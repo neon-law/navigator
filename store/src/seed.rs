@@ -4045,7 +4045,13 @@ mod tests {
         seed_posts(&db, posts, posts_path, &mut first)
             .await
             .unwrap();
-        assert_eq!(first.posts_inserted, 14);
+        assert_eq!(first.posts_inserted, 15);
+        let announcement =
+            crate::posts::find_by_brand_slug(&db, "neon", "navigator-is-open-source")
+                .await
+                .unwrap()
+                .expect("the public-source announcement is seeded");
+        assert_eq!(announcement.status, "published");
         let mut second = SeedReport::default();
         seed_social_handles(&db, handles, handles_path, &mut second)
             .await
