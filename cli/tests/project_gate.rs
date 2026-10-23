@@ -187,10 +187,7 @@ fn the_action_is_deployment_agnostic() {
     // for.
     let source = action_source()
         .replace("neon-law-source-code/navigator", "<this-action>")
-        .replace(
-            "neon-law/homebrew-navigator",
-            "<distribution-host>",
-        );
+        .replace("neon-law/homebrew-navigator", "<distribution-host>");
     for (key, value) in deployment_identifying_values() {
         assert!(
             !source.contains(&value),

@@ -1145,8 +1145,7 @@ mod tests {
             heading: "Run Navigator yourself".to_string(),
             description: Some("Pick your platform.".to_string()),
             version: "26.8.20".to_string(),
-            archive_href: "https://github.com/neon-law/homebrew-navigator/releases"
-                .to_string(),
+            archive_href: "https://github.com/neon-law/homebrew-navigator/releases".to_string(),
             archive_label: "every release".to_string(),
             items: crate::cli_release::PLATFORMS
                 .iter()

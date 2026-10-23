@@ -1441,7 +1441,12 @@ fn postgres_image_is_published_weekly_from_this_repository_and_pinned_back() {
     assert!(compatibility.contains("images/postgres/tests/dbos/Cargo.toml"));
 
     let tests = workspace().join("images/postgres/tests");
-    for file in ["run.sh", "extensions.sql", "persistence.sql", "dbos/Cargo.lock"] {
+    for file in [
+        "run.sh",
+        "extensions.sql",
+        "persistence.sql",
+        "dbos/Cargo.lock",
+    ] {
         assert!(tests.join(file).is_file(), "images/postgres/tests/{file}");
     }
     assert!(

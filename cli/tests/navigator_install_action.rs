@@ -114,9 +114,8 @@ fn both_installers_default_to_the_public_distribution_host() {
          is checked out from, which is not necessarily the distribution host",
     );
     assert!(
-        install_script_source().contains(
-            r#"repo="${NAVIGATOR_INSTALL_REPO:-neon-law/homebrew-navigator}""#
-        ),
+        install_script_source()
+            .contains(r#"repo="${NAVIGATOR_INSTALL_REPO:-neon-law/homebrew-navigator}""#),
         "install.sh must default to the public distribution host",
     );
 }

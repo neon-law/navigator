@@ -47,8 +47,7 @@ pub const RELEASE_DOWNLOAD_BASE: &str =
     "https://github.com/neon-law/homebrew-navigator/releases/download";
 
 /// The Releases index, for a reader who wants an older version or the notes.
-pub const RELEASES_HREF: &str =
-    "https://github.com/neon-law/homebrew-navigator/releases";
+pub const RELEASES_HREF: &str = "https://github.com/neon-law/homebrew-navigator/releases";
 
 /// The tap-qualified formula. `neon-law-source-code/navigator` is a **separate
 /// repository** (`homebrew-navigator`), which is why the formula is named with
