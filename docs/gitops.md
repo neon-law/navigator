@@ -276,6 +276,14 @@ rather than half-reconciled.
 > required, the mutation is refused with `Pull request is in unstable status`, because auto-merge has nothing to wait
 > on.
 >
+> The same refusal comes back once every required check has already passed: `Pull request is in clean status` (or
+> `unstable status`, when a check the ruleset does not require failed), because there is nothing left to queue. A
+> re-run of the arming job on a green pull request therefore always failed. `navigator ops github auto-merge
+> --pull-request <n> [owner/name]` closes that gap: it arms squash auto-merge when GitHub will queue it, and otherwise
+> reads the base branch's live rules and squash-merges only when every required check passed on the head commit,
+> pinning the merge to that commit. A branch with no required check is refused, so the direct merge never bypasses a
+> missing `production` ruleset. `ci.yml` keeps its inline arming step until a published release carries the verb.
+>
 > Dependabot has a separate secret store, so mirror both App secrets there. Forks do not use this path.
 
 ### TDD and the pre-commit gate

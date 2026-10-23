@@ -37,6 +37,7 @@ mod email_summary_redrive;
 mod flake_hunt;
 mod forgejo;
 mod gcp;
+mod github_auto_merge;
 pub(crate) mod github_setup;
 mod lifecycle;
 mod native;
@@ -936,6 +937,10 @@ fn dispatch_with_dns_provider(
             &action_version,
             &workflow_home,
         ),
+        crate::Command::Ops(crate::OpsCmd::Github(crate::GithubCmd::AutoMerge {
+            repository,
+            pull_request,
+        })) => github_auto_merge::run(&RepositoryTarget::resolve(repository)?, pull_request),
         crate::Command::Ops(crate::OpsCmd::Github(crate::GithubCmd::CheckSignatures {
             base,
             head,
