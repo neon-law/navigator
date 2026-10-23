@@ -102,8 +102,8 @@
 {"file":"cli/src/assets.rs","line":1239,"function":"embedded_asset_refs","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/assets.rs","line":1240,"function":"embedded_asset_refs","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/assets.rs","line":1241,"function":"embedded_asset_refs","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/assets.rs","line":3651,"function":"orphan_keys_reports_the_unreferenced_and_ignores_other_prefixes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/assets.rs","line":3953,"function":"emitted_font_keys","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/assets.rs","line":3691,"function":"orphan_keys_reports_the_unreferenced_and_ignores_other_prefixes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/assets.rs","line":3993,"function":"emitted_font_keys","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/blog.rs","line":155,"function":"preflight","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/credentials.rs","line":74,"function":"set","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/credentials.rs","line":206,"function":"write_with_mode_0600","operation":"create","sql_operations":[],"tables":[],"transaction":false}
@@ -181,8 +181,8 @@
 {"file":"cli/src/devx/native/supervisor.rs","line":333,"function":"start","operation":"create","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/native/surreal.rs","line":71,"function":"remove_database","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/observability.rs","line":1478,"function":"assert_pipelines_match_declared_processors","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/devx/orchestrate.rs","line":605,"function":"strip_ingress_controller_host_ports_if_requested","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/devx/orchestrate.rs","line":1417,"function":"open_log","operation":"create","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/devx/orchestrate.rs","line":628,"function":"strip_ingress_controller_host_ports_if_requested","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/devx/orchestrate.rs","line":1440,"function":"open_log","operation":"create","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/restate_handover.rs","line":81,"function":"audit","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
 {"file":"cli/src/devx/restate_handover.rs","line":91,"function":"audit","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/restate_handover.rs","line":105,"function":"audit","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
@@ -635,9 +635,9 @@
 {"file":"portal/src/visitor_analytics.rs","line":675,"function":"country_header_is_bounded_and_never_ip_derived","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/webhook_auth.rs","line":50,"function":"verify_hmac_sha256_b64","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/webhook_auth.rs","line":61,"function":"sign_hmac_sha256_b64","operation":"update","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/workshops/loader.rs","line":237,"function":"render_markdown","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/workshops/loader.rs","line":238,"function":"render_markdown","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/workshops/loader.rs","line":239,"function":"render_markdown","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/workshops/loader.rs","line":228,"function":"render_markdown","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/workshops/loader.rs","line":229,"function":"render_markdown","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/workshops/loader.rs","line":230,"function":"render_markdown","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/clauses.rs","line":165,"function":"selections","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/clauses.rs","line":208,"function":"merge_questions","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/clauses.rs","line":209,"function":"merge_questions","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
