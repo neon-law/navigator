@@ -1144,14 +1144,24 @@ fn plan_with_codeowners(
     actions
 }
 
-struct GitHubClient {
-    http: reqwest::Client,
+pub(super) struct GitHubClient {
+    pub(super) http: reqwest::Client,
     api_base: String,
-    repository: String,
+    pub(super) repository: String,
 }
 
 impl GitHubClient {
-    fn from_env(repository: &RepositoryTarget) -> Result<Self> {
+    /// A client against a mock API base, for tests outside this module.
+    #[cfg(test)]
+    pub(super) fn for_test(api_base: &str, repository: &str) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            api_base: api_base.to_string(),
+            repository: repository.to_string(),
+        }
+    }
+
+    pub(super) fn from_env(repository: &RepositoryTarget) -> Result<Self> {
         let token = required_env(TOKEN_ENV)?;
         let api_base = repository.api_base.clone();
         let mut headers = header::HeaderMap::new();
@@ -1181,15 +1191,15 @@ impl GitHubClient {
         })
     }
 
-    fn url(&self, path: &str) -> String {
+    pub(super) fn url(&self, path: &str) -> String {
         format!("{}{}", self.api_base, path)
     }
 
-    fn repo_path(&self, suffix: &str) -> String {
+    pub(super) fn repo_path(&self, suffix: &str) -> String {
         format!("/repos/{}{}", self.repository, suffix)
     }
 
-    async fn get_json<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
+    pub(super) async fn get_json<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
         let url = self.url(path);
         let response = self.http.get(&url).send().await?;
         parse_json(response, &url).await

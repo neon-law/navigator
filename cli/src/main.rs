@@ -3271,6 +3271,20 @@ enum GithubCmd {
         #[arg(long, default_value = projects::repository::DEFAULT_WORKFLOW_HOME)]
         workflow_home: String,
     },
+    /// Put a pull request on the path to `main` under the `production`
+    /// ruleset: arm squash auto-merge, or — when every required check has
+    /// already passed, so GitHub has nothing left to queue — squash-merge it
+    /// now, pinned to the head commit whose checks were read. Drafts, closed
+    /// pull requests, and ones already armed are left alone. Reads `GITHUB_TOKEN`;
+    /// in CI that is the merge App's token, never the workflow's own.
+    AutoMerge {
+        /// Repository as `owner/name`. Defaults to `GITHUB_REPOSITORY`, then
+        /// to this checkout's `origin` remote.
+        repository: Option<String>,
+        /// The pull request number.
+        #[arg(long)]
+        pull_request: u64,
+    },
     /// Refuse a revision range that contains an unsigned commit. Cloud Agent
     /// pull-request heads carry an HSM `gpgsig`; a session that turned
     /// `commit.gpgsign` off does not. Squash-merge still writes a GitHub-signed
