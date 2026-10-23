@@ -3095,7 +3095,7 @@ async fn llms_txt_indexes_the_markdown_corpus_with_absolute_urls() {
         );
     }
     // `llms.txt` lists the public marketing surfaces and nothing else. The
-    // repository source is MIT OR Apache-2.0 licensed, but currently private;
+    // repository source is public and MIT OR Apache-2.0 licensed;
     // it is a developer surface rather than a marketing one, and adding it is a
     // deliberate content decision rather than a side effect of the licence.
     assert!(

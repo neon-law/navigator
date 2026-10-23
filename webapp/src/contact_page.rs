@@ -339,8 +339,8 @@ mod tests {
             "firm contact channels: {contact}"
         );
         assert!(
-            !out.contains("github.com"),
-            "the shared footer links no source repository: {out}"
+            out.contains(r#"href="https://github.com/neon-law/navigator""#),
+            "the shared footer links the public source repository: {out}"
         );
     }
 
