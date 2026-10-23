@@ -17,11 +17,14 @@ use std::process::Command;
 
 /// Files that mention `DATABASE_URL` on purpose: they prove a stray
 /// Postgres URL does not become a Surreal endpoint, and that the gate
-/// still isolates env.
+/// still isolates env. The PostgreSQL image's DBOS smoke application is a
+/// standalone test program, not Navigator source; it reads the synthetic
+/// `DBOS_DATABASE_URL` its smoke scripts export.
 const DATABASE_URL_ALLOWED_FILES: &[&str] = &[
     "cli/tests/retired_postgres_url.rs",
     "store/src/surreal/config.rs",
     "cli/tests/gate.rs",
+    "images/postgres/tests/dbos/src/main.rs",
 ];
 
 fn repo_root() -> PathBuf {
