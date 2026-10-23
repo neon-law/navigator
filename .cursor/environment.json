@@ -1,0 +1,9 @@
+{
+  "name": "Neon Law Navigator",
+  "user": "ubuntu",
+  "install": "NAVIGATOR_CLOUD_DIND=1 bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "ports": [
+    { "name": "web", "port": 3001 }
+  ]
+}

@@ -1,0 +1,284 @@
+# navigator-web Deployment. Connects to the in-cluster SurrealDB, SeaweedFS,
+# Rauthy, and Restate by their service DNS names.
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: navigator-web
+  namespace: navigator
+type: Opaque
+stringData:
+  SESSION_SECRET: change-me-32-bytes-of-random-data-x
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navigator-web
+  namespace: navigator
+  labels:
+    app: navigator-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: navigator-web
+  template:
+    metadata:
+      labels:
+        app: navigator-web
+    spec:
+      containers:
+        - name: web
+          image: navigator-web:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3001
+          env:
+            - name: PORT
+              value: "3001"
+            - name: NAVIGATOR_ENVIRONMENT
+              value: dev
+            - name: NAVIGATOR_CI_HARNESS
+              value: "1"
+            - name: NAVIGATOR_BOOTSTRAP_COMPANY
+              value: Shook Law PC
+            # Object storage. Production uses GCS/Workload Identity;
+            # KIND uses SeaweedFS through the same S3-compatible contract.
+            - name: NAVIGATOR_STORAGE_BACKEND
+              value: s3
+            - name: NAVIGATOR_STORAGE_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-seaweedfs
+                  key: s3_endpoint
+            - name: NAVIGATOR_STORAGE_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-seaweedfs
+                  key: documents_bucket
+            - name: NAVIGATOR_SURREAL_ARCHIVES_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-seaweedfs
+                  key: surreal_archives_bucket
+            - name: NAVIGATOR_STORAGE_REGION
+              value: us-east-1
+            - name: NAVIGATOR_STORAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-seaweedfs-s3
+                  key: access_key
+            - name: NAVIGATOR_STORAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-seaweedfs-s3
+                  key: secret_key
+            - name: NAVIGATOR_ASSETS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-seaweedfs-s3
+                  key: assets_access_key
+            - name: NAVIGATOR_ASSETS_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-seaweedfs
+                  key: assets_bucket
+            - name: NAVIGATOR_ASSETS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-seaweedfs-s3
+                  key: assets_secret_key
+            - name: NAVIGATOR_APPLICATIONS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-seaweedfs-s3
+                  key: applications_access_key
+            - name: NAVIGATOR_APPLICATIONS_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-seaweedfs
+                  key: applications_bucket
+            - name: NAVIGATOR_APPLICATIONS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-seaweedfs-s3
+                  key: applications_secret_key
+            - name: NAVIGATOR_ARCHIVED_PROJECTS_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-seaweedfs
+                  key: archived_projects_bucket
+            - name: NAVIGATOR_ARCHIVED_PROJECTS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-seaweedfs-s3
+                  key: archived_projects_access_key
+            - name: NAVIGATOR_ARCHIVED_PROJECTS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-seaweedfs-s3
+                  key: archived_projects_secret_key
+            - name: NAVIGATOR_LFS_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-seaweedfs
+                  key: lfs_bucket
+            - name: NAVIGATOR_LFS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-seaweedfs-s3
+                  key: lfs_access_key
+            - name: NAVIGATOR_LFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-seaweedfs-s3
+                  key: lfs_secret_key
+            # Rauthy has one canonical issuer for browser and backchannel
+            # traffic. KIND supplies the value and a pod-local proxy; another
+            # staging environment supplies its own public issuer. Production
+            # replaces this complete OIDC environment with Google Identity.
+            - name: OAUTH_ISSUER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: rauthy-secrets
+                  key: OAUTH_ISSUER_URL
+            - name: OAUTH_CLIENT_ID
+              value: navigator-web
+            - name: OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: rauthy-client
+                  key: OAUTH_CLIENT_SECRET
+            - name: OAUTH_REDIRECT_URI
+              value: http://localhost:8080/auth/callback
+            # Optional deployment-owned trust for the separate Forgejo
+            # document-only CI exchange. No values are committed here.
+            - name: NAVIGATOR_FORGEJO_ACTIONS_OIDC_ISSUER
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-forgejo-actions-oidc
+                  key: issuer
+                  optional: true
+            - name: NAVIGATOR_FORGEJO_ACTIONS_OIDC_AUDIENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-forgejo-actions-oidc
+                  key: audience
+                  optional: true
+            - name: NAVIGATOR_FORGEJO_ACTIONS_OIDC_WORKFLOW
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-forgejo-actions-oidc
+                  key: workflow
+                  optional: true
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-web
+                  key: SESSION_SECRET
+            - name: NAVIGATOR_CLAMD_ADDR
+              value: clamav.navigator.svc.cluster.local:3310
+            # Restate workflow broker. `RESTATE_BROKER_URL` is what
+            # `workflows::RestateRuntime::from_env` reads; its presence
+            # is also what `web::main` checks to pick RestateRuntime
+            # over the in-process InMemoryRuntime. The
+            # `workflows-service` RestateDeployment registers itself
+            # with this cluster via the operator (no Job needed).
+            #
+            # The Restate Operator places the StatefulSet + Service in
+            # a namespace named after the RestateCluster (`restate`),
+            # not the namespace of the CR itself. So consumers in
+            # `navigator` reach the broker via the cross-namespace FQDN.
+            - name: RESTATE_BROKER_URL
+              value: http://restate.restate.svc.cluster.local:8080
+            - name: OTEL_SERVICE_NAME
+              value: navigator-web
+            # SendGrid + DocuSign stubs belong only to the explicit KIND
+            # CI harness selected above. Normal staging omits the harness
+            # flag and supplies real non-production credentials. The
+            # webhook secrets (events + esignature) are never parsed at
+            # boot — they're stored as strings and only verified when
+            # the corresponding endpoint is hit, which the KIND smoke
+            # path never exercises — so opaque stubs are safe here. The
+            # GKE production overlay replaces the env list wholesale with
+            # real Secret-backed values plus NAVIGATOR_EMAIL_BACKEND=sendgrid.
+            - name: SENDGRID_API_KEY
+              value: SG.kind-stub
+            - name: SENDGRID_INBOUND_SECRET
+              value: kind-stub
+            - name: SENDGRID_INBOUND_PUBLIC_KEY
+              value: kind-stub
+            - name: SENDGRID_EVENTS_SECRET
+              value: kind-stub
+            - name: SENDGRID_EVENTS_PUBLIC_KEY
+              value: kind-stub
+            - name: DOCUSIGN_HMAC_KEY
+              value: kind-stub
+            - name: NAVIGATOR_GIT_REPO_ROOT
+              value: /var/lib/navigator/repos
+          volumeMounts:
+            - name: repos
+              mountPath: /var/lib/navigator/repos
+          readinessProbe:
+            httpGet:
+              path: /app/readyz
+              port: 3001
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /app/health
+              port: 3001
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        # `NAVIGATOR_GIT_REPO_ROOT` above names this directory for
+        # `repos::RepoStore`. Nothing in a running web pod commits to it:
+        # Project repositories live on the forge, so the store only creates
+        # an empty bare repository on a first template lookup (and that lookup
+        # then falls back to the bundled catalog) or finds none to expunge.
+        # Scratch space per pod is therefore enough, and it carries no
+        # single-writer claim, so `web` can run more than one replica and roll
+        # with a surge pod. `/app/readyz` (portal::readyz) still fails closed
+        # when the root is unset.
+        - name: repos
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: navigator-web
+  namespace: navigator
+spec:
+  selector:
+    app: navigator-web
+  ports:
+    - port: 80
+      targetPort: 3001
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: navigator-web
+  namespace: navigator
+  annotations:
+    # ingress-nginx's compiled-in default (1m) sits in front of the app's
+    # own document-batch ceiling (portal::project_documents::MAX_BATCH_BYTES,
+    # 500 MB) — without raising it here, a large scanned-PDF upload never
+    # reaches the pod at all. Headroom above 500 MB covers multipart
+    # boundary/header overhead across a full batch.
+    nginx.ingress.kubernetes.io/proxy-body-size: "550m"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: navigator-web
+                port:
+                  number: 80

@@ -1,0 +1,550 @@
+# Public assets
+
+Neon Law Navigator's marketing, presentation, workshop, and blog pages render public images through the shared asset
+lane. Responsive photos use `views::assets::responsive_picture`; hand-authored heroes and slide media can be dropped
+directly under `server/public/img/<slug>/` as PNGs or JPEGs. The bytes are **never** stored in git. The staging
+deployment serves them through its public `/assets` route, while local development and the ephemeral KIND integration
+image hydrate `server/public/img/` from the local `/public` route. That keeps the repository small (a clone is code, not
+megabytes of binaries) without making the local test harness depend on a runtime GCP mount.
+
+## Misericordia stock photos
+
+These photos are available under the [Pexels License](https://www.pexels.com/license/). Use them as illustrative stock
+images, without implying a client relationship or endorsement. JPEGs stay outside Git under `server/public/`; the
+following paths are their public asset keys. Source credits remain here for future reuse.
+
+- [Damaged car](https://www.pexels.com/photo/a-broken-car-parked-outside-4048602/) by Karl Solano.
+  Key: `img/misericordia/pexels-damaged-car-4048602.jpg`. Alt text: Severely damaged car parked beside a foggy street.
+- [Rear-end collision](https://www.pexels.com/photo/a-minor-car-accident-10102313/) by Nikita Nikitin.
+  Key: `img/misericordia/pexels-rear-end-collision-10102313.jpg`. Alt text: Close view of two cars touching in a
+  rear-end collision.
+- [Hospital corridor](https://www.pexels.com/photo/empty-hospital-corridor-with-medical-equipment-36595248/)
+  by Juan Moccagatta. Key: `img/misericordia/pexels-hospital-corridor-36595248.jpg`. Alt text: Empty hospital corridor
+  with medical scales and equipment.
+
+The downloaded JPEGs retain their original dimensions and copyright metadata. Their EXIF contains orientation,
+resolution, and image dimensions, with no GPS, camera identifiers, or capture dates.
+
+## Vesta photographs
+
+Six user-supplied photographs illustrate places of remembrance on Vesta's estate planning home page.
+`views::assets::VESTA_PHOTOS` records their object keys and descriptive alt text under `img/vesta-home/`. Published JPEG
+copies have orientation applied and EXIF metadata removed; source files remain outside Git. The gallery preserves each
+photograph's full composition, including the portrait memorial. The public asset inventory includes all six files for
+restoration, deployment checks, and orphan protection.
+
+The main meadow photograph uses `img/vesta-home/cemetery-meadow.jpg`: gravestones across a green meadow beneath a cloudy
+sky. The user-supplied replacement is a 1024×768 JPEG with orientation applied and embedded metadata removed. Keep this
+key when replacing the main photograph so existing home-page references continue to resolve. Publish the replacement to
+both staging and production through `navigator site asset upload`; its byte-for-byte readback verifies each published
+copy.
+
+## Brand uploads
+
+Brand logo and font uploads share one UUID-scoped prefix in the public bucket: `brand-<Brand UUID>/logo.png` or
+`logo.svg`, and `brand-<Brand UUID>/fonts/<sha256>.woff2`. The application serves these at `/assets/<object key>`. The
+Brand row records the exact object key; changing a Brand's text key does not change its upload namespace. Existing
+references continue to serve at their recorded paths. No folder URL lists the bucket's contents.
+
+The Brand editor shows an attached replacement when present. Otherwise a registered house Brand shows its built-in logo
+and configured typeface, with links to the logo and font stylesheet. A missing replacement is not evidence that the
+house Brand's published font or logo is absent. The editor provides no logo or font upload boxes; asset publishing uses
+the existing operator workflow.
+
+## The four commands
+
+Vesta's mark is the [public-domain Vesta symbol](https://commons.wikimedia.org/wiki/File:4_Vesta_(1).svg), vectorized by
+Carnby after Urhixidur. `server/public/brand/vesta.svg` adds a scalable view box and the brand's bronze fill. This small
+SVG ships with the other tracked brand marks and needs no bucket upload. `server/public/brand/vesta.png` is the same
+mark rendered at ten times the view box (980×1370, transparent) for social previews, which do not rasterize SVG. It is
+tracked too, and published to each deployment bucket as `brand/vesta.png` with `navigator site asset upload`.
+
+The `navigator ops assets` subcommands form a build → publish → restore → verify loop. For responsive photos, the
+`views::assets::GALLERY` manifest and the width set (`WIDTHS = [400, 800, 1200]`) are the single source of truth shared
+with the view layer, so adding a photo is a manifest edit plus a JPEG — never a code change. Standalone blog,
+illustration, presentation, or workshop slide assets do not go through `assets build`; put the finished PNG or JPEG at
+its final `server/public/img/<slug>/<name>` path, then use `assets upload` to publish it.
+
+| Command | Direction | What it does |
+| --- | --- | --- |
+| `assets build` | JPEGs → `server/public/img/` | Re-encode each manifest photo to AVIF/WebP/JPEG at every width. |
+| `assets build --only <slug>` | one JPEG → `server/public/img/<slug>/` | Same, for named slugs only. |
+| `assets upload` | `server/public/img/` → bucket | Push recognized images to `gs://<project>-assets/img/<slug>/…`. |
+| `assets pull` | bucket → `server/public/img/` | Download the published image files back for local development. |
+| `assets fetch-referenced` | origin → `server/public/` | Hydrate content `img/…` refs over public HTTPS (no ADC). |
+| `assets stub-referenced` | refs → output root | Write tiny placeholders for content `img/…` paths. |
+| `assets verify` | published refs → chosen origin | Fetch every published image and font; fail if any are missing. |
+
+`build` and `upload` are the batch publish path for responsive photos, run by whoever curates the gallery. A single
+finished PNG or JPEG — a hero, a campaign portrait, a slide image — goes through `navigator site asset upload` instead
+(see [Publishing one asset to staging and production](#publishing-one-asset-to-staging-and-production)). `pull` is the
+restore path every developer runs. `verify` is the post-roll guardrail. Run `assets build` and `assets upload` for the
+gallery, and `assets fonts upload` for licensed faces, before `ops ship`: the preflight refuses the roll when a required
+gallery variant, brand image, or font is missing or the bucket cannot be read.
+
+When restoring a public photo from a local library, copy it to the ignored final path only after confirming it is
+firm-owned or rights-cleared and removing EXIF metadata such as GPS coordinates, device identifiers, and capture times.
+The local source stays outside Git; the Markdown reference, filename, and accurate alt text are the durable record.
+
+An unfiltered `build` walks the whole manifest and needs every photo's source JPEG on disk, which is not the shape of
+adding one photo. `--only <slug>` (repeatable) narrows the run to the slugs you name. An unknown slug fails and lists
+the manifest rather than reporting a successful build of nothing.
+
+```bash
+cargo run -p cli -- ops assets build --src ~/photos --only lake-tahoe
+```
+
+## Publishing one asset to staging and production
+
+This is the default lane for any single public asset, and the one every agent skill uses.
+
+`assets upload` above needs GCS access on the operator's own machine through ADC — the right shape for the operator
+batch-publishing the whole gallery, wrong for a one-off asset from a machine that has never run `gcloud auth
+application-default login`. `navigator site asset upload` is the OAuth-backed sibling: it reads no GCP environment,
+needs no bucket name, and writes nothing except through the deployment's own authenticated site API (`POST
+/app/api/assets`, `portal::assets_api`), following the same `navigator site login` seam `site document upload` and `site
+authorities create` already use (see [`command-boundary`](command-boundary.md)).
+
+Without `--key`, `ASSET_NAME` is read relative to `server/public/`, and that relative path is also the exact bucket key
+the object is stored — and served back — under. Pass `img/<slug>/<file>`, not `server/public/img/<slug>/<file>`: the
+longer form doubles the prefix and fails with `No such file or directory`. Pass `--key` for a file that lives elsewhere
+(a generated asset not yet staged under `server/public/`) or when the deployed key should differ from the local path.
+
+Log in to each deployment first — a login is a one-hour bearer token, and no secret is written to the repository — then
+publish to both in one call. Each host's result is reported on its own line, and the command exits non-zero if any
+requested host fails; rerun only the failed `--host`:
+
+```bash
+navigator site login --host staging.neonlaw.com
+navigator site login --host www.neonlaw.com
+navigator site asset upload \
+  --host staging.neonlaw.com --host www.neonlaw.com \
+  img/<slug>/<file>
+```
+
+`navigator site whoami --host <host>` shows whether a stored token is still valid.
+
+The server derives the content type from the key's extension, checks the caller's declared `sha256` against what it
+decodes (catching transit corruption before a byte reaches storage), rejects a key outside `brand/`, `img/`, or `fonts/`
+or anything over the size ceiling, and writes only to the deployment's public assets bucket — it never touches the
+private documents bucket `NAVIGATOR_DOCUMENTS_BUCKET` names. A `.woff2` payload must carry the `wOF2` signature, and
+`fonts/<family>/OFL.txt` is the one accepted `.txt` key, checked for valid UTF-8 under 64 KiB. Uploading the same key
+with the same bytes and content type again is reported `unchanged` rather than rewritten. After any write (or confirming
+none was needed) the server reads the object straight back from the same storage the public route serves, and the CLI
+itself then fetches `<host>/assets/<key>` and compares it byte-for-byte against the local file, so a reported success
+means the asset is already live, not merely accepted — no separate `assets verify` step needed for this one object.
+Authorization is Owner/Admin, the same tier every other site-branding write uses — a public asset is firm-side site
+configuration, not matter-scoped lawyer work.
+
+## Adding an image to a presentation or workshop slide
+
+A bucket-lane slide image is complete only when the same file has two homes:
+
+1. The ignored local source at `server/public/img/<deck-slug>/<filename>`, where the development server can preview it.
+2. The object `img/<deck-slug>/<filename>` in every deployment bucket that will render the deck.
+
+When an image generator, clipboard, Notes attachment, or conversion tool produces a temporary file, save the
+full-resolution result into that final local path before editing the slide Markdown. A file left only under `/tmp`, in a
+clipboard attachment, or in the image-generation result is not the local copy. Use PNG for text, diagrams, and
+flat-colour art; use JPEG for photographs. HEIC and other unsupported sources must be converted first.
+
+Reference the bucket key without `/public`:
+
+```markdown
+![A concise description of the picture](img/rust-in-peace/example.jpg)
+```
+
+Then preview locally and publish to staging and production. The upload itself confirms each object is live at
+`<host>/assets/<key>` byte-for-byte:
+
+```bash
+cargo run -p cli -- ops assets verify --base-url http://localhost:<web-port>/public
+navigator site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/<deck-slug>/<filename>
+```
+
+An agent that cannot perform a write (no valid login for a host) must report that host as pending and provide the exact
+command; it must not describe the image as published there. After the staging origin is reachable, run `assets verify`
+against that origin as the browser-level publication check. Because the local directory is ignored, another checkout
+restores the cloud copy with `assets pull` or `assets fetch-referenced`.
+
+Exact-key checks must report the expected byte length and hashes in staging. During a full or image-only roll, `ops
+ship` opens the selected `NAVIGATOR_ASSETS_BUCKET` and refuses to roll when any key in the applicable public asset
+inventory is missing or the bucket cannot be read. That inventory is the same set the post-roll check probes at
+`NAVIGATOR_ASSET_BASE_URL`. On a source checkout it is every markdown image under `server/content`, every gallery
+variant, the brand media, and every licensed webfont face. On a deploy-only checkout it is the workshop images embedded
+in the CLI plus those gallery variants, brand media, and fonts. Restart-only skips that preflight because it changes no
+content or image version.
+
+## Publishing one photo to every deployment
+
+Each deployment owns its own assets bucket, so a photo is published once per deployment — there is no shared origin that
+all three read. The buckets are `NAVIGATOR_ASSETS_BUCKET` in each `deployments/<name>/config.toml`.
+
+| Deployment | `--host` | Public origin (`NAVIGATOR_ASSET_BASE_URL`) |
+| --- | --- | --- |
+| staging | `staging.neonlaw.com` | `https://staging.neonlaw.com/assets` |
+| production | `www.neonlaw.com` | `https://www.neonlaw.com/assets` |
+
+The origin is the app's own `/assets/{key}` route, not a raw storage URL, so the browser stays on the site's origin.
+Every brand host a deployment serves (`www.cyberinjurylaw.com`, `www.deathanddivorcelaw.com`, …) reads that deployment's
+one bucket, so uploading through the `neonlaw.com` host publishes for every brand. Publish to both:
+
+```bash
+navigator site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/<slug>/<file>
+```
+
+## Licensed webfonts
+
+The public asset origin also serves GORP Serif. The WOFF2 bytes are never committed or baked into an image: each
+operator supplies the fonts from its own TrashType delivery and uploads the initial Regular and Bold faces under
+`fonts/gorp-serif/`. `PageLayout` resolves those URLs through `NAVIGATOR_ASSET_BASE_URL`; without that setting, local
+development falls back to `/public/fonts/gorp-serif/` for a licensed operator's ignored local copies.
+
+```bash
+cargo run -p cli -- ops assets fonts upload \
+  --dir '/path/to/GORP Serif/WOFF'
+```
+
+The command targets `NAVIGATOR_ASSETS_BUCKET` (or `--bucket`) and refuses a partial delivery. Navigator code is
+copyright Neon Law IP LLC; [GORP Serif](https://trashtype.com/fonts/gorp) is font software licensed separately from
+TrashType. Follow the [TrashType terms](https://trashtype.com/legal) and keep the local notice in
+`server/public/fonts/gorp-serif/LICENSE.txt` with the source files. Before the first upload, rerun `navigator ops gcp
+setup` so the public assets bucket receives the font-fetch CORS policy.
+
+The desktop `.otf` family from the same delivery is a _restricted_ download for firm workers who need the installable
+faces. It is published separately, as one ZIP — and, crucially, to the **private documents bucket**
+(`NAVIGATOR_DOCUMENTS_BUCKET`), not the public assets bucket the WOFF2 web faces use. The web faces are public because
+browsers fetch them auth-free; the installable family must stay behind authorization, so it lives where only the gated
+route can reach it. Public object URLs cannot bypass embedded Rego. `assets fonts upload-desktop` packages the full
+licensed family — every one of the six weights, refusing a partial delivery — into a byte-stable ZIP (sorted,
+fixed-timestamp) and uploads it to `fonts/gorp-serif/gorp-serif-otf.zip`:
+
+```bash
+NAVIGATOR_DOCUMENTS_BUCKET=<project>-documents cargo run -p cli -- ops assets fonts upload-desktop \
+  --dir '/path/to/GORP Serif'
+```
+
+The route `GET /app/team/fonts/gorp-serif.zip` streams that object; the `/app/team` home links it as its **Brand fonts**
+card. The object rides the team home's own prefix, so embedded Rego's `/app/team` rules admit exactly the four firm
+tiers — Owner, Admin, Lawyer, and Clerk — and deny client and anonymous callers. A font ZIP is a firm brand asset, not
+lawyer work, so it needs neither the `/app/lawyer` prefix nor the exact-path Clerk exception that prefix used to force.
+A missing object is a loud `502`, never a fallback — the same pull-and-verify posture as the vendored government forms.
+
+### DeleteYourData.com's typeface
+
+The `delete-your-data` house brand seeds the closed `plus-jakarta-sans` typeface. Plus Jakarta Sans is OFL-1.1, so it
+carries no `operator_licence_required` flag, but its faces are bucket-served on the same operator-upload lane as GORP's
+rather than committed to this repository.
+
+```bash
+cargo run -p cli -- ops assets fonts upload --family plus-jakarta-sans \
+  --dir '/path/to/plus-jakarta-sans/woff2'
+```
+
+The directory must hold `PlusJakartaSans-Regular.woff2` and `PlusJakartaSans-Bold.woff2`; the command uploads both to
+`fonts/plus-jakarta-sans/` in the public assets bucket (`--family gorp-serif`, the default, is unchanged). Local
+development and tests resolve the same fallback `/public/fonts/plus-jakarta-sans/` path GORP's faces use when
+`NAVIGATOR_ASSET_BASE_URL` is unset. `portal::dioxus_app` injects a preload and the `@font-face` block for each brand's
+own family. The generated `brand-{key}-tokens.css` declares the same faces alongside the brand's `--nav-font-family`.
+
+### The practice brands' typefaces
+
+The practice brands wear seven more OFL-1.1 families on the same lane. `cli::assets::BUCKET_FONT_FAMILIES` is the one
+list all of it reads: `--family` names an entry, `assets verify` probes every entry's two faces, and the orphan scan
+spares every listed family. A family joins those three at once, so a face cannot ship without joining both the
+verification and orphan-scan contracts.
+
+| `--family` | Family | Brands |
+| --- | --- | --- |
+| `gorp-serif` | GORP Serif | Neon Law |
+| `plus-jakarta-sans` | Plus Jakarta Sans | DeleteYourData.com |
+| `eb-garamond` | EB Garamond | Vesta Estate Planning (headings and body) |
+| `source-sans-3` | Source Sans 3 | Misericordia Injury Law (body) |
+| `source-serif-4` | Source Serif 4 | Misericordia (display); Daybridge and Groundwork |
+| `pirata-one` | Pirata One | Death & Divorce |
+| `mukta` | Mukta | Abhaya Immigration |
+| `public-sans` | Public Sans | DeleteYourDebt.com |
+| `libre-franklin` | Libre Franklin | the summons practice |
+| `barlow-condensed` | Barlow Condensed | CyberInjuryLaw and Aegis display (400, 700, 800) |
+| `dm-sans` | DM Sans | CyberInjuryLaw and Aegis body (variable 100–1000) |
+
+Each value is spelled as the bucket directory it publishes to, and the directory holds `<Stem>-Regular.woff2` and
+`<Stem>-Bold.woff2` — the same `<dir>/<stem>` pair `portal::dioxus_app`'s `bucket_font_head` splits, so the operator
+lane and the browser surface derive the object key identically:
+
+```bash
+cargo run -p cli -- ops assets fonts upload --family eb-garamond \
+  --dir '/path/to/eb-garamond/woff2'
+```
+
+We redistribute these bytes from our own buckets, so each family's grant travels with it:
+`server/public/fonts/<family>/OFL.txt` carries the upstream notice verbatim, tracked even though the faces are not.
+Lawyer Shook's Tinos is the one family whose faces are tracked instead — see below. Because Lawyer Shook is also the
+portfolio directory, its page head declares the sibling brands' bucket-served faces as well; each card then renders in
+the typeface named by its compiled brand key without importing a sibling token sheet and overwriting Lawyer Shook's
+palette.
+
+The published faces are latin subsets. That is right while the English-only invariant holds, but `views` chose Mukta for
+Abhaya specifically for its Devanagari coverage: a Hindi surface would need those faces taken from the upstream release
+and converted, not from a latin-subset endpoint.
+
+Publication is not verified by CI. `deploy.yml` builds and publishes images, and its local KIND gate proves only the
+placeholder image. A full or image-only `ops ship` run checks the applicable public asset inventory in
+`NAVIGATOR_ASSETS_BUCKET` before any rollout, then probes the same keys at the public asset origin after the rollout has
+completed and the worker has re-registered with Restate. A missing or unreadable key fails the command before the roll
+starts. A key the origin does not serve fails it before the ship can report complete. Restart-only skips both checks
+because it changes no image or content version. The post-roll probe is the check that looks at what a browser would
+actually receive:
+
+```bash
+cargo run -p cli -- ops assets verify --base-url https://staging.neonlaw.com/assets
+```
+
+`verify` probes every markdown `](img/…)` reference, every `views::assets::GALLERY` variant, the brand media the views
+load by key, and all faces of every `BUCKET_FONT_FAMILIES` entry, and exits `2` naming whatever the origin does not
+serve. `orphans` treats the image keys in that set as reachable and leaves `fonts/` alone. `ops ship` preflight reads
+that same `verify` set from the bucket when the checkout has `server/content`, and the embedded inventory (workshop
+markdown, gallery variants, brand media, and fonts) when it does not.
+
+### CyberInjuryLaw's fonts and campaign
+
+CyberInjuryLaw is a Dioxus house brand. `NAVIGATOR_LOCAL_CYBER_INJURY_LAW_PORT` selects its local preview port. The
+tracked flexed-muscle SVG lives at `server/public/brand/cyber-injury-law.svg`. The header's QR code at
+`server/public/brand/cyber-consultation-qr.svg` encodes `https://www.cyberinjurylaw.com/consultation`. That route
+redirects to the brand's configured booking URL, so a provider change leaves printed codes valid.
+
+All homepage campaign copy lives in `neon/locales/en/cyber-injury-law/home.yaml`, including wordmarks, highlighted
+headline suffixes, contact details, QR labels, portrait captions, accessibility text, and assessment controls and
+results. Edit that catalog to update the page; rebuild to publish. The shared firm footer retains its firm identity and
+legal notices. Text embedded in the poster PNG is artwork and requires a new asset.
+
+The server and browser hydrate the same `HomePageEntry` root. The server keeps its rendered head during hydration, so
+the campaign controls work under the existing strict CSP. The public asset lane restores campaign PNGs to the ignored
+`server/public/img/cyber-injury-law/` paths.
+
+The hero is attorney Nick Shook's AI-enhanced campaign portrait at `img/cyber-injury-law/cyber-warrior-ferris.png`, with
+a recessed Ferris outline on the chest and one steel Cancer outline on each sleeve. The "Subway ad" links to
+`img/cyber-injury-law/canal-street-ad-f9faa356.png`. The ad highlights the full "more money in your pocket" phrase. The
+page and ad advertise no fee percentage; fees are set by the signed engagement agreement. Publish each image with:
+
+```bash
+navigator site asset upload --host staging.neonlaw.com --host www.neonlaw.com \
+  img/cyber-injury-law/cyber-warrior-ferris.png
+navigator site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/cyber-injury-law/canal-street-ad-f9faa356.png
+```
+
+The Canal Street ad uses the website's longer-hair portrait, composited with fixed crops and masks rather than
+regenerated. Its 7680 × 5120 PNG has SHA-256 `f9faa356d1d62d96da2bbdef42efe700b278d3b2d74d1f575e88d9f5faa89eda`. The
+Android and iPhone QR codes encode the canonical `www` URLs below; the call QR encodes the visible `tel:` destination.
+Decode all three from the finished ad before publication. The asset key includes the hash prefix so browsers request the
+revised artwork.
+
+The tracked `cyber-android-qr.svg` and `cyber-iphone-qr.svg` under `server/public/brand/` encode
+`https://www.cyberinjurylaw.com/android` and `https://www.cyberinjurylaw.com/iPhone` respectively. The phone QR encodes
+the same `tel:` destination as the visible call link. Each QR has a four-module white quiet zone and a tap target; the
+heart and its QR link to the brand's public `/testimonials` page. The app URLs are campaign destinations; app-store
+distribution and redirect targets are configured separately.
+
+Barlow Condensed provides Regular (400), Bold (700), and ExtraBold (800). DM Sans supports a variable WOFF2 face from
+100 to 1000, delivered as Regular and Bold files. Both families use SIL OFL 1.1; their upstream notices are tracked
+beside the ignored binaries. Sources:
+
+- [Barlow Condensed](https://github.com/google/fonts/tree/main/ofl/barlowcondensed)
+- [DM Sans](https://github.com/google/fonts/tree/main/ofl/dmsans)
+
+```bash
+cargo run -p cli -- ops assets fonts upload --family barlow-condensed \
+  --dir ~/Downloads/CyberInjuryLaw/fonts/barlow-condensed
+cargo run -p cli -- ops assets fonts upload --family dm-sans \
+  --dir ~/Downloads/CyberInjuryLaw/fonts/dm-sans
+```
+
+Barlow's upload requires all three faces; missing ExtraBold fails before any write. The font CSS declares actual weights
+and uses the same first-party asset origin as other brands. It makes no Google Fonts runtime request. The preliminary
+assessment hydrates through Dioxus; assessment answers stay in the browser.
+
+### Lawyer Shook's Tinos
+
+The `lawyer-shook` house brand uses Tinos under the SIL Open Font License 1.1. The repository carries the Regular and
+Bold WOFF2 faces under `server/public/fonts/tinos/`; no raster mark is required because the public header and footer
+render the LAWYER SHOOK wordmark as text. `portal::dioxus_app` selects these faces for the Lawyer Shook host. It is the
+only brand served from the tracked tree rather than the bucket, so it is the one family absent from
+`BUCKET_FONT_FAMILIES`; `published_font_families_cover_every_bucket_face_the_site_emits` accepts either lane and refuses
+a face delivered by neither. That guard reads both emitters — `portal::dioxus_app`'s per-brand head fragment and
+`views::brand_presentation`'s typeface catalog, which is what `/app/admin/brands/new` still picks a new brand's starting
+typeface from (`/app/admin/brands/{key}/edit` picks from that Firm's own uploaded fonts instead, ENG-659) — so a face
+cannot reach a browser through either door without a way to publish it.
+
+## Verify after shipping
+
+A live deployment can serve a 404 hero when the bucket is missing bytes. The rendered-HTML test checks only the `src`
+string; `assets verify` checks every image under `server/content`, every responsive gallery variant, the brand media
+keys, and every registered webfont face. It fetches each from the public origin with an auth-free `HEAD` against
+`NAVIGATOR_ASSET_BASE_URL`, exactly as a browser would, and reports missing objects. `ops ship` checks that same
+inventory in the selected bucket before a full or image-only roll, then runs this verifier after the roll. A deploy-only
+checkout has `deployments/` and omits `server/content`; both checks then use the workshop markdown, gallery variants,
+brand media, and font faces embedded in the binary. The post-roll check names this scope on stderr because it cannot see
+blog references.
+
+Run `assets verify` from a source checkout to cover them.
+
+```bash
+NAVIGATOR_ASSET_BASE_URL=https://staging.neonlaw.com/assets cargo run -p cli -- ops assets verify
+```
+
+Run it after `assets upload`, or let `ops ship` run it after the rollout. The `deploy` workflow's `build` job runs
+`assets stub-referenced` before baking the ephemeral `navigator-web` image used by KIND, writing placeholders under
+`server/public`; those placeholder files carry the same paths as the real objects, but not the real photo bytes. After
+`dev e2e`, the KIND `integration` job runs `assets verify` against the local host — the serve gate proving the stubbed
+KIND image serves every referenced path:
+
+```bash
+navigator ops assets verify --base-url http://localhost:8080/public
+```
+
+CI does not probe a public origin: publication of the real bytes is the operator upload lane described above. The live
+site's `/assets` proxy is checked after a roll, and `ops ship` blocks completion if that check fails. Locally, run the
+same gate against a host-side server:
+
+```bash
+navigator ops assets verify --base-url http://localhost:<web-port>/public
+```
+
+### The deployed origin
+
+In the deployment's `deployments/<name>/config.toml`, set `NAVIGATOR_ASSET_BASE_URL` to that deployment's public asset
+origin, normally its same-origin `/assets` route (for example, `https://staging.neonlaw.com/assets`). The bucket stays
+private; `web` proxies the request, so the browser never needs a raw storage URL. Successful public asset responses
+include `Access-Control-Allow-Origin: *`, allowing every house brand to load webfonts from that shared asset origin
+without credentials. The header belongs only to the public-assets response; private document routes keep their own
+access rules. `navigator ops ship` requires this coordinate before any rollout. It also requires every applicable public
+asset to be readable in `NAVIGATOR_ASSETS_BUCKET` before the roll, and it verifies the same keys at this origin after a
+full or image-only roll, so a deployment cannot start or report success while its public assets are missing.
+
+## Why the images aren't in git
+
+`server/public/img/` is ignored by `.gitignore`. A fresh clone has **empty image slots** — the rest of `server/public`
+(Bootstrap, brand SVGs, vendored JS/CSS) stays tracked and still ships in the image, but page images do not. The
+deployed app resolves image URLs through `views::assets::asset_url`, which prefixes `NAVIGATOR_ASSET_BASE_URL`; the
+staging deployment uses its same-origin `/assets` proxy, while local development defaults to `/public`. The CI KIND
+image is the exception: it bakes temporary placeholders under `/public` so browser tests exercise the local path without
+requiring GCP credentials or real photo bytes.
+
+## CI placeholders and local development
+
+`assets stub-referenced` is for CI image packaging checks. It scans the same `server/content` Markdown references as
+`verify`, creates each parent directory under the chosen output root, and writes a minimal valid image file matching the
+referenced extension. Run public-origin `verify` first; the stub command does not contact GCS and does not prove
+publication. Its job is only to let the local `/public/img/...` route serve something at the exact keys already proven
+live in the public bucket.
+
+Because the slots are empty on a fresh clone, the dev `/public` mount 404s every page image until you populate
+`server/public/img/`. The fast path is to **pull** the already-published files from the bucket — no source JPEGs, no
+re-encode, and no generated-image source needed:
+
+```bash
+NAVIGATOR_STORAGE_ENDPOINT= cargo run -p cli -- ops assets pull --bucket neon-law-stg-assets
+```
+
+This downloads every supported image file (`.avif`, `.webp`, `.jpg`, `.jpeg`, `.png`) under the bucket's `img/` prefix
+into `server/public/img/<slug>/…`, byte-identical to what was uploaded. Run it once after cloning, and again whenever
+public page images change; the KIND dev loop then serves the images from `/public` with no further setup. Auth is ADC
+(`gcloud auth application-default login`); this operator command targets real GCS.
+
+**Clear `NAVIGATOR_STORAGE_ENDPOINT` on the command line, as above.** Every `navigator` invocation loads `.devx/env`
+(`cli/src/main.rs`), and a worktree's `.devx/env` points that variable at the local SeaweedFS emulator. A `pull` from a
+working KIND checkout therefore asks `localhost` for a GCS bucket and fails `403 Forbidden` on a URL naming the right
+bucket, which reads like a permissions problem and is not one. `env -u` does not help: unsetting the variable only lets
+`dotenvy` supply it from the file again. Assigning it empty works because the storage layer treats an empty endpoint as
+absent.
+
+### No ADC? Pull over public HTTPS instead
+
+The published bytes are world-readable at the deployment's own origin, so a developer without GCP credentials can fetch
+them with no auth at all:
+
+```bash
+cargo run -p cli -- ops assets fetch-referenced --base-url https://staging.neonlaw.com/assets
+```
+
+**This covers content images only, and that difference bites.** `fetch-referenced` scans `server/content` Markdown for
+`img/…` references, so it restores blog and workshop images and not the photos the `views::assets::GALLERY` manifest
+declares. A manifest photo such as `lake-tahoe` is referenced from Rust rather than from Markdown, so on a fresh clone
+with no ADC the blog fills in and that photo stays a broken image. A person or entity avatar is neither: it is uploaded
+at runtime through `/app/avatar` and `/app/profile/avatar` (self-service; both POST to the same handler so a relative
+form action from `/app/profile` and a nested absolute action both land). The profile page posts that multipart body in
+place and refreshes `/app/me/avatar` without leaving the page; a navigation without JavaScript still redirects back to
+`/app/profile`. Firm-tier Person avatars, including an Admin upload at `/app/admin/people/{id}/avatar`, are public HTTPS
+content: the uploader writes a PNG or JPEG to the public-assets key `people/{id}/avatar.{png,jpg}` and the singular
+Surreal `person.profile_image_url` records its public asset URL. That URL comes from `views::assets::bucket_asset_url`,
+not `asset_url`. The two differ only in the unconfigured fallback, and only that fallback matters here: a deployment
+sets `NAVIGATOR_ASSET_BASE_URL` to `<NAV_BASE_URL>/assets` and `ops ship` refuses to roll without it, so both resolve to
+the `/assets/{key}` route there. With no configured origin — the local loop, KIND, `cargo test` — `asset_url` falls back
+to `/public`, the crate-bundled static mount, which holds tracked files only and so answers `404` for an object that
+exists in the bucket alone. `bucket_asset_url` falls back to the same-origin `/assets/{key}` route instead, which reads
+the bucket the uploader just wrote. The profile form says this before submission and limits uploads to 5 MB and 1024 ×
+1024 pixels. Client avatars retain their private documents-bucket keys (`people/{id}/avatars/…`), as do Entity avatars
+(`entities/{id}/avatars/…`). Dynamic avatars have no manifest entry to pull; application avatar routes retain their
+authorization checks, but a public firm-tier Person-avatar URL is intentionally world-readable. Clearing a firm-tier
+Person avatar unlinks the row and removes both canonical public variants; clearing a Client avatar leaves its private
+object untouched. Until `fetch-referenced` learns the manifest, fetch a manifest photo's variants directly; the widths
+and formats are the ones `views::assets` generates:
+
+```bash
+mkdir -p server/public/img/lake-tahoe
+for w in 400 800 1200; do for ext in avif webp jpg; do
+  curl -fsS -o "server/public/img/lake-tahoe/lake-tahoe-${w}w.${ext}" \
+    "https://staging.neonlaw.com/assets/img/lake-tahoe/lake-tahoe-${w}w.${ext}"
+done; done
+```
+
+If you are _curating_ the gallery (adding or replacing a responsive photo), use `build` from the source JPEGs and then
+`upload` instead — see [The four commands](#the-four-commands) above. If you are adding a blog hero PNG, put it under
+`server/public/img/<slug>/`, verify it locally, then run `assets upload`.
+
+## Vesta explainer
+
+Vesta uses EB Garamond throughout. Its explainer lives at `server/public/img/vesta-home/vesta-explainer.mp4` locally and
+resolves through the public asset origin in a deployment. The page labels the clip from
+`neon/locales/en/vesta/home.yaml`. Both source-checkout and embedded deployment verification include its object key, so
+a missing video blocks a new release instead of leaving a broken player.
+
+Publish the finished clip to staging and production before the next rollout:
+
+```bash
+navigator site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/vesta-home/vesta-explainer.mp4
+```
+
+## Vesta video updates
+
+The October 12–18, 2026 Vesta Posts use public MP4s under `img/vesta-updates/`, named by date as `YYYY-MM-DD.mp4`.
+Source files stay outside Git. MP4 uploads accept up to 64 MiB; other public assets remain limited to 25 MiB. Preserve
+video resolution when practical and inspect compressed copies before publishing. The Post seed records these keys, and
+the release asset inventory checks every one before and after a rollout.
+
+The homepage shows the newest five published video Posts in a horizontal scroll, with inline playback controls and
+keyboard access. When fewer than five videos are published, it shows the available videos. Post pages also play each
+video and show its confirmed social post links when present. The shared `nav-video-rail` style in `theme.css` keeps
+portrait cards in a horizontal row with native scrolling and keyboard access for any house site.
+
+## Death & Divorce hero
+
+Death & Divorce's home hero is a picture at `img/death-and-divorce/hero.png`
+(`views::assets::DEATH_AND_DIVORCE_HERO_KEY`), served from the public asset lane like CyberInjuryLaw's portrait. The
+favicon and header logo stay the tracked `server/public/brand/death-and-divorce/mark.svg`. `assets verify` and `ops
+ship` both check the hero key, so a release fails loudly until it is published:
+
+```bash
+navigator site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/death-and-divorce/hero.png
+```
+
+## Astrocartography design map
+
+The design gallery's world map embeds Natural Earth's v5.1.2 1:110m land geometry from the [versioned GeoJSON
+source](https://github.com/nvkelso/natural-earth-vector/blob/v5.1.2/geojson/ne_110m_land.geojson). Natural Earth makes
+the data [public domain](https://www.naturalearthdata.com/about/terms-of-use/).
+
+`webapp/src/assets/natural-earth-110m-land.path` holds the land polygons projected into the reusable SVG's 960×480
+coordinate space: `x = (longitude + 180) / 360 * 960`, `y = (90 - latitude) / 180 * 480`. Each polygon ring is a closed
+SVG subpath; the renderer uses the even-odd fill rule. The asset is compiled into the Rust component and needs no bucket
+upload or runtime map provider. The map's planetary overlays are invented design fixtures, separate from the land data.

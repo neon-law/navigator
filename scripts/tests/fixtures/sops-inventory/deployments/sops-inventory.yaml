@@ -1,0 +1,25 @@
+# Synthetic key-name contract used only to test the inventory validator.
+# These rows contain no credentials and do not represent a provisioned deployment.
+common:
+  SESSION_SECRET: synthetic shared application key
+
+independent:
+  NAVIGATOR_RUNTIME_KMS_KEY: synthetic per-row runtime key
+
+production_only:
+  NAVIGATOR_META_APP_SECRET: synthetic provider secret
+
+staging_only:
+  NAVIGATOR_SMS_TEST_RECIPIENTS: synthetic test-recipient list
+
+postgres_service_only:
+  NAVIGATOR_POSTGRES_PASSWORD: synthetic database password
+  NAVIGATOR_POSTGRES_TLS_CERTIFICATE: synthetic database certificate
+  NAVIGATOR_POSTGRES_TLS_PRIVATE_KEY: synthetic database private key
+
+forgejo_service_only:
+  NAVIGATOR_FORGEJO_DATABASE_PASSWORD: synthetic Forgejo database password
+  NAVIGATOR_FORGEJO_SECRET_KEY: synthetic Forgejo secret key
+  NAVIGATOR_FORGEJO_INTERNAL_TOKEN: synthetic Forgejo internal token
+  NAVIGATOR_FORGEJO_OAUTH2_JWT_SECRET: synthetic Forgejo JWT secret
+  NAVIGATOR_FORGEJO_POSTGRES_CA_CERT: synthetic Forgejo database CA certificate

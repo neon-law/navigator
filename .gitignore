@@ -1,0 +1,113 @@
+/target
+/.worktrees/
+# Claude Code state is entirely local now that the contract is AGENTS.md and the
+# catalog is /.agents/skills — nothing under here is source. It also holds the
+# linked checkouts agent harnesses create, each a whole second copy of this tree,
+# so a committed snapshot would ship another branch's content — and the brand
+# guards skip any directory named `worktrees`, so nothing would catch it.
+/.claude/
+**/*.rs.bk
+# macOS Finder metadata — never source
+.DS_Store
+/.devx/
+/navigator.sqlite
+/navigator.sqlite.stale.*
+# Local-only secret drop (Slack app creds, etc.) — deployed values live in
+# each deployment's SOPS-encrypted tree.
+/.slack.txt
+/.navigator
+/.agent/scheduled_tasks.lock
+# Local agent state stays local, but repo skills are source.
+/.agents/*
+!/.agents/skills/
+!/.agents/skills/**
+# Local Codex state stays local; the skill catalog lives in /.agents/skills.
+/.codex/
+/.playwright-mcp/
+# Root-level screenshots taken during UI iteration (about-*.png,
+# mobile-*.png, www-neonlaw-*.png, help-page-*.png, …). Keep them
+# out of the repo; they belong on the operator's machine.
+/*.png
+
+# Environment files. The workspace loads `.env` at startup via
+# `dotenvy::dotenv().ok()`. Real deployment values (project IDs,
+# OAuth client IDs, domain names, secrets) belong in your local
+# `.env`, never in git. `.env.example` is the only env file checked
+# in — it documents every variable the workspace reads.
+.env
+.env.*
+!.env.example
+
+# Decrypted deployment key material never reaches a commit. `deployments/<row>/`
+# holds only `config.toml` and the SOPS ciphertext `secrets.enc.yaml`; a
+# plaintext secret that is committed cannot be un-committed, only rotated at the
+# provider. `navigator ops deployments` also refuses any stray plaintext file.
+/deployments/**/secrets.yaml
+/deployments/**/secrets.json
+/deployments/**/*.dec.*
+/deployments/**/*.decrypted.*
+
+# Output of `scripts/publish-oss.sh` / `cargo run -p cli -- oss-publish`
+# (Phase 6 — the clean-history snapshot used to seed the public repo).
+/dist-oss/
+
+# Transcoded responsive photo variants (~17 MB, 117 files). Generated
+# by `cli assets build` from the `/tmp` source photos and served in
+# production from the public `<project>-assets` GCS bucket via
+# `cli assets upload` — never in git, never baked into the image. A
+# fresh clone has empty photo slots until a local `cli assets build`
+# repopulates this directory (matches the workshop/marketing asset
+# pattern). The rest of `server/public` (Bootstrap, brand SVGs) stays
+# tracked and still ships in the image.
+/server/public/img/
+
+# Licensed GORP WOFF2 files are operator-supplied assets. They are uploaded to
+# the deployment's public assets bucket by `navigator assets fonts upload`, not
+# committed to this open-source repository.
+/server/public/fonts/gorp-serif/*.woff2
+
+# DeleteYourData.com's Plus Jakarta Sans WOFF2 faces follow the same bucket
+# lane as GORP's, uploaded by `navigator ops assets fonts upload --family
+# plus-jakarta-sans` — see `docs/assets.md`.
+/server/public/fonts/plus-jakarta-sans/*.woff2
+
+# The five practice brands' six OFL families ride the same lane, one
+# `--family` value per directory. Only the OFL.txt notices are tracked; the
+# faces come from the deployment's public assets bucket. Lawyer Shook's Tinos
+# is the exception and stays tracked.
+/server/public/fonts/eb-garamond/*.woff2
+/server/public/fonts/source-sans-3/*.woff2
+/server/public/fonts/source-serif-4/*.woff2
+/server/public/fonts/mukta/*.woff2
+/server/public/fonts/public-sans/*.woff2
+/server/public/fonts/libre-franklin/*.woff2
+
+# Default local object-storage root (cloud::from_env fs backend)
+var/
+
+# Government form blanks are working copies, not source: the canonical
+# bytes live in the public assets bucket, pinned by the tracked sibling
+# `.sha256` files. `navigator forms sync` uploads a local blank and
+# records its pin; only text (`.md`, `.fields.toml`, `.sha256`) is
+# committed.
+/templates/notations/forms/**/*.pdf
+
+# Still no third language.
+pyproject.toml
+.venv
+
+# Dioxus client bundle — built by `navigator dev build-webapp` (issue #641),
+# staged into the image by images/Containerfile.web. A build artifact, never committed.
+server/public/dioxus/
+
+# Managed DOCX adapter build outputs — the source project and lock files are
+# tracked, but SDK restore/build artifacts are not.
+/word/adapter/bin/
+/word/adapter/obj/
+
+/server/public/fonts/barlow-condensed/*.woff2
+/server/public/fonts/dm-sans/*.woff2
+/cyberinjurylaw/
+
+# Python bytecode from local tooling.
+__pycache__/

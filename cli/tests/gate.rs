@@ -1,0 +1,2620 @@
+//! Integration tests for the `navigator project gate` subcommand.
+//!
+//! These drive the compiled binary through `assert_cmd` so the test
+//! exercises the real argv parsing, exit codes, and stdout the user
+//! will see — not just the library it wraps.
+
+use std::fmt::Write as _;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
+use predicates::str;
+use tempfile::TempDir;
+
+fn write(dir: &Path, rel: &str, contents: &str) {
+    let path = dir.join(rel);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, contents).unwrap();
+}
+
+fn write_agent_contract(dir: &Path, _code: &str) {
+    write(
+        dir,
+        "AGENTS.md",
+        include_str!("../src/projects/agent_contract.md"),
+    );
+}
+
+fn write_project_shell(dir: &Path, code: &str) {
+    write(
+        dir,
+        "navigator.yaml",
+        &format!("host: staging.neonlaw.com\nproject: {code}\n"),
+    );
+    write(dir, "README.md", &format!("# {code}\n\nProject source.\n"));
+    write(dir, ".github/CODEOWNERS", "# CODEOWNERS\n\n* @shicholas\n");
+    write_agent_contract(dir, code);
+    write(
+        dir,
+        ".claude/settings.json",
+        include_str!("../src/projects/claude_settings.json"),
+    );
+    write(
+        dir,
+        ".github/workflows/ci.yml",
+        r"name: ci
+on: [pull_request]
+jobs:
+  ci:
+    uses: neon-law/navigator/.github/workflows/project-gate.yml@26.8.23
+",
+    );
+    write(
+        dir,
+        ".github/workflows/cd.yml",
+        r"name: cd
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  gate:
+    uses: neon-law/navigator/.github/workflows/project-gate.yml@26.8.23
+  publish:
+    needs: gate
+    uses: neon-law/navigator/.github/workflows/project-publish.yml@26.8.23
+",
+    );
+}
+
+fn navigator() -> Command {
+    let mut command = Command::cargo_bin("navigator").unwrap();
+    command.env_remove("GITHUB_REPOSITORY");
+    command
+}
+
+/// Arrange `root` as something the gate will run in — it identifies a
+/// repository root by the `README` and `.git` beside it — and invoke it there.
+///
+/// The README is deliberately extensionless unless the fixture already wrote
+/// its own: the gate lints `.md`, and a `README.md` nobody asked for would be
+/// one more file in every scan count these tests assert on.
+fn gate(root: &Path) -> Command {
+    let has_readme = fs::read_dir(root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| entry.file_name().to_string_lossy().starts_with("README"));
+    if !has_readme {
+        fs::write(root.join("README"), "fixture\n").unwrap();
+    }
+    if !root.join(".git").exists() {
+        let status = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git init failed in {}", root.display());
+    }
+    let mut command = navigator();
+    command.current_dir(root).args(["project", "gate"]);
+    command
+}
+
+/// ENG-951: `--ci` is for CI runners. Without `CI` it refuses before any
+/// offline pass, layout check, or live check runs, so a laptop never sees a
+/// misleading "0 error(s)" summary followed by an exit 1 from the live check.
+#[test]
+fn ci_flag_refuses_before_any_check_when_ci_is_unset_or_empty() {
+    for ci in [None, Some("")] {
+        for args in [&["--ci"][..], &["--check", "--ci"][..]] {
+            let dir = TempDir::new().unwrap();
+            let mut command = gate(dir.path());
+            command.args(args);
+            match ci {
+                Some(value) => command.env("CI", value),
+                None => command.env_remove("CI"),
+            };
+            let assert = command.assert().failure().code(2).stdout("");
+            let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+            assert_eq!(stderr.lines().count(), 1, "one line on stderr: {stderr:?}");
+            assert!(
+                stderr.starts_with("error: --ci is for CI runners (CI is not set)."),
+                "{stderr:?}"
+            );
+            assert!(stderr.contains("navigator project gate"), "{stderr:?}");
+            assert!(
+                stderr.contains("navigator site login --host <host>"),
+                "{stderr:?}"
+            );
+        }
+    }
+}
+
+/// The refusal reads only `CI`: with it set, `--ci` proceeds into the gate as
+/// before, and a bare `gate` never consults it.
+#[test]
+fn ci_flag_runs_when_ci_is_set_and_bare_gate_ignores_it() {
+    let dir = TempDir::new().unwrap();
+    gate(dir.path())
+        .env("CI", "true")
+        .arg("--ci")
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 error(s)"));
+    gate(dir.path())
+        .env_remove("CI")
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 error(s)"));
+}
+
+#[test]
+fn gate_succeeds_on_clean_directory() {
+    let dir = TempDir::new().unwrap();
+    // A plain prose file classifies as Markdown (it carries none of the
+    // notation/event/content markers), so it is held only to the M/S
+    // rules — no N-family expectations to satisfy.
+    write(dir.path(), "Notes.md", "Plain body line.\n");
+    gate(dir.path()).assert().success().stdout(str::contains(
+        "Scanned 1 file(s), found 0 error(s), 0 warning(s)",
+    ));
+}
+
+#[test]
+fn validate_fix_removes_legacy_template_code_metadata() {
+    let dir = TempDir::new().unwrap();
+    let source = include_str!("../../templates/notations/neon_law/onboarding__letter.md").replacen(
+        "title: Onboarding Letter\n",
+        "title: Onboarding Letter\ncode: stale_code\n",
+        1,
+    );
+    write(
+        dir.path(),
+        "templates/notations/neon_law/onboarding__letter.md",
+        &source,
+    );
+
+    navigator()
+        .args(["validate", dir.path().to_str().unwrap(), "--fix"])
+        .assert()
+        .success()
+        .stdout(str::contains("Fixed 1 file(s)"));
+
+    let fixed = fs::read_to_string(
+        dir.path()
+            .join("templates/notations/neon_law/onboarding__letter.md"),
+    )
+    .unwrap();
+    assert!(
+        !fixed.contains("\ncode:"),
+        "legacy code field remains: {fixed}"
+    );
+}
+
+#[test]
+fn gate_refuses_a_services_catalog_with_a_dangling_template() {
+    let dir = TempDir::new().unwrap();
+    let catalog =
+        fs::read_to_string(workspace_root().join("neon/locales/en/neon/services-catalog.yaml"))
+            .unwrap()
+            .replace("template: nv__llc_formation", "template: missing_template");
+    write(
+        dir.path(),
+        "locales/en/neon/services-catalog.yaml",
+        &catalog,
+    );
+
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("N124"))
+        .stdout(str::contains("missing_template"));
+}
+
+#[test]
+fn gate_exits_nonzero_on_violations_and_prints_each_one() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "Bad.md",
+        &format!("Intro.\n\n{}\n", "x".repeat(121)),
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("S101"))
+        .stdout(str::contains("Scanned 1 file(s), found"));
+}
+
+/// LAW-86 item 4: a Project repository whose own layout is clean (so
+/// `validate_gate`'s "Validated Project repository …" line legitimately says
+/// `0 error(s), 0 warning(s)`) can still fail the run on a content-lint
+/// finding elsewhere in the tree. The overall result must say so, rather than
+/// leaving that clean-looking line as the last thing printed on an exit-1 run.
+#[test]
+fn gate_states_the_true_reason_when_content_findings_fail_a_clean_project_layout() {
+    let dir = TempDir::new().unwrap();
+    write_project_shell(dir.path(), "acme");
+    // `tests/` is on `ALLOWED_ROOTS`, so this does not itself become a
+    // repository-layout error — only a content-lint finding.
+    write(
+        dir.path(),
+        "tests/Bad.md",
+        &format!("Intro.\n\n{}\n", "x".repeat(121)),
+    );
+
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("S101"))
+        .stdout(str::contains(
+            "Validated Project repository `acme`: 0 template(s), 0 error(s),",
+        ))
+        .stdout(str::contains(
+            "navigator project gate: 1 content finding(s), 0 repository-layout error(s) — failing",
+        ));
+}
+
+#[test]
+fn gate_ignores_dependency_and_build_outputs_but_catches_authored_findings() {
+    let dir = TempDir::new().unwrap();
+    let overlong = format!("Intro.\n\n{}\n", "x".repeat(121));
+    write(dir.path(), "authored.md", &overlong);
+    write(dir.path(), "node_modules/pkg/README.md", &overlong);
+    write(dir.path(), "dist/README.md", &overlong);
+    write(
+        dir.path(),
+        "node_modules/pkg/broken.yaml",
+        "key: [unclosed\n",
+    );
+    write(dir.path(), "dist/broken.yaml", "key: [unclosed\n");
+    write(
+        dir.path(),
+        "node_modules/pkg/Containerfile",
+        "FROM node:latest\n",
+    );
+    write(dir.path(), "dist/Containerfile", "FROM node:latest\n");
+
+    let output = gate(dir.path()).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("authored.md"),
+        "authored finding: {combined}"
+    );
+    assert!(combined.contains("S101"), "authored rule code: {combined}");
+    assert!(
+        !combined.contains("node_modules") && !combined.contains("dist"),
+        "generated trees must not be reported: {combined}"
+    );
+    assert!(
+        stdout.contains("Scanned 1 file(s), found 1 error(s), 0 warning(s)"),
+        "only the authored Markdown file is scanned: {stdout}"
+    );
+    assert!(
+        stdout.contains("Parsed 0 YAML file(s), found 0 error(s)"),
+        "generated YAML is ignored: {stdout}"
+    );
+    assert!(
+        stdout.contains("Checked consumed image/binary tags, found 0 mutable tag(s)"),
+        "generated Containerfiles are ignored: {stdout}"
+    );
+}
+
+/// The generated-tree skip matches a whole directory name, never a substring.
+/// `validate` is the gate over authored content, so a directory whose name
+/// merely contains `dist`, `node_modules`, or `target` is authored content and
+/// stays in the walk. A substring rule would silently stop scanning a real
+/// tree, which is the one failure this gate cannot have.
+///
+/// Every pass carrying the skip is pinned here, because two filters implement
+/// it: `rules::DefaultFileFilter` for the Markdown walk, and the CLI's own
+/// entry filter for the YAML, seed, locale, and mutable-tag passes.
+#[test]
+fn gate_walks_authored_directories_whose_names_only_contain_a_skipped_name() {
+    let dir = TempDir::new().unwrap();
+    let overlong = format!("Intro.\n\n{}\n", "x".repeat(121));
+    write(dir.path(), "distributions/notes.md", &overlong);
+    write(dir.path(), "node_modules_policy/notes.md", &overlong);
+    write(dir.path(), "targeting/notes.md", &overlong);
+    write(dir.path(), "distributions/broken.yaml", "key: [unclosed\n");
+    write(
+        dir.path(),
+        "node_modules_policy/Containerfile",
+        "FROM node:latest\n",
+    );
+
+    let output = gate(dir.path()).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let combined = format!("{stdout}{stderr}");
+    for tree in ["distributions", "node_modules_policy", "targeting"] {
+        assert!(
+            combined.contains(tree),
+            "{tree}/ is authored and must still be scanned: {combined}"
+        );
+    }
+    assert!(
+        stdout.contains("Scanned 3 file(s), found 3 error(s), 0 warning(s)"),
+        "every authored Markdown file is scanned: {stdout}"
+    );
+    assert!(
+        stdout.contains("Parsed 1 YAML file(s), found 1 error(s)"),
+        "authored YAML in a look-alike directory is parsed: {stdout}"
+    );
+    assert!(
+        stdout.contains("Checked consumed image/binary tags, found 1 mutable tag(s)"),
+        "authored Containerfiles in a look-alike directory are checked: {stdout}"
+    );
+}
+
+#[test]
+fn gate_marks_each_diagnostic_with_its_severity() {
+    let dir = TempDir::new().unwrap();
+    let warning_source =
+        workspace_root().join("templates/notations/neon_law/onboarding__letter.md");
+    let warning_path = dir
+        .path()
+        .join("templates/notations/neon_law/onboarding__letter.md");
+    fs::create_dir_all(warning_path.parent().unwrap()).unwrap();
+    // The shipped template's only allowed-but-deferred step is `onchain`
+    // (`lawyer_review` is a mandatory human gate, not deferred automation,
+    // and must stay in place so this still satisfies `N106`). Route the
+    // signature branch through it so `N112` still has a live subject.
+    let contents = fs::read_to_string(&warning_source)
+        .unwrap()
+        .replace(
+            "    signature_received: END\n",
+            "    signature_received: onchain\n",
+        )
+        .replace("  END: {}\n", "  onchain:\n    recorded: END\n  END: {}\n");
+    fs::write(&warning_path, contents).unwrap();
+    write(
+        dir.path(),
+        "Bad.md",
+        &format!("Intro.\n\n{}\n", "x".repeat(121)),
+    );
+
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::is_match(r"(?m)^error: .*S101:").unwrap())
+        .stdout(str::is_match(r"(?m)^warning: .*N112:").unwrap());
+}
+
+#[test]
+fn gate_default_rule_set_flags_missing_frontmatter() {
+    let dir = TempDir::new().unwrap();
+    // A file self-identifies as a notation template by declaring
+    // `kind:` (one of the notation kinds) — not by its path or structure.
+    // Once it does, the missing required keys are flagged.
+    write(
+        dir.path(),
+        "templates/notes.md",
+        "---\nkind: onboarding\nquestionnaire:\n  BEGIN:\n    _: END\n---\n\nBody.\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("N101"))
+        .stdout(str::contains("N102"));
+}
+
+#[test]
+fn gate_no_longer_flags_a_body_only_letter_with_a_plain_signature_line_for_n104() {
+    // LAW-84: a manual signature line shows the document gets signed, not
+    // that Navigator runs the signing, so it no longer forces a
+    // questionnaire/workflow pair the way a `sent_for_signature`
+    // placeholder still does. This fixture is otherwise incomplete
+    // frontmatter (no `title`/`code`/etc.), so the gate still fails — just
+    // not on N104 anymore; see `wet_ink_templates.rs` for the full-fixture
+    // success case.
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "templates/signable.md",
+        "---\nkind: letter\n---\n\nPlease sign below.\n\nSignature: ____________________\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("N104").not());
+}
+
+#[test]
+fn gate_accepts_a_resume_template_with_no_questionnaire_or_workflow() {
+    let dir = TempDir::new().unwrap();
+    write_project_shell(dir.path(), "acme");
+    write(
+        dir.path(),
+        "templates/resume.md",
+        "---\ntitle: Resume\nkind: resume\nrespondent_type: person\nconfidential: false\n---\n\n\
+         # Alex Example\n\nalex@example.com\n\n## Experience\n\n- Led a synthetic workstream.\n",
+    );
+    gate(dir.path())
+        .assert()
+        .stdout(str::contains("templates/resume.md").not());
+}
+
+#[test]
+fn gate_requires_a_kind_from_every_file_in_the_templates_lane() {
+    // LAW-15: this used to pass clean. Classification is still
+    // frontmatter-driven — a file with no `kind:` is *linted* as plain
+    // Markdown — but a file under `templates/` with no `kind:` is not a
+    // plain Markdown file, it is a template that forgot to say what it is,
+    // and passing clean is the worst possible report. An instrument that
+    // is pure body prose (a will, a directive) carries no questionnaire
+    // and no workflow, so the structural trigger never caught it; the lane
+    // does.
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "templates/notes.md", "Just a body line.\n");
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("S104"))
+        .stdout(str::contains("under `templates/` but declares no `kind:`"));
+}
+
+#[test]
+fn gate_exempts_templates_lane_repository_furniture_from_the_kind_rule() {
+    // A templates tree carries its own README and agent contract. Neither
+    // is a notation, so neither is asked for a kind.
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "templates/README.md", "# Templates\n");
+    gate(dir.path()).assert().success().stdout(str::contains(
+        "Scanned 1 file(s), found 0 error(s), 0 warning(s)",
+    ));
+}
+
+#[test]
+fn gate_rejects_the_retired_public_template_shelf() {
+    let dir = TempDir::new().unwrap();
+    let source = workspace_root().join("templates/notations/neon_law/onboarding__letter.md");
+    let retired = dir.path().join("templates/open_source/retainer.md");
+    fs::create_dir_all(retired.parent().unwrap()).unwrap();
+    fs::copy(source, &retired).unwrap();
+
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("N110"))
+        .stdout(str::contains("open_source"))
+        .stdout(str::contains(
+            "must live under `notations/neon_law/` or `notations/forms/`",
+        ));
+}
+
+#[test]
+fn gate_default_treats_code_only_frontmatter_as_markdown() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "server/content/marketing/service.md",
+        "---\ntitle: Service\ncode: sample\n---\n\nBody.\n",
+    );
+    gate(dir.path()).assert().success().stdout(str::contains(
+        "Scanned 1 file(s), found 0 error(s), 0 warning(s)",
+    ));
+}
+
+#[test]
+fn gate_walks_the_repository_root_it_is_run_in() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "Notes.md", "Plain body line.\n");
+    gate(dir.path()).assert().success().stdout(str::contains(
+        "Scanned 1 file(s), found 0 error(s), 0 warning(s)",
+    ));
+}
+
+/// The gate takes no path, so the only thing that can put it over the wrong
+/// tree is being run from one. A directory with no `README` and no `.git` is
+/// not a repository root, and the gate says so rather than reporting a clean
+/// scan of whatever it found there.
+#[test]
+fn gate_refuses_a_directory_that_is_not_a_repository_root() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "Notes.md", "Plain body line.\n");
+    navigator()
+        .current_dir(dir.path())
+        .args(["project", "gate"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(str::contains("has no README and no .git"));
+}
+
+/// A subdirectory of a repository is still not a root, which is the case the
+/// old directory argument made easy to get wrong: a gate pointed at `docs/`
+/// reported a clean tree over every file it never read.
+#[test]
+fn gate_refuses_a_subdirectory_of_a_repository() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "docs/Notes.md", "Plain body line.\n");
+    gate(dir.path());
+    navigator()
+        .current_dir(dir.path().join("docs"))
+        .args(["project", "gate"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(str::contains("run it from the root"));
+}
+
+#[test]
+fn gate_now_scans_readme_and_claude_as_prose() {
+    // The former default excludes are gone: README/CLAUDE are scanned like
+    // any other markdown and, as clean prose, pass.
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "README.md", "A readme line.\n");
+    write(dir.path(), "CLAUDE.md", "Agent rules line.\n");
+    write(dir.path(), "Ok.md", "Plain body line.\n");
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("Scanned 3 file(s)"));
+}
+
+#[test]
+fn gate_root_scans_canonical_skills_without_duplicate_hidden_aliases() {
+    let dir = TempDir::new().unwrap();
+    let broken_skill = dir
+        .path()
+        .join(".agents")
+        .join("skills")
+        .join("broken")
+        .join("SKILL.md");
+    write(
+        dir.path(),
+        ".agents/skills/broken/SKILL.md",
+        &format!("{}\n", "x".repeat(121)),
+    );
+    write(
+        dir.path(),
+        ".claude/skills/alias/SKILL.md",
+        &format!("{}\n", "x".repeat(121)),
+    );
+    write(
+        dir.path(),
+        ".codex/skills/alias/SKILL.md",
+        &format!("{}\n", "x".repeat(121)),
+    );
+    write(
+        dir.path(),
+        ".git/ignored.md",
+        &format!("{}\n", "x".repeat(121)),
+    );
+    write(
+        dir.path(),
+        "target/ignored.md",
+        &format!("{}\n", "x".repeat(121)),
+    );
+
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains(broken_skill.display().to_string()))
+        .stdout(str::contains("S101"))
+        .stdout(str::contains("Scanned 1 file(s)"));
+}
+
+/// Validate remains independent of database environment variables.
+#[test]
+fn gate_ignores_an_exported_database_url() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "Notes.md", "Plain body line.\n");
+    gate(dir.path())
+        .env("DATABASE_URL", "postgres://x:y@localhost:5432/z")
+        .env_remove("NAVIGATOR_SURREAL_ENDPOINT")
+        .env_remove("NAVIGATOR_SURREAL_NAMESPACE")
+        .env_remove("NAVIGATOR_SURREAL_DATABASE")
+        .assert()
+        .success()
+        .stdout(str::contains(
+            "Scanned 1 file(s), found 0 error(s), 0 warning(s)",
+        ));
+}
+
+/// The removed store-backed flag is rejected so validation stays local.
+#[test]
+fn question_codes_from_store_flag_is_removed() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "Notes.md", "Plain body line.\n");
+    gate(dir.path())
+        .arg("--question-codes-from-store")
+        .env_remove("NAVIGATOR_SURREAL_ENDPOINT")
+        .env_remove("NAVIGATOR_SURREAL_NAMESPACE")
+        .env_remove("NAVIGATOR_SURREAL_DATABASE")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(str::contains(
+            "unexpected argument '--question-codes-from-store'",
+        ));
+}
+
+#[test]
+fn gate_names_the_half_of_the_root_marker_that_is_missing() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("README"), "fixture\n").unwrap();
+    navigator()
+        .current_dir(dir.path())
+        .args(["project", "gate"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(str::contains("has no .git"));
+}
+
+/// The repository root, derived from this crate's manifest dir
+/// (`CARGO_MANIFEST_DIR` points at `cli/`; the workspace is one up).
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .canonicalize()
+        .expect("workspace root exists")
+}
+
+/// CI guard: this repository passes its own gate.
+///
+/// The gate runs at a repository root over the whole tree, so this is one
+/// assertion rather than one per subtree: every shipped notation template
+/// under `templates/`, every doc, and every YAML the tree carries, including
+/// the infrastructure roots whose consumed image and binary tags must stay
+/// pinned (navigator#540). `--ci` writes nothing — this must not edit the
+/// working tree — so a file the gate would have fixed fails here too, which
+/// is the same contract the merge gate runs under.
+///
+/// Yellow `N112` "not built yet" advisories (every template's
+/// `lawyer_review` gate earns one today) are warnings, not errors, so they
+/// are expected and do not fail the run — assert on `0 error(s)`.
+///
+/// Keep the tree conforming; do not loosen this test to make a bad file pass.
+#[test]
+fn this_repository_passes_its_own_gate() {
+    navigator()
+        .current_dir(workspace_root())
+        .env("CI", "true")
+        .args(["project", "gate", "--ci"])
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 error(s)"))
+        .stdout(str::contains("found 0 mutable tag(s)"))
+        .stdout(str::contains("unformatted 0 file(s)"));
+}
+
+/// Every classified corpus file must declare a `kind:` — the guard that
+/// keeps classification honest now that [`rules::classify_source`] reads
+/// the declared kind and nothing else (no questionnaire/workflow/path
+/// inference). If a template or content page forgets its `kind:`, it
+/// classifies as plain [`rules::DocumentKind::Markdown`] and silently
+/// skips its whole rule family. This walks the real content roots and
+/// fails the build the moment one drifts — so inference can never quietly
+/// return through the side door of an undeclared file.
+///
+/// `README.md` is excluded by name from the linter (it is never notation),
+/// so the workshop README — which the loader still serves as a workshop —
+/// is not required to declare a kind here.
+#[test]
+fn every_classified_corpus_file_declares_a_kind() {
+    use rules::DocumentKind;
+
+    // (content root, the kind every non-README file under it must resolve
+    // to). Matched longest-prefix-first, so a nested root overrides its
+    // parent: `templates/github` is the engineering intake shelf and
+    // classifies as `Github`, while every other file under `templates`
+    // is a legal notation.
+    let roots: &[(&str, DocumentKind)] = &[
+        ("templates", DocumentKind::NotationTemplate),
+        ("templates/github", DocumentKind::Github),
+        ("server/content/workshops", DocumentKind::Workshop),
+    ];
+    let root = workspace_root();
+    let expected_for = |path: &Path| -> DocumentKind {
+        roots
+            .iter()
+            .filter(|(rel, _)| path.starts_with(root.join(rel)))
+            .max_by_key(|(rel, _)| rel.len())
+            .map(|(_, kind)| *kind)
+            .expect("every walked file lives under one of the roots")
+    };
+    let mut checked = 0usize;
+    for (rel, _) in roots {
+        let dir = root.join(rel);
+        assert!(dir.is_dir(), "content root missing: {}", dir.display());
+        for entry in walkdir::WalkDir::new(&dir) {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let is_md = path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("md"));
+            if !is_md {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            // READMEs are excluded from linting by name.
+            if name.eq_ignore_ascii_case("README.md") {
+                continue;
+            }
+            let contents = fs::read_to_string(path).unwrap();
+            let file = rules::SourceFile {
+                path: path.to_path_buf(),
+                contents,
+            };
+            let expected = expected_for(path);
+            let actual = rules::classify_source(&file);
+            assert_eq!(
+                actual,
+                expected,
+                "{} must declare a `kind:` that classifies as {expected:?} (got {actual:?}); \
+                 an undeclared file silently lints as prose Markdown",
+                path.display(),
+            );
+            checked += 1;
+        }
+    }
+    // A loose floor, not an exact count: it exists so a walker that silently
+    // finds nothing fails loudly. The slim catalog (public forms plus two
+    // sample letters, plus GitHub intake, blog, and workshops) is 21 files
+    // because the nested `templates/github` root is walked twice.
+    assert!(
+        checked >= 21,
+        "expected to check the whole corpus, only saw {checked} files",
+    );
+}
+
+/// `validate` parses standalone `.yaml`/`.yml` in the same walk and reports
+/// the count.
+#[test]
+fn gate_parses_yaml_and_yml_files() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "config.yaml",
+        "name: navigator\nitems:\n  - one\n",
+    );
+    write(dir.path(), "nested/multi.yml", "---\na: 1\n---\nb: 2\n");
+    write(dir.path(), "notes.txt", "not: [valid\n");
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("Parsed 2 YAML file(s), found 0 error(s)"));
+}
+
+#[test]
+fn gate_rejects_yaml_parse_errors() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "bad.yaml", "root:\n  - ok\n  - [broken\n");
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Parsed 1 YAML file(s), found 1 error(s)"))
+        .stderr(str::contains("bad.yaml"))
+        .stderr(str::contains("YAML parse error"));
+}
+
+#[test]
+fn gate_checks_document_pointer_shape_only_in_a_project_repository() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "navigator.yaml",
+        "project: acme\nhost: staging.example.com\n",
+    );
+    write(
+        dir.path(),
+        "blobs/agreements/terms.pdf.yml",
+        "kind: agreement\nvisibility: internal\ncurrent_verison: {}\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y003"))
+        .stdout(str::contains("current_version"));
+
+    let unrelated = TempDir::new().unwrap();
+    write(
+        unrelated.path(),
+        "blobs/agreements/terms.pdf.yml",
+        "belongs: to-another-tool\n",
+    );
+    gate(unrelated.path()).assert().success();
+}
+
+#[test]
+fn gate_accepts_a_complete_document_pointer_and_rejects_chain_mismatches() {
+    let dir = TempDir::new().unwrap();
+    write_project_shell(dir.path(), "acme");
+    let path = "blobs/agreements/terms.pdf.yml";
+    write(
+        dir.path(),
+        path,
+        "kind: agreement\nvisibility: internal\ncurrent_version:\n  version: 1\n  asset_id: 0199b9e4-14b7-7ad0-87a5-71ef24a46d40\n  created_at: 2026-09-05T12:00:00Z\n  sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n  size_bytes: 42\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains(
+            "Validated 1 document pointer(s), found 0 error(s)",
+        ))
+        .stderr(str::contains("live Project check is inconclusive"));
+
+    write(
+        dir.path(),
+        path,
+        "kind: agreement\nvisibility: public\ncurrent_version:\n  version: 2\n  asset_id: 0199b9e4-14b7-7ad0-87a5-71ef24a46d40\n  created_at: 2026-09-05T08:00:00-04:00\n  sha256: ABCD\n  size_bytes: 0\nunknown: true\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y003"))
+        .stdout(str::contains("unknown"));
+}
+
+/// ENG-859: `onboarding/`/`offboarding/` require a matching `_signed.pdf`
+/// name and `docusign_envelope_id` together, and every `invoices/` pointer
+/// requires `xero_invoice_id`.
+#[test]
+fn gate_enforces_the_onboarding_offboarding_and_invoice_pointer_keys() {
+    let dir = TempDir::new().unwrap();
+    write_project_shell(dir.path(), "acme");
+    let common = "current_version:\n  version: 1\n  asset_id: 0199b9e4-14b7-7ad0-87a5-71ef24a46d40\n  created_at: 2026-09-05T12:00:00Z\n  sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n  size_bytes: 42\n";
+
+    // A `_signed.pdf` onboarding pointer with no envelope id is rejected.
+    write(
+        dir.path(),
+        "blobs/onboarding/retainer_signed.pdf.yaml",
+        &format!("kind: onboarding\nvisibility: internal\n{common}"),
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y003"))
+        .stdout(str::contains("docusign_envelope_id"));
+
+    // Adding a well-formed envelope id makes the same pointer pass.
+    write(
+        dir.path(),
+        "blobs/onboarding/retainer_signed.pdf.yaml",
+        &format!(
+            "kind: onboarding\nvisibility: internal\n{common}docusign_envelope_id: 0199b9e4-14b7-7ad0-87a5-71ef24a46d41\n"
+        ),
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains(
+            "Validated 1 document pointer(s), found 0 error(s)",
+        ))
+        .stderr(str::contains("live Project check is inconclusive"));
+
+    // An onboarding pointer named without the `_signed.pdf` suffix but
+    // carrying an envelope id is also rejected.
+    std::fs::remove_file(dir.path().join("blobs/onboarding/retainer_signed.pdf.yaml")).unwrap();
+    write(
+        dir.path(),
+        "blobs/onboarding/retainer.pdf.yaml",
+        &format!(
+            "kind: onboarding\nvisibility: internal\n{common}docusign_envelope_id: 0199b9e4-14b7-7ad0-87a5-71ef24a46d41\n"
+        ),
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y003"))
+        .stdout(str::contains("_signed.pdf"));
+
+    // An invoice pointer with no xero_invoice_id is rejected.
+    std::fs::remove_file(dir.path().join("blobs/onboarding/retainer.pdf.yaml")).unwrap();
+    write(
+        dir.path(),
+        "blobs/invoices/INV-1.pdf.yaml",
+        &format!("kind: invoice\nvisibility: internal\n{common}"),
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y003"))
+        .stdout(str::contains("xero_invoice_id"));
+
+    // Adding the invoice id makes it pass.
+    write(
+        dir.path(),
+        "blobs/invoices/INV-1.pdf.yaml",
+        &format!(
+            "kind: invoice\nvisibility: internal\n{common}xero_invoice_id: 0199b9e4-14b7-7ad0-87a5-71ef24a46d42\n"
+        ),
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains(
+            "Validated 1 document pointer(s), found 0 error(s)",
+        ))
+        .stderr(str::contains("live Project check is inconclusive"));
+}
+
+#[test]
+fn gate_checks_seed_documents_before_any_deployment_write() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "seeds/Person.yaml",
+        "lookup_fields:\n  - email\nrecords:\n  - email: person@example.com\n    name: Person\n",
+    );
+    write(
+        dir.path(),
+        "seeds/Entity.yaml",
+        "lookup_fields:\n  - name\n  - entity_type_id\nrecords: []\n",
+    );
+    write(
+        dir.path(),
+        "seeds/PersonProjectRole.yaml",
+        "lookup_fields:\n  - person_id\n  - project_id\nrecords:\n  - person:\n      email: person@example.com\n    project:\n      code: acme\n",
+    );
+    gate(dir.path()).assert().success().stdout(str::contains(
+        "Validated 3 seed document(s), found 0 error(s)",
+    ));
+}
+
+#[test]
+fn gate_ignores_unsupported_canonical_seed_catalogs() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "store/seeds/Question.yaml",
+        "lookup_fields: []\nrecords: []\n",
+    );
+    write(
+        dir.path(),
+        "store/seeds/Person.yaml",
+        "lookup_fields:\n  - email\nrecords: []\n",
+    );
+    gate(dir.path()).assert().success().stdout(str::contains(
+        "Validated 1 seed document(s), found 0 error(s)",
+    ));
+}
+
+#[test]
+fn gate_refuses_invalid_seed_documents() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "seeds/Person.yaml",
+        "lookup_fields:\n  - email\nrecords:\n  - email: person@example.com\n    display_name: Person\n",
+    );
+    write(
+        dir.path(),
+        "seeds/Notation.yaml",
+        "lookup_fields: []\nrecords: []\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y001"))
+        .stdout(str::contains("unknown field `display_name`"))
+        .stdout(str::contains("unsupported seed model `Notation`"))
+        .stdout(str::contains(
+            "Validated 2 seed document(s), found 2 error(s)",
+        ));
+}
+
+#[test]
+fn gate_accepts_a_typed_english_locale_catalog() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "locales/en/home.yaml",
+        "head_title: \"{site_name} | Home\"\n\
+         meta_description: Everyone deserves access to justice.\n\
+         heading: Everyone deserves access to justice.\n\
+         lead: We fight for people.\n\
+         contact_label: Contact us\n",
+    );
+    gate(dir.path()).assert().success().stdout(str::contains(
+        "Validated 1 locale catalog(s), found 0 error(s)",
+    ));
+}
+
+#[test]
+fn gate_refuses_an_incomplete_locale_catalog() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "locales/en/home.yaml", "heading: Hello\n");
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y002"))
+        .stdout(str::contains(
+            "Validated 1 locale catalog(s), found 1 error(s)",
+        ));
+}
+
+#[test]
+fn gate_refuses_a_locale_directory_other_than_english() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "locales/xx/home.yaml",
+        "head_title: \"{site_name} | Home\"\n\
+         meta_description: Everyone deserves access to justice.\n\
+         heading: Everyone deserves access to justice.\n\
+         lead: We fight for people.\n\
+         contact_label: Contact us\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y002"))
+        .stdout(str::contains("only `en` is allowed"));
+}
+
+#[test]
+fn gate_refuses_an_unknown_locale_page_stem() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "locales/en/about.yaml", "title: About\n");
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y002"))
+        .stdout(str::contains("unknown locale page `about`"));
+}
+
+/// A complete shared catalog, so a test can break exactly one rule.
+fn shared_catalog_fixture() -> String {
+    let mut yaml = String::from("catalog_version: 1\nentries:\n");
+    for key in views::locales::shared::REQUIRED_KEYS {
+        writeln!(yaml, "  {key}: Words for {key}.").expect("write to a String");
+    }
+    yaml
+}
+
+/// The shared catalog is validated by the same gate the page catalogs are, so
+/// a copy-only edit to it cannot land a document either repository refuses.
+#[test]
+fn gate_accepts_a_complete_shared_catalog() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "locales/en/shared.yaml",
+        &shared_catalog_fixture(),
+    );
+    gate(dir.path()).assert().success().stdout(str::contains(
+        "Validated 1 locale catalog(s), found 0 error(s)",
+    ));
+}
+
+/// Required copy fails the gate when it is absent. A page cannot render a
+/// headline nobody authored, so the build stops rather than shipping a gap.
+#[test]
+fn gate_refuses_a_shared_catalog_missing_required_copy() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "locales/en/shared.yaml",
+        &shared_catalog_fixture().replace("  litigation.title:", "  litigation.other:"),
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y002"))
+        .stdout(str::contains("required key `litigation.title` is missing"));
+}
+
+/// A consumer is built against one catalog version. A document that declares
+/// a different one must fail here rather than render half of itself there.
+#[test]
+fn gate_refuses_an_unsupported_shared_catalog_version() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "locales/en/shared.yaml",
+        &shared_catalog_fixture().replace("catalog_version: 1", "catalog_version: 99"),
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y002"))
+        .stdout(str::contains("catalog version 99 is not supported"));
+}
+
+/// Only the two brand placeholders are fillable. Anything else would reach a
+/// reader as a literal brace.
+#[test]
+fn gate_refuses_an_unsupported_placeholder_in_shared_copy() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "locales/en/shared.yaml",
+        &shared_catalog_fixture().replace(
+            "  litigation.cta: Words for litigation.cta.",
+            "  litigation.cta: Write to {support_email}.",
+        ),
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y002"))
+        .stdout(str::contains("unsupported placeholder `{support_email}`"));
+}
+
+/// A brand may override shared wording, but only for a key the shared
+/// defaults define — otherwise a brand could smuggle a key into a contract
+/// the other repository does not know about.
+#[test]
+fn gate_refuses_a_brand_override_of_an_unknown_shared_key() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "locales/en/shared.yaml",
+        &format!(
+            "{}brands:\n  neon:\n    litigation.invented: Something new.\n",
+            shared_catalog_fixture()
+        ),
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y002"))
+        .stdout(str::contains("which the shared defaults do not define"));
+}
+
+/// A page catalog may reference shared copy and the two brand placeholders.
+/// A typo in either is an error, not a brace on the page.
+#[test]
+fn gate_refuses_an_unsupported_placeholder_in_a_page_catalog() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "locales/en/home.yaml",
+        "head_title: \"{site_name} | Home\"\n\
+         meta_description: Everyone deserves access to justice.\n\
+         heading: \"{shared:home.need_prompt}\"\n\
+         lead: \"{sitename} fights for people.\"\n\
+         contact_label: Contact us\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y002"))
+        .stdout(str::contains("unsupported placeholder `{sitename}`"));
+}
+
+#[test]
+fn gate_refuses_an_unknown_brand_catalog_directory() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "locales/en/not-a-brand/home.yaml",
+        "head_title: \"{site_name} | Home\"\n\
+         meta_description: Everyone deserves access to justice.\n\
+         heading: Everyone deserves access to justice.\n\
+         lead: We fight for people.\n\
+         contact_label: Contact us\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y002"))
+        .stdout(str::contains("not a registry key"));
+}
+
+/// The consumed-mutable-tag guard (navigator#540) fires on every consume
+/// site: a YAML `image:` value, a Containerfile `FROM`, and a workflow
+/// installer step's `version: latest`. Each is a way production could change
+/// with no commit; the gate must fail so the diff has to pin them.
+#[test]
+fn gate_flags_consumed_mutable_tags_at_every_site() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "k8s/pod.yaml",
+        "spec:\n  containers:\n    - name: policy\n      image: example/policy:latest\n",
+    );
+    write(
+        dir.path(),
+        "images/Containerfile.demo",
+        "FROM debian:latest AS runtime\n",
+    );
+    write(
+        dir.path(),
+        ".github/workflows/ci.yml",
+        "jobs:\n  a:\n    steps:\n      - name: install\n        with:\n          version: latest\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("found 3 mutable tag(s)"))
+        .stderr(str::contains("example/policy:latest"))
+        .stderr(str::contains("debian:latest"))
+        .stderr(str::contains("consumed mutable binary version `latest`"));
+}
+
+/// The guard also catches a `latest-<arch>` variant and an implicit latest (an
+/// untagged reference) in an on-cluster manifest — both are the `latest` family.
+#[test]
+fn gate_flags_latest_variant_and_implicit_latest_in_manifest() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "k8s/a.yaml",
+        "spec:\n  containers:\n    - name: c\n      image: example/tool:latest-amd64\n",
+    );
+    write(
+        dir.path(),
+        "k8s/b.yaml",
+        "spec:\n  containers:\n    - name: c\n      image: example/untagged\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("found 2 mutable tag(s)"))
+        .stderr(str::contains("latest-amd64"))
+        .stderr(str::contains("implicit"));
+}
+
+/// References that are properly pinned — an explicit version tag, a digest, our
+/// own `:dev`/`:YY.M.D` build tags — pass, and a `# pin-exempt:` comment is the
+/// documented escape hatch for an intentional case.
+#[test]
+fn gate_accepts_pinned_digest_and_exempt_references() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "k8s/ok.yaml",
+        "spec:\n  containers:\n\
+         \x20   - name: a\n      image: example/policy:1.18.2\n\
+         \x20   - name: b\n      image: postgres:16-alpine\n\
+         \x20   - name: c\n      image: navigator-web:dev\n\
+         \x20   - name: d\n      image: us-west4-docker.pkg.dev/x/y/z:YY.M.D\n\
+         \x20   - name: e\n      image: repo/img@sha256:abc123\n\
+         \x20   - name: f\n      image: publisher/tool:latest # pin-exempt: publish-only pointer\n",
+    );
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 mutable tag(s)"));
+}
+
+/// A bare, untagged `- image: navigator-web` in a workflow file names a
+/// build-matrix target we *publish*, not a container we *run*, so it is not an
+/// implicit-latest consume site — the guard leaves it alone. The identical line
+/// in an on-cluster manifest IS flagged, proving the distinction is by file
+/// role, not by luck.
+#[test]
+fn gate_ignores_bare_matrix_image_in_workflow_but_flags_it_in_manifest() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        ".github/workflows/deploy.yml",
+        "jobs:\n  build:\n    strategy:\n      matrix:\n        include:\n          - image: navigator-web\n",
+    );
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 mutable tag(s)"));
+
+    let dir2 = TempDir::new().unwrap();
+    write(
+        dir2.path(),
+        "k8s/pod.yaml",
+        "spec:\n  containers:\n    - image: navigator-web\n",
+    );
+    gate(dir2.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("found 1 mutable tag(s)"));
+}
+
+/// A workflow `container:` / `services:` image is a runtime image we *consume*,
+/// unlike the build-matrix `- image:` list item — so a plain untagged
+/// `image: ubuntu` (implicit latest) there IS flagged, while the matrix list
+/// item is not. Guards against a bypass where a real runtime image hides behind
+/// the matrix exemption.
+#[test]
+fn gate_flags_plain_runtime_image_in_workflow_not_matrix_list() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        ".github/workflows/ci.yml",
+        "jobs:\n  test:\n    container:\n      image: ubuntu\n    strategy:\n      matrix:\n        include:\n          - image: navigator-web\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("found 1 mutable tag(s)"))
+        .stderr(str::contains("`ubuntu`"))
+        .stderr(str::contains("implicit"));
+}
+
+/// The guard cannot be bypassed by valid-but-unusual formatting: a
+/// case-varied Dockerfile `From` (the instruction is case-insensitive) and a
+/// YAML `image :` with a space before the colon are both still caught.
+#[test]
+fn gate_catches_mixed_case_from_and_spaced_yaml_key() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "images/Containerfile.mc",
+        "From debian:latest AS runtime\n",
+    );
+    write(
+        dir.path(),
+        "k8s/spaced.yaml",
+        "spec:\n  containers:\n    - name: c\n      image : example/policy:latest\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("found 2 mutable tag(s)"))
+        .stderr(str::contains("debian:latest"))
+        .stderr(str::contains("example/policy:latest"));
+}
+
+/// A lookalike key must not be mistaken for `image:`: `imagePullPolicy: Always`
+/// is not an image reference and is left alone.
+#[test]
+fn gate_ignores_image_lookalike_keys() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "k8s/pod.yaml",
+        "spec:\n  containers:\n    - name: c\n      image: example/policy:1.18.2\n      imagePullPolicy: Always\n",
+    );
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 mutable tag(s)"));
+}
+
+/// The collapsed commands are gone from the CLI surface: invoking one now
+/// fails with clap's unknown-subcommand error.
+#[test]
+fn removed_validate_subcommands_error() {
+    for removed in ["validate-events", "validate-yaml", "validate-i18n"] {
+        navigator()
+            .arg(removed)
+            .assert()
+            .failure()
+            .stderr(str::contains("unrecognized subcommand"));
+    }
+}
+
+#[test]
+fn missing_subcommand_prints_usage_and_fails() {
+    navigator()
+        .assert()
+        .failure()
+        .stderr(str::contains("Usage:"));
+}
+
+#[test]
+fn gate_fixes_writes_back_autofixable_edits_and_reports_remaining() {
+    let dir = TempDir::new().unwrap();
+    // Three trailing spaces (M009 violates — two-space hard break is
+    // exempt, three is not) + a hard tab (M010). Both autofixable. The
+    // two sit in separate paragraphs so this stays a test of those two
+    // fixes: adjacent, they would also be packed together by S102.
+    write(
+        dir.path(),
+        "Mixed.md",
+        "Body line with trailing spaces   \n\nTabbed\there\n",
+    );
+    gate(dir.path())
+        .assert()
+        .stdout(str::contains("fixed"))
+        .stdout(str::contains("fixed 1 file(s)"));
+    let after = fs::read_to_string(dir.path().join("Mixed.md")).unwrap();
+    assert_eq!(
+        after, "Body line with trailing spaces\n\nTabbed  here\n",
+        "expected M009 + M010 autofixes; got: {after:?}",
+    );
+}
+
+/// `S102` asks for prose packed as close to the 120-character limit as
+/// it goes, and `--fix` now answers it: the whole paragraph is repacked,
+/// not one word pulled up per run.
+#[test]
+fn gate_fixes_packs_a_loosely_wrapped_paragraph() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "Loose.md",
+        "A paragraph wrapped\nfar short of the\nline limit.\n\nA second one,\nalso loose.\n",
+    );
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("fixed 1 file(s)"));
+    let after = fs::read_to_string(dir.path().join("Loose.md")).unwrap();
+    assert_eq!(
+        after, "A paragraph wrapped far short of the line limit.\n\nA second one, also loose.\n",
+        "expected each paragraph packed in place; got: {after:?}",
+    );
+}
+
+/// Reference definitions and HTML blocks are structural Markdown, so S102
+/// must not repack through them. Ordinary prose alongside those boundaries
+/// remains eligible for the same command-level fix.
+#[test]
+fn gate_fixes_preserves_reference_definitions_and_html_blocks() {
+    let dir = TempDir::new().unwrap();
+    let original = "Use the [guide][], [titled][], and [preceded][] references below.\n\n\
+        A prose line before the definition.\n\
+        [preceded]: <https://example.com/preceded>\n\n\
+        [guide]: <https://example.com/reference>\n\
+        A prose line after the definition.\n\n\
+        [titled]: <https://example.com/titled>\n\
+        \"Guide title\"\n\
+        A prose line after the title.\n\n\
+        <div>\n\
+        HTML block line one.\n\
+        HTML block line two.\n\
+        </div>\n\n\
+        An ordinary paragraph that remains\n\
+        eligible for reflow.\n";
+    write(dir.path(), "Boundaries.md", original);
+
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("fixed 1 file(s)"));
+
+    let expected = "Use the [guide][], [titled][], and [preceded][] references below.\n\n\
+        A prose line before the definition.\n\
+        [preceded]: <https://example.com/preceded>\n\n\
+        [guide]: <https://example.com/reference>\n\
+        A prose line after the definition.\n\n\
+        [titled]: <https://example.com/titled>\n\
+        \"Guide title\"\n\
+        A prose line after the title.\n\n\
+        <div>\n\
+        HTML block line one.\n\
+        HTML block line two.\n\
+        </div>\n\n\
+        An ordinary paragraph that remains eligible for reflow.\n";
+    let after = fs::read_to_string(dir.path().join("Boundaries.md")).unwrap();
+    assert_eq!(
+        after, expected,
+        "structural Markdown was repacked: {after:?}"
+    );
+
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("fixed 0 file(s)"));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("Boundaries.md")).unwrap(),
+        expected,
+        "a repeated fix changed the fixture"
+    );
+}
+
+/// One fix uncovers another: `M009` trimming the trailing whitespace off
+/// a short line hands that line to `S102`, which could not have flagged
+/// it while it still looked like a hard break. A single `--fix` run has
+/// to land both, or the command reports work it is able to do itself.
+#[test]
+fn gate_fixes_keeps_going_until_the_file_stops_changing() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "Cascade.md",
+        "Short line.   \nAnother short line.\n",
+    );
+    gate(dir.path()).assert().success().stdout(str::contains(
+        "found 0 error(s), 0 warning(s), fixed 1 file(s)",
+    ));
+    let after = fs::read_to_string(dir.path().join("Cascade.md")).unwrap();
+    assert_eq!(after, "Short line. Another short line.\n", "got: {after:?}");
+}
+
+#[test]
+fn gate_fixes_leaves_diagnostic_only_violations_for_human() {
+    let dir = TempDir::new().unwrap();
+    // M010 (autofixable) + N101 (diagnostic-only) in the same
+    // notation-template file. The declared `kind:` marks it as a template;
+    // `title` is still missing, so N101 fires.
+    write(
+        dir.path(),
+        "templates/needs.md",
+        "---\nkind: onboarding\nrespondent_type: entity\nquestionnaire:\n  BEGIN:\n    _: END\n---\n\n\tTabbed\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("N101"))
+        .stdout(str::contains("fixed 1 file(s)"));
+    // The autofixable tab is gone.
+    let after = fs::read_to_string(dir.path().join("templates/needs.md")).unwrap();
+    assert!(
+        !after.contains('\t'),
+        "tab should be replaced; got: {after:?}"
+    );
+}
+
+#[test]
+fn gate_fixes_is_idempotent() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "OnlyFixable.md", "Body  \n\tIndent\n");
+    gate(dir.path()).assert().success();
+    // Second run finds nothing to fix.
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("fixed 0 file(s)"));
+}
+
+// ───────── Every run ends with the lines that failed it (ENG-413) ─────────
+//
+// `validate` runs six passes. The four standalone ones print after the
+// markdown lint's summary line, so no ordering inside a single pass can
+// gather a markdown error and a locale-catalog error together — only a
+// block printed after every pass can name them all. These tests assert the
+// *rendered text* rather than the exit code, because the exit code was
+// never the part that was wrong.
+
+/// Run the gate in `dir` and return its stdout and exit code.
+fn gate_output(dir: &Path, extra_args: &[&str]) -> (String, i32) {
+    let mut command = gate(dir);
+    for arg in extra_args {
+        command.arg(arg);
+    }
+    let output = command.output().unwrap();
+    (
+        String::from_utf8(output.stdout).unwrap(),
+        output.status.code().unwrap(),
+    )
+}
+
+/// A tree shaped like the run this was filed over: one Error-severity
+/// violation (`S101`, an over-long line) among several Warning-severity
+/// advisories (`M061`, a docs link to a code file) — the same shape that
+/// produced the misreading, not a shape that hides it.
+///
+/// Which line lands last in the listing is not fixed: the listing follows
+/// the directory walk, and `walkdir` reports entries in filesystem order,
+/// which is sorted on NTFS and arbitrary on ext4/tmpfs. Tests over this
+/// fixture assert the severity mixing and the position of the
+/// recapitulation, never a specific walk order.
+fn error_buried_among_warnings(dir: &Path) {
+    // M061 is the web-portability advisory, not the disk-resolution
+    // error, so its target has to exist for M057 to stay quiet. A
+    // same-directory `lib.rs` is the shape the renderer cannot rewrite.
+    write(dir, "docs/glossary/lib.rs", "pub fn placeholder() {}\n");
+    write(
+        dir,
+        "docs/glossary/a_long.md",
+        &format!("Intro.\n\n{}\n", "x".repeat(130)),
+    );
+    for name in ["m_one.md", "n_two.md", "z_three.md"] {
+        write(
+            dir,
+            &format!("docs/glossary/{name}"),
+            "Body.\n\nSee [lib](lib.rs) for detail.\n",
+        );
+    }
+}
+
+/// Collect the recapitulation block: every line after the
+/// `N error(s) fail this run:` header.
+fn recap_lines(stdout: &str) -> Vec<&str> {
+    stdout
+        .lines()
+        .skip_while(|line| !line.ends_with("error(s) fail this run:"))
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .collect()
+}
+
+/// The run closes by naming every failing line again, on its own. This is
+/// the half a per-line severity marker cannot cover: the marker helps a
+/// reader looking *at* a line, and does nothing when the error scrolled
+/// past hundreds of lines ago.
+#[test]
+fn gate_recapitulates_only_the_errors_at_the_tail() {
+    let dir = TempDir::new().unwrap();
+    error_buried_among_warnings(dir.path());
+    let (stdout, code) = gate_output(dir.path(), &[]);
+    assert_eq!(code, 1, "expected exit 1:\n{stdout}");
+
+    // The primary listing mixes the severities, which is the condition the
+    // recapitulation exists to answer. Assert the mixing itself rather than
+    // which line lands last: the listing follows the directory walk, and
+    // `walkdir` yields entries in whatever order the filesystem reports,
+    // sorted on NTFS but arbitrary on ext4/tmpfs. Pinning the last line
+    // would be a test of `walkdir`, not of this output.
+    let listing: Vec<&str> = stdout
+        .lines()
+        .take_while(|line| !line.starts_with("Scanned "))
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert!(
+        listing.iter().any(|line| line.starts_with("warning: "))
+            && listing.iter().any(|line| line.starts_with("error: ")),
+        "the listing must mix both severities for this test to mean anything; got: {listing:?}",
+    );
+
+    // The error is buried in the sense that matters: its place in the
+    // listing is separated from the end of the run by the pass-summary
+    // lines, so it is not what the reader is left looking at. The
+    // recapitulation is what puts it back there.
+    let lines: Vec<&str> = stdout.lines().collect();
+    let first_error = lines
+        .iter()
+        .position(|line| line.starts_with("error: "))
+        .expect("an error line in the listing");
+    let summary = lines
+        .iter()
+        .position(|line| line.starts_with("Scanned "))
+        .expect("the markdown summary line");
+    let recap_header = lines
+        .iter()
+        .position(|line| line.ends_with("error(s) fail this run:"))
+        .expect("the recapitulation header");
+    assert!(
+        first_error < summary && summary < recap_header,
+        "expected listing then summaries then recapitulation, got indices \
+         error={first_error}, summary={summary}, recap={recap_header}:\n{stdout}",
+    );
+
+    assert!(
+        stdout.contains("1 error(s) fail this run:"),
+        "expected an error-only recapitulation in:\n{stdout}",
+    );
+    let recap = recap_lines(&stdout);
+    assert_eq!(
+        recap.len(),
+        1,
+        "expected one recapped error, got: {recap:?}"
+    );
+    assert!(
+        recap[0].starts_with("error: ")
+            && recap[0].contains("a_long.md")
+            && recap[0].contains("S101"),
+        "the recapped line must name the failing file and code; got: {:?}",
+        recap[0],
+    );
+    assert!(
+        !recap.iter().any(|line| line.contains("M061")),
+        "an advisory must never appear in the errors recapitulation: {recap:?}",
+    );
+
+    // The recapitulation is the last thing on screen, where the terminal
+    // leaves the reader.
+    assert!(
+        stdout
+            .trim_end()
+            .lines()
+            .next_back()
+            .unwrap()
+            .starts_with("error: "),
+        "the run must end on the failing line:\n{stdout}",
+    );
+}
+
+/// The recapitulation spans every pass, not just the markdown lint. The
+/// four standalone passes print *after* the markdown summary line, so
+/// ordering inside one pass could never have gathered them; one block at
+/// the tail is the only place that can name them all.
+#[test]
+fn gate_recapitulation_gathers_errors_from_every_pass() {
+    let dir = TempDir::new().unwrap();
+    error_buried_among_warnings(dir.path());
+    // A locale catalog in a directory the site does not publish: Y002,
+    // reported by the locale pass long after the markdown listing ended.
+    write(dir.path(), "locales/xx/home.yaml", "heading: Hello\n");
+    let (stdout, code) = gate_output(dir.path(), &[]);
+    assert_eq!(code, 1, "expected exit 1:\n{stdout}");
+
+    assert!(
+        stdout.contains("2 error(s) fail this run:"),
+        "expected both passes' errors counted together in:\n{stdout}",
+    );
+    let recap = recap_lines(&stdout);
+    assert!(
+        recap.iter().any(|line| line.contains("S101")),
+        "markdown error missing from the recapitulation: {recap:?}",
+    );
+    assert!(
+        recap.iter().any(|line| line.contains("Y002")),
+        "locale-pass error missing from the recapitulation: {recap:?}",
+    );
+    assert!(
+        recap.iter().all(|line| line.starts_with("error: ")),
+        "every recapped line is an error: {recap:?}",
+    );
+}
+
+/// A clean run says nothing extra: no recapitulation, no empty header.
+#[test]
+fn gate_prints_no_recapitulation_when_there_are_no_errors() {
+    let dir = TempDir::new().unwrap();
+    // Advisories only — M061 never fails the gate.
+    write(
+        dir.path(),
+        "docs/glossary/lib.rs",
+        "pub fn placeholder() {}\n",
+    );
+    write(
+        dir.path(),
+        "docs/glossary/guide.md",
+        "Body.\n\nSee [lib](lib.rs) for detail.\n",
+    );
+    let (stdout, code) = gate_output(dir.path(), &[]);
+    assert_eq!(code, 0, "advisories must not fail the gate:\n{stdout}");
+    assert!(
+        stdout.contains("found 0 error(s), 1 warning(s)"),
+        "expected the advisory counted:\n{stdout}",
+    );
+    assert!(
+        !stdout.contains("fail this run"),
+        "a clean run must not print a recapitulation:\n{stdout}",
+    );
+}
+
+/// The gate prints every finding it has, advisories included: one listing, no
+/// flag deciding what a reader is allowed to see. The summary counts both
+/// severities and only the Error-severity ones fail the run.
+#[test]
+fn gate_prints_advisories_alongside_the_errors_that_fail_it() {
+    let dir = TempDir::new().unwrap();
+    error_buried_among_warnings(dir.path());
+    let (stdout, code) = gate_output(dir.path(), &[]);
+    assert_eq!(code, 1, "the error must fail the gate:\n{stdout}");
+    assert!(
+        stdout.contains("M061"),
+        "the advisories must still print:\n{stdout}",
+    );
+    assert!(
+        stdout.contains("found 1 error(s), 3 warning(s)"),
+        "the summary counts both severities:\n{stdout}",
+    );
+}
+
+#[test]
+fn gate_refuses_a_project_manifest_that_is_not_a_hostname_or_code() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "navigator.yaml",
+        "host: https://staging.neonlaw.com\nproject: Not A Code\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y004"))
+        .stdout(str::contains("Y005"));
+}
+
+#[test]
+fn gate_refuses_an_unknown_manifest_key_and_a_boolean_no_live_row() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "navigator.yaml",
+        "host: staging.neonlaw.com\nproject: acme\nexempt_roots: [docs]\nno_live_row: true\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y006"))
+        .stdout(str::contains("exempt_roots"))
+        .stdout(str::contains("Y007"))
+        .stdout(str::contains("written as text"));
+}
+
+#[test]
+fn gate_tells_a_yml_manifest_to_rename() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "navigator.yml",
+        "host: staging.neonlaw.com\nproject: acme\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y008"))
+        .stdout(str::contains("the manifest is navigator.yaml, rename it"));
+}
+
+#[test]
+fn gate_refuses_a_comment_in_a_project_manifest() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "navigator.yaml",
+        "host: staging.neonlaw.com\n# exemption reason\nproject: acme\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Y011"))
+        .stdout(str::contains("pull request"))
+        .stdout(str::contains("repository contract"));
+}
+
+#[test]
+fn gate_does_not_report_prose_followed_by_a_pipe_less_rule_as_a_table() {
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), "Prose.md", "some | prose\n---\n");
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 error(s)"));
+}
+
+/// A GFM table is a table only while its delimiter row carries as many
+/// cells as its header. The shape below — a header that gained a fourth
+/// column while the delimiter row kept three — passed the gate and
+/// rendered as paragraph text, so `M056` now measures that row too.
+#[test]
+fn gate_flags_a_delimiter_row_that_does_not_match_its_header() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "Contracts.md",
+        "# Contracts\n\n\
+         | | Unset | Plain collector | Complete contract |\n\
+         | --- | --- | --- |\n\
+         | stdout | human-readable | structured JSON | structured JSON |\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Contracts.md:4"))
+        .stdout(str::contains("M056"))
+        .stdout(str::contains("3 cell(s)"))
+        .stdout(str::contains("4"));
+}
+
+/// The repaired shape passes, and the body-row check `M056` already
+/// carried still measures a row that disagrees with a delimiter row the
+/// header does agree with.
+#[test]
+fn gate_accepts_a_matching_delimiter_row_and_still_measures_body_rows() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "Good.md",
+        "# Good\n\n\
+         | | Unset | Plain collector | Complete contract |\n\
+         | --- | --- | --- | --- |\n\
+         | stdout | human-readable | structured JSON | structured JSON |\n",
+    );
+    write(
+        dir.path(),
+        "Short.md",
+        "# Short\n\n\
+         | first | second |\n\
+         | --- | --- |\n\
+         | only one |\n",
+    );
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("Short.md:5"))
+        .stdout(str::contains("Table row has 1 cell(s); expected 2"))
+        .stdout(str::contains("found 1 error(s)"));
+}
+
+/// A broken table drawn inside a fenced code block is sample text that
+/// documents the failure, not a table the renderer will build, so no table
+/// rule measures it — not `M056`, and not `M058`, which would otherwise
+/// report the row after the fence opener as a table with no blank line
+/// above it. An escaped `\|` stays inside its cell, so `M060` reads the
+/// padded table below as tight rather than as ragged halves. Every table
+/// rule is diagnostic-only, so `--fix` leaves the file byte-identical and a
+/// second run reports exactly the same thing.
+#[test]
+fn gate_ignores_fenced_tables_and_escaped_pipes() {
+    let dir = TempDir::new().unwrap();
+    let original = "# Samples\n\n\
+        ```markdown\n\
+        | a | b | c |\n\
+        | --- | --- |\n\
+        | 1 |\n\
+        ```\n\n\
+        | command | effect |\n\
+        | --- | --- |\n\
+        | `a \\| b` | pipes a into b |\n";
+    write(dir.path(), "Samples.md", original);
+    for _ in 0..2 {
+        gate(dir.path())
+            .assert()
+            .success()
+            .stdout(str::contains("fixed 0 file(s)"));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("Samples.md")).unwrap(),
+            original,
+            "a fix run rewrote a file that carries no violation"
+        );
+    }
+}
+
+/// `S102`'s structural recognisers follow `CommonMark`, so ordinary prose
+/// that merely *looks* structural still reflows: a bracketed word followed
+/// by prose is not a link-reference definition, and a paragraph opening
+/// with an inline tag is not an HTML block. The genuine constructs
+/// alongside them are still preserved, and a second `--fix` run changes
+/// nothing.
+#[test]
+fn gate_fixes_reflows_prose_that_only_looks_structural() {
+    let dir = TempDir::new().unwrap();
+    let original = "Use the [text][] and [guide][] references below.\n\n\
+        [text]: this is prose\n\
+        and the sentence continues here.\n\n\
+        <span>inline</span> opens this\n\
+        paragraph, which still reflows.\n\n\
+        [guide]: <https://example.com/guide>\n\
+        A prose line under the definition.\n\n\
+        <div>\n\
+        HTML block line one.\n\
+        HTML block line two.\n\
+        </div>\n";
+    write(dir.path(), "Shapes.md", original);
+
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("fixed 1 file(s)"));
+
+    let expected = "Use the [text][] and [guide][] references below.\n\n\
+        [text]: this is prose and the sentence continues here.\n\n\
+        <span>inline</span> opens this paragraph, which still reflows.\n\n\
+        [guide]: <https://example.com/guide>\n\
+        A prose line under the definition.\n\n\
+        <div>\n\
+        HTML block line one.\n\
+        HTML block line two.\n\
+        </div>\n";
+    assert_eq!(
+        fs::read_to_string(dir.path().join("Shapes.md")).unwrap(),
+        expected,
+        "prose was held back, or a real construct was repacked"
+    );
+
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("fixed 0 file(s)"));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("Shapes.md")).unwrap(),
+        expected,
+        "a repeated fix changed the fixture"
+    );
+}
+
+/// A reference definition owns a title on the next line only when it does
+/// not already carry one. A definition that does carry its own title
+/// leaves the quoted line below it as prose.
+#[test]
+fn gate_fixes_gives_a_next_line_title_only_to_a_title_less_definition() {
+    let dir = TempDir::new().unwrap();
+    let original = "Use the [pending][] and [carried][] references below.\n\n\
+        [pending]: <https://example.com/pending>\n\
+        \"Pending title\"\n\
+        A prose line under the title.\n\n\
+        [carried]: <https://example.com/carried> \"Carried title\"\n\
+        \"A quoted opening\"\n\
+        and the rest of the sentence.\n";
+    write(dir.path(), "Titles.md", original);
+
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("fixed 1 file(s)"));
+
+    let expected = "Use the [pending][] and [carried][] references below.\n\n\
+        [pending]: <https://example.com/pending>\n\
+        \"Pending title\"\n\
+        A prose line under the title.\n\n\
+        [carried]: <https://example.com/carried> \"Carried title\"\n\
+        \"A quoted opening\" and the rest of the sentence.\n";
+    assert_eq!(
+        fs::read_to_string(dir.path().join("Titles.md")).unwrap(),
+        expected,
+        "the wrong line was treated as a definition title"
+    );
+
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("fixed 0 file(s)"));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("Titles.md")).unwrap(),
+        expected,
+        "a repeated fix changed the fixture"
+    );
+}
+
+#[test]
+fn gate_fixes_preserves_a_standalone_raw_text_closing_tag() {
+    let dir = TempDir::new().unwrap();
+    let original = "</script>\nShort line.\nNext line.\n";
+    write(dir.path(), "RawText.md", original);
+
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("fixed 0 file(s)"));
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join("RawText.md")).unwrap(),
+        original,
+        "a closing raw-text tag was folded into prose"
+    );
+}
+
+/// `N122` — the converse of `N115`/`N120`: a declared questionnaire state
+/// that the body never reads.
+///
+/// Driven through the real binary on the shipped onboarding letter, because
+/// the defect this rule exists for is a rewrite that drops a reference and
+/// leaves the state machine alone. The unmodified letter is clean; deleting
+/// its one `{{custom_text__engagement_scope}}` leaves a question the
+/// respondent is still asked whose answer now reaches no document, and
+/// `validate` must fail on it rather than report zero errors.
+#[test]
+fn gate_flags_a_questionnaire_state_the_body_stopped_reading() {
+    let source = fs::read_to_string(
+        workspace_root().join("templates/notations/neon_law/onboarding__letter.md"),
+    )
+    .unwrap();
+    assert!(
+        source.contains("{{custom_text__engagement_scope}}"),
+        "the letter must read the state this test removes",
+    );
+
+    let clean = TempDir::new().unwrap();
+    write(
+        clean.path(),
+        "templates/notations/neon_law/onboarding__letter.md",
+        &source,
+    );
+    gate(clean.path())
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 error(s)"));
+
+    let rewritten = TempDir::new().unwrap();
+    write(
+        rewritten.path(),
+        "templates/notations/neon_law/onboarding__letter.md",
+        &source.replace(
+            "> {{custom_text__engagement_scope}}",
+            "> The scope is agreed in writing.",
+        ),
+    );
+    gate(rewritten.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("N122"))
+        .stdout(str::contains("custom_text__engagement_scope"));
+}
+
+/// `N123` — an instrument the firm drafts must carry a Harvard outline, in
+/// the scheme its kind uses.
+///
+/// Driven through the real binary on the shipped closing letter: the rule is
+/// worth nothing if it passes because it never bound a real file. The
+/// unmodified letter is a clean Roman outline; renumbering its first section
+/// `## 1.` is the motion-practice scheme on a closing letter, and `validate`
+/// must fail on it.
+#[test]
+fn gate_flags_a_contract_numbered_like_motion_practice() {
+    let source = fs::read_to_string(
+        workspace_root().join("templates/notations/neon_law/offboarding__letter.md"),
+    )
+    .unwrap();
+    assert!(
+        source.contains("kind: offboarding") && source.contains("## I. Representation concluded"),
+        "the letter must carry the Roman heading this test renumbers",
+    );
+
+    let clean = TempDir::new().unwrap();
+    write(
+        clean.path(),
+        "templates/notations/neon_law/offboarding__letter.md",
+        &source,
+    );
+    gate(clean.path())
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 error(s)"));
+
+    let renumbered = TempDir::new().unwrap();
+    write(
+        renumbered.path(),
+        "templates/notations/neon_law/offboarding__letter.md",
+        &source.replace(
+            "## I. Representation concluded",
+            "## 1. Representation concluded",
+        ),
+    );
+    gate(renumbered.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("N123"))
+        .stdout(str::contains("expected `## I. Representation concluded`"));
+}
+
+/// `N125` — a subsection written as a flush-left bold-led paragraph renders
+/// as body prose, so it must be a lettered block quote.
+///
+/// Driven through the real binary on the shipped closing letter, the same
+/// way the `N123` tests above are: a rule that only ever saw a synthetic
+/// fixture has not been shown to reach a document the firm sends. The
+/// unmodified letter is clean; a `**Costs.** …` paragraph under its first
+/// numbered section is the drift, and the identical sentence quoted and
+/// lettered is the hand fix.
+#[test]
+fn gate_flags_a_flush_left_bold_led_subsection_and_accepts_the_quoted_form() {
+    let rel = "templates/notations/neon_law/offboarding__letter.md";
+    let source = fs::read_to_string(workspace_root().join(rel)).unwrap();
+    let section = "## I. Representation concluded\n";
+    assert!(
+        source.contains("kind: offboarding") && source.contains(section),
+        "the fixture must be the `offboarding` letter this test adds a subsection to",
+    );
+
+    let drifted = TempDir::new().unwrap();
+    write(
+        drifted.path(),
+        rel,
+        &source.replace(
+            section,
+            &format!("{section}\n**Costs.** Nothing further is owed on this matter.\n"),
+        ),
+    );
+    drifted_gate_output(drifted.path());
+
+    // The same sentence as a lettered block quote: the construct the message
+    // asks for, and the only one `pdf::markdown::to_typst` indents.
+    let quoted = TempDir::new().unwrap();
+    write(
+        quoted.path(),
+        rel,
+        &source.replace(
+            section,
+            &format!("{section}\n> **A. Costs.** Nothing further is owed on this matter.\n"),
+        ),
+    );
+    gate(quoted.path())
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 error(s)"));
+}
+
+/// The failing half of the pair above, split out so the assertion chain
+/// stays readable.
+fn drifted_gate_output(root: &Path) {
+    gate(root)
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("N125"))
+        .stdout(str::contains("expected `> **A. Costs.** …`"));
+}
+
+/// The letter a quoted subsection carries stays `N123`'s to check. `N125`
+/// reports the construct; once the drafter quotes the paragraph, an
+/// out-of-sequence letter is the outline rule's report, not a second one
+/// from this rule.
+#[test]
+fn gate_leaves_the_subsection_letter_sequence_to_the_outline_rule() {
+    let rel = "templates/notations/neon_law/offboarding__letter.md";
+    let source = fs::read_to_string(workspace_root().join(rel)).unwrap();
+    let section = "## I. Representation concluded\n";
+
+    let skipped = TempDir::new().unwrap();
+    write(
+        skipped.path(),
+        rel,
+        &source.replace(
+            section,
+            &format!(
+                "{section}\n> **A. Costs.** Nothing further is owed.\n\n\
+                 > **C. Invoices.** The final invoice has been sent.\n"
+            ),
+        ),
+    );
+    let assertion = gate(skipped.path()).assert().failure().code(1);
+    let stdout = String::from_utf8(assertion.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("N123"), "{stdout}");
+    assert!(stdout.contains("is subsection C."), "{stdout}");
+    assert!(
+        !stdout.contains("N125"),
+        "the quoted form is the construct N125 asks for: {stdout}"
+    );
+}
+
+/// A bold-led paragraph in a document with no outline to hold it is prose.
+/// `N125` binds the kinds `N123` binds and no others, so a `kind: onboarding`
+/// letter — exempt from the outline since it renders on letterhead — keeps
+/// its bold lead-ins.
+#[test]
+fn gate_exempts_a_letter_kind_from_the_subsection_check() {
+    let rel = "templates/notations/neon_law/onboarding__letter.md";
+    let source = fs::read_to_string(workspace_root().join(rel)).unwrap();
+    let section = "## I. Scope\n";
+    assert!(
+        source.contains("kind: onboarding") && source.contains(section),
+        "the fixture must be the `onboarding` letter this test adds a paragraph to",
+    );
+
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        rel,
+        &source.replace(
+            section,
+            &format!("{section}\n**Costs.** Nothing further is owed on this matter.\n"),
+        ),
+    );
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 error(s)"));
+}
+
+/// Validation is a pure read: running the gate twice over one unchanged tree
+/// reports the same `N125` both times, and the first run leaves nothing
+/// behind that changes the second.
+#[test]
+fn gate_reports_the_same_subsection_drift_on_a_repeated_run() {
+    let rel = "templates/notations/neon_law/offboarding__letter.md";
+    let source = fs::read_to_string(workspace_root().join(rel)).unwrap();
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        rel,
+        &source.replace(
+            "## I. Representation concluded\n",
+            "## I. Representation concluded\n\n**Costs.** Nothing further is owed on this \
+             matter.\n",
+        ),
+    );
+
+    let first = gate(dir.path()).assert().failure().code(1);
+    let first = String::from_utf8(first.get_output().stdout.clone()).unwrap();
+    let second = gate(dir.path()).assert().failure().code(1);
+    let second = String::from_utf8(second.get_output().stdout.clone()).unwrap();
+    assert!(first.contains("N125"), "{first}");
+    assert_eq!(
+        first, second,
+        "a repeated gate run must report the same tree"
+    );
+}
+
+/// `kind: onboarding` is a letter at the render path. N123 must not bind it,
+/// or the scaffold cannot ship a stub that declares the kind it is.
+#[test]
+fn gate_exempts_onboarding_from_the_outline_check() {
+    let source = fs::read_to_string(
+        workspace_root().join("templates/notations/neon_law/onboarding__letter.md"),
+    )
+    .unwrap();
+    assert!(
+        source.contains("kind: onboarding") && source.contains("## I. Scope"),
+        "the fixture must be the Roman-numbered `onboarding` this test renumbers",
+    );
+
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "templates/notations/neon_law/onboarding__letter.md",
+        &source.replace("## I. Scope", "## 1. Scope"),
+    );
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 error(s)"));
+}
+
+/// The Nevada litigation papers are `kind: pleading`, so `N123` binds them
+/// to the Arabic scheme.
+///
+/// Driven on the real affidavit, because the reclassification is only worth
+/// something if the rule actually reaches these files: renumbering its first
+/// section `## I.` is the contract scheme on court paper, and `validate`
+/// must fail on it.
+#[test]
+fn gate_flags_a_pleading_numbered_like_a_contract() {
+    let rel = "templates/notations/neon_law/witness_affidavit__nevada.md";
+    let source = fs::read_to_string(workspace_root().join(rel)).unwrap();
+    assert!(
+        source.contains("kind: pleading") && source.contains("## 1. Basis of knowledge"),
+        "the fixture must be the Arabic-numbered `pleading` this test renumbers",
+    );
+
+    let renumbered = TempDir::new().unwrap();
+    write(
+        renumbered.path(),
+        rel,
+        &source.replace("## 1. Basis of knowledge", "## I. Basis of knowledge"),
+    );
+    gate(renumbered.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains("N123"))
+        .stdout(str::contains("expected `## 1. Basis of knowledge`"));
+}
+
+/// A pleading's caption carries its formal title line — `## SUMMONS — CIVIL`
+/// sits above `## 1.` — and that line is a caption element, not section one.
+/// `N123` treats it as preamble; this pins the real document that proves the
+/// allowance is not hypothetical.
+#[test]
+fn gate_accepts_a_pleading_whose_caption_title_precedes_the_outline() {
+    let rel = "templates/notations/neon_law/summons__nevada.md";
+    let source = fs::read_to_string(workspace_root().join(rel)).unwrap();
+    assert!(
+        source.contains("## SUMMONS — CIVIL") && source.contains("## 1. You must respond"),
+        "the fixture must carry an unnumbered caption title above its outline",
+    );
+
+    let dir = TempDir::new().unwrap();
+    write(dir.path(), rel, &source);
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 error(s)"));
+}
+
+/// A `kind: letter` is exempt from `N123`: a demand or notice letter is
+/// often a single page of prose with no sections at all, which is not an
+/// outline the rule can hold to a scheme.
+///
+/// Proven on the real engagement letter by renumbering it into the scheme
+/// its kind would be wrong in. `onboarding` is exempt for the same reason;
+/// `offboarding` is not, and is the run that still fails.
+#[test]
+fn gate_exempts_a_letter_from_the_outline_check() {
+    let rel = "templates/notations/neon_law/engagement_letter__nevada.md";
+    let source = fs::read_to_string(workspace_root().join(rel)).unwrap();
+    assert!(
+        source.contains("kind: letter") && source.contains("## I. Client and scope"),
+        "the fixture must be the Roman-numbered `letter` this test renumbers",
+    );
+
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        rel,
+        &source.replace("## I. Client and scope", "## 1. Client and scope"),
+    );
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 error(s)"));
+}
+
+/// The shipped Nevada engagement letter carries a Roman outline like the
+/// other two engagement letters.
+///
+/// It is a `kind: letter`, so `N123` does not bind it — this pins the file
+/// itself rather than the rule, because the numbering is a drafting
+/// convention the firm keeps whether or not a lint enforces it.
+#[test]
+fn the_nevada_engagement_letter_is_a_roman_outline() {
+    let source = fs::read_to_string(
+        workspace_root().join("templates/notations/neon_law/engagement_letter__nevada.md"),
+    )
+    .unwrap();
+    let markers: Vec<&str> = source
+        .lines()
+        .filter_map(|line| line.strip_prefix("## "))
+        .filter_map(|rest| rest.split_once('.').map(|(marker, _)| marker))
+        .collect();
+    assert_eq!(
+        markers,
+        ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"],
+        "the engagement letter must run I..IX in sequence",
+    );
+}
+
+/// A `output: form` notation is exempt: its answers fill a named `AcroForm`'s
+/// fields, a map the `rules` crate cannot see. The shipped N-400 asks a
+/// good-moral-character question that reaches a lawyer rather than the
+/// intake summary beside it, and that is not a defect.
+#[test]
+fn gate_exempts_a_form_notation_from_the_unread_state_check() {
+    let dir = TempDir::new().unwrap();
+    let rel = "templates/notations/forms/united_states/federal/uscis/us__naturalization.md";
+    let source = fs::read_to_string(workspace_root().join(rel)).unwrap();
+    assert!(
+        source.contains("output: form")
+            && !source.contains("{{custom_yes_no__good_moral_character"),
+        "the fixture must be a form notation with a state its body does not read",
+    );
+    write(dir.path(), rel, &source);
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 error(s)"));
+}
+
+#[test]
+fn gate_keeps_the_spaces_around_a_code_span_its_reflow_wraps() {
+    // `S102` packs a paragraph to 120 columns, which can leave an inline
+    // code span opened on one line and closed on the next — valid GFM, and
+    // what a long sentence naturally produces. `M038` then reads each line
+    // on its own, so that closing backtick looks like an *opener* and the
+    // prose up to the next backtick reads as a padded code span whose
+    // spaces it trims: `` upload`can `` and `` it,`--host` ``. The gate
+    // reintroduced it on every run, so the text could not be fixed by hand.
+    let dir = TempDir::new().unwrap();
+    // Authored short so the reflow has to repack it. The packed first line
+    // reaches 114 columns at `` `site ``, and `document` would take it to
+    // 123 — so the span straddles the wrap.
+    write(
+        dir.path(),
+        "Notes.md",
+        "Alpha bravo charlie delta echo foxtrot golf\n\
+         hotel india juliett kilo lima mike november\n\
+         oscar papa quebec xx `site document upload`\n\
+         can confirm this before it, `--host` was accepted\n\
+         and then ignored entirely.\n",
+    );
+
+    gate(dir.path()).assert().success();
+
+    let packed = fs::read_to_string(dir.path().join("Notes.md")).unwrap();
+    let lines: Vec<&str> = packed.lines().collect();
+    assert_eq!(lines.len(), 2, "expected a two-line pack, got {packed:?}");
+    assert!(
+        lines[0].ends_with("`site"),
+        "the span should open at the end of line one, got {:?}",
+        lines[0]
+    );
+    assert!(
+        lines[1].starts_with("document upload` can confirm"),
+        "the space after the span's closing backtick must survive, got {:?}",
+        lines[1]
+    );
+    assert!(
+        lines[1].contains("before it, `--host` was"),
+        "the space before the next span must survive, got {:?}",
+        lines[1]
+    );
+
+    // And the gate must have reached its fixpoint: a second run changes
+    // nothing, which is what "cannot be corrected by hand" failed before.
+    gate(dir.path())
+        .assert()
+        .success()
+        .stdout(str::contains("fixed 0 file(s)"));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("Notes.md")).unwrap(),
+        packed,
+        "the second pass must leave the file alone"
+    );
+}
+
+/// LAW-25: `Y003` must walk both pointer spellings.
+///
+/// Navigator writes `.yaml` now and still reads the retired `.yml`, and the
+/// gate's pointer pass has to read exactly what the walkers read. A pass that
+/// matched only one spelling would skip every pointer in a repository on the
+/// other side of the rename and report a clean run over nothing — which looks
+/// from the outside identical to a repository that has no documents at all.
+/// That silent pass is the failure the shared extension contract exists to
+/// prevent, so it earns a test at the gate rather than only in the unit.
+#[test]
+fn gate_validates_document_pointers_in_both_spellings() {
+    const VALID: &str = "kind: agreement\nvisibility: internal\ncurrent_version:\n  version: 1\n  asset_id: 0199b9e4-14b7-7ad0-87a5-71ef24a46d40\n  created_at: 2026-09-05T12:00:00Z\n  sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n  size_bytes: 42\n";
+
+    for extension in ["yaml", "yml"] {
+        let dir = TempDir::new().unwrap();
+        write_project_shell(dir.path(), "acme");
+        write(
+            dir.path(),
+            &format!("blobs/agreements/terms.pdf.{extension}"),
+            VALID,
+        );
+        gate(dir.path())
+            .assert()
+            .failure()
+            .code(1)
+            .stdout(str::contains(
+                "Validated 1 document pointer(s), found 0 error(s)",
+            ))
+            .stderr(str::contains("live Project check is inconclusive"));
+    }
+
+    // And a malformed pointer is caught under either spelling — the count
+    // above could be satisfied by a walker that finds the file and declines
+    // to validate it.
+    for extension in ["yaml", "yml"] {
+        let dir = TempDir::new().unwrap();
+        write_project_shell(dir.path(), "acme");
+        write(
+            dir.path(),
+            &format!("blobs/agreements/terms.pdf.{extension}"),
+            "kind: agreement\nvisibility: internal\ncurrent_verison: {}\n",
+        );
+        gate(dir.path())
+            .assert()
+            .failure()
+            .code(1)
+            .stdout(str::contains("Y003"))
+            .stdout(str::contains("current_version"));
+    }
+}
+
+/// A repository carrying both spellings sees both counted, so a half-renamed
+/// checkout is never under-reported mid-migration.
+#[test]
+fn gate_counts_a_half_renamed_documents_directory_in_full() {
+    const VALID: &str = "kind: agreement\nvisibility: internal\ncurrent_version:\n  version: 1\n  asset_id: 0199b9e4-14b7-7ad0-87a5-71ef24a46d40\n  created_at: 2026-09-05T12:00:00Z\n  sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n  size_bytes: 42\n";
+
+    let dir = TempDir::new().unwrap();
+    write_project_shell(dir.path(), "acme");
+    write(dir.path(), "blobs/agreements/renamed.pdf.yaml", VALID);
+    write(dir.path(), "blobs/agreements/retired.pdf.yml", VALID);
+
+    gate(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(str::contains(
+            "Validated 2 document pointer(s), found 0 error(s)",
+        ))
+        .stderr(str::contains("live Project check is inconclusive"));
+}

@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workflows-service
+  namespace: navigator
+spec:
+  template:
+    spec:
+      containers:
+        - name: worker
+          env:
+            - name: NAVIGATOR_GCP_PROJECT_ID
+              value: YOUR_PROJECT_ID
+            - name: NAVIGATOR_GITHUB_ORG
+              value: YOUR_GITHUB_ORG
+            - name: NAVIGATOR_APPLICATIONS_BUCKET
+              value: YOUR_APPLICATIONS_BUCKET

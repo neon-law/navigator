@@ -1,0 +1,11 @@
+pages:
+  - slug: timeline
+    kind: docket_deadline_board
+    title: Case timeline
+    lenses:
+      lawyer: [deadline_board, boundary_note, provenance_statement]
+  - slug: timeline
+    kind: matter_status_console
+    title: Status
+    lenses:
+      lawyer: [metric_strip, workstream_cards, decision_queue, boundary_note, provenance_statement]

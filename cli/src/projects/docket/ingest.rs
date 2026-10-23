@@ -1,0 +1,1464 @@
+//! `navigator project docket ingest` — file the documents a court's CM/ECF
+//! notices point at into this Project.
+//!
+//! Run from a Project checkout. The Project code and host come from
+//! `navigator.yaml`; the cases come from its `dockets:` list (and
+//! `matter.case_number`). A notice for any other case is skipped without
+//! naming it, so a mailbox that serves several matters cannot leak one into
+//! another's output.
+//!
+//! A free-look link is single-use, so the order of work is fixed: plan
+//! offline, then for each document write the bytes under `documents/` before
+//! anything else, and only then upload and stage the pointer. A run that
+//! fails after the download leaves the bytes on disk, and the next run reuses
+//! them rather than spending a second free look.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use anyhow::{anyhow, Context, Result};
+use sha2::{Digest, Sha256};
+
+use super::nef::{self, Notice};
+use crate::projects::manifest;
+
+/// Where every docket document lands below `documents/`.
+const DOCKET_FOLDER: &str = "docket";
+/// How many words of the docket text name the file.
+const SLUG_WORDS: usize = 6;
+const SLUG_MAX_CHARS: usize = 48;
+
+/// What the operator asked for.
+#[derive(Debug, Clone, Default)]
+pub struct Options {
+    pub notices: Vec<PathBuf>,
+    pub dry_run: bool,
+    /// File only these docket entry numbers.
+    pub only: Vec<String>,
+    /// Skip a notice whose docket text contains any of these, ignoring case.
+    pub skip_patterns: Vec<String>,
+    /// Replace the suggested kind on every document.
+    pub kind: Option<String>,
+    pub host: Option<String>,
+}
+
+/// One free-look download. The real one is [`HttpFreeLook`]; tests use a fake,
+/// so no test spends or even reaches a court's link.
+#[async_trait::async_trait]
+pub trait FreeLook: Send + Sync {
+    async fn fetch(&self, url: &str) -> Result<Vec<u8>>;
+}
+
+/// Follows a CM/ECF free-look link over HTTPS. A court that answers with a
+/// wrapper page is followed once to the PDF that page embeds.
+pub struct HttpFreeLook {
+    client: reqwest::Client,
+}
+
+impl HttpFreeLook {
+    /// # Errors
+    ///
+    /// When the HTTP client cannot be built.
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .context("build free-look client")?,
+        })
+    }
+
+    async fn get(&self, url: &str) -> Result<Vec<u8>> {
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .context("follow the free-look link")?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(anyhow!("the free-look link answered {status}"));
+        }
+        Ok(response
+            .bytes()
+            .await
+            .context("read free-look bytes")?
+            .to_vec())
+    }
+}
+
+#[async_trait::async_trait]
+impl FreeLook for HttpFreeLook {
+    async fn fetch(&self, url: &str) -> Result<Vec<u8>> {
+        let bytes = self.get(url).await?;
+        if is_pdf(&bytes) {
+            return Ok(bytes);
+        }
+        let page = String::from_utf8_lossy(&bytes);
+        let embedded = embedded_document(&page).ok_or_else(|| {
+            anyhow!(
+                "the free-look link answered without a PDF; it may already have been used, \
+                 so download this entry from PACER"
+            )
+        })?;
+        let next = url::Url::parse(url)
+            .and_then(|base| base.join(&embedded))
+            .context("resolve the document the free-look page embeds")?;
+        let bytes = self.get(next.as_str()).await?;
+        if is_pdf(&bytes) {
+            Ok(bytes)
+        } else {
+            Err(anyhow!(
+                "the free-look page embedded something other than a PDF"
+            ))
+        }
+    }
+}
+
+fn is_pdf(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF")
+}
+
+/// The `src` of the first `<iframe>` or `<embed>` on a free-look wrapper page.
+fn embedded_document(page: &str) -> Option<String> {
+    let lower = page.to_ascii_lowercase();
+    ["<iframe", "<embed"].iter().find_map(|tag| {
+        let start = lower.find(tag)?;
+        let end = lower[start..].find('>')? + start;
+        let element = &page[start..end];
+        let at = element.to_ascii_lowercase().find("src=")? + 4;
+        let value = &element[at..];
+        let quote = value.chars().next()?;
+        let src = if quote == '"' || quote == '\'' {
+            value[1..].split(quote).next()?
+        } else {
+            value.split_whitespace().next()?
+        };
+        Some(src.replace("&amp;", "&"))
+    })
+}
+
+/// `navigator project docket ingest`, from the working directory.
+pub async fn run(options: Options) -> ExitCode {
+    let free_look = match HttpFreeLook::new() {
+        Ok(free_look) => free_look,
+        Err(error) => {
+            eprintln!("navigator project docket ingest: {error:#}");
+            return ExitCode::from(2);
+        }
+    };
+    match ingest(Path::new("."), &options, &free_look).await {
+        Ok(report) if report.failures == 0 => ExitCode::SUCCESS,
+        Ok(report) => {
+            eprintln!(
+                "navigator project docket ingest: {} document(s) failed; their notices can be re-run",
+                report.failures
+            );
+            ExitCode::from(2)
+        }
+        Err(error) => {
+            eprintln!("navigator project docket ingest: {error:#}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// What one run did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Report {
+    pub filed: usize,
+    pub duplicates: usize,
+    pub skipped_notices: usize,
+    pub failures: usize,
+    /// Docket entries recorded through `POST /app/api/projects/{id}/docket`,
+    /// one per notice that names an entry number.
+    pub entries: usize,
+}
+
+/// The Project this checkout declares, and the dockets it owns.
+struct ProjectScope {
+    code: String,
+    host: Option<String>,
+    dockets: Vec<String>,
+}
+
+fn project_scope(root: &Path) -> Result<ProjectScope> {
+    let path = root.join(manifest::FILE);
+    let contents = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "read {} — run this from the root of a Project repository",
+            manifest::FILE
+        )
+    })?;
+    let parsed = manifest::parse(&contents).map_err(|error| anyhow!(error))?;
+    let code = parsed
+        .project
+        .ok_or_else(|| anyhow!("{} names no Project", manifest::FILE))?;
+    let mut dockets = parsed.dockets;
+    let matter_case = serde_yaml::from_str::<serde_yaml::Value>(&contents)
+        .ok()
+        .and_then(|document| {
+            document
+                .get(crate::projects::matter::KEY)?
+                .get("case_number")?
+                .as_str()
+                .map(str::trim)
+                .map(str::to_string)
+        })
+        .filter(|case| !case.is_empty());
+    if let Some(case) = matter_case {
+        if !dockets
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(&case))
+        {
+            dockets.push(case);
+        }
+    }
+    if dockets.is_empty() {
+        return Err(anyhow!(
+            "{} lists no dockets; add the case numbers this Project appears in under `dockets:`",
+            manifest::FILE
+        ));
+    }
+    Ok(ProjectScope {
+        code,
+        host: parsed.host,
+        dockets,
+    })
+}
+
+/// The manifest docket a notice's case number belongs to. A notice prints
+/// the judge's initials after the number (`9:26-cv-00042-XYZ`); a manifest
+/// entry may leave them off.
+fn docket_for<'a>(case_no: &str, dockets: &'a [String]) -> Option<&'a str> {
+    let case_no = case_no.to_ascii_lowercase();
+    dockets
+        .iter()
+        .find(|docket| {
+            let docket = docket.to_ascii_lowercase();
+            case_no == docket || case_no.starts_with(&format!("{docket}-"))
+        })
+        .map(String::as_str)
+}
+
+/// `9:26-cv-00042` → `9-26-cv-00042`: the folder one docket's documents share.
+fn case_folder(docket: &str) -> String {
+    let mut folder = String::new();
+    for c in docket.chars() {
+        if c.is_ascii_alphanumeric() {
+            folder.push(c.to_ascii_lowercase());
+        } else if !folder.is_empty() && !folder.ends_with('-') {
+            folder.push('-');
+        }
+    }
+    folder.trim_end_matches('-').to_string()
+}
+
+/// The first few words of `text`, starting at the first word that begins
+/// with a letter, so the slug never starts with a digit an attachment number
+/// could be mistaken for.
+fn text_slug(text: &str) -> String {
+    let words = text
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .skip_while(|word| !word.starts_with(|c: char| c.is_ascii_alphabetic()))
+        .take(SLUG_WORDS);
+    let mut slug = String::new();
+    for word in words {
+        if slug.len() + word.len() + 1 > SLUG_MAX_CHARS {
+            break;
+        }
+        if !slug.is_empty() {
+            slug.push('-');
+        }
+        slug.push_str(&word);
+    }
+    if slug.is_empty() {
+        "entry".to_string()
+    } else {
+        slug
+    }
+}
+
+/// `di-<n>[-<att>]-<slug>.pdf`.
+fn document_filename(doc_no: &str, attachment: Option<u32>, text: &str) -> String {
+    match attachment {
+        Some(number) => format!("di-{doc_no}-{number}-{}.pdf", text_slug(text)),
+        None => format!("di-{doc_no}-{}.pdf", text_slug(text)),
+    }
+}
+
+/// The `(docket entry, attachment)` a docket filename names.
+fn docket_key(filename: &str) -> Option<(String, Option<u32>)> {
+    let rest = filename.strip_prefix("di-")?;
+    let (doc_no, rest) = rest.split_once('-')?;
+    if doc_no.is_empty() || !doc_no.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let attachment = rest
+        .split_once('-')
+        .filter(|(head, _)| !head.is_empty() && head.chars().all(|c| c.is_ascii_digit()))
+        .and_then(|(head, _)| head.parse().ok());
+    Some((doc_no.to_string(), attachment))
+}
+
+/// The kind a docket document most likely is. The operator overrides it with
+/// `--kind`.
+fn suggested_kind(docket_text: &str, attachment_description: Option<&str>) -> &'static str {
+    if let Some(description) = attachment_description {
+        if description.to_ascii_lowercase().contains("exhibit") {
+            return "exhibit";
+        }
+    }
+    if docket_text
+        .split_whitespace()
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("transcript"))
+    {
+        return "transcript";
+    }
+    "pleading"
+}
+
+/// What this checkout already files, read from its committed pointers.
+#[derive(Default)]
+struct Filed {
+    /// `(case folder, entry, attachment)` → slug.
+    keyed: BTreeMap<(String, String, Option<u32>), String>,
+    /// Lowercased document filename → slug, for a filing uploaded from the
+    /// drafts lane under its own name.
+    named: BTreeMap<String, String>,
+    hashed: BTreeMap<String, String>,
+}
+
+impl Filed {
+    fn read(root: &Path) -> Result<Self> {
+        let mut filed = Self::default();
+        for relative in crate::document_read::discover_pointers(root)? {
+            let slash = crate::document_sync::slash_path(&relative)?;
+            let Some(slug) = slash
+                .strip_prefix(&format!("{}/", crate::document_sync::POINTER_DIRECTORY))
+                .and_then(crate::document_sync::strip_pointer_extension)
+            else {
+                continue;
+            };
+            filed.record(slug);
+            if let Ok(Some(pointer)) = crate::document_sync::read_pointer(&root.join(&relative)) {
+                filed.hashed.insert(
+                    pointer.current_version.sha256.to_ascii_lowercase(),
+                    slug.to_string(),
+                );
+            }
+        }
+        Ok(filed)
+    }
+
+    fn record(&mut self, slug: &str) {
+        let mut parts = slug.rsplit('/');
+        let Some(filename) = parts.next() else {
+            return;
+        };
+        self.named
+            .entry(filename.to_ascii_lowercase())
+            .or_insert_with(|| slug.to_string());
+        let folder = parts.next();
+        let docket_root = parts.next();
+        if let (Some(folder), Some(DOCKET_FOLDER), None) = (folder, docket_root, parts.next()) {
+            if let Some((doc_no, attachment)) = docket_key(filename) {
+                self.keyed
+                    .entry((folder.to_string(), doc_no, attachment))
+                    .or_insert_with(|| slug.to_string());
+            }
+        }
+    }
+
+    fn existing(&self, item: &Item) -> Option<&str> {
+        self.keyed
+            .get(&(item.folder.clone(), item.doc_no.clone(), item.attachment))
+            .or_else(|| {
+                item.original_filename
+                    .as_ref()
+                    .and_then(|name| self.named.get(&name.to_ascii_lowercase()))
+            })
+            .map(String::as_str)
+    }
+}
+
+/// One document a notice points at.
+#[derive(Debug, Clone)]
+struct Item {
+    case_no: String,
+    folder: String,
+    doc_no: String,
+    attachment: Option<u32>,
+    filename: String,
+    kind: String,
+    free_look_url: Option<String>,
+    original_filename: Option<String>,
+    description: String,
+}
+
+impl Item {
+    fn slug(&self) -> String {
+        format!("{DOCKET_FOLDER}/{}/{}", self.folder, self.filename)
+    }
+
+    fn label(&self) -> String {
+        match self.attachment {
+            Some(number) => format!("D.I. {}-{number}", self.doc_no),
+            None => format!("D.I. {}", self.doc_no),
+        }
+    }
+}
+
+/// The documents one notice points at.
+fn items_for(notice: &Notice, docket: &str, kind_override: Option<&str>) -> Vec<Item> {
+    let Some(doc_no) = notice.doc_no.clone() else {
+        return Vec::new();
+    };
+    let folder = case_folder(docket);
+    let mut items = vec![Item {
+        case_no: notice.case_no.clone(),
+        folder: folder.clone(),
+        doc_no: doc_no.clone(),
+        attachment: None,
+        filename: document_filename(&doc_no, None, &notice.docket_text),
+        kind: kind_override
+            .unwrap_or_else(|| suggested_kind(&notice.docket_text, None))
+            .to_string(),
+        free_look_url: notice.free_look_url.clone(),
+        original_filename: notice.original_filename.clone(),
+        description: format!(
+            "D.I. {doc_no} in {}: {}",
+            notice.case_no,
+            truncate(&notice.docket_text, 400)
+        ),
+    }];
+    for attachment in &notice.attachments {
+        items.push(Item {
+            case_no: notice.case_no.clone(),
+            folder: folder.clone(),
+            doc_no: doc_no.clone(),
+            attachment: Some(attachment.number),
+            filename: document_filename(&doc_no, Some(attachment.number), &attachment.description),
+            kind: kind_override
+                .unwrap_or_else(|| {
+                    suggested_kind(&notice.docket_text, Some(&attachment.description))
+                })
+                .to_string(),
+            free_look_url: attachment.free_look_url.clone(),
+            original_filename: attachment.original_filename.clone(),
+            description: format!(
+                "D.I. {doc_no}-{} in {}: {}",
+                attachment.number, notice.case_no, attachment.description
+            ),
+        });
+    }
+    items
+}
+
+fn truncate(text: &str, max: usize) -> &str {
+    match text.char_indices().nth(max) {
+        Some((at, _)) => &text[..at],
+        None => text,
+    }
+}
+
+/// One notice that belongs to this Project and passed the filters.
+struct Accepted {
+    notice: Notice,
+    /// The manifest docket the notice's case number matched.
+    docket: String,
+    items: Vec<Item>,
+}
+
+/// Parse and filter every notice. Nothing here touches the network.
+fn accept(scope: &ProjectScope, options: &Options, report: &mut Report) -> Vec<Accepted> {
+    let patterns: Vec<String> = options
+        .skip_patterns
+        .iter()
+        .map(|pattern| pattern.to_ascii_lowercase())
+        .collect();
+    let mut accepted = Vec::new();
+    for path in &options.notices {
+        let notice = match std::fs::read(path)
+            .with_context(|| format!("read {}", path.display()))
+            .and_then(|bytes| nef::parse_eml(&bytes).map_err(anyhow::Error::from))
+        {
+            Ok(notice) => notice,
+            Err(error) => {
+                println!("skipped {}: {error:#}", path.display());
+                report.skipped_notices += 1;
+                continue;
+            }
+        };
+        let Some(docket) = docket_for(&notice.case_no, &scope.dockets) else {
+            println!("skipped {}: not a docket of this Project", path.display());
+            report.skipped_notices += 1;
+            continue;
+        };
+        if !options.only.is_empty()
+            && !notice
+                .doc_no
+                .as_ref()
+                .is_some_and(|doc_no| options.only.contains(doc_no))
+        {
+            report.skipped_notices += 1;
+            continue;
+        }
+        let text = notice.docket_text.to_ascii_lowercase();
+        if let Some(pattern) = patterns
+            .iter()
+            .find(|pattern| text.contains(pattern.as_str()))
+        {
+            println!(
+                "skipped {}: docket text matches --skip-pattern {pattern:?}",
+                path.display()
+            );
+            report.skipped_notices += 1;
+            continue;
+        }
+        let items = items_for(&notice, docket, options.kind.as_deref());
+        accepted.push(Accepted {
+            notice,
+            docket: docket.to_string(),
+            items,
+        });
+    }
+    accepted
+}
+
+/// Plan, then (unless `--dry-run`) download, upload, and stage each document.
+///
+/// # Errors
+///
+/// A missing or malformed manifest, a missing login, or an unreadable
+/// `documents/` tree. A failure on one document is counted in
+/// [`Report::failures`] and the run continues with the next.
+#[allow(clippy::too_many_lines)]
+pub async fn ingest(root: &Path, options: &Options, free_look: &dyn FreeLook) -> Result<Report> {
+    let scope = project_scope(root)?;
+    crate::document_sync::refuse_legacy_layout(root)?;
+    let mut report = Report::default();
+    let accepted = accept(&scope, options, &mut report);
+    let mut filed = Filed::read(root)?;
+    let mut planned: Vec<Item> = Vec::new();
+    let mut seen: BTreeSet<(String, String, Option<u32>)> = BTreeSet::new();
+
+    for Accepted { notice, items, .. } in &accepted {
+        if notice.doc_no.is_none() {
+            println!(
+                "{} · no document attached · {}",
+                notice.case_no,
+                truncate(&notice.docket_text, 80)
+            );
+        }
+        for item in items {
+            let key = (item.folder.clone(), item.doc_no.clone(), item.attachment);
+            if let Some(existing) = filed.existing(item) {
+                println!(
+                    "{} · {} · already filed as {existing}",
+                    item.case_no,
+                    item.label()
+                );
+                report.duplicates += 1;
+                continue;
+            }
+            if !seen.insert(key) {
+                report.duplicates += 1;
+                continue;
+            }
+            let on_disk = docket_bytes(root, &item.slug()).is_file()
+                || crate::document_sync::document_path_for_slug(root, Path::new(&item.slug()))
+                    .is_file();
+            if item.free_look_url.is_none() && !on_disk {
+                println!(
+                    "{} · {} · no free-look link in the notice; download it from {}'s document page",
+                    item.case_no,
+                    item.label(),
+                    format_args!("D.I. {}", item.doc_no)
+                );
+                continue;
+            }
+            println!(
+                "{} · {} · {} · {}{}",
+                item.case_no,
+                item.label(),
+                item.kind,
+                item.slug(),
+                if on_disk {
+                    " (bytes already on disk)"
+                } else {
+                    ""
+                }
+            );
+            planned.push(item.clone());
+        }
+    }
+
+    let service_list = ServiceList::from_notices(
+        &scope.code,
+        accepted.iter().map(|accepted| &accepted.notice),
+    );
+    service_list.print();
+
+    let entries: Vec<serde_json::Value> = accepted
+        .iter()
+        .filter_map(|accepted| docket_entry_body(&accepted.notice, &accepted.docket))
+        .collect();
+    for entry in &entries {
+        println!(
+            "{} · D.I. {} · docket entry · {}",
+            entry["docket_number"].as_str().unwrap_or_default(),
+            entry["entry_number"].as_str().unwrap_or_default(),
+            entry["kind"].as_str().unwrap_or_default()
+        );
+    }
+
+    if options.dry_run {
+        println!(
+            "dry run: {} document(s) would be filed into {} and {} docket entr{} recorded; nothing was downloaded",
+            planned.len(),
+            scope.code,
+            entries.len(),
+            if entries.len() == 1 { "y" } else { "ies" }
+        );
+        return Ok(report);
+    }
+
+    let host = options.host.as_deref().or(scope.host.as_deref());
+    if planned.is_empty() {
+        println!("nothing to file into {}", scope.code);
+    } else {
+        file_planned(
+            root,
+            host,
+            &scope.code,
+            free_look,
+            &planned,
+            &mut filed,
+            &mut report,
+        )
+        .await?;
+    }
+    if !entries.is_empty() {
+        record_entries(host, &scope.code, &entries, &mut report).await;
+    }
+    if !service_list.is_empty() {
+        match service_list.persist(host).await {
+            Ok((people, entries)) => println!(
+                "service list: {} new person(s), {} new relationship log row(s)",
+                people.created, entries.created
+            ),
+            Err(error) => {
+                eprintln!("service list: {error:#}");
+                report.failures += 1;
+            }
+        }
+    }
+    Ok(report)
+}
+
+/// The docket entry one notice records (LAW-133): the entry number, the
+/// kind read from the docket text, the text itself as the title, the filer
+/// as the party, the filed date, and the main document by the slug the
+/// filing step wrote. A text-only entry (no document number) records nothing.
+fn docket_entry_body(notice: &Notice, docket: &str) -> Option<serde_json::Value> {
+    let doc_no = notice.doc_no.as_deref()?;
+    let mut body = serde_json::json!({
+        "docket_number": docket,
+        "entry_number": doc_no,
+        "kind": entry_kind(&notice.docket_text),
+        "title": truncate(&notice.docket_text, 400),
+        "slug": format!(
+            "{DOCKET_FOLDER}/{}/{}",
+            case_folder(docket),
+            document_filename(doc_no, None, &notice.docket_text)
+        ),
+    });
+    if let Some(caption) = notice.case_name.as_deref().filter(|name| !name.is_empty()) {
+        body["caption"] = serde_json::json!(caption);
+    }
+    if !notice.court.is_empty() {
+        body["forum"] = serde_json::json!(notice.court);
+    }
+    if let Some(party) = notice
+        .filed_by
+        .as_deref()
+        .or(notice.filer_attorney.as_deref())
+    {
+        body["party"] = serde_json::json!(party);
+    }
+    if let Some(filed) = notice.filed_at {
+        body["filed_or_served_on"] = serde_json::json!(filed.format("%Y-%m-%d").to_string());
+    }
+    Some(body)
+}
+
+/// The docket entry kind a notice's text names: its first word, when that
+/// word is a kind the spine knows; `other` when it is not. A hearing or
+/// trial is never recorded from a notice, because the notice does not carry
+/// the date the court set.
+fn entry_kind(docket_text: &str) -> &'static str {
+    let first = docket_text
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .find(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    match first.as_str() {
+        "motion" => "motion",
+        "opposition" | "response" => "opposition",
+        "reply" => "reply",
+        "order" => "order",
+        "notice" => "notice",
+        "stipulation" => "stipulation",
+        "subpoena" => "subpoena",
+        "complaint" | "answer" | "petition" | "counterclaim" => "pleading",
+        _ => "other",
+    }
+}
+
+/// Record each planned entry through `POST /app/api/projects/{id}/docket`.
+/// The door answers an entry number already on the case with the existing
+/// row, so a re-run records nothing twice.
+async fn record_entries(
+    host: Option<&str>,
+    code: &str,
+    entries: &[serde_json::Value],
+    report: &mut Report,
+) {
+    let client = match crate::remote::DocumentClient::connect(host, code).await {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("docket entries: {error:#}");
+            report.failures += entries.len();
+            return;
+        }
+    };
+    let coordinates = super::entries::Coordinates {
+        base: client.base().to_string(),
+        token: client.token().to_string(),
+        project_id: client.project_id(),
+    };
+    for entry in entries {
+        match super::entries::post_entry(&coordinates, entry).await {
+            Ok(row) => {
+                report.entries += 1;
+                println!(
+                    "recorded docket entry D.I. {} ({})",
+                    row["entry_number"].as_str().unwrap_or_default(),
+                    row["id"].as_str().unwrap_or_default()
+                );
+            }
+            Err(error) => {
+                eprintln!(
+                    "docket entry D.I. {}: {error:#}",
+                    entry["entry_number"].as_str().unwrap_or_default()
+                );
+                report.failures += 1;
+            }
+        }
+    }
+}
+
+async fn file_planned(
+    root: &Path,
+    host: Option<&str>,
+    code: &str,
+    free_look: &dyn FreeLook,
+    planned: &[Item],
+    filed: &mut Filed,
+    report: &mut Report,
+) -> Result<()> {
+    let client = crate::remote::DocumentClient::connect(host, code).await?;
+    crate::document_sync::ensure_documents_ignored(root)?;
+    for item in planned {
+        match file_one(root, &client, free_look, item, filed).await {
+            Ok(Filing::Filed(pointer_path)) => {
+                println!("staged {}", pointer_path.display());
+                report.filed += 1;
+            }
+            Ok(Filing::SameBytes(existing)) => {
+                println!(
+                    "{} · {} · the same bytes are already filed as {existing}",
+                    item.case_no,
+                    item.label()
+                );
+                report.duplicates += 1;
+            }
+            Err(error) => {
+                eprintln!("{} · {} · {error:#}", item.case_no, item.label());
+                report.failures += 1;
+            }
+        }
+    }
+    println!(
+        "{} document(s) filed into {code}, {} already filed",
+        report.filed, report.duplicates
+    );
+    Ok(())
+}
+
+/// Everyone the accepted notices were mailed to, as the two seed documents
+/// that record them: a Person per primary email, and a Relationship Log row
+/// per person per filing. Firm-wide conflicts data — each log row names the
+/// Project whose filing produced it, and nothing grants a role on it.
+#[derive(Debug, Default)]
+struct ServiceList {
+    people: Vec<serde_json::Value>,
+    entries: Vec<serde_json::Value>,
+}
+
+impl ServiceList {
+    fn from_notices<'a>(project: &str, notices: impl Iterator<Item = &'a Notice>) -> Self {
+        let mut emails = BTreeSet::new();
+        let mut rows = BTreeSet::new();
+        let mut list = Self::default();
+        for notice in notices {
+            let source = match &notice.doc_no {
+                Some(doc_no) => format!("per D.I. {doc_no}"),
+                None => match notice.filed_at {
+                    Some(date) => format!("per the notice filed {date}"),
+                    None => "per a notice of electronic filing".to_string(),
+                },
+            };
+            for entry in &notice.service_list {
+                let Some(email) = entry.primary_email() else {
+                    continue;
+                };
+                if emails.insert(email.to_string()) {
+                    list.people.push(serde_json::json!({
+                        "email": email,
+                        "name": entry.name,
+                    }));
+                }
+                let (action, detail) = match &entry.party {
+                    Some(party) => (
+                        "appears_for",
+                        format!(
+                            "{} appears for {party} in {}, {source}",
+                            entry.name, notice.case_no
+                        ),
+                    ),
+                    None => (
+                        "on_service_list",
+                        format!(
+                            "{} is on the service list in {}, {source}",
+                            entry.name, notice.case_no
+                        ),
+                    ),
+                };
+                if rows.insert((email.to_string(), detail.clone())) {
+                    list.entries.push(serde_json::json!({
+                        "subject": { "email": email },
+                        "action": action,
+                        "detail": detail,
+                        "project": { "code": project },
+                    }));
+                }
+            }
+        }
+        list
+    }
+
+    fn is_empty(&self) -> bool {
+        self.people.is_empty()
+    }
+
+    fn print(&self) {
+        if self.is_empty() {
+            return;
+        }
+        println!(
+            "service list: {} person(s), {} relationship log row(s)",
+            self.people.len(),
+            self.entries.len()
+        );
+        for entry in &self.entries {
+            println!(
+                "  {} · {}",
+                entry["subject"]["email"].as_str().unwrap_or_default(),
+                entry["detail"].as_str().unwrap_or_default()
+            );
+        }
+    }
+
+    /// People first, so every log row's subject exists when it is written.
+    async fn persist(
+        &self,
+        host: Option<&str>,
+    ) -> Result<(crate::remote::SeedCounts, crate::remote::SeedCounts)> {
+        let people =
+            crate::remote::import_records(host, "person", &["email"], &self.people).await?;
+        let entries = crate::remote::import_records(
+            host,
+            "relationship_log",
+            &["subject_id", "action", "detail"],
+            &self.entries,
+        )
+        .await?;
+        Ok((people, entries))
+    }
+}
+
+/// Write `bytes` beside `path` and rename into place, so an interrupted run
+/// never leaves a partial PDF that a later run would mistake for the download.
+fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    let temp = PathBuf::from(format!("{}.tmp-{}", path.display(), uuid::Uuid::now_v7()));
+    std::fs::write(&temp, bytes).with_context(|| format!("write {}", temp.display()))?;
+    std::fs::rename(&temp, path).with_context(|| format!("publish {}", path.display()))
+}
+
+enum Filing {
+    Filed(PathBuf),
+    SameBytes(String),
+}
+
+/// Where docket ingest saves a filing's bytes: Docket Filings, whatever the
+/// entry's kind (LAW-189).
+fn docket_bytes(root: &Path, slug: &str) -> PathBuf {
+    root.join(crate::document_sync::DOCUMENT_DIRECTORY).join(
+        crate::document_layout::bytes_relative(
+            Path::new(slug),
+            store::document_pointers::MatterFolder::DocketFilings,
+        ),
+    )
+}
+
+async fn file_one(
+    root: &Path,
+    client: &crate::remote::DocumentClient,
+    free_look: &dyn FreeLook,
+    item: &Item,
+    filed: &mut Filed,
+) -> Result<Filing> {
+    let slug = item.slug();
+    let target = docket_bytes(root, &slug);
+    // A download saved before the matter folders sits at the slug itself; a
+    // free-look link is single-use, so those bytes are read, not refetched.
+    let legacy = crate::document_sync::document_path_for_slug(root, Path::new(&slug));
+    let bytes = if target.is_file() {
+        std::fs::read(&target).with_context(|| format!("read {}", target.display()))?
+    } else if legacy.is_file() {
+        std::fs::read(&legacy).with_context(|| format!("read {}", legacy.display()))?
+    } else {
+        let parent = target
+            .parent()
+            .ok_or_else(|| anyhow!("{} has no parent", target.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        crate::document_sync::ensure_managed_copy_target(root, &target)?;
+        let url = item
+            .free_look_url
+            .as_deref()
+            .ok_or_else(|| anyhow!("no free-look link"))?;
+        let bytes = free_look.fetch(url).await?;
+        write_atomically(&target, &bytes)?;
+        println!("saved {}", target.display());
+        bytes
+    };
+    let sha256 = Sha256::digest(&bytes)
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+    if let Some(existing) = filed.hashed.get(&sha256) {
+        return Ok(Filing::SameBytes(existing.clone()));
+    }
+    let metadata = serde_json::json!({
+        "source": "cm_ecf_notice",
+        "case_number": item.case_no,
+        "docket_entry": item.doc_no,
+        "attachment": item.attachment,
+        "original_filename": item.original_filename,
+    });
+    let mut pointer = client
+        .upload_bytes(
+            &item.filename,
+            &bytes,
+            &item.kind,
+            None,
+            Some(&item.description),
+            Some("application/pdf"),
+            Some(&slug),
+            Some(metadata),
+        )
+        .await?;
+    pointer.folder = crate::document_layout::recorded_folder(
+        &pointer.kind,
+        store::document_pointers::MatterFolder::DocketFilings,
+    );
+    let pointer_path = crate::document_sync::write_uploaded_pointer(root, &slug, &pointer)?;
+    filed.record(&slug);
+    filed.hashed.insert(sha256, slug);
+    Ok(Filing::Filed(pointer_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        case_folder, docket_for, docket_key, document_filename, embedded_document, entry_kind,
+        ingest, suggested_kind, text_slug, FreeLook, Options, Report,
+    };
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::LazyLock;
+
+    use crate::credentials::{self, Credentials, HostCredential};
+    use uuid::Uuid;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Serves fixed bytes for any link and counts how often it was asked.
+    struct FakeFreeLook {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl FreeLook for FakeFreeLook {
+        async fn fetch(&self, url: &str) -> anyhow::Result<Vec<u8>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(format!("%PDF-1.7 synthetic {url}").into_bytes())
+        }
+    }
+
+    // `NAVIGATOR_CREDENTIALS_FILE` is process-global env, so tests that set
+    // it must not run concurrently — the discipline `cli::remote` uses.
+    static CREDENTIALS_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+    struct CredentialsEnv {
+        _dir: tempfile::TempDir,
+    }
+
+    impl CredentialsEnv {
+        fn logged_in(base: &str) -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("navigator.json");
+            let mut creds = Credentials::default();
+            creds.set(
+                base,
+                HostCredential {
+                    token: "test-token".into(),
+                    person_email: Some("lawyer@neonlaw.com".into()),
+                    role: Some("lawyer".into()),
+                    expires_at: i64::MAX,
+                },
+            );
+            credentials::save(&path, &creds).unwrap();
+            std::env::set_var("NAVIGATOR_CREDENTIALS_FILE", path);
+            Self { _dir: dir }
+        }
+    }
+
+    fn fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/nef")
+            .join(name)
+    }
+
+    fn checkout(manifest: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("navigator.yaml"), manifest).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(init.success());
+        dir
+    }
+
+    #[test]
+    fn a_notice_case_number_matches_its_docket_with_or_without_initials() {
+        let dockets = vec!["9:26-cv-00042".to_string(), "26-10042-ZZZ".to_string()];
+        assert_eq!(
+            docket_for("9:26-cv-00042-XYZ", &dockets),
+            Some("9:26-cv-00042")
+        );
+        assert_eq!(docket_for("26-10042-zzz", &dockets), Some("26-10042-ZZZ"));
+        assert_eq!(docket_for("9:26-cv-00043-XYZ", &dockets), None);
+        assert_eq!(docket_for("9:26-cv-000421", &dockets), None);
+        assert_eq!(case_folder("9:26-cv-00042"), "9-26-cv-00042");
+    }
+
+    #[test]
+    fn a_document_is_named_by_its_entry_attachment_and_text() {
+        assert_eq!(
+            document_filename("12", None, "MOTION to Dismiss for Failure to State a Claim"),
+            "di-12-motion-to-dismiss-for-failure-to.pdf"
+        );
+        assert_eq!(
+            document_filename("12", Some(1), "Exhibit A - Supply Agreement"),
+            "di-12-1-exhibit-a-supply-agreement.pdf"
+        );
+        assert_eq!(text_slug("3 (three) copies"), "three-copies");
+        assert_eq!(text_slug("12 34"), "entry");
+        assert_eq!(docket_key("di-12-motion.pdf"), Some(("12".into(), None)));
+        assert_eq!(
+            docket_key("di-12-1-exhibit-a.pdf"),
+            Some(("12".into(), Some(1)))
+        );
+        assert_eq!(docket_key("motion.pdf"), None);
+    }
+
+    #[test]
+    fn the_suggested_kind_reads_the_entry() {
+        assert_eq!(suggested_kind("MOTION to Dismiss", None), "pleading");
+        assert_eq!(suggested_kind("ORDER granting", None), "pleading");
+        assert_eq!(
+            suggested_kind("TRANSCRIPT of Proceedings", None),
+            "transcript"
+        );
+        assert_eq!(suggested_kind("MOTION", Some("Exhibit A")), "exhibit");
+        assert_eq!(suggested_kind("MOTION", Some("Proposed Order")), "pleading");
+    }
+
+    #[test]
+    fn a_free_look_wrapper_page_names_its_pdf() {
+        assert_eq!(
+            embedded_document(
+                "<html><iframe src=\"/cgi-bin/show_temp.pl?file=a.pdf&amp;type=1\"></iframe>"
+            )
+            .as_deref(),
+            Some("/cgi-bin/show_temp.pl?file=a.pdf&type=1")
+        );
+        assert_eq!(embedded_document("<p>expired</p>"), None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_dry_run_plans_without_downloading_and_skips_other_dockets() {
+        let dir =
+            checkout("host: navigator.example.com\nproject: acme\ndockets:\n  - 9:26-cv-00042\n");
+        let free_look = FakeFreeLook {
+            calls: AtomicUsize::new(0),
+        };
+        let report = ingest(
+            dir.path(),
+            &Options {
+                notices: vec![
+                    fixture("district-motion.eml"),
+                    fixture("bankruptcy-transfer.eml"),
+                ],
+                dry_run: true,
+                ..Options::default()
+            },
+            &free_look,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            report,
+            Report {
+                skipped_notices: 1,
+                ..Report::default()
+            }
+        );
+        assert_eq!(free_look.calls.load(Ordering::SeqCst), 0);
+        assert!(!dir.path().join("documents").exists());
+    }
+
+    #[test]
+    fn the_entry_kind_reads_the_first_word_of_the_docket_text() {
+        assert_eq!(entry_kind("MOTION to Dismiss"), "motion");
+        assert_eq!(entry_kind("ORDER granting"), "order");
+        assert_eq!(entry_kind("Transfer of Claim."), "other");
+        assert_eq!(entry_kind("Notice of hearing"), "notice");
+        assert_eq!(entry_kind("ANSWER to complaint"), "pleading");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_skip_pattern_and_only_filter_notices() {
+        let dir = checkout(
+            "host: navigator.example.com\nproject: acme\ndockets:\n  - 9:26-cv-00042\n  - 26-10042\n",
+        );
+        let free_look = FakeFreeLook {
+            calls: AtomicUsize::new(0),
+        };
+        let notices = vec![
+            fixture("district-motion.eml"),
+            fixture("bankruptcy-transfer.eml"),
+        ];
+        let skipped = ingest(
+            dir.path(),
+            &Options {
+                notices: notices.clone(),
+                dry_run: true,
+                skip_patterns: vec!["TRANSFER OF CLAIM".into()],
+                ..Options::default()
+            },
+            &free_look,
+        )
+        .await
+        .unwrap();
+        assert_eq!(skipped.skipped_notices, 1);
+
+        let only = ingest(
+            dir.path(),
+            &Options {
+                notices,
+                dry_run: true,
+                only: vec!["29".into()],
+                ..Options::default()
+            },
+            &free_look,
+        )
+        .await
+        .unwrap();
+        assert_eq!(only.skipped_notices, 1);
+    }
+
+    /// Mount the Project lookup and an upload that answers with a fresh
+    /// pointer per request.
+    async fn upload_server(project_id: Uuid) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": project_id, "code": "acme"}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/app/api/projects/{project_id}/documents")))
+            .respond_with(move |request: &wiremock::Request| {
+                let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+                ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                    "kind": body["kind"],
+                    "visibility": "internal",
+                    "current_version": {
+                        "version": 1,
+                        "asset_id": Uuid::now_v7(),
+                        "created_at": "2026-03-04T12:00:00Z",
+                        "sha256": "0".repeat(64),
+                        "size_bytes": 10
+                    }
+                }))
+            })
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/seed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model": "person", "created": 1, "updated": 0, "unchanged": 0, "records": []
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/app/api/projects/{project_id}/docket")))
+            .respond_with(move |request: &wiremock::Request| {
+                let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+                ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                    "id": Uuid::now_v7(),
+                    "entry_number": body["entry_number"],
+                    "kind": body["kind"],
+                    "title": body["title"],
+                }))
+            })
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// The docket entries a run recorded, as posted.
+    async fn docket_entries(server: &MockServer) -> Vec<serde_json::Value> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path().ends_with("/docket"))
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .collect()
+    }
+
+    /// The seed documents a run posted, as `(model, yaml)`.
+    async fn seeds(server: &MockServer) -> Vec<(String, String)> {
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path() == "/app/api/seed")
+            .map(|request| {
+                let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+                (
+                    body["model"].as_str().unwrap().to_string(),
+                    body["yaml"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn apply_mode_saves_bytes_files_the_document_and_a_rerun_skips_it() {
+        let project_id = Uuid::now_v7();
+        let server = upload_server(project_id).await;
+        let dir = checkout("host: navigator.example.com\nproject: acme\ndockets:\n  - 26-10042\n");
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let _env = CredentialsEnv::logged_in(&server.uri());
+        let free_look = FakeFreeLook {
+            calls: AtomicUsize::new(0),
+        };
+        let options = Options {
+            notices: vec![fixture("bankruptcy-transfer.eml")],
+            host: Some(server.uri()),
+            ..Options::default()
+        };
+
+        let report = ingest(dir.path(), &options, &free_look).await.unwrap();
+        assert_eq!(report.filed, 1, "{report:?}");
+        assert_eq!(report.failures, 0, "{report:?}");
+        assert_eq!(report.entries, 1, "one docket entry per notice: {report:?}");
+        assert_eq!(free_look.calls.load(Ordering::SeqCst), 1);
+        let entries = docket_entries(&server).await;
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0]["docket_number"], "26-10042");
+        assert_eq!(entries[0]["entry_number"], "29");
+        assert_eq!(entries[0]["kind"], "other");
+        assert_eq!(entries[0]["party"], "Harbor Recovery Fund");
+        assert_eq!(entries[0]["filed_or_served_on"], "2026-03-05");
+        assert_eq!(
+            entries[0]["slug"],
+            "docket/26-10042/di-29-transfer-of-claim-transfer-agreement-3001.pdf"
+        );
+        assert!(entries[0]["title"]
+            .as_str()
+            .unwrap()
+            .starts_with("Transfer of Claim"));
+        let bytes = dir
+            .path()
+            .join("documents/Docket Filings/docket/26-10042/di-29-transfer-of-claim-transfer-agreement-3001.pdf");
+        assert!(std::fs::read(&bytes).unwrap().starts_with(b"%PDF"));
+        assert!(dir
+            .path()
+            .join("blobs/docket/26-10042/di-29-transfer-of-claim-transfer-agreement-3001.pdf.yaml")
+            .is_file());
+        let uploads: Vec<serde_json::Value> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path().ends_with("/documents"))
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .collect();
+        assert_eq!(uploads.len(), 1);
+        assert_eq!(uploads[0]["kind"], "pleading");
+        assert_eq!(
+            uploads[0]["slug"],
+            "docket/26-10042/di-29-transfer-of-claim-transfer-agreement-3001.pdf"
+        );
+        assert_eq!(uploads[0]["content_type"], "application/pdf");
+
+        let posted = seeds(&server).await;
+        let models: Vec<&str> = posted.iter().map(|(model, _)| model.as_str()).collect();
+        assert_eq!(models, vec!["person", "relationship_log"]);
+        assert!(posted[0].1.contains("email: quentin.quill@example.com"));
+        assert!(posted[1].1.contains(
+            "Quentin Quill appears for Creditor Harbor Recovery Fund in 26-10042-ZZZ, per D.I. 29"
+        ));
+        assert!(
+            !posted[0].1.contains("acme"),
+            "the person seed never names the Project"
+        );
+        assert!(
+            posted[1].1.contains("project:\n    code: acme"),
+            "each relationship_log row names the Project it came from: {}",
+            posted[1].1
+        );
+
+        let rerun = ingest(dir.path(), &options, &free_look).await.unwrap();
+        assert_eq!(rerun.filed, 0);
+        assert_eq!(rerun.duplicates, 1);
+        assert_eq!(
+            free_look.calls.load(Ordering::SeqCst),
+            1,
+            "no second free look"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bytes_left_by_a_failed_run_are_reused_not_downloaded_again() {
+        let project_id = Uuid::now_v7();
+        let server = upload_server(project_id).await;
+        let dir = checkout("host: navigator.example.com\nproject: acme\ndockets:\n  - 26-10042\n");
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let _env = CredentialsEnv::logged_in(&server.uri());
+        let folder = dir.path().join("documents/docket/26-10042");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("di-29-transfer-of-claim-transfer-agreement-3001.pdf"),
+            b"%PDF-1.7 left behind",
+        )
+        .unwrap();
+        let free_look = FakeFreeLook {
+            calls: AtomicUsize::new(0),
+        };
+
+        let report = ingest(
+            dir.path(),
+            &Options {
+                notices: vec![fixture("bankruptcy-transfer.eml")],
+                host: Some(server.uri()),
+                ..Options::default()
+            },
+            &free_look,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.filed, 1);
+        assert_eq!(free_look.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn our_own_filing_from_the_drafts_lane_is_recognised_named() {
+        let dir = checkout("host: navigator.example.com\nproject: acme\ndockets:\n  - 26-10042\n");
+        let pointer = store::document_pointers::DocumentPointer {
+            kind: "pleading".into(),
+            visibility: "internal".into(),
+            folder: None,
+            current_version: store::document_pointers::PointerVersion {
+                version: 1,
+                asset_id: Uuid::now_v7(),
+                created_at: "2026-03-05T12:00:00Z".into(),
+                sha256: "1".repeat(64),
+                size_bytes: 10,
+                canonical_url: None,
+                checked_on: None,
+            },
+            previous_version: None,
+            authority_id: None,
+            docusign_envelope_id: None,
+            xero_invoice_id: None,
+            signing: None,
+            notarization: Vec::new(),
+            service: Vec::new(),
+        };
+        crate::document_sync::write_uploaded_pointer(
+            dir.path(),
+            "filings/transfer-of-claim-7.pdf",
+            &pointer,
+        )
+        .unwrap();
+        let free_look = FakeFreeLook {
+            calls: AtomicUsize::new(0),
+        };
+
+        let report = ingest(
+            dir.path(),
+            &Options {
+                notices: vec![fixture("bankruptcy-transfer.eml")],
+                ..Options::default()
+            },
+            &free_look,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.duplicates, 1);
+        assert_eq!(free_look.calls.load(Ordering::SeqCst), 0);
+    }
+}

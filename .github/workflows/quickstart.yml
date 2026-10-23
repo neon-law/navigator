@@ -1,0 +1,84 @@
+name: Quickstart on KIND
+# The same `navigator quickstart` a newcomer runs after `brew install`, on a
+# clean runner: preflight, the worktree KIND tier, PostgreSQL and Forgejo,
+# then `web` serving the seeded firm. `CI` keeps it from opening a browser.
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  quickstart:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5
+        with:
+          version: v1.37.0
+      - name: Install pinned KIND
+        run: |
+          curl -fsSL https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 -o /tmp/kind
+          echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  /tmp/kind' | sha256sum -c -
+          chmod +x /tmp/kind
+          sudo mv /tmp/kind /usr/local/bin/kind
+      - name: Install the pinned Restate CLI
+        run: npm install --global @restatedev/restate@1.7.2
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: 1.98.0
+      - name: cache the Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: gate-cli
+          save-if: false
+      - name: build navigator CLI
+        run: cargo build -p cli --quiet
+      - name: navigator quickstart
+        run: |
+          target/debug/navigator quickstart > /tmp/quickstart.log 2>&1 &
+          echo $! > /tmp/quickstart.pid
+          for _ in $(seq 1 5400); do
+            if ! kill -0 "$(cat /tmp/quickstart.pid)" 2>/dev/null; then
+              tail -100 /tmp/quickstart.log
+              echo "::error::navigator quickstart exited before the website was ready"
+              exit 1
+            fi
+            if grep -q '^Preview: ' /tmp/quickstart.log; then
+              break
+            fi
+            sleep 1
+          done
+          grep -q '^Preview: ' /tmp/quickstart.log
+          tail -40 /tmp/quickstart.log
+      - name: The seeded site, Forgejo, and PostgreSQL answer
+        run: |
+          set -a; source .devx/env; set +a
+          curl -fsS "http://localhost:$PORT/app/readyz"
+          curl -fsS "http://localhost:$PORT/" | grep -q 'Shook Law PC'
+          curl -fsS "http://localhost:$NAVIGATOR_KIND_FORGEJO_PORT/api/healthz"
+          timeout 5 bash -c "</dev/tcp/127.0.0.1/$NAVIGATOR_KIND_POSTGRES_PORT"
+      - name: Diagnose
+        if: failure()
+        run: |
+          tail -200 /tmp/quickstart.log || true
+          set -a; source .devx/env || true; set +a
+          kubectl -n navigator get pods,jobs,pvc -o wide || true
+          kubectl -n navigator describe pod navigator-forgejo-0 || true
+      - name: Cleanup
+        if: always()
+        run: |
+          kill "$(cat /tmp/quickstart.pid)" 2>/dev/null || true
+          target/debug/navigator dev worktree-env down --path "$PWD" || true
+'on':
+  pull_request:
+    paths:
+      - cli/src/devx/quickstart.rs
+      - cli/src/devx/serve.rs
+      - cli/src/devx/worktree_env.rs
+      - cli/src/devx/forgejo/**
+      - .github/workflows/quickstart.yml
+  workflow_dispatch: null

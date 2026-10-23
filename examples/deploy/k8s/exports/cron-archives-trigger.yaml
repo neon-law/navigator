@@ -1,0 +1,77 @@
+# Starts one Archives Restate workflow at 05:55 and 17:55 UTC each day.
+# The workflow is hosted by workflows-service; this Job only submits it.
+# Restate owns retries of extraction, Iceberg promotion and the Slack digest.
+# The trigger keys each invocation by its UTC scheduled time, so the two
+# daily runs are distinct and retries within a run attach to its journal.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: archives-trigger
+  namespace: navigator
+  labels:
+    app: archives-trigger
+spec:
+  schedule: "55 5,17 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  # Forbid + a finite deadline together: never overlap runs, but never let a
+  # stuck trigger (e.g. an unpullable image, or a hung ingress POST) stay
+  # Active and skip every subsequent run — the failure mode that silently
+  # stopped the archive digest for days. A healthy trigger exits in seconds.
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            app: archives-trigger
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: archives-trigger
+              image: YOUR_IMAGE_REGISTRY/navigator-archives-trigger:YY.M.D
+              imagePullPolicy: Always
+              env:
+                # Restate Cloud ingress endpoint. Sourced from the Secret rather
+                # than written inline — see the `RESTATE_INGRESS_URL` note in
+                # kustomization.yaml for why a literal here blocks every manifest
+                # change. The trigger POSTs
+                # `${RESTATE_INGRESS_URL}/Archives/<scheduled-time>/run`.
+                - name: RESTATE_INGRESS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: RESTATE_INGRESS_URL
+                      optional: true
+                # Restate Cloud authenticates every ingress call with the
+                # tenant bearer. Without this the trigger POST 401s and the
+                # Slack digest never posts. Sourced from the same
+                # `navigator-web-secrets` Secret the web Deployment mounts
+                # (synced from Secret Manager via the CSI driver). `optional`
+                # so KIND — where the in-cluster Operator needs no auth and
+                # this CronJob isn't applied — never blocks on a missing key.
+                - name: RESTATE_AUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: RESTATE_AUTH_TOKEN
+                      optional: true
+                - name: RUST_LOG
+                  value: info
+              envFrom:
+                # Collector endpoint (OTEL_EXPORTER_OTLP_ENDPOINT) — the trigger
+                # emits the `navigator.workflow.trigger.fired` metric (flushed on
+                # exit) through the fail-closed redaction collector. Shared with
+                # web + workflows-service via one ConfigMap.
+                - configMapRef:
+                    name: navigator-otel-env
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 64Mi
+                limits:
+                  memory: 128Mi

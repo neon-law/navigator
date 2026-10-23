@@ -1,0 +1,12 @@
+head_title: "{site_name} | Team"
+meta_description: Meet the team at {site_name}.
+page_title: Our team
+members:
+  - name: Nick Shook
+    href: /team/nick
+profile:
+  name: Nick Shook
+  biography: >-
+    Nick is a lawyer at Neon Law. He builds Navigator, the firm's legal
+    project platform.
+  linkedin_url: https://www.linkedin.com/in/nicholas-shook/

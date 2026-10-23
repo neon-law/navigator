@@ -1,0 +1,48 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: navigator
+
+# Scheduled triggers. Durable workflows are hosted by the
+# `workflows-service` worker (see ../gke/workflows-service/) — these
+# CronJobs are thin triggers that POST to the Restate Cloud ingress to
+# start one invocation, then exit. The Surreal operational archive is
+# the remaining self-contained batch on this list.
+#
+# RESTATE_INGRESS_URL AND RESTATE_AUTH_TOKEN COME FROM THE SECRET
+# --------------------------------------------------------------
+# Both are read with `valueFrom.secretKeyRef` into the projected
+# `navigator-web-secrets`, never written as a literal. `ops ship` applies
+# these CronJobs over the live ones, and a container's `env` list merges by
+# entry name: an inline `value` merges with the cluster's `valueFrom` into a
+# single entry carrying both, and the API server rejects the whole object:
+# "may not be specified when `value` is not empty". That aborts `kubectl diff
+# -k` before it compares anything, which blocks not just the trigger but EVERY
+# manifest change to the deployment, leaving version rolls stuck on `ops ship
+# --image-only`. A literal ingress URL did exactly that for two releases.
+#
+# Each reference is `optional: true`. `ship::omit_unwritten_objects` drops an
+# object the shipping deployment does not write from the rendered
+# `SecretProviderClass`, and `RESTATE_INGRESS_URL` is scoped to the automation
+# home — so an ordinary deployment's Secret carries no such key. A required
+# reference would leave those trigger pods in CreateContainerConfigError,
+# never started and never logging a reason; optional lets the trigger run and
+# exit naming the value it wanted.
+#
+# `triggers_source_every_projected_key_from_the_deployment_secret` in
+# `cli/src/devx/ship.rs` fails the build if any trigger inlines a key this
+# Secret projects.
+#
+# The `general-nag`, `dri-digest-trigger`, and `notation-reset-trigger` lines
+# are also placeholders: `ops ship` drops each one when its
+# `NAVIGATOR_DBOS_*_ENABLED` switch moves that daily workflow onto the DBOS
+# executor in `web`, and deletes the live CronJob in the same roll.
+resources:
+  - cron-archives-trigger.yaml
+  - cron-surreal-archive.yaml
+  - surreal-archive-monitoring.yaml
+  - cron-billing-digest-trigger.yaml
+  - cron-dri-digest-trigger.yaml
+  - cron-nightly-project-update-trigger.yaml
+  - cron-notation-reset-trigger.yaml
+  - cron-social-publish-reconciler-trigger.yaml
+  - cron-general-nag.yaml

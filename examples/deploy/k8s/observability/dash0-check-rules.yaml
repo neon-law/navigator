@@ -1,0 +1,66 @@
+# Dash0 check rules for the Nightly Project Update.
+#
+# The worker exports two counters (telemetry/src/lib.rs):
+#   navigator.nightly_project_update.run           outcome = clean | degraded
+#   navigator.nightly_project_update.child_failed  stage = membership | slack | repository,
+#                                                  error.type = a bounded cause code
+# Both carry counts and codes only — never a Project id or code.
+#
+# One rule per group, so each group also loads as a Terraform
+# `dash0_check_rule` (which accepts exactly one group with one rule).
+#
+# Apply to the deployment's Dash0 dataset with either:
+#   dash0 check-rules create -f dash0-check-rules.yaml --dataset <dataset>
+#   kubectl apply -f dash0-check-rules.yaml   # Dash0 operator, namespace with a Dash0Monitoring resource
+# Route notifications with a label filter (`workflow = nightly_project_update`)
+# on the Dash0 notification channel, not in this file.
+#
+# Dash0 is a staging-only integration today (docs/observability.md), so these
+# rules watch staging until a production row declares DASH0_ENDPOINT.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nightly-project-update
+  namespace: YOUR_NAMESPACE
+  labels:
+    dash0.com/dataset: YOUR_DASH0_DATASET
+spec:
+  groups:
+    - name: nightly-project-update-failures
+      interval: 5m
+      rules:
+        # Any failed child degrades; five or more failures of one tag in a run
+        # is critical — that is one systemic cause, not one bad Project.
+        - alert: NightlyProjectUpdateChildrenFailed
+          expr: |
+            sum by (stage) (
+              increase({otel_metric_name="navigator.nightly_project_update.child_failed"}[1d])
+            ) > $__threshold
+          for: 0m
+          annotations:
+            summary: "Nightly Project Update: {{ $value }} {{ $labels.stage }} failures in the last day"
+            description: "The Slack update in #messages names each cause with a count. Group the child_failed counter by error.type in Dash0 to see the cause codes."
+            dash0-threshold-degraded: "0"
+            dash0-threshold-critical: "4"
+            dash0-enabled: "true"
+          labels:
+            workflow: nightly_project_update
+    - name: nightly-project-update-missed
+      interval: 5m
+      rules:
+        # The run fires at 05:55 UTC. No finished run in 26 hours means the
+        # trigger, the worker, or the parent workflow stopped — the run series
+        # is zero-started at worker boot so a restart cannot hide the gap.
+        - alert: NightlyProjectUpdateMissed
+          expr: |
+            (
+              sum(increase({otel_metric_name="navigator.nightly_project_update.run"}[26h]))
+              or vector(0)
+            ) < 1
+          for: 15m
+          annotations:
+            summary: "Nightly Project Update has not finished in 26 hours"
+            description: "Start with `navigator ops doctor`, then the Restate Invocations view for NightlyProjectUpdate."
+            dash0-enabled: "true"
+          labels:
+            workflow: nightly_project_update

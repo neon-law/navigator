@@ -1,0 +1,103 @@
+# What the public snapshot audit (`P001`, `cli/src/snapshot_audit.rs`) may find
+# without failing `navigator validate`. See docs/public-snapshot-audit.md.
+#
+# Each entry names one `class` (credential, email, phone, gcp, env, build,
+# binary-metadata, binary), a `reason`, and narrows itself by `paths` (exact
+# paths, or directory prefixes ending in `/`), by `match` (a regular expression
+# the whole finding value must match), or both. A whole class is never allowed.
+# An entry that permits nothing prints a warning: remove it.
+#
+# A real person's contact data, a credential, or a deployment's coordinate is
+# never listed here to make a finding pass. Replace it with a synthetic value.
+
+# --- Firm public contacts ---------------------------------------------------
+
+[[allow]]
+class = "email"
+match = '''(?i)[^@]+@(?:[a-z0-9-]+\.)*(?:neonlaw\.com|neonlaw\.org|lawyershook\.com|cyberinjurylaw\.com|deleteyourdata\.com|deleteyourdebt\.com|daybridgedivorce\.com|vestaestateplanning\.com|summonsdefense\.nyc|misericordialaw\.com|deathanddivorcelaw\.com|abhayaimmigration\.com)'''
+reason = "The firm's own domains and its brands' public contact domains. Published contacts and synthetic fixture users on a firm domain reach no third party."
+
+[[allow]]
+class = "phone"
+match = "5108002090"
+reason = "The firm's published voice line, printed in neon/content/privacy.md and neon/content/terms.md."
+
+# --- Third-party attributions and machine identities ------------------------
+
+[[allow]]
+class = "email"
+paths = ["THIRD-PARTY-NOTICES.txt"]
+reason = "Copyright attributions the bundled dependencies' licences require us to preserve."
+
+[[allow]]
+class = "email"
+match = '''release-train@users\.noreply\.github\.com'''
+paths = [".github/workflows/release-cut.yml"]
+reason = "GitHub's noreply commit identity for the release bot, not a mailbox."
+
+[[allow]]
+class = "email"
+match = '''SM123@sms\.twilio\.com'''
+paths = ["portal/src/twilio_sms.rs"]
+reason = "A synthetic Twilio message id in the SMS intake parser's test."
+
+# --- Domain-shape fixtures --------------------------------------------------
+
+[[allow]]
+class = "email"
+match = '''[a-z-]+@privaterelay\.appleid\.com'''
+paths = ["portal/src/oauth.rs", ".github/pii/allowlist.toml"]
+reason = "Apple's private-relay domain is the behaviour under test in Sign in with Apple; the mailboxes are invented."
+
+[[allow]]
+class = "email"
+match = '''(?:token@www\.notion\.so|secret@www\.tiktok\.com)'''
+paths = [
+  "portal/src/social_oauth/tiktok.rs",
+  "store/tests/project_resource_links.rs",
+  ".github/pii/allowlist.toml",
+]
+reason = "URL userinfo fixtures proving the code strips credentials from a provider URL; no mailbox exists."
+
+[[allow]]
+class = "email"
+match = '''person@(?:notexample\.com|example\.co)'''
+paths = ["store/src/brand_domains.rs", ".github/pii/allowlist.toml"]
+reason = "Near-miss domains the reserved-domain matcher must refuse; the test needs them unreserved."
+
+# --- Synthetic cloud names --------------------------------------------------
+
+[[allow]]
+class = "gcp"
+match = '''navigator-(?:assets|documents|exports|logs|applications|lfs|web|drive)'''
+paths = [
+  ".env.example",
+  ".github/workflows/deploy.yml",
+  "cli/src/devx/mod.rs",
+  "docs/oss-install.md",
+]
+reason = "The product's default resource names, which a self-hosted deployment creates in its own project; they name no firm resource."
+
+[[allow]]
+class = "gcp"
+match = "exports|bucket|project|a-deployment-applications"
+paths = [
+  "archives/src/iceberg.rs",
+  "workflows/src/notify.rs",
+  "cli/src/devx/ship.rs",
+]
+reason = "One-word or role-named placeholder buckets in unit tests."
+
+[[allow]]
+class = "gcp"
+match = "us-west4"
+paths = ["examples/deploy/k8s/gke/kustomization.yaml"]
+reason = "A region in a `YOUR_PROJECT_ID:us-west4` connection-name placeholder, not a project id."
+
+# --- The audit's own negative tests ------------------------------------------
+
+[[allow]]
+class = "gcp"
+match = '''(?:web@)?acme-prod-[a-z0-9-]+(?:\.iam\.gserviceaccount\.com)?|projects/918273645/locations/global/workloadIdentityPools/gh/providers/repo'''
+paths = ["cli/src/snapshot_audit.rs"]
+reason = "Invented cloud coordinates each `gcp` detector must refuse; no such project exists."

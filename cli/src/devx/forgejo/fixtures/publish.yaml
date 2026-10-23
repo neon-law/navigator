@@ -1,0 +1,13 @@
+# Synthetic publication for `navigator dev forgejo smoke`: runs on every
+# commit that reaches main, including a squash merge Forgejo makes itself.
+name: publish
+on:
+  push:
+    branches: [main]
+jobs:
+  publish:
+    runs-on: self-hosted
+    steps:
+      - env:
+          SHA: ${{ forgejo.sha }}
+        run: echo "synthetic publication of $SHA"

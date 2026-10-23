@@ -1,0 +1,68 @@
+# Opt-in DBOS executor inside `web`.
+#
+# `ops ship` adds this patch only for a deployment whose `config.toml` sets
+# `NAVIGATOR_DBOS_ENABLED = "true"`; every other deployment renders without it
+# and `web` never touches DBOS. It must follow `web-env.yaml`, whose
+# `$patch: replace` rebuilds the env list.
+#
+# The executor signs in as the `navigator_dbos` login with verify-full TLS and
+# reads only the `dbos` schema. The password and the CA bundle come from the
+# `navigator-postgres-dbos` Secret, which
+# `navigator ops secrets apply --service postgres` projects from
+# `NAVIGATOR_POSTGRES_DBOS_PASSWORD`; neither enters the `envFrom` deployment
+# Secret. The application version is the image's own `NAVIGATOR_RELEASE_TAG`.
+# The pod label is what the PostgreSQL NetworkPolicy admits.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navigator-web
+  namespace: navigator
+spec:
+  template:
+    metadata:
+      labels:
+        navigator.neonlaw.org/postgres-client: "true"
+    spec:
+      containers:
+        - name: web
+          env:
+            - name: NAVIGATOR_DBOS_ENABLED
+              value: "true"
+            # `ops ship` renders each daily schedule's switch here, and the
+            # Slack channels a switched-on schedule posts to. A switch that is
+            # on also drops that schedule's Restate CronJob from the render and
+            # deletes the live one. See docs/dbos-durability.md.
+            # NAVIGATOR_DBOS_SCHEDULE_ENV
+            - name: NAVIGATOR_DBOS_EXECUTOR_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NAVIGATOR_DBOS_HOST
+              value: navigator-postgres.navigator.svc.cluster.local
+            - name: NAVIGATOR_DBOS_PORT
+              value: "5432"
+            - name: NAVIGATOR_DBOS_DATABASE
+              value: navigator
+            - name: NAVIGATOR_DBOS_SSLMODE
+              value: verify-full
+            - name: NAVIGATOR_DBOS_ROOT_CERT
+              value: /etc/navigator/postgres-dbos/ca.crt
+            - name: NAVIGATOR_DBOS_USER
+              value: navigator_dbos
+            - name: NAVIGATOR_DBOS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-postgres-dbos
+                  key: password
+          volumeMounts:
+            - name: postgres-dbos-ca
+              mountPath: /etc/navigator/postgres-dbos
+              readOnly: true
+      volumes:
+        - name: postgres-dbos-ca
+          secret:
+            secretName: navigator-postgres-dbos
+            items:
+              - key: ca.crt
+                path: ca.crt
+            defaultMode: 0444

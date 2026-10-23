@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create PR"
+  short_description: "Group local changes into commits, run the gate, and open a ready GitHub PR."
+  default_prompt: "Use $create-pr to commit my current changes, upload any walkthrough capture, and open a GitHub PR ready for review."

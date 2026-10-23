@@ -1,0 +1,1559 @@
+//! The declared document `kind` — the single frontmatter discriminator
+//! that names what a Neon Law Navigator markdown file *is*.
+//!
+//! Every file the workspace lints belongs to one [`crate::engine::DocumentKind`]
+//! family, and a declared `kind:` key is the **only** thing that names it:
+//! the classifier reads the key directly and does not infer the family
+//! from a file's structure or path. A file that declares no `kind:` is
+//! plain prose Markdown; [`crate::S104MissingKind`] catches a file that
+//! carries notation/event structure yet forgot to declare one.
+//!
+//! The vocabulary is a small, closed enum extended deliberately as the
+//! firm's practice areas grow. Most values name notation-family kinds (a
+//! legal template that becomes a running Notation); some name content
+//! pages (events, posts, workshops); and the rest name
+//! **matter page kinds** — the page types an attorney composes in a
+//! Project manifest's `pages:` block ([`crate::pages`]), whose section
+//! skeletons live in [`crate::dashboard`]. A page kind is never declared in
+//! Markdown frontmatter ([`Lane::Page`]).
+
+/// A recognized value of the `kind:` frontmatter key.
+///
+/// An unrecognized string is **not** a `Kind` — [`Kind::parse`] returns
+/// `None`, the file classifies as plain Markdown, and
+/// [`crate::S103KindEnum`] flags the bad value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A letter the firm sends on a client's behalf (demand, notice,
+    /// settlement, closing).
+    Letter,
+    /// A document filed with a government body (formation, annual report,
+    /// tax return, application).
+    Filing,
+    /// A last will and testament.
+    Will,
+    /// A trust instrument.
+    Trust,
+    /// An advance directive — a health-care directive or a durable
+    /// financial power of attorney.
+    Directive,
+    /// A private agreement between the client and a third party
+    /// (employment, contractor, LLC operating agreement).
+    Agreement,
+    /// Court paper — a complaint, motion, or brief — filed with a court.
+    /// Distinct from [`Kind::Filing`], which is a document filed with a
+    /// government body (formation, annual report, tax return, application)
+    /// and pairs with `output: form` and the `AcroForm` fill path; a
+    /// pleading is a legal instrument the firm drafts, pairs with
+    /// `output: pleading`, and renders through `pdf::pleading`'s
+    /// jurisdiction-calibrated geometry rather than a fillable form.
+    Pleading,
+    /// The engagement that opens a matter — a lawyer creates it on the
+    /// Project like any other notation (opening the Project does not open
+    /// it) and it is the one kind the self-serve doors accept as a
+    /// matter's first notation (see [`Kind::opens_a_matter`]). The shipped
+    /// sample is the onboarding letter.
+    Onboarding,
+    /// The firm-signed letter that **closes a matter** — the mirror of
+    /// [`Kind::Onboarding`] (see [`Kind::closes_a_matter`]). Distinct from
+    /// the general [`Kind::Letter`]: every offboarding letter is a letter,
+    /// but `Kind::Letter` alone must not clear a matter's offboarding flag,
+    /// or any demand or notice letter would silently close it out.
+    Offboarding,
+    /// An analytical work product the firm delivers — a review memo or
+    /// opinion, not an executed instrument.
+    ///
+    /// A memo blueprint is authored differently from every instrument kind
+    /// above, and deliberately so. Its questionnaire collects only the
+    /// durable typed inputs — the client, the responsible lawyer, the
+    /// matter, the governing jurisdiction, the date, the client's own
+    /// statement of the question, and the records handed over. The facts,
+    /// the analysis, the recommendation, and the open questions are body
+    /// prose the attorney writes at `lawyer_review`; they are not states
+    /// in the questionnaire, and a memo blueprint that tries to make them
+    /// states is the thing this note exists to head off.
+    ///
+    /// That is why `N117` allowlists no memo-section role, and why the
+    /// absence is a holding rather than a gap in
+    /// `ALLOWED_CUSTOM_TEXT_ROLES`. A question presented, a short answer,
+    /// an analysis — each is attorney work product, so collecting it at
+    /// intake would ask the client to supply the reasoning the memorandum
+    /// exists to deliver. Read an `N117` failure on a memo as a prompt to
+    /// move that section into the body, never as one to widen the list.
+    Memo,
+    /// A person's own resume: a one- or two-page record of experience,
+    /// rendered on the dense `resume` frame. Not correspondence and not an
+    /// instrument — nobody sends it on a client's behalf and nobody signs it
+    /// — so it carries neither a letterhead nor a signature block, and like
+    /// every kind it may omit `questionnaire:` and `workflow:` entirely.
+    Resume,
+    /// A lawyer's internal trial-preparation deck, read from the pinned
+    /// Notation body by the `stage_list` Section.
+    TrialPrep,
+    /// A dated public event page under `server/content/events/`.
+    Event,
+    /// A published blog post under `web/content/blog/`.
+    Post,
+    /// A public workshop / teaching page under
+    /// `web/content/workshops/`.
+    Workshop,
+    /// An engineering intake notation under `templates/github/` — the
+    /// questionnaire that gathers what a GitHub issue or pull request
+    /// needs before it is opened, and the body that renders it.
+    ///
+    /// It borrows the questionnaire grammar but is **not** a legal
+    /// instrument: it binds to no respondent, carries no jurisdiction or
+    /// confidentiality classification, and never reaches lawyer review.
+    /// [`Kind::Github`] is therefore not [`Kind::is_notation`]; the rules
+    /// it is held to are the questionnaire-grammar subset plus `N119`.
+    Github,
+    /// A recorded sitting transcript filed on a matter (the
+    /// estate intake's `document_intake__transcript` step). **Asset-lane
+    /// only** — a document classification for an `assets` row, not a
+    /// notation-template kind; declaring `kind: transcript` in a
+    /// template's frontmatter is nonsensical, and
+    /// [`Kind::valid_for`]`(`[`Lane::Template`]`)` rejects it there. Not
+    /// [`Kind::is_notation`] and not [`Kind::carries_questionnaire`].
+    Transcript,
+    /// An inbound contract a client uploads for review (the contract-review
+    /// walk's `document_intake__*` step). Same asset-lane-only caveat as
+    /// [`Kind::Transcript`].
+    InboundContract,
+    /// The issued USCIS Form N-550, filed when a naturalization matter's
+    /// `document_intake__certificate_of_naturalization` step receives it.
+    /// Same asset-lane-only caveat as [`Kind::Transcript`].
+    CertificateOfNaturalization,
+    /// Evidence filed on a matter, including images and court exhibits.
+    /// Asset-lane only: the source repository carries only its pointer.
+    Exhibit,
+    /// An order a court enters on the docket. Neither a pleading (court paper
+    /// a party files) nor a filing (paper filed with a government body), so
+    /// it is its own classification, filed under `documents/Docket Filings/`
+    /// (LAW-189). Same asset-lane-only caveat as [`Kind::Transcript`].
+    Order,
+    /// The archive of a closed Project's repository — a zip of its working
+    /// tree at the final commit, with no git history, filed on the matter
+    /// once the repository is redundant. Same asset-lane-only caveat as
+    /// [`Kind::Transcript`]: this is a document classification for an
+    /// `assets` row, never a template's own declared kind.
+    ClosedRepository,
+    /// The Firm's invoice to the client, downloaded from the billing system
+    /// and staged under `documents/invoices/`. Same asset-lane-only caveat
+    /// as [`Kind::Transcript`], and defaults to `internal` visibility like
+    /// every other asset-lane kind `navigator project sync` routes without an
+    /// explicit override.
+    Invoice,
+    /// A filed artifact nobody has classified yet — an inbound email
+    /// attachment, a blank-kind lawyer upload, an expunge tombstone.
+    ///
+    /// **Asset-lane only**, and a real variant rather than an absent
+    /// value on purpose: it is the `NOT NULL DEFAULT` the `assets.kind`
+    /// column carries, so every exhaustive match over [`Kind`] must
+    /// declare which side of its line an unclassified document falls on
+    /// instead of silently treating "no kind" as "no opinion".
+    Unclassified,
+
+    // --- Matter dashboard kinds (#896). Each names a page type an
+    // attorney composes, and each carries a section skeleton in
+    // [`crate::dashboard`]. None is a notation template, so none carries
+    // a questionnaire or opens a matter.
+    /// The dominant layout in the surveyed corpus: a filterable rail of
+    /// items, a detail pane, and a per-item status. Document review,
+    /// discovery response, and citation checking are specialisations.
+    ReviewQueueWorkbench,
+    /// Drafted assertion on one side, source page on the other, both
+    /// marked, with a status setter (#891, #893).
+    VerifierSplitView,
+    /// Multi-workstream state: metrics, per-workstream cards, and the
+    /// decisions only the principal can make.
+    MatterStatusConsole,
+    /// Dated rows with hard/soft classification, provenance confidence,
+    /// and per-row calendar export (#539, #688).
+    DocketDeadlineBoard,
+    /// A draft with a block-structured body and phrase-anchored comments.
+    DocumentWorkbench,
+    /// A searchable set of authorities, each with citation, holding, the
+    /// verbatim quote, and its position for this matter (#890).
+    AuthorityLibrary,
+    /// Numbered request/response pairs with objection tracking.
+    DiscoveryCockpit,
+    /// Ordered stages with argument points, authorities, and anticipated
+    /// questions.
+    HearingConsole,
+    /// A linear, non-interactive handoff page: what is included, what is
+    /// excluded, downloads, and a provenance statement.
+    DeliverablePackage,
+    /// Engagement letter, invoice, and prebill review with per-entry
+    /// findings.
+    EngagementBillingRecords,
+    /// An estate plan console: one card per instrument with its execution
+    /// formalities, the signing ceremony, the distribution plan, the
+    /// fiduciaries, and the asset schedule.
+    EstatePlanConsole,
+    /// A transaction's closing room: the closing checklist, the signature
+    /// tracker, the open terms, and the revisions of each document.
+    ClosingRoom,
+}
+
+/// The group a [`Kind`] belongs to, read by `/notations`' kind catalog
+/// (LAW-53) to group both the catalog and the template gallery. See
+/// [`Kind::category`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Category {
+    /// Goes out on the firm's own letterhead: a letter, the engagement that
+    /// opens a matter, the letter that closes one, and an analytical memo.
+    Correspondence,
+    /// An instrument a client or counterparty executes: a will, a trust, a
+    /// directive, or a private agreement.
+    Instrument,
+    /// A document filed with a government body.
+    Filing,
+    /// Court paper filed with a court.
+    CourtPaper,
+    /// A public content page — never filed on a matter.
+    Content,
+    /// The engineering intake that opens a GitHub issue or pull request.
+    Engineering,
+    /// A document that presents a person rather than a matter: a resume.
+    Profile,
+    /// Internal work product that prepares a matter for trial.
+    TrialPreparation,
+    /// A matter dashboard: a page type an attorney composes from registered
+    /// sections (see [`Kind::is_dashboard`]).
+    MatterDashboard,
+    /// An asset-lane-only classification for a filed byte artifact — never a
+    /// template's own declared kind, so never shown on `/notations`.
+    FiledAsset,
+}
+
+impl Category {
+    /// The URL-safe, kebab-case value this category filters by on
+    /// `/notations`.
+    #[must_use]
+    pub fn slug(self) -> &'static str {
+        match self {
+            Category::Correspondence => "correspondence",
+            Category::Instrument => "instrument",
+            Category::Filing => "filing",
+            Category::CourtPaper => "court-paper",
+            Category::Content => "content",
+            Category::Engineering => "engineering",
+            Category::Profile => "profile",
+            Category::TrialPreparation => "trial-preparation",
+            Category::MatterDashboard => "matter-dashboard",
+            Category::FiledAsset => "filed-asset",
+        }
+    }
+
+    /// The human-readable label this category renders under.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Category::Correspondence => "Correspondence",
+            Category::Instrument => "Instrument",
+            Category::Filing => "Filing",
+            Category::CourtPaper => "Court paper",
+            Category::Content => "Content",
+            Category::Engineering => "Engineering",
+            Category::Profile => "Profile",
+            Category::TrialPreparation => "Trial preparation",
+            Category::MatterDashboard => "Matter dashboard",
+            Category::FiledAsset => "Filed asset",
+        }
+    }
+}
+
+impl Kind {
+    /// Every recognized kind, in declaration order.
+    pub const ALL: &'static [Kind] = &[
+        Kind::Letter,
+        Kind::Filing,
+        Kind::Will,
+        Kind::Trust,
+        Kind::Directive,
+        Kind::Agreement,
+        Kind::Pleading,
+        Kind::Onboarding,
+        Kind::Offboarding,
+        Kind::Memo,
+        Kind::Resume,
+        Kind::TrialPrep,
+        Kind::Event,
+        Kind::Post,
+        Kind::Workshop,
+        Kind::Github,
+        Kind::Transcript,
+        Kind::InboundContract,
+        Kind::CertificateOfNaturalization,
+        Kind::Exhibit,
+        Kind::Order,
+        Kind::ClosedRepository,
+        Kind::Invoice,
+        Kind::Unclassified,
+        Kind::ReviewQueueWorkbench,
+        Kind::VerifierSplitView,
+        Kind::MatterStatusConsole,
+        Kind::DocketDeadlineBoard,
+        Kind::DocumentWorkbench,
+        Kind::AuthorityLibrary,
+        Kind::DiscoveryCockpit,
+        Kind::HearingConsole,
+        Kind::DeliverablePackage,
+        Kind::EngagementBillingRecords,
+        Kind::EstatePlanConsole,
+        Kind::ClosingRoom,
+    ];
+
+    /// The frontmatter string this kind is written as.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Letter => "letter",
+            Kind::Filing => "filing",
+            Kind::Will => "will",
+            Kind::Trust => "trust",
+            Kind::Directive => "directive",
+            Kind::Agreement => "agreement",
+            Kind::Pleading => "pleading",
+            Kind::Onboarding => "onboarding",
+            Kind::Offboarding => "offboarding",
+            Kind::Memo => "memo",
+            Kind::Resume => "resume",
+            Kind::TrialPrep => "trial_prep",
+            Kind::Event => "event",
+            Kind::Post => "post",
+            Kind::Workshop => "workshop",
+            Kind::Github => "github",
+            Kind::Transcript => "transcript",
+            Kind::InboundContract => "inbound_contract",
+            Kind::CertificateOfNaturalization => "certificate_of_naturalization",
+            Kind::Exhibit => "exhibit",
+            Kind::Order => "order",
+            Kind::ClosedRepository => "closed_repository",
+            Kind::Invoice => "invoice",
+            Kind::Unclassified => "unclassified",
+            Kind::ReviewQueueWorkbench => "review_queue_workbench",
+            Kind::VerifierSplitView => "verifier_split_view",
+            Kind::MatterStatusConsole => "matter_status_console",
+            Kind::DocketDeadlineBoard => "docket_deadline_board",
+            Kind::DocumentWorkbench => "document_workbench",
+            Kind::AuthorityLibrary => "authority_library",
+            Kind::DiscoveryCockpit => "discovery_cockpit",
+            Kind::HearingConsole => "hearing_console",
+            Kind::DeliverablePackage => "deliverable_package",
+            Kind::EngagementBillingRecords => "engagement_billing_records",
+            Kind::EstatePlanConsole => "estate_plan_console",
+            Kind::ClosingRoom => "closing_room",
+        }
+    }
+
+    /// A one-line, human-readable summary of the kind — the surface an
+    /// editor completion shows next to each value.
+    #[must_use]
+    pub fn describe(self) -> &'static str {
+        match self {
+            Kind::Letter => "A letter the firm sends on the client's behalf",
+            Kind::Filing => "A document filed with a government body",
+            Kind::Will => "A last will and testament",
+            Kind::Trust => "A trust instrument",
+            Kind::Directive => "An advance health-care or durable financial directive",
+            Kind::Agreement => "A private agreement (employment, contractor, LLC operating)",
+            Kind::Pleading => "Court paper filed with a court (complaint, motion, brief)",
+            Kind::Onboarding => "The engagement that opens a matter — one instrument or a bundle",
+            Kind::Offboarding => "The firm-signed letter that closes a matter",
+            Kind::Memo => "An analytical work product (a review memo or opinion)",
+            Kind::Resume => "A person's resume, on the dense one- or two-page resume frame",
+            Kind::TrialPrep => "Internal trial-preparation cards for a matter",
+            Kind::Event => "A public event page (web/content/events/)",
+            Kind::Post => "A published blog post (web/content/blog/)",
+            Kind::Workshop => "A public workshop / teaching page (web/content/workshops/)",
+            Kind::Github => {
+                "An engineering intake notation that opens a GitHub issue or pull request \
+                 (templates/github/)"
+            }
+            Kind::Transcript => "A recorded sitting transcript filed on a matter (asset-lane only)",
+            Kind::InboundContract => {
+                "An inbound contract a client uploaded for review (asset-lane only)"
+            }
+            Kind::CertificateOfNaturalization => {
+                "An issued USCIS Certificate of Naturalization (Form N-550, asset-lane only)"
+            }
+            Kind::Exhibit => "Evidence or an exhibit filed on a matter (asset-lane only)",
+            Kind::Order => "An order a court enters on the docket (asset-lane only)",
+            Kind::ClosedRepository => {
+                "The archive of a closed Project's repository at its final commit (asset-lane only)"
+            }
+            Kind::Invoice => "The Firm's invoice to the client (asset-lane only)",
+            Kind::Unclassified => "A filed artifact nobody has classified yet (asset-lane only)",
+            Kind::ReviewQueueWorkbench => {
+                "A matter dashboard: a filterable item rail, a detail pane, and a per-item status"
+            }
+            Kind::VerifierSplitView => {
+                "A matter dashboard: drafted assertion beside the source page, both marked"
+            }
+            Kind::MatterStatusConsole => {
+                "A matter dashboard: workstream state, key dates, and the principal's decisions"
+            }
+            Kind::DocketDeadlineBoard => {
+                "A matter dashboard: dated rows with hard/soft classification and calendar export"
+            }
+            Kind::DocumentWorkbench => {
+                "A matter dashboard: a draft body with phrase-anchored comments"
+            }
+            Kind::AuthorityLibrary => {
+                "A matter dashboard: authorities with citation, holding, quote, and position"
+            }
+            Kind::DiscoveryCockpit => {
+                "A matter dashboard: numbered request/response pairs with objection tracking"
+            }
+            Kind::HearingConsole => {
+                "A matter dashboard: ordered stages with argument points and anticipated questions"
+            }
+            Kind::DeliverablePackage => {
+                "A matter deliverable: a linear handoff page of inclusions, exclusions, and files"
+            }
+            Kind::EngagementBillingRecords => {
+                "A matter dashboard: engagement letter, invoice, and prebill review"
+            }
+            Kind::EstatePlanConsole => {
+                "A matter dashboard: estate instruments, signing ceremony, and distribution plan"
+            }
+            Kind::ClosingRoom => {
+                "A matter dashboard: closing checklist, signatures, and open terms"
+            }
+        }
+    }
+
+    /// Parse a frontmatter value into a `Kind`, or `None` when it is not
+    /// one of the recognized vocabulary values.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Kind> {
+        Self::ALL.iter().copied().find(|k| k.as_str() == value)
+    }
+
+    /// True when a notation of this kind is the **engagement that opens a
+    /// matter** — the document whose absence means a Project was never
+    /// really opened. `Onboarding` covers both a single-instrument
+    /// engagement letter and the intake-driven engagement that opens a
+    /// bundle of instruments. Callers that ask "does this matter have its
+    /// engagement yet?" (`portal::admin::matter_flags`) key off this rather
+    /// than a template's `code`, so a new engagement template is classified
+    /// by what it *is*, not by what it happens to be named.
+    ///
+    /// Deliberately an exhaustive `match`: adding a [`Kind`] fails to
+    /// compile until it declares which side of this line it falls on.
+    #[must_use]
+    pub fn opens_a_matter(self) -> bool {
+        match self {
+            Kind::Onboarding => true,
+            Kind::Letter
+            | Kind::Filing
+            | Kind::Will
+            | Kind::Trust
+            | Kind::Directive
+            | Kind::Agreement
+            | Kind::Pleading
+            | Kind::Offboarding
+            | Kind::Memo
+            | Kind::Resume
+            | Kind::TrialPrep
+            | Kind::Event
+            | Kind::Post
+            | Kind::Workshop
+            | Kind::Github
+            | Kind::Transcript
+            | Kind::InboundContract
+            | Kind::CertificateOfNaturalization
+            | Kind::Exhibit
+            | Kind::Order
+            | Kind::ClosedRepository
+            | Kind::Invoice
+            | Kind::Unclassified
+            | Kind::ReviewQueueWorkbench
+            | Kind::VerifierSplitView
+            | Kind::MatterStatusConsole
+            | Kind::DocketDeadlineBoard
+            | Kind::DocumentWorkbench
+            | Kind::AuthorityLibrary
+            | Kind::DiscoveryCockpit
+            | Kind::HearingConsole
+            | Kind::DeliverablePackage
+            | Kind::EngagementBillingRecords
+            | Kind::EstatePlanConsole
+            | Kind::ClosingRoom => false,
+        }
+    }
+
+    /// True when a notation of this kind is the **letter that closes a
+    /// matter** — the mirror of [`Kind::opens_a_matter`]. Callers that ask
+    /// "does this matter have its offboarding letter yet?"
+    /// (`store::projects::template_closes_a_matter`) key off this rather
+    /// than a template's `code`, so a bespoke closing letter is classified
+    /// by what it *is*, not by what it happens to be named.
+    ///
+    /// `Kind::Letter` alone does **not** close a matter — an ordinary
+    /// demand, notice, or settlement letter must not be mistaken for the
+    /// one that ends the representation.
+    ///
+    /// Deliberately an exhaustive `match`: adding a [`Kind`] fails to
+    /// compile until it declares which side of this line it falls on.
+    #[must_use]
+    pub fn closes_a_matter(self) -> bool {
+        match self {
+            Kind::Offboarding => true,
+            Kind::Letter
+            | Kind::Filing
+            | Kind::Will
+            | Kind::Trust
+            | Kind::Directive
+            | Kind::Agreement
+            | Kind::Pleading
+            | Kind::Onboarding
+            | Kind::Memo
+            | Kind::Resume
+            | Kind::TrialPrep
+            | Kind::Event
+            | Kind::Post
+            | Kind::Workshop
+            | Kind::Github
+            | Kind::Transcript
+            | Kind::InboundContract
+            | Kind::CertificateOfNaturalization
+            | Kind::Exhibit
+            | Kind::Order
+            | Kind::ClosedRepository
+            | Kind::Invoice
+            | Kind::Unclassified
+            | Kind::ReviewQueueWorkbench
+            | Kind::VerifierSplitView
+            | Kind::MatterStatusConsole
+            | Kind::DocketDeadlineBoard
+            | Kind::DocumentWorkbench
+            | Kind::AuthorityLibrary
+            | Kind::DiscoveryCockpit
+            | Kind::HearingConsole
+            | Kind::DeliverablePackage
+            | Kind::EngagementBillingRecords
+            | Kind::EstatePlanConsole
+            | Kind::ClosingRoom => false,
+        }
+    }
+
+    /// True when this kind names a **matter dashboard** — a page type an
+    /// attorney composes from registered sections, whose skeleton lives
+    /// in [`crate::dashboard::skeleton`].
+    ///
+    /// A dashboard kind is never notation-family: it declares no
+    /// questionnaire, opens no matter, and becomes no instrument. It
+    /// drives validation and scaffolding only — never rendering (#690).
+    #[must_use]
+    pub fn is_dashboard(self) -> bool {
+        matches!(
+            self,
+            Kind::ReviewQueueWorkbench
+                | Kind::VerifierSplitView
+                | Kind::MatterStatusConsole
+                | Kind::DocketDeadlineBoard
+                | Kind::DocumentWorkbench
+                | Kind::AuthorityLibrary
+                | Kind::DiscoveryCockpit
+                | Kind::HearingConsole
+                | Kind::DeliverablePackage
+                | Kind::EngagementBillingRecords
+                | Kind::EstatePlanConsole
+                | Kind::ClosingRoom
+        )
+    }
+
+    /// True when this kind is a notation-family kind — a legal template
+    /// that declares a questionnaire/workflow and becomes a Notation — as
+    /// opposed to a content page (event/post/workshop).
+    #[must_use]
+    pub fn is_notation(self) -> bool {
+        matches!(
+            self,
+            Kind::Letter
+                | Kind::Filing
+                | Kind::Will
+                | Kind::Trust
+                | Kind::Directive
+                | Kind::Agreement
+                | Kind::Pleading
+                | Kind::Onboarding
+                | Kind::Offboarding
+                | Kind::Memo
+                | Kind::Resume
+                | Kind::TrialPrep
+        )
+    }
+
+    /// Whether a Notation of this kind may be listed or read by a client.
+    /// Internal trial-preparation work remains lawyer-only even when a
+    /// matter participant knows its Notation id.
+    #[must_use]
+    pub fn is_client_visible(self) -> bool {
+        self != Kind::TrialPrep
+    }
+
+    /// True when a file of this kind legitimately declares the
+    /// `questionnaire:` machine.
+    ///
+    /// Every notation-family kind does, and so does [`Kind::Github`],
+    /// which drives an engineering artifact through the same questionnaire
+    /// grammar without being a legal instrument. A content page
+    /// (`post`, `workshop`) never does — [`crate::S104MissingKind`]
+    /// keys on this to flag a content page carrying a copied
+    /// `questionnaire:`/`workflow:` block, which would otherwise skip every
+    /// structural rule in silence.
+    #[must_use]
+    pub fn carries_questionnaire(self) -> bool {
+        self.is_notation() || self == Kind::Github
+    }
+
+    /// The render profile a notation of this kind renders under when its
+    /// template declares no `output:` frontmatter field at all — the
+    /// default `N109`'s optional field falls back to. One of
+    /// [`crate::F109OutputFormat::VALID`] (`"letter"`, `"contract"`,
+    /// `"pleading"`, `"form"`) or `"plain"`, the implicit default
+    /// `output:` itself never declares. A template's own `output:` is the
+    /// one explicit override: `cli::run_render` resolves `output:` → this
+    /// default → plain, trying the declared value first and falling back
+    /// here only when the field is absent. There is no third input —
+    /// `--format` was retired for choosing the frame a second time, from
+    /// outside the document it framed.
+    ///
+    /// `"pleading"` is the one value a caller cannot hand to
+    /// `pdf::OutputFormat::parse`: court geometry is calibrated by the
+    /// template's `jurisdiction:` through
+    /// `pdf::pleading::variant_for_jurisdiction`, so `run_render` resolves
+    /// that itself and refuses a jurisdiction the table has no
+    /// calibration for.
+    ///
+    /// Only a notation-family kind ([`Kind::is_notation`]) ever reaches
+    /// a render profile — `output:` means nothing for a content page, a
+    /// dashboard, `github`, or an asset-lane classification, so every
+    /// other kind returns `"plain"` without endorsing a render surface
+    /// for it.
+    ///
+    /// Deliberately an exhaustive `match`: adding a [`Kind`] fails to
+    /// compile until it declares which default format it falls under.
+    #[must_use]
+    pub fn default_output(self) -> &'static str {
+        match self {
+            // The firm is speaking in its own voice: a letter, the
+            // engagement that opens a matter, the letter that closes
+            // one, and an analytical memo all go out on letterhead.
+            Kind::Letter | Kind::Onboarding | Kind::Offboarding | Kind::Memo => "letter",
+            // Already true in practice before this method existed: every
+            // template that declares `output: form` is `kind: filing`.
+            Kind::Filing => "form",
+            // Court paper renders through pdf::pleading's calibrated
+            // geometry, never firm letterhead — a pleading's typeface and
+            // margins are a court-rule compliance decision.
+            Kind::Pleading => "pleading",
+            // A contract gets the contract frame: an unadorned instrument
+            // with a visible section hierarchy and no firm letterhead. It
+            // defaulted to `plain` only because the frame used to print
+            // the letterhead, which an instrument between two other
+            // parties must never carry; LAW-14 removed it, so the kind can
+            // now derive the frame named after it.
+            Kind::Agreement => "contract",
+            // A resume is dense, unbranded, and headed by the person's own
+            // name and contact line.
+            Kind::Resume => "resume",
+            // Instruments the firm drafts for a client to execute alone
+            // carry no chrome at all. Every other kind below never reaches
+            // a render profile: content pages, matter dashboards, the
+            // GitHub intake, and asset-lane-only classifications.
+            Kind::TrialPrep
+            | Kind::Will
+            | Kind::Trust
+            | Kind::Directive
+            | Kind::Event
+            | Kind::Post
+            | Kind::Workshop
+            | Kind::Github
+            | Kind::Transcript
+            | Kind::InboundContract
+            | Kind::CertificateOfNaturalization
+            | Kind::Exhibit
+            | Kind::Order
+            | Kind::ClosedRepository
+            | Kind::Invoice
+            | Kind::Unclassified
+            | Kind::ReviewQueueWorkbench
+            | Kind::VerifierSplitView
+            | Kind::MatterStatusConsole
+            | Kind::DocketDeadlineBoard
+            | Kind::DocumentWorkbench
+            | Kind::AuthorityLibrary
+            | Kind::DiscoveryCockpit
+            | Kind::HearingConsole
+            | Kind::DeliverablePackage
+            | Kind::EngagementBillingRecords
+            | Kind::EstatePlanConsole
+            | Kind::ClosingRoom => "plain",
+        }
+    }
+
+    /// The render profile a notation of this kind gets, or `None` for a
+    /// kind that never reaches one (a content page, dashboard, `github`
+    /// intake, or asset-lane classification). The `Some` case is
+    /// [`Kind::default_output`]; the `None` case keeps that method's
+    /// meaningless `"plain"` for those kinds from reading as a frame.
+    #[must_use]
+    pub fn render_default(self) -> Option<&'static str> {
+        self.is_notation().then(|| self.default_output())
+    }
+
+    /// The category `/notations` groups this kind under — the docs page's
+    /// same-source-as-`S103` grouping (LAW-53). Deliberately an exhaustive
+    /// `match`: adding a [`Kind`] fails to compile until it declares which
+    /// group it falls into.
+    #[must_use]
+    pub fn category(self) -> Category {
+        match self {
+            // The kinds that go out on the firm's own letterhead (mirrors
+            // `default_output`'s `"letter"` grouping, see
+            // `letterhead_kinds_default_to_letter`).
+            Kind::Letter | Kind::Onboarding | Kind::Offboarding | Kind::Memo => {
+                Category::Correspondence
+            }
+            // Instruments a client or counterparty executes: a will, a
+            // trust, a directive, and a private agreement.
+            Kind::Will | Kind::Trust | Kind::Directive | Kind::Agreement => Category::Instrument,
+            // A government filing pairs with `output: form` and the
+            // `AcroForm` fill path — distinct from an instrument the firm
+            // drafts for a party to sign.
+            Kind::Filing => Category::Filing,
+            // Court paper, calibrated to a jurisdiction's own geometry.
+            Kind::Pleading => Category::CourtPaper,
+            // Public content pages, never filed on a matter.
+            Kind::Event | Kind::Post | Kind::Workshop => Category::Content,
+            // The engineering intake — borrows the questionnaire grammar but
+            // is not a legal instrument.
+            Kind::Github => Category::Engineering,
+            Kind::Resume => Category::Profile,
+            Kind::TrialPrep => Category::TrialPreparation,
+            // The twelve matter-dashboard page types (see `is_dashboard`).
+            Kind::ReviewQueueWorkbench
+            | Kind::VerifierSplitView
+            | Kind::MatterStatusConsole
+            | Kind::DocketDeadlineBoard
+            | Kind::DocumentWorkbench
+            | Kind::AuthorityLibrary
+            | Kind::DiscoveryCockpit
+            | Kind::HearingConsole
+            | Kind::DeliverablePackage
+            | Kind::EngagementBillingRecords
+            | Kind::EstatePlanConsole
+            | Kind::ClosingRoom => Category::MatterDashboard,
+            // Asset-lane-only classifications: never declared in a
+            // template's frontmatter, so never shown on `/notations`.
+            Kind::Transcript
+            | Kind::InboundContract
+            | Kind::CertificateOfNaturalization
+            | Kind::Exhibit
+            | Kind::Order
+            | Kind::ClosedRepository
+            | Kind::Invoice
+            | Kind::Unclassified => Category::FiledAsset,
+        }
+    }
+
+    /// The kind-specific structural lint rules bound to this kind, as
+    /// `(code, one-sentence requirement)` pairs — the same source `S103`'s
+    /// accepted vocabulary comes from, read by the `/notations` kind catalog
+    /// (LAW-53) so its "Rules" column cannot drift from what the gate
+    /// actually enforces.
+    ///
+    /// Empty for a kind bound to no rule beyond the universal S-family and
+    /// M-family Markdown rules every file — regardless of kind — is already
+    /// held to.
+    #[must_use]
+    pub fn structural_rules(self) -> Vec<(&'static str, String)> {
+        let mut rules = Vec::new();
+        if let Some(note) = crate::f123::outline_requirement_note(self.as_str()) {
+            rules.push((crate::f123::F123HarvardOutlineRequired::CODE, note));
+        }
+        if self == Kind::Memo {
+            rules.push((
+                crate::f117::F117GlossaryBackedCustomText::CODE,
+                "Every `custom_text__*` state must be allowlisted, and a memo's allowlist carries \
+                 no section role: the question presented, the analysis, and the recommendation are \
+                 body prose the attorney writes at `lawyer_review`, never questionnaire state."
+                    .to_string(),
+            ));
+        }
+        if self == Kind::Github {
+            rules.push((
+                crate::f119::F119GithubNotation::CODE,
+                "The questionnaire may declare only the engineering-intake field grammar; a \
+                 `github` notation binds to no respondent and never reaches lawyer review."
+                    .to_string(),
+            ));
+        }
+        rules
+    }
+
+    /// True when this kind may be declared in `lane`.
+    ///
+    /// One vocabulary spans both of Navigator's document lanes, but not
+    /// every value makes sense in both. `kind: transcript` in a template's
+    /// frontmatter is nonsensical — a transcript is a byte artifact
+    /// somebody files, not text the firm drafts — and `kind: workshop` on
+    /// an `assets` row is equally nonsensical, because a teaching page is
+    /// never a document filed on a matter.
+    ///
+    /// The split is what lets each lane's write boundary stay closed:
+    /// [`Lane::Template`] backs `VALID`, `S103`, and the LSP `kind:`
+    /// completion, while [`Lane::Asset`] backs `store::documents`'
+    /// ingest boundary.
+    ///
+    /// Deliberately an exhaustive `match`: adding a [`Kind`] fails to
+    /// compile until it declares which lanes it belongs to.
+    #[must_use]
+    pub fn valid_for(self, lane: Lane) -> bool {
+        match lane {
+            // Everything an author can write into a Markdown file's
+            // frontmatter: the notation family, the content pages, and the
+            // GitHub intake. A matter page kind is declared in a Project
+            // manifest's `pages:` block instead (see `crate::pages`).
+            Lane::Template => match self {
+                Kind::Letter
+                | Kind::Filing
+                | Kind::Will
+                | Kind::Trust
+                | Kind::Directive
+                | Kind::Agreement
+                | Kind::Pleading
+                | Kind::Onboarding
+                | Kind::Offboarding
+                | Kind::Memo
+                | Kind::Resume
+                | Kind::TrialPrep
+                | Kind::Event
+                | Kind::Post
+                | Kind::Workshop
+                | Kind::Github => true,
+                Kind::ReviewQueueWorkbench
+                | Kind::VerifierSplitView
+                | Kind::MatterStatusConsole
+                | Kind::DocketDeadlineBoard
+                | Kind::DocumentWorkbench
+                | Kind::AuthorityLibrary
+                | Kind::DiscoveryCockpit
+                | Kind::HearingConsole
+                | Kind::DeliverablePackage
+                | Kind::EngagementBillingRecords
+                | Kind::EstatePlanConsole
+                | Kind::ClosingRoom
+                | Kind::Transcript
+                | Kind::InboundContract
+                | Kind::CertificateOfNaturalization
+                | Kind::Exhibit
+                | Kind::Order
+                | Kind::ClosedRepository
+                | Kind::Invoice
+                | Kind::Unclassified => false,
+            },
+            // Everything that can be *filed on a matter*: the three
+            // intake-only classifications, the unclassified default, and
+            // every notation kind — a generated PDF lands in `assets`
+            // carrying its owning template's declared kind (#830).
+            //
+            // Content pages and dashboards are excluded: neither is ever
+            // a byte artifact on a matter.
+            Lane::Asset => match self {
+                Kind::Letter
+                | Kind::Filing
+                | Kind::Will
+                | Kind::Trust
+                | Kind::Directive
+                | Kind::Agreement
+                | Kind::Pleading
+                | Kind::Onboarding
+                | Kind::Offboarding
+                | Kind::Memo
+                | Kind::Resume
+                | Kind::TrialPrep
+                | Kind::Transcript
+                | Kind::InboundContract
+                | Kind::CertificateOfNaturalization
+                | Kind::Exhibit
+                | Kind::Order
+                | Kind::ClosedRepository
+                | Kind::Invoice
+                | Kind::Unclassified => true,
+                Kind::Event
+                | Kind::Post
+                | Kind::Workshop
+                | Kind::Github
+                | Kind::ReviewQueueWorkbench
+                | Kind::VerifierSplitView
+                | Kind::MatterStatusConsole
+                | Kind::DocketDeadlineBoard
+                | Kind::DocumentWorkbench
+                | Kind::AuthorityLibrary
+                | Kind::DiscoveryCockpit
+                | Kind::HearingConsole
+                | Kind::DeliverablePackage
+                | Kind::EngagementBillingRecords
+                | Kind::EstatePlanConsole
+                | Kind::ClosingRoom => false,
+            },
+            // A matter page's `kind:` in a Project manifest's `pages:` block:
+            // exactly the dashboard kinds.
+            Lane::Page => self.is_dashboard(),
+        }
+    }
+}
+
+/// Which of Navigator's two document lanes a [`Kind`] is being declared
+/// in.
+///
+/// The lanes are not two vocabularies — they are two *write boundaries*
+/// over one vocabulary, each admitting the subset that means something
+/// for it. See [`Kind::valid_for`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lane {
+    /// A Markdown file in the repository — a notation template or a
+    /// content page. Its kind arrives as the `kind:` frontmatter key, so
+    /// this lane backs `S103` and the LSP completion.
+    Template,
+    /// A byte artifact filed on a matter (an `assets` row). Its kind is
+    /// chosen by whoever files it, never parsed from frontmatter, so this
+    /// lane backs `store::documents`' ingest boundary.
+    Asset,
+    /// A [Matter Page](crate::pages) entry in a Project manifest's `pages:`
+    /// block. Its kind is one of the dashboard kinds, checked by `Y021`.
+    Page,
+}
+
+/// The kinds a Markdown file may declare, as strings, for diagnostics and
+/// completion.
+///
+/// This is the [`Lane::Template`] slice of the vocabulary, not the whole
+/// enum: the asset-lane-only values (`transcript`, `inbound_contract`,
+/// `certificate_of_naturalization`, `unclassified`) classify a filed byte
+/// artifact and mean nothing in frontmatter, so `S103` rejects them and
+/// the LSP does not offer them. `valid_strings_are_exactly_the_template_lane`
+/// pins the two together.
+pub const VALID: &[&str] = &[
+    "letter",
+    "filing",
+    "will",
+    "trust",
+    "directive",
+    "agreement",
+    "pleading",
+    "onboarding",
+    "offboarding",
+    "memo",
+    "resume",
+    "trial_prep",
+    "event",
+    "post",
+    "workshop",
+    "github",
+];
+
+/// The declared `kind:` for a file's contents, when present and
+/// recognized. Returns `None` when the key is absent or its value is not
+/// a known kind — in the latter case the file classifies as plain
+/// Markdown and [`crate::S103KindEnum`] reports the bad value.
+#[must_use]
+pub fn declared(contents: &str) -> Option<Kind> {
+    let fm = crate::frontmatter::extract(contents)?;
+    let raw = crate::frontmatter::field(fm, "kind")?;
+    Kind::parse(&raw)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{declared, Category, Kind, Lane};
+
+    #[test]
+    fn parse_round_trips_every_kind() {
+        for kind in Kind::ALL {
+            assert_eq!(Kind::parse(kind.as_str()), Some(*kind));
+        }
+    }
+
+    #[test]
+    fn parse_rejects_unknown_value() {
+        assert_eq!(Kind::parse("bogus"), None);
+        assert_eq!(Kind::parse(""), None);
+    }
+
+    #[test]
+    fn valid_strings_are_exactly_the_template_lane() {
+        // `VALID` (the diagnostics/completion surface) must never drift
+        // from the template lane, or S103 would accept a value that means
+        // nothing in frontmatter, or reject one that does.
+        let template_lane: Vec<&str> = Kind::ALL
+            .iter()
+            .filter(|k| k.valid_for(Lane::Template))
+            .map(|k| k.as_str())
+            .collect();
+        assert_eq!(template_lane, super::VALID);
+    }
+
+    #[test]
+    fn the_asset_only_kinds_are_not_declarable_in_frontmatter() {
+        // A transcript is filed, not drafted. Declaring one as a
+        // template's `kind:` is the mistake this lane split exists to
+        // catch, so `S103`'s accepted list must not contain it.
+        for kind in [
+            Kind::Transcript,
+            Kind::InboundContract,
+            Kind::CertificateOfNaturalization,
+            Kind::Exhibit,
+            Kind::Order,
+            Kind::ClosedRepository,
+            Kind::Invoice,
+            Kind::Unclassified,
+        ] {
+            assert!(!kind.valid_for(Lane::Template), "{}", kind.as_str());
+            assert!(kind.valid_for(Lane::Asset), "{}", kind.as_str());
+            assert!(
+                !super::VALID.contains(&kind.as_str()),
+                "{} leaked into VALID",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn a_content_page_is_never_filed_on_a_matter() {
+        // The mirror of the rule above: a teaching page is never a byte
+        // artifact somebody files on a matter, so the ingest boundary must
+        // refuse it.
+        for kind in [Kind::Event, Kind::Post, Kind::Workshop, Kind::Github] {
+            assert!(!kind.valid_for(Lane::Asset), "{}", kind.as_str());
+            assert!(kind.valid_for(Lane::Template), "{}", kind.as_str());
+        }
+    }
+
+    #[test]
+    fn a_page_kind_lives_only_in_the_page_lane() {
+        // A matter page is declared in `pages:`, never in frontmatter and
+        // never filed on a matter.
+        for kind in Kind::ALL.iter().filter(|k| k.is_dashboard()) {
+            assert!(kind.valid_for(Lane::Page), "{}", kind.as_str());
+            assert!(!kind.valid_for(Lane::Template), "{}", kind.as_str());
+            assert!(!kind.valid_for(Lane::Asset), "{}", kind.as_str());
+            assert!(!super::VALID.contains(&kind.as_str()), "{}", kind.as_str());
+        }
+        for kind in Kind::ALL.iter().filter(|k| !k.is_dashboard()) {
+            assert!(!kind.valid_for(Lane::Page), "{}", kind.as_str());
+        }
+    }
+
+    #[test]
+    fn every_kind_belongs_to_at_least_one_lane() {
+        // A kind valid in neither lane could never be written anywhere —
+        // dead vocabulary that `S103` would still advertise.
+        for kind in Kind::ALL {
+            assert!(
+                kind.valid_for(Lane::Template)
+                    || kind.valid_for(Lane::Asset)
+                    || kind.valid_for(Lane::Page),
+                "{} belongs to no lane",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn resume_is_a_notation_on_its_own_frame() {
+        let resume = Kind::parse("resume").expect("resume is a recognized kind");
+        assert!(resume.is_notation());
+        assert!(resume.valid_for(Lane::Template));
+        assert!(resume.valid_for(Lane::Asset));
+        assert_eq!(resume.render_default(), Some("resume"));
+        assert_eq!(resume.category(), Category::Profile);
+        assert!(!resume.opens_a_matter());
+        assert!(!resume.closes_a_matter());
+        assert!(resume.structural_rules().is_empty());
+    }
+
+    #[test]
+    fn trial_prep_is_a_plain_notation_and_not_an_engagement_or_closing_kind() {
+        let kind = Kind::parse("trial_prep").expect("trial prep is a recognized kind");
+        assert!(kind.is_notation());
+        assert!(kind.valid_for(Lane::Template));
+        assert!(kind.valid_for(Lane::Asset));
+        assert_eq!(kind.render_default(), Some("plain"));
+        assert_eq!(kind.category(), Category::TrialPreparation);
+        assert!(!kind.opens_a_matter());
+        assert!(!kind.closes_a_matter());
+        assert!(!kind.is_client_visible());
+    }
+
+    #[test]
+    fn only_trial_prep_is_hidden_from_client_notation_visibility() {
+        for kind in Kind::ALL.iter().filter(|kind| kind.is_notation()) {
+            assert_eq!(
+                kind.is_client_visible(),
+                *kind != Kind::TrialPrep,
+                "{} client visibility",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn notation_family_covers_every_instrument_and_excludes_content_pages() {
+        for kind in [
+            Kind::Letter,
+            Kind::Filing,
+            Kind::Will,
+            Kind::Trust,
+            Kind::Directive,
+            Kind::Agreement,
+            Kind::Pleading,
+            Kind::Onboarding,
+            Kind::Offboarding,
+            Kind::Memo,
+            Kind::Resume,
+            Kind::TrialPrep,
+        ] {
+            assert!(
+                kind.is_notation(),
+                "{} should be notation-family",
+                kind.as_str()
+            );
+        }
+        for kind in [Kind::Event, Kind::Post, Kind::Workshop] {
+            assert!(!kind.is_notation(), "{} is a content page", kind.as_str());
+        }
+        // A dashboard kind composes registered sections. It declares no
+        // questionnaire and becomes no instrument, so it must stay out of
+        // the notation family and never pick up the legal N-family rules.
+        for kind in Kind::ALL.iter().filter(|k| k.is_dashboard()) {
+            assert!(
+                !kind.is_notation(),
+                "{} is a matter dashboard, not a notation template",
+                kind.as_str(),
+            );
+            assert!(!kind.carries_questionnaire(), "{}", kind.as_str());
+            assert!(!kind.opens_a_matter(), "{}", kind.as_str());
+        }
+        // `github` borrows the questionnaire grammar but is an engineering
+        // artifact, not a legal instrument — it must stay out of the
+        // notation family so it never picks up the legal N-family rules.
+        assert!(
+            !Kind::Github.is_notation(),
+            "github is not a legal instrument"
+        );
+        // The asset-lane-only kinds are not notation-template kinds either
+        // — nobody declares `kind: transcript` in a template's frontmatter.
+        for kind in [
+            Kind::Transcript,
+            Kind::InboundContract,
+            Kind::CertificateOfNaturalization,
+        ] {
+            assert!(
+                !kind.is_notation(),
+                "{} is an asset-lane classification, not a notation template",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn questionnaire_carrying_kinds_are_the_notations_plus_github() {
+        for kind in Kind::ALL {
+            let expected = kind.is_notation() || *kind == Kind::Github;
+            assert_eq!(
+                kind.carries_questionnaire(),
+                expected,
+                "{} questionnaire-carrying classification",
+                kind.as_str()
+            );
+        }
+        // The load-bearing pair: github may declare one, a workshop may not.
+        assert!(Kind::Github.carries_questionnaire());
+        assert!(!Kind::Workshop.carries_questionnaire());
+    }
+
+    #[test]
+    fn github_is_parsed_and_described() {
+        assert_eq!(Kind::parse("github"), Some(Kind::Github));
+        assert!(Kind::Github.describe().contains("GitHub"));
+        assert!(!Kind::Github.opens_a_matter());
+    }
+
+    #[test]
+    fn matter_opening_kinds_are_the_engagements_and_nothing_else() {
+        // The one kind that opens a matter: the onboarding engagement,
+        // whether a single-instrument engagement letter or the
+        // intake-driven onboarding that opens a bundle of instruments
+        // (the estate plan, fractional GC).
+        assert!(
+            Kind::Onboarding.opens_a_matter(),
+            "onboarding opens a matter"
+        );
+        // Every other kind is work done *inside* an already-open matter,
+        // or a content page — none of them is the engagement.
+        for kind in [
+            Kind::Letter,
+            Kind::Filing,
+            Kind::Will,
+            Kind::Trust,
+            Kind::Directive,
+            Kind::Agreement,
+            Kind::Pleading,
+            Kind::Offboarding,
+            Kind::Memo,
+            Kind::Event,
+            Kind::Post,
+            Kind::Workshop,
+            Kind::Github,
+            Kind::Transcript,
+            Kind::InboundContract,
+            Kind::CertificateOfNaturalization,
+        ] {
+            assert!(
+                !kind.opens_a_matter(),
+                "{} does not open a matter",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn closing_kinds_are_the_offboarding_letter_and_nothing_else() {
+        // The mirror of `matter_opening_kinds_are_the_engagements_and_nothing_else`:
+        // the one kind that closes a matter is the offboarding letter.
+        assert!(
+            Kind::Offboarding.closes_a_matter(),
+            "offboarding closes a matter"
+        );
+        // `Kind::Letter` is the load-bearing negative case: every offboarding
+        // letter is a letter, but an ordinary letter must not close a matter,
+        // or any demand/notice/settlement letter would silently end the
+        // representation.
+        assert!(!Kind::Letter.closes_a_matter());
+        // Every other kind is work done *inside* an already-open matter, the
+        // engagement that opened it, or a content page — none of them is the
+        // offboarding letter.
+        for kind in [
+            Kind::Letter,
+            Kind::Filing,
+            Kind::Will,
+            Kind::Trust,
+            Kind::Directive,
+            Kind::Agreement,
+            Kind::Pleading,
+            Kind::Onboarding,
+            Kind::Memo,
+            Kind::Event,
+            Kind::Post,
+            Kind::Workshop,
+            Kind::Github,
+            Kind::Transcript,
+            Kind::InboundContract,
+            Kind::CertificateOfNaturalization,
+        ] {
+            assert!(
+                !kind.closes_a_matter(),
+                "{} does not close a matter",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn dashboard_kinds_are_exactly_the_twelve_catalog_entries() {
+        let dashboards: Vec<&str> = Kind::ALL
+            .iter()
+            .filter(|k| k.is_dashboard())
+            .map(|k| k.as_str())
+            .collect();
+        assert_eq!(
+            dashboards,
+            vec![
+                "review_queue_workbench",
+                "verifier_split_view",
+                "matter_status_console",
+                "docket_deadline_board",
+                "document_workbench",
+                "authority_library",
+                "discovery_cockpit",
+                "hearing_console",
+                "deliverable_package",
+                "engagement_billing_records",
+                "estate_plan_console",
+                "closing_room",
+            ],
+        );
+    }
+
+    #[test]
+    fn asset_lane_only_kinds_carry_no_notation_or_matter_semantics() {
+        // None of these is notation-family, carries a questionnaire, or
+        // opens a matter — they classify an `assets` row, not a template.
+        // See the doc comments for the #779 Lane-scoping caveat.
+        for kind in [
+            Kind::Transcript,
+            Kind::InboundContract,
+            Kind::CertificateOfNaturalization,
+        ] {
+            assert!(!kind.is_notation());
+            assert!(!kind.carries_questionnaire());
+            assert!(!kind.opens_a_matter());
+        }
+        assert_eq!(Kind::parse("transcript"), Some(Kind::Transcript));
+        assert_eq!(Kind::parse("inbound_contract"), Some(Kind::InboundContract));
+        assert_eq!(
+            Kind::parse("certificate_of_naturalization"),
+            Some(Kind::CertificateOfNaturalization)
+        );
+    }
+
+    #[test]
+    fn default_output_is_always_a_declarable_value_or_plain() {
+        // Every kind's default must be either one of N109's declarable
+        // values or "plain" — the same closed vocabulary `output:` itself
+        // is held to, so a caller can always feed this straight into the
+        // same parser it feeds an explicit `output:` value through.
+        for kind in Kind::ALL {
+            let default = kind.default_output();
+            assert!(
+                default == "plain" || crate::F109OutputFormat::VALID.contains(&default),
+                "{} defaults to unrecognized profile `{default}`",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn letterhead_kinds_default_to_letter() {
+        // The firm speaks in its own voice: a letter, the engagement that
+        // opens a matter, the letter that closes one, and an analytical
+        // memo all go out on letterhead by default.
+        for kind in [
+            Kind::Letter,
+            Kind::Onboarding,
+            Kind::Offboarding,
+            Kind::Memo,
+        ] {
+            assert_eq!(
+                kind.default_output(),
+                "letter",
+                "{} should default to letterhead",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn only_notation_kinds_have_a_render_default() {
+        for kind in Kind::ALL {
+            assert_eq!(kind.render_default().is_some(), kind.is_notation());
+        }
+        assert_eq!(Kind::Letter.render_default(), Some("letter"));
+        assert_eq!(Kind::Directive.render_default(), Some("plain"));
+        assert_eq!(Kind::Post.render_default(), None);
+    }
+
+    #[test]
+    fn filing_defaults_to_form() {
+        // Already true in practice: every template that declares
+        // `output: form` is `kind: filing`.
+        assert_eq!(Kind::Filing.default_output(), "form");
+    }
+
+    #[test]
+    fn pleading_defaults_to_pleading() {
+        // Court paper renders through pdf::pleading's own geometry, never
+        // firm letterhead.
+        assert_eq!(Kind::Pleading.default_output(), "pleading");
+    }
+
+    #[test]
+    fn instruments_a_client_executes_alone_default_to_plain() {
+        // A will, a trust, and a directive carry no chrome at all.
+        for kind in [Kind::Will, Kind::Trust, Kind::Directive] {
+            assert_eq!(
+                kind.default_output(),
+                "plain",
+                "{} should default to plain",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn a_contract_derives_the_contract_frame() {
+        // Before LAW-14 this derived `plain`, because the frame named
+        // after it printed the firm's letterhead — which a contract
+        // between two other parties must never carry. With the letterhead
+        // gone the kind derives its own frame, so a contract gets the
+        // section hierarchy and unbreakable signature blocks without the
+        // template having to say `output:` at all.
+        assert_eq!(Kind::Agreement.default_output(), "contract");
+        assert!(
+            crate::F109OutputFormat::VALID.contains(&Kind::Agreement.default_output()),
+            "the derived default must be a declarable profile"
+        );
+    }
+
+    #[test]
+    fn non_notation_kinds_default_to_plain() {
+        // `output:` means nothing for a content page, a dashboard,
+        // `github`, or an asset-lane classification — none of them ever
+        // reaches a render profile, so none endorses a render surface.
+        for kind in Kind::ALL.iter().filter(|k| !k.is_notation()) {
+            assert_eq!(
+                kind.default_output(),
+                "plain",
+                "{} is not notation-family and should default to plain",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn declared_reads_a_recognized_kind_from_frontmatter() {
+        let body = "---\ntitle: T\nkind: onboarding\n---\n\nBody.\n";
+        assert_eq!(declared(body), Some(Kind::Onboarding));
+    }
+
+    #[test]
+    fn declared_is_none_for_absent_or_unknown_kind() {
+        assert_eq!(declared("---\ntitle: T\n---\n"), None);
+        assert_eq!(declared("---\ntitle: T\nkind: bogus\n---\n"), None);
+        assert_eq!(declared("no frontmatter"), None);
+    }
+
+    #[test]
+    fn correspondence_is_exactly_the_letterhead_kinds() {
+        // Mirrors `letterhead_kinds_default_to_letter`: the same four kinds
+        // that default to the `"letter"` render profile are grouped as
+        // `Category::Correspondence`.
+        for kind in [
+            Kind::Letter,
+            Kind::Onboarding,
+            Kind::Offboarding,
+            Kind::Memo,
+        ] {
+            assert_eq!(
+                kind.category(),
+                Category::Correspondence,
+                "{}",
+                kind.as_str()
+            );
+        }
+        for kind in Kind::ALL
+            .iter()
+            .filter(|k| k.category() == Category::Correspondence)
+        {
+            assert_eq!(kind.default_output(), "letter", "{}", kind.as_str());
+        }
+    }
+
+    #[test]
+    fn every_dashboard_kind_shares_one_category() {
+        for kind in Kind::ALL.iter().filter(|k| k.is_dashboard()) {
+            assert_eq!(
+                kind.category(),
+                Category::MatterDashboard,
+                "{}",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn asset_lane_only_kinds_use_the_filed_asset_category() {
+        for kind in [
+            Kind::Transcript,
+            Kind::InboundContract,
+            Kind::CertificateOfNaturalization,
+            Kind::Exhibit,
+            Kind::Order,
+            Kind::ClosedRepository,
+            Kind::Invoice,
+            Kind::Unclassified,
+        ] {
+            assert_eq!(kind.category(), Category::FiledAsset, "{}", kind.as_str());
+        }
+    }
+
+    #[test]
+    fn no_template_lane_kind_uses_the_filed_asset_category() {
+        // `FiledAsset` names a document classification for an `assets` row,
+        // never a template's own declared `kind:` — so no kind S103 accepts
+        // may be grouped there, or `/notations` would render a category no
+        // author could ever pick.
+        for kind in Kind::ALL.iter().filter(|k| k.valid_for(Lane::Template)) {
+            assert_ne!(kind.category(), Category::FiledAsset, "{}", kind.as_str());
+        }
+    }
+
+    #[test]
+    fn category_slug_and_label_are_populated_for_every_kind() {
+        for kind in Kind::ALL {
+            assert!(!kind.category().slug().is_empty());
+            assert!(!kind.category().label().is_empty());
+        }
+    }
+
+    #[test]
+    fn the_outline_bound_kinds_carry_n123() {
+        for kind in [
+            Kind::Agreement,
+            Kind::Offboarding,
+            Kind::Pleading,
+            Kind::Will,
+        ] {
+            let rules = kind.structural_rules();
+            assert!(
+                rules.iter().any(|(code, _)| *code == "N123"),
+                "{} should carry N123: {rules:?}",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn memo_carries_n117_and_github_carries_n119() {
+        assert!(Kind::Memo
+            .structural_rules()
+            .iter()
+            .any(|(code, _)| *code == "N117"));
+        assert!(Kind::Github
+            .structural_rules()
+            .iter()
+            .any(|(code, _)| *code == "N119"));
+    }
+
+    #[test]
+    fn most_kinds_carry_no_kind_specific_structural_rule() {
+        // The common case: a kind bound to no rule beyond the universal
+        // S-family and M-family Markdown rules every file is held to,
+        // regardless of kind.
+        for kind in [
+            Kind::Letter,
+            Kind::Filing,
+            Kind::Trust,
+            Kind::Directive,
+            Kind::Onboarding,
+            Kind::Event,
+            Kind::Post,
+            Kind::Workshop,
+            Kind::ReviewQueueWorkbench,
+            Kind::DeliverablePackage,
+        ] {
+            assert!(
+                kind.structural_rules().is_empty(),
+                "{} unexpectedly carries {:?}",
+                kind.as_str(),
+                kind.structural_rules()
+            );
+        }
+    }
+}

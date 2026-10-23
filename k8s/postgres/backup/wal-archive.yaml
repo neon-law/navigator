@@ -1,0 +1,169 @@
+# Continuous WAL archiving for point-in-time recovery.
+#
+# `receive` streams WAL over verify-full TLS as the REPLICATION-only
+# `navigator_backup` login into a retained spool claim; `upload` copies each
+# finished segment, and the in-progress one every interval, to
+# gs://<bucket>/<namespace>/navigator-postgres/wal/. The bucket name comes from
+# the operator-provisioned `navigator-postgres-backup-target` ConfigMap, so no
+# storage coordinate is committed here.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: navigator-postgres-wal-archive
+spec:
+  serviceName: navigator-postgres-wal-archive
+  replicas: 1
+  selector:
+    matchLabels:
+      app: navigator-postgres-wal-archive
+  template:
+    metadata:
+      labels:
+        app: navigator-postgres-wal-archive
+        navigator.neonlaw.org/postgres-client: "true"
+    spec:
+      serviceAccountName: navigator-postgres-backup
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: receive
+          image: neon-law-postgres:16.15-age1.6.0-vector0.8.2
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - /etc/navigator/postgres/scripts/receive-wal.sh
+          env:
+            - name: PGHOST
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: host
+            - name: PGPORT
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: port
+            - name: PGSSLMODE
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: sslmode
+            - name: PGSSLROOTCERT
+              value: /etc/navigator/postgres/backup/ca.crt
+            - name: PGUSER
+              value: navigator_backup
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-postgres-backup
+                  key: password
+            - name: PGAPPNAME
+              value: navigator-postgres-wal-archive
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+              ephemeral-storage: 64Mi
+            limits:
+              memory: 256Mi
+              ephemeral-storage: 64Mi
+          volumeMounts:
+            - name: spool
+              mountPath: /wal
+            - name: scripts
+              mountPath: /etc/navigator/postgres/scripts
+              readOnly: true
+            - name: backup
+              mountPath: /etc/navigator/postgres/backup
+              readOnly: true
+        - name: upload
+          image: google-cloud-cli:540.0.0-slim
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - /etc/navigator/postgres/scripts/upload-wal.sh
+          env:
+            - name: BACKUP_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-backup-target
+                  key: bucket
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: UPLOAD_INTERVAL_SECONDS
+              value: "60"
+            - name: HOME
+              value: /tmp
+            - name: CLOUDSDK_CONFIG
+              value: /tmp/gcloud
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # A stalled loop stops refreshing the heartbeat and is restarted.
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - test $(( $(date -u +%s) - $(cat /wal/last-upload) )) -lt 600
+            initialDelaySeconds: 600
+            periodSeconds: 60
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+              ephemeral-storage: 256Mi
+            limits:
+              memory: 512Mi
+              ephemeral-storage: 256Mi
+          volumeMounts:
+            - name: spool
+              mountPath: /wal
+            - name: scripts
+              mountPath: /etc/navigator/postgres/scripts
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: scripts
+          configMap:
+            name: navigator-postgres-backup-scripts
+        - name: backup
+          secret:
+            secretName: navigator-postgres-backup
+            items:
+              - key: ca.crt
+                path: ca.crt
+            defaultMode: 0444
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: spool
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain

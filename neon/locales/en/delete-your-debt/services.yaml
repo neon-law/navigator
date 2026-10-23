@@ -1,0 +1,93 @@
+head_title: "{site_name} | Work with PandA Law"
+meta_description: >-
+  A way to work with PandA Law on debt relief in Nevada, Washington,
+  New York, or California. Remote conversations and in-person meetings
+  in Brooklyn. Attorney advertisement. No result is promised.
+title: Debt relief with PandA Law
+hero_mark: scales
+tagline: Start with a conversation.
+hero_lines:
+  - text: Your debt. Your questions.
+    accent_words: 0
+  - text: A team to talk to.
+    accent_words: 5
+hero_lead: >-
+  PandA Law already provides debt relief. DeleteYourDebt.com connects you
+  with that work in Nevada, Washington, New York, and California.
+hero_cta:
+  href: https://www.pandalawfirm.com/contact/
+  label: Talk to PandA Law
+skin: practice
+bands:
+  - kind: cards
+    anchor: states
+    overline: Where we work
+    heading: Four states. One place to start.
+    description: >-
+      Tell us where you are and what you need help with. We will confirm
+      whether the team can take your matter before representation begins.
+    items:
+      - title: Nevada
+        body:
+          - - text: Talk with the team about debt relief in Nevada.
+      - title: Washington
+        body:
+          - - text: Talk with the team about debt relief in Washington.
+      - title: New York
+        body:
+          - - text: Talk remotely, or request an in-person meeting in Brooklyn.
+      - title: California
+        body:
+          - - text: Talk with the team about debt relief in California.
+  - kind: cards
+    anchor: start
+    overline: Getting started
+    heading: You do not have to sort it out alone.
+    description: >-
+      Begin with a few details. You can ask questions before deciding
+      whether to engage a lawyer.
+    items:
+      - title: Tell us what is happening
+        body:
+          - - text: >-
+                Share your state, the kind of debt, and whether there is a
+                lawsuit or an upcoming deadline. Keep sensitive documents
+                for a secure exchange with the team.
+      - title: Discuss your options
+        body:
+          - - text: >-
+                PandA Law provides debt relief. The team will review your
+                situation and discuss which services may fit your needs.
+      - title: Agree on the work
+        body:
+          - - text: >-
+                Before representation begins, a written engagement identifies
+                the lawyers handling your matter, the scope, and the fees.
+                No particular outcome is guaranteed.
+  - kind: cards
+    anchor: meet
+    overline: Stay connected
+    heading: Across the country. In person in Brooklyn.
+    description: >-
+      Our team works across the country. Choose a remote conversation or
+      ask us to arrange an in-person meeting in Brooklyn.
+    items:
+      - title: Talk to PandA Law
+        body:
+          - - text: Start a conversation with PandA Law.
+              href: https://www.pandalawfirm.com/contact/
+      - title: Meet our team in Brooklyn
+        body:
+          - - text: Ask about an in-person meeting.
+              href: https://www.pandalawfirm.com/contact/
+  - kind: statement
+    heading: Clear expectations from the start.
+    lead: >-
+      DeleteYourDebt.com is operated by Shook Law PC and is a way to
+      work with PandA Law on debt relief.
+    body:
+      - - text: >-
+            Contacting either team does not create an attorney-client
+            relationship. The name DeleteYourDebt.com does not guarantee
+            that a debt will be reduced or eliminated. Attorney
+            advertisement. No result is promised.

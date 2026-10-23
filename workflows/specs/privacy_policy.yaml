@@ -1,0 +1,103 @@
+kind: agreement
+title: Privacy Policy
+code: privacy_policy
+jurisdiction: US
+respondent_type: person_and_entity
+confidential: false
+prompts:
+  company: "What is the company’s full legal name and entity type?"
+  business_services: "Identify covered websites, apps, audiences, and controller/business role."
+  effective_date: "What is the {{for_label}}?"
+  contacts: "Who are the primary and alternate contacts? Include name, title, email, and postal address."
+  business_data: "Inventory data categories, sensitive data, people, and specific sources."
+  business_purposes: "Map each category to its actual purpose and disclose any automated decision-making."
+  business_sharing: >-
+    Map data categories to recipients and purposes; state actual sale, sharing, advertising, and opt-out practices.
+  business_cookie_inventory: >-
+    List every cookie or tracker with provider, purpose, necessary/optional category, lifetime, and data recipients;
+    reconcile against an actual scan.
+  business_cookie_choices: >-
+    Give working preference-center instructions and URL, consent behavior, opt-out signals, and relevant browser
+    controls.
+  business_retention: "State retention periods or criteria by category, security practices, and backup treatment."
+  business_rights: >-
+    Give working request methods, verification, authorized-agent, appeal, response, and marketing opt-out procedures.
+  business_children: "State intended ages, child-data practices, and parent contact process."
+  us_states: "Do U.S. state privacy laws apply to these practices?"
+  business_state_disclosures: >-
+    Complete applicable state disclosures, including California collection/sale/sharing information for the required
+    period and financial incentives, if any.
+  gdpr: "Does the GDPR, UK GDPR, or Swiss data-protection law apply to these practices?"
+  business_bases: >-
+    Map each processing purpose to its lawful basis, identifying legitimate interests and consent withdrawal methods.
+  business_transfers: >-
+    Identify actual destinations, adequacy decisions or executed safeguards, and how people can obtain a copy.
+  business_representatives: >-
+    Give applicable DPO, EU/UK representative, and competent supervisory-authority details; explain any role that does
+    not apply.
+audiences:
+  business_services: lawyer
+  effective_date: lawyer
+  business_data: lawyer
+  business_purposes: lawyer
+  business_sharing: lawyer
+  business_cookie_inventory: lawyer
+  business_cookie_choices: lawyer
+  business_retention: lawyer
+  business_rights: lawyer
+  business_children: lawyer
+  us_states: lawyer
+  business_state_disclosures: lawyer
+  gdpr: lawyer
+  business_bases: lawyer
+  business_transfers: lawyer
+  business_representatives: lawyer
+questionnaire:
+  BEGIN:
+    _: entity__company
+  entity__company:
+    _: custom_text__business_services
+  custom_text__business_services:
+    _: custom_datetime__effective_date
+  custom_datetime__effective_date:
+    _: people__contacts
+  people__contacts:
+    _: custom_text__business_data
+  custom_text__business_data:
+    _: custom_text__business_purposes
+  custom_text__business_purposes:
+    _: custom_text__business_sharing
+  custom_text__business_sharing:
+    _: custom_text__business_cookie_inventory
+  custom_text__business_cookie_inventory:
+    _: custom_text__business_cookie_choices
+  custom_text__business_cookie_choices:
+    _: custom_text__business_retention
+  custom_text__business_retention:
+    _: custom_text__business_rights
+  custom_text__business_rights:
+    _: custom_text__business_children
+  custom_text__business_children:
+    _: custom_yes_no__us_states
+  custom_yes_no__us_states:
+    _: custom_text__business_state_disclosures
+  custom_text__business_state_disclosures:
+    _: custom_yes_no__gdpr
+  custom_yes_no__gdpr:
+    _: custom_text__business_bases
+  custom_text__business_bases:
+    _: custom_text__business_transfers
+  custom_text__business_transfers:
+    _: custom_text__business_representatives
+  custom_text__business_representatives:
+    _: END
+  END: {}
+workflow:
+  BEGIN:
+    _: lawyer_review
+  lawyer_review:
+    approved: END
+    changes_requested: reask__draft
+  reask__draft:
+    resubmitted: lawyer_review
+  END: {}

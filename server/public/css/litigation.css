@@ -1,0 +1,208 @@
+/* Litigation page (`/disputes`) — the disputes practice, both sides of the v.
+
+   The brand layer (`brand-firm.css`) owns the palette, the serif, the card, and
+   the hero glow; this file places them and adds the page's one piece of motion,
+   the heading rising a word at a time.
+
+   It used to carry a great deal more: a class-formation figure of dots closing
+   into a frame beside the hero, six Rule 23 element cards each growing a left
+   rule on a view timeline, a chip strip, a phase rail drawn on scroll, and an
+   authority strip that lifted on entry. All of it illustrated sections the page
+   no longer has. What is left is a statement, the firm's own paragraphs, and
+   the same email and phone channels the footer closes every page with.
+
+   The remaining animation is decoration, and the `prefers-reduced-motion` block
+   at the bottom settles it. */
+
+/* ---- Hero -------------------------------------------------------------- */
+
+/* One column. The statement had a graphic beside it and now has the width. */
+.zeal-hero {
+  position: relative;
+  /* `.zeal-hero__glow` bleeds 25vw past each edge on purpose; without a clip
+     here that bleed becomes real layout width, which is what put a
+     horizontal scrollbar under every phone-width visit to this page. */
+  overflow: hidden;
+  display: grid;
+  gap: clamp(2rem, 6vw, 4rem);
+  align-items: center;
+  padding: clamp(2.5rem, 7vw, 5rem) 0 clamp(2rem, 5vw, 3rem);
+}
+
+.zeal-hero__glow {
+  inset-inline: -25vw;
+}
+
+.zeal-hero__statement {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1.25rem;
+  max-width: 40rem;
+}
+
+.zeal-hero__mark {
+  width: clamp(4.25rem, 9vw, 6.5rem);
+  height: clamp(4.25rem, 9vw, 6.5rem);
+  padding: 1rem;
+  border: 1px solid var(--firm-brand-edge);
+  border-radius: 50%;
+  color: var(--firm-brand);
+  background: var(--firm-brand-tint);
+  box-shadow: 0 1rem 3rem var(--firm-brand-glow);
+}
+
+.zeal-hero__heading {
+  margin: 0;
+  font-family: var(--firm-serif);
+  font-size: clamp(2.25rem, 6vw, 3.75rem);
+  font-weight: 600;
+  line-height: 1.05;
+  text-wrap: balance;
+}
+
+/* Each word carries its own reveal order as `--zeal-word-index`, set inline by
+   the view. Keying the stagger to data rather than `nth-child` means a copy
+   edit that adds or drops a word keeps working. */
+/* The word gap is a margin rather than a space in the markup: each word is its
+   own inline-block so it can be transformed, and an inline-block collapses the
+   whitespace at its own end — a trailing space in the view would render as
+   nothing and run the heading together. */
+.zeal-word {
+  display: inline-block;
+  margin-inline-end: 0.26em;
+  animation: zeal-word-rise 700ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation-delay: calc(var(--zeal-word-index, 0) * 90ms);
+}
+
+.zeal-word--accent {
+  color: var(--firm-brand);
+}
+
+@keyframes zeal-word-rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.55em) rotate(-1.5deg);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg);
+  }
+}
+
+.zeal-hero__lead {
+  margin: 0;
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--nav-color-text-muted);
+}
+
+/* The one call to action on the page wears the firm's colour rather than the
+   product chrome's. Matches `theme.css`'s own selector specificity to win. */
+.nav-theme a.nav-btn--primary.zeal-hero__cta,
+.nav-theme a.nav-btn--primary.zeal-hero__cta:hover,
+.nav-theme a.nav-btn--primary.zeal-hero__cta:focus-visible {
+  border-color: var(--firm-brand);
+  background: var(--firm-brand);
+  color: var(--firm-on-brand);
+}
+
+.nav-theme a.nav-btn--primary.zeal-hero__cta:hover,
+.nav-theme a.nav-btn--primary.zeal-hero__cta:focus-visible {
+  border-color: var(--firm-brand-strong);
+  background: var(--firm-brand-strong);
+}
+
+/* ---- Shared section furniture ------------------------------------------ */
+
+/* Every section heading on the page. Named for what it is rather than for the
+   one section it started in. */
+.zeal-heading {
+  margin: 0 0 0.75rem;
+  font-family: var(--firm-serif);
+  font-size: clamp(1.5rem, 3.5vw, 2.25rem);
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.zeal-paragraph {
+  margin: 0 0 0.85rem;
+  max-width: 62ch;
+  line-height: 1.65;
+  color: var(--nav-color-text-muted);
+}
+
+.zeal-paragraph:last-child {
+  margin-bottom: 0;
+}
+
+/* The two paragraphs are the page, so they carry the page's reading size rather
+   than the muted secondary size the old sections used for supporting prose. */
+.zeal-paragraph--lead {
+  max-width: 68ch;
+  font-size: 1.0625rem;
+  color: var(--nav-color-text);
+}
+
+.zeal-paragraph--lead + .zeal-paragraph--lead {
+  margin-top: 1.25rem;
+}
+
+/* The one inline link in the body prose — the Navigator mention in the last
+   paragraph. Underlined rather than colour-only, so it reads as a link without
+   relying on hue: the surrounding text is the same size and weight, and colour
+   alone would not carry the distinction for a reader who cannot separate the
+   two. The offset keeps the rule off the descenders. */
+.zeal-paragraph__link {
+  color: var(--firm-brand-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+}
+
+.zeal-paragraph__link:hover,
+.zeal-paragraph__link:focus-visible {
+  text-decoration-thickness: 2px;
+}
+
+/* The page's own call to action: the same two channels the footer closes
+   every page with (`.site-footer__office--channel` supplies the card, the
+   hover lift, and the swell; see `webapp::components::site_footer`), laid out
+   as their own centered row rather than the footer's three-column office
+   grid. The footer's grid-column rules key off `.site-footer__offices`, so a
+   different wrapper class here is what keeps this row from being pulled into
+   that layout instead of its own. */
+.zeal-cta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--footer-band-gap, 0.75rem);
+  margin: 2rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.zeal-cta .site-footer__office {
+  flex: 0 0 auto;
+  min-width: 14rem;
+}
+
+/* The footer's own channel link is `width: 100%` on purpose: it fills a fixed
+   grid cell there. This row has no such cell — it is two tiles sized to their
+   own content — so that rule is overridden here, or the anchor stretches to
+   the card's full width and `flex-wrap` drops the second tile onto its own
+   row instead of sitting beside the first. */
+.zeal-cta .site-footer__channel-link {
+  width: auto;
+}
+
+/* The heading's word-by-word rise is the page's only motion, and it is
+   decoration: suppressed, the words rest where they landed. */
+@media (prefers-reduced-motion: reduce) {
+  .zeal-word {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+}

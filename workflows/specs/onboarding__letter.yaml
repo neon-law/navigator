@@ -1,0 +1,53 @@
+questionnaire:
+  BEGIN:
+    _: entity
+  entity:
+    _: address__principal_office
+  address__principal_office:
+    _: person__client
+  person__client:
+    _: project__engagement
+  project__engagement:
+    _: custom_datetime__engagement_start_date
+  custom_datetime__engagement_start_date:
+    _: custom_text__engagement_scope
+  custom_text__engagement_scope:
+    _: custom_single_choice__governing_law
+  custom_single_choice__governing_law:
+    _: END
+  END: {}
+prompts:
+  client_name: Who is the Client's directly responsible individual, the one person the Firm takes instructions from?
+  project_name: What is the project name for this engagement?
+  engagement_scope: >-
+    In a sentence or two, what is the minimum scope of this engagement.
+  engagement_start_date: When does this engagement begin?
+  governing_law: >-
+    Which state's law governs this engagement? Nevada, unless the Firm has
+    agreed otherwise; California and Washington are the alternatives available.
+audiences:
+  governing_law: lawyer
+  engagement_start_date: lawyer
+  engagement_scope: lawyer
+choices:
+  governing_law:
+    nevada: Nevada
+    california: California
+    washington: Washington
+workflow:
+  BEGIN:
+    intake_submitted: intake_persisted__client
+  intake_persisted__client:
+    retainer_rendered: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__retainer_pdf
+    changes_requested: reask__client
+    rejected: END
+  reask__client:
+    intake_resubmitted: lawyer_review
+  generate_pdf__retainer_pdf:
+    pdf_persisted: sent_for_signature__pending
+  sent_for_signature__pending:
+    signature_received: END
+    signature_declined: END
+  END: {}

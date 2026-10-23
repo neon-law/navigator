@@ -1,0 +1,8 @@
+PostgreSQL compatibility image build and synthetic tests
+Copyright 2026 Neon Law contributors
+First-party build code: Apache-2.0.
+Bundled software retains its upstream licenses:
+PostgreSQL: PostgreSQL License; Apache AGE: Apache-2.0;
+pgvector: PostgreSQL License; DBOS Rust: MIT (test application only).
+Debian packages retain their distribution copyright notices.
+No Navigator source or private history is included.

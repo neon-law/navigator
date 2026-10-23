@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>PostgreSQL compatibility spike — Navigator</title>
+  <link rel="stylesheet" href="../css/theme.css">
+  <style>
+    :root { --report-max: 76rem; }
+    body { background: var(--nav-color-bg); color: var(--nav-color-text); font-family: var(--nav-font-family); margin: 0; }
+    main { margin: 0 auto; max-width: var(--report-max); padding: 2rem 1.25rem 5rem; }
+    .eyebrow { color: var(--nav-color-primary); font: 700 .78rem/1.3 system-ui, sans-serif; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { font-size: clamp(2rem, 6vw, 3.7rem); line-height: 1.04; margin: .45rem 0 1rem; }
+    h2 { border-bottom: 1px solid var(--nav-color-border); font-size: 1.75rem; margin: 3rem 0 1rem; padding-bottom: .5rem; }
+    h3 { font-size: 1.15rem; margin: 1.4rem 0 .35rem; }
+    p, li { line-height: 1.58; }
+    .lede { color: var(--nav-color-text-muted); font: 1.14rem/1.6 system-ui, sans-serif; max-width: 58rem; }
+    .stamp { color: var(--nav-color-text-muted); font: .86rem/1.5 system-ui, sans-serif; }
+    .callout, .card { background: var(--nav-color-surface-raised); border: 1px solid var(--nav-color-border); border-radius: var(--nav-radius-lg); padding: 1.1rem 1.25rem; }
+    .callout { border-left: .35rem solid var(--nav-color-primary); margin: 1.5rem 0; }
+    .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); }
+    .grid .card h3 { margin-top: .15rem; }
+    .badge { border: 1px solid var(--nav-color-border); border-radius: 999px; display: inline-block; font: 650 .76rem/1.5 system-ui, sans-serif; margin: .2rem .25rem .2rem 0; padding: .12rem .55rem; }
+    .good { color: var(--nav-color-success); }
+    .warn { color: #8a5a00; }
+    @media (prefers-color-scheme: dark) { .warn { color: #ffd666; } }
+    table { border-collapse: collapse; display: block; overflow-x: auto; width: 100%; }
+    th, td { border-bottom: 1px solid var(--nav-color-border); padding: .7rem .65rem; text-align: left; vertical-align: top; }
+    th { font: 700 .84rem/1.4 system-ui, sans-serif; }
+    td { line-height: 1.48; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    code { background: var(--nav-color-surface-subtle); border-radius: .25rem; padding: .06rem .25rem; overflow-wrap: anywhere; }
+    pre { background: var(--nav-color-surface-raised); border: 1px solid var(--nav-color-border); border-radius: var(--nav-radius); overflow-x: auto; padding: 1rem; }
+    a { color: var(--nav-color-link); }
+    nav { border-bottom: 1px solid var(--nav-color-border); display: flex; flex-wrap: wrap; gap: .45rem 1.2rem; padding: 1rem 0; }
+    nav a { font: 650 .85rem/1.4 system-ui, sans-serif; }
+    .small { color: var(--nav-color-text-muted); font-size: .9rem; }
+    .flow { font: 600 .92rem/1.6 system-ui, sans-serif; }
+    footer { border-top: 1px solid var(--nav-color-border); color: var(--nav-color-text-muted); margin-top: 3rem; padding-top: 1rem; }
+    @media print { nav { display: none; } main { max-width: none; } a { color: inherit; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Navigator · Architecture compatibility spike · ENG-990</div>
+    <h1>PostgreSQL migration: what comes first?</h1>
+    <p class="lede">Prove the hard runtime and data contracts against a real PostgreSQL image before splitting the SurrealDB translation into implementation work. Keep DBOS as the durable-execution target, Apache AGE for relationship graphs, and nightly Iceberg as the archive destination.</p>
+    <p class="stamp">Evidence updated October 10, 2026 · Navigator baseline 99ef3ee8 · See current image evidence below; earlier SDK observations are retained separately.</p>
+    <nav aria-label="Report sections">
+      <a href="#decision">Decision</a><a href="#evidence">Spike evidence</a><a href="#parity">API parity</a><a href="#data">Data model</a><a href="#migrations">Migrations</a><a href="#image">CI image</a><a href="#archives">Iceberg</a><a href="#sequence">Work sequence</a><a href="#tests">Test plan</a><a href="#sources">Sources</a>
+    </nav>
+  </header>
+
+
+  <section id="image-spike-update">
+    <h2>Image spike update — October 10, 2026</h2>
+    <p><strong>The public neon-law-postgres image is published. Native AMD64 and ARM64 release CI passed extension and DBOS recovery tests.</strong>
+    This is an image and SDK compatibility spike, not a completed migration or runtime adapter.</p>
+    <table><thead><tr><th>Component</th><th>Exact selection</th><th>Evidence</th></tr></thead><tbody>
+      <tr><td>PostgreSQL</td><td>16.15-bookworm</td><td>Base OCI index sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4; official AMD64 and ARM64 manifests exist.</td></tr>
+      <tr><td>Apache AGE</td><td>1.6.0, PG16 distribution</td><td>Apache SHA512 verified during build; extension version 1.6.0; graph create/read and volume restart pass.</td></tr>
+      <tr><td>pgvector</td><td>0.8.2</td><td>Source SHA256 69f4019389af05dc1c9548deb8628e62878e6e207c03907f2b8af2016472cdaa; HNSW construction and exact cosine query pass. Host CPU optimization disabled.</td></tr>
+      <tr><td>citext / pg_trgm</td><td>1.6 / 1.6, bundled with pinned PostgreSQL</td><td>Case-insensitive comparison, trigram similarity and GIN index construction pass.</td></tr>
+      <tr><td>Full-text search</td><td>PostgreSQL 16 built-in English configuration</td><td>Stemming, phrase, ranking and GIN construction pass. Multilingual, recall and tenant-filter parity remain open.</td></tr>
+      <tr><td>DBOS Rust</td><td>dbos =0.5.0; Cargo.lock committed in standalone test application</td><td>Runs in process with Axum/Tokio; launch, schema migration, stable workflow ID, step checkpoints, durable sleep and SIGKILL recovery pass on native AMD64 and ARM64.</td></tr>
+    </tbody></table>
+    <p>Source: <a href="https://github.com/neon-law-source-code/neon-law-postgres">neon-law-source-code/neon-law-postgres</a>.
+    Registry: <code>ghcr.io/neon-law-source-code/neon-law-postgres</code>.
+    The separate upstream Apache-2.0 image recipe retains dependency licenses/notices, pins the base index and source checksums,
+    and includes a locked Rust 1.98 DBOS/Axum test application. DBOS itself is the official MIT SDK from
+    <a href="https://github.com/dbos-inc/dbos-transact-rust">DBOS (dbos.dev)</a>.</p>
+    <p>CI builds native AMD64 and ARM64 candidates with SBOM/provenance, tests each exact digest,
+    and promotes those tested manifests to one multi-platform index without rebuilding.
+    Source commit: <code>155a38bbec5d0cfcec0035c65b0c5c79012ab223</code>.
+    <a href="https://github.com/neon-law-source-code/neon-law-postgres/actions/runs/38102394800">Passing release CI</a>. Published index: <code>sha256:4cc70fee3aa9e53455bd1612d0a5be1f06962f5bcdcda4c6bff47e2b46db969e</code>.
+    Mutable build-package repositories remain a reproducibility limitation: freeze their snapshot/package inputs
+    before treating independent rebuilds as byte-identical. Native image smoke is not an extension upgrade or restore test.</p>
+    <h3>Failure injection and limits</h3>
+    <p>The synthetic controller waits for a committed business write, then SIGKILLs the DBOS/Axum process before
+    the step checkpoint. A non-idempotent attempts table records two executions of that step, while its unique-key
+    effect table has one business effect. The previously completed step runs once. Recovered status is SUCCESS,
+    with recovery_attempts 2 in the observed run. Extension rows and the AGE graph survive a PostgreSQL restart.</p>
+    <p>For a real multi-row business operation, commit its unique replay key, result, domain writes and any outbox
+    rows in one PostgreSQL transaction. A replay reads the stored result and skips the write. Serialize conflicting
+    state transitions with a row lock or compare-and-swap version; a reused key with different input must be rejected.
+    Retry SQL serialization/deadlock failures within bounded application policy. Provider calls need stable idempotency
+    keys or explicit reconciliation: an outbox alone does not prevent a duplicate remote effect after acknowledgment loss.</p>
+    <p>Rust 1.98 formatting and Clippy checks passed; navigator validate passed with zero errors. The test proves completed checkpoint replay and the business-write/checkpoint window. It does not prove
+    interrupted durable sleep, signals, actor attribution, ephemeral workflows, queue concurrency, rolling versions,
+    graceful Axum drain, database/host crash recovery, PITR, operator compatibility or extension upgrades.
+    These remain ENG-990/ENG-1022 acceptance gates. DBOS is an application dependency; the database image contains no DBOS executor.</p>
+    <h3>Shared image consumption</h3>
+    <p>The disposable spike lock is <code>k8s/overlays/postgres-spike/kustomization.yaml</code>;
+    the retained database uses <code>k8s/postgres/kustomization.yaml</code>. Both carry the same published digest.
+    The optional <code>kind-postgres-spike</code> overlay includes that resource alongside the normal Surreal/Restate
+    dependency tier. Navigator's <code>postgres-compatibility.yml</code> renders the same lock, rejects a mutable tag,
+    anonymously pulls the resulting digest, and runs the exact pinned public smoke source.
+    It also verifies extension data survives PVC-backed pod replacement in KIND.
+    <a href="https://github.com/neon-law/navigator/actions/runs/38103859981">Corrected consumer CI</a>
+    proves the SDK fixture actually ran; earlier green runs that masked a Cargo workspace error are not recovery evidence.
+    The image lane switches no Navigator reads or writes.</p>
+    <pre><code>NAVIGATOR_KIND_DEPS_OVERLAY=k8s/overlays/kind-postgres-spike \
+  navigator dev worktree-env up --runtime kind --path "$PWD"
+set -a; source .devx/env; set +a
+kubectl --kubeconfig .devx/kubeconfig --context "kind-$NAVIGATOR_KIND_CLUSTER" \
+  -n navigator rollout status statefulset/postgres-spike --timeout=180s
+kubectl --kubeconfig .devx/kubeconfig --context "kind-$NAVIGATOR_KIND_CLUSTER" \
+  -n navigator port-forward service/postgres-spike :5432</code></pre>
+    <p>Read the assigned loopback port from port-forward output; use only this task's synthetic database.
+    Readiness probes check TCP, not the temporary Unix-socket server used during PostgreSQL initialization.
+    Anonymous pull and the full consumer smoke pass against the published index. Both local overlays render the same digest. The task-owned ARM64 KIND tier verified UID/GID 999, a read-only root filesystem, a bound PVC, extension persistence and the host DBOS fixture through the Service port-forward.
+    This local proof does not establish cloud provisioning, database HA, restore or extension upgrades.
+    Use <code>navigator dev worktree-env down --path "$PWD"</code> to remove the task-owned tier when finished.</p>
+    <h3>Kubernetes foundation and deployment status</h3>
+    <p><a href="https://github.com/neon-law/navigator/pull/1061">PR #1061</a> adds optional retained GKE
+    PostgreSQL manifests with TLS/SCRAM, restricted pod access and retained claims. The
+    <a href="https://github.com/neon-law/navigator/actions/runs/38104542819">persistence CI</a> verifies
+    synthetic data across pod replacement, scale-to-zero and StatefulSet recreation. Server-side GKE admission
+    dry-runs passed. No GKE resources were applied: read-only staging and production inspection found no PostgreSQL
+    StatefulSet, Service, claim or bootstrap/TLS Secrets. These manifests are a deployment foundation, not a completed
+    database rollout. Forgejo provisioning, database roles, OIDC admission and isolated Actions remain separate gates.</p>
+    <h3>Next ordered issues and tests</h3>
+    <ol>
+      <li>ENG-1000 and ENG-1001: retain the published source/image and native CI evidence; retain the passing anonymous-consumption and KIND-restart evidence. Provisioning, restore and upgrade gates remain before promotion. Publication does not close restore or operator-compatibility gates.</li>
+      <li>ENG-990, ENG-994 and ENG-1022: finish SDK lifecycle, queues, durable waits, signals and failure boundaries; share StateMachineRuntime fixtures for idempotent start, kind partitioning, payloads, actor attribution, ordered state/event reads and ephemeral subjects.</li>
+      <li>ENG-993 and ENG-1006: select one SQL client/runner after compatibility proof; timestamp migration filenames, checksummed ledger, advisory lock, failed-DDL recovery, concurrent migrators and expand/contract upgrades. Keep DBOS-owned migrations separate.</li>
+      <li>ENG-991: enforce Firm → Brand → Project through composite foreign keys and matching scoped repository APIs. The current glossary already requires Firm-scoped Brand rows; carry that invariant into SQL constraints. Update approved glossary definitions with schema changes.</li>
+      <li>ENG-992, ENG-1007–ENG-1014: inventory and port bounded domains with UUIDv4 creation and inserted_at/updated_at timestamptz. Preserve existing identities through mapped backfill. Replace UUID order with explicit timestamp-plus-ID order. Compare HTTP/CLI/MCP status, errors, authorization, nullability, pagination and write semantics against Surreal.</li>
+      <li>ENG-1018, ENG-1012 and ENG-1019: port Project-scoped document metadata with blob/attachment separation, hashes, object keys, size/type, revisions and purge rules. Preserve bytes-before-metadata ordering and per-Project deduplication; never infer cross-tenant access from shared content hashes.</li>
+      <li>ENG-1020 and ENG-1021: project canonical Relationship Edges into AGE with application UUIDs, tenant filters, provenance and rebuildable versioned projection; preserve Relationship Log as distinct append-only audit provenance. Test failed projection, deletion and rebuild.</li>
+      <li>ENG-291 and ENG-1032–ENG-1042: twice-daily staging/production Iceberg exports at 05:55 and 17:55 UTC in a separate archive project with explicit environment namespaces, complete app/DBOS/AGE/service inventory, typed schemas and consistent per-database snapshots. Publish a generation manifest only after all required table snapshots validate; do not imply atomic cross-database extraction. Physical backup/WAL and document-byte archives are separate gates.</li>
+      <li>ENG-1015–ENG-1017, ENG-1025 and ENG-1029: dual-write retry/outbox tests, resumable backfill, shadow-read comparisons, access/performance/restore gates, running-workflow drain or migration, then cutover with rollback. Retire Surreal only after accepted parity.</li>
+    </ol>
+    <p>Upstream version sources: <a href="https://age.apache.org/download/">Apache AGE downloads</a>,
+    <a href="https://github.com/pgvector/pgvector">pgvector source</a>,
+    <a href="https://github.com/dbos-inc/dbos-transact-rust">official DBOS Rust source</a>.
+    Image evidence above does not establish application-schema, runtime-adapter or cutover parity.</p>
+  </section>
+
+  <section id="decision">
+    <h2>Decision and first milestone</h2>
+    <div class="callout"><strong>First build one reproducible PostgreSQL compatibility image and CI smoke lane.</strong> It must install PostgreSQL, DBOS’s tested server prerequisites, Apache AGE, citext, pgvector, and the selected full-text-search support. That image becomes the local and CI contract. Then rerun the DBOS recovery and AGE/API parity checks on it before choosing the application SQL and migration libraries.</div>
+    <div class="grid">
+      <article class="card"><h3>Keep</h3><p>DBOS native Rust for durable workflows; Axum for HTTP; PostgreSQL as the application store; Firm → Brand → Project tenancy; project-scoped documents with an Active Storage-like metadata/blob split; full database snapshots to Iceberg at 05:55 and 17:55 UTC.</p></article>
+      <article class="card"><h3>Remaining decisions</h3><p>The exact compatibility tuple is pinned above. Select one Rust SQL client; one Rails-style timestamp migration runner; extension upgrade policy; graph projection/event-log contract; and production archive catalog and retention.</p></article>
+      <article class="card"><h3>Release boundary</h3><p>Public source moves to Apache-2.0 only after license and dependency review, file/asset audit, CI proof, and the requested fresh public-source commit. Navigator first-party source is Apache-2.0. Upstream components and assets retain their own licenses; redistribution still requires dependency, notice, and ownership review.</p></article>
+    </div>
+    <p><span class="badge">DBOS</span><span class="badge">Apache AGE</span><span class="badge">citext</span><span class="badge">pgvector</span><span class="badge">PostgreSQL FTS</span><span class="badge">UUIDv4</span><span class="badge">timestamptz</span></p>
+  </section>
+
+  <section id="evidence">
+    <h2>What this spike actually proves</h2>
+    <table><thead><tr><th>Check</th><th>Result</th><th>Evidence and consequence</th></tr></thead><tbody>
+      <tr><td>DBOS native Rust SDK pin</td><td><span class="good">Pass: compile</span></td><td>Official <code>dbos</code> crate 0.5.0 compiles with Rust 1.98; its declared MSRV is 1.95. It is MIT licensed. Lock and test the exact crate/image tuple in CI.</td></tr>
+      <tr><td>Workflow registration + lifecycle</td><td><span class="good">Pass: synthetic process</span></td><td>A temporary executable registers a workflow, launches DBOS, enqueues a run, and checkpoints two named steps. After interrupting the worker during step two, a second process launches against the same PostgreSQL database and resumes the run. Both runs finish <code>SUCCESS</code>; the interrupted workflow reports recovery attempts and the completed first-step marker count stays unchanged on resume.</td></tr>
+      <tr><td>PostgreSQL system schema</td><td><span class="good">Pass: PostgreSQL 16.15</span></td><td>DBOS applied on disposable PostgreSQL 16.15: DBOS created its <code>dbos</code> schema with 11 system tables, and the recovery run persisted status and checkpoints across process restart. This validates the SDK default internal migration path; the image smoke suite additionally exercises it against PostgreSQL with AGE/vector installed.</td></tr>
+      <tr><td>Process restart / checkpoint replay</td><td><span class="good">Pass: worker restart</span></td><td>A process interruption during a non-transactional synthetic step: a second executor resumed the same pending workflow; the prior completed step stayed checkpointed. SIGINT exercises worker shutdown/restart, not machine or database crash recovery.</td></tr>
+      <tr><td>Axum shutdown/startup integration</td><td><span class="warn">Unverified</span></td><td>DBOS is an in-process Tokio executor. Navigator still needs startup ordering, readiness/liveness, graceful shutdown, bounded drain time, and restart tests within the Axum binary.</td></tr>
+      <tr><td>AGE, citext, pgvector, full-text</td><td><span class="good">Pass: local image smoke</span></td><td>Local native ARM64 and emulated AMD64 image tests pass for AGE 1.6.0, vector 0.8.2, citext/pg_trgm 1.6 and built-in FTS. Final-name native CI evidence is tracked above; restore/upgrade and tenant-search parity are separate tests.</td></tr>
+      <tr><td>Production parity</td><td><span class="warn">Not yet measured</span></td><td>There are no row-count, relation traversal, permissions, query latency, archive completeness, or workflow backfill comparisons yet. Treat this as discovery work, not a migration green light.</td></tr>
+    </tbody></table>
+    <p class="small">The exact SDK source and official API are linked below. Linear ENG-990 now records this evidence and remains open against its remaining acceptance criteria.</p>
+  </section>
+
+  <section id="parity">
+    <h2>Restate runtime API parity to preserve</h2>
+    <p><code>workflows::StateMachineRuntime</code> is the current seam. Keep application callers independent of DBOS, then provide an adapter with contract tests shared with the in-memory implementation.</p>
+    <table><thead><tr><th>Navigator behavior</th><th>Current contract</th><th>DBOS mapping to spike</th><th>Acceptance test</th></tr></thead><tbody>
+      <tr><td>Start</td><td>Idempotent on <code>(MachineKind, notation_id)</code>; stores the parsed workflow spec.</td><td>Stable DBOS workflow name and ID; serialize spec/input. Test duplicate enqueue semantics and map duplicate-start to success.</td><td>Start same notation twice; exactly one logical state machine and no duplicate event.</td></tr>
+      <tr><td>Signal and payload</td><td>Condition advances declared graph; optional answer payload is recorded.</td><td>DBOS workflow events/messages can provide durable waiting and wakeup. The Navigator transition graph and append-only event journal remain application-owned.</td><td>Signal-before-wait, signal-after-wait, duplicate signal, unknown condition, timeout, process restart.</td></tr>
+      <tr><td>Actor attribution</td><td><code>signal_with_context</code> preserves <code>acting_person_id</code>.</td><td>Serialize authenticated actor context in the signal payload; validate it at the API boundary; append it in the same app transaction as the relationship/state event.</td><td>Actor survives wait/replay; omitted actor stays null; forged/cross-project actor is rejected.</td></tr>
+      <tr><td>Current state and events</td><td>Read current state and ordered event list from durable storage.</td><td>Project DBOS execution state into app-owned <code>notation_events</code>/<code>relationship_log</code>; do not treat opaque SDK tables as domain event history.</td><td>Rebuild projected state from events; compare output with the existing runtime fixture across every workflow spec.</td></tr>
+      <tr><td>Ephemeral workflows</td><td>Explicit start/signal variants skip the Notation foreign-key journal.</td><td>Use DBOS workflows without a Notation projection or give them a separate subject type; never fabricate a Project/Notation row.</td><td>Onboarding welcome starts and signals with no Notation row; no journal FK violation.</td></tr>
+      <tr><td>Durable steps and side effects</td><td>Restate journals side effects under stable names; retry/replay avoids repeating completed steps.</td><td>DBOS <code>step</code> checkpoints completion. Rust 0.5.0 has no transactional step, so external effects and checkpoint commits can split. Require provider idempotency keys plus local unique replay keys/outbox.</td><td>Crash after effect but before checkpoint; retry yields one email/payment/archive side effect.</td></tr>
+      <tr><td>Timers and schedules</td><td>Kubernetes CronJobs own schedules; workflows can wait durably.</td><td>DBOS durable <code>sleep</code> is available. Keep Kubernetes as clock for recurring work; DBOS Rust has no built-in scheduler contract to port.</td><td>Restart during wait; one nightly run per UTC date; delayed retries don't duplicate effects.</td></tr>
+      <tr><td>Queues / scale</td><td>Restate workers host registered services with controlled operational deployment.</td><td>DBOS durable queues and queue concurrency; executor is in application pods and shares Postgres. No separately hosted DBOS service is required for core execution.</td><td>Queue limit, pause/resume, worker replica scale-up/down, versioned rolling deploy, poisoned workflow and backlog recovery.</td></tr>
+    </tbody></table>
+    <p>DBOS can meet the product need if these contracts pass. The principal semantic gap is the app-write/checkpoint crash window; the principal operational change is placing execution workers in our Rust process and Postgres cluster.</p>
+  </section>
+
+  <section id="data">
+    <h2>Application data translation map</h2>
+    <div class="flow">Surreal records / graph relations → PostgreSQL relational tables → AGE projection for traversal → Iceberg nightly snapshot</div>
+    <table><thead><tr><th>Concern</th><th>Current evidence</th><th>Target contract and proof</th></tr></thead><tbody>
+      <tr><td>Tenancy</td><td>The current glossary requires Firm-scoped Brand rows and Projects owned by the Firm wearing their Brand. Existing store backfills and authorization constraints need a complete parity inventory; do not assume global Brand rows.</td><td>Make Firm → Brand → Project ownership enforceable through FKs/unique composite keys and request-scoped repository APIs. Enumerate global/system rows, optional Project rows, firm-level records, and derived data. Prove cross-Firm and cross-Project isolation.</td></tr>
+      <tr><td>UUID policy</td><td>Store writes use UUIDv7 extensively; ordering sometimes intentionally relies on ID order.</td><td>Use random UUIDv4 as requested. Replace every implicit “ID order means newest” with explicit <code>inserted_at DESC, id</code> ordering and a backfill/compatibility plan for existing v7 IDs.</td></tr>
+      <tr><td>Audit timestamps</td><td>Most rows carry inserted/updated fields; some Surreal fields are strings while others are datetime.</td><td>Use PostgreSQL <code>timestamptz NOT NULL</code> with UTC defaults for both. Define database or repository update stamping consistently; test insert, update, timezone round-trip, and immutable insert time.</td></tr>
+      <tr><td>Documents</td><td><code>asset</code> is project-scoped metadata with filename, kind, MIME, digest, object key, and optional slug/revision history; bytes flow through a storage abstraction.</td><td>Model Active Storage-like blob metadata and attachments with FK scope to Project, preserving immutable object keys, content hash, type/size, soft deletion/purge rules, revision ordering, deduplication, and bucket lifecycle. Keep document bytes out of Postgres unless an explicit decision says otherwise.</td></tr>
+      <tr><td>Relationships</td><td>Relationship logs already record graph-like facts, often with optional Project scope.</td><td>Keep canonical typed FKs in Postgres. AGE is a derived graph projection with stable vertex/edge IDs and replayable projection version. Test graph rebuild, tenant filter, deletion, and consistency after failed projection.</td></tr>
+      <tr><td>Search</td><td>Search behaviors live in domain code and schema indexes; no PostgreSQL target contract exists.</td><td>Use built-in PostgreSQL FTS (<code>tsvector</code>, GIN, <code>websearch_to_tsquery</code>/<code>ts_rank</code>) for lexical search; decide stemming/config per language. Keep <code>pg_trgm</code> for typo/fuzzy matching only if parity tests require it. Test stemming, punctuation, rank stability, tenant scope, and migrations.</td></tr>
+      <tr><td>Iceberg export</td><td>Nightly Archives currently enumerates declared application tables and OTel lanes; design uses GCS and Iceberg metadata.</td><td>Export every approved application table, DBOS operational history where retention allows, AGE graph projection/rebuild data, and staging/production into the separate Neon log archives GCP bucket/prefixes. Snapshot manifests must record source env, UTC cutoff, migration version, schema hashes, row counts and table errors. Decide encryption, retention, catalog, PII/legal retention, and access controls before exporting new production scope.</td></tr>
+    </tbody></table>
+  </section>
+
+  <section id="migrations">
+    <h2>Rails-style migration convention</h2>
+    <p>Use ordered timestamp filenames with a migration ledger, for example <code>20261010120000_create_firms.sql</code>. A Rust migration runner should sort filenames, checksum applied files, take a PostgreSQL advisory lock, and record version, name, checksum, start/finish, and success. This spike does not select the runner or SQL client. Reversible DDL is preferred; data migrations should be bounded, restartable batches with explicit validation and rollback limits.</p>
+    <pre><code>db/migrate/
+  20261010120000_create_firms.sql
+  20261010120500_create_brands.sql
+  20261010121000_create_projects.sql
+  20261010121500_add_project_scope_to_assets.sql
+  20261010122000_create_relationship_log.sql
+  20261010122500_enable_search_extensions.sql</code></pre>
+    <p>Sequence dependencies explicitly: PostgreSQL roles/database/schema and extensions → DBOS-owned system migrations in its dedicated schema → Navigator timestamp migrations → compatibility views/triggers and dual-write → reconciliation/read shadowing → cutover → stop old writes → later Surreal retirement. DBOS's <code>Config::migrate</code> is distinct: it manages DBOS internal tables. For a centrally controlled schema rollout, set it false and run SDK migrations in a dedicated deploy job only after upstream documents that workflow; otherwise allow DBOS to migrate only inside its isolated schema.</p>
+    <p>Test a fresh database, upgrade from every released migration boundary, rerun idempotent data jobs, interrupted DDL/data migration, checksum drift, two concurrent migrators, extension update, downgrade procedure, and restore from backup. Timestamp names are a human ordering convention; the ledger enforces exactly-once application.</p>
+  </section>
+
+  <section id="image">
+    <h2>Postgres image and CI loop</h2>
+    <p>Publish one immutable, versioned image from the separate <code>neon-law-source-code</code> repository, then reference its digest from local Kubernetes, CI, staging, and production. CI should not silently use upstream vanilla Postgres while production needs AGE and pgvector.</p>
+    <table><thead><tr><th>Image layer</th><th>Requirement</th><th>Gate</th></tr></thead><tbody>
+      <tr><td>Base</td><td>Pin PostgreSQL major/minor and OS base; include only required packages and CA/timezone support.</td><td>Rebuild on security updates; SBOM, vulnerability scan, provenance, non-root execution test.</td></tr>
+      <tr><td>Extensions</td><td>Build/install compatible Apache AGE, citext, pgvector and pg_trgm into the exact server ABI; check shared preload settings and dependency ordering.</td><td>Fresh-cluster <code>CREATE EXTENSION</code>; extension version queries; AGE graph create/query; vector index/nearest neighbor; FTS/trigram query.</td></tr>
+      <tr><td>DBOS</td><td>DBOS Rust is an application SDK, not a Postgres extension. Install/pin it in the Rust app image/Cargo.lock; provision its separate system schema and privileges.</td><td>Launch SDK; inspect schema version; run workflow and restart recovery against image.</td></tr>
+      <tr><td>CI developer service</td><td>Start exact image as health-checked Postgres service; apply extension setup; create app and DBOS schemas/users; migrate; run focused Store/API/graph/DBOS tests.</td><td>One CI job builds image then runs tests on the just-built digest. Push multi-arch tags only after build/tests; promote same digest.</td></tr>
+      <tr><td>Local</td><td>Navigator CLI/KIND points to same image digest with per-worktree database, no shared staging data.</td><td><code>navigator dev up</code> reports image digest and readiness; reset test cluster reproduces CI.</td></tr>
+    </tbody></table>
+    <p class="small">The current image recipe and release evidence are recorded in the image spike update above; deployment and runtime-adapter acceptance remain separate gates.</p>
+  </section>
+
+  <section id="archives">
+    <h2>Nightly Iceberg archive contract</h2>
+    <p>Retain Kubernetes CronJob scheduling and use DBOS for durable execution. Each nightly run snapshots the transactionally consistent state of every eligible application table and records an Iceberg snapshot in the separate GCP archive bucket. Staging and production must have distinct top-level prefixes and catalog namespaces.</p>
+    <pre><code>gs://&lt;separate-neon-log-archives-bucket&gt;/
+  staging/application/&lt;table&gt;/...   staging/dbos/&lt;table&gt;/...
+  staging/graph/&lt;graph&gt;/...        staging/telemetry/&lt;signal&gt;/...
+  production/application/&lt;table&gt;/... production/dbos/&lt;table&gt;/...
+  production/graph/&lt;graph&gt;/...      production/telemetry/&lt;signal&gt;/...</code></pre>
+    <p>“Everything” requires an explicit source inventory: app schemas, DBOS queue/journal/status/event tables, AGE graph labels and catalog metadata, and required telemetry. Define a consistent cross-table cutoff, row-level error reporting, incremental-vs-full snapshot cadence, tombstone/deletion capture, restore drills, encryption/IAM, retention, legal holds, and separation between archive writers and downstream readers before broad access.</p>
+  </section>
+
+  <section id="sequence">
+    <h2>Suggested issue sequence</h2>
+    <ol>
+      <li><strong>Pin contracts.</strong> Choose Postgres major, AGE/pgvector/DBOS versions; map platform support; define tenant and UUID/timestamp contracts. This is ENG-990 and its blockers.</li>
+      <li><strong>Build the image.</strong> Separate source repo, reproducible Docker build, SBOM/license/security checks, GHCR or other registry decision, digest pinning, CI service and local KIND integration.</li>
+      <li><strong>Prove extensions and SDK.</strong> Run DBOS migrations/workflow/recovery, AGE traversal/projection, citext, vector, FTS, backup/restore in CI using the published image.</li>
+      <li><strong>Land SQL foundation.</strong> Pick sqlx or tokio-postgres; Rails-like timestamp migration runner and ledger; typed rows and UUIDv4/timestamptz; dual database and dual-write failure model.</li>
+      <li><strong>Translate by bounded domains.</strong> Begin with a low-risk reference table and tenant-level integration tests; then firms/brands/projects, assets, graph/relationship logs, durable workflows, and remaining Store modules. Keep reads shadowed and compare before cutover.</li>
+      <li><strong>Export and cut over.</strong> Add separate staging/prod Iceberg archives and prove restore; shadow reads; reconcile row counts, permissions, relations, documents and workflows; cut over writes; retain rollback until accepted; decommission Surreal only after parity.</li>
+      <li><strong>Open-source release.</strong> Resolve third-party dependency/license boundaries, code ownership, trademarks, secrets/assets, NOTICE/SBOM and contributor policy; create the fresh public commit and publish after all gates.</li>
+    </ol>
+    <p>The Engineering tracker contains the detailed migration/image/DBOS/AGE/Iceberg issues; ENG-990 holds this spike’s evidence.</p>
+  </section>
+
+  <section id="tests">
+    <h2>Compatibility test gates</h2>
+    <div class="grid">
+      <article class="card"><h3>Database and image</h3><ul><li>Fresh init and upgrade tests on the exact image digest.</li><li>All required extensions load; version and ABI checks pass.</li><li>Database image upgrade and PITR/backup restore preserve app, DBOS, AGE, and Iceberg references.</li><li>Concurrent migration lock, checksum drift, interrupted migration and recovery tests.</li></ul></article>
+      <article class="card"><h3>Tenant/API parity</h3><ul><li>Capture the current API/OpenAPI route/method/status/request/response inventory before edits.</li><li>Run the same contract suite against Surreal and Postgres adapters during dual-write.</li><li>Firm/Brand/Project scoping, role authorization, uniqueness, nullability, sort order, soft delete and error semantics match.</li><li>Every table and API has owner, test, docs, migration and cutover status in the inventory.</li></ul></article>
+      <article class="card"><h3>Workflows and relationships</h3><ul><li>Golden workflow specs produce the same state and event history through InMemory and DBOS adapters.</li><li>Crash at every external effect/checkpoint boundary; retries remain safe with durable keys.</li><li>Actor attribution, ephemeral workflows, queue backpressure, wakeups, timers, version rollouts and cancellation pass.</li><li>Rebuild AGE graph from canonical rows/logs and compare all traversals under tenant filters.</li></ul></article>
+      <article class="card"><h3>Archives and search</h3><ul><li>Every source table/graph/system table appears in manifest inventory or an explicit exclusion.</li><li>Snapshot manifests carry source, environment, cutoff, schema/migration and row-count metadata.</li><li>Restore a nightly staging archive into an isolated test project; verify parity and access boundaries.</li><li>Search result fixtures prove tokenization, language, ranking, fuzzy behavior and project filtering.</li></ul></article>
+    </div>
+  </section>
+
+  <section id="sources">
+    <h2>Repository and upstream evidence</h2>
+    <ul>
+      <li><a href="https://github.com/dbos-inc/dbos-transact-rust">Official DBOS Rust SDK source</a>; pinned spike crate: <code>dbos 0.5.0</code>. SDK README documents the current no-transactional-step limitation and workflow features.</li>
+      <li><a href="https://docs.dbos.dev/architecture">DBOS architecture</a> and <a href="https://docs.dbos.dev/rust/tutorials/">DBOS Rust docs</a>.</li>
+      <li><a href="https://age.apache.org/">Apache AGE overview</a>; <a href="https://github.com/apache/age">Apache AGE source</a>.</li>
+      <li><a href="https://guides.rubyonrails.org/active_storage_overview.html">Rails Active Storage design reference</a>.</li>
+      <li><a href="https://www.postgresql.org/docs/current/textsearch.html">PostgreSQL full-text search</a>; <a href="https://github.com/pgvector/pgvector">pgvector</a>; <a href="https://www.postgresql.org/docs/current/citext.html">citext</a>.</li>
+      <li>Repository evidence: <code>workflows/src/runtime.rs</code>, <code>workflows/src/runtime_restate.rs</code>, <code>docs/durable-workflows.md</code>, <code>docs/iceberg-archive.md</code>, <code>store/src/schema/navigator.surql</code>, <code>store/src/schema/mod.rs</code>, <code>store/src/assets.rs</code>, root <code>Cargo.toml</code>.</li>
+    </ul>
+  </section>
+  <footer><p>Prepared from repository source and an isolated synthetic SDK spike. No production database, document, or client data was used.</p></footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,5263 @@
+//! Admin routes — gated by [`auth::require_auth`].
+//!
+//! Each sub-page (dashboard, people, …) is a `Router` attached to
+//! the same auth layer. New admin surfaces add another `.route(...)`
+//! and inherit auth automatically.
+
+use std::io::Cursor;
+use std::sync::Arc;
+use uuid::Uuid;
+
+use axum::extract::{DefaultBodyLimit, Extension, FromRef, Multipart, Path, State};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::middleware;
+use axum::response::{IntoResponse, Redirect, Response};
+use axum::routing::{get, post};
+use axum::{Form, Router};
+
+use crate::session::{DriView, SessionData};
+// Every Entity write — create, update, delete — belongs to
+// `store::entity_commands`, including the firm-anchor rules and the advisory
+// locks that make check-then-write atomic. This module only authorizes and
+// renders, so the error type is all it needs from there.
+use store::entity_commands::EntityCommandError;
+
+/// The canonical seed's firm Entity, protected in every deployment. White-label
+/// operators name their own firm Entity with `NAVIGATOR_BOOTSTRAP_COMPANY`,
+/// which protects that row *in addition* to this one — `store::seed` re-creates
+/// this row by exact name on every boot, so deleting or renaming it never
+/// sticks and the surface must not offer the option.
+pub const DEFAULT_BOOTSTRAP_COMPANY: &str = store::seed::FIRM_ENTITY_NAME;
+
+/// Resolve the operator's firm entity once while the router is built. Blank
+/// values fall back to the shipped legal entity, which is protected regardless.
+#[must_use]
+pub fn bootstrap_company_from_env() -> String {
+    bootstrap_company_from_lookup(|key| std::env::var(key).ok())
+}
+
+fn bootstrap_company_from_lookup<F>(get: F) -> String
+where
+    F: Fn(&str) -> Option<String>,
+{
+    get(store::seed::BOOTSTRAP_COMPANY_ENV)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_BOOTSTRAP_COMPANY.to_string())
+}
+
+/// `303 See Other` back to the list index after a row delete.
+fn delete_response(redirect_to: &'static str) -> Response {
+    Redirect::to(redirect_to).into_response()
+}
+
+/// Response for a delete that **failed** (most often a foreign-key block —
+/// the row still has dependent records, or the lawyer-DRI lockout): a redirect
+/// back to the listing carrying `message` as the `?error=` flash the form
+/// handlers in this file already use.
+///
+/// The flash is what makes the refusal legible. Without it the row is still
+/// there after the reload and nothing says why, which reads as a no-op rather
+/// than as a refusal (navigator#995).
+fn delete_refused_response(message: &str, redirect_to: &'static str) -> Response {
+    Redirect::to(&format!(
+        "{redirect_to}?error={}",
+        encode_query_value(message)
+    ))
+    .into_response()
+}
+
+const PROJECT_PARTICIPATION_DELETE_ERROR: &str = "Couldn't remove that person from this matter.";
+/// Refusal shown when removing a participation row would strand the matter's
+/// accountable lawyer. The lawyer DRI reaches a matter through this row, so
+/// dropping it while the column still names them would leave a matter whose
+/// own lawyer cannot open it. Reassigning the DRI is the deliberate path.
+const PROJECT_PARTICIPATION_DRI_LOCKOUT_ERROR: &str =
+    "This person is the matter's lawyer DRI. Assign a different lawyer DRI before removing them.";
+/// The one matter surface. Both former prefixes collapse here.
+const APP_PROJECTS_PATH: &str = "/app/projects";
+
+use serde::Deserialize;
+
+use crate::auth::{require_auth, AuthConfig};
+use crate::signature::SignatureProvider;
+
+/// Per-router state for the admin sub-tree. Wraps the store handle plus
+/// the durable-workflow + signature-provider seams that the
+/// retainer-intake flow needs.
+#[derive(Clone)]
+pub struct AdminState {
+    /// The store. `persons` lives here, so every people surface on the
+    /// admin console reads and writes it.
+    pub surreal: store::surreal::SurrealDb,
+    pub workflow_runtime: Arc<dyn workflows::StateMachineRuntime>,
+    pub signature_provider: Arc<dyn SignatureProvider>,
+    /// Parsed questionnaire spec from the bundled retainer
+    /// template. Drives the per-step walker at
+    /// `/app/lawyer/notations/{id}/step`.
+    pub retainer_intake_questionnaire: workflows::QuestionnaireSpec,
+    /// Same `Arc` as `workflow_runtime` — kept as a separate field so
+    /// the questionnaire walker reads from a name that matches the
+    /// timeline it drives.
+    pub questionnaire_runtime: Arc<dyn workflows::StateMachineRuntime>,
+    /// Object storage seam — the retainer workflow's
+    /// `generate_pdf__retainer_pdf` step writes the rendered PDF here.
+    pub storage: Arc<dyn cloud::StorageService>,
+    /// Public-assets storage — blank government forms are pulled from
+    /// this lane at fill and download time and verified against their
+    /// repo `.sha256` pins. Same `Arc` as `AppState.assets_storage`.
+    pub assets_storage: Arc<dyn cloud::StorageService>,
+    /// Vendored-forms registry the fill + download paths consult
+    /// (`forms::registry()` in production; a test harness swaps in
+    /// entries pinned to synthetic staged blanks). Same `Arc` as
+    /// `AppState.forms_registry`.
+    pub forms_registry: Arc<Vec<forms::FormMeta>>,
+    /// Outbound email backend — same `Arc` as `AppState.email`,
+    /// passed through so the admin "Send welcome" handler reaches
+    /// the audited [`crate::email::LoggingEmail`] decorator.
+    pub email: Arc<dyn crate::email::EmailService>,
+    /// Accounting seam — read-only from `web`'s side. Invoices originate in
+    /// Xero, where lawyers raise them directly; nothing here computes or
+    /// raises money. Same `Arc` as `AppState.billing_provider`.
+    pub billing_provider: Arc<dyn billing::BillingProvider>,
+    /// Inbound-contract deviation reviewer (same `Arc` as
+    /// `AppState.contract_reviewer`). The `analysis__contract_deviations`
+    /// step runs this web-side to flag a contract against the client
+    /// Entity's playbook. See [`crate::contract_review_walk`].
+    pub contract_reviewer: Arc<dyn crate::contract_review::ContractReviewer>,
+    /// Email of the protected Owner operator (see
+    /// [`crate::oauth::AuthState::bootstrap_owner_email`]). The role
+    /// editor uses this to lock the `role` field on that one row
+    /// so the Owner cannot accidentally demote themselves from the UI.
+    /// `None` disables the lock — every row's role becomes freely
+    /// editable.
+    pub bootstrap_owner_email: Option<String>,
+    /// The boot-resolved lawyer DRI for client-initiated service starts.
+    pub on_call_lawyer_email: Option<String>,
+    /// Legal name of the firm anchor Entity. The matching row is never
+    /// deletable by application users, including admins.
+    pub bootstrap_company: String,
+    /// Session signer used when a firm member switches the browser cookie
+    /// into a read-only client-DRI view and when the banner exits back.
+    pub sessions: crate::SessionStore,
+    /// Whether session cookies should carry `Secure`.
+    pub secure_cookies: bool,
+    /// Malware scanner every brand logo/font upload is checked against
+    /// (ENG-586) — same `Arc` as `AppState.attachment_scanner`.
+    pub attachment_scanner: Arc<dyn crate::attachment_scanner::AttachmentScanner>,
+    /// Runtime KMS handle for Firm integration-secret envelope encryption
+    /// (ENG-491) — same `Arc` as `AppState.runtime_kms`. Used only by the
+    /// `firm_secrets_*` doors below; every other handler on this state goes
+    /// through `store::firm_secrets::resolve_project_credential` indirectly,
+    /// via `AppState.integration_providers`, and never touches this field.
+    pub runtime_kms: Arc<dyn cloud::RuntimeKms>,
+}
+
+impl FromRef<AdminState> for store::surreal::SurrealDb {
+    fn from_ref(s: &AdminState) -> Self {
+        s.surreal.clone()
+    }
+}
+
+impl FromRef<AdminState> for Arc<dyn crate::email::EmailService> {
+    fn from_ref(s: &AdminState) -> Self {
+        s.email.clone()
+    }
+}
+
+impl FromRef<AdminState> for Arc<dyn cloud::StorageService> {
+    fn from_ref(s: &AdminState) -> Self {
+        s.storage.clone()
+    }
+}
+
+/// Build the admin sub-router. The caller merges it into the main
+/// router. Auth is applied here via `route_layer` so a missing or
+/// invalid token fails before the handler runs. The `sessions`
+/// store backs the CSRF middleware that gates every form-encoded
+/// state-changing request.
+#[allow(clippy::too_many_lines)]
+pub fn routes(
+    state: AdminState,
+    auth: AuthConfig,
+    sessions: crate::SessionStore,
+    policy: crate::policy::PolicyClient,
+) -> Router {
+    // `/app/*` renders each caller's own lens. `/app/lawyer/*` is the firm lens.
+    // A person may be eligible for both; the URL prefix decides which
+    // project-visibility predicate applies.
+    let mut r = Router::new()
+        .merge(crate::social_oauth::admin_routes())
+        .merge(crate::deployment_keys::routes());
+    // Admin-only people administration: the one browser surface that creates or
+    // edits a Person. Detail/edit use the singular `/app/admin/people`.
+    // embedded Rego policy needs no `/admin` rule — the admin-bypass allows admin and
+    // default-deny blocks lawyer; each handler re-checks the admin role.
+    r = r
+        // `/app/admin/people` (the list) and `/app/admin/people/new` (the create
+        // form) render through Dioxus (`dioxus_app::admin_people_router` and
+        // `csrf_page_router`); the create form posts to the native
+        // `POST /app/admin/people` handler below, which axum merges with the
+        // Dioxus list GET on the same path.
+        .route("/app/admin/people", post(admin_people_create))
+        // `/app/admin/people/{id}` (+ its `/edit` alias) — the show/edit render
+        // serves through Dioxus (`dioxus_app::admin_person_show_router`). Its
+        // native-form actions post here: update, welcome-email send, delete.
+        // axum merges the Dioxus GET and these POSTs on each path.
+        .route("/app/admin/people/{id}", post(admin_person_update))
+        .route(
+            "/app/admin/people/{id}/avatar",
+            // Axum's own default body limit (~2 MB) sits in front of this
+            // handler's own `MAX_AVATAR_BYTES` check, same reasoning as the
+            // project-documents upload route below. Person avatars are stored
+            // in the public-assets lane; this authenticated URL remains for
+            // old private keys and redirects public ones to their asset URL.
+            get(admin_person_avatar_download)
+                .post(admin_person_avatar_upload)
+                .delete(admin_person_avatar_clear)
+                .layer(DefaultBodyLimit::max(MAX_AVATAR_BYTES)),
+        )
+        .route("/app/me/avatar", get(current_viewer_avatar))
+        .route(
+            "/app/avatar",
+            // The self-service twin of `/app/admin/people/{id}/avatar` above:
+            // every authenticated tier reaches this, but the target is always
+            // the caller's own row, resolved from the session — never a
+            // person id supplied by the request. Sibling of `/app/profile`
+            // so a native form on that page and the browser's relative
+            // resolution of a nested `avatar` action both land here.
+            // Same body-limit reasoning.
+            post(profile_avatar_upload)
+                .delete(profile_avatar_clear)
+                .layer(DefaultBodyLimit::max(MAX_AVATAR_BYTES)),
+        )
+        .route(
+            "/app/profile/avatar",
+            // Same handler as `/app/avatar`. An absolute nested action on
+            // `/app/profile` posts here; a relative `avatar` action posts
+            // to `/app/avatar`. Both write the caller's row.
+            post(profile_avatar_upload)
+                .delete(profile_avatar_clear)
+                .layer(DefaultBodyLimit::max(MAX_AVATAR_BYTES)),
+        )
+        .route(
+            "/app/people/{id}/avatar",
+            // Another person's avatar, gated by `store::access::
+            // avatar_visible_to`: self, Owner/Admin, or a viewer sharing a
+            // Project participation with the target.
+            get(person_avatar_view),
+        )
+        .route("/app/admin/people/{id}/welcome", post(admin_person_welcome))
+        .route("/app/admin/people/{id}/delete", post(admin_person_delete))
+        .route("/app/admin/leads/{id}/status", post(admin_lead_status))
+        .route("/app/admin/leads/{id}/convert", post(admin_lead_convert))
+        .route("/app/admin/leads/{id}/link", post(admin_lead_link));
+    r = r
+        .route(
+            "/app/admin/blog/video",
+            post(blog_post_video_upload).layer(DefaultBodyLimit::max(MAX_BLOG_VIDEO_REQUEST_BYTES)),
+        )
+        .route("/app/social/calendar/{id}/cancel", post(blog_post_cancel));
+    // Owner opens a Firm (ENG-585): the create form renders through Dioxus at
+    // `/app/owner/firms/new`; these native POSTs create the row and its two
+    // inline related records. axum merges the Dioxus GET with the first.
+    r = r
+        .route(
+            "/app/inbox/{conversation_id}/assign",
+            post(crate::inbox::assign_post),
+        )
+        .route(
+            "/app/owner/inbox/{conversation_id}/assign",
+            post(crate::inbox::assign_post),
+        )
+        .route(
+            "/app/inbox/{conversation_id}/replies",
+            post(crate::inbox::intake_reply_post),
+        )
+        .route("/app/inbox/texts", post(crate::inbox::new_text_post))
+        .route(
+            "/app/inbox/{conversation_id}/contact",
+            post(crate::inbox::link_contact_post),
+        )
+        .route(
+            "/app/projects/{project_code}/inbox/{conversation_id}/notes",
+            post(crate::inbox::note_post),
+        )
+        .route(
+            "/app/projects/{project_code}/inbox/{conversation_id}/replies",
+            post(crate::inbox::reply_post),
+        )
+        .route("/app/owner/firms", post(firms_create))
+        .route("/app/owner/firms/new/entity", post(firms_new_entity_inline))
+        .route("/app/owner/firms/new/admin", post(firms_new_admin_inline));
+    r = register_firm_matter_routes(r, "/app/lawyer");
+    r = register_firm_admin_routes(r, "/app/admin");
+    // Firm brand fonts — the licensed GORP Serif desktop family, served as one
+    // ZIP from the *private* documents bucket, so a direct object URL can never
+    // bypass this gate. The bytes are uploaded out-of-band by
+    // `navigator ops assets fonts upload-desktop`.
+    //
+    // Not under `/app/lawyer`: a brand asset is not lawyer work, and every firm
+    // tier — Clerk included — may fetch it. Sitting under `/app/lawyer` made Clerk
+    // an exact-path exception to "Clerk never enters /app/lawyer". Under
+    // `/app/team` the page that offers the card and the object it links share
+    // one prefix, so embedded Rego's existing `/app/team` rules admit exactly
+    // the four firm tiers here and deny a client, with no rule of its own.
+    // Registered here rather than inside `register_firm_matter_routes` because
+    // that helper's `{prefix}` is `/app/lawyer`.
+    r = r.route(
+        "/app/team/fonts/gorp-serif.zip",
+        get(crate::brand_fonts::download_get),
+    );
+    r = register_project_routes(r);
+    r = r.route(
+        "/app/notations/{id}/documents/{doc_id}",
+        get(crate::documents::download),
+    );
+    // The client lens on the signing ceremony — the same handler the
+    // `/app/lawyer` prefix registers, which forks on the session's tier
+    // rather than on the prefix. The client is a captive DocuSign recipient
+    // and gets no signing email, so this route is the only door for them.
+    r = r.route("/app/notations/{id}/sign", get(crate::esign_view::sign_get));
+    // Blank government forms — any authenticated person (embedded Rego policy's
+    // `/app/forms` rule); the bytes are pulled from the public
+    // assets bucket and verified against the repo's `.sha256` pins,
+    // the same pull-and-verify path the workflows fill through.
+    r = r.route("/app/forms/{file}", get(crate::gov_forms::download_get));
+    let bearer_sessions = sessions.clone();
+    r.with_state(state)
+        .layer(middleware::from_fn_with_state(
+            (sessions.clone(), crate::csrf::CsrfMode::Form),
+            crate::csrf::require_csrf,
+        ))
+        // Policy check runs after bearer-token + session decode so
+        // rego rules can read `input.session.role`. A deny short-
+        // circuits with 403 — the CSRF layer below it never runs.
+        .route_layer(middleware::from_fn_with_state(
+            (sessions, policy),
+            crate::policy::require_policy,
+        ))
+        .route_layer(middleware::from_fn_with_state(auth, require_auth))
+        // Outermost: resolve a `navigator` CLI bearer credential (the
+        // same `SessionData` blob the cookie carries) into a
+        // `SessionData` + `AuthClaims` extension, so the CLI drives every
+        // `/app` handler over the same path the browser does. Sits
+        // outside `require_auth` so the JWT layer short-circuits on the
+        // injected `AuthClaims` instead of rejecting a session blob.
+        .route_layer(middleware::from_fn_with_state(
+            bearer_sessions,
+            crate::auth::inject_bearer_session,
+        ))
+}
+
+/// Owner/Admin-only gate shared by the `/admin/*` handlers. Returns a `403`
+/// response when the caller is anonymous or outside that tier, or `None` when
+/// the request may proceed. embedded Rego policy already denies lawyer on `/admin/*`; this
+/// is the defense-in-depth handler check the access model calls for.
+fn admin_gate(session: Option<&SessionData>) -> Option<Response> {
+    match session {
+        None => Some(
+            (
+                StatusCode::FORBIDDEN,
+                webapp::error_pages::forbidden(webapp::error_pages::Viewer::Anonymous),
+            )
+                .into_response(),
+        ),
+        Some(s) if !s.role.is_admin_tier() => Some(
+            (
+                StatusCode::FORBIDDEN,
+                webapp::error_pages::forbidden(webapp::error_pages::Viewer::SignedIn),
+            )
+                .into_response(),
+        ),
+        Some(_) => None,
+    }
+}
+
+fn log_lead_admin(lead_id: Uuid, outcome: &str, session: Option<&SessionData>) {
+    let actor_person_id = session
+        .and_then(|s| s.person_id)
+        .map_or_else(|| "none".to_string(), |id| id.to_string());
+    tracing::info!(
+        target: "audit",
+        lead_id = %lead_id,
+        outcome,
+        actor_person_id = actor_person_id.as_str(),
+        "lead admin"
+    );
+}
+
+fn lead_row_redirect(id: Uuid, key: &str, message: &str) -> Response {
+    Redirect::to(&format!(
+        "/app/admin/leads/{id}?{key}={}",
+        encode_query_value(message)
+    ))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct LeadStatusForm {
+    status: String,
+}
+
+/// `POST /app/admin/leads/{id}/status` — persist a closed status word.
+async fn admin_lead_status(
+    State(s): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Path(id): Path<Uuid>,
+    Form(form): Form<LeadStatusForm>,
+) -> Response {
+    if let Some(forbidden) = admin_gate(session.as_deref()) {
+        return forbidden;
+    }
+    let Some(status) = store::leads::LeadStatus::parse(&form.status) else {
+        log_lead_admin(id, "invalid_status", session.as_deref());
+        return lead_row_redirect(id, "error", "Choose a listed status.");
+    };
+    match store::leads::set_status(&s.surreal, id, status).await {
+        Ok(_) => {
+            log_lead_admin(id, "status_updated", session.as_deref());
+            lead_row_redirect(id, "notice", "Status updated.")
+        }
+        Err(store::leads::LeadError::NotFound) => {
+            log_lead_admin(id, "not_found", session.as_deref());
+            not_found_response()
+        }
+        Err(_) => {
+            log_lead_admin(id, "status_failed", session.as_deref());
+            lead_row_redirect(id, "error", "Could not update that lead.")
+        }
+    }
+}
+
+/// `POST /app/admin/leads/{id}/convert` — create a Person from the lead.
+async fn admin_lead_convert(
+    State(s): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Path(id): Path<Uuid>,
+) -> Response {
+    if let Some(forbidden) = admin_gate(session.as_deref()) {
+        return forbidden;
+    }
+    match store::leads::convert(&s.surreal, id).await {
+        Ok(_) => {
+            log_lead_admin(id, "converted", session.as_deref());
+            lead_row_redirect(id, "notice", "Created a Person from this lead.")
+        }
+        Err(store::leads::LeadError::NotFound) => {
+            log_lead_admin(id, "not_found", session.as_deref());
+            not_found_response()
+        }
+        Err(_) => {
+            log_lead_admin(id, "convert_failed", session.as_deref());
+            lead_row_redirect(id, "error", "Could not create a Person from this lead.")
+        }
+    }
+}
+
+/// `POST /app/admin/leads/{id}/link` — attach the Person who already holds the mailbox.
+async fn admin_lead_link(
+    State(s): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Path(id): Path<Uuid>,
+) -> Response {
+    if let Some(forbidden) = admin_gate(session.as_deref()) {
+        return forbidden;
+    }
+    match store::leads::link_person(&s.surreal, id).await {
+        Ok(_) => {
+            log_lead_admin(id, "linked", session.as_deref());
+            lead_row_redirect(id, "notice", "Linked this lead to the existing Person.")
+        }
+        Err(store::leads::LeadError::NoMatchingPerson) => {
+            log_lead_admin(id, "no_matching_person", session.as_deref());
+            lead_row_redirect(id, "error", "No Person holds this mailbox yet.")
+        }
+        Err(store::leads::LeadError::NotFound) => {
+            log_lead_admin(id, "not_found", session.as_deref());
+            not_found_response()
+        }
+        Err(_) => {
+            log_lead_admin(id, "link_failed", session.as_deref());
+            lead_row_redirect(id, "error", "Could not link this lead.")
+        }
+    }
+}
+
+/// Register matter-content and conflict-graph writes under `{prefix}`
+/// (`/app/lawyer`).
+#[allow(clippy::too_many_lines)]
+fn register_firm_matter_routes(r: Router<AdminState>, prefix: &str) -> Router<AdminState> {
+    r
+        // `GET /app/lawyer/retainers/new` (the form) renders through Dioxus (#956
+        // Phase 4, `dioxus_app::csrf_page_router`); the create posts here, and
+        // axum merges the two same-path method routes.
+        .route(
+            &format!("{prefix}/retainers/new"),
+            post(crate::retainer_walk::start_post),
+        )
+        // The step page renders through Dioxus (#956 Phase 4,
+        // `dioxus_app::walker_step_router`, which also answers the
+        // `?format=json` CLI surface on this path); the answer posts here, and
+        // axum merges the two same-path method routes.
+        .route(
+            &format!("{prefix}/notations/{{id}}/step"),
+            post(crate::retainer_walk::step_post),
+        )
+        // Batch transcript coverage — the walk's transcript input mode. Runs
+        // `live_inquiry` over the notation's template and persists each covered
+        // inquiry as a proposed `source = extracted` answer the walk confirms.
+        .route(
+            &format!("{prefix}/notations/{{id}}/transcript"),
+            post(crate::retainer_walk::transcript_post),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/documents/drive-import"),
+            post(crate::project_documents::drive_import),
+        )
+        // Open a notation for an existing matter from a template authored in
+        // the Project's git repo — the project-scoped `notation create` front
+        // door (auto-saves the template version, then opens the notation).
+        // Hand the matter's client their self-serve intake link.
+        .route(
+            &format!("{prefix}/notations/{{id}}/send-intake"),
+            post(crate::retainer_walk::send_intake_post),
+        )
+        // Attorney approves a notation parked at lawyer_review (it carries
+        // custom content): fires `approved` so the worker renders + persists
+        // the reviewed bytes, then parks at `generate_pdf__retainer_pdf`.
+        .route(
+            &format!("{prefix}/notations/{{id}}/approve-send"),
+            post(crate::retainer_walk::approve_send_post),
+        )
+        // The deliberate send half: confirms the worker's PDF landed, then
+        // dispatches exactly one envelope. 409 + JSON reason when not ready.
+        .route(
+            &format!("{prefix}/notations/{{id}}/send"),
+            post(crate::retainer_walk::send_post),
+        )
+        // The review/approve screen for a notation parked at lawyer_review —
+        // where the matter-open form lands lawyer after opening a matter with a
+        // retainer — renders through Dioxus (#956 Phase 4,
+        // `dioxus_app::intake_review_router`, which also answers the
+        // `?format=json` CLI status surface on this path).
+        // Send a reviewed notation back for changes: record the flagged
+        // answers + note and route lawyer_review → reask__client, then
+        // re-collect the flagged answers and resubmit for review. A rejected
+        // review re-collects the wrong answers instead of dead-ending.
+        .route(
+            &format!("{prefix}/notations/{{id}}/request-changes"),
+            post(crate::retainer_walk::request_changes_post),
+        )
+        .route(
+            &format!("{prefix}/notations/{{id}}/reask"),
+            post(crate::retainer_walk::reask_post),
+        )
+        // Per-notation custom clauses spliced into the assembled document.
+        // The editor itself renders through Dioxus (#956 Phase 4,
+        // `dioxus_app::clause_editor_router`, which also answers the
+        // `?format=json` CLI surface on this path); the add posts here, and
+        // axum merges the two same-path method routes.
+        .route(
+            &format!("{prefix}/notations/{{id}}/clauses"),
+            post(crate::clauses::clause_add),
+        )
+        .route(
+            &format!("{prefix}/notations/{{id}}/clauses/{{cid}}/edit"),
+            post(crate::clauses::clause_edit),
+        )
+        .route(
+            &format!("{prefix}/notations/{{id}}/clauses/{{cid}}/delete"),
+            post(crate::clauses::clause_delete),
+        )
+        .route(
+            &format!("{prefix}/notations/{{id}}/clauses/{{cid}}/move"),
+            post(crate::clauses::clause_move),
+        )
+        .route(
+            &format!("{prefix}/notations/{{id}}/sign"),
+            get(crate::esign_view::sign_get),
+        )
+        .route(
+            &format!("{prefix}/notations/{{id}}/documents/{{doc_id}}"),
+            get(crate::documents::download),
+        )
+        // Admin-only governed expunge of a filed document — drives the
+        // history-rewrite + storage-delete + audit primitive, then redirects
+        // back to the render. The handler 404s any non-admin session. The
+        // confirmation + result render through Dioxus (#956 Phase 4,
+        // `dioxus_app::LAWYER_DOCUMENT_EXPUNGE_PATH`); axum merges the methods.
+        .route(
+            &format!("{prefix}/documents/{{doc_id}}/expunge"),
+            post(crate::expunge_route::run),
+        )
+        // Client document-deletion requests: a lawyer/admin queue, with
+        // admin-only authorize (runs the expunge) + lawyer/admin deny. The read
+        // queue at `{prefix}/expunge-requests` now renders through Dioxus (#641
+        // Phase 3, `dioxus_app::expunge_queue_router`); its rows post to these
+        // mutation handlers via native forms, so the POST routes stay.
+        .route(
+            &format!("{prefix}/expunge-requests/{{id}}/authorize"),
+            post(crate::expunge_request_route::admin_authorize),
+        )
+        .route(
+            &format!("{prefix}/expunge-requests/{{id}}/deny"),
+            post(crate::expunge_request_route::admin_deny),
+        )
+        .route("/app/view-as-client/stop", post(stop_viewing_as_dri))
+        // Attorney review screen for an inbound contract review: act on
+        // each finding, edit the risk summary, then approve (assemble +
+        // deliver the memo) or reject. Row-scoped to the matter in the
+        // handlers. The screen itself renders through Dioxus (#956 Phase 4,
+        // `dioxus_app::LAWYER_CONTRACT_REVIEW_PATH`); these mutations sit on
+        // deeper paths, so axum routes them independently.
+        .route(
+            &format!("{prefix}/contract-reviews/{{id}}/findings/{{idx}}"),
+            post(crate::admin_contract_reviews::save_finding),
+        )
+        .route(
+            &format!("{prefix}/contract-reviews/{{id}}/summary"),
+            post(crate::admin_contract_reviews::save_summary),
+        )
+        .route(
+            &format!("{prefix}/contract-reviews/{{id}}/approve"),
+            post(crate::admin_contract_reviews::approve),
+        )
+        .route(
+            &format!("{prefix}/contract-reviews/{{id}}/reject"),
+            post(crate::admin_contract_reviews::reject),
+        )
+        .route(
+            &format!("{prefix}/contract-reviews/{{id}}/document/edit"),
+            post(crate::admin_contract_reviews::save_document_edit_route),
+        )
+        .route(
+            &format!("{prefix}/contract-reviews/{{id}}/document/comments"),
+            post(crate::admin_contract_reviews::add_document_comment_route),
+        )
+        .route(
+            &format!("{prefix}/contract-reviews/{{id}}/document/comments/{{comment_id}}/decide"),
+            post(crate::admin_contract_reviews::decide_document_comment_route),
+        )
+}
+
+/// Register firm-administration writes under `{prefix}` (`/app/admin`).
+///
+/// These are the native POST/CSV handlers behind the Tranche A Dioxus pages:
+/// entities, playbooks, schedules, and the people directory export.
+fn register_firm_admin_routes(r: Router<AdminState>, prefix: &str) -> Router<AdminState> {
+    r.route(&format!("{prefix}/firms/{{id}}/edit"), post(firms_update))
+        .route(
+            &format!("{prefix}/firms/{{id}}/secrets"),
+            post(firm_secrets_put),
+        )
+        .route(
+            &format!("{prefix}/firms/{{id}}/secrets/revoke"),
+            post(firm_secrets_revoke),
+        )
+        .route(
+            &format!("{prefix}/firms/{{id}}/summary-approvals"),
+            post(summary_approval_put),
+        )
+        .route(
+            &format!("{prefix}/firms/{{id}}/summary-approvals/revoke"),
+            post(summary_approval_revoke),
+        )
+        .route(&format!("{prefix}/people.csv"), get(people_csv))
+        .route(&format!("{prefix}/entities"), post(entities_create))
+        .route(&format!("{prefix}/entities.csv"), get(entities_csv))
+        .route(&format!("{prefix}/entities/{{id}}"), post(entities_update))
+        .route(
+            &format!("{prefix}/entities/{{id}}/delete"),
+            post(entities_delete),
+        )
+        .route(
+            &format!("{prefix}/entities/{{id}}/avatar"),
+            // Same body-limit reasoning as the person avatar route.
+            get(entities_avatar_download)
+                .post(entities_avatar_upload)
+                .layer(DefaultBodyLimit::max(MAX_AVATAR_BYTES)),
+        )
+        .route(
+            &format!("{prefix}/playbooks"),
+            post(crate::admin_playbooks::create),
+        )
+        .route(
+            &format!("{prefix}/playbooks/{{id}}"),
+            post(crate::admin_playbooks::update),
+        )
+        .route(
+            &format!("{prefix}/schedules/{{job}}/run"),
+            post(crate::cron_schedules::run),
+        )
+}
+
+/// Register the matter surface under [`APP_PROJECTS_PATH`].
+///
+/// One registration, one path per resource. Each handler decides which lens a
+/// caller gets from their tier and their `person_project_roles` row
+/// (`store::access::matter_lens`), the only safe place for that decision: a
+/// URL prefix is chosen by the requester.
+///
+/// Row scoping is uniform: every tier, Owner and Admin included, needs a
+/// participation row on the matter. The lawyer-only writes below also require
+/// the lawyer tier in their own handlers, not through a path-prefix policy.
+#[allow(clippy::too_many_lines)]
+fn register_project_routes(r: Router<AdminState>) -> Router<AdminState> {
+    let prefix = APP_PROJECTS_PATH;
+    // `{prefix}` (the list), `{prefix}/{code}` (the matter workbench), the forms,
+    // and the read pages all render through Dioxus (`dioxus_app`); the `POST`s
+    // stay here and axum merges the same-path methods.
+    r.route(prefix, post(projects_create_lawyer_only))
+        .route(&format!("{prefix}.csv"), get(projects_csv))
+        // Inline record creation from the Add-project form: create a new
+        // entity or client without leaving the page. Static path segments,
+        // so they win over the `{{id}}` capture below.
+        .route(
+            &format!("{prefix}/new/entity"),
+            post(projects_new_entity_inline),
+        )
+        .route(
+            &format!("{prefix}/new/client"),
+            post(projects_new_client_inline),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}"),
+            post(projects_update_lawyer_only),
+        )
+        // A firm participant can open the same matter through its client's
+        // lens without first leaving the matter workbench. The handler resolves
+        // both the participant and the accountable client server-side; neither
+        // identity comes from the form.
+        .route(
+            &format!("{prefix}/{{project_code}}/view-as-client"),
+            post(project_view_as_client),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/testimonial"),
+            post(project_testimonial_save),
+        )
+        .route(
+            "/app/admin/projects/{project_code}/testimonial",
+            post(admin_project_testimonial_save),
+        )
+        .route(
+            "/app/admin/projects/{project_code}/testimonial/publish",
+            post(admin_project_testimonial_publish),
+        )
+        .route(
+            "/app/admin/projects/{project_code}/testimonial/unpublish",
+            post(admin_project_testimonial_unpublish),
+        )
+        .route(
+            "/app/admin/projects/{project_code}/people/{person_id}/avatar",
+            post(admin_project_person_avatar_upload).layer(DefaultBodyLimit::max(MAX_AVATAR_BYTES)),
+        )
+        .route(
+            "/app/admin/projects/{project_code}/people/{person_id}/avatar/clear",
+            post(admin_project_person_avatar_clear),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/people"),
+            post(project_participation_create),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/people/{{role_id}}/edit"),
+            post(project_participation_update),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/people/{{role_id}}/delete"),
+            post(project_participation_delete),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/people/{{role_id}}/dri"),
+            post(matter_dri_designate),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/people/{{role_id}}/dri/remove"),
+            post(matter_dri_remove),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/delete"),
+            post(projects_delete_lawyer_only),
+        )
+        .route(
+            &format!("{prefix}/{{project_code}}/documents/upload"),
+            // Axum's own default body limit (~2 MB) sits in front of this
+            // handler's own `MAX_BATCH_BYTES` check — without raising it
+            // here, a large scanned-PDF batch never reaches the handler at
+            // all, it 413s at the framework layer.
+            post(crate::project_documents::upload).layer(DefaultBodyLimit::max(
+                crate::project_documents::MAX_BATCH_BYTES,
+            )),
+        )
+        // Open a notation for an existing matter from a template authored in
+        // the Project's git repo — the project-scoped `notation create` front
+        // door (auto-saves the template version, then opens the notation).
+        // Matter-scoped, so it belongs here rather than on the firm prefix.
+        .route(
+            &format!("{prefix}/{{project_code}}/notations/new"),
+            post(crate::project_notation::project_notation_new_post),
+        )
+        // `navigator notation preview` (LAW-29) — push a template as a
+        // draft, stored and addressable but explicitly not run. Matter-
+        // scoped the same way `notations/new` is; unlike it, this never
+        // creates a Notation or starts a workflow instance.
+        .route(
+            &format!("{prefix}/{{project_code}}/notations/draft"),
+            post(crate::notation_draft::create_notation_draft_post),
+        )
+        // Close the matter — opens the closing-letter walk.
+        .route(
+            &format!("{prefix}/{{project_code}}/close"),
+            post(crate::retainer_walk::close_matter_post),
+        )
+        // Inbound contract review: a third-party contract uploaded for
+        // playbook review, by the client or by the firm acting for them.
+        // One of the four paths that already dispatched here from both
+        // prefixes, so the merge is deletion.
+        .route(
+            &format!("{prefix}/{{project_code}}/contract-review"),
+            post(crate::contract_review_walk::upload),
+        )
+        // `GET {prefix}/{id}/documents/{doc_id}` (the provenance page) renders
+        // through Dioxus (`dioxus_app::project_document_router`); the
+        // signed-URL download stays here. The client lens still never resolves
+        // an `internal` asset — matter participation selects that now, not the
+        // prefix.
+        .route(
+            &format!("{prefix}/{{project_code}}/documents/{{doc_id}}/download"),
+            get(crate::project_documents::download),
+        )
+        // "Download all matter documents" — a ZIP of the matter's current
+        // files (repo HEAD). The firm gets every asset; a client gets the
+        // `visibility`-filtered set.
+        .route(
+            &format!("{prefix}/{{project_code}}/documents.zip"),
+            get(crate::project_export::download_all),
+        )
+        // Client-initiated "Delete this document" — records a pending
+        // request a lawyer/admin later authorizes. Request-only.
+        .route(
+            &format!("{prefix}/{{project_code}}/documents/{{doc_id}}/request-deletion"),
+            post(crate::expunge_request_route::client_request),
+        )
+        // Comment-only client review surface. The page
+        // renders through Dioxus (`dioxus_app::review_router`); the comment
+        // `GET`/`POST` (the custom element's data API) stay here.
+        .route(
+            &format!("{prefix}/{{project_code}}/review/{{doc_id}}/comments"),
+            get(crate::review::list_comments).post(crate::review::create_comment),
+        )
+        // The matter's single privileged conversation log — document
+        // comments, email (both directions), and portal messages interleaved
+        // in time. The thread renders through Dioxus
+        // (`dioxus_app::conversation_router`); the message `POST` stays here
+        // and redirects back to the page (PRG). Only the firm lens may post
+        // an internal note, which the handler decides from the tier.
+        .route(
+            &format!("{prefix}/{{project_code}}/conversation/messages"),
+            post(crate::conversation::post_message),
+        )
+        // Client self-serve intake (the magic link): the demand-side
+        // mirror of the admin walker. Row-scoped to the matter; the
+        // client answers the client-facing questions, source `client`.
+        // The `GET` renders through Dioxus
+        // (`dioxus_app::client_intake_router`); the save posts here.
+        .route(
+            &format!("{prefix}/{{project_code}}/intake/{{notation_id}}"),
+            post(crate::intake::intake_save),
+        )
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TestimonialForm {
+    #[serde(rename = "_csrf")]
+    _csrf_token: Option<String>,
+    quote: String,
+    attribution: String,
+    publication: String,
+}
+
+/// `POST /app/projects/{project_code}/testimonial` — the client DRI's one
+/// testimonial write. The CSRF layer on [`routes`] consumes the signed session
+/// cookie before this handler runs; the handler itself derives both identities
+/// from the path and session and never accepts either as form data.
+async fn project_testimonial_save(
+    State(surreal): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path(code): Path<String>,
+    Form(input): Form<TestimonialForm>,
+) -> Response {
+    let Some(session) = session else {
+        return not_found_response();
+    };
+    if session.viewing_as_dri.is_some() {
+        return not_found_response();
+    }
+    let Some(person_id) = session.person_id else {
+        return not_found_response();
+    };
+    let Some(project) = store::projects::find_by_code(&surreal, &code)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return not_found_response();
+    };
+    let participation = store::projects::participation_for_person(&surreal, person_id, project.id)
+        .await
+        .ok()
+        .flatten();
+    if !participation
+        .as_ref()
+        .is_some_and(|row| can_submit_testimonial(&session, row))
+    {
+        return not_found_response();
+    }
+    let request_public = match input.publication.as_str() {
+        "public" => true,
+        "private" => false,
+        _ => {
+            return Redirect::to(&format!(
+                "/app/projects/{code}?error={}",
+                encode_query_value(
+                    "Choose whether to keep the testimonial private or request public use."
+                )
+            ))
+            .into_response();
+        }
+    };
+    let result = store::testimonials::save_for_client_dri(
+        &surreal,
+        person_id,
+        project.id,
+        &store::testimonials::TestimonialSubmission {
+            quote: &input.quote,
+            attribution_label: (!input.attribution.trim().is_empty())
+                .then(|| input.attribution.trim().to_string()),
+            request_public,
+        },
+    )
+    .await;
+    match result {
+        Ok(_) => Redirect::to(&format!("/app/projects/{code}")).into_response(),
+        Err(
+            store::testimonials::TestimonialError::NotAuthorized
+            | store::testimonials::TestimonialError::NotFound,
+        ) => not_found_response(),
+        Err(error) => {
+            tracing::error!(error = %error, "portal testimonial: save failed");
+            Redirect::to(&format!(
+                "/app/projects/{code}?error={}",
+                encode_query_value("Your testimonial could not be saved.")
+            ))
+            .into_response()
+        }
+    }
+}
+
+/// `POST /app/admin/projects/{project_code}/testimonial` — an Owner/Admin
+/// records the client DRI's words without changing the client-facing form.
+/// The caller must also participate on the named matter; Rego can admit the
+/// system tier, but it cannot read the participation ledger.
+async fn admin_project_testimonial_save(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Path(code): Path<String>,
+    Form(input): Form<TestimonialForm>,
+) -> Response {
+    if let Some(forbidden) = admin_gate(session.as_deref()) {
+        return forbidden;
+    }
+    let Some(session) = session.as_ref() else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let Some(project) = admin_matter_project(&state.surreal, session, &code).await else {
+        return not_found_response();
+    };
+    let Some(client_id) = first_client_dri(&state.surreal, project.id).await else {
+        return not_found_response();
+    };
+    let request_public = match input.publication.as_str() {
+        "public" => true,
+        "private" => false,
+        _ => {
+            return Redirect::to(&format!(
+                "/app/projects/{code}?error={}",
+                encode_query_value(
+                    "Choose whether to keep the testimonial private or request public use."
+                )
+            ))
+            .into_response();
+        }
+    };
+    match store::testimonials::save_for_client_dri(
+        &state.surreal,
+        client_id,
+        project.id,
+        &store::testimonials::TestimonialSubmission {
+            quote: &input.quote,
+            attribution_label: (!input.attribution.trim().is_empty())
+                .then(|| input.attribution.trim().to_string()),
+            request_public,
+        },
+    )
+    .await
+    {
+        Ok(_) => Redirect::to(&format!("/app/projects/{code}")).into_response(),
+        Err(
+            store::testimonials::TestimonialError::NotAuthorized
+            | store::testimonials::TestimonialError::NotFound,
+        ) => not_found_response(),
+        Err(error) => {
+            tracing::error!(error = %error, "admin testimonial: save failed");
+            Redirect::to(&format!(
+                "/app/projects/{code}?error={}",
+                encode_query_value("The testimonial could not be saved.")
+            ))
+            .into_response()
+        }
+    }
+}
+
+/// The client DRI whose words the matter's testimonial card edits.
+async fn first_client_dri(surreal: &store::surreal::SurrealDb, project_id: Uuid) -> Option<Uuid> {
+    store::projects::participations_for_project(surreal, project_id)
+        .await
+        .ok()
+        .and_then(|rows| {
+            rows.into_iter().find_map(|row| {
+                (row.is_client_dri
+                    && store::projects::PARTICIPATION_CLIENT_SIDE
+                        .contains(&row.participation.as_str()))
+                .then_some(row.person_id)
+            })
+        })
+}
+
+/// `POST /app/admin/projects/{project_code}/testimonial/publish` — approve the
+/// matter's consented testimonial for the public site.
+async fn admin_project_testimonial_publish(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Path(code): Path<String>,
+) -> Response {
+    match session.as_deref() {
+        Some(session) => set_testimonial_publication(&state.surreal, session, &code, true).await,
+        None => admin_gate(None).unwrap_or_else(not_found_response),
+    }
+}
+
+/// `POST /app/admin/projects/{project_code}/testimonial/unpublish` — take the
+/// matter's testimonial off the public site, keeping the client's consent.
+async fn admin_project_testimonial_unpublish(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Path(code): Path<String>,
+) -> Response {
+    match session.as_deref() {
+        Some(session) => set_testimonial_publication(&state.surreal, session, &code, false).await,
+        None => admin_gate(None).unwrap_or_else(not_found_response),
+    }
+}
+
+/// Publish or unpublish through the same store functions the API door uses, so
+/// the lawyer-tier and firm-side participation checks are not restated here.
+/// The CSRF layer on [`routes`] has already consumed the session token.
+async fn set_testimonial_publication(
+    surreal: &store::surreal::SurrealDb,
+    session: &SessionData,
+    code: &str,
+    publish: bool,
+) -> Response {
+    if let Some(forbidden) = admin_gate(Some(session)) {
+        return forbidden;
+    }
+    let Some(project) = admin_matter_project(surreal, session, code).await else {
+        return not_found_response();
+    };
+    let Some(client_id) = first_client_dri(surreal, project.id).await else {
+        return not_found_response();
+    };
+    let Ok(Some(testimonial)) =
+        store::testimonials::for_person_project(surreal, client_id, project.id).await
+    else {
+        return not_found_response();
+    };
+    let result = if publish {
+        store::testimonials::publish(surreal, session.person_id, session.role, testimonial.id).await
+    } else {
+        store::testimonials::unpublish(surreal, session.person_id, session.role, testimonial.id)
+            .await
+    };
+    match result {
+        Ok(_) => Redirect::to(&format!("/app/projects/{code}")).into_response(),
+        Err(store::testimonials::TestimonialError::NotConsented) => Redirect::to(&format!(
+            "/app/projects/{code}?error={}",
+            encode_query_value("The client has not agreed to public use of this testimonial.")
+        ))
+        .into_response(),
+        Err(
+            store::testimonials::TestimonialError::NotAuthorized
+            | store::testimonials::TestimonialError::NotFound,
+        ) => not_found_response(),
+        Err(error) => {
+            tracing::error!(error = %error, "admin testimonial: publication change failed");
+            Redirect::to(&format!(
+                "/app/projects/{code}?error={}",
+                encode_query_value("The testimonial could not be updated.")
+            ))
+            .into_response()
+        }
+    }
+}
+
+/// Resolve the admin's matter scope for a privileged write. This is separate
+/// from `can_manage_project_participation`: staffing an unassigned matter is
+/// intentionally broader than changing content owned by a matter participant.
+async fn admin_matter_project(
+    surreal: &store::surreal::SurrealDb,
+    session: &SessionData,
+    code: &str,
+) -> Option<store::projects::Project> {
+    if session.viewing_as_dri.is_some() {
+        return None;
+    }
+    let person_id = session.person_id?;
+    let project = store::projects::find_by_code(surreal, code)
+        .await
+        .ok()
+        .flatten()?;
+    store::projects::participation_for_person(surreal, person_id, project.id)
+        .await
+        .ok()
+        .flatten()?;
+    Some(project)
+}
+
+/// Resolve a target person who participates on the same matter as the acting
+/// admin. The existing global admin avatar route remains useful for directory
+/// administration; this matter route adds the narrower page-level boundary.
+async fn admin_matter_person(
+    state: &AdminState,
+    session: &SessionData,
+    code: &str,
+    person_id: Uuid,
+) -> Option<store::persons::Person> {
+    let project = admin_matter_project(&state.surreal, session, code).await?;
+    let person = store::persons::find_by_id(&state.surreal, person_id)
+        .await
+        .ok()
+        .flatten()?;
+    store::projects::participation_for_person(&state.surreal, person.id, project.id)
+        .await
+        .ok()
+        .flatten()?;
+    Some(person)
+}
+
+/// `POST /app/admin/projects/{project_code}/people/{person_id}/avatar` — set
+/// an avatar from the matter people list. Both the acting admin and target
+/// person must hold a participation row on the named matter.
+async fn admin_project_person_avatar_upload(
+    State(state): State<AdminState>,
+    Path((code, person_id)): Path<(String, Uuid)>,
+    cookies: tower_cookies::Cookies,
+    session: Option<Extension<SessionData>>,
+    mut multipart: Multipart,
+) -> Response {
+    if let Some(forbidden) = admin_gate(session.as_deref()) {
+        return forbidden;
+    }
+    let Some(Extension(session_data)) = session else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let Some(person) = admin_matter_person(&state, &session_data, &code, person_id).await else {
+        return not_found_response();
+    };
+    let (content_type, bytes) = match read_avatar_upload(
+        &cookies,
+        &session_data,
+        &mut multipart,
+        person_avatar_content_types(person.role),
+    )
+    .await
+    {
+        Ok(pair) => pair,
+        Err(response) => return response,
+    };
+    if person_avatar_is_public(person.role) {
+        if let Err(response) = validate_person_avatar_dimensions(&bytes, &content_type) {
+            return response;
+        }
+    }
+    match persist_person_avatar(&state, &person, &content_type, &bytes).await {
+        Ok(()) => Redirect::to(&format!("/app/projects/{code}")).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// `POST /app/admin/projects/{project_code}/people/{person_id}/avatar/clear`
+/// — clear the target's avatar and its role-appropriate storage object.
+async fn admin_project_person_avatar_clear(
+    State(state): State<AdminState>,
+    Path((code, person_id)): Path<(String, Uuid)>,
+    session: Option<Extension<SessionData>>,
+) -> Response {
+    if let Some(forbidden) = admin_gate(session.as_deref()) {
+        return forbidden;
+    }
+    let Some(session) = session.as_ref() else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let Some(person) = admin_matter_person(&state, session, &code, person_id).await else {
+        return not_found_response();
+    };
+    match clear_person_avatar(&state, &person).await {
+        Ok(()) => Redirect::to(&format!("/app/projects/{code}")).into_response(),
+        Err(response) => response,
+    }
+}
+
+fn can_submit_testimonial(
+    session: &SessionData,
+    participation: &store::projects::PersonProjectRole,
+) -> bool {
+    session.viewing_as_dri.is_none()
+        && session.person_id == Some(participation.person_id)
+        && participation.is_client_dri
+        && store::projects::PARTICIPATION_CLIENT_SIDE
+            .contains(&participation.participation.as_str())
+}
+
+/// Returns `true` when the caller can act on the lawyer workbench.
+/// Missing sessions fail closed; tests that need lawyer behavior should
+/// pass an explicit lawyer/admin session just like production does.
+pub(crate) fn is_lawyer_tier(session: Option<&SessionData>) -> bool {
+    session.is_some_and(|s| s.role.is_lawyer_tier())
+}
+
+fn can_change_roles(session: Option<&SessionData>) -> bool {
+    session.is_none_or(|s| s.role.is_admin_tier() && s.viewing_as_dri.is_none())
+}
+
+fn can_assign_role(session: Option<&SessionData>, requested: store::persons::Role) -> bool {
+    session.is_none_or(|s| {
+        s.viewing_as_dri.is_none()
+            && s.role.is_admin_tier()
+            && requested.authority_rank() <= s.role.authority_rank()
+    })
+}
+
+/// Project participation controls the next caller's project scope, so it is
+/// privileged membership administration rather than an ordinary lawyer write.
+fn can_manage_project_participation(session: Option<&SessionData>) -> bool {
+    session.is_some_and(|s| s.role.is_admin_tier() && s.viewing_as_dri.is_none())
+}
+
+/// Returns `true` for Owner and Admin. These tiers see internal DB-error
+/// detail on a failed matter write; other lawyers get a generic message.
+fn is_admin(session: Option<&SessionData>) -> bool {
+    session.is_some_and(|s| s.role.is_admin_tier())
+}
+
+/// Pick the failure message for a matter write. Admins see the diagnostic
+/// `detail` (so they can act without opening the logs); everyone else gets
+/// `generic`. The detail is always logged server-side regardless, so it is
+/// never lost — only withheld from non-admins in the UI.
+fn admin_gated_message(is_admin: bool, detail: &str, generic: &str) -> String {
+    if is_admin {
+        detail.to_string()
+    } else {
+        generic.to_string()
+    }
+}
+
+fn not_found_response() -> Response {
+    (StatusCode::NOT_FOUND, webapp::error_pages::not_found()).into_response()
+}
+
+/// `POST /app/admin/people/{id}/delete` — the native-form person delete behind the
+/// Dioxus admin people list (#641 Phase 3). The row used an `hx-delete` to
+/// the REST `/app/api/people/{id}`; this wraps the same delete command and redirects
+/// (303) back to the list, or back with an `?error=` flash when the command
+/// blocks the delete (the bootstrap Owner, or a non-client record).
+async fn admin_person_delete(
+    State(s): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Path(id): Path<Uuid>,
+) -> Response {
+    if let Some(forbidden) = admin_gate(session.as_deref()) {
+        return forbidden;
+    }
+    match crate::people_commands::delete_person(&s.surreal, id, s.bootstrap_owner_email.as_deref())
+        .await
+    {
+        Ok(_) => Redirect::to("/app/admin/people").into_response(),
+        Err(e) => Redirect::to(&format!(
+            "/app/admin/people?error={}",
+            encode_query_value(&e.user_message())
+        ))
+        .into_response(),
+    }
+}
+
+/// `GET /app/admin/people/new` — the admin console create form (Cancel returns
+/// to `/app/admin/people`). Admin-gated.
+/// `POST /app/admin/people` — the native-form create behind the Dioxus admin
+/// add-person page (#641 Phase 3). Admin-gated; wraps the person create command
+/// and redirects (303) to the list on success, or back to the form with an
+/// `?error=` flash on failure. The form posted to the REST `/app/api/people`
+/// over HTMX; this is the plain-form equivalent (the create form's GET now
+/// renders through Dioxus).
+async fn admin_people_create(
+    State(surreal): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Form(command): Form<crate::people_commands::CreatePersonCommand>,
+) -> Response {
+    if let Some(forbidden) = admin_gate(session.as_deref()) {
+        return forbidden;
+    }
+    if crate::people_commands::parse_role(&command.role)
+        .is_some_and(|role| !can_assign_role(session.as_deref(), role))
+    {
+        return Redirect::to(
+            "/app/admin/people/new?error=You%20cannot%20assign%20a%20system%20role%20above%20your%20own.",
+        )
+        .into_response();
+    }
+    match crate::people_commands::create_person(&surreal, &command).await {
+        Ok(_) => Redirect::to("/app/admin/people").into_response(),
+        Err(e) => Redirect::to(&format!(
+            "/app/admin/people/new?error={}",
+            encode_query_value(&e.user_message())
+        ))
+        .into_response(),
+    }
+}
+
+/// Percent-encode a query-parameter value: the query-structural characters, and
+/// everything outside printable ASCII. A refusal message travels back to its
+/// form in a `Location` header, and a header value admits neither a control
+/// character nor a non-ASCII byte — so an un-encoded newline (a conflict
+/// block's joined findings) or em dash would turn the refusal into a `500`.
+pub(crate) fn encode_query_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'?' => out.push_str("%3F"),
+            b'&' => out.push_str("%26"),
+            b'#' => out.push_str("%23"),
+            b'%' => out.push_str("%25"),
+            b'+' => out.push_str("%2B"),
+            b' ' => out.push_str("%20"),
+            // Printable ASCII that RFC 3986 excludes from a query. Browsers
+            // tolerate these, but a strict URI parser rejects the whole
+            // `Location` — so a playbook's `|`-delimited positions text riding
+            // a refusal would turn that refusal into a broken redirect.
+            b'"' | b'<' | b'>' | b'[' | b'\\' | b']' | b'^' | b'`' | b'{' | b'|' | b'}' => {
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                out.push('%');
+                out.push(HEX[usize::from(byte >> 4)] as char);
+                out.push(HEX[usize::from(byte & 0x0f)] as char);
+            }
+            // Everything outside printable ASCII: control characters (a
+            // conflict block's newline-joined findings) and every byte of a
+            // non-ASCII character (an em dash in a refusal message). Both are
+            // illegal in a `Location` header, so passing them through would
+            // turn a refusal into a `500`.
+            _ if byte <= 0x20 || byte >= 0x7f => {
+                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                out.push('%');
+                out.push(HEX[usize::from(byte >> 4)] as char);
+                out.push(HEX[usize::from(byte & 0x0f)] as char);
+            }
+            _ => out.push(byte as char),
+        }
+    }
+    out
+}
+
+/// `POST /app/admin/people/{id}` — the native-form person update behind the Dioxus
+/// admin show/edit page. Wraps the person update command; redirects back to the
+/// show view on success (or with an `?error=` flash on a rejected write). The
+/// form `PATCH`ed the REST `/app/api/people/{id}` over HTMX; this is the same
+/// command with a redirect result so a plain form (no JavaScript) works.
+async fn admin_person_update(
+    State(s): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Path(id): Path<Uuid>,
+    Form(command): Form<crate::people_commands::UpdatePersonCommand>,
+) -> Response {
+    if let Some(forbidden) = admin_gate(session.as_deref()) {
+        return forbidden;
+    }
+    let ctx = crate::people_commands::UpdateContext {
+        bootstrap_owner_email: s.bootstrap_owner_email.as_deref(),
+        actor_role: session
+            .as_deref()
+            .map_or(store::persons::Role::Client, |s| s.role),
+        may_change_roles: can_change_roles(session.as_deref()),
+    };
+    match crate::people_commands::update_person(&s.surreal, id, &command, &ctx).await {
+        Ok(_) => Redirect::to(&format!("/app/admin/people/{id}")).into_response(),
+        Err(e) => Redirect::to(&format!(
+            "/app/admin/people/{id}?error={}",
+            encode_query_value(&e.user_message())
+        ))
+        .into_response(),
+    }
+}
+
+/// The public profile-avatar formats. The extension comes from the trusted
+/// content type, never the uploaded filename, so its public object key has a
+/// predictable JPEG or PNG suffix.
+const PERSON_AVATAR_CONTENT_TYPES: [(&str, &str); 2] =
+    [("image/png", "png"), ("image/jpeg", "jpg")];
+
+/// Client avatars remain private. Keep their established WebP allowance and
+/// private documents-bucket representation: a public avatar can disclose a
+/// client's representation even when no application page links to it.
+const PRIVATE_PERSON_AVATAR_CONTENT_TYPES: [(&str, &str); 3] = [
+    ("image/png", "png"),
+    ("image/jpeg", "jpg"),
+    ("image/webp", "webp"),
+];
+
+/// Entity avatars stay on their private lane and retain the historic WebP
+/// option. Public person avatars deliberately use the narrower type set.
+const ENTITY_AVATAR_CONTENT_TYPES: [(&str, &str); 3] = [
+    ("image/png", "png"),
+    ("image/jpeg", "jpg"),
+    ("image/webp", "webp"),
+];
+
+/// Most bytes one avatar upload may carry. Generous for a profile photo,
+/// nowhere near the document-batch ceiling.
+const MAX_AVATAR_BYTES: usize = 5 * 1024 * 1024;
+const MAX_BLOG_VIDEO_BYTES: usize = crate::assets_api::MAX_VIDEO_UPLOAD_BYTES;
+const MAX_BLOG_VIDEO_REQUEST_BYTES: usize = MAX_BLOG_VIDEO_BYTES + 1024 * 1024;
+
+fn is_blog_mp4(bytes: &[u8]) -> bool {
+    bytes.len() >= 12 && bytes.len() <= MAX_BLOG_VIDEO_BYTES && &bytes[4..8] == b"ftyp"
+}
+
+/// The ISO base media boxes directly inside `bytes`, as `(type, payload)`.
+/// A malformed size ends the walk rather than reading past the buffer.
+fn mp4_boxes(mut bytes: &[u8]) -> Vec<([u8; 4], &[u8])> {
+    let mut boxes = Vec::new();
+    while bytes.len() >= 8 {
+        let size = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        let kind = [bytes[4], bytes[5], bytes[6], bytes[7]];
+        let (header, size) = match size {
+            0 => (8, bytes.len()),
+            1 if bytes.len() >= 16 => {
+                let mut wide = [0_u8; 8];
+                wide.copy_from_slice(&bytes[8..16]);
+                (
+                    16,
+                    usize::try_from(u64::from_be_bytes(wide)).unwrap_or(usize::MAX),
+                )
+            }
+            size => (8, size),
+        };
+        if size < header || size > bytes.len() {
+            break;
+        }
+        boxes.push((kind, &bytes[header..size]));
+        bytes = &bytes[size..];
+    }
+    boxes
+}
+
+/// The displayed `(width, height)` of an MP4's first visual track, read from
+/// its `tkhd` box and turned by the track matrix's quarter rotation. `None`
+/// when the file has no measurable video track.
+pub(crate) fn mp4_display_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let read = |slice: &[u8], at: usize| -> Option<u32> {
+        let word = slice.get(at..at + 4)?;
+        Some(u32::from_be_bytes([word[0], word[1], word[2], word[3]]))
+    };
+    let (_, moov) = mp4_boxes(bytes)
+        .into_iter()
+        .find(|(kind, _)| kind == b"moov")?;
+    for (_, trak) in mp4_boxes(moov)
+        .into_iter()
+        .filter(|(kind, _)| kind == b"trak")
+    {
+        let Some((_, tkhd)) = mp4_boxes(trak)
+            .into_iter()
+            .find(|(kind, _)| kind == b"tkhd")
+        else {
+            continue;
+        };
+        // version 1 widens the three time fields to 64 bits.
+        let matrix_at = if tkhd.first() == Some(&1) {
+            4 + 32 + 16
+        } else {
+            4 + 20 + 16
+        };
+        let width = read(tkhd, matrix_at + 36)? >> 16;
+        let height = read(tkhd, matrix_at + 40)? >> 16;
+        if width == 0 || height == 0 {
+            continue;
+        }
+        let a = read(tkhd, matrix_at)?;
+        let d = read(tkhd, matrix_at + 16)?;
+        return Some(if a == 0 && d == 0 {
+            (height, width)
+        } else {
+            (width, height)
+        });
+    }
+    None
+}
+/// Neither dimension of a publicly available profile image may exceed this
+/// bound. Reading only image metadata before upload avoids allocating an
+/// attacker-controlled decoded raster.
+const MAX_PERSON_AVATAR_DIMENSION: u32 = 1024;
+
+/// Read and validate the one `file` field a multipart avatar upload carries:
+/// the CSRF check, field name, allowed content type, and size ceiling. Shared
+/// by person and entity handlers; the public person lane additionally checks
+/// decoded dimensions before writing.
+///
+/// # Errors
+///
+/// The `Response` to return as-is on any refusal (bad CSRF, wrong field,
+/// disallowed type, empty or oversized body).
+async fn read_avatar_upload(
+    cookies: &tower_cookies::Cookies,
+    session_data: &SessionData,
+    multipart: &mut Multipart,
+    allowed_content_types: &[(&str, &str)],
+) -> Result<(String, axum::body::Bytes), Response> {
+    if let Err(status) = crate::csrf::require_multipart_csrf(cookies, session_data, multipart).await
+    {
+        return Err(status.into_response());
+    }
+
+    let field = match multipart.next_field().await {
+        Ok(Some(field)) if field.name() == Some("file") => field,
+        Ok(_) | Err(_) => return Err(StatusCode::BAD_REQUEST.into_response()),
+    };
+    let content_type = field.content_type().map(str::to_string);
+    let is_allowed = content_type.as_deref().is_some_and(|ct| {
+        allowed_content_types
+            .iter()
+            .any(|(allowed, _)| *allowed == ct)
+    });
+    if !is_allowed {
+        return Err(StatusCode::BAD_REQUEST.into_response());
+    }
+    let Ok(bytes) = field.bytes().await else {
+        return Err(StatusCode::BAD_REQUEST.into_response());
+    };
+    if bytes.is_empty() {
+        return Err(StatusCode::BAD_REQUEST.into_response());
+    }
+    if bytes.len() > MAX_AVATAR_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE.into_response());
+    }
+    Ok((
+        content_type.unwrap_or_else(|| "application/octet-stream".to_string()),
+        bytes,
+    ))
+}
+
+/// Refuse malformed public-image bytes and any public avatar wider or taller
+/// than [`MAX_PERSON_AVATAR_DIMENSION`]. The MIME type chose the decoder, so
+/// a JPEG body mislabeled as PNG cannot pass by merely having image-like data.
+fn validate_person_avatar_dimensions(bytes: &[u8], content_type: &str) -> Result<(), Response> {
+    let format = match content_type {
+        "image/png" => image::ImageFormat::Png,
+        "image/jpeg" => image::ImageFormat::Jpeg,
+        _ => return Err(StatusCode::BAD_REQUEST.into_response()),
+    };
+    let Ok((width, height)) =
+        image::ImageReader::with_format(Cursor::new(bytes), format).into_dimensions()
+    else {
+        return Err(StatusCode::BAD_REQUEST.into_response());
+    };
+    if width > MAX_PERSON_AVATAR_DIMENSION || height > MAX_PERSON_AVATAR_DIMENSION {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE.into_response());
+    }
+    Ok(())
+}
+
+/// The public representation is reserved for firm-tier people. `Client` is
+/// the one tier whose avatar can itself disclose representation, so its bytes
+/// must remain on the authenticated documents lane.
+fn person_avatar_is_public(role: store::persons::Role) -> bool {
+    !matches!(role, store::persons::Role::Client)
+}
+
+fn person_avatar_content_types(
+    role: store::persons::Role,
+) -> &'static [(&'static str, &'static str)] {
+    if person_avatar_is_public(role) {
+        &PERSON_AVATAR_CONTENT_TYPES
+    } else {
+        &PRIVATE_PERSON_AVATAR_CONTENT_TYPES
+    }
+}
+
+fn public_person_avatar_key(id: Uuid, stored: Option<&str>) -> Option<String> {
+    let stored = stored?;
+    ["png", "jpg"].into_iter().find_map(|extension| {
+        let key = format!("people/{id}/avatar.{extension}");
+        (stored == views::assets::bucket_asset_url(&key)).then_some(key)
+    })
+}
+
+/// Remove both canonical public representations for one Person. Storage
+/// deletion is idempotent, so a missing variant is already a successful clear.
+async fn delete_public_person_avatar(state: &AdminState, person_id: Uuid) -> Result<(), Response> {
+    for extension in ["png", "jpg"] {
+        let key = format!("people/{person_id}/avatar.{extension}");
+        if let Err(error) = state.assets_storage.delete(&key).await {
+            if matches!(error, cloud::StorageError::NotFound(_)) {
+                continue;
+            }
+            tracing::error!(
+                error = %error,
+                person_id = %person_id,
+                key = %key,
+                "avatar clear: public avatar delete failed"
+            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+    }
+    Ok(())
+}
+
+/// Clear the row's avatar and, only for firm-tier people, remove every
+/// canonical public object keyed by the immutable Person id.
+async fn clear_person_avatar(
+    state: &AdminState,
+    person: &store::persons::Person,
+) -> Result<(), Response> {
+    match store::persons::set_profile_image_url(&state.surreal, person.id, None).await {
+        Ok(true) => {}
+        Ok(false) => return Err(StatusCode::NOT_FOUND.into_response()),
+        Err(error) => {
+            tracing::error!(error = %error, person_id = %person.id, "avatar clear: person edit failed");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+    }
+    if person_avatar_is_public(person.role) {
+        delete_public_person_avatar(state, person.id).await?;
+    }
+    Ok(())
+}
+
+/// Write one avatar in its role-appropriate storage lane and update the
+/// singular `person.profile_image_url` field. When a firm-tier avatar changes
+/// extension, remove the superseded public object so it cannot remain
+/// addressable after the row points at the replacement.
+async fn persist_person_avatar(
+    state: &AdminState,
+    person: &store::persons::Person,
+    content_type: &str,
+    bytes: &[u8],
+) -> Result<(), Response> {
+    let public = person_avatar_is_public(person.role);
+    let allowed = person_avatar_content_types(person.role);
+    let extension = allowed
+        .iter()
+        .find(|(allowed, _)| *allowed == content_type)
+        .map_or("bin", |(_, extension)| *extension);
+    let key = if public {
+        format!("people/{}/avatar.{extension}", person.id)
+    } else {
+        format!("people/{}/avatars/{}.{}", person.id, person.id, extension)
+    };
+    let storage = if public {
+        &state.assets_storage
+    } else {
+        &state.storage
+    };
+    if let Err(error) = storage.put(&key, bytes, content_type).await {
+        tracing::error!(error = %error, person_id = %person.id, public, "avatar upload: storage write failed");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    }
+
+    let stored = if public {
+        views::assets::bucket_asset_url(&key)
+    } else {
+        key.clone()
+    };
+    match store::persons::set_profile_image_url(&state.surreal, person.id, Some(stored)).await {
+        Ok(true) => {}
+        Ok(false) => return Err(StatusCode::NOT_FOUND.into_response()),
+        Err(error) => {
+            tracing::error!(error = %error, person_id = %person.id, "avatar upload: person edit failed");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+    }
+
+    if public {
+        if let Some(previous_key) =
+            public_person_avatar_key(person.id, person.profile_image_url.as_deref())
+                .filter(|previous_key| previous_key != &key)
+        {
+            if let Err(error) = state.assets_storage.delete(&previous_key).await {
+                tracing::error!(error = %error, person_id = %person.id, key = %previous_key, "avatar upload: stale public avatar delete failed");
+                return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// `profile_image_url`/`avatar_url` has three writer shapes. New Person avatar
+/// uploads store a public asset URL; a directory-sync seed may store another
+/// external URL; and historical Person/Entity uploads store bare private
+/// documents-bucket keys. URLs redirect directly, while only the historical
+/// private key needs this handler to read a bucket.
+enum StoredAvatar {
+    DirectlyFetchableUrl(String),
+    DocumentsBucketKey(String),
+}
+
+fn classify_stored_avatar(value: String) -> StoredAvatar {
+    if value.starts_with('/') || value.contains("://") {
+        StoredAvatar::DirectlyFetchableUrl(value)
+    } else {
+        StoredAvatar::DocumentsBucketKey(value)
+    }
+}
+
+/// Stream a historical private-lane avatar back, or redirect a public URL.
+/// Shared by the person and entity download handlers.
+async fn stream_avatar(
+    storage: &Arc<dyn cloud::StorageService>,
+    stored: Option<String>,
+) -> Response {
+    match stored.map(classify_stored_avatar) {
+        None => StatusCode::NOT_FOUND.into_response(),
+        Some(StoredAvatar::DirectlyFetchableUrl(url)) => Redirect::to(&url).into_response(),
+        Some(StoredAvatar::DocumentsBucketKey(key)) => match storage.get(&key).await {
+            Ok(object) => {
+                let mut response = object.bytes.into_response();
+                if let Ok(content_type) = HeaderValue::from_str(&object.content_type) {
+                    response
+                        .headers_mut()
+                        .insert(header::CONTENT_TYPE, content_type);
+                }
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("private, no-store"),
+                );
+                response
+            }
+            Err(cloud::StorageError::NotFound(_)) => StatusCode::NOT_FOUND.into_response(),
+            Err(e) => {
+                tracing::error!(error = %e, key = %key, "avatar download: storage read failed");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        },
+    }
+}
+
+/// `POST /app/admin/people/{id}/avatar` — the native multipart form behind the
+/// Dioxus admin show/edit page's avatar upload card. Validates the image,
+/// writes firm-tier people to the public-assets bucket at
+/// `people/{id}/avatar.{jpg,png}` and records its public asset URL on the
+/// singular Surreal `person` row. Client avatars remain private.
+async fn admin_person_avatar_upload(
+    State(s): State<AdminState>,
+    Path(id): Path<Uuid>,
+    cookies: tower_cookies::Cookies,
+    session: Option<Extension<SessionData>>,
+    mut multipart: Multipart,
+) -> Response {
+    if let Some(forbidden) = admin_gate(session.as_deref()) {
+        return forbidden;
+    }
+    // `admin_gate` above already refused a `None` session, so this is
+    // always `Some` here — but the value, not just the tier check, is
+    // what `read_avatar_upload`'s CSRF check needs.
+    let Some(Extension(session_data)) = session else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let person = match store::persons::find_by_id(&s.surreal, id).await {
+        Ok(Some(person)) => person,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(error = %error, person_id = %id, "avatar upload: person read failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let (content_type, bytes) = match read_avatar_upload(
+        &cookies,
+        &session_data,
+        &mut multipart,
+        person_avatar_content_types(person.role),
+    )
+    .await
+    {
+        Ok(pair) => pair,
+        Err(response) => return response,
+    };
+    if person_avatar_is_public(person.role) {
+        if let Err(response) = validate_person_avatar_dimensions(&bytes, &content_type) {
+            return response;
+        }
+    }
+    match persist_person_avatar(&s, &person, &content_type, &bytes).await {
+        Ok(()) => Redirect::to(&format!("/app/admin/people/{id}")).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// `DELETE /app/admin/people/{id}/avatar` — clear a Person's avatar. The
+/// target role comes from the stored row, so Client clears never touch the
+/// public-assets lane.
+async fn admin_person_avatar_clear(
+    State(s): State<AdminState>,
+    Path(id): Path<Uuid>,
+    session: Option<Extension<SessionData>>,
+) -> Response {
+    if let Some(forbidden) = admin_gate(session.as_deref()) {
+        return forbidden;
+    }
+    let person = match store::persons::find_by_id(&s.surreal, id).await {
+        Ok(Some(person)) => person,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(error = %error, person_id = %id, "avatar clear: person read failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    match clear_person_avatar(&s, &person).await {
+        Ok(()) => Redirect::to(&format!("/app/admin/people/{id}")).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// `GET /app/admin/people/{id}/avatar` — redirect the Person's public avatar
+/// URL, or stream a historical private documents-bucket key. It remains
+/// Admin-gated like every other `/app/admin/people` door: embedded Rego admits
+/// only Owner/Admin here, and this handler re-checks that rule like
+/// [`admin_person_avatar_upload`] does.
+async fn admin_person_avatar_download(
+    State(s): State<AdminState>,
+    Path(id): Path<Uuid>,
+    session: Option<Extension<SessionData>>,
+) -> Response {
+    if let Some(forbidden) = admin_gate(session.as_deref()) {
+        return forbidden;
+    }
+    let person = match store::persons::find_by_id(&s.surreal, id).await {
+        Ok(person) => person,
+        Err(e) => {
+            tracing::error!(error = %e, person_id = %id, "avatar download: person read failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let Some(person) = person else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    stream_avatar(&s.storage, person.profile_image_url).await
+}
+
+/// `GET /app/me/avatar` — stream only the authenticated viewer's avatar for
+/// the shared `/app` profile menu. The person id comes from the signed session,
+/// never from the URL, so this is not an alternative people-directory read.
+async fn current_viewer_avatar(
+    State(s): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+) -> Response {
+    let Some(Extension(session)) = session else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let Some(person_id) = session.person_id else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let person = match store::persons::find_by_id(&s.surreal, person_id).await {
+        Ok(person) => person,
+        Err(e) => {
+            tracing::error!(error = %e, person_id = %person_id, "current avatar: person read failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let Some(person) = person else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match person.profile_image_url {
+        Some(stored) => stream_avatar(&s.storage, Some(stored)).await,
+        None => initials_avatar_response(&person.name),
+    }
+}
+
+/// Render the same initials fallback as the Dioxus avatar component for the
+/// native image request used by the profile menu.
+fn initials_avatar_response(name: &str) -> Response {
+    let initials = webapp::components::initials(name);
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" role="img" aria-label="Profile avatar"><circle cx="18" cy="18" r="18" fill="#0f766e"/><text x="18" y="19" fill="white" font-family="sans-serif" font-size="13" font-weight="600" text-anchor="middle" dominant-baseline="middle">{initials}</text></svg>"##
+    );
+    (
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "image/svg+xml; charset=utf-8",
+            ),
+            (axum::http::header::CACHE_CONTROL, "private, no-store"),
+        ],
+        svg,
+    )
+        .into_response()
+}
+
+/// `POST /app/avatar` — the native multipart form behind the self-service
+/// `/app/profile` page's avatar upload card. Every authenticated tier reaches
+/// this handler (no `admin_gate`): the target is always the caller's own row,
+/// resolved from the signed session exactly like [`current_viewer_avatar`],
+/// never a person id supplied in the request. The row's role selects the
+/// public firm-tier lane or the private client lane.
+///
+/// A classic form navigation receives `303` back to `/app/profile`. The
+/// in-place script on that page sends `X-Requested-With: XMLHttpRequest`
+/// and receives `204` so the browser can stay on the profile page.
+async fn profile_avatar_upload(
+    State(s): State<AdminState>,
+    cookies: tower_cookies::Cookies,
+    session: Option<Extension<SessionData>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
+    let Some(Extension(session_data)) = session else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let Some(id) = session_data.person_id else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let person = match store::persons::find_by_id(&s.surreal, id).await {
+        Ok(Some(person)) => person,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(error = %error, person_id = %id, "profile avatar upload: person read failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let (content_type, bytes) = match read_avatar_upload(
+        &cookies,
+        &session_data,
+        &mut multipart,
+        person_avatar_content_types(person.role),
+    )
+    .await
+    {
+        Ok(pair) => pair,
+        Err(response) => return response,
+    };
+    if person_avatar_is_public(person.role) {
+        if let Err(response) = validate_person_avatar_dimensions(&bytes, &content_type) {
+            return response;
+        }
+    }
+    match persist_person_avatar(&s, &person, &content_type, &bytes).await {
+        Ok(()) => profile_avatar_upload_accepted(&headers),
+        Err(response) => response,
+    }
+}
+
+/// `DELETE /app/avatar` and `/app/profile/avatar` — clear the authenticated
+/// viewer's avatar. The target is resolved from the signed session, never a
+/// request-supplied person id.
+async fn profile_avatar_clear(
+    State(s): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(Extension(session_data)) = session else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let Some(id) = session_data.person_id else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let person = match store::persons::find_by_id(&s.surreal, id).await {
+        Ok(Some(person)) => person,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(error = %error, person_id = %id, "profile avatar clear: person read failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    match clear_person_avatar(&s, &person).await {
+        Ok(()) => profile_avatar_upload_accepted(&headers),
+        Err(response) => response,
+    }
+}
+
+/// `204` when the profile page's in-place script posted the upload, so the
+/// browser stays on `/app/profile`; `303` for a native form navigation.
+fn profile_avatar_upload_accepted(headers: &HeaderMap) -> Response {
+    let inplace = headers
+        .get("x-requested-with")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("XMLHttpRequest"));
+    if inplace {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        Redirect::to(webapp::profile::PROFILE_PATH).into_response()
+    }
+}
+
+/// `GET /app/people/{id}/avatar` — stream another person's avatar, gated by
+/// [`store::access::avatar_visible_to`]: self, Owner/Admin, or any viewer
+/// sharing a Project participation with the target.
+/// embedded Rego policy admits any authenticated caller on this path
+/// (`portal/policy/navigator.rego`) because it has no participation data to
+/// narrow further; this handler carries the actual, participation-aware rule
+/// (`docs/access-model.md`).
+///
+/// A denial and a missing row answer identically — `404`, never `403` — so
+/// neither discloses which one it was, the same non-disclosure
+/// [`webapp::firm_show`] already holds for a Firm outside the caller's own
+/// membership.
+async fn person_avatar_view(
+    State(s): State<AdminState>,
+    Path(id): Path<Uuid>,
+    session: Option<Extension<SessionData>>,
+) -> Response {
+    let Some(Extension(session)) = session else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let Some(viewer_id) = session.person_id else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let target = match store::persons::find_by_id(&s.surreal, id).await {
+        Ok(person) => person,
+        Err(e) => {
+            tracing::error!(error = %e, person_id = %id, "avatar view: person read failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let Some(target) = target else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let visible = match store::access::avatar_visible_to(
+        &s.surreal,
+        viewer_id,
+        session.role,
+        target.id,
+    )
+    .await
+    {
+        Ok(visible) => visible,
+        Err(e) => {
+            tracing::error!(error = %e, person_id = %id, "avatar view: visibility check failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if !visible {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    stream_avatar(&s.storage, target.profile_image_url).await
+}
+
+/// `POST /app/admin/people/{id}/welcome` — the native-form welcome-email send behind
+/// the Dioxus admin show/edit page. Both outcomes redirect back to the show view
+/// with a `?notice=` flag that floats a toned flash toast; a send failure is
+/// surfaced there, not as a 5xx. The button posted to the REST
+/// `/app/api/people/{id}/welcome` over HTMX.
+async fn admin_person_welcome(
+    State(s): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Path(id): Path<Uuid>,
+) -> Response {
+    if let Some(forbidden) = admin_gate(session.as_deref()) {
+        return forbidden;
+    }
+    let base_url = workflows::email::base_url_from_env();
+    let notice =
+        match crate::people_commands::send_welcome(&s.surreal, s.email.as_ref(), &base_url, id)
+            .await
+        {
+            Ok(_) => "welcome_sent",
+            Err(_) => "welcome_failed",
+        };
+    Redirect::to(&format!("/app/admin/people/{id}?notice={notice}")).into_response()
+}
+
+/// `POST /app/projects/{project_code}/view-as-client` — let a firm member who
+/// can already open this matter inspect its client rendering, read-only. The
+/// target is the matter's first client DRI in stable participation order,
+/// never a person id supplied by the browser. Matters open with that DRI, and
+/// if a later edit has left none, the preview is unavailable rather than
+/// guessing a client.
+///
+/// The resulting session carries `viewing_as_dri`, which [`crate::policy`]'s
+/// `require_policy` middleware uses to refuse every mutating request outright
+/// (except the exit action) — the DRI view is read-only regardless of what
+/// the underlying client role would otherwise be allowed to write.
+#[allow(clippy::too_many_lines)]
+async fn project_view_as_client(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    cookies: tower_cookies::Cookies,
+    Path(project_code): Path<String>,
+) -> Response {
+    let Some(Extension(session)) = session else {
+        return not_found_response();
+    };
+    // The client tier has no separate preview to enter, and a DRI-view
+    // session must never nest or choose another client.
+    if session.role == store::persons::Role::Client || session.viewing_as_dri.is_some() {
+        return not_found_response();
+    }
+    let Some(project) = (match store::projects::find_by_code(&state.surreal, &project_code).await {
+        Ok(project) => project,
+        Err(error) => {
+            tracing::error!(error = %error, project_code, "client preview: matter lookup failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                webapp::error_pages::server_error(),
+            )
+                .into_response();
+        }
+    }) else {
+        return not_found_response();
+    };
+    let viewer = match store::access::matter_viewer(
+        &state.surreal,
+        session.person_id,
+        session.role,
+        project.id,
+    )
+    .await
+    {
+        Ok(viewer) => viewer,
+        Err(error) => {
+            tracing::error!(
+                error,
+                project_code,
+                "client preview: matter access check failed"
+            );
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                webapp::error_pages::server_error(),
+            )
+                .into_response();
+        }
+    };
+    // A caller whose sole row is client-side is already in the client
+    // rendering. Only the supervised Clerk or firm workbench variants may
+    // enter a client preview from this control.
+    if !matches!(
+        viewer,
+        Some(
+            store::access::MatterViewer::Clerk
+                | store::access::MatterViewer::Lawyer
+                | store::access::MatterViewer::LawyerDri,
+        )
+    ) {
+        return not_found_response();
+    }
+    let client_id = match store::projects::participations_for_project(&state.surreal, project.id)
+        .await
+    {
+        Ok(rows) => rows
+            .into_iter()
+            .find(|row| row.is_client_dri)
+            .map(|row| row.person_id),
+        Err(error) => {
+            tracing::error!(error = %error, project_code, "client preview: client DRI lookup failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                webapp::error_pages::server_error(),
+            )
+                .into_response();
+        }
+    };
+    let Some(client_id) = client_id else {
+        return not_found_response();
+    };
+    let target = match store::persons::find_by_id(&state.surreal, client_id).await {
+        Ok(Some(person)) if person.role == store::persons::Role::Client => person,
+        Ok(_) => return not_found_response(),
+        Err(error) => {
+            tracing::error!(error = %error, project_code, client_id = %client_id, "client preview: target lookup failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                webapp::error_pages::server_error(),
+            )
+                .into_response();
+        }
+    };
+
+    let mut effective = SessionData::fresh(
+        target
+            .oidc_subject
+            .clone()
+            .unwrap_or_else(|| format!("person:{}", target.id)),
+        store::persons::Role::Client,
+    );
+    effective.email = Some(target.email.clone());
+    effective.person_id = Some(target.id);
+    effective.source = session.source;
+    effective.viewing_as_dri = Some(DriView {
+        actor_sub: session.sub,
+        actor_email: session.email,
+        actor_person_id: session.person_id,
+        target_name: target.name,
+        target_email: target.email,
+    });
+    cookies.add(crate::oauth::session_cookie(
+        state.sessions.encode(&effective),
+        state.secure_cookies,
+    ));
+    Redirect::to(&format!("/app/projects/{}", project.code)).into_response()
+}
+
+async fn stop_viewing_as_dri(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    cookies: tower_cookies::Cookies,
+) -> Response {
+    let Some(Extension(session)) = session else {
+        return (
+            StatusCode::FORBIDDEN,
+            webapp::error_pages::forbidden(webapp::error_pages::Viewer::Anonymous),
+        )
+            .into_response();
+    };
+    let Some(viewing_as_dri) = session.viewing_as_dri else {
+        // Nothing to stop: bounce the firm person back to their own home.
+        return Redirect::to("/app/team").into_response();
+    };
+    let (person_id, email, role) = match viewing_as_dri.actor_person_id {
+        Some(id) => match store::persons::find_by_id(&state.surreal, id).await {
+            Ok(Some(actor)) => (Some(actor.id), Some(actor.email), actor.role),
+            Ok(None) => (
+                None,
+                viewing_as_dri.actor_email,
+                store::persons::Role::Client,
+            ),
+            Err(e) => {
+                tracing::error!(error = %e, person_id = %id, "admin: load DRI-view actor failed");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    webapp::error_pages::server_error(),
+                )
+                    .into_response();
+            }
+        },
+        None => (
+            None,
+            viewing_as_dri.actor_email,
+            store::persons::Role::Client,
+        ),
+    };
+    let mut restored = SessionData::fresh(viewing_as_dri.actor_sub, role);
+    restored.email = email;
+    restored.person_id = person_id;
+    restored.source = session.source;
+    cookies.add(crate::oauth::session_cookie(
+        state.sessions.encode(&restored),
+        state.secure_cookies,
+    ));
+    // Every firm tier that can start a DRI view — Clerk, Lawyer, Admin, or
+    // Owner — lands on the shared team home on exit, the same destination
+    // `oauth::post_login_landing` sends every firm tier to. `/app/admin` is
+    // Owner/Admin only and would 403 a restored Clerk or Lawyer.
+    Redirect::to("/app/team").into_response()
+}
+
+// ---- Entities ----
+
+#[derive(Deserialize)]
+struct EntityInput {
+    name: String,
+    entity_type_id: Uuid,
+    jurisdiction_id: Uuid,
+}
+
+/// The edit form's body — [`EntityInput`] plus the Xero contact id, which
+/// only the edit form (not "Add entity") offers. A blank submission clears
+/// the stored id; the field is always present because the native form
+/// always submits it.
+#[derive(Deserialize)]
+struct EntityUpdateInput {
+    name: String,
+    entity_type_id: Uuid,
+    jurisdiction_id: Uuid,
+    #[serde(default)]
+    xero_id: String,
+}
+
+async fn entities_create(State(s): State<AdminState>, Form(input): Form<EntityInput>) -> Response {
+    let command = store::entity_commands::CreateEntityCommand {
+        name: input.name,
+        entity_type_id: input.entity_type_id,
+        jurisdiction_id: input.jurisdiction_id,
+    };
+    match store::entity_commands::create_entity(&s.surreal, &s.bootstrap_company, &command).await {
+        Ok(_) => Redirect::to("/app/admin/entities").into_response(),
+        Err(e) => {
+            if let EntityCommandError::Entities(ref err) = e {
+                tracing::warn!(error = %err, "admin: create entity failed");
+            }
+            // Post/redirect/get: every refusal — a blank name, a conflict, a
+            // server-side fault — sends the lawyer back to the form with
+            // the message in the query, so a reload never resubmits the create.
+            // The form this replaced was re-rendered inline, which let the
+            // status code split (409 on a conflict, 200 otherwise); a redirect
+            // carries one status. `/app/api/entities` keeps the per-outcome codes
+            // for programmatic callers.
+            // Redirect to the route that serves the form, so the two cannot
+            // drift apart.
+            back_to_entity_form(
+                crate::dioxus_app::LAWYER_ENTITY_NEW_PATH,
+                &e.user_message(),
+                None,
+            )
+        }
+    }
+}
+
+/// Redirect back to an entity form with `message` as the `?error=` flash, plus
+/// the submitted values when `values` is set (the edit door, which must show the
+/// rejected edit rather than silently reloading the stored row).
+fn back_to_entity_form(
+    path: &str,
+    message: &str,
+    values: Option<&store::entity_commands::UpdateEntityCommand>,
+) -> Response {
+    let mut query = String::new();
+    push_query(&mut query, "error", message);
+    if let Some(values) = values {
+        push_query(&mut query, "name", values.name.as_deref().unwrap_or(""));
+        push_query(
+            &mut query,
+            "entity_type_id",
+            &values
+                .entity_type_id
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+        );
+        push_query(
+            &mut query,
+            "jurisdiction_id",
+            &values
+                .jurisdiction_id
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+        );
+        push_query(
+            &mut query,
+            "xero_id",
+            values.xero_id.as_deref().unwrap_or(""),
+        );
+    }
+    if query.is_empty() {
+        Redirect::to(path).into_response()
+    } else {
+        Redirect::to(&format!("{path}?{query}")).into_response()
+    }
+}
+
+async fn entities_update(
+    State(s): State<AdminState>,
+    Path(id): Path<Uuid>,
+    Form(input): Form<EntityUpdateInput>,
+) -> Response {
+    // The admin form always submits every field, so this door's own
+    // "partial" is always the full quartet — the JSON command's genuine
+    // partial-update semantics (ENG-518) exist for the API caller, not for
+    // this browser form. `xero_id` carries the blank-clears convention
+    // `update_entity` applies: an empty submission clears the stored contact.
+    let command = store::entity_commands::UpdateEntityCommand {
+        name: Some(input.name),
+        entity_type_id: Some(input.entity_type_id),
+        jurisdiction_id: Some(input.jurisdiction_id),
+        xero_id: Some(input.xero_id),
+    };
+    match store::entity_commands::update_entity(&s.surreal, id, &s.bootstrap_company, &command)
+        .await
+    {
+        Ok(_) => Redirect::to("/app/admin/entities").into_response(),
+        Err(EntityCommandError::NotFound) => {
+            (StatusCode::NOT_FOUND, webapp::error_pages::not_found()).into_response()
+        }
+        Err(EntityCommandError::Entities(e)) => {
+            tracing::error!(error = %e, entity_id = %id, "admin: update entity failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                webapp::error_pages::server_error(),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            // Post/redirect/get, as the create door does: a validation or
+            // conflict outcome is the caller's to correct, so redirect back to
+            // the edit form carrying the message and the rejected values rather
+            // than re-rendering inline. The form this replaced could split
+            // the status code (409 on a conflict, 200 on a blank name); a
+            // redirect carries one. `/app/api/entities` keeps the per-outcome codes.
+            back_to_entity_form(
+                &format!("/app/admin/entities/{id}/edit"),
+                &e.user_message(),
+                Some(&command),
+            )
+        }
+    }
+}
+
+async fn entities_delete(State(s): State<AdminState>, Path(id): Path<Uuid>) -> Response {
+    match store::entity_commands::delete_entity(&s.surreal, id, &s.bootstrap_company).await {
+        // `NotFound` renders as success on purpose: the row is already gone,
+        // which is what the caller wanted, so a double-clicked delete button
+        // or a second tab must not report an error. The API renders that same
+        // outcome as a 404 — only this browser door treats it as done.
+        Ok(_) | Err(EntityCommandError::NotFound) => delete_response("/app/admin/entities"),
+        Err(EntityCommandError::FirmAnchorProtected) => (
+            StatusCode::CONFLICT,
+            store::entity_commands::FIRM_ANCHOR_PROTECTED_MESSAGE,
+        )
+            .into_response(),
+        Err(EntityCommandError::Entities(e)) => {
+            tracing::error!(error = %e, entity_id = %id, "entities_delete: failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                webapp::error_pages::server_error(),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::warn!(entity_id = %id, "entities_delete: refused");
+            delete_refused_response(&e.user_message(), "/app/admin/entities")
+        }
+    }
+}
+
+/// `POST /app/admin/entities/{id}/avatar` — the native multipart form behind
+/// the entity edit page's avatar upload card. Its private documents-bucket
+/// lane differs from [`admin_person_avatar_upload`]'s public Person-avatar
+/// lane; no `admin_gate` here for the same reason [`entities_update`] carries
+/// none — embedded Rego
+/// policy's `admin_lawyer_resources` set already admits the lawyer tier (and
+/// Owner/Admin through the route bypass) to every `/app/admin/entities/*`
+/// door, so a handler-level admin check would wrongly narrow it.
+async fn entities_avatar_upload(
+    State(s): State<AdminState>,
+    Path(id): Path<Uuid>,
+    cookies: tower_cookies::Cookies,
+    session: Option<Extension<SessionData>>,
+    mut multipart: Multipart,
+) -> Response {
+    let Some(Extension(session_data)) = session else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let (content_type, bytes) = match read_avatar_upload(
+        &cookies,
+        &session_data,
+        &mut multipart,
+        &ENTITY_AVATAR_CONTENT_TYPES,
+    )
+    .await
+    {
+        Ok(pair) => pair,
+        Err(response) => return response,
+    };
+    let ext = ENTITY_AVATAR_CONTENT_TYPES
+        .iter()
+        .find(|(allowed, _)| *allowed == content_type)
+        .map_or("bin", |(_, ext)| *ext);
+
+    let key = format!("entities/{id}/avatars/{id}.{ext}");
+    if let Err(e) = s.storage.put(&key, &bytes, &content_type).await {
+        tracing::error!(error = %e, entity_id = %id, "avatar upload: storage write failed");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    match store::entities::set_avatar_url(&s.surreal, id, Some(key)).await {
+        Ok(Some(_)) => Redirect::to(&format!("/app/admin/entities/{id}/edit")).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, entity_id = %id, "avatar upload: entity edit failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `GET /app/admin/entities/{id}/avatar` — stream the entity's avatar from
+/// the private documents bucket. No `admin_gate`, matching every other
+/// `/app/admin/entities/*` door (see [`entities_avatar_upload`]).
+async fn entities_avatar_download(State(s): State<AdminState>, Path(id): Path<Uuid>) -> Response {
+    let entity = match store::entities::find_by_id(&s.surreal, id).await {
+        Ok(entity) => entity,
+        Err(e) => {
+            tracing::error!(error = %e, entity_id = %id, "avatar download: entity read failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let Some(entity) = entity else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    stream_avatar(&s.storage, entity.avatar_url).await
+}
+
+// ---- Firms (ENG-585) ----
+
+/// The create-firm form's path — the page every refusal on this cluster
+/// redirects back to (post/redirect/get), carrying its message and the
+/// submitted values in the query so nothing is retyped.
+const FIRM_NEW_PATH: &str = "/app/owner/firms/new";
+
+/// Redirect back to the create-firm form with `query` (already encoded).
+fn back_to_firm_new_form(query: &str) -> Response {
+    if query.is_empty() {
+        Redirect::to(FIRM_NEW_PATH).into_response()
+    } else {
+        Redirect::to(&format!("{FIRM_NEW_PATH}?{query}")).into_response()
+    }
+}
+
+#[derive(Deserialize)]
+struct FirmCreateInput {
+    #[serde(default)]
+    name: String,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    entity_id: Option<Uuid>,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    admin_dri_person_id: Option<Uuid>,
+}
+
+/// `POST /app/owner/firms` — Owner opens a Firm and appoints its first Admin
+/// DRI in one submission (`store::firms::create`, ENG-499). Every
+/// `FirmError` refusal redirects back to the create form with `?error=`
+/// naming the rule and the submitted fields echoed, so nothing is retyped.
+async fn firms_create(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<FirmCreateInput>,
+) -> Response {
+    if !session
+        .as_ref()
+        .is_some_and(|Extension(s)| s.role.is_owner())
+    {
+        return not_found_response();
+    }
+    let name = input.name.trim();
+    let refuse = |message: &str| {
+        let mut query = String::new();
+        push_query(&mut query, "error", message);
+        push_query(&mut query, "name", name);
+        push_query(
+            &mut query,
+            "entity_id",
+            &input.entity_id.map(|id| id.to_string()).unwrap_or_default(),
+        );
+        push_query(
+            &mut query,
+            "admin_dri_person_id",
+            &input
+                .admin_dri_person_id
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+        );
+        back_to_firm_new_form(&query)
+    };
+
+    if name.is_empty() {
+        return refuse("Name is required.");
+    }
+    let Some(entity_id) = input.entity_id else {
+        return refuse(
+            "Pick an entity to open the firm against (create the entity first if needed).",
+        );
+    };
+    let Some(admin_dri_person_id) = input.admin_dri_person_id else {
+        return refuse("Pick an Admin DRI (create the admin first if needed).");
+    };
+
+    match store::firms::create(
+        &state.surreal,
+        &store::firms::NewFirm {
+            name: name.to_string(),
+            status: "active".to_string(),
+            entity_id,
+            admin_dri_person_id,
+        },
+    )
+    .await
+    {
+        Ok(created) => Redirect::to(&format!("/app/admin/firms/{}", created.id)).into_response(),
+        Err(e) => refuse(&e.user_message()),
+    }
+}
+
+#[derive(Deserialize)]
+struct FirmEntityInlineInput {
+    #[serde(default)]
+    entity_name: String,
+    #[serde(default)]
+    entity_type_id: String,
+    #[serde(default)]
+    jurisdiction_id: String,
+}
+
+/// `POST /app/owner/firms/new/entity` — the inline "New entity" form on the
+/// create-firm page. Same shape as [`projects_new_entity_inline`]: creates
+/// the entity, then redirects back with `?entity=<id>` so the picker
+/// re-renders with it selected, or `?entity_error=` with the typed values
+/// echoed.
+async fn firms_new_entity_inline(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<FirmEntityInlineInput>,
+) -> Response {
+    if !session
+        .as_ref()
+        .is_some_and(|Extension(s)| s.role.is_owner())
+    {
+        return not_found_response();
+    }
+    let name = input.entity_name.trim();
+    let entity_type_id = Uuid::parse_str(input.entity_type_id.trim()).ok();
+    let jurisdiction_id = Uuid::parse_str(input.jurisdiction_id.trim()).ok();
+
+    let refuse = |message: &str| {
+        let mut query = String::new();
+        push_query(&mut query, "entity_error", message);
+        push_query(&mut query, "entity_name", name);
+        push_query(&mut query, "entity_type_id", input.entity_type_id.trim());
+        push_query(&mut query, "jurisdiction_id", input.jurisdiction_id.trim());
+        back_to_firm_new_form(&query)
+    };
+
+    if name.is_empty() {
+        return refuse("Name is required.");
+    }
+    let (Some(type_id), Some(jur_id)) = (entity_type_id, jurisdiction_id) else {
+        return refuse("Pick an entity type and a jurisdiction.");
+    };
+
+    let command = store::entity_commands::CreateEntityCommand {
+        name: name.to_string(),
+        entity_type_id: type_id,
+        jurisdiction_id: jur_id,
+    };
+    match store::entity_commands::create_entity(&state.surreal, &state.bootstrap_company, &command)
+        .await
+    {
+        Ok(created) => {
+            let mut query = String::new();
+            push_query(&mut query, "entity", &created.id.to_string());
+            back_to_firm_new_form(&query)
+        }
+        Err(e) => refuse(&e.user_message()),
+    }
+}
+
+#[derive(Deserialize)]
+struct FirmAdminInlineInput {
+    #[serde(default)]
+    admin_name: String,
+    #[serde(default)]
+    admin_email: String,
+}
+
+/// `POST /app/owner/firms/new/admin` — the inline "New admin" form on the
+/// create-firm page. Mints a person with `role = admin` (never a firm
+/// attorney) so the create form's Admin DRI picker has a fresh eligible
+/// choice, then redirects back naming it or echoing a refusal.
+async fn firms_new_admin_inline(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<FirmAdminInlineInput>,
+) -> Response {
+    if !session
+        .as_ref()
+        .is_some_and(|Extension(s)| s.role.is_owner())
+    {
+        return not_found_response();
+    }
+    let command = crate::people_commands::CreatePersonCommand {
+        name: input.admin_name.clone(),
+        email: input.admin_email.clone(),
+        role: store::persons::Role::Admin.as_str().to_string(),
+        given_name: None,
+        family_name: None,
+        middle_name: None,
+        notion_user_id: None,
+        firm_id: None,
+    };
+    match crate::people_commands::create_person(&state.surreal, &command).await {
+        Ok(created) => {
+            let mut query = String::new();
+            push_query(&mut query, "admin", &created.id.to_string());
+            back_to_firm_new_form(&query)
+        }
+        Err(e) => {
+            let mut query = String::new();
+            push_query(&mut query, "admin_error", &e.user_message());
+            push_query(&mut query, "admin_name", input.admin_name.trim());
+            push_query(&mut query, "admin_email", input.admin_email.trim());
+            back_to_firm_new_form(&query)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct FirmUpdateInput {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    entity_id: Option<Uuid>,
+    /// Present only on the Owner's form. Handed to
+    /// `store::firms::appoint_admin_dri` when it names someone other than
+    /// the current Admin DRI.
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    admin_dri_person_id: Option<Uuid>,
+}
+
+/// `POST /app/admin/firms/{id}/edit` — a descriptive edit on
+/// `store::firms::update`, which itself authorizes Owner or that Firm's own
+/// Admin membership (`FirmCapability::ManageMembership`), then — when the
+/// Owner's form names a new Admin DRI (an Owner or an admin member) — a
+/// transfer through `store::firms::appoint_admin_dri`, which is Owner-only.
+/// A caller outside that reach gets the same not-found response the GET
+/// form's capability gate renders, so this door discloses nothing the page
+/// does not. Every other refusal redirects back to the edit form with
+/// `?error=` naming the rule.
+async fn firms_update(
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<FirmUpdateInput>,
+) -> Response {
+    let Some(Extension(session_data)) = session else {
+        return not_found_response();
+    };
+    let edit = store::firms::FirmEdit {
+        name: Some(input.name.clone()),
+        status: Some(input.status.clone()),
+        entity_id: input.entity_id,
+    };
+    let result = match store::firms::update(
+        &state.surreal,
+        session_data.role,
+        session_data.person_id,
+        id,
+        &edit,
+    )
+    .await
+    {
+        Ok(_) => {
+            appoint_admin_dri_if_changed(&state, &session_data, id, input.admin_dri_person_id).await
+        }
+        Err(e) => Err(e),
+    };
+    match result {
+        Ok(()) => Redirect::to(&format!("/app/admin/firms/{id}")).into_response(),
+        Err(store::firms::FirmError::NotAuthorized | store::firms::FirmError::NoSuchFirm(_)) => {
+            not_found_response()
+        }
+        Err(e) => {
+            let mut query = String::new();
+            push_query(&mut query, "error", &e.user_message());
+            Redirect::to(&format!("/app/admin/firms/{id}/edit?{query}")).into_response()
+        }
+    }
+}
+
+/// Transfer the Admin DRI to `person_id` when it names someone who does not
+/// already hold it. `None` — every non-Owner form — leaves it untouched.
+async fn appoint_admin_dri_if_changed(
+    state: &AdminState,
+    session: &SessionData,
+    firm_id: Uuid,
+    person_id: Option<Uuid>,
+) -> Result<(), store::firms::FirmError> {
+    let Some(person_id) = person_id else {
+        return Ok(());
+    };
+    let already = store::firms::membership_for_person(&state.surreal, person_id, firm_id)
+        .await?
+        .is_some_and(|row| row.is_dri);
+    if !already {
+        store::firms::appoint_admin_dri(
+            &state.surreal,
+            session.role,
+            session.person_id,
+            firm_id,
+            person_id,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+// ---- Firm integration secrets (ENG-491) ----
+
+fn back_to_firm_show(id: Uuid, query: &str) -> Response {
+    if query.is_empty() {
+        Redirect::to(&format!("/app/admin/firms/{id}")).into_response()
+    } else {
+        Redirect::to(&format!("/app/admin/firms/{id}?{query}")).into_response()
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SummaryApprovalInput {
+    #[serde(default)]
+    provider_account: String,
+    #[serde(default)]
+    project_sender: String,
+    #[serde(default)]
+    approval_id: String,
+    #[serde(default, rename = "_csrf")]
+    _csrf: Option<String>,
+}
+
+pub(crate) async fn summary_approval_put(
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<SummaryApprovalInput>,
+) -> Response {
+    let Some(Extension(actor)) = session else {
+        return not_found_response();
+    };
+    let Some(actor_id) = actor.person_id else {
+        return not_found_response();
+    };
+    let Some((project_id, email)) = input.project_sender.split_once(':') else {
+        return Redirect::to(&format!(
+            "/app/admin/firms/{id}?summary_error=Choose+a+current+Project+Client+DRI"
+        ))
+        .into_response();
+    };
+    let Ok(project_id) = Uuid::parse_str(project_id) else {
+        return not_found_response();
+    };
+    match store::summary_sender_approvals::approve(
+        &state.surreal,
+        actor.role,
+        actor_id,
+        id,
+        project_id,
+        &input.provider_account,
+        email,
+    )
+    .await
+    {
+        Ok(approval) => {
+            let mut query = String::new();
+            push_query(&mut query, "summary_saved", &approval.sender_email);
+            back_to_firm_show(id, &query)
+        }
+        Err(store::summary_sender_approvals::ApprovalError::NotAuthorized) => not_found_response(),
+        Err(error) => {
+            let mut query = String::new();
+            push_query(&mut query, "summary_error", &error.to_string());
+            back_to_firm_show(id, &query)
+        }
+    }
+}
+
+pub(crate) async fn summary_approval_revoke(
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<SummaryApprovalInput>,
+) -> Response {
+    let Some(Extension(actor)) = session else {
+        return not_found_response();
+    };
+    let Some(actor_id) = actor.person_id else {
+        return not_found_response();
+    };
+    let Ok(approval_id) = Uuid::parse_str(&input.approval_id) else {
+        return not_found_response();
+    };
+    match store::summary_sender_approvals::revoke(
+        &state.surreal,
+        actor.role,
+        actor_id,
+        id,
+        approval_id,
+    )
+    .await
+    {
+        Ok(()) => {
+            let mut query = String::new();
+            push_query(&mut query, "summary_revoked", &input.approval_id);
+            back_to_firm_show(id, &query)
+        }
+        Err(store::summary_sender_approvals::ApprovalError::NotAuthorized) => not_found_response(),
+        Err(error) => {
+            let mut query = String::new();
+            push_query(&mut query, "summary_error", &error.to_string());
+            back_to_firm_show(id, &query)
+        }
+    }
+}
+
+/// Map a form-submitted `kind` slug to its typed pair, deriving `provider`
+/// from `kind` rather than trusting a second submitted field — a form can
+/// only ever offer a `(provider, kind)` pair that already agrees, so there is
+/// nothing for a mismatched pair to mean except a malformed request.
+fn parse_secret_kind(
+    kind: &str,
+) -> Option<(
+    store::firm_secrets::IntegrationProvider,
+    store::firm_secrets::IntegrationSecretKind,
+)> {
+    let kind = store::firm_secrets::parse_kind(kind)?;
+    Some((kind.provider(), kind))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct FirmSecretPutInput {
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    value: String,
+}
+
+/// `POST /app/admin/firms/{id}/secrets` — create or replace (rotate) one
+/// typed provider credential. `store::firm_secrets::put` is the only writer
+/// and re-authorizes `ManageIntegrationSecrets` itself (the Firm's own Admin
+/// DRI, never an Owner who is not that DRI), so this handler adds no authorization of its own — it
+/// only maps the closed secret-kind vocabulary and reports the outcome. Every
+/// path back to the caller is a redirect to the Firm show page, which renders
+/// metadata only: the submitted value is never echoed, on success or on
+/// refusal.
+pub(crate) async fn firm_secrets_put(
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<FirmSecretPutInput>,
+) -> Response {
+    let Some(Extension(session_data)) = session else {
+        return not_found_response();
+    };
+    let Some((provider, kind)) = parse_secret_kind(&input.kind) else {
+        let mut query = String::new();
+        push_query(&mut query, "secret_error", "Unknown secret kind.");
+        return back_to_firm_show(id, &query);
+    };
+    match store::firm_secrets::put(
+        &state.surreal,
+        store::firm_secrets::SecretPutRequest {
+            actor_role: session_data.role,
+            actor_person_id: session_data.person_id,
+            firm_id: id,
+            provider,
+            kind,
+            value: &input.value,
+        },
+        state.runtime_kms.as_ref(),
+    )
+    .await
+    {
+        Ok(saved) => {
+            let mut query = String::new();
+            push_query(&mut query, "secret_saved", saved.kind.as_str());
+            back_to_firm_show(id, &query)
+        }
+        Err(store::firm_secrets::SecretStoreError::NotAuthorized) => not_found_response(),
+        Err(error) => {
+            let mut query = String::new();
+            push_query(&mut query, "secret_error", &error.to_string());
+            back_to_firm_show(id, &query)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct FirmSecretRevokeInput {
+    #[serde(default)]
+    kind: String,
+}
+
+/// `POST /app/admin/firms/{id}/secrets/revoke` — revoke the current version.
+/// Navigator stops offering the credential to a Project's provider client on
+/// the very next call (`portal::integrations::FirmIntegrations` never caches
+/// one); it does not call the provider to revoke access there, which the
+/// settings view states.
+pub(crate) async fn firm_secrets_revoke(
+    State(state): State<AdminState>,
+    Path(id): Path<Uuid>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<FirmSecretRevokeInput>,
+) -> Response {
+    let Some(Extension(session_data)) = session else {
+        return not_found_response();
+    };
+    let Some((provider, kind)) = parse_secret_kind(&input.kind) else {
+        let mut query = String::new();
+        push_query(&mut query, "secret_error", "Unknown secret kind.");
+        return back_to_firm_show(id, &query);
+    };
+    match store::firm_secrets::revoke(
+        &state.surreal,
+        session_data.role,
+        session_data.person_id,
+        id,
+        provider,
+        kind,
+    )
+    .await
+    {
+        Ok(()) => {
+            let mut query = String::new();
+            push_query(&mut query, "secret_revoked", kind.as_str());
+            back_to_firm_show(id, &query)
+        }
+        Err(store::firm_secrets::SecretStoreError::NotAuthorized) => not_found_response(),
+        Err(error) => {
+            let mut query = String::new();
+            push_query(&mut query, "secret_error", &error.to_string());
+            back_to_firm_show(id, &query)
+        }
+    }
+}
+
+// ---- Brands (ENG-586) ----
+
+const BRAND_NEW_PATH: &str = "/app/admin/brands/new";
+
+fn back_to_brand_new_form(query: &str) -> Response {
+    if query.is_empty() {
+        Redirect::to(BRAND_NEW_PATH).into_response()
+    } else {
+        Redirect::to(&format!("{BRAND_NEW_PATH}?{query}")).into_response()
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct BrandCreateInput {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    typeface: String,
+    #[serde(default)]
+    primary_color: String,
+}
+
+/// `POST /app/admin/brands/new` — the same path the create form renders at, so a
+/// refusal reloads it with `?error=` and every field echoed. `firm_id` is
+/// never read from the form: every brand is Firm-scoped (ENG-659), and the
+/// caller's own Firm is re-resolved server-side from their DRI membership,
+/// exactly as `store::brands::create`'s own `authorize` would insist on —
+/// trusting a client-submitted Firm id here would let an Admin DRI of one
+/// Firm name a brand scoped to another. Owner holds no Firm membership at
+/// all, so Owner is refused the same way a DRI-less Admin is.
+pub(crate) async fn brands_create(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<BrandCreateInput>,
+) -> Response {
+    let Some(Extension(session_data)) = session else {
+        return not_found_response();
+    };
+    if !session_data.role.is_admin_tier() {
+        return not_found_response();
+    }
+
+    let refuse = |message: &str| {
+        let mut query = String::new();
+        push_query(&mut query, "error", message);
+        push_query(&mut query, "name", &input.name);
+        push_query(&mut query, "key", &input.key);
+        push_query(&mut query, "typeface", &input.typeface);
+        push_query(&mut query, "primary_color", &input.primary_color);
+        back_to_brand_new_form(&query)
+    };
+
+    // Every brand is Firm-scoped (ENG-659): the caller — Owner included —
+    // must be the Admin DRI of some Firm, resolved server-side from their
+    // own membership rather than trusted from the form, exactly as
+    // `store::brands::create`'s own `authorize` would insist on anyway.
+    // Owner holds no `person_firm_role` row at all, so Owner reaches the
+    // same refusal a DRI-less Admin does.
+    let Some(person_id) = session_data.person_id else {
+        return refuse("Your session isn't linked to a firm person.");
+    };
+    let memberships = match store::firms::memberships_for_person(&state.surreal, person_id).await {
+        Ok(memberships) => memberships,
+        Err(error) => {
+            tracing::error!(error = %error, "brands_create: membership lookup failed");
+            return refuse("Could not resolve your Firm membership.");
+        }
+    };
+    let Some(firm_id) = memberships
+        .iter()
+        .find(|m| m.is_dri && m.membership == store::firms::FirmMembership::Admin)
+        .map(|m| m.firm_id)
+    else {
+        return refuse("You are not the Admin DRI of any Firm.");
+    };
+
+    match store::brands::create(
+        &state.surreal,
+        session_data.role,
+        session_data.person_id,
+        &store::brands::NewBrand {
+            name: input.name.clone(),
+            key: input.key.clone(),
+            firm_id: Some(firm_id),
+            typeface: (!input.typeface.is_empty()).then(|| input.typeface.clone()),
+            primary_color: (!input.primary_color.is_empty()).then(|| input.primary_color.clone()),
+            ..store::brands::NewBrand::default()
+        },
+    )
+    .await
+    {
+        Ok(created) => {
+            Redirect::to(&format!("/app/admin/brands/{}/edit", created.key)).into_response()
+        }
+        Err(error) => refuse(&error.user_message()),
+    }
+}
+
+/// Upload one original MP4 to the public assets bucket after checking the
+/// submitting Admin/Owner can manage the selected Brand. The returned bucket
+/// key can be attached to the Blog Post and previewed before publication.
+pub(crate) async fn blog_post_video_upload(
+    State(state): State<AdminState>,
+    cookies: tower_cookies::Cookies,
+    session: Option<Extension<SessionData>>,
+    mut multipart: Multipart,
+) -> Response {
+    let Some(Extension(actor)) = session else {
+        return not_found_response();
+    };
+    if !actor.role.is_admin_tier() {
+        return not_found_response();
+    }
+    let Some(person_id) = actor.person_id else {
+        return Redirect::to("/app/admin/blog?error=Your+session+is+not+linked+to+a+person")
+            .into_response();
+    };
+    if let Err(status) = crate::csrf::require_multipart_csrf(&cookies, &actor, &mut multipart).await
+    {
+        return status.into_response();
+    }
+    let mut brand_key = None;
+    let mut video = None;
+    let mut invalid_video = false;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        match field.name() {
+            Some("brand_key") => brand_key = field.text().await.ok(),
+            Some("file") => {
+                if field.content_type() != Some("video/mp4") {
+                    invalid_video = true;
+                    continue;
+                }
+                match field.bytes().await {
+                    Ok(bytes) if is_blog_mp4(&bytes) => video = Some(bytes),
+                    _ => invalid_video = true,
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(brand_key) = brand_key.map(|key| key.trim().to_ascii_lowercase()) else {
+        return Redirect::to("/app/admin/blog?error=Choose+a+Brand+for+the+video").into_response();
+    };
+    let brands = match store::posts::manageable_brand_keys(&state.surreal, actor.role, person_id)
+        .await
+    {
+        Ok(brands) => brands,
+        Err(error) => {
+            tracing::error!(error = %error, "blog video upload: Brand authorization lookup failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if !brands.iter().any(|brand| brand == &brand_key) {
+        return not_found_response();
+    }
+    let Some(video) = (!invalid_video).then_some(video).flatten() else {
+        return Redirect::to("/app/admin/blog?error=Upload+a+valid+MP4+up+to+64+MiB")
+            .into_response();
+    };
+    let Some((width, height)) = mp4_display_dimensions(&video) else {
+        return Redirect::to("/app/admin/blog?error=Upload+an+MP4+with+a+video+track")
+            .into_response();
+    };
+    let key = format!("img/{brand_key}/social/{}.mp4", Uuid::now_v7());
+    if let Err(error) = state.assets_storage.put(&key, &video, "video/mp4").await {
+        tracing::error!(error = %error, brand = %brand_key, "blog video upload: public asset write failed");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    if let Err(error) =
+        store::posts::record_video(&state.surreal, &brand_key, &key, width, height).await
+    {
+        tracing::error!(error = %error, brand = %brand_key, "blog video upload: measurement record failed");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    Redirect::to(&format!(
+        "/app/admin/blog?video_asset={}",
+        encode_query_value(&key)
+    ))
+    .into_response()
+}
+
+/// Hold a future scheduled Post before the publisher sends. The Post's
+/// content and schedule are edited in its Git Markdown source.
+pub(crate) async fn blog_post_cancel(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let Some(Extension(actor)) = session else {
+        return not_found_response();
+    };
+    let Some(person_id) = actor.person_id else {
+        return not_found_response();
+    };
+    if !actor.role.is_admin_tier() {
+        return not_found_response();
+    }
+    match store::posts::cancel(&state.surreal, actor.role, person_id, id).await {
+        Ok(()) => Redirect::to("/app/social/calendar").into_response(),
+        Err(error) => {
+            let mut query = String::new();
+            push_query(&mut query, "error", &error.to_string());
+            Redirect::to(&format!("/app/social/calendar?{query}")).into_response()
+        }
+    }
+}
+
+// ---- Projects ----
+
+/// The matter-open form's path — the page every refusal on this cluster
+/// redirects back to (post/redirect/get), carrying its message and the
+/// submitted values in the query so nothing is retyped.
+const PROJECT_NEW_PATH: &str = "/app/projects/new";
+
+/// Append `key=value` to a redirect query being built. A blank value is skipped
+/// so the URL carries only what was actually submitted.
+pub(crate) fn push_query(query: &mut String, key: &str, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    if !query.is_empty() {
+        query.push('&');
+    }
+    query.push_str(key);
+    query.push('=');
+    query.push_str(&encode_query_value(value));
+}
+
+/// Redirect back to the matter-open form with `query` (already encoded).
+fn back_to_project_form(query: &str) -> Response {
+    if query.is_empty() {
+        Redirect::to(PROJECT_NEW_PATH).into_response()
+    } else {
+        Redirect::to(&format!("{PROJECT_NEW_PATH}?{query}")).into_response()
+    }
+}
+
+#[derive(Deserialize)]
+struct EntityInlineInput {
+    #[serde(default)]
+    entity_name: String,
+    #[serde(default)]
+    entity_type_id: String,
+    #[serde(default)]
+    jurisdiction_id: String,
+}
+
+/// `POST /app/projects/new/entity` — the inline "New entity" form on the
+/// matter-open page. Creates the entity through the same `create_entity` command
+/// as the standalone form, then redirects back to the form with `?entity=<id>`
+/// so the Entity picker re-renders with it selected. A validation or conflict
+/// error redirects back with `?entity_error=` and the submitted values echoed,
+/// which re-opens the disclosure over what was typed. Nothing about the matter
+/// form itself is touched either way.
+async fn projects_new_entity_inline(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<EntityInlineInput>,
+) -> Response {
+    if !is_lawyer_tier(session.as_deref()) {
+        return not_found_response();
+    }
+    let name = input.entity_name.trim();
+    let entity_type_id = Uuid::parse_str(input.entity_type_id.trim()).ok();
+    let jurisdiction_id = Uuid::parse_str(input.jurisdiction_id.trim()).ok();
+
+    let refuse = |message: &str| {
+        let mut query = String::new();
+        push_query(&mut query, "entity_error", message);
+        push_query(&mut query, "entity_name", name);
+        push_query(&mut query, "entity_type_id", input.entity_type_id.trim());
+        push_query(&mut query, "jurisdiction_id", input.jurisdiction_id.trim());
+        back_to_project_form(&query)
+    };
+
+    if name.is_empty() {
+        return refuse("Name is required.");
+    }
+    let (Some(type_id), Some(jur_id)) = (entity_type_id, jurisdiction_id) else {
+        return refuse("Pick an entity type and a jurisdiction.");
+    };
+
+    let command = store::entity_commands::CreateEntityCommand {
+        name: name.to_string(),
+        entity_type_id: type_id,
+        jurisdiction_id: jur_id,
+    };
+    match store::entity_commands::create_entity(&state.surreal, &state.bootstrap_company, &command)
+        .await
+    {
+        Ok(created) => {
+            let mut query = String::new();
+            push_query(&mut query, "entity", &created.id.to_string());
+            back_to_project_form(&query)
+        }
+        Err(e) => {
+            if let EntityCommandError::Entities(ref err) = e {
+                tracing::warn!(error = %err, "admin: inline entity create failed");
+            }
+            refuse(&e.user_message())
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ClientInlineInput {
+    #[serde(default)]
+    client_name: String,
+    #[serde(default)]
+    client_email: String,
+}
+
+/// `POST /app/projects/new/client` — the inline "New client" form on the
+/// matter-open page. Reuses [`crate::people_commands::create_person`] (the
+/// People command boundary) with the role pinned to `client`, so the matter's
+/// client-side DRI is a real client of record. On success it redirects back with
+/// `?client=<id>` so the DRI picker re-renders with the new client selected; on
+/// failure with `?client_error=` and the submitted values echoed.
+async fn projects_new_client_inline(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<ClientInlineInput>,
+) -> Response {
+    if !is_lawyer_tier(session.as_deref()) {
+        return not_found_response();
+    }
+    let command = crate::people_commands::CreatePersonCommand {
+        name: input.client_name.clone(),
+        email: input.client_email.clone(),
+        role: store::persons::Role::Client.as_str().to_string(),
+        given_name: None,
+        family_name: None,
+        middle_name: None,
+        notion_user_id: None,
+        firm_id: None,
+    };
+    match crate::people_commands::create_person(&state.surreal, &command).await {
+        Ok(created) => {
+            let mut query = String::new();
+            push_query(&mut query, "client", &created.id.to_string());
+            back_to_project_form(&query)
+        }
+        Err(e) => {
+            let mut query = String::new();
+            push_query(&mut query, "client_error", &e.user_message());
+            push_query(&mut query, "client_name", input.client_name.trim());
+            push_query(&mut query, "client_email", input.client_email.trim());
+            back_to_project_form(&query)
+        }
+    }
+}
+
+/// Deserialize an optional form field whose `<select>` posts an **empty
+/// string** when it sits on the blank option — the shape every unselected
+/// picker on the create form arrives in.
+///
+/// `Option<Uuid>` alone does not coerce `""` to `None`: `serde_urlencoded`
+/// hands `""` to the `Uuid` parser, which fails, and Axum's `Form`
+/// extractor then rejects the whole body with a bare 422 — before the
+/// handler's own validation, which is the thing that would have told lawyer
+/// what to pick, can run at all. Blank (or whitespace) means "not chosen"
+/// and becomes `None`; a non-blank value must still parse, so a malformed
+/// id is still an error rather than a silent `None`.
+fn empty_string_as_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    match raw.as_deref().map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(value) => value.parse().map(Some).map_err(serde::de::Error::custom),
+    }
+}
+
+#[derive(Deserialize)]
+struct ProjectInput {
+    /// The matter code. `serde(default)` stays — an HTML form always posts the
+    /// field, and a blank one must reach `open_matter` so lawyers see its
+    /// "Code is required" message rather than a deserialize failure. The field
+    /// is marked `required` in the form template.
+    #[serde(default)]
+    code: String,
+    name: String,
+    /// The entity this matter is opened against — `projects.entity_id` is
+    /// NOT NULL, so a matter without one is a bug. Required on the form;
+    /// an unselected picker posts `""`, which coerces to `None` here so
+    /// the handler's own "Pick an entity" message is what lawyers see.
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    entity_id: Option<Uuid>,
+    /// The matter's scope narrative ("this project's story"). Persisted to
+    /// `projects.description`.
+    #[serde(default)]
+    description: String,
+    /// The required client-side DRI: which existing `Role::Client` person
+    /// this matter is opened for. The client must pre-exist (the picker
+    /// lists existing clients); validated below.
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    client_dri_person_id: Option<Uuid>,
+    #[serde(default)]
+    scope_of_services: String,
+    /// The lawyer-only Slack channel for this matter. Only read by the
+    /// descriptive-update handler; the open-matter form has no field for it.
+    #[serde(default)]
+    internal_slack_channel_url: String,
+    /// The Slack channel shared with the client, if any. Only read by the
+    /// descriptive-update handler; the open-matter form has no field for it.
+    #[serde(default)]
+    external_slack_channel_url: String,
+    /// The Project's source repository, as a whole URL on any forge — where
+    /// its notation templates and Portal are sourced from. Only read by
+    /// the descriptive-update handler; the open-matter form has no field for
+    /// it, so a matter opens without one and records it later.
+    #[serde(default)]
+    repository_url: String,
+    /// The firm-only Notion page for this matter. Only read by the
+    /// descriptive-update handler; the open-matter form has no field for it.
+    #[serde(default)]
+    private_notion_page_url: String,
+    /// The Notion page shared with the client, if any. Only read by the
+    /// descriptive-update handler; the open-matter form has no field for it.
+    #[serde(default)]
+    shared_notion_page_url: String,
+    /// The Slack card's "Share a separate resource with the client" toggle
+    /// (ENG-477), `Some("1")` when ticked and absent when not — an unchecked
+    /// HTML checkbox never posts a value at all. Only read by the
+    /// descriptive-update handler, which uses it to decide whether
+    /// `external_slack_channel_url` is honored or force-cleared; see
+    /// [`projects_update_lawyer_only`].
+    #[serde(default)]
+    share_external_slack_channel: Option<String>,
+    /// The Notion counterpart of `share_external_slack_channel`, gating
+    /// `shared_notion_page_url` on the same terms.
+    #[serde(default)]
+    share_shared_notion_page: Option<String>,
+    /// Set (to `"1"`) when the opening attorney ticks the required conflict
+    /// attestation checkbox. The shared `open_matter` command refuses the open
+    /// without it (`AttestationRequired`) — every open is attested, never
+    /// defaulted. At this firm `lawyer` is an attorney, so a lawyer/admin session
+    /// opening a matter is an attorney attesting they have checked for and
+    /// cleared conflicts. A *blocking* conflict (adverse to a current client)
+    /// is a hard stop the attestation never overrides.
+    #[serde(default)]
+    attestation: Option<String>,
+}
+
+fn nonblank(s: &str) -> Option<String> {
+    let trimmed = s.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Resolve the firm-side person who is the matter's lawyer DRI: the opening
+/// lawyer when their session is linked to a Person, else the firm's
+/// default principal (resolved by role) so a matter still opens with a
+/// real, NOT-NULL DRI under the dev auth-bypass. `None` only when neither
+/// exists — an unseeded DB with an unlinked session, which the caller
+/// rejects.
+async fn resolve_lawyer_dri(
+    surreal: &store::surreal::SurrealDb,
+    session: Option<&SessionData>,
+) -> Option<Uuid> {
+    if let Some(id) = session.and_then(|s| s.person_id) {
+        return Some(id);
+    }
+    store::persons::default_firm_dri(surreal)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Echo the submitted matter-open fields back into a redirect query, under
+/// `error`, so a refused open re-renders with nothing retyped. The conflict
+/// attestation is deliberately never echoed: the opening attorney re-attests on
+/// the corrected submission, so a refused open cannot leave it silently ticked.
+fn project_form_query(input: &ProjectInput, error: &str) -> String {
+    let mut query = String::new();
+    push_query(&mut query, "error", error);
+    push_query(&mut query, "name", input.name.trim());
+    push_query(&mut query, "code", input.code.trim());
+    if let Some(id) = input.entity_id {
+        push_query(&mut query, "entity_id", &id.to_string());
+    }
+    push_query(&mut query, "description", input.description.trim());
+    if let Some(id) = input.client_dri_person_id {
+        push_query(&mut query, "client_dri_person_id", &id.to_string());
+    }
+    push_query(
+        &mut query,
+        "scope_of_services",
+        input.scope_of_services.trim(),
+    );
+    query
+}
+
+/// Refuse a matter open: redirect back to the form with the message and the
+/// submitted values (post/redirect/get). No matter is created — the caller
+/// returns this before any insert, or after the open transaction rolled back.
+fn refuse_open_matter(input: &ProjectInput, message: &str) -> Response {
+    back_to_project_form(&project_form_query(input, message))
+}
+
+/// Validate the create form's selected client DRI: it must be present, exist,
+/// and carry `Role::Client`. Returns the client's `store::persons::Person` (so the caller
+/// has its email/name for the retainer) or the refusal redirect. The client-side
+/// DRI is a real client of record, never a firm attorney — both the engineering
+/// and legal councils flagged the firm-as-its-own-client default as a
+/// conflict/loyalty problem.
+async fn selected_client_dri(
+    surreal: &store::surreal::SurrealDb,
+    input: &ProjectInput,
+) -> Result<store::persons::Person, Response> {
+    let Some(id) = input.client_dri_person_id else {
+        return Err(refuse_open_matter(
+            input,
+            "Pick the client this matter is for.",
+        ));
+    };
+    let row = match store::persons::find_by_id(surreal, id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return Err(refuse_open_matter(
+                input,
+                "That client was not found — pick an existing client (create them first if \
+                 needed).",
+            ));
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "projects_create: client DRI lookup failed");
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response());
+        }
+    };
+    if row.role != store::persons::Role::Client {
+        return Err(refuse_open_matter(
+            input,
+            "The client DRI must be an existing client person.",
+        ));
+    }
+    Ok(row)
+}
+
+/// Map a matter-open command failure to the refusal redirect. Field-correctable
+/// problems (a bad reference, a missing attestation, a code clash, a blocking
+/// conflict) carry their own message; a mid-open database error carries the
+/// admin-gated one. The command wrote nothing on any of these — it validates and
+/// provisions in one transaction that rolls back on failure.
+fn open_matter_form_error(
+    session: Option<&SessionData>,
+    input: &ProjectInput,
+    err: store::projects::OpenMatterError,
+) -> Response {
+    use store::projects::OpenMatterError as E;
+    let msg = match err {
+        E::AttestationRequired => "Attest that you have checked for conflicts, and that either \
+             none prevent opening this Project or this Project is not legal advice."
+            .to_string(),
+        E::BlockingConflict(findings) => format!(
+            "Conflict check blocked this matter — it is adverse to a current client. Resolve the \
+             conflict or record a waiver before opening.\n\n{}",
+            findings.join("\n"),
+        ),
+        E::CodeConflict => {
+            "That project code is already in use. Choose a different code.".to_string()
+        }
+        E::Invalid(m) => m.to_string(),
+        // The matter *did* open — only the conflict attestation failed to
+        // record — so this must not read as a refusal. It says what is
+        // missing, because the attestation is the record the firm's
+        // conflict discipline rests on.
+        E::Attestation(e) => {
+            tracing::error!(error = %e, "open matter: attestation was not recorded");
+            "The matter opened, but its conflict attestation was not recorded. Tell an \
+             administrator before proceeding."
+                .to_string()
+        }
+        E::ClientNotAllowed => {
+            "The client of record must be an existing client person.".to_string()
+        }
+        E::AttesterNotAllowed => {
+            "Your session isn't a firm attorney — a matter's attester must be a firm lawyer."
+                .to_string()
+        }
+        E::NotFound(what) => {
+            format!("That {what} was not found — open the matter against existing records.")
+        }
+        // The `String` description is shown to admins only; other lawyers get a
+        // generic line. The caller has already logged the real error, so it is
+        // queryable in `gcloud` regardless of what the UI shows.
+        E::Db(e) => admin_gated_message(
+            is_admin(session),
+            &format!("Couldn't open this matter — {e}."),
+            "Couldn't open this matter. The error has been logged; an admin can review the \
+             details.",
+        ),
+    };
+    refuse_open_matter(input, &msg)
+}
+
+/// POST `/app/projects` — open a matter, and **only** the matter: the
+/// Project row, its conflict-review audit, and the lawyer-DRI + client
+/// participations, in one transaction.
+///
+/// Opening a matter and opening its retainer are two steps. A Project is
+/// created first (this handler); the retainer is then created on it like
+/// any other Notation — `navigator notation create <retainer_code>
+/// --project <code>`, or the lawyer retainer walk. The engagement-first rule
+/// still holds and is enforced where notations are opened
+/// (`workflows::notation_session`): a matter's *first* notation must be the
+/// engagement that opens it. It is not this handler's job to pre-satisfy it
+/// — a fresh matter legitimately has no engagement letter yet.
+async fn projects_create_lawyer_only(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<ProjectInput>,
+) -> Response {
+    if !is_lawyer_tier(session.as_deref()) {
+        return not_found_response();
+    }
+    if input.name.trim().is_empty() {
+        return refuse_open_matter(&input, "Name is required.");
+    }
+
+    // Presentation validation: resolve the human-facing picks to the ids the
+    // shared command needs, each with a friendly, field-specific form error.
+    // The command re-validates every reference — these lookups are for the
+    // message, not the trust boundary.
+    let client = match selected_client_dri(&state.surreal, &input).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    let Some(entity_id) = input.entity_id else {
+        return refuse_open_matter(
+            &input,
+            "Pick an entity to open the matter against (create the entity first if needed).",
+        );
+    };
+
+    // The attesting attorney and lawyer-side DRI: the opening lawyer when their
+    // session is linked to a Person, else the firm principal under the dev
+    // auth-bypass (never a sentinel). NOT NULL — a matter never opens without a
+    // real responsible attorney.
+    let Some(attester) = resolve_lawyer_dri(&state.surreal, session.as_deref()).await else {
+        return refuse_open_matter(
+            &input,
+            "Your session isn't linked to a firm person — cannot open a matter.",
+        );
+    };
+
+    // Open the matter through the shared command — the same boundary
+    // `POST /app/api/projects` (and, over HTTP, the CLI's `project
+    // create`) uses (#355). It owns the reference checks, the conflict
+    // block, the attestation audit row, both DRI
+    // designations in one transaction. The form is a thin adapter: it resolves
+    // ids and renders the command's outcome. The required attestation checkbox
+    // is the conflict control on every open; soft (non-blocking) findings
+    // proceed on it and are recorded in the audit row, while a blocking
+    // conflict is a hard stop.
+    match store::projects::open_matter(
+        &state.surreal,
+        &store::projects::OpenMatterCommand {
+            name: input.name.clone(),
+            code: input.code.clone(),
+            client_id: client.id,
+            entity_id,
+            jurisdiction_id: None,
+            description: nonblank(&input.description),
+            brand: views::brand::brand_key().as_str().to_string(),
+            attestation: input.attestation.as_deref() == Some("1"),
+            acting_person_id: attester,
+            closed_at: None,
+        },
+    )
+    .await
+    {
+        Ok(created) => {
+            // Creating a matter lands on the matter. Its engagement letter is
+            // the next step, not this one — the show page names that gap and
+            // links to it, so lawyers choose the retainer deliberately.
+            Redirect::to(&format!("/app/projects/{}", created.code)).into_response()
+        }
+        Err(e) => open_matter_form_error(session.as_deref(), &input, e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ProjectParticipationInput {
+    #[serde(default, rename = "_csrf")]
+    _csrf_token: Option<String>,
+    #[serde(default)]
+    person_id: Option<Uuid>,
+    /// The accountability control: `none`, `lawyer`, or `client`. Absent when
+    /// the control was locked, which reads as "leave the markers alone".
+    #[serde(default)]
+    dri: Option<String>,
+}
+
+impl ProjectParticipationInput {
+    /// The accountability request this submit carries.
+    ///
+    /// A missing field is [`DriRequest::Unchanged`]: a locked control posts
+    /// nothing, and neither does any door that does not render one.
+    fn dri_request(&self) -> store::participation::DriRequest {
+        use store::participation::DriRequest;
+        match self.dri.as_deref() {
+            Some("lawyer") => DriRequest::Designate(store::projects::DriSide::Lawyer),
+            Some("client") => DriRequest::Designate(store::projects::DriSide::Client),
+            Some("none") => DriRequest::Clear,
+            _ => DriRequest::Unchanged,
+        }
+    }
+}
+
+/// Turn a refused DRI change into the operator-facing sentence.
+///
+/// Designation is additive, so nothing here is a two-step: a submit either
+/// changes the matter's accountability or is refused with a reason.
+fn refuse_dri(
+    project_code: &str,
+    role_id: Option<Uuid>,
+    input: &ProjectParticipationInput,
+    error: &store::participation::DriError,
+) -> Response {
+    use store::participation::DriError as E;
+    let message = match error {
+        E::TierMismatch => {
+            "Only a firm-side lawyer can be the lawyer DRI, and only a client can be the client DRI."
+        }
+        E::NotPermitted | E::ActorUnknown => {
+            "You may not change this matter's accountability."
+        }
+        E::LawyerDriRequired => {
+            "This matter always has a lawyer DRI. Designate another lawyer before removing this one."
+        }
+        E::Db(err) => {
+            tracing::error!(error = %err, %project_code, "project participation: dri designation failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
+        }
+    };
+    refuse_participation(project_code, role_id, input, message)
+}
+
+/// The DRI actor behind this request.
+///
+/// This surface is admin-gated, so a session that reached it is already
+/// entitled; naming the person is what puts them on the audit row. A session
+/// with no `persons` row cannot be named, and the trail records the change with
+/// no actor rather than not recording it.
+fn dri_actor(session: Option<&SessionData>) -> store::participation::DriActor {
+    session.and_then(|session| session.person_id).map_or(
+        store::participation::DriActor::System,
+        store::participation::DriActor::Person,
+    )
+}
+
+/// Require an admin who is not in a read-only DRI view before changing a project's participation
+/// ledger. This avoids exposing the firm-wide people directory to ordinary
+/// lawyer and keeps project-scope grants with the administrative ACL owner.
+///
+/// This is the *firm-wide* ledger form. A matter's own lawyer DRIs govern their
+/// side from the workbench (`webapp::lawyer_project_detail`), which shows only
+/// the people already on that matter and so needs no directory read.
+async fn project_participation_access(
+    surreal: &store::surreal::SurrealDb,
+    session: Option<&SessionData>,
+    project_id: Uuid,
+) -> Result<(), Response> {
+    if !can_manage_project_participation(session) {
+        return Err(not_found_response());
+    }
+    // Only admins reach this helper, and the lawyer access model gives admins
+    // the documented all-project bypass. Keep the project lookup below so a
+    // random identifier still returns a normal not-found response.
+    match store::projects::find_by_id(surreal, project_id).await {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(not_found_response()),
+        Err(e) => {
+            tracing::error!(error = %e, project_id = %project_id, "project participation: project lookup failed");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response())
+        }
+    }
+}
+
+async fn project_show_path(surreal: &store::surreal::SurrealDb, project_id: Uuid) -> String {
+    store::projects::find_by_id(surreal, project_id)
+        .await
+        .ok()
+        .flatten()
+        .map_or_else(
+            || APP_PROJECTS_PATH.to_string(),
+            |project| format!("/app/projects/{}", project.code),
+        )
+}
+
+async fn participation_people(
+    surreal: &store::surreal::SurrealDb,
+) -> Result<Vec<store::persons::Person>, Response> {
+    store::persons::list_directory(surreal, "", "", &[])
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "project participation: people lookup failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response()
+        })
+}
+
+/// The participation form's path for one matter — the page a refused add or
+/// edit redirects back to (post/redirect/get), carrying its message and the
+/// submitted values so nothing is retyped.
+fn participation_form_path(project_code: &str, role_id: Option<Uuid>) -> String {
+    match role_id {
+        Some(role_id) => format!("/app/projects/{project_code}/people/{role_id}/edit"),
+        None => format!("/app/projects/{project_code}/people/new"),
+    }
+}
+
+/// Refuse a participation add/edit: redirect back to its form with the message
+/// and the submitted person echoed.
+fn refuse_participation(
+    project_code: &str,
+    role_id: Option<Uuid>,
+    input: &ProjectParticipationInput,
+    error: &str,
+) -> Response {
+    let mut query = String::new();
+    push_query(&mut query, "error", error);
+    if let Some(person_id) = input.person_id {
+        push_query(&mut query, "person_id", &person_id.to_string());
+    }
+    if let Some(dri) = input.dri.as_deref() {
+        push_query(&mut query, "dri", dri);
+    }
+    let path = participation_form_path(project_code, role_id);
+    if query.is_empty() {
+        Redirect::to(&path).into_response()
+    } else {
+        Redirect::to(&format!("{path}?{query}")).into_response()
+    }
+}
+
+async fn project_participation_create(
+    State(surreal): State<store::surreal::SurrealDb>,
+    Path(project_code): Path<String>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<ProjectParticipationInput>,
+) -> Response {
+    let session = session.as_deref();
+    let Some(id) = store::projects::id_for_code(&surreal, &project_code).await else {
+        return not_found_response();
+    };
+    if let Err(response) = project_participation_access(&surreal, session, id).await {
+        return response;
+    }
+    let people = match participation_people(&surreal).await {
+        Ok(rows) => rows,
+        Err(response) => return response,
+    };
+    let Some(person_id) = input.person_id else {
+        return refuse_participation(
+            &project_code,
+            None,
+            &input,
+            "Choose a person to assign to this matter.",
+        );
+    };
+    if !people.iter().any(|p| p.id == person_id) {
+        return refuse_participation(&project_code, None, &input, "That person was not found.");
+    }
+    // Route the write through the shared command — the same boundary
+    // `POST /app/api/projects/{id}/participants` uses (#355). It owns the
+    // participation validation, the one-row-per-person+matter rule, and the
+    // insert; the form resolves the person field and renders the outcome.
+    // The form asks only who; the command derives the participation from that
+    // person's tier, so this handler never names one.
+    match store::participation::add_participant(
+        &surreal,
+        &store::participation::AddParticipantCommand {
+            project_id: id,
+            person_id,
+            dri: input.dri_request(),
+            actor: dri_actor(session),
+        },
+    )
+    .await
+    {
+        Ok(_) => Redirect::to(&project_show_path(&surreal, id).await).into_response(),
+        Err(e) => {
+            use store::participation::AddParticipantError as E;
+            let message = match e {
+                E::Duplicate => "That person is already assigned to this matter.",
+                E::PersonNotFound => "That person was not found.",
+                E::ProjectNotFound => "That matter was not found.",
+                E::Dri(error) => return refuse_dri(&project_code, None, &input, &error),
+                E::Db(err) => {
+                    tracing::error!(error = %err, project_id = %id, "project participation: add failed");
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
+                }
+            };
+            refuse_participation(&project_code, None, &input, message)
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn project_participation_update(
+    State(surreal): State<store::surreal::SurrealDb>,
+    Path((project_code, role_id)): Path<(String, Uuid)>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<ProjectParticipationInput>,
+) -> Response {
+    let session = session.as_deref();
+    let Some(id) = store::projects::id_for_code(&surreal, &project_code).await else {
+        return not_found_response();
+    };
+    if let Err(response) = project_participation_access(&surreal, session, id).await {
+        return response;
+    }
+    let people = match participation_people(&surreal).await {
+        Ok(rows) => rows,
+        Err(response) => return response,
+    };
+    let Some(person_id) = input.person_id else {
+        return refuse_participation(
+            &project_code,
+            Some(role_id),
+            &input,
+            "Choose a person to assign to this matter.",
+        );
+    };
+    if !people.iter().any(|p| p.id == person_id) {
+        return refuse_participation(
+            &project_code,
+            Some(role_id),
+            &input,
+            "That person was not found.",
+        );
+    }
+    // Route the write through the shared command (#355) — it owns the
+    // participation validation, the duplicate rule, and the lawyer-DRI-lockout
+    // invariant; the form resolves the person field and renders the outcome.
+    // Re-pointing a row re-derives which side of the matter it sits on, inside
+    // the command — this handler resolves the person and nothing else.
+    match store::participation::update_participant(
+        &surreal,
+        &store::participation::UpdateParticipantCommand {
+            project_id: id,
+            role_id,
+            person_id,
+            dri: input.dri_request(),
+            actor: dri_actor(session),
+        },
+    )
+    .await
+    {
+        Ok(_) => Redirect::to(&project_show_path(&surreal, id).await).into_response(),
+        Err(e) => {
+            use store::participation::UpdateParticipantError as E;
+            let message = match e {
+                E::NotFound => return not_found_response(),
+                E::PersonNotFound => "That person was not found.",
+                E::Duplicate => "That person is already assigned to this matter.",
+                E::DriLockout => PROJECT_PARTICIPATION_DRI_LOCKOUT_ERROR,
+                E::Dri(error) => return refuse_dri(&project_code, Some(role_id), &input, &error),
+                E::Db(err) => {
+                    tracing::error!(error = %err, project_id = %id, role_id = %role_id, "project participation: update failed");
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
+                }
+            };
+            refuse_participation(&project_code, Some(role_id), &input, message)
+        }
+    }
+}
+
+async fn project_participation_delete(
+    State(surreal): State<store::surreal::SurrealDb>,
+    Path((project_code, role_id)): Path<(String, Uuid)>,
+    session: Option<Extension<SessionData>>,
+) -> Response {
+    let session = session.as_deref();
+    let Some(id) = store::projects::id_for_code(&surreal, &project_code).await else {
+        return not_found_response();
+    };
+    if let Err(response) = project_participation_access(&surreal, session, id).await {
+        return response;
+    }
+    // Route the removal through the shared command (#355) — it owns the
+    // lawyer-DRI-lockout invariant (the accountability marker rides this row, so
+    // removing the DRI's row would strand the matter's accountable lawyer).
+    match store::participation::remove_participant(&surreal, id, role_id, dri_actor(session)).await
+    {
+        Ok(()) => Redirect::to(&project_show_path(&surreal, id).await).into_response(),
+        Err(store::participation::RemoveParticipantError::NotFound) => not_found_response(),
+        Err(store::participation::RemoveParticipantError::DriLockout) => {
+            delete_refused_response(PROJECT_PARTICIPATION_DRI_LOCKOUT_ERROR, APP_PROJECTS_PATH)
+        }
+        Err(store::participation::RemoveParticipantError::Dri(error)) => {
+            // Removing a row that carries a marker is a DRI change, so it can
+            // be refused for the same reasons a designation can.
+            tracing::warn!(error = %error, project_id = %id, role_id = %role_id, "project participation: dri removal refused");
+            delete_refused_response(&error.to_string(), APP_PROJECTS_PATH)
+        }
+        Err(store::participation::RemoveParticipantError::Db(e)) => {
+            tracing::error!(error = %e, project_id = %id, role_id = %role_id, "project participation delete failed");
+            delete_refused_response(PROJECT_PARTICIPATION_DELETE_ERROR, APP_PROJECTS_PATH)
+        }
+    }
+}
+
+/// The two matter-workbench accountability controls, on people already assigned
+/// to the matter.
+///
+/// These are deliberately *not* behind [`project_participation_access`]. That
+/// gate protects the firm-wide participation form, which reads the whole people
+/// directory; this pair names one row that is already on the matter, so it needs
+/// no directory read and admits the lawyer tier. Who may actually move the
+/// marker is `store::participation`'s decision, from the actor these handlers
+/// pass it: a matter's lawyer DRIs govern their own side, and the client side
+/// takes the lawyer tier.
+///
+/// `role_id` names the participation row; the side follows from the person on
+/// it, so neither handler takes one.
+async fn matter_dri_designate(
+    State(surreal): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path((project_code, role_id)): Path<(String, Uuid)>,
+) -> Response {
+    let session = session.as_deref();
+    if !is_lawyer_tier(session) {
+        return not_found_response();
+    }
+    let Some(id) = store::projects::id_for_code(&surreal, &project_code).await else {
+        return not_found_response();
+    };
+    let Some(row) = participation_row(&surreal, id, role_id).await else {
+        return not_found_response();
+    };
+    // The side is the person's tier, not a field the form posts — the same
+    // derivation `participation_for_role` makes everywhere else.
+    let Some(person) = (match store::persons::find_by_id(&surreal, row.person_id).await {
+        Ok(person) => person,
+        Err(e) => {
+            tracing::error!(error = %e, project_id = %id, "matter dri: person lookup failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
+        }
+    }) else {
+        return not_found_response();
+    };
+    let side = if person.role.is_lawyer_tier() {
+        store::projects::DriSide::Lawyer
+    } else {
+        store::projects::DriSide::Client
+    };
+    matter_dri_write(
+        &surreal,
+        id,
+        role_id,
+        row.person_id,
+        store::participation::DriRequest::Designate(side),
+        dri_actor(session),
+    )
+    .await
+}
+
+async fn matter_dri_remove(
+    State(surreal): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path((project_code, role_id)): Path<(String, Uuid)>,
+) -> Response {
+    let session = session.as_deref();
+    if !is_lawyer_tier(session) {
+        return not_found_response();
+    }
+    let Some(id) = store::projects::id_for_code(&surreal, &project_code).await else {
+        return not_found_response();
+    };
+    let Some(row) = participation_row(&surreal, id, role_id).await else {
+        return not_found_response();
+    };
+    matter_dri_write(
+        &surreal,
+        id,
+        role_id,
+        row.person_id,
+        store::participation::DriRequest::Clear,
+        dri_actor(session),
+    )
+    .await
+}
+
+/// One participation row, confirmed to belong to this matter.
+async fn participation_row(
+    surreal: &store::surreal::SurrealDb,
+    project_id: Uuid,
+    role_id: Uuid,
+) -> Option<store::projects::PersonProjectRole> {
+    store::projects::participation_by_id(surreal, role_id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|row| row.project_id == project_id)
+}
+
+/// Send one accountability change through the shared command and render the
+/// outcome back onto the workbench.
+async fn matter_dri_write(
+    surreal: &store::surreal::SurrealDb,
+    project_id: Uuid,
+    role_id: Uuid,
+    person_id: Uuid,
+    dri: store::participation::DriRequest,
+    actor: store::participation::DriActor,
+) -> Response {
+    let show_path = project_show_path(surreal, project_id).await;
+    let result = store::participation::update_participant(
+        surreal,
+        &store::participation::UpdateParticipantCommand {
+            project_id,
+            role_id,
+            person_id,
+            dri,
+            actor,
+        },
+    )
+    .await;
+    // The refusal rides back to the matter it was refused on, not to the
+    // matter list — the operator is looking at the accountability panel and
+    // that is where the sentence has to appear.
+    let refused = |message: &str| {
+        Redirect::to(&format!(
+            "{show_path}?error={}",
+            encode_query_value(message)
+        ))
+        .into_response()
+    };
+    match result {
+        Ok(_) => Redirect::to(&show_path).into_response(),
+        Err(store::participation::UpdateParticipantError::NotFound) => not_found_response(),
+        Err(store::participation::UpdateParticipantError::Dri(error)) => {
+            refused(&error.to_string())
+        }
+        Err(e) => {
+            tracing::error!(error = %e, %project_id, %role_id, "matter dri: write failed");
+            refused(PROJECT_PARTICIPATION_DELETE_ERROR)
+        }
+    }
+}
+
+async fn projects_update_lawyer_only(
+    State(surreal): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path(code): Path<String>,
+    Form(input): Form<ProjectInput>,
+) -> Response {
+    if !is_lawyer_tier(session.as_deref()) {
+        return not_found_response();
+    }
+    // This edit form owns descriptive fields and resource links. Firm/brand
+    // changes are available only through the JSON API. The form renders no
+    // status control:
+    // changing a matter's lifecycle (open/closed/archived) and its coupled
+    // retention `closed_at` is a transition with firm-policy semantics, handled
+    // by dedicated lifecycle commands (navigator#770), not this general edit.
+    // So `status` is neither posted by the form nor forwarded here. The form
+    // always sends `description`, the two Slack fields, the two Notion fields,
+    // and the repository URL, so pass each as `Some` to keep the
+    // blank-clears behavior.
+    let Some(project) = store::projects::find_by_code(&surreal, &code)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return (StatusCode::NOT_FOUND, webapp::error_pages::not_found()).into_response();
+    };
+    let project_id = project.id;
+    // ENG-477: each shared resource's own card carries a "Share a separate
+    // resource with the client" toggle. An unchecked toggle forces the shared
+    // column blank regardless of whatever text a lawyer left in that (hidden)
+    // field — so unchecking the box and saving is what actually removes the
+    // client's access, and a stale value sitting in a hidden field can never be
+    // resubmitted as if sharing were still on. This never touches the private
+    // half of either card.
+    let share_external_slack = input.share_external_slack_channel.as_deref() == Some("1");
+    let share_shared_notion = input.share_shared_notion_page.as_deref() == Some("1");
+    let command = store::projects::UpdateProjectCommand {
+        // The form always posts every field, so it is a full replacement even
+        // though the command is a patch. A blank name still fails the command's
+        // own refusal rather than clearing the column.
+        name: Some(input.name),
+        entity_id: input.entity_id,
+        firm_id: None,
+        brand: None,
+        description: Some(input.description),
+        internal_slack_channel_url: Some(input.internal_slack_channel_url),
+        external_slack_channel_url: Some(if share_external_slack {
+            input.external_slack_channel_url
+        } else {
+            String::new()
+        }),
+        repository_url: Some(input.repository_url),
+        private_notion_page_url: Some(input.private_notion_page_url),
+        shared_notion_page_url: Some(if share_shared_notion {
+            input.shared_notion_page_url
+        } else {
+            String::new()
+        }),
+    };
+    match store::projects::update_project(&surreal, project_id, &command).await {
+        Ok(_) => Redirect::to("/app/projects").into_response(),
+        Err(store::projects::ProjectCommandError::NotFound) => {
+            (StatusCode::NOT_FOUND, webapp::error_pages::not_found()).into_response()
+        }
+        Err(store::projects::ProjectCommandError::Invalid(message)) => {
+            (StatusCode::BAD_REQUEST, message).into_response()
+        }
+        // `Referenced` is a delete-only outcome; a descriptive update never
+        // raises it, but the enum is shared, so treat it as the same
+        // server-side fault rather than leaving the match non-exhaustive.
+        Err(store::projects::ProjectCommandError::Db(e)) => {
+            tracing::error!(error = %e, %project_id, "projects_update: failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                webapp::error_pages::server_error(),
+            )
+                .into_response()
+        }
+        Err(e @ store::projects::ProjectCommandError::Referenced(_)) => {
+            tracing::error!(error = %e, %project_id, "projects_update: unexpected referenced");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                webapp::error_pages::server_error(),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn projects_delete_lawyer_only(
+    State(surreal): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path(project_code): Path<String>,
+) -> Response {
+    if !is_lawyer_tier(session.as_deref()) {
+        return not_found_response();
+    }
+    let Some(id) = store::projects::id_for_code(&surreal, &project_code).await else {
+        return not_found_response();
+    };
+    match store::projects::delete_project_with_surreal(&surreal, id).await {
+        // `NotFound` lands with `Ok` on purpose: already gone is what the
+        // caller wanted, so a double-clicked delete or a second tab must not
+        // error. The API renders that same outcome as a 404 — only this
+        // browser door treats it as done.
+        Ok(_) | Err(store::projects::ProjectCommandError::NotFound) => {
+            delete_response("/app/projects")
+        }
+        // Dependents still reference the matter — the row stays put.
+        Err(store::projects::ProjectCommandError::Referenced(detail)) => delete_refused_response(
+            &format!("Couldn't delete this matter — {detail}."),
+            "/app/projects",
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, project_id = %id, "projects_delete: failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                webapp::error_pages::server_error(),
+            )
+                .into_response()
+        }
+    }
+}
+
+// --- CSV exports -----------------------------------------------------
+//
+// One endpoint per CRUD admin resource. Returns an RFC 4180 CSV with
+// the columns the admin list pages already show, plus the resolved
+// names of foreign-key references (entity type / jurisdiction /
+// related entity) so the spreadsheet stays readable without joining
+// back to other exports.
+
+async fn people_csv(State(surreal): State<store::surreal::SurrealDb>) -> crate::admin_csv::CsvBody {
+    // Ordered by name, not id: the CSV is a human artifact and an id
+    // ordering carries no meaning to its reader.
+    let rows_raw = store::persons::list_directory(&surreal, "", "", &[])
+        .await
+        .unwrap_or_default();
+    let rows: Vec<Vec<String>> = rows_raw
+        .into_iter()
+        .map(|p| vec![p.id.to_string(), p.name, p.email])
+        .collect();
+    crate::admin_csv::CsvBody {
+        filename: "people.csv",
+        headers: vec!["id", "name", "email"],
+        rows,
+    }
+}
+
+async fn entities_csv(
+    State(surreal): State<store::surreal::SurrealDb>,
+) -> crate::admin_csv::CsvBody {
+    let mut rows_raw = store::entities::all(&surreal).await.unwrap_or_default();
+    // The CSV has always been id-ordered, and `entities::all` reads by
+    // name, so the order is restored here rather than adding a second
+    // ordering to the store for one export.
+    rows_raw.sort_by_key(|row| row.id);
+    // A failed reference read degrades to empty cells, matching the
+    // other lookups.
+    let types = store::entity_types::list(&surreal, &[])
+        .await
+        .unwrap_or_default();
+    let jurs = store::jurisdictions::list_all(&surreal)
+        .await
+        .unwrap_or_default();
+    let by_type = |id: Uuid| {
+        types
+            .iter()
+            .find(|t| t.id == id)
+            .map_or(String::new(), |t| t.name.clone())
+    };
+    let by_jur = |id: Uuid| {
+        jurs.iter()
+            .find(|j| j.id == id)
+            .map_or(String::new(), |j| j.name.clone())
+    };
+    let rows: Vec<Vec<String>> = rows_raw
+        .into_iter()
+        .map(|e| {
+            vec![
+                e.id.to_string(),
+                e.name,
+                by_type(e.entity_type_id),
+                by_jur(e.jurisdiction_id),
+            ]
+        })
+        .collect();
+    crate::admin_csv::CsvBody {
+        filename: "entities.csv",
+        headers: vec!["id", "name", "entity_type", "jurisdiction"],
+        rows,
+    }
+}
+
+async fn projects_csv(
+    State(surreal): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+) -> crate::admin_csv::CsvBody {
+    let (person_id, role) = match session.as_deref() {
+        Some(s) => (s.person_id, s.role),
+        None => (None, store::persons::Role::Client),
+    };
+    let rows_raw = store::access::visible_projects_as_lawyer(&surreal, person_id, role)
+        .await
+        .unwrap_or_default();
+    let entities = store::entities::all(&surreal).await.unwrap_or_default();
+    let by_entity = |id: Uuid| {
+        entities
+            .iter()
+            .find(|e| e.id == id)
+            .map_or(String::new(), |e| e.name.clone())
+    };
+    let rows: Vec<Vec<String>> = rows_raw
+        .into_iter()
+        .map(|p| {
+            vec![
+                p.id.to_string(),
+                p.code,
+                p.name,
+                p.status,
+                by_entity(p.entity_id),
+            ]
+        })
+        .collect();
+    crate::admin_csv::CsvBody {
+        filename: "projects.csv",
+        headers: vec!["id", "code", "name", "status", "entity_name"],
+        rows,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        admin_gated_message, blog_post_cancel, bootstrap_company_from_env,
+        bootstrap_company_from_lookup, can_submit_testimonial, encode_query_value, is_admin,
+        is_blog_mp4, mp4_display_dimensions, open_matter_form_error, participation_people,
+        project_participation_access, project_testimonial_save, AdminState, ProjectInput,
+        TestimonialForm,
+    };
+    use crate::session::SessionData;
+    use store::persons::Role;
+    use uuid::Uuid;
+
+    #[test]
+    fn blog_video_upload_requires_an_mp4_container_header() {
+        assert!(is_blog_mp4(b"\0\0\0\x18ftypisom\0\0\0\0"));
+        assert!(!is_blog_mp4(b"not mp4"));
+        assert!(!is_blog_mp4(b"\0\0\0\x18nopeisom\0\0\0\0"));
+    }
+
+    /// A synthetic MP4: `ftyp`, then a `moov` with one `trak` per
+    /// `(width, height, rotated, version)`.
+    pub(crate) fn synthetic_mp4(tracks: &[(u32, u32, bool, u8)]) -> Vec<u8> {
+        fn boxed(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
+            let mut out = u32::try_from(payload.len() + 8)
+                .unwrap()
+                .to_be_bytes()
+                .to_vec();
+            out.extend_from_slice(&kind);
+            out.extend_from_slice(payload);
+            out
+        }
+        let mut moov = Vec::new();
+        for &(width, height, rotated, version) in tracks {
+            let mut tkhd = vec![version, 0, 0, 3];
+            tkhd.extend(vec![0_u8; if version == 1 { 32 } else { 20 }]);
+            tkhd.extend([0_u8; 16]);
+            let one = 0x0001_0000_u32;
+            let minus_one = (-0x0001_0000_i32).cast_unsigned();
+            let matrix: [u32; 9] = if rotated {
+                [0, one, 0, minus_one, 0, 0, 0, 0, 0x4000_0000]
+            } else {
+                [one, 0, 0, 0, one, 0, 0, 0, 0x4000_0000]
+            };
+            for value in matrix {
+                tkhd.extend(value.to_be_bytes());
+            }
+            tkhd.extend((width << 16).to_be_bytes());
+            tkhd.extend((height << 16).to_be_bytes());
+            moov.extend(boxed(*b"trak", &boxed(*b"tkhd", &tkhd)));
+        }
+        let mut file = boxed(*b"ftyp", b"isom\0\0\0\0");
+        file.extend(boxed(*b"moov", &moov));
+        file
+    }
+
+    #[test]
+    fn blog_video_dimensions_come_from_the_first_visual_track_and_its_rotation() {
+        assert_eq!(
+            mp4_display_dimensions(&synthetic_mp4(&[(1080, 1920, false, 0)])),
+            Some((1080, 1920))
+        );
+        assert_eq!(
+            mp4_display_dimensions(&synthetic_mp4(&[(0, 0, false, 0), (1920, 1080, false, 1)])),
+            Some((1920, 1080)),
+            "the audio track is skipped and a version 1 header is read"
+        );
+        assert_eq!(
+            mp4_display_dimensions(&synthetic_mp4(&[(1920, 1080, true, 0)])),
+            Some((1080, 1920)),
+            "a quarter-turned landscape track displays as portrait"
+        );
+        assert_eq!(
+            mp4_display_dimensions(&synthetic_mp4(&[(0, 0, false, 0)])),
+            None
+        );
+        let truncated = synthetic_mp4(&[(1080, 1920, false, 0)]);
+        assert_eq!(
+            mp4_display_dimensions(&truncated[..truncated.len() - 6]),
+            None
+        );
+        assert_eq!(mp4_display_dimensions(b"\0\0\0\x18ftypisom\0\0\0\0"), None);
+    }
+
+    fn blank_project_input(code: &str) -> ProjectInput {
+        ProjectInput {
+            code: code.to_string(),
+            name: "A Matter".to_string(),
+            entity_id: None,
+            description: String::new(),
+            client_dri_person_id: None,
+            scope_of_services: String::new(),
+            internal_slack_channel_url: String::new(),
+            external_slack_channel_url: String::new(),
+            repository_url: String::new(),
+            private_notion_page_url: String::new(),
+            shared_notion_page_url: String::new(),
+            share_external_slack_channel: None,
+            share_shared_notion_page: None,
+            attestation: None,
+        }
+    }
+
+    // A code collision is caller-correctable, so the redirect must say the
+    // lawyer needs to choose a different code, never anything implying
+    // Navigator will pick one (ENG-414: `open_matter` refuses a colliding
+    // code rather than generating around it).
+    #[test]
+    fn a_code_conflict_tells_the_lawyer_to_choose_a_different_code() {
+        let input = blank_project_input("acme-holdings");
+        let response =
+            open_matter_form_error(None, &input, store::projects::OpenMatterError::CodeConflict);
+        let location = response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .expect("a refusal redirects back to the form")
+            .to_str()
+            .expect("a `Location` built from `encode_query_value` is valid ASCII");
+        assert!(
+            location.contains("already%20in%20use") && location.contains("different%20code"),
+            "expected the refusal to name the conflict and ask for a different code: {location}"
+        );
+    }
+
+    /// The encoder's contract, pinned directly rather than only through the
+    /// one flow that happened to expose it.
+    ///
+    /// Every byte it emits must be legal in a `Location` header. Before this
+    /// was fixed a conflict block (findings joined with a newline) and any
+    /// refusal carrying an em dash passed through unchanged and turned a
+    /// deliberate refusal into a `500` — latent in the pre-existing `?error=`
+    /// flashes, not only in the new post/redirect/get paths.
+    #[test]
+    fn encode_query_value_emits_only_header_safe_bytes() {
+        // Query syntax that would otherwise split the query.
+        assert_eq!(
+            encode_query_value("a?b&c#d%e+f g"),
+            "a%3Fb%26c%23d%25e%2Bf%20g"
+        );
+        // Control characters: the newline joining conflict findings, and the
+        // CR that would otherwise permit header splitting outright.
+        assert_eq!(encode_query_value("one\ntwo"), "one%0Atwo");
+        assert_eq!(encode_query_value("a\r\nb"), "a%0D%0Ab");
+        assert_eq!(encode_query_value("\u{0}"), "%00");
+        // Printable ASCII that is nonetheless illegal in a URI query. The
+        // playbook positions textarea rides a refusal as `?positions=`, and its
+        // `|` field delimiter is the common case — left raw, the `Location`
+        // is not a URI at all and a strict client refuses the redirect.
+        assert_eq!(
+            encode_query_value("Term | 1 year | 2 years"),
+            "Term%20%7C%201%20year%20%7C%202%20years",
+        );
+        assert_eq!(
+            encode_query_value("a\"b<c>d[e]f\\g^h`i{j}k"),
+            "a%22b%3Cc%3Ed%5Be%5Df%5Cg%5Eh%60i%7Bj%7Dk",
+        );
+        // Non-ASCII: an em dash is three UTF-8 bytes, each encoded.
+        assert_eq!(
+            encode_query_value("no \u{2014} yes"),
+            "no%20%E2%80%94%20yes"
+        );
+        // DEL, the boundary on the upper side.
+        assert_eq!(encode_query_value("\u{7f}"), "%7F");
+        // Ordinary printable ASCII is untouched.
+        assert_eq!(
+            encode_query_value("Plain-Text_123.txt"),
+            "Plain-Text_123.txt"
+        );
+
+        // The invariant behind every case above: nothing outside printable
+        // ASCII survives, so no output can break a `Location` header.
+        let hostile = "findings:\nfirst \u{2014} second\r\n\u{0}\u{7f}\u{e9}";
+        let encoded = encode_query_value(hostile);
+        assert!(
+            encoded.bytes().all(|b| (0x21..0x7f).contains(&b)),
+            "every emitted byte must be printable ASCII, got: {encoded}"
+        );
+    }
+
+    const GENERIC: &str =
+        "Couldn't open this matter. The error has been logged; an admin can review the details.";
+
+    #[test]
+    fn bootstrap_company_defaults_to_shook_and_ignores_blank_values() {
+        assert_eq!(
+            bootstrap_company_from_lookup(|_| None),
+            super::DEFAULT_BOOTSTRAP_COMPANY
+        );
+        assert_eq!(
+            bootstrap_company_from_lookup(|_| Some(" \t ".to_string())),
+            super::DEFAULT_BOOTSTRAP_COMPANY
+        );
+        assert_eq!(
+            bootstrap_company_from_lookup(|_| Some("  Rebrand Law PLLC  ".to_string())),
+            "Rebrand Law PLLC"
+        );
+    }
+
+    #[test]
+    fn admin_sees_detail_and_non_admin_gets_the_generic_line() {
+        let detail = "Couldn't open this matter — a referenced person no longer exists.";
+        // Admin: the diagnostic detail, verbatim.
+        assert_eq!(admin_gated_message(true, detail, GENERIC), detail);
+        // Non-admin: the generic line, with the detail withheld.
+        let hidden = admin_gated_message(false, detail, GENERIC);
+        assert_eq!(hidden, GENERIC);
+        assert!(!hidden.contains("referenced person"));
+    }
+
+    #[test]
+    fn is_admin_is_true_for_owner_and_admin() {
+        assert!(is_admin(Some(&SessionData::fresh(
+            "o@example.com",
+            Role::Owner
+        ))));
+        assert!(is_admin(Some(&SessionData::fresh(
+            "a@example.com",
+            Role::Admin
+        ))));
+        assert!(!is_admin(Some(&SessionData::fresh(
+            "s@example.com",
+            Role::Lawyer
+        ))));
+        assert!(!is_admin(Some(&SessionData::fresh(
+            "c@example.com",
+            Role::Client
+        ))));
+        assert!(!is_admin(None));
+    }
+
+    #[tokio::test]
+    async fn participation_people_returns_internal_on_database_failure() {
+        // The directory is read from SurrealDB, so the failure has to happen
+        // *there*: any other unreachable handle leaves this reading a healthy
+        // engine and returning an empty list.
+        let surreal = store::surreal::test_support::unreachable();
+        let response = participation_people(&surreal).await.unwrap_err();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[tokio::test]
+    async fn project_participation_access_returns_internal_on_project_lookup_failure() {
+        let surreal = store::surreal::test_support::unreachable();
+        let session = SessionData::fresh("admin@example.com", Role::Admin);
+        let response = project_participation_access(&surreal, Some(&session), Uuid::now_v7())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    fn participation(person_id: Uuid, is_client_dri: bool) -> store::projects::PersonProjectRole {
+        store::projects::PersonProjectRole {
+            id: Uuid::now_v7(),
+            person_id,
+            project_id: Uuid::now_v7(),
+            participation: "client".into(),
+            is_lawyer_dri: false,
+            is_client_dri,
+            inserted_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn testimonial_form_allows_only_the_authenticated_client_dri() {
+        let person_id = Uuid::now_v7();
+        let mut session = SessionData::fresh("client", Role::Client);
+        session.person_id = Some(person_id);
+        assert!(can_submit_testimonial(
+            &session,
+            &participation(person_id, true)
+        ));
+        assert!(!can_submit_testimonial(
+            &session,
+            &participation(person_id, false)
+        ));
+        assert!(!can_submit_testimonial(
+            &session,
+            &participation(Uuid::now_v7(), true)
+        ));
+    }
+
+    #[test]
+    fn testimonial_form_rejects_arbitrary_identity_fields() {
+        let parsed = serde_json::from_str::<TestimonialForm>(
+            r#"{"_csrf":"token","quote":"quote","attribution":"Founder","publication":"private","project_id":"other"}"#,
+        );
+        assert!(parsed.is_err(), "the form must not accept a project id");
+        assert!(crate::csrf::extract_csrf_field("quote=quote").is_none());
+        assert_eq!(
+            crate::csrf::extract_csrf_field("_csrf=token&quote=quote").as_deref(),
+            Some("token")
+        );
+    }
+
+    fn session_for(person: &store::persons::Person) -> SessionData {
+        let mut session = SessionData::fresh(person.email.clone(), person.role);
+        session.person_id = Some(person.id);
+        session
+    }
+
+    async fn seed_testimonial_matter(
+        surreal: &store::surreal::SurrealDb,
+        code: &str,
+    ) -> (
+        store::persons::Person,
+        store::persons::Person,
+        store::projects::Project,
+    ) {
+        let client = store::persons::create(
+            surreal,
+            &store::persons::NewPerson::new("Form Client", format!("{code}-client@example.com")),
+        )
+        .await
+        .unwrap();
+        let lawyer = store::persons::create(
+            surreal,
+            &store::persons::NewPerson {
+                role: Role::Lawyer,
+                ..store::persons::NewPerson::new(
+                    "Form Lawyer",
+                    format!("{code}-lawyer@example.com"),
+                )
+            },
+        )
+        .await
+        .unwrap();
+        let project = store::projects::create(
+            surreal,
+            &store::projects::NewProject {
+                code: code.into(),
+                name: "Form testimonial matter".into(),
+                status: "open".into(),
+                entity_id: Uuid::now_v7(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        store::projects::designate_dri_in_surreal(
+            surreal,
+            project.id,
+            client.id,
+            store::projects::DriSide::Client,
+        )
+        .await
+        .unwrap();
+        store::projects::designate_dri_in_surreal(
+            surreal,
+            project.id,
+            lawyer.id,
+            store::projects::DriSide::Lawyer,
+        )
+        .await
+        .unwrap();
+        (client, lawyer, project)
+    }
+
+    fn testimonial_form(quote: &str, publication: &str) -> TestimonialForm {
+        TestimonialForm {
+            _csrf_token: None,
+            quote: quote.into(),
+            attribution: "Founder".into(),
+            publication: publication.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_form_route_refuses_non_client_tiers_and_leaves_state_unchanged() {
+        let surreal = store::surreal::test_support::mem().await;
+        let (client, lawyer, project) = seed_testimonial_matter(&surreal, "form-non-client").await;
+        let admin = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson {
+                role: Role::Admin,
+                ..store::persons::NewPerson::new("Form Admin", "form-non-client-admin@example.com")
+            },
+        )
+        .await
+        .unwrap();
+        store::projects::add_participation(&surreal, project.id, admin.id, "admin")
+            .await
+            .unwrap();
+        let clerk = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson {
+                role: Role::Clerk,
+                ..store::persons::NewPerson::new("Form Clerk", "form-non-client-clerk@example.com")
+            },
+        )
+        .await
+        .unwrap();
+        store::projects::add_participation(&surreal, project.id, clerk.id, "clerk")
+            .await
+            .unwrap();
+
+        for person in [&lawyer, &admin, &clerk] {
+            let response = project_testimonial_save(
+                axum::extract::State(surreal.clone()),
+                Some(axum::extract::Extension(session_for(person))),
+                axum::extract::Path(project.code.clone()),
+                axum::Form(testimonial_form("Firm-written quote.", "public")),
+            )
+            .await;
+            assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+            assert!(
+                store::testimonials::for_person_project(&surreal, person.id, project.id)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        assert!(
+            store::testimonials::for_person_project(&surreal, client.id, project.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    async fn consented_testimonial(
+        surreal: &store::surreal::SurrealDb,
+        client: &store::persons::Person,
+        project: &store::projects::Project,
+        request_public: bool,
+    ) -> store::testimonials::Testimonial {
+        store::testimonials::save_for_client_dri(
+            surreal,
+            client.id,
+            project.id,
+            &store::testimonials::TestimonialSubmission {
+                quote: "Client words.",
+                attribution_label: None,
+                request_public,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn seed_participant(
+        surreal: &store::surreal::SurrealDb,
+        project: &store::projects::Project,
+        label: &str,
+        role: Role,
+        participating: bool,
+    ) -> store::persons::Person {
+        let person = store::persons::create(
+            surreal,
+            &store::persons::NewPerson {
+                role,
+                ..store::persons::NewPerson::new(label, format!("{label}@example.com"))
+            },
+        )
+        .await
+        .unwrap();
+        if participating {
+            store::projects::add_participation(surreal, project.id, person.id, label)
+                .await
+                .unwrap();
+        }
+        person
+    }
+
+    #[tokio::test]
+    async fn a_participating_admin_publishes_and_unpublishes_from_the_card_routes() {
+        let surreal = store::surreal::test_support::mem().await;
+        let (client, _, project) = seed_testimonial_matter(&surreal, "pub-ok").await;
+        let admin = seed_participant(&surreal, &project, "admin", Role::Admin, true).await;
+        let row = consented_testimonial(&surreal, &client, &project, true).await;
+
+        let response =
+            super::set_testimonial_publication(&surreal, &session_for(&admin), &project.code, true)
+                .await;
+        assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+        let after = store::testimonials::for_person_project(&surreal, client.id, project.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.id, row.id);
+        assert!(after.published_at.is_some());
+
+        let response = super::set_testimonial_publication(
+            &surreal,
+            &session_for(&admin),
+            &project.code,
+            false,
+        )
+        .await;
+        assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+        let after = store::testimonials::for_person_project(&surreal, client.id, project.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(after.published_at.is_none());
+        assert!(after.consented_at.is_some());
+    }
+
+    /// Every persona that must not change publication, with the exact status
+    /// each layer yields: `admin_gate` refuses a non-admin tier with 403 (even
+    /// a lawyer who participates, whom the store alone would admit), while a
+    /// matter the admin does not participate on, does not exist, or is viewed
+    /// through a client lens is a 404.
+    #[tokio::test]
+    async fn publication_is_refused_with_the_exact_status_for_every_denied_persona() {
+        use axum::http::StatusCode;
+        let surreal = store::surreal::test_support::mem().await;
+        let (client, lawyer, project) = seed_testimonial_matter(&surreal, "pub-deny").await;
+        let (_, other_lawyer, _) = seed_testimonial_matter(&surreal, "pub-deny-other").await;
+        let clerk = seed_participant(&surreal, &project, "clerk", Role::Clerk, true).await;
+        let outsider = seed_participant(&surreal, &project, "outsider", Role::Admin, false).await;
+        let admin = seed_participant(&surreal, &project, "admin", Role::Admin, true).await;
+        let row = consented_testimonial(&surreal, &client, &project, true).await;
+        let mut as_client = session_for(&admin);
+        as_client.viewing_as_dri = Some(crate::session::DriView {
+            actor_sub: "sub".into(),
+            actor_email: None,
+            actor_person_id: Some(admin.id),
+            target_name: "Form Client".into(),
+            target_email: client.email.clone(),
+        });
+
+        let cases = [
+            (
+                "client",
+                session_for(&client),
+                project.code.as_str(),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "clerk",
+                session_for(&clerk),
+                project.code.as_str(),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "participating lawyer",
+                session_for(&lawyer),
+                project.code.as_str(),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "other-firm lawyer",
+                session_for(&other_lawyer),
+                project.code.as_str(),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "non-participating admin",
+                session_for(&outsider),
+                project.code.as_str(),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                "wrong project code",
+                session_for(&admin),
+                "no-such-matter",
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                "admin viewing as the client",
+                as_client,
+                project.code.as_str(),
+                StatusCode::NOT_FOUND,
+            ),
+        ];
+        // Publish is refused against an unpublished row; unpublish against a
+        // published one, so a refusal that leaked through would show.
+        for publish in [true, false] {
+            if !publish {
+                store::testimonials::publish(&surreal, Some(admin.id), Role::Admin, row.id)
+                    .await
+                    .unwrap();
+            }
+            for (who, session, code, status) in &cases {
+                let response =
+                    super::set_testimonial_publication(&surreal, session, code, publish).await;
+                assert_eq!(response.status(), *status, "{who} publish={publish}");
+                let after =
+                    store::testimonials::for_person_project(&surreal, client.id, project.id)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                assert_eq!(
+                    after.published_at.is_some(),
+                    !publish,
+                    "{who} publish={publish}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unconsented_testimonial_is_not_published_by_the_card_route() {
+        let surreal = store::surreal::test_support::mem().await;
+        let (client, _, project) = seed_testimonial_matter(&surreal, "pub-noconsent").await;
+        let admin = seed_participant(&surreal, &project, "admin", Role::Admin, true).await;
+        consented_testimonial(&surreal, &client, &project, false).await;
+
+        let response =
+            super::set_testimonial_publication(&surreal, &session_for(&admin), &project.code, true)
+                .await;
+        assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+        let location = response.headers()[axum::http::header::LOCATION]
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(location.contains("error="), "{location}");
+        let after = store::testimonials::for_person_project(&surreal, client.id, project.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(after.published_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_form_route_refuses_the_wrong_project_and_leaves_state_unchanged() {
+        let surreal = store::surreal::test_support::mem().await;
+        let (client, _, project) = seed_testimonial_matter(&surreal, "form-right-matter").await;
+        let (_, _, other_project) = seed_testimonial_matter(&surreal, "form-wrong-matter").await;
+        store::testimonials::save_for_client_dri(
+            &surreal,
+            client.id,
+            project.id,
+            &store::testimonials::TestimonialSubmission {
+                quote: "Kept quote.",
+                attribution_label: Some("Founder".into()),
+                request_public: true,
+            },
+        )
+        .await
+        .unwrap();
+        let before = store::testimonials::for_person_project(&surreal, client.id, project.id)
+            .await
+            .unwrap();
+
+        let response = project_testimonial_save(
+            axum::extract::State(surreal.clone()),
+            Some(axum::extract::Extension(session_for(&client))),
+            axum::extract::Path(other_project.code.clone()),
+            axum::Form(testimonial_form("Wrong matter.", "public")),
+        )
+        .await;
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(
+            store::testimonials::for_person_project(&surreal, client.id, project.id)
+                .await
+                .unwrap(),
+            before
+        );
+        assert!(
+            store::testimonials::for_person_project(&surreal, client.id, other_project.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_form_route_clears_publication_when_the_client_revokes_consent() {
+        let surreal = store::surreal::test_support::mem().await;
+        let (client, lawyer, project) = seed_testimonial_matter(&surreal, "form-revoke").await;
+        let saved = store::testimonials::save_for_client_dri(
+            &surreal,
+            client.id,
+            project.id,
+            &store::testimonials::TestimonialSubmission {
+                quote: "Public quote.",
+                attribution_label: Some("Founder".into()),
+                request_public: true,
+            },
+        )
+        .await
+        .unwrap();
+        store::testimonials::publish(&surreal, Some(lawyer.id), Role::Lawyer, saved.id)
+            .await
+            .unwrap();
+
+        let response = project_testimonial_save(
+            axum::extract::State(surreal.clone()),
+            Some(axum::extract::Extension(session_for(&client))),
+            axum::extract::Path(project.code.clone()),
+            axum::Form(testimonial_form("Now private.", "private")),
+        )
+        .await;
+        assert_eq!(response.status(), axum::http::StatusCode::SEE_OTHER);
+        let current = store::testimonials::for_person_project(&surreal, client.id, project.id)
+            .await
+            .unwrap()
+            .expect("the client still owns the row");
+        assert_eq!(current.quote, "Now private.");
+        assert!(current.consented_at.is_none());
+        assert!(current.published_at.is_none());
+        assert!(store::testimonials::published_for_home(&surreal, 10)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn blog_cancel_without_a_session_is_not_found() {
+        let state = blog_admin_state(store::test_support::mem_surreal().await).await;
+        let cancelled = blog_post_cancel(
+            axum::extract::State(state),
+            None,
+            axum::extract::Path(uuid::Uuid::nil()),
+        )
+        .await;
+        assert_eq!(cancelled.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    async fn blog_admin_state(db: store::surreal::SurrealDb) -> AdminState {
+        let app = crate::test_support::app_state(db).await;
+        AdminState {
+            surreal: app.surreal,
+            workflow_runtime: app.workflow_runtime,
+            signature_provider: app.signature_provider,
+            retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
+            questionnaire_runtime: app.questionnaire_runtime,
+            storage: app.storage,
+            assets_storage: app.assets_storage,
+            forms_registry: app.forms_registry,
+            email: app.email,
+            billing_provider: app.billing_provider,
+            contract_reviewer: app.contract_reviewer,
+            bootstrap_owner_email: app.bootstrap_owner_email,
+            on_call_lawyer_email: app.on_call_lawyer_email,
+            bootstrap_company: bootstrap_company_from_env(),
+            sessions: app.sessions,
+            secure_cookies: false,
+            attachment_scanner: app.attachment_scanner,
+            runtime_kms: app.runtime_kms,
+        }
+    }
+
+    async fn seed_blog_admin(
+        db: &store::surreal::SurrealDb,
+    ) -> (store::persons::Person, SessionData) {
+        let admin = store::persons::create(
+            db,
+            &store::persons::NewPerson::with_role(
+                "Blog Scheduler",
+                format!("blog-scheduler-{}@example.com", Uuid::now_v7()),
+                Role::Admin,
+            ),
+        )
+        .await
+        .unwrap();
+        let firm = store::firms::create(
+            db,
+            &store::firms::NewFirm {
+                name: format!("Blog Scheduler Firm {}", admin.id),
+                status: "active".into(),
+                entity_id: store::test_support::seed_entity(db).await,
+                admin_dri_person_id: admin.id,
+            },
+        )
+        .await
+        .unwrap();
+        store::brands::create(
+            db,
+            Role::Admin,
+            Some(admin.id),
+            &store::brands::NewBrand {
+                name: format!("Blog Scheduler Brand {}", admin.id),
+                key: "blog-schedule".into(),
+                firm_id: Some(firm.id),
+                primary_color: None,
+                accent_color: None,
+                typeface: None,
+            },
+        )
+        .await
+        .unwrap();
+        let session = session_for(&admin);
+        (admin, session)
+    }
+
+    async fn imported_scheduled_post(db: &store::surreal::SurrealDb) -> Uuid {
+        let post = store::posts::SourcePost {
+            brand_key: "blog-schedule",
+            slug: "held",
+            title: "Held",
+            description: "Synthetic",
+            body_html: "<p>Synthetic</p>",
+            body_markdown: None,
+            status: "scheduled",
+            publish_at: chrono::Utc::now() + chrono::Duration::days(30),
+            video_asset: None,
+            vertical_video: None,
+            tiktok_ai_generated: None,
+            captions: store::posts::SourceCaptions::default(),
+            accounts: &[],
+            social_links: &[],
+        };
+        store::posts::import_source(db, &post, chrono::Utc::now())
+            .await
+            .unwrap()
+            .post_id
+    }
+
+    #[tokio::test]
+    async fn blog_cancel_holds_an_imported_scheduled_post() {
+        let db = store::test_support::mem_surreal().await;
+        let (_, session) = seed_blog_admin(&db).await;
+        let state = blog_admin_state(db.clone()).await;
+        let post_id = imported_scheduled_post(&db).await;
+        let cancelled = blog_post_cancel(
+            axum::extract::State(state),
+            Some(axum::extract::Extension(session)),
+            axum::extract::Path(post_id),
+        )
+        .await;
+        assert_eq!(cancelled.status(), axum::http::StatusCode::SEE_OTHER);
+        assert_eq!(
+            store::posts::find_by_id(&db, post_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "cancelled"
+        );
+    }
+
+    #[tokio::test]
+    async fn blog_cancel_refuses_a_lawyer_and_an_unlinked_session() {
+        let db = store::test_support::mem_surreal().await;
+        seed_blog_admin(&db).await;
+        let state = blog_admin_state(db.clone()).await;
+        let post_id = imported_scheduled_post(&db).await;
+        for session in [
+            SessionData::fresh("lawyer@example.com", Role::Lawyer),
+            SessionData::fresh("admin@example.com", Role::Admin),
+        ] {
+            let refused = blog_post_cancel(
+                axum::extract::State(state.clone()),
+                Some(axum::extract::Extension(session)),
+                axum::extract::Path(post_id),
+            )
+            .await;
+            assert_eq!(refused.status(), axum::http::StatusCode::NOT_FOUND);
+        }
+        assert_eq!(
+            store::posts::find_by_id(&db, post_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "scheduled"
+        );
+    }
+}

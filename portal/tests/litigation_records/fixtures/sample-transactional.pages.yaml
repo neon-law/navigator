@@ -1,0 +1,15 @@
+pages:
+  - slug: engagement
+    kind: engagement_billing_records
+    title: Engagement and billing
+    draft: drafts/sample_transactional__engagement.md
+    lenses:
+      lawyer: [engagement_letter, invoice, prebill_review, boundary_note, provenance_statement]
+      client: [engagement_letter, invoice, boundary_note, provenance_statement]
+  - slug: agreements
+    kind: document_workbench
+    title: Agreements
+    draft: drafts/sample_transactional__engagement.md
+    lenses:
+      lawyer: [document_body, notation_list, notation_document, notation_checklist, boundary_note, provenance_statement]
+      client: [notation_list, notation_document, notation_checklist, boundary_note, provenance_statement]

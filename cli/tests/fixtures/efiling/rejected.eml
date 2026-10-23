@@ -1,0 +1,15 @@
+From: Example EFSP <noreply@example.com>
+To: Synthetic Attorney <attorney@example.com>
+Subject: Filing Rejected - Transaction EX-20261005-0043
+Date: Tue, 6 Oct 2026 10:20:00 -0700
+Message-ID: <rejected-0043@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Your e-filing has been rejected by the court.
+
+Transaction ID: EX-20261005-0043
+Status: Rejected
+Court: Superior Court of California, County of Example
+Case Number: 26EXCV00042
+Rejection Reason: Document is missing the attorney signature.

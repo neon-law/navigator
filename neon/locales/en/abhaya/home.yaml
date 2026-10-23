@@ -1,0 +1,74 @@
+head_title: "{site_name} | Your next chapter, without fear"
+meta_description: >-
+  Immigration counsel for people, families, founders, and employers. Work
+  visas, family petitions, green cards, citizenship, and responses to USCIS
+  notices. Attorney advertisement.
+heading: Your next chapter, without fear.
+lead: >-
+  A new job. A family together. A business ready to grow. Abhaya Immigration
+  helps you understand your options and prepare the case for the life you
+  are building in the United States.
+contact_label: Book Consultation
+photo:
+  src: img/abhaya/stadium-community.jpg
+  alt: A crowd at a football stadium with a large United States flag spread across the field.
+  caption: A new chapter is about the life you build here.
+service:
+  heading: A clear plan for your immigration case.
+  body:
+    - - text: >-
+          We help individuals, families, founders, and employers with work
+          visas, family petitions, permanent residence, citizenship, consular
+          processing, and responses to immigration notices. A licensed attorney
+          reviews the work. Shook Law PC is the law firm you would retain.
+    - - text: >-
+          We explain the path, the documents needed, and the work we will do.
+          Our fee is a flat amount agreed in writing before we begin.
+          Government filing fees and other agreed costs are separate.
+    - - text: >-
+          U.S. Citizenship and Immigration Services (USCIS), the Department
+          of State, and other agencies decide applications within their authority.
+          We cannot promise approval or a government timeline. We can prepare
+          your case carefully and keep the next step clear.
+    - - text: >-
+          Write in your own words. Tell us what you hope to do, where you are
+          now, and whether you have a deadline or notice to answer. If English
+          is not your first language, say so when you reach out.
+practices_heading: Explore your immigration options
+practices:
+  - mark: gavel
+    heading: Work, talent, and investment
+    body: >-
+      O-1, H-1B, TN, E-1, E-2, E-3, J-1, L-1, P-1, and R-1 matters for
+      professionals, founders, investors, artists, athletes, and organizations.
+    href: /services#work
+  - mark: scales
+    heading: Family and marriage
+    body: >-
+      Marriage-based green cards, petitions for eligible relatives, and K-1
+      fiancé petitions. We explain adjustment of status and processing abroad.
+    href: /services#residence
+  - mark: gavel
+    heading: Employment-based green cards
+    body: >-
+      EB-1, EB-2 national interest waivers, EB-2 PERM, EB-3, and EB-5 investor
+      matters for people planning a lasting home in the United States.
+    href: /services#residence
+  - mark: scales
+    heading: Citizenship and consular processing
+    body: >-
+      Naturalization eligibility, application and interview preparation,
+      and the immigration steps handled by U.S. consulates abroad.
+    href: /services#residence
+  - mark: gavel
+    heading: Employers and growing teams
+    body: >-
+      Founding-team visas, employee sponsorship, PERM labor certification,
+      transfers, and planning for ongoing U.S. immigration needs.
+    href: /services#employers
+  - mark: scales
+    heading: When USCIS asks for more
+    body: >-
+      Responses to Requests for Evidence and Notices of Intent to Deny.
+      Start with the notice and its deadline so we can assess the next step.
+    href: /services#notices

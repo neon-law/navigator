@@ -1,0 +1,1159 @@
+name: ci
+
+# The PR flow (see docs/gitops.md "CI/CD workflows"). Lean on purpose: the
+# `gate` job always runs `navigator project gate` over YAML and Markdown. The
+# `rust` job — fmt + clippy + the whole workspace test suite, which also
+# carries the coverage floor under `cargo llvm-cov` — runs only when the PR
+# touches Rust or the files that job is the proof for. Coverage is a byproduct
+# of that existing gate and NOT a second test run.
+# Integration (KIND), docker image builds, browser tests, and the deploy
+# Slack report all live in the release flow (`deploy.yml`), which runs on
+# pushes to `main` and release-verification branches.
+#
+# Do NOT add audit/deny/cucumber/docker/e2e jobs back here — the Cucumber BDD
+# suite already runs inside the test step, and the heavy paths
+# belong in the release flow so PR latency stays low. Coverage is the
+# one deliberate exception: it piggybacks on the existing test pass rather than
+# adding a job, and `--fail-under-lines` fails that job in-run, so the whole
+# signal lives in this workflow with no third-party service in the merge path
+# and no status context of its own.
+#
+# Dioxus bundle and browser/accessibility checks live in `deploy.yml`: that
+# workflow path-filters UI pull requests without filtering this required merge
+# gate, and builds the exact bundle the KIND web image serves.
+#
+# Every job runs on `blacksmith-4vcpu-ubuntu-2404` for consistent runner,
+# cache, and disk capacity. The macOS legs in `deploy.yml` stay on
+# GitHub-hosted runners.
+#
+# The history matters, because the previous label cost a full CI cycle to
+# diagnose. This workflow used to name `neon-law-medium`, a GitHub-hosted
+# larger runner on the *previous* organisation, back when the repository lived
+# on a tenant with no Marketplace and so no third-party fleets.
+# Neither that label nor `neon-law-large` exists in `neon-law-source-code`, and
+# a `runs-on` label with no runner behind it does not fail — GitHub queues the
+# job forever, so the PR waits on a check that can never report.
+#
+# Four vCPU is measured, not guessed, and the measurement is a two-arm matrix
+# rather than a comparison across days: run 32536363029 ran this exact job on
+# `blacksmith-4vcpu-ubuntu-2404` and `blacksmith-8vcpu-ubuntu-2404` from one
+# commit against one cache entry, so core count was the only variable. Both
+# were green.
+#
+#   phase                      8 vCPU   4 vCPU   ratio
+#   build navigator CLI          2.3m     3.3m   1.43x
+#   cargo clippy                 2.0m     2.2m   1.10x
+#   cargo test with coverage    10.5m    11.3m   1.08x
+#   whole job                   15.8m    18.0m   1.14x
+#
+# Blacksmith bills LINEARLY in cores — 2 vCPU is $0.004/min, 4 is $0.008, 8 is
+# $0.016 — and the 3,000 included minutes are 2-vCPU-EQUIVALENTS, so an 8-vCPU
+# job spends them four times as fast. Both the bill and the quota are therefore
+# core-minutes, which means halving the cores saves nothing unless the job
+# takes less than 2x as long. It takes 1.14x. Per run, rounding up to the whole
+# minute Blacksmith charges: $0.256 -> $0.144, and 64 -> 36 included minutes.
+#
+# The ratio is that small because the job is not core-bound. `cargo test with
+# coverage` is 11 of the 18 minutes. The other phases are compiles, and the
+# cache step below restores the third-party graph before they start, so they
+# have far less to divide across extra cores than a cold build would.
+#
+# 1.14x is therefore the WARM ratio, and this job is not always warm: the gate
+# owns its cache end to end, so the first push of a new pull request restores
+# nothing and compiles the graph. The conclusion survives that anyway, and the
+# algebra is worth keeping because it is what makes the choice robust rather
+# than lucky. Split the job into a core-insensitive part T and a parallel part
+# B, and take the worst case for four cores, B scaling perfectly to 2B:
+#
+#   cost(4) / cost(8) = (T + 2B) x $0.008 / (T + B) x $0.016
+#                     = (T + 2B) / (2T + 2B)
+#
+# That is below 1 for any T greater than zero, and equal to 1 only if the job
+# were entirely parallel. Four cores is cheaper or the same at every cache
+# state; warm merely makes it cheapest, because T is 11 of 18 minutes there.
+# What would overturn it is not a cold cache but T shrinking to nothing —
+# a run phase that scales with cores the same way the compile does.
+#
+# The two ways a narrower runner fails are cliffs, not slopes, so both were
+# measured rather than reasoned about. Memory peaks LOWER at 4 cores — 5.1 GB
+# against 7.2 GB — because fewer link jobs run at once, so the smaller box is
+# under less memory pressure, not more. Disk is the real narrowing: the 4-vCPU
+# image has a 150 GB root against the 8-vCPU image's 246 GB. Run 38068387566
+# finished a green instrumented suite at 142 GB used / 244 MB free (100%).
+# The 27 GB headroom from run 32536363029 is gone. One more crate now loses
+# the runner mid-nextest; the image sweep below is what leaves room.
+#
+# Sixteen cores is the same argument from the other end, and was rejected on
+# the retired GitHub-hosted fleet: `neon-law-large` ran this suite in 29.2 min
+# against `neon-law-medium`'s ~40 (runs 144357516 and 144682316), buying the
+# build half and nothing else at twice the rate.
+#
+# Stock `ubuntu-latest` does not fit either. It
+# carries no second disk, so the /mnt escape hatch below finds nothing, and an
+# uninstrumented run of this suite ended with 87 MB free on a 72 GB root (run
+# 144427521) — against the 142 GB this job now peaks at.
+#
+# `cargo nextest` is what makes the run phase schedule across binaries instead
+# of one after another. See the test step.
+#
+# The `free-disk-space` sweep is back: a green run now finishes at 100% disk
+# (run 38068387566, 244 MB free), so the 1.2-1.5 min reclaim is what the
+# instrumented suite spends to stay on the runner. `strip=symbols`, lld and
+# the narrowed clean stay — they are cheap, and they are what keep the peak
+# from growing faster than the sweep can cover.
+#
+# Confirm a label exists before putting it here. A label nothing can schedule
+# does not fail the run, it hangs it: run 139216706 asked for
+# `blacksmith-8vcpu-ubuntu-2404` after that fleet was removed, then sat with
+# `runner_name: ""` for 24h0m2s before expiring — a silent day of nothing, not a
+# red build.
+
+on:
+  # Pull requests targeting `main` only. `main` itself never runs THIS workflow
+  # on push: it advances solely through PRs (merge-only), so the PR run is the
+  # single gate before merge and a post-merge repeat would prove nothing new.
+  #
+  # `deploy.yml` DOES run on every push to `main`, and the division of labour is
+  # worth holding: this workflow decides whether the code is good, that one
+  # decides whether the commit is a release. Its first job answers in seconds and
+  # stops, because almost no merge carries a version bump.
+  #
+  # NOTHING RUNS EITHER PIPELINE ON A CLOCK, which is worth knowing before
+  # relying on it: `deploy.yml` was scheduled nightly and now waits for a version
+  # bump, and the one remaining scheduled workflow (`ghcr-retention.yml`) only
+  # prunes the registry. See docs/gitops.md § "What detects a broken pipeline".
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# One in-flight run per PR; a new push cancels the superseded run. Without this
+# every push left its predecessor running: the workspace job holds a runner for
+# the better part of an hour, so two or three pushes in a row queued up that
+# many full builds, all but the last of them answering a question about a commit
+# that is no longer the PR head. `github.ref` is `refs/pull/<n>/merge` here, so
+# the group is per-PR and one PR never cancels another.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Default every job to read-only; the one job that needs more (enable-automerge)
+# requests pull-requests:write at the job level, so the test job never runs with
+# write access.
+permissions:
+  contents: read
+
+jobs:
+  # Classify the PR so a copy-only or docs-only change does not spend a
+  # Blacksmith runner on the workspace test suite. Fail OPEN: if the diff
+  # cannot be computed the answer is "run rust". A scope test that silently
+  # declines to run is the same hole the wasm-scope step exists to close.
+  #
+  # Do NOT replace this with a workflow-level `paths:` filter. That would skip
+  # the whole workflow, including the required `ci` check, and GitHub would
+  # wait forever on a context nothing posts.
+  changes:
+    name: classify the pull request
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.scope.outputs.rust }}
+      word_adapter: ${{ steps.scope.outputs.word_adapter }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - name: does this PR touch Rust
+        id: scope
+        run: |
+          set -uo pipefail
+          if ! changed="$(git diff --name-only HEAD^ HEAD 2>/dev/null)" || [ -z "${changed}" ]; then
+              echo "could not read the PR diff — running the Rust suite anyway"
+              echo "rust=true" >> "${GITHUB_OUTPUT}"
+              echo "word_adapter=true" >> "${GITHUB_OUTPUT}"
+              exit 0
+          fi
+          echo "changed files:"
+          echo "${changed}" | sed 's/^/  /'
+          if echo "${changed}" | grep -qE \
+              '\.(rs|surql|feature)$|(^|/)Cargo\.(toml|lock)$|(^|/)rust-toolchain\.toml$|^\.cargo/|^\.config/nextest\.toml$|^\.github/workflows/ci\.yml$|^features/'; then
+              echo "-> in scope: running cargo test (workspace)"
+              echo "rust=true" >> "${GITHUB_OUTPUT}"
+          else
+              echo "-> out of scope: no Rust sources in this PR"
+              echo "rust=false" >> "${GITHUB_OUTPUT}"
+          fi
+          if echo "${changed}" | grep -qE '^(word/|images/Containerfile\.neon$|global\.json$|\.github/workflows/ci\.yml$)'; then
+              echo "-> in scope: running the managed Word adapter tests"
+              echo "word_adapter=true" >> "${GITHUB_OUTPUT}"
+          else
+              echo "-> out of scope: no managed Word adapter sources in this PR"
+              echo "word_adapter=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+  word-adapter:
+    name: test managed Word adapter
+    needs: [changes]
+    if: needs.changes.outputs.word_adapter == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: set up the pinned .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: verify the locked restore in the release SDK image
+        run: docker build --target word-adapter-builder --file images/Containerfile.neon .
+      - name: restore the managed Word adapter tests
+        run: dotnet restore word/adapter/WordAdapter.Tests.csproj --locked-mode
+      - name: test the managed Word adapter
+        run: dotnet test word/adapter/WordAdapter.Tests.csproj --no-restore --configuration Release
+
+  # Always run. A locale or Markdown edit still has to pass `navigator project
+  # gate`; that is the cheap gate that lets the rust job stay skipped.
+  gate:
+    name: gate content
+    services:
+      presidio:
+        image: ghcr.io/data-privacy-stack/presidio-analyzer:2.2.364@sha256:ae8f6f111ac2f04e3fec552f7f80edd0dcbfa2dd69ee1b9e030475be31669885
+        env:
+          LOG_LEVEL: WARNING
+        ports:
+          - 3000:3000
+        # Analyzer errors can contain input text. Never upload its raw logs.
+        options: --log-driver none
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The signature check walks `base.sha..head.sha`. Depth 1 is the
+          # merge commit only, so an unsigned PR commit would not be in the
+          # clone. Full history is cheap next to building the CLI.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: 1.98.0
+      - name: cache the Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: gate-cli
+      - name: build navigator CLI
+        run: cargo build -p cli --quiet
+      - name: gate the content tree with navigator
+        run: "${CARGO_TARGET_DIR:-target}/debug/navigator project gate --ci"
+      - name: wait for the local PII analyzer
+        run: curl --fail --silent --output /dev/null --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:3000/health
+      - name: scan for personal data with Presidio
+        run: '"${CARGO_TARGET_DIR:-target}/debug/navigator" pii --analyzer-url http://127.0.0.1:3000'
+      - name: scan the working tree for secrets
+        run: |
+          scan_root="$(mktemp -d)"
+          trap 'rm -rf "$scan_root"' EXIT
+          git archive HEAD | tar -xf - -C "$scan_root"
+          docker run --rm \
+            --volume "$scan_root:/repo:ro" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            dir --redact --config /repo/.gitleaks.toml /repo
+      # The reusable workflows and composite actions under `.github/` name this
+      # repository's OWN actions by an absolute tag, so a bump that moves
+      # `[workspace.package].version` without sweeping the pins publishes a gate
+      # no consumer can run. The `cut-release` preflight runs this same command
+      # before a bump is pushed; here it runs on the pull request, which is the
+      # last place a stale pin is still free to fix.
+      #
+      # IT BELONGS IN THIS JOB, not in `rust`. The scanned roots are `.github/`
+      # and `docs/examples/`, and none of those paths selects `rust` — a PR
+      # editing only a composite action would skip it, and the aggregate accepts
+      # a skipped `rust`. `gate` is unconditional and its result is required
+      # with no skip allowance, and it has already built the CLI above.
+      - name: do the self-referencing action pins name the workspace version
+        run: "${CARGO_TARGET_DIR:-target}/debug/navigator ops release pins"
+      # Source CI uses only synthetic deployment rows. The private deployment
+      # tree is supplied by operators through NAVIGATOR_DEPLOYMENTS_DIR.
+      - name: validate the SOPS key inventory
+        run: ./scripts/tests/check-sops-inventory.sh
+      - name: check the deployment tree
+        run: >-
+          "${CARGO_TARGET_DIR:-target}/debug/navigator"
+          ops deployments
+          --deployments-dir cli/tests/fixtures/deployment-tree
+      - name: test the external deployment-coordinate denylist scanner
+        run: python3 scripts/validate-deployment-coordinates.py --self-test
+      # `production` requires signatures on `main`. Squash-merge writes a
+      # GitHub-signed commit there, which does not prove the PR head was
+      # signed. Inspect the pull-request head — not the workflow merge commit —
+      # so Cloud Agent HSM signatures and human GPG/SSH signatures are both
+      # required, and a `git commit` with `commit.gpgsign=false` is refused.
+      - name: refuse unsigned commits on the PR head
+        run: |
+          "${CARGO_TARGET_DIR:-target}/debug/navigator" ops github check-signatures \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}"
+
+
+  rust:
+    name: cargo test (workspace)
+    needs: [changes]
+    if: needs.changes.outputs.rust == 'true'
+    # `neon-law-medium` does not exist in the `neon-law-source-code` org. That
+    # label was a GitHub-hosted larger runner on the previous org, and a label
+    # with no runner behind it does not fail the job — it queues it forever, so
+    # the PR waits on a required check that can never report. The org's runners
+    # are `ubuntu-large` (GitHub-hosted) and the Blacksmith fleet.
+    #
+    # Four vCPU is the sizing the comment above measures. The label is probed,
+    # not assumed: run 32536363029 scheduled on it (`runner_name:
+    # blacksmith-...-4vcpu`), which is the check the paragraph above demands
+    # before any label goes here.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # A wedge detector, not a duration budget. This job had no cap at all while
+    # it ran ~30 min; at ~40 min GitHub's 6-hour default means a hung build
+    # holds a metered runner for most of a working day and blocks the PR behind
+    # an in-progress required check the whole time. 120 leaves wide headroom
+    # over the measured 18 while still catching a genuine wedge.
+    timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      # Link with LLVM lld instead of GNU ld. The workspace produces ~40 test
+      # binaries, several of which (notably `features`) statically link most of
+      # the tree — portal, webapp, restate-sdk, wiremock, fantoccini and their
+      # transitive graph in one image. Four of those link
+      # steps run concurrently on a small runner, and GNU ld died
+      # partway through with
+      #
+      #     collect2: fatal error: ld terminated with signal 7 [Bus error]
+      #
+      # while 40 GB of disk was still free, so this is memory, not space. lld
+      # holds far less resident per link and is substantially faster on inputs
+      # this size.
+      # `strip=symbols` is the load-bearing half. `cargo test --workspace`
+      # builds 209 integration-test binaries across 28 crates, and each one
+      # statically links the whole dependency graph — surrealdb-core alone is a
+      # 590 MB rlib. Even with debuginfo already off, their symbol tables filled
+      # a 46 GB disk to 100% ("/dev/root 72G 72G 26M 100% /") and took the
+      # Actions runner down with it. Stripping symbols is what makes the set fit;
+      # libtest still names the failing test and prints its assertion, so a red
+      # build stays readable.
+      RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C strip=symbols"
+    steps:
+      # Run 38068387566 finished this job at
+      # `/dev/root 150G 142G 244M 100% /`. The 27 GB headroom from run
+      # 32536363029 is gone; a PR that grows the linked graph now loses the
+      # runner mid-nextest (runs 38066397793, 38070561694) whether or not
+      # the worker log still has room to print ENOSPC. Reclaim the image
+      # bloat. `swap-storage: false` is load-bearing. `large-packages`
+      # (the action default) purges `llvm-*` apt packages, so this step
+      # stays before `install lld`.
+      #
+      # A full disk still does not always print ENOSPC: a linker writes
+      # through `mmap`, so it surfaces as
+      #
+      #     ld terminated with signal 7 [Bus error]
+      #
+      # Read a returning SIGBUS or a lost runner during this job as "the
+      # job outgrew the runner", never as a flake to re-run.
+      - name: free disk space
+        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
+        with:
+          swap-storage: false
+      # lld is absent from this image (`ld.lld: absent`, run 144671916) and
+      # RUSTFLAGS below requires it, so the install is not optional here.
+      - name: install lld
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lld
+          ld.lld --version
+      # Build on whichever disk is actually large enough.
+      #
+      # `blacksmith-4vcpu-ubuntu-2404` now splits storage: a 150 GB `/dev/root`
+      # and a 590 GB `/dev/vdb` mounted at `/var/lib/docker` (run 38072476583).
+      # Leaving `target/` on root fills it during the instrumented workspace
+      # run — `ld terminated with signal 7 [Bus error]` on the features link,
+      # or the runner dying on its own diagnostic log — while hundreds of
+      # gigabytes sit unused. `/mnt` is still checked first for runners that
+      # expose a dedicated scratch mount. `/var/lib/docker` is the same
+      # filesystem as root on images that do not split, so `-gt` stays false
+      # there and this step remains a no-op.
+      #
+      # Guarded rather than assumed, and it prints which branch it took — read
+      # that line before trusting any claim about this runner's disks.
+      #
+      # Blacksmith attaches `/dev/vdb` a few minutes after the job starts
+      # (run 38074588448: absent at 18:09:23, present at 18:12:07). A single
+      # df here loses that race and leaves clippy plus the instrumented
+      # suite on the 150 GB root. Wait up to 240s so both land on the
+      # 590 GB volume; the post-clippy relocate is the fallback if attach
+      # is later still.
+      - name: place the build directory on the largest disk
+        run: |
+          set -euo pipefail
+          # `df -P | awk` rather than `df --output=avail`: GNU df rejects
+          # --portability and --output together, and `set -e` would make that
+          # a hard failure here.
+          avail() { df -P "$1" | awk 'NR == 2 { print $4 }'; }
+          pick_dest() {
+            root_avail="$(avail /)"
+            mnt_avail=0
+            docker_avail=0
+            dest=""
+            dest_avail=0
+            if [ -d /mnt ]; then
+                mnt_avail="$(avail /mnt)"
+            fi
+            if [ -d /var/lib/docker ]; then
+                docker_avail="$(avail /var/lib/docker)"
+            fi
+            if [ "${mnt_avail}" -gt "${root_avail}" ] && [ "${mnt_avail}" -ge "${docker_avail}" ]; then
+                dest=/mnt/cargo-target
+                dest_avail="${mnt_avail}"
+            elif [ "${docker_avail}" -gt "${root_avail}" ]; then
+                dest=/var/lib/docker/navigator-cargo-target
+                dest_avail="${docker_avail}"
+            fi
+            printf '%s %s\n' "${dest}" "${dest_avail}"
+          }
+          df -h
+          dest=""
+          dest_avail=0
+          deadline=$((SECONDS + 240))
+          while true; do
+              picked="$(pick_dest)"
+              dest="${picked%% *}"
+              dest_avail="${picked#* }"
+              if [ -n "${dest}" ]; then
+                  break
+              fi
+              if [ "${SECONDS}" -ge "${deadline}" ]; then
+                  break
+              fi
+              echo "waiting for a larger disk than root (${SECONDS}s)"
+              sleep 15
+          done
+          df -h
+          if [ -n "${dest}" ]; then
+              sudo mkdir -p "${dest}"
+              sudo chown "$(id -u):$(id -g)" "${dest}"
+              echo "CARGO_TARGET_DIR=${dest}" >> "${GITHUB_ENV}"
+              echo "build directory -> ${dest} ($((dest_avail / 1024 / 1024)) GiB free)"
+          else
+              echo "build directory -> workspace default (root is the larger disk)"
+          fi
+      # Depth 2, not 1. On a `pull_request` event this checks out
+      # `refs/pull/<n>/merge`, whose first parent is the base tip and whose
+      # second is the PR head — so `HEAD^ HEAD` is exactly this PR's diff, and
+      # two commits is the whole history needed to compute it. The wasm scope
+      # test below is the only consumer; nothing else in this job reads
+      # history.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: 1.98.0
+          # `llvm-tools-preview` supplies `llvm-profdata`/`llvm-cov`, the
+          # instrumentation tooling the coverage floor in the test step needs.
+          components: rustfmt, clippy, llvm-tools-preview
+      # Pinned for the same reason `deploy.yml` pins nextest: the coverage floor
+      # is a merge gate, so the number it measures must not move because the
+      # installer silently picked up a new cargo-llvm-cov. 0.8.7 is the version
+      # the floor below was measured with; bump both together, deliberately.
+      - name: install cargo-llvm-cov
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: cargo-llvm-cov@0.8.7
+      # Pinned to the same version `deploy.yml`'s browser gate pins, for the
+      # same reason: the test runner must not change under the coverage floor
+      # because an installer picked up a newer release.
+      - name: install cargo-nextest
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: nextest@0.9.140
+      # Cache the compiled DEPENDENCIES, not just their sources.
+      #
+      # The plain `actions/cache` this replaces kept only the `~/.cargo`
+      # download caches, because caching a raw `target/` runs the standard
+      # hosted runner out of disk: `cargo test --workspace` already ends the job
+      # at 5.1 GB free on a 72 GB root (run 139871776), and the 209 linked test
+      # binaries are what fills it. `rust-cache` is the way to keep the useful
+      # part without that: before saving it prunes the target directory down to
+      # `deps`/`build`/`.fingerprint` and drops every artifact belonging to a
+      # workspace member, so the test binaries — the whole reason `target/` is
+      # too big to cache — are never in the archive. What is left is the
+      # third-party rlib set, on the order of a couple of GB compressed against
+      # a 10 GB repository quota. Restoring it costs no more disk than building
+      # it did, because these are byte-for-byte the artifacts the job would
+      # otherwise produce in the same paths.
+      #
+      # That quota is the whole story of whether this step does anything. It is
+      # 10 GB for the entire repository, and `deploy.yml` used to spend it all:
+      # eleven `mode=max` buildx exports left 66 of 68 live entries as
+      # `buildkit-blob-*` totalling 9.51 GB, so this 2.19 GB archive was
+      # evicted as fast as it was written. Measured on run 144149466 the
+      # restore took 0.16 s and returned nothing, and the repository held zero
+      # `v0-rust-*` entries — every PR push was compiling the third-party graph
+      # from scratch and then uploading 2.19 GB nothing would ever read. The
+      # publish jobs now cache into Artifact Registry instead, which leaves the
+      # quota to this.
+      #
+      # This step both restores AND saves. The gate owns its cache end to end,
+      # so there is no second workflow writing the entry it reads and no pair of
+      # files that have to agree.
+      #
+      # The cost, stated plainly rather than discovered later: Actions caches are
+      # scoped per ref, so an entry written by one pull request is readable only
+      # by that pull request. The FIRST push of a new branch is therefore always
+      # cold — ~6 min of test build plus the dependency share of clippy and the
+      # CLI build — and every later push of that branch restores it.
+      #
+      # What it buys is a quota nothing has to share. ~1.6 GB per active branch
+      # against 10 GB for the whole repository is roughly six live branches
+      # before eviction begins, which is exactly why the `deploy.yml` rule below
+      # still matters: one unread `mode=max` export is enough to starve all of
+      # them.
+      #
+      # It authenticates the way the first-party action does — the
+      # runner-injected `ACTIONS_RUNTIME_TOKEN` — so nothing here reaches
+      # api.github.com. The key it derives already covers the rustc version, the
+      # lock file, and `CARGO_TARGET_DIR`, so it follows the build directory
+      # wherever the step above put it.
+      - name: cache the Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # `shared-key`, NOT `key`. `key` is added to an automatic per-job key
+          # (`add-job-id-key` defaults to true), which would scope the entry to
+          # this job id and make it unreadable the moment the job is renamed.
+          # `shared-key` replaces that automatic part, so the entry this job
+          # writes is the entry it reads on the next push of the same branch.
+          shared-key: workspace
+      # SurrealDB for the server-mode lane (#1093). Unit tests use the
+      # embedded `kv-mem` engine and need nothing running; this container
+      # exists for `store/tests/surreal_server.rs`, which covers what an
+      # in-process engine cannot — the WebSocket protocol, root `signin`,
+      # and namespace/database selection over a wire, i.e. the path every
+      # deployment actually uses. Memory-backed and thrown away with the
+      # job. The image tag MUST match the `surrealdb` crate version in the
+      # workspace manifest; bump both in the same PR.
+      - name: start SurrealDB for the server-mode lane
+        run: |
+          docker run -d --name test-surreal \
+            -p 8000:8000 \
+            surrealdb/surrealdb:v3.2.3 \
+            start --bind 0.0.0.0:8000 --user root --pass root --no-banner memory
+          for i in $(seq 1 30); do
+              if curl -sS http://127.0.0.1:8000/health >/dev/null 2>&1; then
+                  echo "test-surreal ready after $i attempt(s)"; exit 0
+              fi
+              sleep 1
+          done
+          echo "test-surreal never came up" >&2
+          docker logs test-surreal >&2 || true
+          exit 1
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+      # The wasm client build, which nothing else in this workflow compiles.
+      #
+      # `webapp` is the only crate `dx` compiles to `wasm32-unknown-unknown`,
+      # and that target admits a different dependency graph than the host one:
+      # a crate can be perfectly green under `cargo test --workspace` and still
+      # refuse to compile for the browser. Run 150772186 is the worked example
+      # — an ungated `uuid` gained the workspace `v7` pin, whose `rng` module
+      # has no randomness source on `wasm32-unknown-unknown` and hard-errors
+      # until one is named. Every gate here passed; the break surfaced only in
+      # `deploy.yml`'s `build navigator-web` image build, 20 minutes in, on
+      # `main`, after the merge.
+      #
+      # `check`, not `build`: the failure class is "this graph does not compile
+      # for wasm", which type-checking catches in a fraction of a release
+      # codegen. Placed before the CLI build so it fails in minutes rather than
+      # behind the workspace test pass.
+      #
+      # Conditional, because the wasm graph is small and precisely bounded.
+      # Under `--features web` it resolves to 205 crates, and `webapp` is the
+      # ONLY workspace member among them — every other path crate the manifest
+      # names (`store`, `views`, `cloud`, `axum`, `tracing`, `dioxus-ssr`) is
+      # behind `server`, and `neon` links `webapp` for SSR on the host
+      # target and is never compiled to wasm. So no other crate's SOURCE can
+      # break this build; only the manifests that pin and configure it can:
+      #
+      #   webapp/**            the crate itself
+      #   Cargo.toml           workspace dependency pins, features, lints
+      #   Cargo.lock           the resolved versions (this break was a pin)
+      #   rust-toolchain.toml  the compiler
+      #   this workflow        the check itself
+      #
+      # It stays inside the `rust` job rather than becoming its own, so the
+      # `ci` gate below needs no new dependency and a skip is a skipped STEP,
+      # never a skipped required check.
+      #
+      # Fail OPEN: if the diff cannot be computed the answer is "run it". A
+      # scope test that silently declines to run is the same hole this step
+      # exists to close, and the check is cheap next to a wrong skip.
+      - name: does this PR touch the wasm client graph
+        id: wasm-scope
+        run: |
+          set -uo pipefail
+          if ! changed="$(git diff --name-only HEAD^ HEAD 2>/dev/null)" || [ -z "${changed}" ]; then
+              echo "could not read the PR diff — running the wasm check anyway"
+              echo "run=true" >> "${GITHUB_OUTPUT}"
+              exit 0
+          fi
+          echo "changed files:"
+          echo "${changed}" | sed 's/^/  /'
+          if echo "${changed}" | grep -qE '^(webapp/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'; then
+              echo "-> in scope: running the wasm client check"
+              echo "run=true" >> "${GITHUB_OUTPUT}"
+          else
+              echo "-> out of scope: nothing here can reach the wasm graph"
+              echo "run=false" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: install the wasm client target
+        if: steps.wasm-scope.outputs.run == 'true'
+        run: rustup target add wasm32-unknown-unknown
+      - name: cargo check (webapp, wasm client)
+        if: steps.wasm-scope.outputs.run == 'true'
+        run: cargo check -p webapp --target wasm32-unknown-unknown --features web
+      # Dogfood the CLI as the Markdown gate: build `navigator` once, then run
+      # that binary over the full visible repository tree (including
+      # README/CLAUDE-style files). Ordinary docs get prose Markdown rules, and
+      # templates get the notation-template superset
+      # (questionnaire/workflow/template rules).
+      # `${CARGO_TARGET_DIR:-target}`, not `./target`: the step above may have
+      # moved the build directory onto the larger disk.
+      - name: build navigator CLI
+        run: cargo build -p cli --quiet
+      - name: verify generated SendGrid adapter
+        run: "${CARGO_TARGET_DIR:-target}/debug/navigator dev sendgrid-openapi --verify"
+      # One content validator over the whole tree: lint every `.md` against the
+      # classified rule set, run the typed event checks over each event file,
+      # and parse every `.yaml`/`.yml` in the same walk.
+      - name: gate the content tree with navigator
+        run: "${CARGO_TARGET_DIR:-target}/debug/navigator project gate --ci"
+      # ---- The release preflight, run on every pull request ----------------
+      #
+      # THESE CHECKS USED TO LIVE ONLY IN A SCRIPT SOMEONE REMEMBERED TO RUN.
+      # `cut-release`'s preflight asked them on the operator's machine, before a
+      # tag was pushed; nothing in CI did. Now that a merge to `main` is what
+      # publishes, the pull request is the last place either is still free to
+      # fix — so they are required checks rather than a habit.
+      #
+      # Both are cheap and neither is release-specific: they pass on every
+      # ordinary PR and only have anything to say when a bump is involved.
+      #
+      - name: is the workspace version a releasable one
+        run: "${CARGO_TARGET_DIR:-target}/debug/navigator ops release check"
+      # `ops notices --check` is here now. It could not be while `notices_for`
+      # read "this crate's source is absent" and "this crate ships no licence
+      # file" as the same empty result: `Cargo.lock` is deliberately
+      # over-inclusive across target platforms, so a macOS desk and a Linux
+      # runner each rendered the other's platform-only crates as gaps and could
+      # never agree on the file.
+      #
+      # Two things make it reproducible. The command now REFUSES an unread
+      # registry instead of rendering it as the crates' own licence gap, and
+      # `cargo fetch` with no --target unpacks EVERY target platform's graph
+      # where the build steps above unpack only this runner's — Linux plus
+      # wasm32. The fetch is what makes this step pass rather than merely
+      # correct, so it is not tidiness and must not be dropped.
+      #
+      # It earns a required check because THIRD-PARTY-NOTICES.txt is compiled
+      # into the binary with `include_str!` (cli/src/main.rs) and printed by
+      # `navigator --third-party-notices`. Whatever is committed is what every
+      # published archive ships, on both platforms at once, and a
+      # permissive licence whose text was never read is one whose notice did
+      # not travel with the work it covers.
+      #
+      # Two costs to read off the run rather than assume: the extra ~500 crate
+      # sources land on the root disk this job already fights for, and they
+      # grow the `~/.cargo` half of the rust-cache archive against a 10 GB
+      # repository-wide quota. The `df -h` prices the first. If either bites,
+      # move this pair into its own small job. Re-extract the cached archives so
+      # mutable files left in registry/src by an earlier run cannot change the
+      # generated notice text for an unchanged Cargo.lock.
+      - name: are the third-party notices current
+        run: |
+          rm -rf "${CARGO_HOME:-$HOME/.cargo}/registry/src"
+          cargo fetch --locked
+          df -h
+          "${CARGO_TARGET_DIR:-target}/debug/navigator" ops notices --check
+      # `Cargo.lock` pins every workspace crate's version too, and the release
+      # builds with `--locked` in four places. A bump that carried only
+      # `Cargo.toml` would fail those builds AFTER the release tag exists, which
+      # is the one failure in the pipeline that cannot be re-run away.
+      # `ops release version` refreshes both files together; this is the check
+      # that proves it happened.
+      - name: does Cargo.lock agree with the manifest
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+      # The repo holds the firm's OWN data and synthetic fixtures — never a
+      # client's. That invariant is enforced by `cli/tests/no_client_data.rs`,
+      # which scans the shipped data surfaces (store/seeds, templates,
+      # server/content) inside the workspace test pass below. See AGENTS.md
+      # "No client data in the repo".
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      # The headroom the clippy artifacts leave behind, which is the number that
+      # says whether the narrowed clean below stays affordable. It was never
+      # recorded while the bare `cargo clean` hid it.
+      - name: report free disk after clippy
+        run: df -h
+      # Clear the WORKSPACE crates' clippy output, and nothing else.
+      #
+      # A bare `cargo clean` deletes the entire target directory, which threw
+      # away every third-party rlib the two steps above had just built —
+      # `cargo test` then recompiled the whole dependency graph from zero. That
+      # was the single most expensive line in this file: the test step ran 63.6
+      # minutes of an 88-minute job (run 139871776), a large share of it
+      # rebuilding dependencies that already existed on disk seconds earlier.
+      #
+      # The clean was not gratuitous, though, so it is narrowed rather than
+      # dropped. `RUSTC_WORKSPACE_WRAPPER` — how cargo injects clippy-driver —
+      # applies only to workspace members, so registry dependencies are compiled
+      # by plain rustc into ordinary rlibs that `cargo test` reuses verbatim.
+      # Workspace members are the opposite: clippy leaves check-only `.rmeta`
+      # behind at fingerprints the test build cannot use, so those files are
+      # pure dead weight on a job where disk is the binding constraint. Cleaning
+      # exactly the members keeps the reusable half and discards the unusable
+      # half, which makes this step disk-neutral against the old `cargo clean`
+      # while removing the recompile.
+      #
+      # `cargo metadata --no-deps` is the package list, so the arguments are
+      # always real workspace members and `cargo clean -p` cannot fail on an
+      # unmatched spec.
+      - name: clear the clippy check artifacts for workspace crates
+        run: |
+          set -euo pipefail
+          cargo metadata --no-deps --format-version 1 \
+              | jq -r '.packages[].name | "--package=" + .' \
+              | xargs cargo clean --verbose
+      # Disk is the binding constraint on this job, and it fails as a SIGBUS in
+      # the linker rather than as ENOSPC, so the headroom going in is the single
+      # most useful number when it breaks. Record it.
+      - name: report free disk before the test build
+        run: df -h
+      # The early "largest disk" step runs before Blacksmith attaches the
+      # 590 GB `/dev/vdb` at `/var/lib/docker` (run 38074588448: the volume
+      # is absent at 18:09:23 and present by 18:12:07). Re-evaluate here,
+      # after clippy, and move `target/` across if a larger filesystem is
+      # now mounted. Leaving the instrumented suite on the 150 GB root
+      # fills it; `llvm-cov` still needs those binaries, so they have to
+      # live on the large disk rather than be deleted.
+      - name: relocate the build directory onto the largest disk
+        run: |
+          set -euo pipefail
+          df -h
+          avail() { df -P "$1" | awk 'NR == 2 { print $4 }'; }
+          root_avail="$(avail /)"
+          dest=""
+          dest_avail=0
+          if [ -d /mnt ]; then
+              mnt_avail="$(avail /mnt)"
+              if [ "${mnt_avail}" -gt "${root_avail}" ]; then
+                  dest=/mnt/cargo-target
+                  dest_avail="${mnt_avail}"
+              fi
+          fi
+          if [ -d /var/lib/docker ]; then
+              docker_avail="$(avail /var/lib/docker)"
+              if [ "${docker_avail}" -gt "${root_avail}" ] && [ "${docker_avail}" -ge "${dest_avail}" ]; then
+                  dest=/var/lib/docker/navigator-cargo-target
+                  dest_avail="${docker_avail}"
+              fi
+          fi
+          if [ -z "${dest}" ]; then
+              echo "build directory stays ${CARGO_TARGET_DIR:-target} (root is the larger disk)"
+              exit 0
+          fi
+          current="${CARGO_TARGET_DIR:-$PWD/target}"
+          case "${current}" in
+              /*) ;;
+              *) current="${PWD}/${current}" ;;
+          esac
+          sudo mkdir -p "$(dirname "${dest}")"
+          if [ -d "${current}" ] && [ "${current}" != "${dest}" ]; then
+              echo "moving ${current} -> ${dest}"
+              sudo rm -rf "${dest}"
+              sudo mv "${current}" "${dest}"
+              sudo chown -R "$(id -u):$(id -g)" "${dest}"
+          else
+              sudo mkdir -p "${dest}"
+              sudo chown "$(id -u):$(id -g)" "${dest}"
+          fi
+          echo "CARGO_TARGET_DIR=${dest}" >> "${GITHUB_ENV}"
+          echo "build directory -> ${dest} ($((dest_avail / 1024 / 1024)) GiB free)"
+          df -h
+      # One `cargo test --workspace` pass covers the whole workspace including
+      # the Cucumber BDD suite. This is the merge gate, and it carries the
+      # coverage floor: the pass runs under `cargo llvm-cov` instrumentation and
+      # the report at the end of the step fails the job when total workspace
+      # line coverage drops below the floor.
+      #
+      # `cargo llvm-cov show-env` rather than `cargo llvm-cov --workspace`, and
+      # the difference is load-bearing twice over.
+      #
+      #   * It leaves the four invocations below literally unchanged, so the
+      #     build/run split — full-width build, then a bounded run — survives,
+      #     and so does running `features` and the doctests as their own lanes.
+      #     `cargo llvm-cov` is one shot with no build-only mode (its
+      #     `--no-run` means "report without running", the opposite of
+      #     cargo's), so it cannot express any of that.
+      #   * `cargo llvm-cov --workspace` runs `cargo test --tests`, which drops
+      #     DOCTESTS. Switching to it would have quietly narrowed the merge gate
+      #     to buy coverage. This shape adds measurement and subtracts no tests.
+      #
+      # It also keeps the ordinary target directory (instrumentation rides a
+      # `RUSTC_WRAPPER` applied to workspace crates only), so `rust-cache` and
+      # the largest-disk step above keep working untouched.
+      - name: start PostgreSQL for covered journal tests
+        run: |
+          docker run -d --name test-postgres -p 127.0.0.1:25432:5432 \
+            -e POSTGRES_PASSWORD=synthetic -e POSTGRES_DB=smoke \
+            ghcr.io/neon-law-source-code/neon-law-postgres@sha256:4cc70fee3aa9e53455bd1612d0a5be1f06962f5bcdcda4c6bff47e2b46db969e
+          for attempt in $(seq 1 30); do
+            if docker exec test-postgres pg_isready -U postgres -d smoke; then
+              docker exec -i test-postgres psql -U postgres -d smoke -v ON_ERROR_STOP=1 < store/postgres/schema.sql
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs test-postgres
+          exit 1
+      - name: cargo test with coverage
+        env:
+          # The server-mode SurrealDB lane. `NAV_REQUIRE_SURREAL=1` makes
+          # it fail rather than skip here, so a broken engine is a red
+          # build instead of a silently absent test. It is deliberately not
+          # `NAV_REQUIRE_HARNESS`, which arms the browser suites and the
+          # Restate broker fixture: this job starts database fixtures only, so that
+          # flag would fail every suite whose fixture belongs to
+          # `navigator dev e2e` instead.
+          NAVIGATOR_SURREAL_ENDPOINT: ws://127.0.0.1:8000
+          NAVIGATOR_SURREAL_NAMESPACE: navigator
+          NAVIGATOR_SURREAL_DATABASE: navigator
+          NAVIGATOR_SURREAL_USER: root
+          NAVIGATOR_SURREAL_PASSWORD: root
+          NAV_REQUIRE_SURREAL: "1"
+          NAVIGATOR_TEST_POSTGRES_PORT: "25432"
+          NAV_REQUIRE_POSTGRES: "1"
+          RUST_BACKTRACE: full
+        # Compile at the machine's full width. Test execution uses Rust and
+        # nextest defaults — neither libtest nor nextest gets an extra cap.
+        run: |
+          set -uo pipefail
+          ulimit -n "$(ulimit -Hn)" || true
+          echo "nproc                   : $(nproc)"
+          echo "file descriptor limit   : $(ulimit -n)"
+          echo "epoll max_user_instances: $(cat /proc/sys/fs/epoll/max_user_instances 2>/dev/null || echo '<not exposed>')"
+          set -e
+          # Arm coverage instrumentation for every cargo invocation below.
+          # `eval "$(...)"`, not `source <(...)`: process substitution is not
+          # portable to every shell this could be run under, and the eval form
+          # behaves identically here.
+          eval "$(cargo llvm-cov show-env --export-prefix)"
+          # Drop stale counter files only. NOT `cargo llvm-cov clean
+          # --workspace`, which deletes build artifacts and would throw away the
+          # dependency graph `rust-cache` just restored.
+          cargo llvm-cov clean --profraw-only
+          # Build every test binary at the machine's full width first, so
+          # execution is a separate cargo invocation.
+          cargo nextest run --workspace --no-run
+          # `--profile ci` is `.config/nextest.toml`: two retries, JUnit at
+          # `target/nextest/ci/junit.xml`, and a fail-then-pass recorded FLAKY.
+          # Tee the suite so a red run still has the panic after the log
+          # stream is gone; the step after this one uploads the JUnit on every
+          # outcome and the tee file on failure.
+          cargo nextest run --workspace --no-fail-fast --profile ci 2>&1 | tee /tmp/navigator-workspace-tests.log
+          # The two lanes nextest does not run, kept so this gate stays exactly
+          # as wide as the `cargo test --workspace` it replaces — and so the
+          # coverage number keeps measuring the same test set.
+          #
+          #   * `features`. The cucumber suites are `harness = false` binaries
+          #     that do not speak nextest's `--list` protocol, so
+          #     `.config/nextest.toml` excludes the package and a workspace run
+          #     would otherwise abort on them. Run alone rather than alongside
+          #     the line above: these suites carry their own fixed
+          #     `max_concurrent_scenarios: Some(64)`, which is the same
+          #     concurrency they get today inside `cargo test --workspace`.
+          #   * DOCTESTS. nextest does not run them at all. They are part of
+          #     what the floor below measures — see the note there on why the
+          #     local `cargo llvm-cov --workspace` lane reads lower than this
+          #     job — so dropping them would both narrow the gate and move the
+          #     percentage it is compared against.
+          cargo test -p features
+          cargo test --workspace --doc
+          # THE COVERAGE GATE. `--fail-under-lines` exits non-zero when total
+          # workspace line coverage is under the floor, which fails this job and
+          # therefore the `ci` merge gate. There is no upload, no separate
+          # required context, and no third-party service: the full per-file
+          # table printed here IS the diagnostic when it trips — read it to find
+          # which file regressed.
+          #
+          # Same step as the run above on purpose. `show-env` exported the
+          # counter-file location into this shell only, so a later step would
+          # not find the profile data.
+          #
+          # The floor sits under what THIS command measures. Last published
+          # CI print before this raise: 90.86% line coverage (20094 missed of
+          # 219755) on 2026-09-21. The 91.0 floor is the merge gate from this
+          # change onward.
+          #
+          # Raising the floor means moving four constants together — here,
+          # `docs/agent-workflows.md`, `docs/oss-install.md`, and
+          # `.agents/skills/create-pr/SKILL.md` — so raise it deliberately, in
+          # one change, never as a side effect of another. And never lower it to
+          # make a red build green.
+          #
+          # Do NOT compare this job's percentage against one measured over a
+          # different denominator, and do not set a floor from a local run. The
+          # local lane below reads BELOW this job because the workspace nextest
+          # profile excludes `features`, so the cucumber suites never run and
+          # their ~490 lines plus everything their scenarios drive count as
+          # missed:
+          #
+          #   cargo llvm-cov nextest --workspace --no-fail-fast \
+          #       --ignore-filename-regex '<the regex below>'
+          #
+          # That makes it a valid differential and a useless absolute. Use it to
+          # learn the SIGN of a change — confirmed on run 150323146, where it
+          # predicted +0.07pt and this job then measured 90.63%, up from 90.32%:
+          # same sign, 0.83pt apart on the absolute. Set the floor from this
+          # job's own printed number.
+          #
+          # The local measurement is deliberately conservative — CI should read
+          # at or above it, never below — for two reasons. `cargo llvm-cov
+          # --workspace` (the local form) runs `cargo test --tests` and so skips
+          # DOCTESTS, which this job runs as their own `cargo test --workspace
+          # --doc` lane and which can only add covered lines. That lane is why
+          # the move to nextest did not move this number: nextest does not run
+          # doctests, so dropping it would have taken those lines out of the
+          # measurement. And the local pass had one red binary,
+          # `features --test portal_admin_firm_surface`, a macOS-only
+          # runtime-drop panic that is green on Linux, so its scenarios
+          # contributed less coverage locally than they will here.
+          #
+          # `--ignore-filename-regex` excludes the live-cluster orchestrators.
+          # Every function in them shells out to kind/kubectl/helm/docker, reaps
+          # host port-forward children, or drives a real Chromium session, so
+          # none of it can execute in this job — the browser suites self-skip
+          # without a harness, and counting bodies that never run would depress
+          # the number without measuring anything. They are proven by the
+          # deploy.yml browser/e2e gates instead. The pure decision logic each
+          # one sits beside is deliberately NOT excluded and keeps its tests:
+          # `cli/src/devx/mod.rs` (KindConfig derivation, env rendering,
+          # deploy-order guards), `cli/src/devx/lifecycle.rs` (every staging
+          # decision, against a fake), and `harness_decision` in features.
+          # Anything here that grows a decision belongs on the other side of
+          # that seam, not in this regex. `email_summary_e2e/harness.rs` and
+          # `scenarios.rs` are the same kind of file: they drive the host web
+          # process, the Restate broker and the branch worker on a KIND
+          # cluster. Its fixture server and worker-patch logic stay counted.
+          # `forgejo/cluster.rs`, `oidc.rs`, and `smoke.rs` drive kubectl, git,
+          # and HTTP against a KIND Forgejo; `forgejo-postgres.yml` runs them,
+          # and `forgejo/mod.rs` keeps their decisions and their tests here.
+          cargo llvm-cov report \
+              --fail-under-lines 91.0 \
+              --ignore-filename-regex '(cli/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|cli/src/devx/forgejo/(cluster|oidc|smoke)|cli/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver)\.rs$'
+      - name: stop covered PostgreSQL fixture
+        if: always()
+        run: docker rm -f test-postgres
+      - name: upload nextest JUnit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-junit
+          path: target/nextest/ci/junit.xml
+      - name: upload workspace test log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: workspace-test-log
+          path: /tmp/navigator-workspace-tests.log
+      - name: report free disk after the test build
+        if: always()
+        run: df -h
+
+  # The merge gate, and the only check `ops github setup` requires.
+  #
+  # This job runs nothing. It exists so the required status check has a name
+  # that never changes: every repository the Firm administers terminates its
+  # `ci` workflow in a job spelled exactly `ci`, and the ruleset requires that
+  # one context everywhere. What CI actually *does* stays free to differ per
+  # repository and to be renamed at will.
+  #
+  # The indirection is worth a job slot because the failure it removes is
+  # silent. A required context is matched by string: rename `rust`'s `name:`
+  # and GitHub starts posting a check under the new spelling while the ruleset
+  # goes on waiting for the old one, which never arrives. That does not read as
+  # a broken gate — the pull request simply sits on an expected check forever,
+  # or, if the rule is dropped to fix it, merges with nothing enforced at all.
+  # `navigator ops github setup` asserts this job exists before it will bind
+  # the gate, so the two halves cannot drift apart.
+  #
+  # `if: always()` with an explicit result test, rather than a bare `needs:`.
+  # A plain dependency would let this job be *skipped* when `rust` fails, and a
+  # skipped required check is not a red one — GitHub reports no result, so the
+  # gate would quietly stop blocking exactly when it matters. Testing the
+  # result makes every non-success outcome, including `cancelled`, a failure of
+  # this job. `rust` may be `skipped` when the PR touches no Rust files; that
+  # is success so long as `gate` succeeded.
+  #
+  # `enable-automerge` is deliberately not a dependency: it is conditional, it
+  # does not run on forks, and whether auto-merge got armed is not a statement
+  # about whether the code is good.
+  ci:
+    name: ci
+    needs: [changes, gate, rust, word-adapter]
+    if: always()
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - name: report the gate result
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
+          WORD_ADAPTER_RESULT: ${{ needs.word-adapter.result }}
+        run: |
+          set -euo pipefail
+          echo "classify the pull request: ${CHANGES_RESULT}"
+          echo "gate content: ${GATE_RESULT}"
+          echo "cargo test (workspace): ${RUST_RESULT}"
+          echo "test managed Word adapter: ${WORD_ADAPTER_RESULT}"
+          if [ "${CHANGES_RESULT}" != "success" ]; then
+              echo "::error::the merge gate is red — classify the pull request reported ${CHANGES_RESULT}"
+              exit 1
+          fi
+          if [ "${GATE_RESULT}" != "success" ]; then
+              echo "::error::the merge gate is red — gate content reported ${GATE_RESULT}"
+              exit 1
+          fi
+          if [ "${RUST_RESULT}" != "success" ] && [ "${RUST_RESULT}" != "skipped" ]; then
+              echo "::error::the merge gate is red — cargo test (workspace) reported ${RUST_RESULT}"
+              exit 1
+          fi
+          if [ "${WORD_ADAPTER_RESULT}" != "success" ] && [ "${WORD_ADAPTER_RESULT}" != "skipped" ]; then
+              echo "::error::the merge gate is red — test managed Word adapter reported ${WORD_ADAPTER_RESULT}"
+              exit 1
+          fi
+
+  # Turn on GitHub auto-merge on open / ready-for-review AND on every push
+  # (`synchronize`). Auto-merge squash-merges the PR the moment its gate is green
+  # and every required review thread is resolved — no manual "Merge when ready",
+  # no babysitting. The step is idempotent (it exits early when auto-merge is
+  # already on), so re-running on every push is a harmless no-op that also re-arms
+  # auto-merge if a push cleared it. To hold a ready PR, convert it to draft (the
+  # `draft == false` guard below skips drafts), not by disabling auto-merge.
+  # `gh pr merge --auto` only *requests* it; GitHub still holds the PR until the
+  # required `ci` check passes and, for everyone but the organization
+  # administrator, the code-owner review lands (see the `production` and
+  # `production-review` rulesets in `cli/src/devx/github_setup.rs`).
+  # The fork guard skips PRs from forks, whose GITHUB_TOKEN is read-only.
+  enable-automerge:
+    name: enable PR auto-merge
+    # Only this job needs write; the test job stays contents:read (above).
+    # `enablePullRequestAutoMerge` requires contents:write — pull-requests:write
+    # alone returns "Resource not accessible by integration".
+    permissions:
+      contents: write
+      pull-requests: write
+    if: >
+      github.event_name == 'pull_request' &&
+      (github.event.action == 'opened' || github.event.action == 'ready_for_review' || github.event.action == 'synchronize') &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # The App ID lives in a secret (not a variable) because the repo keeps
+    # every workflow credential in GitHub Actions *secrets* —
+    # this repo has no Actions *variables*. Hoisted to
+    # job-level env so the step `if` below can gate on its presence: the
+    # `secrets` context is unavailable in `if`, but `env` is.
+    env:
+      AUTOMERGE_APP_ID: ${{ secrets.AUTOMERGE_APP_ID }}
+    steps:
+      # Arm auto-merge as a GitHub App, and ONLY as a GitHub App. The App
+      # installation token carries the `contents: write` + `pull-requests: write`
+      # this needs and arms auto-merge under a stable bot identity.
+      #
+      # WHICH IDENTITY ARMS IT DECIDES WHETHER THE RELEASE PUBLISHES. GitHub's
+      # workflow-recursion guard creates no runs for a push attributed to
+      # `GITHUB_TOKEN`, and since the version bump in the merged manifest IS the
+      # publish, a merge armed under that token lands on `main` and starts no
+      # `deploy` run at all. Nothing goes red; the release is simply never built.
+      #
+      # So both steps below are gated on the App being configured, and there is
+      # NO fallback to the workflow token. An absent secret arms nothing and
+      # leaves the PR for a human — visibly waiting, which a lost release is
+      # not. A secret that is present but broken fails the mint and arms nothing
+      # either. Both are fail-closed on purpose, and
+      # `cli/tests/automerge_identity.rs` asserts the fallback stays absent.
+      # Forks, which hold no secrets, skip both steps and still pass.
+      #
+      # Dependabot note: a Dependabot-opened PR runs this job against the
+      # separate *Dependabot* secret store, so both secrets exist there as well
+      # as in the Actions store. Without them its bumps would arm nothing.
+      - name: mint app token
+        id: app-token
+        if: env.AUTOMERGE_APP_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.AUTOMERGE_APP_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+      - name: request auto-merge
+        if: env.AUTOMERGE_APP_ID != ''
+        env:
+          # The App installation token, and nothing else.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          # `gh` targets github.com unless told otherwise, which is where this
+          # repository lives — so the default is right here and was not on the
+          # tenant this moved off, where an Actions token sent to api.github.com
+          # came back "Bad credentials" (HTTP 401) rather than a permissions
+          # error. Derive the API host from the run itself so the same block
+          # works on any host.
+          GH_HOST="${GITHUB_SERVER_URL#https://}"
+          export GH_HOST
+          auto_merge_enabled="$(
+              gh pr view "${PR_URL}" \
+                  --json autoMergeRequest \
+                  --jq '.autoMergeRequest != null'
+          )"
+          if [ "${auto_merge_enabled}" = "true" ]; then
+              echo "auto-merge already enabled; nothing to do."
+              exit 0
+          fi
+          # Enable auto-merge via the GraphQL mutation rather than
+          # `gh pr merge --auto`: a current `gh pr merge --auto` (no method)
+          # hard-errors non-interactively ("--merge, --rebase, or --squash
+          # required"). `enablePullRequestAutoMerge` needs an explicit
+          # `mergeMethod` — omitting it defaults to MERGE, which this repo
+          # disallows ("Merge method merge commits are not allowed"). SQUASH is
+          # the repo's only allowed method, so it is accepted.
+          pr_id="$(gh pr view "${PR_URL}" --json id --jq '.id')"
+          # A defensive soft pass, not the expected path. Arming auto-merge is
+          # a mutation on the pull request rather than a write of workflow
+          # content, and a PR editing `.github/workflows/*` does arm and merge
+          # under this App — #99 did exactly that. An installation whose token
+          # lacked the reach would instead see "refusing to allow a GitHub App
+          # to create or update workflow ... without `workflows` permission",
+          # which no CI change can fix, so that one refusal is reported and
+          # passed over. Every other failure is real and fails the job.
+          if ! result="$(gh api graphql -f pr="${pr_id}" -f query='
+              mutation($pr: ID!) {
+                enablePullRequestAutoMerge(input: { pullRequestId: $pr, mergeMethod: SQUASH }) {
+                  pullRequest { number }
+                }
+              }' 2>&1)"; then
+              if printf '%s' "${result}" | grep -q 'refusing to allow a GitHub App to create or update workflow'; then
+                  echo "::warning::the App was refused for lack of the \`workflows\` permission on a PR that edits workflow files. Merge this PR manually."
+                  printf '%s\n' "${result}"
+                  exit 0
+              fi
+              printf '%s\n' "${result}" >&2
+              exit 1
+          fi
+          printf '%s\n' "${result}"

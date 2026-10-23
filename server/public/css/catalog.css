@@ -1,0 +1,1403 @@
+/* Shared workshop and presentation indexes and material pages. The decorative
+   hero follows the system color theme and freezes under reduced motion. */
+
+.catalog-hero {
+  /* Cyan — the only hue, taken stop-for-stop from Tailwind's cyan ramp
+     (400 / 300 / 900 / 100). Kept as literals here, and as hex rather than
+     `oklch()`, so this self-contained scene never depends on the token layer
+     having arrived and resolves the same where `color-mix` is absent. */
+  --catalog-accent: #22d3ee;
+  --catalog-bright: #67e8f9;
+  --catalog-deep: #164e63;
+  --catalog-soft: #cffafe;
+
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-height: clamp(13rem, 28vw, 20rem);
+  margin-bottom: 2.5rem;
+  border-radius: 0.5rem;
+  color: #fff;
+  /* Deep space: two faint cyan catalog washes over a cool near-black field. */
+  background:
+    radial-gradient(ellipse 64% 56% at 72% 30%, rgba(22, 78, 99, 0.52), transparent 62%),
+    radial-gradient(ellipse 58% 66% at 18% 82%, rgba(34, 211, 238, 0.16), transparent 64%),
+    linear-gradient(180deg, #03090c 0%, #04161c 58%, #03080b 100%);
+}
+
+.catalog-hero-media {
+  position: absolute;
+  inset: 0;
+}
+
+/* A soft vignette so the bottom-left copy stays legible over the moving
+   scene — light enough that the stars still read through it. */
+.catalog-hero-media::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background:
+    linear-gradient(90deg, rgba(3, 9, 12, 0.72), rgba(3, 9, 12, 0.32) 52%, rgba(3, 9, 12, 0)),
+    linear-gradient(0deg, rgba(3, 9, 12, 0.66), rgba(3, 9, 12, 0) 60%);
+}
+
+/* Two tiled starfields drifting at different speeds for parallax. Each plane is
+   a handful of tiny radial-gradient dots repeated across the scene; the whole
+   plane twinkles (opacity) and drifts (background position). */
+.catalog-hero__stars,
+.catalog-hero__stars--far {
+  position: absolute;
+  inset: 0;
+  background-repeat: repeat;
+  background-image:
+    radial-gradient(1.5px 1.5px at 40px 60px, #fff, transparent),
+    radial-gradient(1px 1px at 130px 100px, var(--catalog-soft), transparent),
+    radial-gradient(1.5px 1.5px at 200px 168px, var(--catalog-bright), transparent),
+    radial-gradient(1px 1px at 92px 224px, #fff, transparent),
+    radial-gradient(1px 1px at 252px 44px, var(--catalog-soft), transparent),
+    radial-gradient(1.5px 1.5px at 280px 256px, var(--catalog-accent), transparent);
+  background-size: 300px 300px;
+  animation:
+    catalog-twinkle 4.5s ease-in-out infinite,
+    catalog-drift 90s linear infinite;
+}
+
+.catalog-hero__stars--far {
+  background-size: 210px 210px;
+  opacity: 0.6;
+  animation:
+    catalog-twinkle 6.5s ease-in-out infinite 1.2s,
+    catalog-drift 150s linear infinite reverse;
+}
+
+/* The catalog gas — soft blurred cyan clouds that breathe and drift, the
+   cradle the new star forms inside. */
+.catalog-hero__cloud {
+  position: absolute;
+  inset: -12%;
+  background:
+    radial-gradient(38% 50% at 70% 32%, color-mix(in srgb, var(--catalog-accent) 32%, transparent), transparent 70%),
+    radial-gradient(30% 42% at 30% 60%, color-mix(in srgb, var(--catalog-bright) 22%, transparent), transparent 72%),
+    radial-gradient(26% 36% at 82% 70%, color-mix(in srgb, var(--catalog-deep) 28%, transparent), transparent 72%);
+  filter: blur(26px);
+  animation: catalog-cloud 26s ease-in-out infinite alternate;
+}
+
+/* The star being born, anchored to the densest knot of gas (72% / 32%): a
+   bright pulsing core... */
+.catalog-hero__core {
+  position: absolute;
+  left: 72%;
+  top: 32%;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff 0%, var(--catalog-bright) 42%, transparent 72%);
+  box-shadow:
+    0 0 14px 4px var(--catalog-bright),
+    0 0 40px 12px color-mix(in srgb, var(--catalog-accent) 70%, transparent);
+  animation: catalog-core 5s ease-in-out infinite;
+}
+
+/* ...wrapped in a shockwave ring that expands and fades — the explosion. */
+.catalog-hero__burst {
+  position: absolute;
+  left: 72%;
+  top: 32%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--catalog-bright) 82%, transparent);
+  transform: scale(0);
+  animation: catalog-burst 7s ease-out infinite;
+}
+
+/* The copy block sits above the scene and is padded here rather than by the
+   Bootstrap `py-5 px-4 px-lg-5` utilities the header used, so the layout
+   survives Bootstrap's removal (#877). `mb-5` on the banner becomes the
+   `.catalog-hero` margin below. */
+.catalog-hero-copy {
+  position: relative;
+  display: flex;
+  min-height: inherit;
+  max-width: 48rem;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 2rem 1.5rem;
+}
+
+@media (min-width: 992px) {
+  .catalog-hero-copy {
+    padding: 2.25rem 3rem;
+  }
+}
+
+/* The small uppercase attribution above the wordmark. The header spelled
+   this with Bootstrap utilities (`text-uppercase small fw-semibold mb-2`); it
+   is a named class here so the rule survives Bootstrap's removal (#877). */
+.catalog-hero__eyebrow {
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.catalog-hero h1 {
+  font-size: clamp(2.75rem, 7vw, 4.25rem);
+  line-height: 0.95;
+  /* A gentle cyan halo ties the wordmark to the service heroes' glow. */
+  text-shadow:
+    0 0 8px color-mix(in srgb, var(--catalog-bright) 60%, transparent),
+    0 0 28px color-mix(in srgb, var(--catalog-deep) 55%, transparent);
+}
+
+.catalog-hero .lede {
+  max-width: 44rem;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+@keyframes catalog-twinkle {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes catalog-drift {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 300px -300px;
+  }
+}
+
+@keyframes catalog-cloud {
+  from {
+    transform: translate3d(-3%, 2%, 0) scale(1);
+  }
+  to {
+    transform: translate3d(3%, -2%, 0) scale(1.08);
+  }
+}
+
+@keyframes catalog-core {
+  0%,
+  100% {
+    transform: scale(0.8);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.28);
+    opacity: 1;
+  }
+}
+
+@keyframes catalog-burst {
+  0% {
+    transform: scale(0);
+    opacity: 0.9;
+  }
+  72% {
+    opacity: 0.22;
+  }
+  100% {
+    transform: scale(26);
+    opacity: 0;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* LIGHT variant — "daylight catalog": the same cyan ramp re-tinted for  */
+/* cool paper. Deeper cyans hold contrast on white, and the copy flips  */
+/* to ink so it reads on the pale sky.                                  */
+/*                                                                      */
+/* Keyed on `prefers-color-scheme` so the hero follows the shared token */
+/* layer without requiring a JavaScript theme toggle.                    */
+/* ------------------------------------------------------------------ */
+@media (prefers-color-scheme: light) {
+  .catalog-hero {
+    color: #083344;
+    background:
+      radial-gradient(ellipse 64% 56% at 72% 30%, rgba(34, 211, 238, 0.24), transparent 62%),
+      radial-gradient(ellipse 58% 66% at 18% 82%, rgba(22, 78, 99, 0.12), transparent 64%),
+      linear-gradient(180deg, #ecfeff 0%, #f6feff 56%, #ffffff 100%);
+  }
+
+  /* Deep-cyan stars so the dots read as a daytime sparkle on cool paper. */
+  .catalog-hero__stars,
+  .catalog-hero__stars--far {
+    background-image:
+      radial-gradient(1.5px 1.5px at 40px 60px, var(--catalog-deep), transparent),
+      radial-gradient(1px 1px at 130px 100px, var(--catalog-accent), transparent),
+      radial-gradient(1.5px 1.5px at 200px 168px, #155e75, transparent),
+      radial-gradient(1px 1px at 92px 224px, var(--catalog-deep), transparent),
+      radial-gradient(1px 1px at 252px 44px, var(--catalog-accent), transparent),
+      radial-gradient(1.5px 1.5px at 280px 256px, #155e75, transparent);
+  }
+
+  /* Pale vignette so ink copy reads on the bright scene. */
+  .catalog-hero-media::after {
+    background:
+      linear-gradient(90deg, rgba(236, 254, 255, 0.72), rgba(236, 254, 255, 0.2) 52%, rgba(236, 254, 255, 0)),
+      linear-gradient(0deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0) 60%);
+  }
+
+  /* Ink wordmark with a soft cyan halo — no neon on paper. */
+  .catalog-hero h1 {
+    color: #083344;
+    text-shadow: 0 0 18px rgba(34, 211, 238, 0.3);
+  }
+
+  .catalog-hero .lede {
+    color: rgba(8, 51, 68, 0.78);
+  }
+}
+
+/* Access-to-justice restraint: freeze the scene to a still, dignified space
+   banner for anyone who asks for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .catalog-hero__stars,
+  .catalog-hero__stars--far,
+  .catalog-hero__cloud,
+  .catalog-hero__core {
+    animation: none;
+  }
+
+  .catalog-hero__burst {
+    display: none;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* The material lists.                                                */
+/* ------------------------------------------------------------------ */
+
+/* The landing's material lists. The markup got its bullet removal and
+   bottom margin from Bootstrap's `list-unstyled mb-5`; both are named rules
+   here so the lists survive Bootstrap's removal (#877). */
+.catalog-materials {
+  margin-bottom: 3rem;
+  padding-left: 0;
+  list-style: none;
+}
+
+/* One workshop or presentation in the landing's lists. */
+.catalog-material {
+  margin-bottom: 1.5rem;
+}
+
+.catalog-material h3 {
+  font-size: 1.25rem;
+  line-height: 1.2;
+}
+
+/* The small uppercase line above a material's title. */
+.catalog-eyebrow {
+  margin-bottom: 0.25rem;
+  color: var(--nav-color-text-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.catalog-empty,
+.catalog-more {
+  color: var(--nav-color-text-muted);
+}
+
+.catalog-more {
+  font-style: italic;
+}
+
+@media (max-width: 575.98px) {
+  .catalog-hero {
+    min-height: 15rem;
+  }
+
+  .catalog-hero h1 {
+    font-size: 2.75rem;
+  }
+
+  .catalog-hero-media::after {
+    background: linear-gradient(0deg, rgba(3, 9, 12, 0.9), rgba(3, 9, 12, 0.36));
+  }
+}
+
+@media (min-width: 992px) {
+  .catalog-hero h1 {
+    font-size: 4.25rem;
+  }
+}
+
+/* Bootstrap shipped `box-sizing: border-box` as a global reset, so every rule
+   written against the pages assumed it. A Dioxus page loads only what it
+   names and `theme.css` carries no reset, so these surfaces state it for
+   themselves — without it a padded element sized in percent or `dvh` overflows
+   its own box (the slide canvas clips its text; the projector shell overruns
+   the viewport by twice its padding). Scoped to the page roots below rather
+   than declared globally: the hero is already tuned against the browser
+   default, and a document-wide reset is `theme.css`'s to make when Bootstrap
+   leaves for good (#877). */
+:is(
+  .material-page,
+  .workshop-step,
+  .workshop-lighttable,
+  .workshop-cert-sent,
+  .catalog-display
+),
+:is(
+    .material-page,
+    .workshop-step,
+    .workshop-lighttable,
+    .workshop-cert-sent,
+    .catalog-display
+  )
+  * {
+  box-sizing: border-box;
+}
+
+/* ------------------------------------------------------------------ */
+/* The material surface: a workshop or presentation hub, and the       */
+/* light-table grid of its slides.                                     */
+/*                                                                     */
+/* These pages had almost no CSS of their own — their whole appearance */
+/* came from Bootstrap *components* (`card`, `badge`, `list-group`,    */
+/* `form-control`) that the layout linked on every render, not    */
+/* from `brand.css`. So this is a rebuild on the theme's `--nav-*`     */
+/* tokens rather than a port of existing rules.                        */
+/* ------------------------------------------------------------------ */
+
+.material-page,
+.workshop-lighttable,
+.workshop-cert-sent {
+  max-width: 72rem;
+  margin-inline: auto;
+}
+
+.workshop-cert-sent {
+  padding-block: 3rem;
+  text-align: center;
+}
+
+.material-header {
+  margin-bottom: 1.5rem;
+}
+
+/* A notation's title and its links (a form's own blank original, the
+   GitHub source) share one row — the links float to the end rather than
+   stacking under the title. */
+.notation-preview-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.notation-preview-header h1 {
+  margin: 0;
+}
+
+.notation-preview-header__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* The "Try answering this" demo (ENG-452) — a card so it reads as a distinct,
+   self-contained sandbox rather than a continuation of the document body it
+   sits below. */
+.notation-demo {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 0.75rem;
+}
+
+.notation-demo h2 {
+  margin-top: 0;
+}
+
+.notation-demo__step {
+  margin-block: 1rem;
+}
+
+.notation-demo__explanation {
+  color: var(--nav-color-text);
+}
+
+.notation-demo__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+/* Question and document sit in columns on a wide screen and stack on a
+   narrow one. minmax(0, 1fr) lets long prompts, URLs, and tables wrap
+   inside the column instead of widening the page. */
+.notation-preview {
+  padding-bottom: 6rem;
+}
+
+.notation-demo__workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.notation-demo__workspace--stacked {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.notation-demo__question,
+.notation-demo__document,
+.notation-demo__prompt,
+.notation-demo__help,
+.notation-demo__explanation,
+.notation-demo__group,
+.notation-demo__role,
+.notation-demo__outline,
+.notation-demo__schedule,
+.notation-demo__row,
+.notation-demo .nav-field,
+.notation-demo .nav-choice-card,
+.notation-demo .nav-btn {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.notation-demo__prompt,
+.notation-demo__help,
+.notation-demo__group,
+.notation-demo__role {
+  display: block;
+}
+
+.notation-demo__help,
+.notation-demo__group,
+.notation-demo__role {
+  margin: 0.35rem 0 0;
+}
+
+.notation-demo__count {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+}
+
+.notation-demo__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.notation-demo__row > * {
+  min-width: 0;
+}
+
+.notation-demo input,
+.notation-demo textarea,
+.notation-demo select,
+.notation-demo button {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.notation-demo .nav-choice-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.notation-demo input[type="radio"] {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.notation-demo__document table,
+.notation-preview table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.notation-demo__document th,
+.notation-demo__document td,
+.notation-preview th,
+.notation-preview td {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 768px) {
+  .notation-demo__workspace,
+  .notation-demo__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Definition-derived workflow graph and live questionnaire rendering. */
+.notation-workflow,
+.notation-workflow__viewport {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.notation-workflow__viewport {
+  overflow-x: auto;
+}
+
+.notation-workflow__graph {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 12rem;
+  overflow: visible;
+}
+
+.notation-workflow__edge path {
+  fill: none;
+  stroke: var(--nav-color-text-muted);
+  stroke-width: 2;
+}
+
+.notation-workflow__edge text,
+.notation-workflow__node-role {
+  fill: var(--nav-color-text-muted);
+  font-size: 0.72rem;
+  paint-order: stroke fill;
+  stroke: var(--nav-color-bg);
+  stroke-width: 4px;
+}
+
+.notation-workflow__arrow {
+  fill: var(--nav-color-text-muted);
+}
+
+.notation-workflow__node rect {
+  fill: var(--nav-color-surface);
+  stroke: var(--nav-color-border);
+  stroke-width: 2;
+}
+
+.notation-workflow__node text {
+  fill: var(--nav-color-text);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.notation-workflow__node--start rect {
+  stroke: var(--nav-color-primary);
+  stroke-width: 3;
+}
+
+.notation-workflow__node--end rect {
+  stroke-dasharray: 6 4;
+}
+
+.notation-live-template {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--nav-color-border);
+}
+
+.notation-live-template__blank {
+  display: inline-block;
+  min-width: 5rem;
+  min-height: 1.2em;
+  padding: 0 0.25rem;
+  border-bottom: 2px dotted var(--nav-color-text-muted);
+  color: var(--nav-color-text-muted);
+  font-style: italic;
+}
+
+/* The material's own lede reads as body copy, not the hero treatment the
+   `.catalog-hero .lede` rule gives the landing wordmark. */
+.material-page .lede,
+.workshop-cert-sent .lede {
+  color: var(--nav-color-text);
+  font-size: 1.125rem;
+}
+
+/* Material Markdown is reading prose, unlike the compact site chrome. Keep
+   links visibly distinct even when neither pointer hover nor colour is
+   available. */
+.nav-theme .material-page :is(.material-intro, .material-body, .workshop-chapter__preamble) a {
+  text-decoration: underline;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.14em;
+}
+
+.material-intro {
+  margin-bottom: 1.5rem;
+}
+
+/* Start / slides / markdown, wrapping on narrow viewports. Replaces the
+   `d-flex flex-wrap gap-2 my-4` utilities the markup used. */
+.material-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-block: 1.5rem 2rem;
+}
+
+.material-outline,
+.lighttable-chapters {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.lighttable-chapters {
+  gap: 3rem;
+}
+
+/* One chapter, on both the outline and the light table. The markup drew
+   this as a Bootstrap `card` + `card-header`; it is a plain bordered panel on
+   the theme tokens here. */
+.workshop-chapter {
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+}
+
+.workshop-chapter__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1rem;
+  border-bottom: 1px solid var(--nav-color-border);
+}
+
+.workshop-chapter__title {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.workshop-chapter__preamble {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+}
+
+/* The successor to Bootstrap's `badge text-bg-primary rounded-pill` — the
+   chapter number, and the light table's viewed count. */
+.catalog-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* The chapter's ordered steps — the successor to `list-group-flush`. */
+.workshop-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workshop-steps__item {
+  display: flex;
+  gap: 1rem;
+  padding: 0.625rem 1rem;
+  border-top: 1px solid var(--nav-color-border);
+}
+
+.workshop-steps__item:first-child {
+  border-top: 0;
+}
+
+.workshop-steps__number {
+  color: var(--nav-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.lighttable-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+/* The thumbnail grid. Replaces `row row-cols-1 row-cols-md-2 row-cols-xl-3`. */
+.lighttable-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 1rem;
+  padding: 1rem;
+}
+
+/* Every thumbnail is the same size regardless of how much its slide holds, so
+   the grid reads as a contact sheet. The caption is pinned to the bottom by
+   `margin-top: auto`; without that a short slide floats its caption up and the
+   row stops lining up. */
+.slide-thumb {
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface-raised);
+  color: inherit;
+}
+
+/* The shrunk slide face. Decorative and `aria-hidden`, so it is clipped rather
+   than made readable — the caption below carries the accessible label. */
+/* A fixed height, not a max: the whole point is that every cell matches. The
+   miniature is clipped rather than scaled, and it is `aria-hidden`, so losing
+   the tail costs nothing — the caption carries the readable label. */
+.slide-thumb__preview {
+  height: 9rem;
+  overflow: hidden;
+  padding: 0.5rem;
+  font-size: 0.6rem;
+  line-height: 1.3;
+}
+
+/* Keep a slide's own headings from blowing out the miniature. */
+.slide-thumb__preview :is(h1, h2, h3, h4) {
+  font-size: 0.75rem;
+  margin: 0 0 0.25rem;
+}
+
+.slide-thumb__preview :is(p, ul, ol, pre) {
+  margin: 0 0 0.25rem;
+}
+
+/* Syntect gives code tokens inline colours that belong to their full-size slide
+   face. A thumbnail is decorative and too small to preserve that palette, so
+   keep its tiny source legible against the shared surface instead. */
+.slide-thumb__preview pre {
+  background: var(--nav-color-surface) !important;
+  color: var(--nav-color-text) !important;
+}
+
+.slide-thumb__preview pre span {
+  color: inherit !important;
+}
+
+/* A thumbnail is a miniature of the slide, `inert`, and too small for a
+   control. The copy button belongs on the slide itself. */
+.slide-thumb__preview .nav-code__copy {
+  display: none;
+}
+
+.slide-thumb__caption {
+  margin-top: auto;
+  overflow: hidden;
+  padding: 0.35rem 0.5rem;
+  border-top: 1px solid var(--nav-color-border);
+  font-size: 0.8125rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Revealed by the same script once every slide has been seen. */
+.workshop-certificate {
+  margin-top: 2rem;
+  padding: 1.25rem;
+  border: 1px solid var(--nav-color-success);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+}
+
+.workshop-certificate__form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.workshop-certificate__field {
+  display: flex;
+  min-width: 14rem;
+  flex: 1 1 14rem;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/* The controls are the shared `Field`; the row's gap does the spacing. */
+.workshop-certificate__field .nav-field {
+  margin-bottom: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* The presenter surface: the classroom step page and the full-screen  */
+/* display face a presenter projects on a second screen.               */
+/*                                                                     */
+/* The slide canvas and the display shell moved here from `brand.css`  */
+/* with the pages that emit them — they were the last rules in that    */
+/* file these routes read, and a Dioxus page loads only what it names. */
+/* The rail, the section menu, and the presenter notes are new: they   */
+/* had no rules of their own at all, because the markup drew them */
+/* entirely out of Bootstrap utilities and a Bootstrap dropdown.       */
+/* ------------------------------------------------------------------ */
+
+.workshop-step {
+  max-width: 72rem;
+  margin-inline: auto;
+}
+
+/* Back to the hub, where you are, and the jump-to-section menu — pinned above
+   the slide so orientation is never stranded behind a Next button. */
+.workshop-rail {
+  margin-bottom: 1.5rem;
+}
+
+.workshop-rail__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+/* The deck title is the step page's `h1`, so it carries the rail's own
+   scale rather than a document heading's. */
+.workshop-rail__title {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+
+.workshop-rail__back {
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.workshop-rail__back:hover {
+  text-decoration: underline;
+}
+
+.workshop-rail__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.workshop-rail__chapter {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.workshop-rail__position {
+  margin: 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.875rem;
+}
+
+/* Workshop progress indicator. */
+.workshop-progress {
+  overflow: hidden;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--nav-color-surface-raised);
+}
+
+.workshop-progress__bar {
+  height: 100%;
+  background: var(--nav-color-primary);
+}
+
+/* The jump-to-section menu is a native `<details>` disclosure. It needs no
+   script, opens before hydration, and is keyboard-accessible by default. */
+.workshop-sections {
+  position: relative;
+}
+
+.workshop-sections__toggle {
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface);
+  color: var(--nav-color-text);
+  cursor: pointer;
+  font-size: 0.875rem;
+  list-style: none;
+  white-space: nowrap;
+}
+
+/* Safari draws its own disclosure triangle through a pseudo-element that
+   `list-style: none` does not reach. */
+.workshop-sections__toggle::-webkit-details-marker {
+  display: none;
+}
+
+.workshop-sections__toggle::after {
+  content: " ▾";
+}
+
+.workshop-sections__toggle:focus-visible {
+  outline: 2px solid var(--nav-color-primary);
+  outline-offset: 1px;
+}
+
+.workshop-sections__menu {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  min-width: 18rem;
+  max-height: min(70vh, 38rem);
+  overflow-y: auto;
+  padding: 0.5rem 0;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+  box-shadow: var(--nav-shadow);
+}
+
+.workshop-sections__header {
+  margin: 0;
+  padding: 0.4rem 1rem 0.2rem;
+  color: var(--nav-color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.workshop-sections__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Written against `.nav-theme a` rather than the bare class: that rule sets
+   every anchor to the brand link colour and out-specifies a lone class, so the
+   entries would read as a wall of links and — worse — the highlighted entry
+   would land link-on-brand over its filled background. This is the same
+   specificity bump `theme.css` makes for `a.nav-btn--*`, and the same defect:
+   a menu that looks styled and fails contrast outright. */
+.nav-theme a.workshop-sections__item {
+  display: block;
+  padding: 0.35rem 1rem;
+  color: var(--nav-color-text);
+  font-size: 0.9375rem;
+  text-decoration: none;
+}
+
+.nav-theme a.workshop-sections__item:hover {
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+}
+
+.nav-theme a.workshop-sections__item--current,
+.nav-theme a.workshop-sections__item--current:hover {
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+  font-weight: 600;
+}
+
+/* Catalog slide faces use Keynote's wide canvas shape: 16:9, equivalent to
+   1920x1080 when an export pipeline needs pixels. The successor to the
+   Bootstrap `card shadow-sm position-relative` the markup used. */
+.workshop-slide {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+  box-shadow: var(--nav-shadow);
+}
+
+.workshop-slide > .material-body {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: clamp(1rem, 3vw, 2rem);
+}
+
+.workshop-slide > .material-body > :last-child {
+  margin-bottom: 0;
+}
+
+.workshop-slide :is(h2, h3) {
+  overflow-wrap: anywhere;
+}
+
+/* The firm's product interlude uses the exact linked practice-card component
+   from `/`, but four offerings need a 2 × 2 presentation composition rather
+   than the homepage's three-across row. The slide body is a flex column so the
+   grid consumes the canvas left after its title without introducing scroll. */
+.workshop-slide > .workshop-product-slide {
+  display: flex;
+  flex-direction: column;
+}
+
+.workshop-slide .workshop-product-cards.home-practices__grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(0.75rem, 2vw, 1.5rem);
+  margin-top: clamp(0.75rem, 2vw, 1.5rem);
+}
+
+.workshop-slide .workshop-product-cards > .home-practice {
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(0.75rem, 2.5vw, 2rem);
+  border-color: var(--firm-brand);
+  color: inherit;
+  text-decoration: none;
+  transform: translateY(-2px);
+  transition: none;
+}
+
+.workshop-slide .workshop-product-cards .home-practice__mark {
+  inline-size: clamp(2.25rem, 4.5vw, 4rem);
+  block-size: clamp(2.25rem, 4.5vw, 4rem);
+}
+
+.workshop-slide .workshop-product-cards .home-practice__heading {
+  color: var(--firm-brand-strong);
+  font-size: clamp(1.2rem, 2.5vw, 2rem);
+  text-align: center;
+}
+
+/* A projected slide is a static composition, so hold the homepage card's
+   finished hover wash in place and remove the transition that normally draws
+   it in under a pointer. */
+.workshop-slide .workshop-product-cards > .home-practice::after {
+  opacity: 0.22;
+  transform: scale(1.5);
+  transition: none;
+}
+
+/* The light table clips every preview to nine rem. Compress this one component
+   rather than showing only the first card's corner in its thumbnail. */
+.slide-thumb__preview .workshop-product-slide {
+  height: 100%;
+  padding: 0;
+}
+
+.slide-thumb__preview .workshop-product-cards.home-practices__grid {
+  gap: 0.2rem;
+  margin-top: 0.2rem;
+}
+
+.slide-thumb__preview .workshop-product-cards > .home-practice {
+  gap: 0.15rem;
+  padding: 0.2rem;
+}
+
+.slide-thumb__preview .workshop-product-cards .home-practice__mark {
+  inline-size: 0.9rem;
+  block-size: 0.9rem;
+}
+
+.slide-thumb__preview .workshop-product-cards .home-practice__heading {
+  font-size: 0.48rem;
+}
+
+/* The Navigator interlude follows the four-practice slide with one deliberate
+   identity: name, helm, source. The mark is the same first-party SVG component
+   used by the page heroes, so the deck and site cannot drift into two logos. */
+.workshop-slide > .workshop-navigator-slide {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  justify-items: center;
+  row-gap: clamp(0.35rem, 1.25vw, 1rem);
+  text-align: center;
+}
+
+.workshop-navigator-slide h3 {
+  align-self: start;
+  justify-self: stretch;
+  margin: 0;
+  line-height: 1.05;
+  text-align: left;
+}
+
+.workshop-navigator-slide__mark {
+  display: grid;
+  place-items: center;
+  width: min(38%, 38vh, 20rem);
+  max-height: 100%;
+  aspect-ratio: 1;
+  align-self: center;
+  border: 1px solid color-mix(in oklab, var(--firm-brand) 52%, transparent);
+  border-radius: 50%;
+  color: var(--firm-brand);
+  background:
+    radial-gradient(circle, var(--firm-brand-tint), transparent 66%),
+    var(--nav-color-surface);
+  box-shadow:
+    0 0 0 0.75rem color-mix(in oklab, var(--firm-brand) 8%, transparent),
+    0 1.5rem 4rem color-mix(in oklab, var(--firm-brand) 22%, transparent);
+}
+
+.workshop-navigator-slide__wheel {
+  width: 72%;
+  height: 72%;
+  stroke-width: 1.2;
+}
+
+.nav-theme a.workshop-navigator-slide__repo {
+  align-self: end;
+  color: var(--nav-color-text-muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: clamp(0.9rem, 1.8vw, 1.35rem);
+  text-underline-offset: 0.28em;
+}
+
+.slide-thumb__preview .workshop-navigator-slide {
+  height: 100%;
+  padding: 0;
+}
+
+.slide-thumb__preview .workshop-navigator-slide h3 {
+  font-size: 0.65rem;
+}
+
+.slide-thumb__preview .workshop-navigator-slide__mark {
+  width: 3.3rem;
+  box-shadow: 0 0 0 0.15rem color-mix(in oklab, var(--firm-brand) 8%, transparent);
+}
+
+.slide-thumb__preview .workshop-navigator-slide__repo {
+  font-size: 0.34rem;
+}
+
+/* A slide face or a workshop step can carry a screenshot. Markdown wraps a
+   bare image in its own paragraph, so centre that paragraph and let the image
+   be an inline block inside it. */
+.material-body p:has(> img, > video) {
+  margin-block: 1rem;
+  text-align: center;
+}
+
+.material-body :is(img, video) {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+}
+
+/* On a slide the binding constraint is height, not width: the face is a fixed
+   16:9 box, so an image bounded only by `max-width` overflows and scrolls the
+   slide instead of scaling with it. A fixed share of the canvas is wrong too —
+   the box scales with the viewport but the heading and copy do not, so any
+   fixed share overflows at small sizes and wastes space at large ones. Instead
+   lay the face out as a column and let the picture flex into exactly the
+   height the text leaves behind. Scoped to `:has(img)` so the other fifty
+   slides keep block layout, where adjoining margins still collapse. */
+.workshop-slide > .material-body:has(img, video) {
+  display: flex;
+  flex-direction: column;
+}
+
+.workshop-slide .material-body p:has(> img, > video) {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  justify-content: center;
+}
+
+.workshop-slide .material-body :is(img, video) {
+  max-height: 100%;
+  width: auto;
+  object-fit: contain;
+}
+
+/* A render-demo slide pairs the command with its document output. Put the two
+   side by side so a portrait PDF page can use the full canvas height instead
+   of shrinking into the short row left beneath a wide code block. */
+.workshop-slide > .material-body:has(.nav-code + p > img) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.58fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  column-gap: clamp(0.75rem, 2vw, 1.5rem);
+}
+
+.workshop-slide > .material-body:has(.nav-code + p > img) > h3 {
+  grid-column: 1 / -1;
+}
+
+.workshop-slide > .material-body:has(.nav-code + p > img) > .nav-code {
+  align-self: center;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.workshop-slide > .material-body:has(.nav-code + p > img) > p:has(> img) {
+  grid-column: 2;
+  grid-row: 2;
+  align-items: stretch;
+  margin-block: 0;
+}
+
+.workshop-slide > .material-body:has(.nav-code + p > img) > p > img {
+  height: 100%;
+}
+
+/* The regular workshop page also includes navigation and presenter controls,
+   so its 16:9 slide can extend below a short browser viewport. Keep media in
+   the visible portion of that page, with breathing room above and below. The
+   full-screen display has its own viewport-fitting canvas and stays unchanged. */
+.workshop-step .workshop-slide .material-body p:has(> img, > video) {
+  align-items: center;
+  padding-block: clamp(0.75rem, 2dvh, 1.5rem);
+}
+
+.workshop-step .workshop-slide .material-body :is(img, video) {
+  max-height: min(100%, 45dvh);
+}
+
+/* The contact sheet renders the same slide HTML into a fixed 9rem cell that
+   clips rather than scales, so an unbounded screenshot would show as a corner
+   crop. The miniature is decorative and `aria-hidden`, so fit the whole
+   picture and let it be small. */
+.slide-thumb__preview p:has(> img, > video) {
+  margin: 0 0 0.25rem;
+  text-align: center;
+}
+
+.slide-thumb__preview :is(img, video) {
+  max-width: 100%;
+  max-height: 4.5rem;
+  width: auto;
+  height: auto;
+}
+
+/* The speaker notes beneath the slide, like a Keynote presenter display. */
+.presenter-notes {
+  margin-top: 1rem;
+}
+
+.presenter-notes__label {
+  margin: 0 0 0.5rem;
+  color: var(--nav-color-text-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.workshop-step__links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-top: 1rem;
+  font-size: 0.875rem;
+}
+
+.workshop-step__nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+}
+
+/* Catalog full-screen display mode (`…/display/{n}`): one slide, centered and
+   scaled to the largest 16:9 box that fits the viewport, on a bare page with no
+   site chrome — a presenter's external monitor shows only the slide. `dvh`
+   tracks the mobile dynamic viewport so a phone address bar doesn't clip it. */
+.catalog-display {
+  --catalog-display-pad: clamp(0.5rem, 3vw, 2.5rem);
+  position: fixed;
+  inset: 0;
+  display: flex;
+  overflow: hidden;
+  align-items: center;
+  justify-content: center;
+  padding: var(--catalog-display-pad);
+  background: var(--nav-color-bg);
+}
+
+.catalog-display-slide {
+  /* Largest 16:9 box that fits: the viewport width, or the width a
+     height-limited 16:9 card would take — whichever is smaller.
+     `.workshop-slide` supplies the aspect-ratio itself. `min-width: 0` stops a
+     wide code block inside the slide from forcing the flex item past the
+     viewport (flex items default to their content min-width). */
+  width: min(100%, (100dvh - 2 * var(--catalog-display-pad)) * 16 / 9);
+  min-width: 0;
+  max-height: calc(100dvh - 2 * var(--catalog-display-pad));
+  margin: 0;
+  cursor: pointer;
+}
+
+/* The controls are near-invisible until the presenter moves the pointer or tabs
+   to them, so a full-screen slide is uncluttered. */
+.catalog-display-controls {
+  position: fixed;
+  z-index: 2;
+  bottom: clamp(0.5rem, 2vh, 1.5rem);
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity 0.2s ease-in-out;
+}
+
+.catalog-display:hover .catalog-display-controls,
+.catalog-display-controls:focus-within {
+  opacity: 1;
+}
+
+/* Touch screens have no hover, so keep the controls visible there. */
+@media (hover: none) {
+  .catalog-display-controls {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .catalog-display-controls {
+    transition: none;
+  }
+}
+
+/* The chevrons are chrome, not prose links, so they carry the body colour
+   rather than the brand link colour `.nav-theme a` gives every anchor — stated
+   at matching specificity because that rule would otherwise win. */
+.catalog-display-nav,
+.nav-theme a.catalog-display-nav,
+.nav-theme a.catalog-display-nav:hover {
+  display: inline-flex;
+  width: 2.75rem;
+  height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 50%;
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+  font-size: 1.5rem;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.catalog-display-nav--disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}

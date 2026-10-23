@@ -1,0 +1,5473 @@
+#![allow(clippy::struct_field_names)]
+//! OAuth2 Authorization Code flow with PKCE — the browser-flow
+//! half of OIDC.
+//!
+//! Routes mounted under `/auth/*`:
+//!
+//! - `GET /auth/login` — generate state + PKCE verifier, set a
+//!   short-lived pre-auth cookie, 302 to the IdP.
+//! - `GET /auth/callback` — validate the returned `state`, exchange
+//!   the `code` for tokens, decode the id_token, set the session
+//!   cookie, 302 back to the `return_to` URL.
+//! - `GET|POST /auth/logout` — clear the session cookie, then 302 to
+//!   the IdP's `end_session_endpoint` (RP-initiated OIDC logout) so the
+//!   provider drops its SSO session too; falls back to 302 home when the
+//!   provider published no end-session endpoint.
+//!
+//! Config is loaded from the environment at boot — see
+//! [`OAuthConfig::from_env`]. The IdP's authorization + token
+//! endpoints come from `<issuer>/.well-known/openid-configuration`
+//! so we don't hard-code provider-specific URLs.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use uuid::Uuid;
+
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Redirect, Response};
+use axum::routing::{get, post};
+use axum::{Form, Router};
+use base64::Engine;
+use jsonwebtoken::{
+    decode, decode_header, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tokio::sync::{Mutex as AsyncMutex, RwLock as AsyncRwLock};
+use tower_cookies::{cookie::SameSite, Cookie, Cookies};
+
+use store::persons::Role;
+
+use crate::auth::{AuthSetupError, JwksDocument};
+
+use crate::session::{
+    now_unix_secs, random_token_32, SessionData, SessionStore, DEFAULT_SESSION_TTL_SECS,
+    SESSION_COOKIE_NAME,
+};
+
+/// The placeholder Microsoft's multi-tenant discovery documents put where a
+/// concrete tenant id would go. Verified live against
+/// `https://login.microsoftonline.com/organizations/v2.0/.well-known/openid-configuration`,
+/// which answers `"issuer": "https://login.microsoftonline.com/{tenantid}/v2.0"`.
+pub const ENTRA_TENANT_TEMPLATE: &str = "{tenantid}";
+
+/// Apple's OIDC issuer. Apple publishes its authorization, token, and JWKS
+/// endpoints from this issuer's discovery document.
+pub const DEFAULT_APPLE_ISSUER: &str = "https://appleid.apple.com";
+
+/// Apple accepts client secrets for at most six months. A one-day token is
+/// enough for one authorization-code exchange and leaves a wide margin below
+/// that cap; the source mints a new one for every exchange, so no rotation
+/// operation or cache invalidation can be missed.
+const APPLE_CLIENT_SECRET_TTL_SECS: i64 = 24 * 60 * 60;
+
+/// Split `OAUTH_MICROSOFT_ALLOWED_TENANTS` into normalised tenant ids.
+///
+/// Comma-separated, whitespace-tolerant, lower-cased so a GUID pasted from the
+/// Entra portal in either case matches the `tid` claim. Empty entries are
+/// dropped, so a trailing comma is not a silently-empty allowlist entry that
+/// would match a token with an empty `tid`.
+fn parse_tenant_allowlist(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|entry| entry.trim().to_ascii_lowercase())
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
+/// Pre-auth (login-in-progress) cookie name.
+pub const PRE_AUTH_COOKIE_NAME: &str = "navigator_pre_auth";
+/// Pre-auth cookie lifetime — 5 minutes is plenty for the
+/// roundtrip to the IdP and back.
+pub const PRE_AUTH_TTL_SECS: i64 = 5 * 60;
+
+/// Which identity provider an [`OAuthConfig`] speaks to.
+///
+/// Navigator holds one config per provider and renders one button per
+/// configured provider. The slug is both the `/auth/login/{provider}` path
+/// segment and the value recorded in [`crate::session::SessionData::provider`],
+/// so a sign-out reaches the provider that actually minted the session.
+/// The serde spelling is deliberately the same string [`Self::slug`] returns,
+/// so the pre-auth cookie, the session cookie, and the `/auth/login/{provider}`
+/// path all name a provider identically. One spelling, three places.
+/// [`Default`] is the primary slot, which is what makes a `serde(default)`
+/// pre-auth or session cookie from before this enum existed decode as the door
+/// it was actually minted by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ProviderId {
+    /// The original single slot: `OAUTH_ISSUER_URL` and friends. Google in
+    /// production, Rauthy in the local lanes, any compliant OIDC provider in
+    /// principle — the module never hard-codes its endpoints.
+    #[default]
+    #[serde(rename = "oidc")]
+    Primary,
+    /// Microsoft Entra ID, configured from `OAUTH_MICROSOFT_*`. Separate from
+    /// [`Self::Primary`] because multi-tenant Entra needs per-token issuer
+    /// validation ([`IssuerPolicy::EntraTenants`]) that a normal single-issuer
+    /// provider does not.
+    #[serde(rename = "microsoft")]
+    Microsoft,
+    /// Sign in with Apple, configured only in a real deployment from
+    /// `OAUTH_APPLE_*` values and a deployment-delivered private key.
+    #[serde(rename = "apple")]
+    Apple,
+}
+
+impl ProviderId {
+    /// URL path segment on `/auth/login/{provider}` and the string persisted in
+    /// the session cookie. `oidc` is the historical spelling of the primary
+    /// slot and is kept so existing links and bookmarks keep working.
+    #[must_use]
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Primary => "oidc",
+            Self::Microsoft => "microsoft",
+            Self::Apple => "apple",
+        }
+    }
+
+    /// The bounded provider value written to sign-in telemetry.
+    #[must_use]
+    const fn telemetry_provider(self) -> telemetry::AuthProvider {
+        match self {
+            Self::Primary => telemetry::AuthProvider::Google,
+            Self::Microsoft => telemetry::AuthProvider::Microsoft,
+            Self::Apple => telemetry::AuthProvider::Apple,
+        }
+    }
+
+    /// Parse a slug back. `None` for anything unrecognised, which the route
+    /// turns into a 404 rather than silently falling back to a provider the
+    /// caller did not ask for.
+    #[must_use]
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        match slug {
+            "oidc" => Some(Self::Primary),
+            "microsoft" => Some(Self::Microsoft),
+            "apple" => Some(Self::Apple),
+            _ => None,
+        }
+    }
+
+    /// The `scope` this provider's authorization request asks for.
+    ///
+    /// Apple documents exactly two scope values beside `openid` — `name` and
+    /// `email` — so the `profile` the other providers ask for is not a value
+    /// it accepts. Navigator only ever reads the address out of the id_token
+    /// ([`Self::identity_address`]), so Apple is asked for the address and
+    /// nothing more, and the existing providers keep the scope they had.
+    fn authorize_scope(self) -> &'static str {
+        match self {
+            Self::Primary | Self::Microsoft => "openid email profile",
+            Self::Apple => "openid email",
+        }
+    }
+
+    /// `response_mode`, for a provider the default `query` mode does not
+    /// cover.
+    ///
+    /// Apple returns the authorization code by POSTing a form to the redirect
+    /// URI whenever the request asks for `name` or `email`, and refuses the
+    /// authorization request outright when `response_mode=form_post` is
+    /// absent. For Apple this parameter is therefore what makes the request
+    /// legal at all, not a preference. The other providers get nothing, which
+    /// keeps their authorization URLs byte-identical.
+    ///
+    /// A provider named here must also be reachable on the `POST`
+    /// `/auth/callback` route and must carry a `SameSite=None` pre-auth cookie
+    /// (see [`pre_auth_cookie`]): a cross-site form POST is neither a `GET`
+    /// nor a request a `Lax` cookie rides along with.
+    fn response_mode(self) -> Option<&'static str> {
+        match self {
+            Self::Primary | Self::Microsoft => None,
+            Self::Apple => Some("form_post"),
+        }
+    }
+
+    /// The sign-in button label.
+    ///
+    /// Microsoft's branding rules require the exact words "Sign in with
+    /// Microsoft" and forbid exposing the "Azure" or "Active Directory"
+    /// brands, so the string is fixed rather than derived from config.
+    #[must_use]
+    pub const fn button_label(self) -> &'static str {
+        match self {
+            Self::Primary => webapp::auth_pages::GOOGLE_SIGN_IN,
+            Self::Microsoft => webapp::auth_pages::MICROSOFT_SIGN_IN,
+            Self::Apple => webapp::auth_pages::APPLE_SIGN_IN,
+        }
+    }
+
+    /// Which claim carries the address a `persons` row is matched on.
+    ///
+    /// This is a security decision per provider, not a convenience:
+    /// `resolve_person_from_claims` falls back to matching a pre-seeded row by
+    /// address, so whichever claim is chosen here is what an attacker would
+    /// have to control in order to land on somebody else's row.
+    ///
+    /// - [`Self::Primary`] — `email`. Google issues `email_verified: true`
+    ///   only after proving the user controls that mailbox, so the address is
+    ///   evidence.
+    /// - [`Self::Microsoft`] — `preferred_username` first, the user principal
+    ///   name, which Entra can only issue on a domain the signing tenant has
+    ///   verified with Microsoft. `email` is the fallback for a directory that
+    ///   omits the UPN, and it is only reachable at all because
+    ///   `OAUTH_MICROSOFT_ALLOWED_TENANTS` has already confined the signer to
+    ///   a tenant an operator named.
+    fn identity_address(self, claims: &IdTokenClaims) -> Option<String> {
+        let pick = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+        match self {
+            Self::Primary | Self::Apple => pick(&claims.email),
+            Self::Microsoft => pick(&claims.preferred_username).or_else(|| pick(&claims.email)),
+        }
+    }
+}
+
+/// How to validate the `iss` claim on an id_token.
+///
+/// Almost every provider publishes a fixed issuer string and the check is a
+/// byte compare. Microsoft's multi-tenant authorities do not: `/organizations`
+/// and `/common` publish the literal template
+/// `https://login.microsoftonline.com/{tenantid}/v2.0`, and the token carries
+/// the signing tenant's GUID in its own `tid` claim. Pinning the template
+/// verbatim rejects every real token, so multi-tenant Entra needs the
+/// per-token form below.
+#[derive(Debug, Clone)]
+pub enum IssuerPolicy {
+    /// One fixed issuer, enforced inside `jsonwebtoken`'s own `Validation`.
+    Exact,
+    /// Microsoft Entra multi-tenant. `iss` must equal `template` with
+    /// `{tenantid}` replaced by the token's `tid`, and `tid` must appear in
+    /// `allowed_tenants`.
+    ///
+    /// The allowlist is consulted **first**, so the string we interpolate can
+    /// only ever be one an operator wrote into
+    /// `OAUTH_MICROSOFT_ALLOWED_TENANTS`; a token from an unlisted tenant is
+    /// rejected before its `tid` is used for anything at all.
+    EntraTenants {
+        /// The templated issuer read from the discovery document.
+        template: String,
+        /// Lower-cased tenant GUIDs permitted to sign in. These are the
+        /// *trusted* tenants: their UPN may still link to an existing Person.
+        allowed_tenants: Vec<String>,
+        /// `OAUTH_MICROSOFT_ALLOW_ANY_TENANT`: also admit a token from any
+        /// other tenant whose `tid` is a well-formed GUID. Those sign-ins are
+        /// marked [`IdTokenClaims::foreign_tenant`] and may only create or
+        /// resume a tenant-scoped client identity.
+        allow_any_tenant: bool,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum OAuthSetupError {
+    #[error("missing env var: {0}")]
+    Missing(&'static str),
+    #[error("fetching discovery doc: {0}")]
+    DiscoveryFetch(String),
+    #[error("parsing discovery doc: {0}")]
+    DiscoveryParse(String),
+    /// `OAUTH_MICROSOFT_ALLOWED_TENANTS` was unset or empty while
+    /// `OAUTH_MICROSOFT_CLIENT_ID` was set. Fail boot rather than default to
+    /// "any Entra tenant": Entra's `email` claim is tenant-asserted and
+    /// unverified, so an open tenant list would let anybody able to create a
+    /// free Entra tenant assert a seeded person's address. The allowlist is
+    /// the control that makes multi-tenant sign-in safe, so it is mandatory.
+    #[error(
+        "OAUTH_MICROSOFT_ALLOWED_TENANTS must list at least one tenant id \
+         (or OAUTH_MICROSOFT_ALLOW_ANY_TENANT must be true)"
+    )]
+    MissingTenantAllowlist,
+    #[error("invalid OAUTH_APPLE_PRIVATE_KEY: {0}")]
+    InvalidApplePrivateKey(String),
+}
+
+#[derive(Clone)]
+pub struct OAuthConfig {
+    inner: Arc<OAuthConfigInner>,
+}
+
+#[derive(Clone)]
+struct OAuthConfigInner {
+    /// Which provider this config speaks to. Chooses the button label, the
+    /// `/auth/login/{provider}` slug, and which id_token claim carries the
+    /// address a `persons` row is matched on.
+    provider: ProviderId,
+    client_id: String,
+    client_secret: ClientSecretSource,
+    redirect_uri: String,
+    authorization_endpoint: String,
+    token_endpoint: String,
+    /// Hand-built configs point at local HTTP mocks on arbitrary hosts; every
+    /// environment-built config requires a confidential token endpoint before a
+    /// client secret is sent. See [`token_endpoint_is_confidential`] for what
+    /// that admits — TLS, or a loopback host the request never leaves.
+    require_confidential_token_endpoint: bool,
+    end_session_endpoint: Option<String>,
+    /// Provider-algorithm id_token verifier, built from the IdP's published
+    /// JWKS and pinned to the discovered `issuer` + our `client_id` audience.
+    /// Not a fixed key set fetched once at boot — see [`IdTokenVerifier`] for
+    /// how it keeps itself current across a provider's key rotation. `None`
+    /// only on the hand-built test config; production always carries one and
+    /// [`callback`] refuses to mint a session without it.
+    id_token_verifier: Option<Arc<IdTokenVerifier>>,
+}
+
+/// The credential sent to an OIDC token endpoint. Existing providers retain
+/// their static `client_secret_post` value; Apple receives a short-lived JWT
+/// signed with the deployment's ES256 private key.
+#[derive(Clone)]
+enum ClientSecretSource {
+    Static(String),
+    Apple(Arc<AppleClientSecret>),
+}
+
+/// Apple client-secret signer. The private key is parsed once at boot and is
+/// held only in memory; the JWT itself is minted immediately before each
+/// token exchange so it cannot age past a refresh threshold.
+struct AppleClientSecret {
+    team_id: String,
+    key_id: String,
+    client_id: String,
+    signing_key: EncodingKey,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AppleClientSecretClaims {
+    iss: String,
+    sub: String,
+    aud: String,
+    iat: i64,
+    exp: i64,
+}
+
+impl AppleClientSecret {
+    fn new(
+        team_id: impl Into<String>,
+        key_id: impl Into<String>,
+        client_id: impl Into<String>,
+        private_key_pem: &[u8],
+    ) -> Result<Self, jsonwebtoken::errors::Error> {
+        Ok(Self {
+            team_id: team_id.into(),
+            key_id: key_id.into(),
+            client_id: client_id.into(),
+            signing_key: EncodingKey::from_ec_pem(private_key_pem)?,
+        })
+    }
+
+    fn mint(&self) -> Result<String, jsonwebtoken::errors::Error> {
+        let iat = now_unix_secs();
+        let claims = AppleClientSecretClaims {
+            iss: self.team_id.clone(),
+            sub: self.client_id.clone(),
+            aud: DEFAULT_APPLE_ISSUER.to_string(),
+            iat,
+            exp: iat + APPLE_CLIENT_SECRET_TTL_SECS,
+        };
+        let mut header = Header::new(Algorithm::ES256);
+        header.kid = Some(self.key_id.clone());
+        encode(&header, &claims, &self.signing_key)
+    }
+}
+
+impl ClientSecretSource {
+    fn static_secret(secret: impl Into<String>) -> Self {
+        Self::Static(secret.into())
+    }
+
+    fn value(&self) -> Result<String, jsonwebtoken::errors::Error> {
+        match self {
+            Self::Static(secret) => Ok(secret.clone()),
+            Self::Apple(source) => source.mint(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscoveryDoc {
+    issuer: String,
+    authorization_endpoint: String,
+    token_endpoint: String,
+    jwks_uri: String,
+    #[serde(default)]
+    end_session_endpoint: Option<String>,
+}
+
+async fn fetch_discovery(issuer: &str) -> Result<DiscoveryDoc, OAuthSetupError> {
+    let url = format!(
+        "{}/.well-known/openid-configuration",
+        issuer.trim_end_matches('/')
+    );
+    reqwest::get(&url)
+        .await
+        .map_err(|e| OAuthSetupError::DiscoveryFetch(e.to_string()))?
+        .json()
+        .await
+        .map_err(|e| OAuthSetupError::DiscoveryParse(e.to_string()))
+}
+
+impl OAuthConfig {
+    /// Build with hand-supplied endpoints. Used by tests to point at
+    /// a mock IdP without doing real discovery.
+    #[must_use]
+    pub fn new(
+        client_id: impl Into<String>,
+        client_secret: impl Into<String>,
+        redirect_uri: impl Into<String>,
+        authorization_endpoint: impl Into<String>,
+        token_endpoint: impl Into<String>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(OAuthConfigInner {
+                provider: ProviderId::Primary,
+                client_id: client_id.into(),
+                client_secret: ClientSecretSource::static_secret(client_secret),
+                redirect_uri: redirect_uri.into(),
+                authorization_endpoint: authorization_endpoint.into(),
+                token_endpoint: token_endpoint.into(),
+                require_confidential_token_endpoint: false,
+                end_session_endpoint: None,
+                id_token_verifier: None,
+            }),
+        }
+    }
+
+    /// Build an Apple config around a deployment-supplied PKCS#8 ES256 key.
+    ///
+    /// The endpoint arguments keep this constructor usable by mocked-provider
+    /// tests. Production calls [`Self::apple_from_env`], which obtains the
+    /// endpoints from Apple's discovery document.
+    pub fn new_apple(
+        client_id: impl Into<String>,
+        team_id: impl Into<String>,
+        key_id: impl Into<String>,
+        private_key_pem: impl AsRef<[u8]>,
+        redirect_uri: impl Into<String>,
+        authorization_endpoint: impl Into<String>,
+        token_endpoint: impl Into<String>,
+    ) -> Result<Self, OAuthSetupError> {
+        let client_id = client_id.into();
+        let signer =
+            AppleClientSecret::new(team_id, key_id, client_id.clone(), private_key_pem.as_ref())
+                .map_err(|error| OAuthSetupError::InvalidApplePrivateKey(error.to_string()))?;
+        Ok(Self {
+            inner: Arc::new(OAuthConfigInner {
+                provider: ProviderId::Apple,
+                client_id,
+                client_secret: ClientSecretSource::Apple(Arc::new(signer)),
+                redirect_uri: redirect_uri.into(),
+                authorization_endpoint: authorization_endpoint.into(),
+                token_endpoint: token_endpoint.into(),
+                require_confidential_token_endpoint: false,
+                end_session_endpoint: None,
+                id_token_verifier: None,
+            }),
+        })
+    }
+
+    /// Re-label a hand-built config as belonging to `provider`. Tests use it
+    /// to drive the Microsoft path against a mock IdP; production sets the
+    /// provider inside the `from_env` constructors.
+    #[must_use]
+    pub fn with_provider(self, provider: ProviderId) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.provider = provider;
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Which provider this config speaks to.
+    #[must_use]
+    pub fn provider(&self) -> ProviderId {
+        self.inner.provider
+    }
+
+    /// Attach an id_token verifier to a hand-built config. Tests use this
+    /// to exercise the real verification path in [`callback`] with a
+    /// locally-minted signing key; production builds the verifier inside
+    /// [`OAuthConfig::from_env`] from the IdP's published JWKS.
+    #[must_use]
+    pub fn with_id_token_verifier(self, verifier: IdTokenVerifier) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.id_token_verifier = Some(Arc::new(verifier));
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// The provider-algorithm id_token verifier, when configured. `callback` treats
+    /// `None` as a misconfiguration and refuses the sign-in rather than
+    /// trusting an unverified token.
+    #[must_use]
+    pub fn id_token_verifier(&self) -> Option<&Arc<IdTokenVerifier>> {
+        self.inner.id_token_verifier.as_ref()
+    }
+
+    /// Attach a provider `end_session_endpoint` to a hand-built config so a
+    /// test can exercise the RP-initiated logout redirect ([`end_session_url`])
+    /// without doing real discovery. Production reads this from the discovery
+    /// document in [`OAuthConfig::from_env`].
+    #[must_use]
+    pub fn with_end_session_endpoint(self, endpoint: impl Into<String>) -> Self {
+        let mut inner = (*self.inner).clone();
+        inner.end_session_endpoint = Some(endpoint.into());
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Build from env. Returns `Ok(None)` when `OAUTH_ISSUER_URL` is
+    /// unset (the binary keeps booting without the browser-flow
+    /// routes); returns `Err` only when `OAUTH_ISSUER_URL` *is* set
+    /// but a required sibling is missing or discovery fails.
+    pub async fn from_env() -> Result<Option<Self>, OAuthSetupError> {
+        let Ok(issuer) = std::env::var("OAUTH_ISSUER_URL") else {
+            return Ok(None);
+        };
+        let client_id = std::env::var("OAUTH_CLIENT_ID")
+            .map_err(|_| OAuthSetupError::Missing("OAUTH_CLIENT_ID"))?;
+        let client_secret = std::env::var("OAUTH_CLIENT_SECRET")
+            .map_err(|_| OAuthSetupError::Missing("OAUTH_CLIENT_SECRET"))?;
+        let redirect_uri = std::env::var("OAUTH_REDIRECT_URI")
+            .map_err(|_| OAuthSetupError::Missing("OAUTH_REDIRECT_URI"))?;
+
+        let url = format!(
+            "{}/.well-known/openid-configuration",
+            issuer.trim_end_matches('/')
+        );
+        let doc: DiscoveryDoc = reqwest::get(&url)
+            .await
+            .map_err(|e| OAuthSetupError::DiscoveryFetch(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| OAuthSetupError::DiscoveryParse(e.to_string()))?;
+
+        // Build the id_token verifier from the IdP's published JWKS,
+        // pinned to the discovered issuer and our client_id audience.
+        // This is the mandatory check on the redirect callback — a
+        // forged or mis-issued id_token can never mint a session.
+        // The primary slot is a single-issuer provider by definition — the
+        // discovery document is fetched from the very issuer we then pin.
+        let verifier = IdTokenVerifier::from_jwks_url(
+            &doc.jwks_uri,
+            &doc.issuer,
+            &client_id,
+            IssuerPolicy::Exact,
+        )
+        .await
+        .map_err(|e| OAuthSetupError::DiscoveryFetch(e.to_string()))?;
+
+        Ok(Some(Self {
+            inner: Arc::new(OAuthConfigInner {
+                provider: ProviderId::Primary,
+                client_id,
+                client_secret: ClientSecretSource::static_secret(client_secret),
+                redirect_uri,
+                authorization_endpoint: doc.authorization_endpoint,
+                token_endpoint: doc.token_endpoint,
+                require_confidential_token_endpoint: true,
+                end_session_endpoint: doc.end_session_endpoint,
+                id_token_verifier: Some(verifier),
+            }),
+        }))
+    }
+
+    /// Default Microsoft authority: work-or-school accounts from any Entra
+    /// tenant, personal Microsoft accounts excluded. Business clients sign in
+    /// with the account they already hold, and an `@outlook.com` login cannot
+    /// silently become a second identity for the same human.
+    pub const DEFAULT_MICROSOFT_ISSUER: &'static str =
+        "https://login.microsoftonline.com/organizations/v2.0";
+
+    /// Build the **Microsoft Entra ID** provider from the environment.
+    ///
+    /// Reads:
+    ///
+    /// - `OAUTH_MICROSOFT_CLIENT_ID` — the Entra app registration's
+    ///   Application (client) ID. Unset gives `Ok(None)`: the second button
+    ///   never renders and every existing deployment is byte-identical.
+    /// - `OAUTH_MICROSOFT_CLIENT_SECRET` — the registration's client secret.
+    ///   Entra advertises `client_secret_post`, which is the form field
+    ///   [`exchange_code`] already sends.
+    /// - `OAUTH_MICROSOFT_ALLOWED_TENANTS` — **required** once the client id
+    ///   is set. Comma-separated Entra tenant ids. See
+    ///   [`IssuerPolicy::EntraTenants`] and
+    ///   [`OAuthSetupError::MissingTenantAllowlist`] for why it is not
+    ///   optional.
+    /// - `OAUTH_MICROSOFT_ISSUER_URL` — optional override, defaulting to
+    ///   [`Self::DEFAULT_MICROSOFT_ISSUER`]. Point it at
+    ///   `https://login.microsoftonline.com/<tenant-guid>/v2.0` for a
+    ///   single-tenant registration; that authority publishes a concrete
+    ///   issuer, so the ordinary [`IssuerPolicy::Exact`] byte compare applies
+    ///   without any further configuration.
+    ///
+    /// The redirect URI is deliberately **shared** with the primary provider
+    /// (`OAUTH_REDIRECT_URI`): both registrations point at `/auth/callback`,
+    /// and the callback tells them apart from the signed pre-auth cookie. So
+    /// adding a provider adds no new public route to register or defend.
+    pub async fn microsoft_from_env() -> Result<Option<Self>, OAuthSetupError> {
+        let Some(client_id) = std::env::var("OAUTH_MICROSOFT_CLIENT_ID")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let client_secret = std::env::var("OAUTH_MICROSOFT_CLIENT_SECRET")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(OAuthSetupError::Missing("OAUTH_MICROSOFT_CLIENT_SECRET"))?;
+        let redirect_uri = std::env::var("OAUTH_REDIRECT_URI")
+            .map_err(|_| OAuthSetupError::Missing("OAUTH_REDIRECT_URI"))?;
+        let allowed_tenants = parse_tenant_allowlist(
+            &std::env::var("OAUTH_MICROSOFT_ALLOWED_TENANTS").unwrap_or_default(),
+        );
+        let allow_any_tenant = std::env::var("OAUTH_MICROSOFT_ALLOW_ANY_TENANT")
+            .is_ok_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true"));
+        if allowed_tenants.is_empty() && !allow_any_tenant {
+            return Err(OAuthSetupError::MissingTenantAllowlist);
+        }
+        let issuer = std::env::var("OAUTH_MICROSOFT_ISSUER_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| Self::DEFAULT_MICROSOFT_ISSUER.to_string());
+
+        let url = format!(
+            "{}/.well-known/openid-configuration",
+            issuer.trim_end_matches('/')
+        );
+        let doc: DiscoveryDoc = reqwest::get(&url)
+            .await
+            .map_err(|e| OAuthSetupError::DiscoveryFetch(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| OAuthSetupError::DiscoveryParse(e.to_string()))?;
+
+        // A multi-tenant authority publishes the templated issuer; a
+        // single-tenant one publishes a concrete tenant id. Pick the policy
+        // from what the document actually says rather than from which
+        // authority we asked for.
+        let policy = if doc.issuer.contains(ENTRA_TENANT_TEMPLATE) {
+            IssuerPolicy::EntraTenants {
+                template: doc.issuer.clone(),
+                allowed_tenants: allowed_tenants.clone(),
+                allow_any_tenant,
+            }
+        } else {
+            IssuerPolicy::Exact
+        };
+        let verifier =
+            IdTokenVerifier::from_jwks_url(&doc.jwks_uri, &doc.issuer, &client_id, policy)
+                .await
+                .map_err(|e| OAuthSetupError::DiscoveryFetch(e.to_string()))?;
+
+        tracing::info!(
+            issuer = %doc.issuer,
+            tenants = allowed_tenants.len(),
+            allow_any_tenant,
+            "oauth: microsoft entra provider configured",
+        );
+
+        Ok(Some(Self {
+            inner: Arc::new(OAuthConfigInner {
+                provider: ProviderId::Microsoft,
+                client_id,
+                client_secret: ClientSecretSource::static_secret(client_secret),
+                redirect_uri,
+                authorization_endpoint: doc.authorization_endpoint,
+                token_endpoint: doc.token_endpoint,
+                require_confidential_token_endpoint: true,
+                end_session_endpoint: doc.end_session_endpoint,
+                id_token_verifier: Some(verifier),
+            }),
+        }))
+    }
+
+    /// Build the **Sign in with Apple** provider from deployment secrets.
+    ///
+    /// Reads `OAUTH_APPLE_CLIENT_ID` (the Services ID), `OAUTH_APPLE_TEAM_ID`,
+    /// `OAUTH_APPLE_KEY_ID`, and `OAUTH_APPLE_PRIVATE_KEY`. The private key is
+    /// a deployment secret containing the downloaded `.p8` PEM and never a
+    /// repository or KIND fixture. An unset client id leaves the provider off;
+    /// once it is set, every sibling is required and boot fails closed.
+    pub async fn apple_from_env() -> Result<Option<Self>, OAuthSetupError> {
+        let Some(client_id) = std::env::var("OAUTH_APPLE_CLIENT_ID")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let team_id = std::env::var("OAUTH_APPLE_TEAM_ID")
+            .map_err(|_| OAuthSetupError::Missing("OAUTH_APPLE_TEAM_ID"))?;
+        let key_id = std::env::var("OAUTH_APPLE_KEY_ID")
+            .map_err(|_| OAuthSetupError::Missing("OAUTH_APPLE_KEY_ID"))?;
+        let private_key = std::env::var("OAUTH_APPLE_PRIVATE_KEY")
+            .map_err(|_| OAuthSetupError::Missing("OAUTH_APPLE_PRIVATE_KEY"))?;
+        let redirect_uri = std::env::var("OAUTH_REDIRECT_URI")
+            .map_err(|_| OAuthSetupError::Missing("OAUTH_REDIRECT_URI"))?;
+        let signer = AppleClientSecret::new(&team_id, &key_id, &client_id, private_key.as_bytes())
+            .map_err(|error| OAuthSetupError::InvalidApplePrivateKey(error.to_string()))?;
+
+        let doc = fetch_discovery(DEFAULT_APPLE_ISSUER).await?;
+        let verifier = IdTokenVerifier::from_jwks_url(
+            &doc.jwks_uri,
+            &doc.issuer,
+            &client_id,
+            IssuerPolicy::Exact,
+        )
+        .await
+        .map_err(|e| OAuthSetupError::DiscoveryFetch(e.to_string()))?;
+
+        Ok(Some(Self {
+            inner: Arc::new(OAuthConfigInner {
+                provider: ProviderId::Apple,
+                client_id,
+                client_secret: ClientSecretSource::Apple(Arc::new(signer)),
+                redirect_uri,
+                authorization_endpoint: doc.authorization_endpoint,
+                token_endpoint: doc.token_endpoint,
+                require_confidential_token_endpoint: true,
+                end_session_endpoint: doc.end_session_endpoint,
+                id_token_verifier: Some(verifier),
+            }),
+        }))
+    }
+
+    #[must_use]
+    pub fn authorization_endpoint(&self) -> &str {
+        &self.inner.authorization_endpoint
+    }
+    #[must_use]
+    pub fn token_endpoint(&self) -> &str {
+        &self.inner.token_endpoint
+    }
+
+    fn client_secret(&self) -> Result<String, jsonwebtoken::errors::Error> {
+        self.inner.client_secret.value()
+    }
+
+    #[must_use]
+    pub fn end_session_endpoint(&self) -> Option<&str> {
+        self.inner.end_session_endpoint.as_deref()
+    }
+
+    /// The configured OAuth redirect URI. Its scheme is the deployment's
+    /// external scheme (KIND uses `http://localhost…`, prod uses
+    /// `https://…`), so it doubles as the signal for whether auth cookies
+    /// should carry the `Secure` flag — even behind a TLS-terminating LB
+    /// that forwards plain HTTP internally.
+    #[must_use]
+    pub fn redirect_uri(&self) -> &str {
+        &self.inner.redirect_uri
+    }
+}
+
+/// 32-byte random url-safe verifier, then S256-derived challenge.
+#[must_use]
+pub fn pkce_verifier() -> String {
+    random_token_32()
+}
+
+#[must_use]
+pub fn pkce_challenge(verifier: &str) -> String {
+    let digest = Sha256::digest(verifier.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+/// Pre-auth cookie payload: enough to validate the callback later.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreAuth {
+    /// Which provider this login is against.
+    ///
+    /// Both providers share one redirect URI (`/auth/callback`), so this is
+    /// what the callback disambiguates on. Keeping it inside the HMAC-signed
+    /// one-shot cookie next to `state` and the PKCE verifier means the code
+    /// can only ever be redeemed at the token endpoint of the provider the
+    /// login actually started against — the mitigation shape RFC 9207
+    /// describes for IdP mix-up.
+    ///
+    /// `serde(default)` so a login already in flight when a new build rolls
+    /// out decodes as [`ProviderId::Primary`] and completes normally instead
+    /// of failing on an unknown cookie shape.
+    #[serde(default)]
+    pub provider: ProviderId,
+    pub state: String,
+    pub verifier: String,
+    /// One-time value sent on the authorize request and required to
+    /// match `id_token.nonce` in the callback — binds the returned
+    /// token to *this* login and defeats id_token replay/injection.
+    #[serde(default)]
+    pub nonce: String,
+    pub return_to: String,
+    pub exp: i64,
+}
+
+impl PreAuth {
+    #[must_use]
+    pub fn new(return_to: String) -> Self {
+        Self::for_provider(ProviderId::Primary, return_to)
+    }
+
+    /// A pre-auth payload bound to `provider`.
+    #[must_use]
+    pub fn for_provider(provider: ProviderId, return_to: String) -> Self {
+        Self {
+            provider,
+            state: random_token_32(),
+            verifier: pkce_verifier(),
+            nonce: random_token_32(),
+            return_to,
+            exp: now_unix_secs() + PRE_AUTH_TTL_SECS,
+        }
+    }
+
+    #[must_use]
+    pub fn is_expired(&self) -> bool {
+        self.exp <= now_unix_secs()
+    }
+}
+
+/// Build the authorize URL the user gets redirected to.
+#[must_use]
+pub fn authorize_url(cfg: &OAuthConfig, pre: &PreAuth) -> String {
+    use std::fmt::Write;
+    let challenge = pkce_challenge(&pre.verifier);
+    let mut url = url_with_query(cfg.authorization_endpoint());
+    let client = urlencode(&cfg.inner.client_id);
+    let redirect = urlencode(&cfg.inner.redirect_uri);
+    let scope = urlencode(cfg.provider().authorize_scope());
+    let state = urlencode(&pre.state);
+    let nonce = urlencode(&pre.nonce);
+    let _ = write!(
+        url,
+        "response_type=code&client_id={client}&redirect_uri={redirect}&scope={scope}&state={state}&nonce={nonce}&code_challenge={challenge}&code_challenge_method=S256",
+    );
+    if let Some(mode) = cfg.provider().response_mode() {
+        let _ = write!(url, "&response_mode={mode}");
+    }
+    url
+}
+
+/// The routes each configured provider's sign-in button points at, in the
+/// order they render. The primary door comes first so the page a signed-out
+/// person already knows does not reorder underneath them when a second
+/// provider is switched on.
+fn provider_buttons(s: &AuthState, return_to: &str) -> Vec<webapp::auth_pages::SignInProvider> {
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("return_to", safe_return_to(return_to))
+        .finish()
+        // Slashes are safe in a query value and keep deep links readable.
+        .replace("%2F", "/");
+    s.configured_providers()
+        .into_iter()
+        .map(|provider| webapp::auth_pages::SignInProvider {
+            href: format!("/auth/login/{}?{query}", provider.slug()),
+            label: provider.button_label().to_string(),
+        })
+        .collect()
+}
+
+/// Build the RP-initiated logout URL when the provider published an
+/// `end_session_endpoint` (OIDC RP-Initiated Logout 1.0). Bouncing the
+/// browser through it clears the provider's own SSO session, so the next
+/// `/auth/login` prompts for credentials instead of silently
+/// re-authenticating from a live provider session.
+///
+/// The request carries `post_logout_redirect_uri` — the app's own origin,
+/// derived from the OAuth redirect URI so it is the same origin the login
+/// flow already round-trips through and is therefore on the provider's
+/// allowlisted `post_logout_redirect_uris` — and `client_id`, which lets
+/// the provider validate that redirect without an `id_token_hint`: our
+/// session never retains the id_token, so we have no hint to send.
+///
+/// Returns `None` when the provider published no `end_session_endpoint`
+/// (or the redirect URI has no parseable origin); the caller then falls
+/// back to clearing the app session and redirecting home.
+#[must_use]
+pub fn end_session_url(cfg: &OAuthConfig) -> Option<String> {
+    use std::fmt::Write;
+    let endpoint = cfg.end_session_endpoint()?;
+    let post_logout = app_origin(cfg.redirect_uri())?;
+    let mut url = url_with_query(endpoint);
+    let redirect = urlencode(&post_logout);
+    let client = urlencode(&cfg.inner.client_id);
+    let _ = write!(
+        url,
+        "post_logout_redirect_uri={redirect}&client_id={client}"
+    );
+    Some(url)
+}
+
+/// The app's own origin (`scheme://host[:port]`, no trailing path) parsed
+/// from the OAuth redirect URI. This is the base the login flow already
+/// uses, so a provider that allowlists the login redirect also allowlists
+/// this post-logout redirect.
+fn app_origin(redirect_uri: &str) -> Option<String> {
+    let parsed = url::Url::parse(redirect_uri).ok()?;
+    let origin = parsed.origin();
+    if origin.is_tuple() {
+        Some(origin.ascii_serialization())
+    } else {
+        None
+    }
+}
+
+fn url_with_query(base: &str) -> String {
+    let mut out = base.to_string();
+    if base.contains('?') {
+        out.push('&');
+    } else {
+        out.push('?');
+    }
+    out
+}
+
+fn urlencode(s: &str) -> String {
+    use std::fmt::Write;
+    // Minimal percent-encoder for OAuth params (RFC 3986 unreserved
+    // chars are left as-is). Good enough for the limited character
+    // set we hand to the IdP.
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                let _ = write!(out, "%{b:02X}");
+            }
+        }
+    }
+    out
+}
+
+/// Combined router state.
+#[derive(Clone)]
+pub struct AuthState {
+    pub oauth: OAuthConfig,
+    /// Microsoft Entra ID, when `OAUTH_MICROSOFT_CLIENT_ID` is set. `None` —
+    /// the default — leaves `/auth/login` exactly as it was: one provider, one
+    /// immediate redirect, no chooser.
+    ///
+    /// This sits alongside [`Self::oauth`] rather than replacing it with a
+    /// list because the primary slot is the one every other part of the module
+    /// still reads for deployment-wide facts (the redirect URI's scheme, the
+    /// fallback end-session endpoint). A provider added here is additive.
+    pub oauth_microsoft: Option<OAuthConfig>,
+    /// Sign in with Apple, when `OAUTH_APPLE_CLIENT_ID` is set. `None` keeps
+    /// the deployment's provider set unchanged.
+    pub oauth_apple: Option<OAuthConfig>,
+    pub sessions: SessionStore,
+    /// Store handle for the tables the auth flows
+    /// touch (participation on a fresh signup, the sent-email log).
+    /// The SurrealDB handle. The whole auth path answers from here:
+    /// `persons` moved with ENG-19, so resolving the IdP claims to a
+    /// local row and reading `role` off it performs no extra read at
+    /// all. The password-reset and email-confirmation flows mint and
+    /// claim `email_token` rows in the same engine.
+    pub surreal: store::surreal::SurrealDb,
+    /// Outbound email backend kept on the auth state for the admin
+    /// "Send welcome" button and other direct sends; the workflow
+    /// trigger below routes through `workflow_runtime`, not this
+    /// field.
+    pub email: std::sync::Arc<dyn crate::email::EmailService>,
+    /// Durable workflow runtime — the OAuth callback fires
+    /// `workflows::email::welcome::trigger_welcome` against this
+    /// when a fresh `persons` row appears.
+    pub workflow_runtime: std::sync::Arc<dyn workflows::StateMachineRuntime>,
+    /// Email address that is "always admin" — JIT-created on first
+    /// sign-in, role-healed if cleared. `None` leaves ordinary first sign-ins
+    /// as Clients. Loaded
+    /// from `NAVIGATOR_BOOTSTRAP_OWNER_EMAIL` in `bootstrap`; threaded
+    /// here so tests can opt in/out without mutating process env.
+    pub bootstrap_owner_email: Option<String>,
+    /// Email/password front door, delegated to **GCP Identity
+    /// Platform**. Present only when `NAVIGATOR_IDENTITY_PLATFORM_API_KEY`
+    /// is set. `None` keeps `/auth/login` as the pure OIDC redirect, so
+    /// existing OIDC-only deploys are byte-identical. We never store or
+    /// hash a password — Identity Platform validates it over TLS and
+    /// hands back an ID token, the same trust model as the OIDC
+    /// back-channel below. See the "Sign-in" section of the deploy
+    /// workshop.
+    pub identity_password: Option<IdentityPasswordConfig>,
+    /// Admin door to **GCP Identity Platform**, used by the password-reset
+    /// and email-confirm flows to write a new password or flip
+    /// `emailVerified` for an account the signed-out user can't touch
+    /// themselves. Unlike [`Self::identity_password`] (a public browser
+    /// key), these calls need a service-account bearer token, minted from
+    /// the GCE metadata server over plain `reqwest` — no GCP SDK in `web`.
+    /// `None` disables reset/confirm even when the password door is on, so
+    /// the routes 404 and the email-confirm gate falls through (no admin
+    /// credential ⇒ nothing to write). See [`crate::idp_admin`].
+    pub identity_admin: Option<crate::idp_admin::IdentityAdminConfig>,
+    /// Whether auth cookies (`session`, pre-auth, login-CSRF) carry the
+    /// `Secure` flag. Derived in `bootstrap` from the OAuth redirect
+    /// URI scheme: `true` for an `https://` deployment, `false` for the
+    /// `http://localhost` KIND loop so cookies still round-trip over
+    /// plain HTTP in dev.
+    pub secure_cookies: bool,
+}
+
+impl AuthState {
+    /// The config for `provider`, or `None` when that provider is not
+    /// configured on this deployment.
+    #[must_use]
+    pub fn provider_config(&self, provider: ProviderId) -> Option<&OAuthConfig> {
+        match provider {
+            ProviderId::Primary => Some(&self.oauth),
+            ProviderId::Microsoft => self.oauth_microsoft.as_ref(),
+            ProviderId::Apple => self.oauth_apple.as_ref(),
+        }
+    }
+
+    /// Every configured provider, primary first.
+    #[must_use]
+    pub fn configured_providers(&self) -> Vec<ProviderId> {
+        let mut out = vec![ProviderId::Primary];
+        if self.oauth_microsoft.is_some() {
+            out.push(ProviderId::Microsoft);
+        }
+        if self.oauth_apple.is_some() {
+            out.push(ProviderId::Apple);
+        }
+        out
+    }
+
+    /// Look a session's recorded provider slug back up.
+    ///
+    /// Falls back to the primary provider for a session with no recorded slug,
+    /// or for a slug this build does not configure: logout must clear the app
+    /// session either way, so an unknown provider degrades to the primary one
+    /// rather than failing.
+    fn provider_config_for_slug(&self, slug: Option<&str>) -> &OAuthConfig {
+        slug.and_then(ProviderId::from_slug)
+            .and_then(|provider| self.provider_config(provider))
+            .unwrap_or(&self.oauth)
+    }
+}
+
+/// Configuration for the Identity Platform email/password sign-in path.
+///
+/// The `api_key` is the project's Identity Platform **browser key** — it
+/// only scopes anonymous Identity Toolkit calls to this project; it is
+/// not an admin credential and grants no data access on its own. The
+/// password the user types is forwarded once to Google's
+/// `accounts:signInWithPassword` endpoint over TLS and never persisted.
+#[derive(Clone)]
+pub struct IdentityPasswordConfig {
+    /// Identity Platform browser API key (`?key=` on the REST call).
+    pub api_key: String,
+    /// Identity Toolkit REST base. `https://identitytoolkit.googleapis.com`
+    /// in prod; tests point it at a mock.
+    pub endpoint: String,
+}
+
+impl IdentityPasswordConfig {
+    /// Production Identity Toolkit REST base.
+    pub const DEFAULT_ENDPOINT: &'static str = "https://identitytoolkit.googleapis.com";
+
+    /// Build from the environment. Returns `None` (password sign-in off)
+    /// when `NAVIGATOR_IDENTITY_PLATFORM_API_KEY` is unset or empty, so
+    /// the route is strictly opt-in and never a boot invariant.
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        let api_key = std::env::var("NAVIGATOR_IDENTITY_PLATFORM_API_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty())?;
+        let endpoint = std::env::var("NAVIGATOR_IDENTITY_PLATFORM_ENDPOINT")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| Self::DEFAULT_ENDPOINT.to_string());
+        Some(Self { api_key, endpoint })
+    }
+}
+
+/// Build the /auth/* sub-router.
+pub fn routes(state: AuthState) -> Router {
+    let mut router = Router::new()
+        .route("/auth/login", get(login))
+        // The per-provider redirect, always reachable by its own path so a
+        // button on the chooser works even when `/auth/login` renders the
+        // chooser instead of redirecting. `oidc` is the primary slot's slug,
+        // which is why the historical `/auth/login/oidc` URL still resolves;
+        // `microsoft` is Entra. An unrecognised or unconfigured slug 404s
+        // rather than falling back to a provider nobody asked for.
+        .route("/auth/login/{provider}", get(start_provider_redirect))
+        // Email/password submit (Identity Platform). 404s when password
+        // sign-in is not configured.
+        .route("/auth/password", post(password_login))
+        // `POST` as well as `GET`: a provider using `response_mode=form_post`
+        // (Apple) delivers the code as a cross-site form submission rather
+        // than a redirect. Both methods land on the same three phases.
+        .route("/auth/callback", get(callback).post(callback_form))
+        .route("/auth/logout", get(logout).post(logout));
+
+    // Self-service password reset + email confirmation only exist where
+    // an email/password door does — an OIDC-only deploy has no passwords
+    // to reset and its Google tokens are already `email_verified`. Mount
+    // them only then, so those deploys stay byte-identical (the routes are
+    // simply absent → 404), mirroring how `/auth/password` itself 404s.
+    if state.identity_password.is_some() {
+        router = router
+            .merge(crate::password_reset::routes())
+            .merge(crate::email_confirm::routes());
+    }
+
+    router.with_state(state)
+}
+
+/// Cookie that carries the signed login-CSRF token while the password
+/// form is on screen — the double-submit counterpart to the hidden
+/// field embedded in the form.
+pub const LOGIN_CSRF_COOKIE_NAME: &str = "navigator_login_csrf";
+
+/// The sign-in failure shown for both an unknown email and a wrong
+/// password.
+///
+/// Deliberately identical for the two cases: a message that distinguished
+/// them would confirm which addresses have accounts. Warm rather than
+/// terse, because the person reading it is locked out.
+const LOGIN_FAILED: &str = "That email and password don't match what we have on file. \
+                            Please try again.";
+
+/// A resolved sign-in toast: its tone plus its text, owned so it remains
+/// valid until the response is rendered.
+enum NoticeText {
+    Danger(String),
+    Success(String),
+}
+
+impl NoticeText {
+    fn as_login_notice(&self) -> webapp::auth_pages::LoginNotice {
+        match self {
+            NoticeText::Danger(text) => webapp::auth_pages::LoginNotice::Danger(text.clone()),
+            NoticeText::Success(text) => webapp::auth_pages::LoginNotice::Success(text.clone()),
+        }
+    }
+}
+
+/// Map the `notice` query flag to the toned banner the sign-in page should
+/// surface, if any. The bounce case is red; the post-action outcomes are
+/// green.
+fn login_notice(notice: Option<&str>) -> Option<NoticeText> {
+    match notice {
+        Some("login_required") => Some(NoticeText::Danger(
+            "You need to log in to view that page.".to_string(),
+        )),
+        Some("password_reset") => Some(NoticeText::Success(
+            "Your password has been updated. Please sign in.".to_string(),
+        )),
+        Some("email_confirmed") => Some(NoticeText::Success(
+            "Your email is confirmed. Please sign in.".to_string(),
+        )),
+        _ => None,
+    }
+}
+
+#[derive(Deserialize)]
+pub struct LoginQuery {
+    #[serde(default = "default_return_to")]
+    pub return_to: String,
+    /// Optional UX hint set by the redirector. `notice=login_required`
+    /// tells the sign-in page to greet the visitor with a red toast (see
+    /// [`login_notice`]); absent for a voluntary visit to `/auth/login`.
+    #[serde(default)]
+    pub notice: Option<String>,
+}
+
+/// The neutral "no explicit destination" default. Empty rather than a concrete
+/// path because the landing is role-dependent and the role is not known until
+/// sign-in completes: [`post_login_landing`] resolves the empty default (and the
+/// retired `/portal`) into the caller's tier landing, while any explicit
+/// `return_to` a deep-link bounce set is honored unchanged.
+fn default_return_to() -> String {
+    String::new()
+}
+
+/// A return destination is a local absolute path, never another authority.
+/// Backslashes and control characters can change how a browser interprets it.
+fn safe_return_to(value: &str) -> &str {
+    if value.starts_with('/')
+        && !value.starts_with("//")
+        && !value.chars().any(|c| c == '\\' || c.is_control())
+    {
+        value
+    } else {
+        ""
+    }
+}
+
+/// Where a freshly authenticated person lands. A firm tier (owner/admin/lawyer/
+/// clerk) goes to the team home; a client goes to their matter list. The neutral
+/// default, retired `/portal`, and unsafe destinations use that tier landing.
+/// Safe local `return_to` paths preserve the page and query the visitor sought.
+///
+/// Public because it is the landing contract the Using workshop teaches in
+/// print, and `workshop_claims_grounding` asserts the deck against this
+/// function rather than restating the rule. A test that re-implemented the
+/// fork would agree with itself while the deck went stale.
+#[must_use]
+pub fn post_login_landing(role: Role, return_to: &str) -> String {
+    let return_to = safe_return_to(return_to);
+    if !return_to.is_empty() && return_to != "/portal" {
+        return return_to.to_string();
+    }
+    if role == Role::Client {
+        crate::dioxus_app::PROJECTS_PATH.to_string()
+    } else {
+        crate::dioxus_app::APP_TEAM_PATH.to_string()
+    }
+}
+
+/// The Project code a `return_to` names when it points into a Project
+/// portal (`/app/projects/<code>/portal` or beneath), else `None`.
+///
+/// Only the portal subtree qualifies. A firm-side deep link into the matter
+/// workbench (`/app/projects/<code>`), the team home, or an admin page keeps
+/// the immediate provider redirect: the interstitial exists for a client who
+/// arrived cold from a portal link, and every other sign-in is one click
+/// shorter without it.
+fn portal_project_code(return_to: &str) -> Option<&str> {
+    let mut segments = return_to.strip_prefix("/app/projects/")?.split('/');
+    let code = segments.next().filter(|code| !code.is_empty())?;
+    (segments.next() == Some(cloud::workspace::PORTAL_MOUNT_SEGMENT)).then_some(code)
+}
+
+async fn login(
+    State(s): State<AuthState>,
+    cookies: Cookies,
+    Query(q): Query<LoginQuery>,
+) -> Response {
+    let return_to = safe_return_to(&q.return_to);
+    // Hold the resolved notice so the borrowed `LoginNotice` it lends the
+    // view outlives the render call.
+    let notice = login_notice(q.notice.as_deref());
+
+    // A portal link's sign-in is a page of ours before it is anyone else's:
+    // it names the firm and the matter, says access is by invitation, and
+    // offers a person to contact beside the provider button. The Project's
+    // name is read from its code in the link; a code with no live row, or a
+    // store that cannot answer, renders the firm-only copy rather than a
+    // bare redirect.
+    if let Some(code) = portal_project_code(return_to) {
+        let project_name = match store::projects::find_by_code(&s.surreal, code).await {
+            Ok(project) => project.map(|project| project.name),
+            Err(error) => {
+                tracing::warn!(
+                    target: "auth",
+                    %error,
+                    "portal sign-in could not resolve the project; rendering firm-only copy",
+                );
+                None
+            }
+        };
+        return login_chooser_response(
+            &s,
+            &cookies,
+            return_to,
+            None,
+            notice.as_ref().map(NoticeText::as_login_notice),
+            Some(webapp::auth_pages::PortalWelcome { project_name }),
+            StatusCode::OK,
+        );
+    }
+
+    // A chooser is only meaningful when there is something to choose: a
+    // password front door, or a second identity provider. A deployment with
+    // one provider and no password door keeps the immediate redirect,
+    // byte-identical to before this route learned about providers at all.
+    let providers = provider_buttons(&s, return_to);
+    if s.identity_password.is_some() || providers.len() > 1 {
+        return login_chooser_response(
+            &s,
+            &cookies,
+            return_to,
+            None,
+            notice.as_ref().map(NoticeText::as_login_notice),
+            None,
+            StatusCode::OK,
+        );
+    }
+    start_provider(&s, &cookies, ProviderId::Primary, return_to)
+}
+
+/// The per-provider redirect handler behind `/auth/login/{provider}`, so each
+/// button on the chooser reaches the provider it names.
+async fn start_provider_redirect(
+    State(s): State<AuthState>,
+    cookies: Cookies,
+    axum::extract::Path(slug): axum::extract::Path<String>,
+    Query(q): Query<LoginQuery>,
+) -> Response {
+    // Unknown slug, or a provider this deployment has not configured: 404.
+    // Silently substituting the primary provider would send somebody who
+    // clicked "Sign in with Microsoft" to a Google consent screen.
+    let Some(provider) = ProviderId::from_slug(&slug) else {
+        return (StatusCode::NOT_FOUND, "unknown sign-in provider").into_response();
+    };
+    if s.provider_config(provider).is_none() {
+        return (StatusCode::NOT_FOUND, "sign-in provider not configured").into_response();
+    }
+    start_provider(&s, &cookies, provider, &q.return_to)
+}
+
+/// Set the pre-auth cookie and 302 to `provider`'s IdP.
+fn start_provider(
+    s: &AuthState,
+    cookies: &Cookies,
+    provider: ProviderId,
+    return_to: &str,
+) -> Response {
+    let Some(cfg) = s.provider_config(provider) else {
+        return (StatusCode::NOT_FOUND, "sign-in provider not configured").into_response();
+    };
+    let pre = PreAuth::for_provider(provider, safe_return_to(return_to).to_owned());
+    let cookie_value = s
+        .sessions
+        .encode_signed_bytes(&serde_json::to_vec(&pre).expect("pre-auth is always serializable"));
+    cookies.add(pre_auth_cookie(
+        cookie_value,
+        s.secure_cookies,
+        provider.response_mode().is_some(),
+    ));
+    Redirect::to(&authorize_url(cfg, &pre)).into_response()
+}
+
+/// Render the password sign-in page, mint a fresh login-CSRF token, and
+/// drop it as a signed cookie (the double-submit pair to the form's
+/// hidden field). Used for the initial GET and for re-rendering after a
+/// rejected attempt (with `error` set and a 401 status).
+fn login_chooser_response(
+    s: &AuthState,
+    cookies: &Cookies,
+    return_to: &str,
+    error: Option<&str>,
+    notice: Option<webapp::auth_pages::LoginNotice>,
+    portal: Option<webapp::auth_pages::PortalWelcome>,
+    status: StatusCode,
+) -> Response {
+    let csrf = random_token_32();
+    let signed = s.sessions.encode_signed_bytes(csrf.as_bytes());
+    cookies.add(login_csrf_cookie(signed, s.secure_cookies));
+    let providers = provider_buttons(s, return_to);
+    let password_enabled = s.identity_password.is_some();
+    let page = match portal {
+        Some(portal) => webapp::auth_pages::portal_login(
+            return_to,
+            &csrf,
+            &providers,
+            password_enabled,
+            error,
+            notice,
+            portal,
+        ),
+        None => webapp::auth_pages::login(
+            return_to,
+            &csrf,
+            &providers,
+            password_enabled,
+            error,
+            notice,
+        ),
+    };
+    (status, page).into_response()
+}
+
+/// Submitted email/password form.
+#[derive(Deserialize)]
+pub struct PasswordLoginForm {
+    pub email: String,
+    pub password: String,
+    #[serde(default = "default_return_to")]
+    pub return_to: String,
+    #[serde(default)]
+    pub csrf_token: String,
+}
+
+/// Why a password sign-in didn't yield a token.
+enum PasswordError {
+    /// Identity Platform rejected the credentials (unknown email, wrong
+    /// password, disabled, throttled). Collapsed to one outcome so the
+    /// response never reveals which — a client-confidentiality duty, not
+    /// just security hygiene.
+    Rejected,
+    /// The sign-in service itself failed (network, 5xx, unparseable).
+    Upstream,
+}
+
+#[derive(Serialize)]
+struct SignInRequest<'a> {
+    email: &'a str,
+    password: &'a str,
+    #[serde(rename = "returnSecureToken")]
+    return_secure_token: bool,
+}
+
+#[derive(Deserialize)]
+struct SignInResponse {
+    #[serde(rename = "idToken")]
+    id_token: String,
+}
+
+/// Forward the typed password to Identity Platform's
+/// `accounts:signInWithPassword` over TLS and return the ID token it
+/// mints. The password is never logged, stored, or hashed by us —
+/// Google owns the credential. The returned token is trusted because it
+/// arrives over TLS straight from Google, exactly as the OIDC
+/// back-channel trusts the token endpoint's response.
+async fn verify_password_with_identity_platform(
+    cfg: &IdentityPasswordConfig,
+    email: &str,
+    password: &str,
+) -> Result<String, PasswordError> {
+    let url = format!(
+        "{}/v1/accounts:signInWithPassword?key={}",
+        cfg.endpoint.trim_end_matches('/'),
+        cfg.api_key,
+    );
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .json(&SignInRequest {
+            email,
+            password,
+            return_secure_token: true,
+        })
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => match r.json::<SignInResponse>().await {
+            Ok(b) => Ok(b.id_token),
+            Err(e) => {
+                tracing::warn!(error = %e, "identity-platform: sign-in response parse failed");
+                Err(PasswordError::Upstream)
+            }
+        },
+        // 4xx is the credential-rejection family (EMAIL_NOT_FOUND,
+        // INVALID_PASSWORD, INVALID_LOGIN_CREDENTIALS, USER_DISABLED,
+        // TOO_MANY_ATTEMPTS_TRY_LATER) — all collapse to Rejected so the
+        // caller's response can't be used to enumerate accounts. We log
+        // only the status code, never the email or password.
+        Ok(r) if r.status().is_client_error() => {
+            tracing::info!(
+                status = r.status().as_u16(),
+                "identity-platform: password sign-in rejected"
+            );
+            Err(PasswordError::Rejected)
+        }
+        Ok(r) => {
+            tracing::warn!(
+                status = r.status().as_u16(),
+                "identity-platform: sign-in upstream error"
+            );
+            Err(PasswordError::Upstream)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "identity-platform: sign-in http error");
+            Err(PasswordError::Upstream)
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn password_login(
+    State(s): State<AuthState>,
+    cookies: Cookies,
+    Form(form): Form<PasswordLoginForm>,
+) -> Response {
+    let Some(cfg) = s.identity_password.clone() else {
+        return (StatusCode::NOT_FOUND, "password sign-in is not enabled").into_response();
+    };
+
+    // Double-submit CSRF: the token in the signed cookie must match the
+    // hidden form field. The cookie is HttpOnly + HMAC-signed, so a
+    // cross-origin attacker can neither read nor forge it.
+    let cookie_token = cookies
+        .get(LOGIN_CSRF_COOKIE_NAME)
+        .and_then(|c| s.sessions.decode_signed_bytes(c.value()))
+        .map(|b| String::from_utf8_lossy(&b).into_owned());
+    let csrf_ok = cookie_token.as_deref().is_some_and(|tok| {
+        !tok.is_empty() && constant_time_eq(tok.as_bytes(), form.csrf_token.as_bytes())
+    });
+    if !csrf_ok {
+        return (StatusCode::BAD_REQUEST, "invalid or missing CSRF token").into_response();
+    }
+    // One-shot: clear the consumed token (a fresh one is minted on any
+    // re-render below).
+    cookies.add(expired_cookie(LOGIN_CSRF_COOKIE_NAME));
+
+    match verify_password_with_identity_platform(&cfg, &form.email, &form.password).await {
+        Ok(id_token) => {
+            let Some(claims) = decode_unverified_payload(&id_token) else {
+                return (StatusCode::BAD_GATEWAY, "id_token claims parse failed").into_response();
+            };
+            complete_sign_in(&s, &cookies, None, claims, &form.return_to).await
+        }
+        Err(PasswordError::Rejected) => login_chooser_response(
+            &s,
+            &cookies,
+            &form.return_to,
+            Some(LOGIN_FAILED),
+            None,
+            None,
+            StatusCode::UNAUTHORIZED,
+        ),
+        Err(PasswordError::Upstream) => {
+            (StatusCode::BAD_GATEWAY, "sign-in service unavailable").into_response()
+        }
+    }
+}
+
+/// Constant-time byte compare so a CSRF check can't be timing-probed.
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+#[derive(Deserialize)]
+pub struct CallbackQuery {
+    pub code: Option<String>,
+    pub state: Option<String>,
+    pub error: Option<String>,
+    // Apple's first `response_mode=form_post` also carries a JSON `user`
+    // field. It is deliberately absent here: the struct does not set
+    // `deny_unknown_fields`, so serde drops it, and a field that exists only
+    // to be ignored reads like one somebody may later be tempted to use. The
+    // signed id_token stays the only source of user claims —
+    // `apple_first_authorization_form_fields_are_ignored` holds that shape
+    // against this struct as it actually ships.
+}
+
+#[derive(Debug, Deserialize)]
+struct TokenResponse {
+    #[serde(default)]
+    id_token: Option<String>,
+}
+
+/// Minimal id_token payload. We deliberately only ask for the
+/// fields Neon Law Navigator actually needs: a stable subject for linkage,
+/// an email for first-time row creation, and an optional display
+/// name. **The role is not read from the token.** Authorization is
+/// derived from the `role` column on the `persons` table after the
+/// upsert, so granting/revoking access is a database write — not
+/// an IdP configuration change.
+///
+/// See [`docs/oidc.md`](../../../docs/oidc.md) for the full
+/// sequence diagram and the identity-vs-authorization rationale.
+#[derive(Debug, Deserialize)]
+struct IdTokenClaims {
+    sub: String,
+    /// The issuer. Redundant for a single-issuer provider, where
+    /// `jsonwebtoken`'s own `Validation` has already enforced it. Load-bearing
+    /// under [`IssuerPolicy::EntraTenants`], where the expected value depends
+    /// on `tid` and so cannot be pinned before decode.
+    #[serde(default)]
+    iss: Option<String>,
+    /// Microsoft Entra tenant id of the signing directory. Absent from every
+    /// other provider's tokens; required when the issuer is templated.
+    #[serde(default)]
+    tid: Option<String>,
+    /// Entra's primary username, normally the user principal name.
+    ///
+    /// Preferred over `email` on the Microsoft door. Entra can only issue a
+    /// UPN on a domain the signing tenant has verified, whereas `email` is
+    /// populated from the directory's `mail` attribute, which nobody verifies
+    /// — Microsoft's own claims reference says of `email` that "this value
+    /// isn't guaranteed to be correct". Since a `persons` row is matched by
+    /// address, taking the unverified claim would let any tenant admin assert
+    /// somebody else's address. See [`ProviderId::identity_address`].
+    #[serde(default)]
+    preferred_username: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    /// Whether the IdP asserts the address is verified. Both Google
+    /// (`email_verified`) and Identity Platform / Firebase password
+    /// tokens carry it. `Some(false)` is the hard gate: a password user
+    /// who hasn't confirmed their email gets no session until they click
+    /// the confirmation link (see [`complete_sign_in`]). A Google token
+    /// carries `Some(true)`, so "sign in with Google **or** confirm your
+    /// email" falls out of one check. `None` (claim absent) is treated as
+    /// "not unverified" — we never had an email-confirm step before, so a
+    /// token that simply omits the claim must keep working.
+    #[serde(default)]
+    email_verified: Option<bool>,
+    #[serde(default)]
+    name: Option<String>,
+    /// Echoed back from the authorize request; verified against the
+    /// pre-auth cookie's `nonce` on the redirect callback. Absent on
+    /// the Identity-Platform password token (a different, direct-TLS
+    /// trust path — see [`password_login`]).
+    #[serde(default)]
+    nonce: Option<String>,
+    /// Set by [`IdTokenVerifier::verify`], never read from the token: the
+    /// signing tenant is outside `OAUTH_MICROSOFT_ALLOWED_TENANTS` and was
+    /// admitted only because the deployment opted in to any-tenant sign-in.
+    /// Such an identity is keyed on its tenant and subject and is never matched
+    /// to an existing Person by address. See [`resolve_foreign_tenant_person`].
+    #[serde(skip)]
+    foreign_tenant: bool,
+}
+
+/// Why id_token verification failed. Every variant is a hard reject:
+/// the callback never mints a session from a token that trips one.
+#[derive(Debug, thiserror::Error)]
+pub enum IdTokenError {
+    #[error("token header is malformed or missing a `kid`")]
+    Header,
+    /// Multi-tenant Entra token with no `tid`. Without it there is no issuer
+    /// to compare against, so the token cannot be validated at all.
+    #[error("token carries no `tid` claim, so its issuer cannot be validated")]
+    MissingTenant,
+    /// The signing tenant is not in `OAUTH_MICROSOFT_ALLOWED_TENANTS`. This is
+    /// the ordinary refusal for a stranger signing in from their own Entra
+    /// tenant, and it is the reason the allowlist is mandatory.
+    #[error("signing tenant is not in the configured allowlist")]
+    TenantNotAllowed,
+    /// `iss` did not match the tenant-interpolated issuer.
+    #[error("`iss` does not match the issuer expected for the token's tenant")]
+    Issuer,
+    #[error("no JWKS key matches the token `kid`")]
+    UnknownKid,
+    #[error("signature, issuer, audience, or expiry check failed: {0}")]
+    Validation(String),
+    #[error("id_token `nonce` does not match the login's pre-auth nonce")]
+    Nonce,
+}
+
+impl IdTokenError {
+    /// The one line shown to the person whose sign-in was refused. Only an
+    /// unlisted tenant gets its own wording, because it is the one refusal the
+    /// person can act on; every other variant stays generic so the page never
+    /// tells a probing client which check it tripped. Static text: no claim,
+    /// tenant id, or address is ever interpolated.
+    #[must_use]
+    pub const fn refusal_message(&self) -> &'static str {
+        match self {
+            Self::TenantNotAllowed => concat!(
+                "Your organization is not enabled for Microsoft sign-in with this firm yet. ",
+                "Contact the firm, or choose another way to sign in at /auth/login.",
+            ),
+            _ => "id_token verification failed",
+        }
+    }
+
+    /// The bounded telemetry reason for this refusal.
+    #[must_use]
+    const fn telemetry_reason(&self) -> telemetry::AuthSignInReason {
+        match self {
+            Self::TenantNotAllowed => telemetry::AuthSignInReason::TenantNotAllowed,
+            _ => telemetry::AuthSignInReason::TokenInvalid,
+        }
+    }
+}
+
+/// The tenant Microsoft issues every personal (consumer) account from. Its
+/// UPN-shaped addresses are aliases the user chose, not addresses on a domain a
+/// tenant verified, so it is refused whatever the configuration: the
+/// `organizations` app registration must not be the only thing keeping it out.
+const MICROSOFT_CONSUMER_TENANT: &str = "9188040d-6c67-4c5b-b112-36a304b66dad";
+
+/// A tenant id is a canonical lower-case hyphenated GUID: 8-4-4-4-12 hex.
+fn is_canonical_guid(value: &str) -> bool {
+    value.len() == 36
+        && value.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit() && !c.is_ascii_uppercase(),
+        })
+}
+
+/// The address a *foreign-tenant* Microsoft identity may be created under:
+/// the UPN only, and only when it is a plain `local@domain` address. Entra can
+/// issue a UPN only on a domain the signing tenant has verified, so this is
+/// evidence of control of that domain; the `email` claim is directory data
+/// nobody verifies and is deliberately not a fallback. A guest-style
+/// `...#EXT#@tenant` UPN or anything that is not a single address yields
+/// `None`. The address must be ASCII (an internationalized domain must arrive
+/// as punycode) with no leading, trailing or doubled dot in the domain, so two
+/// spellings of one address cannot become two identities; a `+tag` is kept
+/// as presented, which is a distinct address on a domain the tenant must own.
+fn foreign_tenant_address(upn: Option<&str>) -> Option<String> {
+    let upn = upn?.trim();
+    let (local, domain) = upn.split_once('@')?;
+    let well_formed = !local.is_empty()
+        && upn.is_ascii()
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && !domain.contains("..")
+        && !domain.contains('@')
+        && !upn.chars().any(|c| c.is_whitespace() || c == '#');
+    well_formed.then(|| upn.to_string())
+}
+
+/// Re-key a foreign-tenant identity before any lookup: the stored subject is
+/// `<tid>:<sub>` so two tenants can never collide on one subject, and the
+/// address comes from [`foreign_tenant_address`] alone.
+fn scope_foreign_tenant_identity(claims: &mut IdTokenClaims) {
+    let tid = claims
+        .tid
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    claims.sub = format!("{tid}:{}", claims.sub);
+    claims.email = foreign_tenant_address(claims.preferred_username.as_deref());
+}
+
+/// How often the background task re-fetches the full JWKS, independent of
+/// whether any unrecognised `kid` has been seen. Hourly is Microsoft's own
+/// documented suggestion for signing-key-rollover handling. See ENG-326.
+const JWKS_REFRESH_INTERVAL: Duration = Duration::from_hours(1);
+
+/// Minimum time between JWKS refetches triggered by an unrecognised `kid`.
+/// Without this floor, a flood of tokens carrying garbage `kid`s — forged or
+/// simply stale — would turn every one of them into an outbound request
+/// against the provider's JWKS endpoint. See ENG-326.
+const JWKS_REFETCH_FLOOR: Duration = Duration::from_mins(5);
+
+/// An id_token verifier built from an IdP's published JWKS and
+/// pinned to the expected issuer and audience (our `client_id`).
+///
+/// Verification is **mandatory** on the OIDC redirect callback. We do
+/// not lean on the TLS back-channel alone: OIDC core §3.1.3.7 requires
+/// the relying party to verify the id_token's signature, `iss`, `aud`,
+/// and `exp`, and to bind it to the login via `nonce`. This type is the
+/// one place that happens for the browser flow.
+///
+/// The JWKS is not fixed at construction: a provider rotates its signing
+/// key on its own schedule (Microsoft explicitly reserves the right to do
+/// so with no notice), so a verifier built once at boot and never updated
+/// 401s every sign-in from the moment of rotation until the process
+/// restarts. [`Self::from_jwks_url`] instead returns a self-refreshing
+/// `Arc`: a background task re-fetches the full key set every
+/// [`JWKS_REFRESH_INTERVAL`], and [`Self::verify`] refetches immediately
+/// (floored by [`JWKS_REFETCH_FLOOR`]) the moment it sees a `kid` it
+/// doesn't recognise. See ENG-326.
+pub struct IdTokenVerifier {
+    /// Per-`kid` decoding keys, replaced wholesale under one write lock on
+    /// every refresh. A map rather than the historical flat list so a
+    /// lookup is by `kid` directly rather than a linear scan.
+    keys: AsyncRwLock<HashMap<String, DecodingKey>>,
+    /// Where [`Self::refresh_keys`] re-fetches from. `None` only for a
+    /// verifier built from a fixed key set ([`Self::from_keys`], used
+    /// exclusively by tests) — there is nowhere to refetch from, so an
+    /// unrecognised `kid` there is a hard reject exactly as before this
+    /// type learned to refresh itself.
+    jwks_url: Option<String>,
+    /// When the last **on-demand** (unrecognised-`kid`) refetch completed.
+    /// `None` means no on-demand refetch has happened yet in this
+    /// verifier's lifetime, so the very first one is never held back by
+    /// [`JWKS_REFETCH_FLOOR`] — that floor governs the spacing *between*
+    /// on-demand refetches, not the delay since the boot fetch. Held across
+    /// the refetch itself (a `tokio::sync::Mutex` guard may span an
+    /// `.await`), so concurrent callers hitting the same unrecognised `kid`
+    /// serialize on one fetch instead of each independently deciding to
+    /// refetch.
+    last_kid_refetch: AsyncMutex<Option<Instant>>,
+    validation: Validation,
+    algorithm: Algorithm,
+    /// How `iss` is checked. [`IssuerPolicy::Exact`] delegates to
+    /// `validation`; [`IssuerPolicy::EntraTenants`] is enforced in
+    /// [`Self::verify`] after decode, because the expected issuer is not known
+    /// until the token's own `tid` claim has been read and allowlisted.
+    issuer_policy: IssuerPolicy,
+}
+
+impl IdTokenVerifier {
+    /// Build a verifier from `(kid, key)` pairs already in hand, pinned
+    /// to `issuer` and `audience`. `from_jwks_document` is the production
+    /// caller; tests use it directly with a locally-held signing key. No
+    /// `jwks_url` is attached, so this verifier never refetches — an
+    /// unrecognised `kid` is a hard reject, matching production before
+    /// ENG-326 (and exactly what a unit test with no mock JWKS endpoint
+    /// needs).
+    #[must_use]
+    pub fn from_keys(
+        keys: Vec<(String, DecodingKey)>,
+        issuer: &str,
+        audience: &str,
+        issuer_policy: IssuerPolicy,
+    ) -> Self {
+        Self::from_keys_with_algorithm(keys, issuer, audience, issuer_policy, Algorithm::RS256)
+    }
+
+    /// Build a fixed-key verifier for a specific signing algorithm. The
+    /// primary, Microsoft, and Apple ID-token paths use the existing RS256
+    /// default; Apple's separate client-secret JWT uses ES256.
+    #[must_use]
+    pub fn from_keys_with_algorithm(
+        keys: Vec<(String, DecodingKey)>,
+        issuer: &str,
+        audience: &str,
+        issuer_policy: IssuerPolicy,
+        algorithm: Algorithm,
+    ) -> Self {
+        let mut validation = Validation::new(algorithm);
+        // `set_issuer`/`set_audience` enable iss/aud enforcement; exp is
+        // validated by default. These are the token-confusion defenses.
+        //
+        // Under `EntraTenants` the discovered issuer is a template, so pinning
+        // it here would reject every real token. `iss` is still mandatory —
+        // `verify` enforces it against the interpolated, allowlisted value
+        // instead, and a token whose `tid` is absent or unlisted is refused.
+        if matches!(issuer_policy, IssuerPolicy::Exact) {
+            validation.set_issuer(&[issuer]);
+        }
+        validation.set_audience(&[audience]);
+        validation.validate_exp = true;
+        Self {
+            keys: AsyncRwLock::new(keys.into_iter().collect()),
+            jwks_url: None,
+            last_kid_refetch: AsyncMutex::new(None),
+            validation,
+            algorithm,
+            issuer_policy,
+        }
+    }
+
+    /// Build a verifier from an already-fetched JWKS document. Like
+    /// [`Self::from_keys`], carries no `jwks_url` — [`Self::from_jwks_url`]
+    /// is the production path that attaches one.
+    pub fn from_jwks_document(
+        doc: &JwksDocument,
+        issuer: &str,
+        audience: &str,
+        issuer_policy: IssuerPolicy,
+    ) -> Result<Self, AuthSetupError> {
+        Self::from_jwks_document_with_algorithm(
+            doc,
+            issuer,
+            audience,
+            issuer_policy,
+            Algorithm::RS256,
+        )
+    }
+
+    /// Build a verifier from a JWKS document using the provider's signing
+    /// algorithm. The default method above preserves the existing RS256
+    /// contract for the primary and Microsoft providers.
+    pub fn from_jwks_document_with_algorithm(
+        doc: &JwksDocument,
+        issuer: &str,
+        audience: &str,
+        issuer_policy: IssuerPolicy,
+        algorithm: Algorithm,
+    ) -> Result<Self, AuthSetupError> {
+        let keys = Self::keys_from_document(doc, algorithm)?;
+        Ok(Self::from_keys_with_algorithm(
+            keys.into_iter().collect(),
+            issuer,
+            audience,
+            issuer_policy,
+            algorithm,
+        ))
+    }
+
+    /// Parse a JWKS document into `kid` → key, accepting only entries for the
+    /// algorithm the provider's discovery/configuration selected.
+    fn keys_from_document(
+        doc: &JwksDocument,
+        algorithm: Algorithm,
+    ) -> Result<HashMap<String, DecodingKey>, AuthSetupError> {
+        let mut keys = HashMap::new();
+        for k in &doc.keys {
+            let key = match algorithm {
+                Algorithm::RS256 => {
+                    if k.kty != "RSA" {
+                        continue;
+                    }
+                    let (Some(n), Some(e)) = (k.n.as_deref(), k.e.as_deref()) else {
+                        continue;
+                    };
+                    DecodingKey::from_rsa_components(n, e)
+                }
+                Algorithm::ES256 => {
+                    if k.kty != "EC" || k.crv.as_deref() != Some("P-256") {
+                        continue;
+                    }
+                    let (Some(x), Some(y)) = (k.x.as_deref(), k.y.as_deref()) else {
+                        continue;
+                    };
+                    DecodingKey::from_ec_components(x, y)
+                }
+                _ => continue,
+            }
+            .map_err(|e| AuthSetupError::Key(e.to_string()))?;
+            keys.insert(k.kid.clone().unwrap_or_default(), key);
+        }
+        if keys.is_empty() {
+            return Err(AuthSetupError::Empty);
+        }
+        Ok(keys)
+    }
+
+    /// Fetch the JWKS at `url` and return a self-refreshing verifier: the
+    /// returned `Arc` owns a background task that re-fetches the full key
+    /// set every [`JWKS_REFRESH_INTERVAL`], on top of the immediate,
+    /// floored refetch [`Self::verify`] performs on an unrecognised `kid`.
+    /// The task runs for the life of the process — this is boot
+    /// configuration, not a value with a shorter-lived owner.
+    pub async fn from_jwks_url(
+        url: &str,
+        issuer: &str,
+        audience: &str,
+        issuer_policy: IssuerPolicy,
+    ) -> Result<Arc<Self>, AuthSetupError> {
+        Self::from_jwks_url_with_algorithm(url, issuer, audience, issuer_policy, Algorithm::RS256)
+            .await
+    }
+
+    /// Fetch a provider JWKS and build the self-refreshing verifier for its
+    /// signing algorithm. The `from_jwks_url` wrapper is the RS256 default;
+    /// the algorithm-specific form is available for providers that publish a
+    /// different id-token signing algorithm.
+    pub async fn from_jwks_url_with_algorithm(
+        url: &str,
+        issuer: &str,
+        audience: &str,
+        issuer_policy: IssuerPolicy,
+        algorithm: Algorithm,
+    ) -> Result<Arc<Self>, AuthSetupError> {
+        let verifier =
+            Arc::new(Self::fetch_and_build(url, issuer, audience, issuer_policy, algorithm).await?);
+
+        let background = Arc::clone(&verifier);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(JWKS_REFRESH_INTERVAL);
+            // `interval.tick()` fires immediately on its first call; the
+            // keys we just fetched above are already current, so consume
+            // that tick without doing any work.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                background.refresh_keys().await;
+            }
+        });
+
+        Ok(verifier)
+    }
+
+    /// Fetch the JWKS at `url` and build the verifier with it attached as
+    /// [`Self::jwks_url`], but without spawning the background refresh task
+    /// [`Self::from_jwks_url`] wraps this with. A private seam so a test
+    /// exercising only the on-demand [`Self::refetch_on_unknown_kid`] path
+    /// doesn't also start a task that outlives the test's own process —
+    /// `cargo nextest` runs each test as its own process and flags one
+    /// that keeps running as "leaky".
+    async fn fetch_and_build(
+        url: &str,
+        issuer: &str,
+        audience: &str,
+        issuer_policy: IssuerPolicy,
+        algorithm: Algorithm,
+    ) -> Result<Self, AuthSetupError> {
+        let doc: JwksDocument = reqwest::get(url)
+            .await
+            .map_err(|e| AuthSetupError::Fetch(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| AuthSetupError::Parse(e.to_string()))?;
+        let mut verifier = Self::from_jwks_document_with_algorithm(
+            &doc,
+            issuer,
+            audience,
+            issuer_policy,
+            algorithm,
+        )?;
+        verifier.jwks_url = Some(url.to_string());
+        Ok(verifier)
+    }
+
+    /// Re-fetch the full JWKS from [`Self::jwks_url`] and replace the
+    /// cached keys wholesale. A fetch failure is logged and otherwise
+    /// swallowed: keeping the existing (possibly stale) cache is strictly
+    /// better than clearing it, since a transient outage at the provider's
+    /// JWKS endpoint must not itself lock out sign-in. A `None` `jwks_url`
+    /// (test-only [`Self::from_keys`]) makes this a no-op.
+    async fn refresh_keys(&self) {
+        let Some(url) = self.jwks_url.as_deref() else {
+            return;
+        };
+        match Self::fetch_keys(url, self.algorithm).await {
+            Ok(fresh) => {
+                let kid_count = fresh.len();
+                *self.keys.write().await = fresh;
+                tracing::info!(kid_count, "oauth: JWKS keys refreshed");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    url,
+                    "oauth: JWKS refresh failed; keeping the previously cached keys",
+                );
+            }
+        }
+    }
+
+    async fn fetch_keys(
+        url: &str,
+        algorithm: Algorithm,
+    ) -> Result<HashMap<String, DecodingKey>, AuthSetupError> {
+        let doc: JwksDocument = reqwest::get(url)
+            .await
+            .map_err(|e| AuthSetupError::Fetch(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| AuthSetupError::Parse(e.to_string()))?;
+        Self::keys_from_document(&doc, algorithm)
+    }
+
+    /// The decoding key for `kid`, refetching once — subject to
+    /// [`JWKS_REFETCH_FLOOR`] — if it's missing from the cache. `None` only
+    /// when `kid` is still unresolved after that refetch (or after a
+    /// refetch withheld by the floor).
+    async fn resolve_key(&self, kid: &str) -> Option<DecodingKey> {
+        if let Some(key) = self.keys.read().await.get(kid).cloned() {
+            return Some(key);
+        }
+        self.refetch_on_unknown_kid(kid).await;
+        self.keys.read().await.get(kid).cloned()
+    }
+
+    /// On an unrecognised `kid`, refetch the JWKS immediately unless an
+    /// on-demand refetch already happened within [`JWKS_REFETCH_FLOOR`] —
+    /// the algorithm Microsoft documents for signing-key-rollover handling.
+    /// A `None` `jwks_url` (test-only [`Self::from_keys`]) makes this a
+    /// no-op: there is nowhere to refetch from.
+    async fn refetch_on_unknown_kid(&self, kid: &str) {
+        if self.jwks_url.is_none() {
+            return;
+        }
+        // Held across the fetch itself: a second caller arriving for the
+        // same rotation event waits here rather than independently
+        // deciding — under the floor — to skip, or — over the floor — to
+        // fire a second redundant fetch.
+        let mut last = self.last_kid_refetch.lock().await;
+        if let Some(last_at) = *last {
+            let since = last_at.elapsed();
+            if since < JWKS_REFETCH_FLOOR {
+                tracing::info!(
+                    kid,
+                    since_last_refetch_secs = since.as_secs(),
+                    "oauth: unrecognised kid within the refetch floor; not refetching",
+                );
+                return;
+            }
+        }
+        tracing::info!(kid, "oauth: unrecognised kid; refetching JWKS immediately");
+        self.refresh_keys().await;
+        *last = Some(Instant::now());
+    }
+
+    /// Enforce [`IssuerPolicy::EntraTenants`] against decoded claims.
+    ///
+    /// Order matters and is the security property: the tenant is allowlisted
+    /// **before** its id is interpolated, so the string compared against `iss`
+    /// can only ever be one an operator wrote into the environment. Microsoft
+    /// states the requirement directly — a multi-tenant application "must
+    /// validate that the `issuer` property in the published metadata matches
+    /// the `iss` claim in the token, in addition to the usual check that the
+    /// `iss` claim in the token contains the tenant ID (`tid`) claim."
+    ///
+    /// Returns whether the signing tenant is *foreign*: admitted only by
+    /// `allow_any_tenant`, not by the allowlist. A tenant id is interpolated
+    /// into the issuer only if it is on the allowlist or is a canonical GUID,
+    /// so a crafted `tid` can never reshape the string compared against `iss`.
+    fn check_entra_tenant(&self, claims: &IdTokenClaims) -> Result<bool, IdTokenError> {
+        let IssuerPolicy::EntraTenants {
+            template,
+            allowed_tenants,
+            allow_any_tenant,
+        } = &self.issuer_policy
+        else {
+            return Ok(false);
+        };
+        let tid = claims
+            .tid
+            .as_deref()
+            .map(str::trim)
+            .filter(|tid| !tid.is_empty())
+            .ok_or(IdTokenError::MissingTenant)?
+            .to_ascii_lowercase();
+        let foreign = !allowed_tenants.contains(&tid);
+        if tid == MICROSOFT_CONSUMER_TENANT
+            || (foreign && !(*allow_any_tenant && is_canonical_guid(&tid)))
+        {
+            return Err(IdTokenError::TenantNotAllowed);
+        }
+        let expected = template.replace(ENTRA_TENANT_TEMPLATE, &tid);
+        // Case-insensitive because the tenant id was lower-cased above and a
+        // host name is case-insensitive anyway. This weakens nothing: both
+        // halves of `expected` are ours — the template came from the discovery
+        // document and the tenant id from the allowlist — so the comparison is
+        // still against exactly one string an operator sanctioned.
+        if !claims
+            .iss
+            .as_deref()
+            .is_some_and(|iss| iss.eq_ignore_ascii_case(&expected))
+        {
+            return Err(IdTokenError::Issuer);
+        }
+        Ok(foreign)
+    }
+
+    /// The configured issuer policy. Test-only: the unit tests assert that
+    /// switching Microsoft on leaves every other provider on the `Exact` path.
+    #[cfg(test)]
+    fn issuer_policy_for_test(&self) -> &IssuerPolicy {
+        &self.issuer_policy
+    }
+
+    /// [`Self::check_entra_tenant`] without a signed token. Test-only: it lets
+    /// the tenant and issuer rules be asserted claim-by-claim, which a
+    /// full-token test cannot do for a `tid` that is absent entirely.
+    #[cfg(test)]
+    fn check_entra_tenant_for_test(&self, claims: &IdTokenClaims) -> Result<bool, IdTokenError> {
+        self.check_entra_tenant(claims)
+    }
+
+    /// Verify `token` and bind it to `expected_nonce`. Returns the
+    /// identity claims only when signature, issuer, audience, expiry,
+    /// and nonce all check out.
+    ///
+    /// Async because an unrecognised `kid` refetches the JWKS
+    /// ([`Self::refetch_on_unknown_kid`]) before giving up — a provider key
+    /// rotation must not need a process restart to stop 401ing every
+    /// sign-in. See ENG-326.
+    async fn verify(
+        &self,
+        token: &str,
+        expected_nonce: &str,
+    ) -> Result<IdTokenClaims, IdTokenError> {
+        let header = decode_header(token).map_err(|_| IdTokenError::Header)?;
+        let kid = header.kid.ok_or(IdTokenError::Header)?;
+
+        let Some(key) = self.resolve_key(&kid).await else {
+            // Distinct from the ordinary `oidc.id_token.rejected` audit line
+            // every `IdTokenError` gets in `verify_id_token`: this one fires
+            // only when a `kid` is still unresolved immediately after a
+            // refetch (or a refetch was withheld by the floor), which is the
+            // shape a stuck or unpropagated key rotation takes — worth a
+            // grep of its own rather than reading as one more generic 401.
+            tracing::error!(
+                target: "audit",
+                event = "oauth.jwks.unknown_kid",
+                kid,
+                "oauth: id_token kid not found in JWKS even after a refetch",
+            );
+            return Err(IdTokenError::UnknownKid);
+        };
+
+        let mut claims = decode::<IdTokenClaims>(token, &key, &self.validation)
+            .map_err(|e| IdTokenError::Validation(e.to_string()))?
+            .claims;
+        // Multi-tenant Entra only: `iss` and `tid` together, since neither is
+        // meaningful without the other.
+        claims.foreign_tenant = self.check_entra_tenant(&claims)?;
+        // Bind the token to this login. Constant-time so the nonce can't
+        // be timing-probed (it isn't a secret, but the compare is free).
+        match claims.nonce.as_deref() {
+            Some(n) if constant_time_eq(n.as_bytes(), expected_nonce.as_bytes()) => Ok(claims),
+            _ => Err(IdTokenError::Nonce),
+        }
+    }
+}
+
+async fn callback(
+    State(s): State<AuthState>,
+    cookies: Cookies,
+    Query(q): Query<CallbackQuery>,
+) -> Response {
+    complete_callback(s, cookies, q).await
+}
+
+/// The `response_mode=form_post` arrival of the same callback.
+///
+/// Apple POSTs `code` and `state` as an `application/x-www-form-urlencoded`
+/// body instead of putting them in the redirect's query string, so the fields
+/// are identical and only the extractor differs. `Form` is last because it
+/// consumes the request body.
+///
+/// The POST is cross-site — it comes from Apple's origin, not ours — which is
+/// why [`pre_auth_cookie`] relaxes `SameSite` for such a provider. The signed
+/// pre-auth cookie remains the only thing that decides which provider this
+/// code belongs to, so an unsolicited POST still fails the state check.
+async fn callback_form(
+    State(s): State<AuthState>,
+    cookies: Cookies,
+    Form(q): Form<CallbackQuery>,
+) -> Response {
+    complete_callback(s, cookies, q).await
+}
+
+async fn complete_callback(s: AuthState, cookies: Cookies, q: CallbackQuery) -> Response {
+    if q.error.is_some() {
+        return (StatusCode::BAD_REQUEST, "oauth error from idp").into_response();
+    }
+    let Some(code) = q.code else {
+        return (StatusCode::BAD_REQUEST, "missing `code` parameter").into_response();
+    };
+    let Some(returned_state) = q.state else {
+        return (StatusCode::BAD_REQUEST, "missing `state` parameter").into_response();
+    };
+
+    // Three phases, each fallible into a `(status, message)` error that we
+    // render at the end: validate the pre-auth cookie, exchange the code
+    // for tokens, verify the id_token. The small tuple error keeps the
+    // helpers off `clippy::result_large_err` (an axum `Response` is big).
+    let render = |e: (StatusCode, &'static str)| e.into_response();
+    let pre = match consume_pre_auth(&s, &cookies, &returned_state) {
+        Ok(pre) => pre,
+        Err((status, "missing pre-auth cookie")) => {
+            let login = url::Url::parse(s.oauth.redirect_uri()).map_or_else(
+                |_| "/auth/login".to_owned(),
+                |callback| format!("{}/auth/login", callback.origin().ascii_serialization()),
+            );
+            return (
+                status,
+                format!("This sign-in could not be resumed. Start again at {login}."),
+            )
+                .into_response();
+        }
+        Err(e) => return render(e),
+    };
+    // Which provider this code belongs to comes from the signed pre-auth
+    // cookie, never from the query string: the browser cannot forge it, and it
+    // was written by the `/auth/login/{provider}` that started this login. A
+    // provider that has since been unconfigured (a rolled-back deploy landing
+    // mid-login) is a 400, not a redemption against a different provider.
+    let Some(cfg) = s.provider_config(pre.provider) else {
+        tracing::warn!(
+            provider = pre.provider.slug(),
+            "oauth: callback for a provider this deployment no longer configures",
+        );
+        return render((StatusCode::BAD_REQUEST, "sign-in provider not configured"));
+    };
+    let token = match exchange_code(cfg, &code, &pre).await {
+        Ok(token) => token,
+        Err(e) => return render(e),
+    };
+    let claims = match verify_id_token(cfg, token, &pre.nonce).await {
+        Ok(claims) => claims,
+        Err((e, reason)) => {
+            let provider = pre.provider.telemetry_provider();
+            let brand = views::brand::brand_key().as_str();
+            telemetry::record_auth_event(telemetry::AuthEvent::SignInRefused {
+                provider,
+                brand,
+                reason,
+            });
+            tracing::warn!(
+                provider = provider.as_str(),
+                brand,
+                reason = reason.as_str(),
+                "auth: sign-in refused",
+            );
+            return render(e);
+        }
+    };
+    complete_sign_in(&s, &cookies, Some(pre.provider), claims, &pre.return_to).await
+}
+
+/// A renderable callback error: an HTTP status plus a static message.
+type CallbackError = (StatusCode, &'static str);
+
+/// Phase 1: validate + consume the one-shot pre-auth cookie, checking
+/// expiry and that the returned `state` matches what we issued.
+fn consume_pre_auth(
+    s: &AuthState,
+    cookies: &Cookies,
+    returned_state: &str,
+) -> Result<PreAuth, CallbackError> {
+    let bad = |msg: &'static str| Err((StatusCode::BAD_REQUEST, msg));
+    let Some(pre_cookie) = cookies.get(PRE_AUTH_COOKIE_NAME) else {
+        return bad("missing pre-auth cookie");
+    };
+    let Some(pre_bytes) = s.sessions.decode_signed_bytes(pre_cookie.value()) else {
+        return bad("invalid pre-auth cookie");
+    };
+    let Ok(pre) = serde_json::from_slice::<PreAuth>(&pre_bytes) else {
+        return bad("malformed pre-auth cookie");
+    };
+    if pre.is_expired() {
+        return bad("pre-auth cookie expired");
+    }
+    if pre.state != returned_state {
+        return bad("state mismatch");
+    }
+    // One-shot: clear it now that we've consumed it.
+    cookies.add(expired_cookie(PRE_AUTH_COOKIE_NAME));
+    Ok(pre)
+}
+
+/// Whether a token endpoint can carry a client secret without exposing it.
+///
+/// The exchange posts the client secret and the authorization code, so the
+/// request must not cross a network in the clear. TLS guarantees that. So does
+/// a loopback host reached over plain HTTP, whose traffic never reaches a
+/// network interface at all — the same property RFC 8252 §8.3 relies on when
+/// it permits plain-HTTP loopback redirects for native apps. The carve-out is
+/// therefore gated on the `http` scheme itself: a different scheme naming a
+/// loopback host is not RFC 8252's property, so it is refused just as a
+/// non-loopback host is.
+///
+/// The loopback carve-out is what lets the local development tier work: it
+/// serves its OIDC provider over plain HTTP on a loopback port, and every
+/// environment-built config reaches that provider through discovery, which sets
+/// [`OAuthConfigInner::require_confidential_token_endpoint`]. Without this, no local
+/// sign-in can complete and the callback answers 502.
+///
+/// `localhost` is matched exactly. A name that merely contains or ends with it
+/// resolves wherever its owner points it, so it is an ordinary network host.
+fn token_endpoint_is_confidential(endpoint: &url::Url) -> bool {
+    if endpoint.scheme() == "https" {
+        return endpoint.host().is_some();
+    }
+    if endpoint.scheme() != "http" {
+        return false;
+    }
+    match endpoint.host() {
+        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    }
+}
+
+/// Phase 2: exchange the authorization `code` at the IdP's token
+/// endpoint (PKCE `code_verifier` from the pre-auth cookie).
+async fn exchange_code(
+    cfg: &OAuthConfig,
+    code: &str,
+    pre: &PreAuth,
+) -> Result<TokenResponse, CallbackError> {
+    let token_endpoint = url::Url::parse(cfg.token_endpoint()).map_err(|_| {
+        tracing::warn!("oauth: refusing token exchange with an invalid endpoint");
+        (StatusCode::BAD_GATEWAY, "invalid token endpoint")
+    })?;
+    if cfg.inner.require_confidential_token_endpoint
+        && !token_endpoint_is_confidential(&token_endpoint)
+    {
+        tracing::warn!("oauth: refusing token exchange over a non-confidential endpoint");
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            "token endpoint must use HTTPS or be on the loopback",
+        ));
+    }
+    let client_secret = cfg.client_secret().map_err(|error| {
+        tracing::warn!(error = %error, "oauth: client secret mint failed");
+        (StatusCode::BAD_GATEWAY, "token client secret unavailable")
+    })?;
+    match reqwest::Client::new()
+        .post(token_endpoint)
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", cfg.inner.redirect_uri.as_str()),
+            ("client_id", cfg.inner.client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+            ("code_verifier", pre.verifier.as_str()),
+        ])
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r.json().await.map_err(|e| {
+            tracing::warn!(error = %e, "oauth: token response parse failed");
+            (StatusCode::BAD_GATEWAY, "token parse failed")
+        }),
+        Ok(r) => {
+            // The status alone cannot distinguish a stale `client_secret`
+            // (`invalid_client`) from a replayed code (`invalid_grant`) from a
+            // callback the IdP does not recognise (`redirect_uri_mismatch`) —
+            // all three are one 400/401 here. RFC 6749 §5.2 puts the machine
+            // -readable cause in the body, so log that instead of discarding
+            // it: without it, diagnosing this means reasoning backwards from
+            // the deployment tree.
+            let status = r.status().as_u16();
+            let body = r.text().await.unwrap_or_default();
+            let (error, description) = oauth_error_fields(&body);
+            tracing::warn!(
+                status,
+                error = error.unwrap_or("unparsed"),
+                error_description = description.unwrap_or(""),
+                "oauth: token exchange returned non-2xx"
+            );
+            Err((StatusCode::BAD_GATEWAY, "token exchange failed"))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "oauth: token exchange http error");
+            Err((StatusCode::BAD_GATEWAY, "token exchange failed"))
+        }
+    }
+}
+
+/// The `error` and `error_description` of an OAuth error response
+/// (RFC 6749 §5.2), borrowed from `body`.
+///
+/// Only these two fields, never the whole body: the response is attacker
+/// -influenced and an IdP may answer with an HTML error page, so logging it
+/// wholesale invites both log spam and injected content. The two RFC fields are
+/// short, machine-readable, and carry no credential — the request's
+/// `client_secret` is never echoed back in them.
+///
+/// Returns `(None, None)` for a body that is not the documented JSON shape,
+/// which the caller reports as `unparsed` rather than mistaking for "no error".
+fn oauth_error_fields(body: &str) -> (Option<&str>, Option<&str>) {
+    // Hand-scan rather than `serde_json::from_str`: the body may not be JSON at
+    // all, and a borrowed &str keeps this allocation-free on the error path.
+    let field = |name: &str| -> Option<&str> {
+        let needle = format!("\"{name}\"");
+        let at = body.find(&needle)? + needle.len();
+        let rest = body[at..].trim_start().strip_prefix(':')?.trim_start();
+        let value = rest.strip_prefix('"')?;
+        let end = value.find('"')?;
+        Some(&value[..end])
+    };
+    (field("error"), field("error_description"))
+}
+
+/// Phase 3: verify the id_token's signature, issuer, audience, expiry,
+/// and nonce. Verification is mandatory — a missing verifier is a deploy
+/// misconfiguration, not a reason to trust the token unverified. Emits
+/// the audit events for both outcomes.
+async fn verify_id_token(
+    cfg: &OAuthConfig,
+    token: TokenResponse,
+    nonce: &str,
+) -> Result<IdTokenClaims, (CallbackError, telemetry::AuthSignInReason)> {
+    let token_invalid = telemetry::AuthSignInReason::TokenInvalid;
+    let Some(verifier) = cfg.id_token_verifier() else {
+        tracing::error!(
+            "oauth: no id_token verifier configured; refusing to mint a session from an unverified token",
+        );
+        return Err((
+            (StatusCode::INTERNAL_SERVER_ERROR, "auth misconfigured"),
+            token_invalid,
+        ));
+    };
+    // The OIDC flow always returns an id_token (we request `openid`). We
+    // never fall back to the access_token: it is not an identity
+    // assertion and carries no verifiable claims for us.
+    let Some(id_token) = token.id_token else {
+        return Err((
+            (StatusCode::BAD_GATEWAY, "no id_token returned"),
+            token_invalid,
+        ));
+    };
+    match verifier.verify(&id_token, nonce).await {
+        Ok(claims) => {
+            tracing::info!(
+                target: "audit",
+                event = "oidc.id_token.verified",
+                subject = %claims.sub,
+                "oauth: id_token signature, issuer, audience, and nonce verified",
+            );
+            Ok(claims)
+        }
+        Err(e) => {
+            // Audit stream (→ OTLP → Iceberg): every rejected id_token is
+            // a security-relevant event. The reason is the `IdTokenError`
+            // variant, never the token bytes.
+            tracing::warn!(
+                target: "audit",
+                event = "oidc.id_token.rejected",
+                reason = %e,
+                "oauth: id_token verification failed",
+            );
+            Err((
+                (StatusCode::UNAUTHORIZED, e.refusal_message()),
+                e.telemetry_reason(),
+            ))
+        }
+    }
+}
+
+/// Record a sign-in refused at person resolution. No session is minted when
+/// there is no admitted person row to log in. The event and log carry only the
+/// provider, brand, and bounded reason, so an unprovisioned or withdrawn
+/// identity does not cross the telemetry boundary.
+fn record_resolution_refusal(
+    auth_provider: Option<telemetry::AuthProvider>,
+    reason: telemetry::AuthSignInReason,
+) {
+    if let Some(provider) = auth_provider {
+        let brand = views::brand::brand_key().as_str();
+        telemetry::record_auth_event(telemetry::AuthEvent::SignInRefused {
+            provider,
+            brand,
+            reason,
+        });
+        tracing::info!(
+            provider = provider.as_str(),
+            brand,
+            reason = reason.as_str(),
+            "auth: sign-in refused",
+        );
+    } else {
+        tracing::info!("auth: sign-in refused");
+    }
+}
+
+/// Shared sign-in tail for both front doors (the OIDC callback and the
+/// Identity Platform password submit): resolve the local `persons` row
+/// from the token claims, fire the welcome workflow for a brand-new row,
+/// mint the standard `SessionData` cookie, and redirect to `return_to`.
+///
+/// The role is always read back from the DB row, never trusted from the
+/// token — so every downstream `require_auth` / embedded Rego policy / CSRF layer is
+/// identical no matter which door the person came through.
+#[allow(clippy::too_many_lines)]
+async fn complete_sign_in(
+    s: &AuthState,
+    cookies: &Cookies,
+    provider: Option<ProviderId>,
+    mut claims: IdTokenClaims,
+    return_to: &str,
+) -> Response {
+    let auth_provider = provider.map(ProviderId::telemetry_provider);
+    // Normalise the address a `persons` row will be matched on, per provider.
+    // Doing it here — once, before any lookup — means every downstream step
+    // (the resolve, the email-confirm gate, the welcome workflow, the session
+    // cookie) agrees on one address, and there is exactly one place to read to
+    // find out which claim a given door trusts.
+    //
+    // `None` is the Identity Platform password door, which has no OIDC
+    // provider: its token comes straight back over TLS from Google with the
+    // address the user just typed, so `email` is already the right claim.
+    if let Some(provider) = provider {
+        claims.email = provider.identity_address(&claims);
+    }
+    // A tenant admitted only by `OAUTH_MICROSOFT_ALLOW_ANY_TENANT` is keyed on
+    // tenant + subject and may use only its UPN; see `resolve_foreign_tenant_person`.
+    if claims.foreign_tenant {
+        scope_foreign_tenant_identity(&mut claims);
+    }
+    // The password door matches a Person by address alone, so it trusts the
+    // address only once Identity Platform says it is verified. An unverified
+    // or unstated one is sent through email confirmation, and with no admin
+    // door to confirm against it is refused outright: anyone holding the
+    // public browser key could otherwise register a lawyer's address and
+    // inherit that lawyer's role.
+    let unverified_password = provider.is_none() && claims.email_verified != Some(true);
+    if unverified_password && s.identity_admin.is_none() {
+        return refuse_unconfirmable_address();
+    }
+    // The IdP owns identity (`sub`); our `persons` table owns the rest —
+    // name, memberships, billing, and the system-wide tier. The lookup is
+    // lookup resolves an existing Person by this provider's subject or email,
+    // or creates a Client on the first verified sign-in. The configured
+    // bootstrap Owner is JIT-created with the Owner role so a fresh deployment
+    // can never lock its operator out. An unverified address never binds its
+    // subject to an existing row.
+    let (person_id, role, resolution) = match resolve_person(
+        &s.surreal,
+        provider,
+        &claims,
+        s.bootstrap_owner_email.as_deref(),
+        !unverified_password,
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(
+            error @ (ResolveError::NotPreSeeded
+            | ResolveError::NotAdmitted
+            | ResolveError::AddressInUse),
+        ) => {
+            let reason = if matches!(error, ResolveError::AddressInUse) {
+                telemetry::AuthSignInReason::AddressInUse
+            } else {
+                refusal_reason(&claims, matches!(error, ResolveError::NotAdmitted))
+            };
+            record_resolution_refusal(auth_provider, reason);
+            // Still a 403, but its own page: the provider did not supply an
+            // address for an unknown identity, or an existing Person is not
+            // admitted. The generic "not authorized" wording reads as a
+            // broken account rather than telling them what to do next.
+            return (
+                StatusCode::FORBIDDEN,
+                webapp::error_pages::sign_in_not_provisioned(),
+            )
+                .into_response();
+        }
+        Err(ResolveError::Db(e)) => {
+            if let Some(provider) = auth_provider {
+                telemetry::record_auth_event(telemetry::AuthEvent::SignInFailed {
+                    provider,
+                    brand: views::brand::brand_key().as_str(),
+                    error_class: telemetry::AuthSignInFailure::Store,
+                });
+            }
+            tracing::warn!(error = %e, "auth: person lookup failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                webapp::error_pages::server_error(),
+            )
+                .into_response();
+        }
+    };
+
+    // Hard gate: a password (non-Google) user whose address the IdP
+    // reports unverified gets NO session. We send a confirmation link and
+    // render a "check your inbox" page instead. Google sign-in carries
+    // `email_verified: true`, so it never trips this — exactly the rule
+    // "sign in with Google **or** confirm your email." The write that
+    // flips `emailVerified` needs the admin door; with no admin config
+    // there is nothing to confirm *against*, so we don't pretend to gate.
+    if (unverified_password || claims.email_verified == Some(false)) && s.identity_admin.is_some() {
+        let name = claims.name.clone().unwrap_or_default();
+        let email = claims.email.clone().unwrap_or_default();
+        return crate::email_confirm::gate_unverified(s, cookies, person_id, &name, &email).await;
+    }
+
+    let first_link = resolution.first_link;
+
+    // Falling through the gate above means the address is verified (or
+    // there is no admin config to gate against), so materialize that onto
+    // the row for downstream account workflows. Best-effort — a write failure
+    // here must not block sign-in, and the flag simply stays unset until the
+    // next successful sign-in retries it.
+    // A foreign tenant's UPN proves domain control, not a reachable mailbox, so
+    // it never marks the address confirmed.
+    if !claims.foreign_tenant {
+        if let Err(e) = store::persons::set_email_confirmed(&s.surreal, person_id, true).await {
+            tracing::warn!(error = %e, person_id = %person_id, "auth: set_email_confirmed failed");
+        }
+    }
+
+    // First identity creation → drive the `onboarding__welcome` workflow,
+    // fire-and-forget so the redirect doesn't wait on the broker. The
+    // bootstrap-Owner and ordinary Client creation produce a `NewSignup`.
+    if let Some(NewSignup { email, name }) = resolution.fresh {
+        let runtime = s.workflow_runtime.clone();
+        let pid = person_id;
+        tokio::spawn(async move {
+            if let Err(e) =
+                workflows::email::welcome::trigger_welcome(runtime.as_ref(), pid, &name, &email)
+                    .await
+            {
+                // `person_id` alone: it already identifies the signup, and the
+                // address would add nothing but client-identifying content to
+                // a signal that leaves the firm's trust boundary.
+                tracing::warn!(
+                    error = %e,
+                    person_id = %pid,
+                    "welcome workflow trigger failed",
+                );
+            }
+        });
+    }
+
+    // Resolve the landing while `role` is still in hand, before it moves into
+    // the session cookie below.
+    let landing = post_login_landing(role, return_to);
+
+    let mut session = SessionData::fresh(claims.sub, role);
+    session.email = claims.email;
+    session.person_id = Some(person_id);
+    // Which door this session came through, so sign-out reaches the provider
+    // that actually holds the SSO session rather than always the primary one.
+    session.provider = provider.map(|provider| provider.slug().to_string());
+    cookies.add(session_cookie(
+        s.sessions.encode(&session),
+        s.secure_cookies,
+    ));
+    if let Some(provider) = auth_provider {
+        let person_id = person_id.to_string();
+        telemetry::record_auth_event(telemetry::AuthEvent::SignedIn {
+            person_id: &person_id,
+            provider,
+            brand: views::brand::brand_key().as_str(),
+            first_link,
+        });
+    }
+    Redirect::to(&landing).into_response()
+}
+
+/// The password door's answer to an unverified address when no Identity
+/// Platform admin door exists to confirm it against.
+fn refuse_unconfirmable_address() -> Response {
+    tracing::info!("identity-platform: unverified address refused; no confirm flow configured");
+    (
+        StatusCode::FORBIDDEN,
+        webapp::error_pages::sign_in_not_provisioned(),
+    )
+        .into_response()
+}
+
+/// Outcome of resolving the IdP-supplied claims to a local
+/// `persons` row.
+#[derive(Debug, thiserror::Error)]
+enum ResolveError {
+    /// No row matched on the provider's subject, and the claims carried no
+    /// email from which to create a Person. The caller renders a 403.
+    #[error("no known persons row for an IdP token without email")]
+    NotPreSeeded,
+    /// A retained person row was deliberately withdrawn from sign-in
+    /// admission. The caller renders the same non-enumerating 403.
+    #[error("person row is not admitted for sign-in")]
+    NotAdmitted,
+    /// A foreign-tenant identity asserted an address that already belongs to a
+    /// Person (or is the bootstrap Owner's). It is never linked: only a
+    /// trusted tenant or the Person's own provider may claim an address.
+    #[error("address belongs to an existing person and cannot be claimed from a foreign tenant")]
+    AddressInUse,
+    #[error(transparent)]
+    Db(#[from] store::persons::PersonError),
+}
+
+/// Read `NAVIGATOR_BOOTSTRAP_OWNER_EMAIL` once at boot. `None` is a
+/// standard first-sign-in mode: unknown verified emails create Clients.
+/// Some-value is the carve-out path — that single address is JIT-created with
+/// the `Owner` role on first sign-in and healed
+/// back to `Owner` on every subsequent sign-in even if a UI edit
+/// cleared the role. An absent or blank value disables the carve-out.
+#[must_use]
+pub fn bootstrap_owner_email_from_env() -> Option<String> {
+    bootstrap_owner_email(
+        std::env::var("NAVIGATOR_BOOTSTRAP_OWNER_EMAIL")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// Read the optional explicit lawyer override for client-initiated service
+/// starts once at boot. A blank value leaves the start door to use the
+/// bootstrap owner as its DRI.
+#[must_use]
+pub fn on_call_lawyer_email_from_env() -> Option<String> {
+    std::env::var("NAVIGATOR_ON_CALL_LAWYER_EMAIL")
+        .ok()
+        .and_then(|value| bootstrap_owner_email(Some(value.as_str())))
+}
+
+fn bootstrap_owner_email(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|email| !email.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Eagerly reconcile the bootstrap-Owner invariant against the currently
+/// configured `NAVIGATOR_BOOTSTRAP_OWNER_EMAIL`, independent of anyone
+/// signing in.
+///
+/// `resolve_person_from_claims` only re-tags the matching row on *its own*
+/// next login — fine for that person, but a *previous* bootstrap identity (a
+/// stale row left over from an old env-var value) has no login of its own
+/// left to trigger on, so nothing would ever demote it. Call this once at
+/// boot — it is idempotent, so calling it again is harmless — and a changed
+/// env var takes effect immediately: whoever now matches becomes `Owner`,
+/// and any other row still holding `Owner` is demoted to `Client`, matching
+/// the rule that exactly one Person carries the bootstrap grant at a time.
+///
+/// `configured_email` is `None` (or blank) when the carve-out is disabled;
+/// then nothing runs, since there is no configured identity to enforce.
+///
+/// # Errors
+///
+/// [`store::persons::PersonError`] if a lookup or write fails.
+pub async fn reconcile_bootstrap_owner(
+    surreal: &store::surreal::SurrealDb,
+    configured_email: Option<&str>,
+) -> Result<(), store::persons::PersonError> {
+    use store::persons;
+
+    let Some(configured) = bootstrap_owner_email(configured_email) else {
+        return Ok(());
+    };
+
+    if let Some(person) = persons::find_by_email_ci(surreal, &configured).await? {
+        if person.role != Role::Owner {
+            persons::set_role(surreal, person.id, Role::Owner).await?;
+        }
+    }
+
+    for other in persons::find_by_role(surreal, Role::Owner).await? {
+        if !other.email.eq_ignore_ascii_case(&configured) {
+            persons::set_role(surreal, other.id, store::persons::Role::Client).await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Returned alongside the person id when the OAuth callback inserts
+/// a brand-new row — the seam that triggers the welcome email. `None`
+/// means the row already existed (either linked by the presenting provider's
+/// subject or promoted from a seeded email).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewSignup {
+    pub email: String,
+    pub name: String,
+}
+
+/// The resolution facts the sign-in completion path needs after a Person row
+/// has been found or created.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolutionMetadata {
+    /// A newly created Person triggers welcome work exactly once.
+    fresh: Option<NewSignup>,
+    /// This sign-in created or persisted the presenting provider identity.
+    first_link: bool,
+}
+
+impl ResolutionMetadata {
+    const fn existing() -> Self {
+        Self {
+            fresh: None,
+            first_link: false,
+        }
+    }
+
+    fn linked(fresh: Option<NewSignup>) -> Self {
+        Self {
+            first_link: true,
+            fresh,
+        }
+    }
+}
+
+fn refusal_reason(claims: &IdTokenClaims, not_admitted: bool) -> telemetry::AuthSignInReason {
+    if not_admitted {
+        telemetry::AuthSignInReason::NotAdmitted
+    } else if claims.email.is_some() {
+        telemetry::AuthSignInReason::EmailUnmatched
+    } else {
+        telemetry::AuthSignInReason::NoSubjectMatchNoEmail
+    }
+}
+
+/// Resolve the `persons` row that corresponds to the IdP claims.
+///
+/// Lookup order:
+///   1. Match on the presenting provider's subject (already linked and
+///      admitted).
+///   2. Match on `email = claims.email` and, if the row hasn't been
+///      linked to this provider yet, promote it (existing seeded person
+///      logging in for the first time — the row keeps its pre-assigned role —
+///      but only when its admission decision is on).
+///   3. **No match with an email** → JIT-create a `client` with no Project
+///      participation, or an `Owner` when the email is the configured
+///      bootstrap identity. A claim without an email remains refused because
+///      it cannot safely identify a new Person.
+///
+/// If the resolved row belongs to the bootstrap Owner email, the `Owner`
+/// role is force-set on the returned value AND persisted back to the
+/// database — so even an accidental demotion in the `/app/admin/people`
+/// UI heals on the next sign-in.
+///
+/// A newly-created client or bootstrap Owner returns `Some(NewSignup)`;
+/// promotion is intentionally NOT treated as fresh because the row was
+/// already seeded by an operator.
+#[cfg(test)]
+async fn resolve_person_from_claims(
+    surreal: &store::surreal::SurrealDb,
+    provider: Option<ProviderId>,
+    claims: &IdTokenClaims,
+    bootstrap_owner_email: Option<&str>,
+) -> Result<(Uuid, Role, ResolutionMetadata), ResolveError> {
+    resolve_person(surreal, provider, claims, bootstrap_owner_email, true).await
+}
+
+/// [`resolve_person_from_claims`], with `link` deciding whether an existing
+/// row matched by address may take this provider's subject. `false` for an
+/// address the provider has not verified.
+async fn resolve_person(
+    surreal: &store::surreal::SurrealDb,
+    provider: Option<ProviderId>,
+    claims: &IdTokenClaims,
+    bootstrap_owner_email: Option<&str>,
+    link: bool,
+) -> Result<(Uuid, Role, ResolutionMetadata), ResolveError> {
+    use store::persons;
+
+    if claims.foreign_tenant {
+        return resolve_foreign_tenant_person(surreal, provider, claims, bootstrap_owner_email)
+            .await;
+    }
+
+    let bootstrap_owner = bootstrap_owner_email.map(str::to_lowercase);
+    let email_lower = claims.email.as_deref().map(str::to_lowercase);
+    let is_bootstrap_owner = matches!(
+        (&bootstrap_owner, &email_lower),
+        (Some(a), Some(e)) if a == e,
+    );
+
+    if let Some(existing) = find_by_provider_subject(surreal, provider, &claims.sub).await? {
+        if !persons::is_admitted(surreal, existing.id).await? {
+            return Err(ResolveError::NotAdmitted);
+        }
+        let mut role = existing.role;
+        if is_bootstrap_owner && role != Role::Owner {
+            role = Role::Owner;
+            persons::set_role(surreal, existing.id, Role::Owner).await?;
+        }
+        return Ok((existing.id, role, ResolutionMetadata::existing()));
+    }
+
+    let Some(email) = claims.email.clone() else {
+        // No email on the token. Before refusing, consult the pre-split
+        // generic slot — this is the only path on which a row written before
+        // per-provider linkage can still be recognised. See
+        // `relink_legacy_subject` for why the branch is shaped this way.
+        if let Some(existing) = relink_legacy_subject(surreal, provider, &claims.sub).await? {
+            if !persons::is_admitted(surreal, existing.id).await? {
+                return Err(ResolveError::NotAdmitted);
+            }
+            // The bootstrap-Owner carve-out is keyed on the email claim, and
+            // this branch runs only when there is none, so the row's stored
+            // role stands as-is.
+            return Ok((existing.id, existing.role, ResolutionMetadata::linked(None)));
+        }
+        // We refuse to mint a session for an unknown identifier — operators
+        // must seed before sign-in.
+        return Err(ResolveError::NotPreSeeded);
+    };
+
+    // Case-insensitive: the IdP may present a casing that differs from the
+    // pre-seeded row, and a byte-exact miss here would 403 a legitimately
+    // seeded lawyer (and then collide with `persons_email_lower_key`
+    // on the insert below).
+    if let Some(existing) = persons::find_by_email_ci(surreal, &email).await? {
+        if !persons::is_admitted(surreal, existing.id).await? {
+            return Err(ResolveError::NotAdmitted);
+        }
+        let mut role = existing.role;
+        let first_link = link && subject_for_provider(&existing, provider).is_none();
+        if first_link {
+            link_provider_subject(surreal, provider, existing.id, &claims.sub).await?;
+        }
+        if is_bootstrap_owner && role != Role::Owner {
+            role = Role::Owner;
+            persons::set_role(surreal, existing.id, Role::Owner).await?;
+        }
+        return Ok((
+            existing.id,
+            role,
+            if first_link {
+                ResolutionMetadata::linked(None)
+            } else {
+                ResolutionMetadata::existing()
+            },
+        ));
+    }
+
+    if !is_bootstrap_owner {
+        // A supported provider's verified unknown email creates a client with
+        // no Project participation. Identity admission is distinct from
+        // opening a Project, which still requires its own lawyer DRI gate.
+        let name = claims.name.clone().unwrap_or_else(|| email.clone());
+        let new = new_person_with_provider_subject(
+            provider,
+            claims.sub.clone(),
+            name.clone(),
+            email.clone(),
+            Role::Client,
+        );
+        return match store::persons::create(surreal, &new).await {
+            Ok(created) => Ok((
+                created.id,
+                Role::Client,
+                ResolutionMetadata::linked(Some(NewSignup { email, name })),
+            )),
+            // Two concurrent first logins for the same identity can both
+            // pass the subject and email lookups above before either insert
+            // runs; one wins and the loser trips the unique provider-subject
+            // or `email_lower` index. Rather than surface that loser as a
+            // 500, re-resolve the row the winner created and treat this
+            // login as an existing (non-fresh) sign-in.
+            Err(insert_err) => {
+                match resolve_existing_after_race(surreal, provider, &claims.sub, &email).await? {
+                    Some(existing) if persons::is_admitted(surreal, existing.id).await? => {
+                        Ok((existing.id, existing.role, ResolutionMetadata::existing()))
+                    }
+                    Some(_) => Err(ResolveError::NotAdmitted),
+                    None => Err(ResolveError::Db(insert_err)),
+                }
+            }
+        };
+    }
+
+    // Bootstrap Owner JIT-create path. Role is `Owner`; the welcome
+    // workflow fires once so the operator gets a paper trail.
+    let name = claims.name.clone().unwrap_or_else(|| email.clone());
+    let new = store::persons::create(
+        surreal,
+        &new_person_with_provider_subject(
+            provider,
+            claims.sub.clone(),
+            name.clone(),
+            email.clone(),
+            Role::Owner,
+        ),
+    )
+    .await?;
+    Ok((
+        new.id,
+        Role::Owner,
+        ResolutionMetadata::linked(Some(NewSignup { email, name })),
+    ))
+}
+
+/// Resolve a sign-in from a tenant admitted only by
+/// `OAUTH_MICROSOFT_ALLOW_ANY_TENANT`.
+///
+/// Open sign-up already creates a Client for any verified unknown identity
+/// (ENG-764); this is that path with the one thing a stranger's tenant cannot
+/// be trusted with removed: **choosing which existing Person it is**.
+///
+///   1. The tenant-scoped subject (`<tid>:<sub>`, see
+///      [`scope_foreign_tenant_identity`]) already linked → sign in as that row.
+///      Immutable identity, never the address.
+///   2. Otherwise the UPN address must not already belong to any Person, nor be
+///      the bootstrap Owner's → [`ResolveError::AddressInUse`]. Nothing is
+///      linked, so a tenant admin cannot take over a seeded person, a Google- or
+///      Apple-linked client, another tenant's identity, or the Owner.
+///   3. Otherwise create a `Client` with no Project participation.
+///
+/// A token with no usable UPN is refused as [`ResolveError::NotPreSeeded`].
+async fn resolve_foreign_tenant_person(
+    surreal: &store::surreal::SurrealDb,
+    provider: Option<ProviderId>,
+    claims: &IdTokenClaims,
+    bootstrap_owner_email: Option<&str>,
+) -> Result<(Uuid, Role, ResolutionMetadata), ResolveError> {
+    use store::persons;
+
+    if let Some(existing) = find_by_provider_subject(surreal, provider, &claims.sub).await? {
+        if !persons::is_admitted(surreal, existing.id).await? {
+            return Err(ResolveError::NotAdmitted);
+        }
+        return Ok((existing.id, existing.role, ResolutionMetadata::existing()));
+    }
+    let Some(email) = claims.email.clone() else {
+        return Err(ResolveError::NotPreSeeded);
+    };
+    let is_bootstrap_owner =
+        bootstrap_owner_email.is_some_and(|owner| owner.trim().eq_ignore_ascii_case(&email));
+    if is_bootstrap_owner || persons::find_by_email_ci(surreal, &email).await?.is_some() {
+        return Err(ResolveError::AddressInUse);
+    }
+    let name = claims.name.clone().unwrap_or_else(|| email.clone());
+    let new = new_person_with_provider_subject(
+        provider,
+        claims.sub.clone(),
+        name.clone(),
+        email.clone(),
+        Role::Client,
+    );
+    match persons::create(surreal, &new).await {
+        Ok(created) => Ok((
+            created.id,
+            Role::Client,
+            ResolutionMetadata::linked(Some(NewSignup { email, name })),
+        )),
+        // Two concurrent first sign-ins: one insert wins on the unique subject
+        // or address index. Converge on the winner only if it is this same
+        // tenant-scoped identity; an address collision is a refusal.
+        Err(insert_err) => match find_by_provider_subject(surreal, provider, &claims.sub).await? {
+            Some(existing) if persons::is_admitted(surreal, existing.id).await? => {
+                Ok((existing.id, existing.role, ResolutionMetadata::existing()))
+            }
+            Some(_) => Err(ResolveError::NotAdmitted),
+            None if persons::find_by_email_ci(surreal, &email).await?.is_some() => {
+                Err(ResolveError::AddressInUse)
+            }
+            None => Err(ResolveError::Db(insert_err)),
+        },
+    }
+}
+
+/// Re-resolve an existing `persons` row by the presenting provider's subject,
+/// then by case-insensitive email — the same order
+/// [`resolve_person_from_claims`] uses. Called after a JIT insert loses a
+/// first-login race so concurrent sign-ins converge on the row the winner
+/// committed instead of mapping the unique-index violation to a 500.
+async fn resolve_existing_after_race(
+    surreal: &store::surreal::SurrealDb,
+    provider: Option<ProviderId>,
+    sub: &str,
+    email: &str,
+) -> Result<Option<store::persons::Person>, store::persons::PersonError> {
+    if let Some(existing) = find_by_provider_subject(surreal, provider, sub).await? {
+        return Ok(Some(existing));
+    }
+    store::persons::find_by_email_ci(surreal, email).await
+}
+
+/// Converge one Person row written before sign-in identifiers were split per
+/// provider, and return it when this sign-in belongs to it.
+///
+/// Rows created before the split hold whichever provider authenticated first
+/// in `oidc_subject`, and nothing records which provider issued it. A row whose
+/// stored identifier came from Apple therefore has no `apple_subject` to match;
+/// Apple omits `email` on a repeat authorization, so the email lookup has
+/// nothing to work with either, and that person is refused on every subsequent
+/// sign-in. Nothing was deleted — the identifier is still in the row — but no
+/// lookup reads it for the provider that issued it.
+///
+/// Three conditions keep this from becoming a general widening of subject
+/// matching, which is the seam this module otherwise closes:
+///
+/// * **The presenting provider is not [`ProviderId::Primary`].** The primary
+///   slot is the one column whose meaning did not change, so reading it for
+///   its own provider is the ordinary lookup above, not a fallback.
+/// * **The claim carries no email.** When an email is present the email lookup
+///   is the correct and safer path, and a miss there has to stay a refusal —
+///   otherwise an address the deployment does not recognise could reach a row
+///   through this branch instead.
+/// * **The matched row holds no subject for the presenting provider yet.** A
+///   row already linked to this provider under a different identifier is a
+///   different identity, never a convergence candidate.
+///
+/// What remains is that an identifier issued by one provider could equal one
+/// issued by another. Neither value is caller-chosen — both are opaque,
+/// high-entropy strings minted by the IdP — and the match must be exact, so
+/// that is a collision rather than an attack surface. It is bounded further by
+/// the move: [`store::persons::adopt_legacy_oidc_subject_as_apple`] writes the
+/// provider's own column and clears `oidc_subject` in one statement, so each
+/// row passes through here at most once and the population this branch can see
+/// only shrinks. ENG-783 retires the branch once the emitted event has been
+/// quiet for four weeks on every deployment.
+///
+/// A row whose identifier really was primary-issued and is consumed here still
+/// signs in: that provider supplies an email on every authorization, so the
+/// email lookup resolves the row and re-links the primary slot.
+async fn relink_legacy_subject(
+    surreal: &store::surreal::SurrealDb,
+    provider: Option<ProviderId>,
+    subject: &str,
+) -> Result<Option<store::persons::Person>, store::persons::PersonError> {
+    let provider = provider.unwrap_or_default();
+    if provider == ProviderId::Primary {
+        return Ok(None);
+    }
+    let Some(existing) = store::persons::find_by_oidc_subject(surreal, subject).await? else {
+        return Ok(None);
+    };
+    if subject_for_provider(&existing, Some(provider)).is_some() {
+        return Ok(None);
+    }
+
+    let adopted = match provider {
+        ProviderId::Microsoft => {
+            store::persons::adopt_legacy_oidc_subject_as_microsoft(surreal, existing.id, subject)
+                .await?
+        }
+        ProviderId::Apple => {
+            store::persons::adopt_legacy_oidc_subject_as_apple(surreal, existing.id, subject)
+                .await?
+        }
+        // Refused above; repeated here so a fourth provider cannot reach the
+        // convergence write by inheriting a default.
+        ProviderId::Primary => return Ok(None),
+    };
+
+    if adopted.is_some() {
+        // Emitted here rather than threaded back through the resolver's return
+        // type: this is a migration signal about the row, not the sign-in
+        // outcome, and the outcome's own event is the caller's to emit.
+        // ENG-784 owns widening that return value.
+        telemetry::record_auth_event(telemetry::AuthEvent::LegacySubjectRelinked {
+            provider: provider.telemetry_provider(),
+        });
+    }
+    Ok(adopted)
+}
+
+fn subject_for_provider(
+    person: &store::persons::Person,
+    provider: Option<ProviderId>,
+) -> Option<&str> {
+    match provider.unwrap_or_default() {
+        ProviderId::Primary => person.oidc_subject.as_deref(),
+        ProviderId::Microsoft => person.microsoft_subject.as_deref(),
+        ProviderId::Apple => person.apple_subject.as_deref(),
+    }
+}
+
+async fn find_by_provider_subject(
+    surreal: &store::surreal::SurrealDb,
+    provider: Option<ProviderId>,
+    subject: &str,
+) -> Result<Option<store::persons::Person>, store::persons::PersonError> {
+    match provider.unwrap_or_default() {
+        ProviderId::Primary => store::persons::find_by_oidc_subject(surreal, subject).await,
+        ProviderId::Microsoft => store::persons::find_by_microsoft_subject(surreal, subject).await,
+        ProviderId::Apple => store::persons::find_by_apple_subject(surreal, subject).await,
+    }
+}
+
+async fn link_provider_subject(
+    surreal: &store::surreal::SurrealDb,
+    provider: Option<ProviderId>,
+    person_id: Uuid,
+    subject: &str,
+) -> Result<Option<store::persons::Person>, store::persons::PersonError> {
+    match provider.unwrap_or_default() {
+        ProviderId::Primary => store::persons::link_oidc_subject(surreal, person_id, subject).await,
+        ProviderId::Microsoft => {
+            store::persons::link_microsoft_subject(surreal, person_id, subject).await
+        }
+        ProviderId::Apple => store::persons::link_apple_subject(surreal, person_id, subject).await,
+    }
+}
+
+fn new_person_with_provider_subject(
+    provider: Option<ProviderId>,
+    subject: String,
+    name: String,
+    email: String,
+    role: Role,
+) -> store::persons::NewPerson {
+    let mut new = store::persons::NewPerson::with_role(name, email, role);
+    match provider.unwrap_or_default() {
+        ProviderId::Primary => new.oidc_subject = Some(subject),
+        ProviderId::Microsoft => new.microsoft_subject = Some(subject),
+        ProviderId::Apple => new.apple_subject = Some(subject),
+    }
+    new
+}
+
+async fn logout(State(s): State<AuthState>, cookies: Cookies) -> Response {
+    // Read the provider off the session *before* clearing the cookie: it names
+    // which IdP is holding the SSO session we are about to ask to end. Sending
+    // a Microsoft-authenticated person to the primary provider's end-session
+    // endpoint would leave their Entra session live and bounce them through a
+    // logout screen belonging to an account they never used.
+    let provider_slug = cookies
+        .get(SESSION_COOKIE_NAME)
+        .and_then(|cookie| s.sessions.decode(cookie.value()))
+        .and_then(|session| session.provider);
+    let end_session_cfg = s.provider_config_for_slug(provider_slug.as_deref());
+    cookies.add(expired_cookie(SESSION_COOKIE_NAME));
+    cookies.add(expired_cookie(PRE_AUTH_COOKIE_NAME));
+    // RP-initiated OIDC logout: clearing our app session leaves the
+    // provider's SSO session live, so the next `/auth/login` would silently
+    // re-authenticate. When the provider published an `end_session_endpoint`,
+    // bounce the browser through it (with a `post_logout_redirect_uri` back to
+    // the app) so the provider clears its session too. When it did not, fall
+    // back to redirecting home — the app session is already cleared.
+    match end_session_url(end_session_cfg) {
+        Some(url) => Redirect::to(&url).into_response(),
+        None => Redirect::to("/").into_response(),
+    }
+}
+
+/// Payload-only decode for the **Identity-Platform password path only**.
+///
+/// That token is not delivered through a browser redirect: we POST the
+/// typed password straight to Google's `signInWithPassword` over TLS and
+/// Google hands the id_token back on the same connection. There is no
+/// `code`, no redirect, and no possibility of IdP-mixup or token
+/// injection, so the back-channel TLS is the trust boundary (the same
+/// trust the OIDC *token endpoint* gets). The redirect [`callback`] does
+/// **not** use this — it runs full JWKS signature + `iss`/`aud`/`exp` +
+/// `nonce` verification via [`IdTokenVerifier`].
+fn decode_unverified_payload(jwt: &str) -> Option<IdTokenClaims> {
+    let mut parts = jwt.split('.');
+    let _header = parts.next()?;
+    let payload = parts.next()?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::STANDARD.decode(payload))
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Build the signed pre-auth cookie.
+///
+/// `cross_site` is set for a provider that answers the authorization request
+/// with a form POST from its own origin ([`ProviderId::response_mode`]).
+/// Browsers withhold a `SameSite=Lax` cookie on a cross-site POST, so such a
+/// provider would arrive at the callback with no pre-auth cookie at all and
+/// fail the state check on every sign-in. `SameSite=None` is only honoured on
+/// a `Secure` cookie, so an insecure deployment keeps `Lax` rather than
+/// emitting a cookie the browser drops outright — the affected providers are
+/// deployment-only and always HTTPS.
+fn pre_auth_cookie(value: String, secure: bool, cross_site: bool) -> Cookie<'static> {
+    let mut c = Cookie::new(PRE_AUTH_COOKIE_NAME, value);
+    c.set_http_only(true);
+    c.set_secure(secure);
+    c.set_same_site(if cross_site && secure {
+        SameSite::None
+    } else {
+        SameSite::Lax
+    });
+    c.set_path("/");
+    c.set_max_age(tower_cookies::cookie::time::Duration::seconds(
+        PRE_AUTH_TTL_SECS,
+    ));
+    c
+}
+
+fn login_csrf_cookie(value: String, secure: bool) -> Cookie<'static> {
+    let mut c = Cookie::new(LOGIN_CSRF_COOKIE_NAME, value);
+    c.set_http_only(true);
+    c.set_secure(secure);
+    c.set_same_site(SameSite::Lax);
+    c.set_path("/");
+    c.set_max_age(tower_cookies::cookie::time::Duration::seconds(
+        PRE_AUTH_TTL_SECS,
+    ));
+    c
+}
+
+/// Build the signed session cookie. `Max-Age` matches the payload's
+/// own TTL so the cookie is *persistent* — it survives a browser
+/// restart instead of dying on close — and the two expiries stay in
+/// lockstep. `crate::session_renew` slides both forward on activity.
+pub(crate) fn session_cookie(value: String, secure: bool) -> Cookie<'static> {
+    let mut c = Cookie::new(SESSION_COOKIE_NAME, value);
+    c.set_http_only(true);
+    c.set_secure(secure);
+    c.set_same_site(SameSite::Lax);
+    c.set_path("/");
+    c.set_max_age(tower_cookies::cookie::time::Duration::seconds(
+        DEFAULT_SESSION_TTL_SECS,
+    ));
+    c
+}
+
+pub(crate) fn expired_cookie(name: &'static str) -> Cookie<'static> {
+    let mut c = Cookie::new(name, "");
+    c.set_path("/");
+    c.set_max_age(tower_cookies::cookie::time::Duration::seconds(0));
+    c
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        authorize_url, bootstrap_owner_email, bootstrap_owner_email_from_env, constant_time_eq,
+        decode_unverified_payload, default_return_to, fetch_discovery, login_notice,
+        oauth_error_fields, pkce_challenge, pkce_verifier, portal_project_code, post_login_landing,
+        reconcile_bootstrap_owner, resolve_existing_after_race, resolve_person_from_claims,
+        session_cookie, urlencode, AppleClientSecret, AppleClientSecretClaims, IdTokenClaims,
+        IdTokenError, IdTokenVerifier, IdentityPasswordConfig, IssuerPolicy, JwksDocument,
+        NoticeText, OAuthConfig, PreAuth, ProviderId, ResolveError, APPLE_CLIENT_SECRET_TTL_SECS,
+    };
+    use super::{
+        pre_auth_cookie, scope_foreign_tenant_identity, token_endpoint_is_confidential, SameSite,
+    };
+    use crate::auth::JwksKey;
+    use crate::session::{now_unix_secs, random_token_32, DEFAULT_SESSION_TTL_SECS};
+    use crate::test_support::{oidc_verifier, sign_id_token, sign_id_token_with_kid};
+    use axum::extract::FromRequest;
+    use jsonwebtoken::Algorithm;
+    use uuid::Uuid;
+
+    /// Apple posts a browser-supplied JSON `user` field on a first
+    /// authorization, carrying a name and an email address. `CallbackQuery`
+    /// does not set `deny_unknown_fields`, so the form parses and that field
+    /// is dropped — the assertion is that `code` and `state` survive while
+    /// nothing from `user` reaches the callback, which is what keeps the
+    /// signed id_token the only source of identity.
+    #[tokio::test]
+    async fn apple_first_authorization_form_fields_are_ignored() {
+        let user =
+            r#"{"name":{"firstName":"Owner","lastName":"Example"},"email":"owner@example.test"}"#;
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("code", "authorization-code")
+            .append_pair("state", "signed-state")
+            .append_pair("id_token", "provider-token")
+            .append_pair("user", user)
+            .finish();
+
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/auth/callback")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(axum::body::Body::from(body))
+            .expect("Apple form_post request builds");
+        let axum::extract::Form(callback) =
+            axum::extract::Form::<super::CallbackQuery>::from_request(request, &())
+                .await
+                .expect("Apple's first form_post shape parses");
+
+        // Destructured exhaustively on purpose: this is the assertion that
+        // nothing the browser supplied in `user` is reachable from the parsed
+        // callback, because these three are the only fields there are. A
+        // field added later to hold `user` stops this test compiling.
+        let super::CallbackQuery { code, state, error } = callback;
+        assert_eq!(code.as_deref(), Some("authorization-code"));
+        assert_eq!(state.as_deref(), Some("signed-state"));
+        assert_eq!(error, None);
+    }
+
+    /// The failure that took `www.neonlaw.com` down on 2026-08-10: a new OAuth
+    /// client ID paired with the previous client's secret, which Google answers
+    /// with `invalid_client`. The status is a bare 401 — only the body names the
+    /// cause, so this is the field that turns the next occurrence into one look
+    /// at the log instead of an audit of the deployment tree.
+    #[test]
+    fn a_stale_client_secret_is_named_in_the_body() {
+        let (error, description) =
+            oauth_error_fields(r#"{"error":"invalid_client","error_description":"Unauthorized"}"#);
+        assert_eq!(error, Some("invalid_client"));
+        assert_eq!(description, Some("Unauthorized"));
+    }
+
+    /// The three causes a single 400/401 conflates must each come back
+    /// distinctly, or the log is no better than the status code.
+    #[test]
+    fn the_conflated_causes_stay_distinguishable() {
+        for code in ["invalid_client", "invalid_grant", "redirect_uri_mismatch"] {
+            let body = format!(r#"{{"error":"{code}"}}"#);
+            assert_eq!(oauth_error_fields(&body).0, Some(code));
+        }
+    }
+
+    #[test]
+    fn whitespace_and_field_order_do_not_matter() {
+        let (error, description) = oauth_error_fields(
+            "{ \"error_description\" : \"Bad request\" , \"error\" : \"invalid_grant\" }",
+        );
+        assert_eq!(error, Some("invalid_grant"));
+        assert_eq!(description, Some("Bad request"));
+    }
+
+    /// An IdP may answer a token request with an HTML error page or an empty
+    /// body. That must read as "could not parse", never panic and never be
+    /// mistaken for a successful absence of error.
+    #[test]
+    fn a_non_json_body_yields_nothing() {
+        for body in ["", "<html><body>502 Bad Gateway</body></html>", "{", "null"] {
+            assert_eq!(oauth_error_fields(body), (None, None), "body: {body:?}");
+        }
+    }
+
+    /// Only the two RFC fields are extracted. Anything else in the response —
+    /// including a field an IdP should never send — stays out of the log.
+    #[test]
+    fn no_other_field_is_extracted() {
+        let (error, description) = oauth_error_fields(
+            r#"{"error":"invalid_client","client_secret":"do-not-log-me","access_token":"ya29.x"}"#,
+        );
+        assert_eq!(error, Some("invalid_client"));
+        assert_eq!(description, None);
+        for logged in [error.unwrap_or_default(), description.unwrap_or_default()] {
+            assert!(!logged.contains("do-not-log-me"), "secret leaked: {logged}");
+            assert!(!logged.contains("ya29."), "token leaked: {logged}");
+        }
+    }
+    use base64::Engine;
+    use store::persons::Role;
+    use store::test_support::mem_surreal;
+
+    /// A throwaway P-256 key in PKCS#8 PEM, generated per call. Apple's real
+    /// `.p8` is a deployment secret and never reaches a test or a fixture.
+    fn test_apple_private_key_pem() -> String {
+        use p256::ecdsa::SigningKey;
+        use p256::elliptic_curve::Generate;
+        use p256::pkcs8::{EncodePrivateKey, LineEnding};
+
+        SigningKey::generate()
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("test key serialises")
+            .to_string()
+    }
+
+    fn cfg() -> OAuthConfig {
+        OAuthConfig::new(
+            "client123",
+            "secret456",
+            "https://app.example.com/auth/callback",
+            "https://idp.example.com/oauth/authorize",
+            "https://idp.example.com/oauth/token",
+        )
+    }
+
+    /// Only a destination inside a Project portal earns the interstitial.
+    /// The matter workbench, the team home, and a bare code with no
+    /// `portal` segment keep the immediate redirect.
+    #[test]
+    fn portal_project_code_reads_only_portal_destinations() {
+        assert_eq!(
+            portal_project_code("/app/projects/sample-estate/portal/"),
+            Some("sample-estate")
+        );
+        assert_eq!(
+            portal_project_code("/app/projects/sample-estate/portal"),
+            Some("sample-estate")
+        );
+        assert_eq!(
+            portal_project_code("/app/projects/sample-estate/portal/engagement/"),
+            Some("sample-estate")
+        );
+        for other in [
+            "",
+            "/app/projects",
+            "/app/projects/",
+            "/app/projects/sample-estate",
+            "/app/projects/sample-estate/",
+            "/app/projects/sample-estate/people/new",
+            "/app/projects//portal/",
+            "/app/team",
+            "/app/admin/entities",
+        ] {
+            assert_eq!(portal_project_code(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn login_notice_maps_each_flag_to_a_toned_catalog_toast() {
+        // The bounce case is a red (Danger) toast; the post-action outcomes
+        // are green (Success); anything else (and a voluntary visit) is no
+        // toast. Each carries catalog-sourced, non-empty copy, and the
+        // borrow-lending conversion renders both tones.
+        let danger = login_notice(Some("login_required")).expect("login_required → a toast");
+        assert!(matches!(danger, NoticeText::Danger(ref t) if !t.is_empty()));
+        assert!(matches!(
+            danger.as_login_notice(),
+            webapp::auth_pages::LoginNotice::Danger(_)
+        ));
+
+        for flag in ["password_reset", "email_confirmed"] {
+            let success = login_notice(Some(flag)).expect("post-action → a toast");
+            assert!(matches!(success, NoticeText::Success(ref t) if !t.is_empty()));
+            assert!(matches!(
+                success.as_login_notice(),
+                webapp::auth_pages::LoginNotice::Success(_)
+            ));
+        }
+
+        assert!(login_notice(Some("not-a-flag")).is_none());
+        assert!(login_notice(None).is_none());
+    }
+
+    #[test]
+    fn bootstrap_owner_requires_a_non_blank_configured_email() {
+        assert_eq!(bootstrap_owner_email(None), None);
+        assert_eq!(bootstrap_owner_email(Some("")), None);
+        assert_eq!(bootstrap_owner_email(Some(" \t\n ")), None);
+        assert_eq!(
+            bootstrap_owner_email(Some(" owner@example.com ")),
+            Some("owner@example.com".into()),
+        );
+    }
+
+    fn unknown_claims(email: &str) -> IdTokenClaims {
+        IdTokenClaims {
+            sub: format!("sub-{email}"),
+            iss: None,
+            tid: None,
+            preferred_username: None,
+            email: Some(email.to_string()),
+            email_verified: Some(true),
+            name: Some("New Trainee".into()),
+            nonce: None,
+            foreign_tenant: false,
+        }
+    }
+
+    /// Claims shaped the way multi-tenant Entra emits them: the address in
+    /// `preferred_username`, `tid` naming the signing directory, and `iss`
+    /// derived from that `tid`.
+    fn entra_claims(
+        tid: &str,
+        preferred_username: Option<&str>,
+        email: Option<&str>,
+    ) -> IdTokenClaims {
+        IdTokenClaims {
+            sub: "entra-pairwise-subject".into(),
+            iss: Some(format!("https://login.microsoftonline.com/{tid}/v2.0")),
+            tid: Some(tid.to_string()),
+            preferred_username: preferred_username.map(str::to_string),
+            email: email.map(str::to_string),
+            email_verified: None,
+            name: Some("Entra User".into()),
+            nonce: None,
+            foreign_tenant: false,
+        }
+    }
+
+    const TENANT_A: &str = "11111111-1111-4111-8111-111111111111";
+    const TENANT_B: &str = "22222222-2222-4222-8222-222222222222";
+
+    /// Claims as `complete_sign_in` hands them to the resolver for a sign-in
+    /// from a tenant outside the allowlist: identity scoped to the tenant,
+    /// address taken from the UPN only.
+    fn foreign_claims(tid: &str, sub: &str, upn: &str) -> IdTokenClaims {
+        let mut claims = IdTokenClaims {
+            sub: sub.into(),
+            ..entra_claims(tid, Some(upn), Some("unverified-claim@elsewhere.test"))
+        };
+        claims.foreign_tenant = true;
+        scope_foreign_tenant_identity(&mut claims);
+        claims
+    }
+
+    #[test]
+    fn an_open_verifier_admits_any_guid_tenant_but_still_derives_the_issuer_from_it() {
+        let open = crate::test_support::entra_open_verifier("aud", &["ALLOWED-TENANT"]);
+        let issuer_for =
+            |tid: &str| crate::test_support::TEST_ENTRA_ISSUER_TEMPLATE.replace("{tenantid}", tid);
+        // Unlisted but well-formed tenant: admitted, and marked foreign.
+        let foreign = IdTokenClaims {
+            iss: Some(issuer_for(TENANT_A)),
+            ..entra_claims(TENANT_A, Some("sam@client.test"), None)
+        };
+        assert!(matches!(
+            open.check_entra_tenant_for_test(&foreign),
+            Ok(true)
+        ));
+        // Allowlisted tenant: admitted and NOT foreign, so it keeps linking.
+        let trusted = IdTokenClaims {
+            iss: Some(issuer_for("allowed-tenant")),
+            ..entra_claims("Allowed-Tenant", Some("sam@client.test"), None)
+        };
+        assert!(matches!(
+            open.check_entra_tenant_for_test(&trusted),
+            Ok(false)
+        ));
+        // A `tid` that is not a GUID is never interpolated into the issuer.
+        for bad in [
+            "other",
+            "../evil",
+            "11111111-1111-4111-8111-11111111111/",
+            "",
+        ] {
+            let token = IdTokenClaims {
+                iss: Some(issuer_for(bad)),
+                ..entra_claims(bad, Some("sam@client.test"), None)
+            };
+            assert!(
+                open.check_entra_tenant_for_test(&token).is_err(),
+                "tid {bad:?} must be refused"
+            );
+        }
+        // A foreign tenant still cannot claim another tenant's issuer.
+        let crossed = IdTokenClaims {
+            iss: Some(issuer_for(TENANT_B)),
+            ..entra_claims(TENANT_A, Some("sam@client.test"), None)
+        };
+        assert!(matches!(
+            open.check_entra_tenant_for_test(&crossed),
+            Err(IdTokenError::Issuer)
+        ));
+    }
+
+    #[test]
+    fn a_plus_tagged_address_is_kept_as_presented() {
+        let claims = foreign_claims(TENANT_A, "s1", "sam+tag@client.test");
+        assert_eq!(claims.email.as_deref(), Some("sam+tag@client.test"));
+    }
+
+    #[test]
+    fn the_consumer_tenant_is_refused_whatever_the_configuration() {
+        let consumer = super::MICROSOFT_CONSUMER_TENANT;
+        let token = IdTokenClaims {
+            iss: Some(
+                crate::test_support::TEST_ENTRA_ISSUER_TEMPLATE.replace("{tenantid}", consumer),
+            ),
+            ..entra_claims(consumer, Some("alias@outlook.test"), None)
+        };
+        // Open mode, and even when an operator allowlists it by mistake.
+        for verifier in [
+            crate::test_support::entra_open_verifier("aud", &[]),
+            crate::test_support::entra_open_verifier("aud", &[consumer]),
+            crate::test_support::entra_verifier("aud", &[consumer]),
+        ] {
+            assert!(matches!(
+                verifier.check_entra_tenant_for_test(&token),
+                Err(IdTokenError::TenantNotAllowed)
+            ));
+        }
+    }
+
+    /// The seam the resolver tests cannot see: `verify` must hand the resolver
+    /// a claims value whose `foreign_tenant` reflects the *verifier's* decision.
+    #[tokio::test]
+    async fn verify_marks_an_unlisted_tenant_foreign_and_an_allowlisted_one_trusted() {
+        let open = crate::test_support::entra_open_verifier("aud", &[TENANT_A]);
+        let sign = |tid: &str| {
+            crate::test_support::sign_entra_id_token(
+                "aud",
+                "n",
+                "sub",
+                tid,
+                Some("sam@client.test"),
+                None,
+                None,
+            )
+        };
+        let trusted = open
+            .verify(&sign(TENANT_A), "n")
+            .await
+            .expect("allowlisted");
+        assert!(!trusted.foreign_tenant);
+        let foreign = open.verify(&sign(TENANT_B), "n").await.expect("open mode");
+        assert!(foreign.foreign_tenant);
+        // The default verifier still refuses the same token outright.
+        let closed = crate::test_support::entra_verifier("aud", &[TENANT_A]);
+        assert!(matches!(
+            closed.verify(&sign(TENANT_B), "n").await,
+            Err(IdTokenError::TenantNotAllowed)
+        ));
+    }
+
+    #[test]
+    fn the_default_verifier_is_unchanged_and_refuses_a_well_formed_unlisted_tenant() {
+        let closed = crate::test_support::entra_verifier("aud", &["ALLOWED-TENANT"]);
+        let stranger = IdTokenClaims {
+            iss: Some(
+                crate::test_support::TEST_ENTRA_ISSUER_TEMPLATE.replace("{tenantid}", TENANT_A),
+            ),
+            ..entra_claims(TENANT_A, Some("sam@client.test"), None)
+        };
+        assert!(matches!(
+            closed.check_entra_tenant_for_test(&stranger),
+            Err(IdTokenError::TenantNotAllowed)
+        ));
+    }
+
+    #[test]
+    fn a_foreign_tenant_identity_is_scoped_and_takes_the_address_from_the_upn_only() {
+        let claims = foreign_claims(TENANT_A, "pairwise", "Sam@Client.test");
+        assert_eq!(claims.sub, format!("{TENANT_A}:pairwise"));
+        assert_eq!(claims.email.as_deref(), Some("Sam@Client.test"));
+        // The unverified `email` claim is never a fallback.
+        let mut no_upn = entra_claims(TENANT_A, None, Some("only-email@client.test"));
+        no_upn.foreign_tenant = true;
+        scope_foreign_tenant_identity(&mut no_upn);
+        assert_eq!(no_upn.email, None);
+        // Guest-style and non-address UPNs yield no address.
+        for upn in [
+            "guest_other.test#EXT#@tenant.onmicrosoft.com",
+            "not-an-address",
+            "a@b@c",
+            " ",
+            "sam@client.test.",
+            "sam@.client.test",
+            "sam@client..test",
+            "s\u{e4}m@client.test",
+            "sam@cl\u{ef}ent.test",
+            "sam@\u{43b}\u{43e}\u{43a}.test",
+        ] {
+            let mut c = entra_claims(TENANT_A, Some(upn), None);
+            c.foreign_tenant = true;
+            scope_foreign_tenant_identity(&mut c);
+            assert_eq!(c.email, None, "{upn:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_foreign_tenant_first_sign_in_creates_a_client_and_the_next_one_finds_it() {
+        let surreal = mem_surreal().await;
+        let claims = foreign_claims(TENANT_A, "s1", "sam@client.test");
+        let (id, role, meta) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
+                .await
+                .expect("an unknown foreign-tenant identity creates a client");
+        assert_eq!(role, Role::Client);
+        assert!(meta.fresh.is_some());
+        let stored = store::persons::find_by_microsoft_subject(&surreal, &claims.sub)
+            .await
+            .expect("lookup")
+            .expect("row carries the tenant-scoped subject");
+        assert_eq!(stored.id, id);
+
+        let (again, _, meta) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
+                .await
+                .expect("returning sign-in");
+        assert_eq!(again, id);
+        assert!(meta.fresh.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_foreign_tenant_address_never_links_to_an_existing_person() {
+        let surreal = mem_surreal().await;
+        let victim = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::with_role("Seeded Lawyer", "lawyer@firm.test", Role::Owner),
+        )
+        .await
+        .expect("seed an existing privileged person");
+        let claims = foreign_claims(TENANT_A, "attacker", "Lawyer@Firm.test");
+        let refused =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
+                .await
+                .expect_err("an asserted address must not take over a person");
+        assert!(matches!(refused, ResolveError::AddressInUse));
+        let after = store::persons::find_by_email_ci(&surreal, "lawyer@firm.test")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.id, victim.id);
+        assert_eq!(after.microsoft_subject, None, "nothing was linked");
+    }
+
+    #[tokio::test]
+    async fn a_second_tenant_with_the_same_address_cannot_take_over_a_linked_identity() {
+        let surreal = mem_surreal().await;
+        let first = foreign_claims(TENANT_A, "s1", "sam@client.test");
+        let (id, _, _) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &first, None)
+                .await
+                .expect("first tenant creates the client");
+        // Same address and even the same pairwise subject string, other tenant.
+        let second = foreign_claims(TENANT_B, "s1", "sam@client.test");
+        let refused =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &second, None)
+                .await
+                .expect_err("a different tenant is a different identity");
+        assert!(matches!(refused, ResolveError::AddressInUse));
+        let row = store::persons::find_by_microsoft_subject(&surreal, &first.sub)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.id, id, "the first tenant's identity is untouched");
+    }
+
+    #[tokio::test]
+    async fn a_foreign_tenant_cannot_mint_the_bootstrap_owner() {
+        let surreal = mem_surreal().await;
+        let claims = foreign_claims(TENANT_A, "s1", "owner@firm.test");
+        let refused = resolve_person_from_claims(
+            &surreal,
+            Some(ProviderId::Microsoft),
+            &claims,
+            Some("OWNER@firm.test"),
+        )
+        .await
+        .expect_err("the bootstrap address is not claimable from a foreign tenant");
+        assert!(matches!(refused, ResolveError::AddressInUse));
+        assert!(
+            store::persons::find_by_email_ci(&surreal, "owner@firm.test")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_foreign_tenant_without_a_usable_upn_is_refused_not_created() {
+        let surreal = mem_surreal().await;
+        let mut claims = entra_claims(TENANT_A, None, Some("only-email@client.test"));
+        claims.foreign_tenant = true;
+        scope_foreign_tenant_identity(&mut claims);
+        let refused =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
+                .await
+                .expect_err("no verified-domain address, no new person");
+        assert!(matches!(refused, ResolveError::NotPreSeeded));
+    }
+
+    #[tokio::test]
+    async fn a_trusted_tenant_still_links_by_upn_as_before() {
+        let surreal = mem_surreal().await;
+        let seeded = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::new("Seeded Client", "sam@client.test"),
+        )
+        .await
+        .expect("seed");
+        let mut claims = entra_claims("allowed-tenant", Some("sam@client.test"), None);
+        claims.email = ProviderId::Microsoft.identity_address(&claims);
+        let (id, _, meta) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Microsoft), &claims, None)
+                .await
+                .expect("allowlisted tenants keep linking by address");
+        assert_eq!(id, seeded.id);
+        assert!(meta.first_link);
+    }
+
+    #[test]
+    fn tenant_allowlist_normalises_and_drops_empty_entries() {
+        use super::parse_tenant_allowlist;
+        assert_eq!(
+            parse_tenant_allowlist("  AAAA-1111 , bbbb-2222,, "),
+            vec!["aaaa-1111".to_string(), "bbbb-2222".to_string()],
+            "entries are trimmed and lower-cased, and blanks are dropped",
+        );
+        // A blank value is an empty allowlist, not an allowlist containing "".
+        // The difference matters: an entry of "" would match a token whose
+        // `tid` is empty, which is the opposite of fail-closed.
+        assert!(parse_tenant_allowlist("").is_empty());
+        assert!(parse_tenant_allowlist(" , ,").is_empty());
+    }
+
+    #[test]
+    fn primary_provider_reads_the_address_from_email_only() {
+        // The Google/Rauthy door is unchanged: `email` and nothing else. A
+        // `preferred_username` on a primary-provider token must be ignored,
+        // or switching Microsoft on would quietly change how every existing
+        // provider resolves a person.
+        let claims = entra_claims("t", Some("upn@example.test"), Some("mail@example.test"));
+        assert_eq!(
+            ProviderId::Primary.identity_address(&claims).as_deref(),
+            Some("mail@example.test"),
+        );
+    }
+
+    #[test]
+    fn microsoft_provider_prefers_the_upn_and_falls_back_to_email() {
+        // UPN wins when both are present — the tenant-asserted `email` claim
+        // must never be able to select a person row out from under the UPN.
+        let both = entra_claims("t", Some("upn@example.test"), Some("mail@example.test"));
+        assert_eq!(
+            ProviderId::Microsoft.identity_address(&both).as_deref(),
+            Some("upn@example.test"),
+        );
+        // Entra omits `email` when a directory's `mail` attribute is empty, so
+        // the UPN alone has to be enough.
+        let upn_only = entra_claims("t", Some("upn@example.test"), None);
+        assert_eq!(
+            ProviderId::Microsoft.identity_address(&upn_only).as_deref(),
+            Some("upn@example.test"),
+        );
+        // And a directory that omits the UPN falls back — safe only because
+        // the tenant allowlist has already vouched for the signer.
+        let email_only = entra_claims("t", None, Some("mail@example.test"));
+        assert_eq!(
+            ProviderId::Microsoft
+                .identity_address(&email_only)
+                .as_deref(),
+            Some("mail@example.test"),
+        );
+        // A blank claim is not an address.
+        let blank = entra_claims("t", Some("   "), None);
+        assert_eq!(ProviderId::Microsoft.identity_address(&blank), None);
+    }
+
+    #[test]
+    fn provider_slugs_round_trip_and_reject_strangers() {
+        for provider in [
+            ProviderId::Primary,
+            ProviderId::Microsoft,
+            ProviderId::Apple,
+        ] {
+            assert_eq!(ProviderId::from_slug(provider.slug()), Some(provider));
+        }
+        // The historical URL is the primary slot's slug, so existing links and
+        // bookmarks keep resolving.
+        assert_eq!(ProviderId::from_slug("oidc"), Some(ProviderId::Primary));
+        assert_eq!(ProviderId::from_slug("okta"), None);
+        assert_eq!(ProviderId::from_slug(""), None);
+    }
+
+    #[test]
+    fn provider_serialises_as_its_slug_so_both_cookies_agree() {
+        // The pre-auth cookie names a provider by serde, the session cookie by
+        // `slug()`. They must be the same string or the two cookies disagree
+        // about which provider signed a person in.
+        for provider in [
+            ProviderId::Primary,
+            ProviderId::Microsoft,
+            ProviderId::Apple,
+        ] {
+            let encoded = serde_json::to_string(&provider).expect("provider serialises");
+            assert_eq!(encoded, format!("\"{}\"", provider.slug()));
+        }
+    }
+
+    #[test]
+    fn apple_client_secret_is_an_es256_jwt_verified_by_the_generated_public_key() {
+        use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+        use p256::ecdsa::SigningKey;
+        use p256::elliptic_curve::Generate;
+        use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+
+        let signing_key = SigningKey::generate();
+        let private_pem = signing_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("test key serialises");
+        let public_pem = signing_key
+            .verifying_key()
+            .to_public_key_pem(LineEnding::LF)
+            .expect("test public key serialises");
+        let source = AppleClientSecret::new(
+            "team-test",
+            "key-test",
+            "client-test",
+            private_pem.as_bytes(),
+        )
+        .expect("test Apple secret source parses");
+
+        let token = source.mint().expect("test Apple client secret mints");
+        let header = decode_header(&token).expect("JWT header decodes");
+        assert_eq!(header.alg, Algorithm::ES256);
+        assert_eq!(header.kid.as_deref(), Some("key-test"));
+
+        let mut validation = Validation::new(Algorithm::ES256);
+        validation.set_issuer(&["team-test"]);
+        validation.set_audience(&["https://appleid.apple.com"]);
+        let decoded = decode::<AppleClientSecretClaims>(
+            &token,
+            &DecodingKey::from_ec_pem(public_pem.as_bytes()).expect("public key parses"),
+            &validation,
+        )
+        .expect("the generated public key must verify the JWT signature");
+        assert_eq!(decoded.claims.iss, "team-test");
+        assert_eq!(decoded.claims.sub, "client-test");
+        assert_eq!(decoded.claims.aud, "https://appleid.apple.com");
+        assert_eq!(
+            decoded.claims.exp - decoded.claims.iat,
+            APPLE_CLIENT_SECRET_TTL_SECS
+        );
+
+        let other_key = SigningKey::generate();
+        let other_public_pem = other_key
+            .verifying_key()
+            .to_public_key_pem(LineEnding::LF)
+            .expect("other public key serialises");
+        assert!(
+            decode::<AppleClientSecretClaims>(
+                &token,
+                &DecodingKey::from_ec_pem(other_public_pem.as_bytes())
+                    .expect("other public key parses"),
+                &validation,
+            )
+            .is_err(),
+            "a different public key must not verify the Apple client secret"
+        );
+    }
+
+    #[tokio::test]
+    async fn apple_discovery_is_read_from_a_mocked_endpoint_without_a_logout_url() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/openid-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "issuer": "https://apple.test",
+                "authorization_endpoint": format!("{}/authorize", server.uri()),
+                "token_endpoint": format!("{}/token", server.uri()),
+                "jwks_uri": format!("{}/jwks", server.uri()),
+            })))
+            .mount(&server)
+            .await;
+
+        let discovery = fetch_discovery(&server.uri())
+            .await
+            .expect("mock Apple discovery parses");
+        assert_eq!(discovery.issuer, "https://apple.test");
+        assert!(discovery.end_session_endpoint.is_none());
+    }
+
+    #[tokio::test]
+    async fn apple_es256_jwks_key_verifies_a_signed_id_token() {
+        use base64::Engine as _;
+        use jsonwebtoken::{encode, EncodingKey, Header};
+        use p256::ecdsa::SigningKey;
+        use p256::elliptic_curve::Generate;
+        use p256::pkcs8::{EncodePrivateKey, LineEnding};
+
+        let signing_key = SigningKey::generate();
+        let private_pem = signing_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("test key serialises");
+        let point = signing_key.verifying_key().to_sec1_point(false);
+        let encode_coordinate =
+            |coordinate: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(coordinate);
+        let doc = JwksDocument {
+            keys: vec![JwksKey {
+                kid: Some("apple-key".into()),
+                kty: "EC".into(),
+                n: None,
+                e: None,
+                crv: Some("P-256".into()),
+                x: Some(encode_coordinate(point.x().expect("x coordinate"))),
+                y: Some(encode_coordinate(point.y().expect("y coordinate"))),
+                alg: Some("ES256".into()),
+            }],
+        };
+        let verifier = IdTokenVerifier::from_jwks_document_with_algorithm(
+            &doc,
+            "https://apple.test",
+            "client-test",
+            IssuerPolicy::Exact,
+            Algorithm::ES256,
+        )
+        .expect("Apple EC JWKS parses");
+        let nonce = test_nonce();
+        let mut header = Header::new(Algorithm::ES256);
+        header.kid = Some("apple-key".into());
+        let token = encode(
+            &header,
+            &serde_json::json!({
+                "iss": "https://apple.test",
+                "aud": "client-test",
+                "exp": now_unix_secs() + 600,
+                "sub": "apple-subject",
+                "email": "apple-user@example.test",
+                "nonce": nonce,
+            }),
+            &EncodingKey::from_ec_pem(private_pem.as_bytes()).expect("private key parses"),
+        )
+        .expect("Apple id_token signs");
+
+        let claims = verifier
+            .verify(&token, &nonce)
+            .await
+            .expect("valid Apple token");
+        assert_eq!(claims.sub, "apple-subject");
+        assert_eq!(claims.email.as_deref(), Some("apple-user@example.test"));
+    }
+
+    fn apple_rsa_jwks_fixture() -> JwksDocument {
+        use base64::Engine as _;
+
+        let modulus_for =
+            |fill| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(vec![fill; 256]);
+        serde_json::from_value(serde_json::json!({
+            "keys": [
+                {
+                    "kty": "RSA",
+                    "kid": "GNCf4J83Oh",
+                    "use": "sig",
+                    "alg": "RS256",
+                    "n": modulus_for(0xA5_u8),
+                    "e": "AQAB"
+                },
+                {
+                    "kty": "RSA",
+                    "kid": "8nTlO3M2Bk",
+                    "use": "sig",
+                    "alg": "RS256",
+                    "n": modulus_for(0xA6_u8),
+                    "e": "AQAB"
+                },
+                {
+                    "kty": "RSA",
+                    "kid": "nP41CGTvOz",
+                    "use": "sig",
+                    "alg": "RS256",
+                    "n": modulus_for(0xA7_u8),
+                    "e": "AQAB"
+                }
+            ]
+        }))
+        .expect("Apple's RSA JWKS fixture parses")
+    }
+
+    #[tokio::test]
+    async fn apple_rsa_jwks_shape_is_usable_by_the_apple_loader() {
+        let document = apple_rsa_jwks_fixture();
+        let verifier = IdTokenVerifier::from_jwks_document(
+            &document,
+            "https://apple.test",
+            "client-test",
+            IssuerPolicy::Exact,
+        )
+        .expect("Apple's RSA JWKS keys must be usable");
+
+        assert_eq!(verifier.keys.read().await.len(), 3);
+    }
+
+    #[test]
+    fn primary_jwks_loader_remains_on_rs256() {
+        let document = apple_rsa_jwks_fixture();
+        let verifier = IdTokenVerifier::from_jwks_document(
+            &document,
+            "https://google.test",
+            "client-test",
+            IssuerPolicy::Exact,
+        )
+        .expect("the primary provider's RSA JWKS keys must remain usable");
+
+        assert_eq!(verifier.algorithm, Algorithm::RS256);
+    }
+
+    #[test]
+    fn apple_jwks_with_no_usable_keys_fails_loudly() {
+        let document = JwksDocument {
+            keys: vec![JwksKey {
+                kid: Some("ec-key".into()),
+                kty: "EC".into(),
+                n: None,
+                e: None,
+                crv: Some("P-256".into()),
+                x: None,
+                y: None,
+                alg: Some("ES256".into()),
+            }],
+        };
+        let Err(error) = IdTokenVerifier::from_jwks_document_with_algorithm(
+            &document,
+            "https://apple.test",
+            "client-test",
+            IssuerPolicy::Exact,
+            Algorithm::RS256,
+        ) else {
+            panic!("a JWKS document with no usable keys must fail");
+        };
+
+        assert_eq!(error.to_string(), "no usable keys in JWKS document");
+    }
+
+    #[test]
+    fn pre_auth_defaults_to_the_primary_provider_for_a_cookie_without_the_field() {
+        // A login already in flight when a new build rolls out has a cookie
+        // with no `provider`. It must complete against the primary provider,
+        // not fail on an unrecognised shape.
+        let legacy = serde_json::json!({
+            "state": "S",
+            "verifier": "V",
+            "nonce": "N",
+            "return_to": "/app/projects",
+            "exp": now_unix_secs() + 60,
+        });
+        let pre: PreAuth = serde_json::from_value(legacy).expect("legacy pre-auth decodes");
+        assert_eq!(pre.provider, ProviderId::Primary);
+    }
+
+    /// A refused sign-in tells the person what to do next without telling a
+    /// stranger anything exploitable: only the unlisted-tenant refusal gets
+    /// its own wording, and no variant echoes a claim or the token.
+    #[test]
+    fn a_refusal_names_the_next_step_for_an_unlisted_tenant_only() {
+        let unlisted = IdTokenError::TenantNotAllowed.refusal_message();
+        assert!(unlisted.contains("not enabled"), "{unlisted}");
+        assert!(unlisted.contains("/auth/login"), "{unlisted}");
+        for other in [
+            IdTokenError::Header,
+            IdTokenError::MissingTenant,
+            IdTokenError::Issuer,
+            IdTokenError::UnknownKid,
+            IdTokenError::Validation("InvalidAudience".into()),
+            IdTokenError::Nonce,
+        ] {
+            assert_eq!(other.refusal_message(), "id_token verification failed");
+        }
+    }
+
+    #[test]
+    fn entra_verifier_rejects_unlisted_tenants_mismatched_issuers_and_missing_tid() {
+        let verifier = crate::test_support::entra_verifier("aud", &["ALLOWED-TENANT"]);
+        // Allowlisted, issuer derived from the same tenant: accepted. The
+        // allowlist is compared case-insensitively, so a GUID pasted from the
+        // portal in either case works.
+        let ok = IdTokenClaims {
+            iss: Some(
+                crate::test_support::TEST_ENTRA_ISSUER_TEMPLATE
+                    .replace("{tenantid}", "allowed-tenant"),
+            ),
+            ..entra_claims("Allowed-Tenant", Some("sam@client.test"), None)
+        };
+        assert!(verifier.check_entra_tenant_for_test(&ok).is_ok());
+
+        // Unlisted tenant, internally consistent issuer: refused.
+        let stranger = IdTokenClaims {
+            iss: Some(
+                crate::test_support::TEST_ENTRA_ISSUER_TEMPLATE.replace("{tenantid}", "other"),
+            ),
+            ..entra_claims("other", Some("sam@client.test"), None)
+        };
+        assert!(matches!(
+            verifier.check_entra_tenant_for_test(&stranger),
+            Err(IdTokenError::TenantNotAllowed),
+        ));
+
+        // Allowlisted tenant claiming a different tenant's issuer: refused.
+        let crossed = IdTokenClaims {
+            iss: Some(
+                crate::test_support::TEST_ENTRA_ISSUER_TEMPLATE.replace("{tenantid}", "other"),
+            ),
+            ..entra_claims("allowed-tenant", Some("sam@client.test"), None)
+        };
+        assert!(matches!(
+            verifier.check_entra_tenant_for_test(&crossed),
+            Err(IdTokenError::Issuer),
+        ));
+
+        // No `tid` at all: nothing to validate the issuer against.
+        let no_tid = IdTokenClaims {
+            tid: None,
+            ..entra_claims("allowed-tenant", Some("sam@client.test"), None)
+        };
+        assert!(matches!(
+            verifier.check_entra_tenant_for_test(&no_tid),
+            Err(IdTokenError::MissingTenant),
+        ));
+    }
+
+    #[test]
+    fn exact_issuer_policy_leaves_the_tenant_check_inert() {
+        // Every non-Entra provider must be untouched by the tenant machinery:
+        // `Validation` has already enforced its fixed issuer, and a token with
+        // no `tid` is perfectly normal there.
+        let verifier = oidc_verifier("aud");
+        assert!(matches!(
+            verifier.issuer_policy_for_test(),
+            IssuerPolicy::Exact
+        ));
+        let claims = unknown_claims("lawyer@neonlaw.test");
+        assert!(verifier.check_entra_tenant_for_test(&claims).is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_unknown_verified_email_creates_a_client() {
+        let surreal = mem_surreal().await;
+        let claims = unknown_claims("stranger@example.com");
+        let (person_id, role, resolution) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+                .await
+                .expect("an unknown verified email creates a client");
+        assert_eq!(role, Role::Client);
+        assert!(resolution.fresh.is_some());
+        assert!(resolution.first_link);
+        let person = store::persons::find_by_email_ci(&surreal, "stranger@example.com")
+            .await
+            .unwrap()
+            .expect("the client row exists");
+        assert_eq!(person.id, person_id);
+    }
+
+    #[tokio::test]
+    async fn an_apple_email_match_adds_apple_subject_without_changing_primary_subject() {
+        let surreal = mem_surreal().await;
+        let person = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson {
+                oidc_subject: Some("primary-subject".into()),
+                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+            },
+        )
+        .await
+        .expect("seed admitted person");
+        let mut claims = unknown_claims("person@example.com");
+        claims.sub = "apple-subject".into();
+
+        let (resolved_id, _, first_resolution) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                .await
+                .expect("the admitted email match resolves");
+
+        assert_eq!(resolved_id, person.id);
+        assert!(first_resolution.first_link);
+        assert!(first_resolution.fresh.is_none());
+        let stored = store::persons::find_by_id(&surreal, person.id)
+            .await
+            .unwrap()
+            .expect("the Person row remains present");
+        assert_eq!(stored.oidc_subject.as_deref(), Some("primary-subject"));
+        assert_eq!(stored.apple_subject.as_deref(), Some("apple-subject"));
+        assert_eq!(stored.microsoft_subject, None);
+
+        let (_, _, repeat_resolution) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                .await
+                .expect("the linked Apple subject resolves on repeat sign-in");
+        assert!(!repeat_resolution.first_link);
+        assert!(repeat_resolution.fresh.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_apple_subject_resolves_a_repeat_claim_without_email() {
+        let surreal = mem_surreal().await;
+        let person = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson {
+                apple_subject: Some("apple-subject".into()),
+                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+            },
+        )
+        .await
+        .expect("seed Apple-linked person");
+        let mut claims = unknown_claims("person@example.com");
+        claims.sub = "apple-subject".into();
+        claims.email = None;
+
+        let (resolved_id, _, _) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                .await
+                .expect("the stored Apple subject resolves without email");
+
+        assert_eq!(resolved_id, person.id);
+        let stored = store::persons::find_by_id(&surreal, person.id)
+            .await
+            .unwrap()
+            .expect("the Person row remains present");
+        assert_eq!(stored.apple_subject.as_deref(), Some("apple-subject"));
+        assert_eq!(stored.oidc_subject, None);
+    }
+
+    /// The reproducer from the review that found this: seed the row exactly as
+    /// the pre-split code wrote it — Apple's identifier in the generic slot —
+    /// and present the repeat Apple claim that carries no email. Before the
+    /// legacy branch this was `NotPreSeeded`, rendered as the "no account
+    /// found" page, which a visitor cannot tell apart from never having been
+    /// provisioned.
+    #[tokio::test]
+    async fn an_apple_first_row_written_before_the_split_still_resolves_without_email() {
+        let surreal = mem_surreal().await;
+        let person = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson {
+                oidc_subject: Some("apple-sub".into()),
+                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+            },
+        )
+        .await
+        .expect("seed a person carrying an Apple subject in the generic slot");
+        let mut claims = unknown_claims("person@example.com");
+        claims.sub = "apple-sub".into();
+        claims.email = None;
+
+        let (resolved_id, _, resolution) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                .await
+                .expect("a pre-split Apple row resolves without an email claim");
+
+        assert_eq!(resolved_id, person.id);
+        // Not a signup: the row was already there, it only converged.
+        assert!(resolution.fresh.is_none());
+        assert!(resolution.first_link);
+        let stored = store::persons::find_by_id(&surreal, person.id)
+            .await
+            .unwrap()
+            .expect("the Person row remains present");
+        assert_eq!(stored.apple_subject.as_deref(), Some("apple-sub"));
+        assert_eq!(stored.oidc_subject, None);
+    }
+
+    /// The convergence is one-way: once the identifier has moved, the row is
+    /// out of the legacy branch's reach and resolves through the ordinary
+    /// per-provider lookup. This is what bounds the branch and what ENG-783
+    /// waits on before deleting it.
+    #[tokio::test]
+    async fn a_converged_row_resolves_through_the_provider_column_on_the_next_sign_in() {
+        let surreal = mem_surreal().await;
+        let person = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson {
+                oidc_subject: Some("apple-sub".into()),
+                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+            },
+        )
+        .await
+        .expect("seed a person carrying an Apple subject in the generic slot");
+        let mut claims = unknown_claims("person@example.com");
+        claims.sub = "apple-sub".into();
+        claims.email = None;
+
+        for _ in 0..2 {
+            let (resolved_id, _, _) =
+                resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                    .await
+                    .expect("both sign-ins resolve the same row");
+            assert_eq!(resolved_id, person.id);
+        }
+
+        assert!(store::persons::find_by_oidc_subject(&surreal, "apple-sub")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// The primary slot's meaning did not change, so reading it for a primary
+    /// sign-in is the ordinary lookup — the legacy branch must not fire there
+    /// and must never clear that column.
+    #[tokio::test]
+    async fn the_legacy_branch_does_not_fire_for_the_primary_provider() {
+        let surreal = mem_surreal().await;
+        let person = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson {
+                oidc_subject: Some("primary-sub".into()),
+                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+            },
+        )
+        .await
+        .expect("seed a primary-linked person");
+        let mut claims = unknown_claims("person@example.com");
+        claims.sub = "primary-sub".into();
+        claims.email = None;
+
+        let (resolved_id, _, _) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+                .await
+                .expect("the primary subject resolves through its own lookup");
+
+        assert_eq!(resolved_id, person.id);
+        let stored = store::persons::find_by_id(&surreal, person.id)
+            .await
+            .unwrap()
+            .expect("the Person row remains present");
+        assert_eq!(stored.oidc_subject.as_deref(), Some("primary-sub"));
+    }
+
+    /// A claim that carries an email creates its own client when the email is
+    /// unknown. Letting the legacy branch run here would instead attach that
+    /// address to a different existing row through a historical subject.
+    #[tokio::test]
+    async fn a_claim_with_an_unmatched_email_creates_a_client_without_reaching_the_legacy_slot() {
+        let surreal = mem_surreal().await;
+        let person = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson {
+                oidc_subject: Some("apple-sub".into()),
+                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+            },
+        )
+        .await
+        .expect("seed a person carrying an Apple subject in the generic slot");
+        let mut claims = unknown_claims("someone-else@privaterelay.appleid.com");
+        claims.sub = "apple-sub".into();
+
+        let (created_id, role, resolution) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                .await
+                .expect("an unmatched email creates its own client");
+
+        assert_eq!(role, Role::Client);
+        assert!(resolution.fresh.is_some());
+        assert!(resolution.first_link);
+        assert_ne!(created_id, person.id);
+        let stored = store::persons::find_by_id(&surreal, person.id)
+            .await
+            .unwrap()
+            .expect("the Person row remains present");
+        assert_eq!(stored.oidc_subject.as_deref(), Some("apple-sub"));
+        assert_eq!(stored.apple_subject, None);
+    }
+
+    /// A row already linked to the presenting provider under a different
+    /// identifier is a different identity. The legacy branch must leave it
+    /// alone rather than overwrite the link it holds.
+    #[tokio::test]
+    async fn the_legacy_branch_skips_a_row_already_linked_to_the_presenting_provider() {
+        let surreal = mem_surreal().await;
+        let person = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson {
+                oidc_subject: Some("legacy-sub".into()),
+                apple_subject: Some("a-different-apple-sub".into()),
+                ..store::persons::NewPerson::new("Admitted Person", "person@example.com")
+            },
+        )
+        .await
+        .expect("seed a person linked to Apple under another subject");
+        let mut claims = unknown_claims("person@example.com");
+        claims.sub = "legacy-sub".into();
+        claims.email = None;
+
+        let refused = resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+            .await
+            .expect_err("an already-linked row is not a convergence candidate");
+
+        assert!(matches!(refused, ResolveError::NotPreSeeded));
+        let stored = store::persons::find_by_id(&surreal, person.id)
+            .await
+            .unwrap()
+            .expect("the Person row remains present");
+        assert_eq!(stored.oidc_subject.as_deref(), Some("legacy-sub"));
+        assert_eq!(
+            stored.apple_subject.as_deref(),
+            Some("a-different-apple-sub")
+        );
+    }
+
+    /// Admission is decided on the row, not on how it was found. A converged
+    /// row that is not admitted is refused as `NotAdmitted`, the same as any
+    /// other path.
+    #[tokio::test]
+    async fn a_converged_row_that_is_not_admitted_is_still_refused() {
+        let surreal = mem_surreal().await;
+        let person = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson {
+                oidc_subject: Some("apple-sub".into()),
+                ..store::persons::NewPerson::new("Barred Person", "barred@example.com")
+            },
+        )
+        .await
+        .expect("seed a person carrying an Apple subject in the generic slot");
+        store::persons::set_admitted(&surreal, person.id, false)
+            .await
+            .expect("withdraw admission");
+        let mut claims = unknown_claims("barred@example.com");
+        claims.sub = "apple-sub".into();
+        claims.email = None;
+
+        let refused = resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+            .await
+            .expect_err("a row that is not admitted cannot sign in");
+
+        assert!(matches!(refused, ResolveError::NotAdmitted));
+    }
+
+    #[tokio::test]
+    async fn an_unmatched_apple_relay_email_creates_a_client_with_its_subject() {
+        let surreal = mem_surreal().await;
+        let person = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::new("Admitted Person", "person@example.com"),
+        )
+        .await
+        .expect("seed admitted person");
+        let mut claims = unknown_claims("person@privaterelay.appleid.com");
+        claims.sub = "unknown-apple-subject".into();
+
+        let (created_id, role, resolution) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Apple), &claims, None)
+                .await
+                .expect("an unmatched relay email creates a client");
+        assert_eq!(role, Role::Client);
+        assert!(resolution.fresh.is_some());
+        assert!(resolution.first_link);
+        let created = store::persons::find_by_email_ci(&surreal, "person@privaterelay.appleid.com")
+            .await
+            .unwrap()
+            .expect("the relay client row exists");
+        assert_eq!(created.id, created_id);
+        assert_eq!(
+            created.apple_subject.as_deref(),
+            Some("unknown-apple-subject")
+        );
+        let stored = store::persons::find_by_id(&surreal, person.id)
+            .await
+            .unwrap()
+            .expect("the admitted Person row remains present");
+        assert_eq!(stored.apple_subject, None);
+    }
+
+    #[tokio::test]
+    async fn a_historical_person_keeps_primary_subject_after_schema_apply() {
+        let surreal = store::surreal::test_support::unmigrated().await;
+        let historical_id = Uuid::now_v7();
+        surreal
+            .query(
+                "CREATE $id SET name = 'Historical Person', \
+                 email = 'historical@example.com', role = 'client', is_admitted = true, \
+                 oidc_subject = 'primary-subject', \
+                 inserted_at = type::datetime('2020-01-01T00:00:00Z'), \
+                 updated_at = type::datetime('2020-01-01T00:00:00Z')",
+            )
+            .bind(("id", store::surreal::record_id("person", historical_id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        store::schema::apply(&surreal)
+            .await
+            .expect("the schema converges over the historical Person row");
+        let mut claims = unknown_claims("historical@example.com");
+        claims.sub = "primary-subject".into();
+        claims.email = None;
+
+        let (resolved_id, _, _) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+                .await
+                .expect("the historical primary-provider subject still resolves");
+
+        let stored = store::persons::find_by_id(&surreal, resolved_id)
+            .await
+            .unwrap()
+            .expect("the historical Person row remains present");
+        assert_eq!(stored.oidc_subject.as_deref(), Some("primary-subject"));
+        assert_eq!(stored.apple_subject, None);
+        assert_eq!(stored.microsoft_subject, None);
+    }
+
+    #[tokio::test]
+    async fn an_unadmitted_person_is_refused_even_when_the_subject_is_linked() {
+        let surreal = mem_surreal().await;
+        let claims = unknown_claims("withdrawn@example.com");
+        let person = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson {
+                oidc_subject: Some(claims.sub.clone()),
+                ..store::persons::NewPerson::with_role(
+                    "Withdrawn Person",
+                    "withdrawn@example.com",
+                    Role::Client,
+                )
+            },
+        )
+        .await
+        .expect("seed linked person");
+        store::persons::set_admitted(&surreal, person.id, false)
+            .await
+            .expect("withdraw person");
+
+        let err = resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+            .await
+            .expect_err("an unadmitted linked row must not resolve");
+        assert!(matches!(err, ResolveError::NotAdmitted));
+    }
+
+    #[tokio::test]
+    async fn a_new_client_has_an_empty_portfolio() {
+        let surreal = mem_surreal().await;
+        let claims = unknown_claims("trainee@example.com");
+        let (person_id, role, resolution) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+                .await
+                .expect("first sign-in creates the person");
+        // A client, treated as a fresh signup (drives the welcome workflow).
+        assert_eq!(role, Role::Client);
+        assert!(
+            resolution.fresh.is_some(),
+            "a newly created client is a fresh signup"
+        );
+        assert!(resolution.first_link);
+        let person = store::persons::find_by_email_ci(&surreal, "trainee@example.com")
+            .await
+            .unwrap()
+            .expect("the client row exists");
+        assert_eq!(person.id, person_id);
+        assert_eq!(person.role, Role::Client);
+        // Empty portfolio: no participation rows until an admin assigns them.
+        let participations = store::projects::participations_for_person(&surreal, person_id)
+            .await
+            .unwrap()
+            .len();
+        assert_eq!(participations, 0, "a new client has an empty portfolio");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_owner_is_created() {
+        let surreal = mem_surreal().await;
+        let claims = unknown_claims("boss@example.com");
+        let (_, role, resolution) = resolve_person_from_claims(
+            &surreal,
+            Some(ProviderId::Primary),
+            &claims,
+            Some("boss@example.com"),
+        )
+        .await
+        .expect("bootstrap Owner is always JIT-created");
+        assert_eq!(role, Role::Owner);
+        assert!(resolution.fresh.is_some());
+        assert!(resolution.first_link);
+    }
+
+    #[tokio::test]
+    async fn reconcile_bootstrap_owner_promotes_the_match_and_demotes_the_stale_owner() {
+        let surreal = mem_surreal().await;
+        // A stale bootstrap identity from a previous env-var value, still
+        // sitting at `Owner` because nothing signed it in to get demoted.
+        let stale = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::with_role("Old Boss", "old@example.com", Role::Owner),
+        )
+        .await
+        .unwrap();
+        // The row the env var now names — seeded with a different role, the
+        // way an operator promotes a person to Admin ahead of a cutover.
+        let next = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::with_role("New Boss", "new@example.com", Role::Admin),
+        )
+        .await
+        .unwrap();
+
+        reconcile_bootstrap_owner(&surreal, Some("new@example.com"))
+            .await
+            .unwrap();
+
+        let stale = store::persons::find_by_id(&surreal, stale.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stale.role,
+            store::persons::Role::Client,
+            "the previous bootstrap identity is demoted, not left at Owner",
+        );
+        let next = store::persons::find_by_id(&surreal, next.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            next.role,
+            Role::Owner,
+            "the configured email is promoted immediately, without waiting for a sign-in",
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_bootstrap_owner_is_a_no_op_with_no_configured_email() {
+        let surreal = mem_surreal().await;
+        let owner = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::with_role("Boss", "boss@example.com", Role::Owner),
+        )
+        .await
+        .unwrap();
+
+        // The carve-out disabled (`None`) must not touch an existing Owner —
+        // there is no configured identity to reconcile against.
+        reconcile_bootstrap_owner(&surreal, None).await.unwrap();
+
+        let owner = store::persons::find_by_id(&surreal, owner.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(owner.role, Role::Owner);
+    }
+
+    #[tokio::test]
+    async fn resolve_existing_after_race_finds_the_row_by_subject_then_email() {
+        let surreal = mem_surreal().await;
+        let claims = unknown_claims("racer@example.com");
+        // Seed the row the "winning" request would have committed.
+        let (person_id, _, _) =
+            resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None)
+                .await
+                .expect("first sign-in creates the person");
+
+        // Matches on the provider subject (the first lookup the recovery tries).
+        let by_subject = resolve_existing_after_race(
+            &surreal,
+            Some(ProviderId::Primary),
+            &claims.sub,
+            "racer@example.com",
+        )
+        .await
+        .unwrap()
+        .expect("the winner's row resolves by subject");
+        assert_eq!(by_subject.id, person_id);
+
+        // Falls back to case-insensitive email when the subject differs.
+        let by_email = resolve_existing_after_race(
+            &surreal,
+            Some(ProviderId::Primary),
+            "some-other-subject",
+            "RACER@example.com",
+        )
+        .await
+        .unwrap()
+        .expect("the winner's row resolves by email when the subject misses");
+        assert_eq!(by_email.id, person_id);
+
+        // An identity that never signed up resolves to nothing.
+        assert!(
+            resolve_existing_after_race(
+                &surreal,
+                Some(ProviderId::Primary),
+                "ghost",
+                "ghost@example.com",
+            )
+            .await
+            .unwrap()
+            .is_none(),
+            "an unknown identity has no row to recover",
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_first_sign_in_converges_on_one_client_without_a_500() {
+        let surreal = mem_surreal().await;
+
+        // Fire several identical first logins at once (`unknown_claims` is
+        // deterministic per email, so every task presents the same subject
+        // and email). Whichever insert wins, the losers must recover the
+        // winner's row rather than propagate the unique-index violation as a
+        // `ResolveError::Db` (a 500 at the callback).
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            // The handle is a cheap clone around one shared engine, so
+            // every task races against the same database.
+            let surreal = surreal.clone();
+            handles.push(tokio::spawn(async move {
+                let claims = unknown_claims("stampede@example.com");
+                resolve_person_from_claims(&surreal, Some(ProviderId::Primary), &claims, None).await
+            }));
+        }
+
+        let mut ids = Vec::new();
+        for handle in handles {
+            let (person_id, role, _) = handle
+                .await
+                .expect("the resolve task must not panic")
+                .expect("a concurrent first sign-in must never 500");
+            assert_eq!(role, Role::Client);
+            ids.push(person_id);
+        }
+
+        // Every request resolved to the same client, and exactly one row exists.
+        let first = ids[0];
+        assert!(
+            ids.iter().all(|id| *id == first),
+            "all concurrent logins must converge on one client, got {ids:?}",
+        );
+        let rows = store::persons::list_directory(&surreal, "", "stampede@example.com", &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the race must create exactly one persons row"
+        );
+    }
+
+    #[test]
+    fn bootstrap_owner_email_from_env_reads_the_configured_value() {
+        // The env-reading wrapper is what `main` actually calls, so cover it
+        // rather than only the pure helper beneath it: an unset variable must
+        // disable the carve-out instead of selecting some default identity.
+        //
+        // SAFETY: `NAVIGATOR_BOOTSTRAP_OWNER_EMAIL` is read only by
+        // `bootstrap_owner_email_from_env`, which no other test in this binary
+        // calls, so there is no concurrent reader of this key to race.
+        std::env::remove_var("NAVIGATOR_BOOTSTRAP_OWNER_EMAIL");
+        assert_eq!(bootstrap_owner_email_from_env(), None);
+
+        std::env::set_var("NAVIGATOR_BOOTSTRAP_OWNER_EMAIL", " \t ");
+        assert_eq!(bootstrap_owner_email_from_env(), None);
+
+        std::env::set_var("NAVIGATOR_BOOTSTRAP_OWNER_EMAIL", " owner@example.com ");
+        assert_eq!(
+            bootstrap_owner_email_from_env(),
+            Some("owner@example.com".into()),
+        );
+
+        std::env::remove_var("NAVIGATOR_BOOTSTRAP_OWNER_EMAIL");
+    }
+
+    #[test]
+    fn session_cookie_is_persistent_with_matching_max_age() {
+        // A persistent cookie (Max-Age set) survives a browser restart,
+        // and its lifetime matches the signed payload's TTL.
+        let c = session_cookie("payload.sig".into(), true);
+        let max_age = c.max_age().expect("session cookie must set Max-Age");
+        assert_eq!(max_age.whole_seconds(), DEFAULT_SESSION_TTL_SECS);
+        assert!(c.secure().unwrap_or(false));
+        assert!(c.http_only().unwrap_or(false));
+    }
+
+    #[test]
+    fn pkce_verifier_is_url_safe_and_random() {
+        let a = pkce_verifier();
+        let b = pkce_verifier();
+        assert_ne!(a, b);
+        assert!(!a.contains('+') && !a.contains('/'));
+    }
+
+    #[test]
+    fn pkce_challenge_is_sha256_of_verifier() {
+        use sha2::Digest;
+        let verifier = "the-verifier";
+        let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sha2::Sha256::digest(verifier.as_bytes()));
+        assert_eq!(pkce_challenge(verifier), expected);
+    }
+
+    #[test]
+    fn urlencode_handles_reserved_chars() {
+        assert_eq!(urlencode("hello"), "hello");
+        assert_eq!(urlencode("hi there"), "hi%20there");
+        assert_eq!(urlencode("a/b?c=d"), "a%2Fb%3Fc%3Dd");
+        assert_eq!(
+            urlencode("openid email profile"),
+            "openid%20email%20profile"
+        );
+    }
+
+    #[test]
+    fn authorize_url_contains_every_required_param() {
+        let pre = PreAuth {
+            provider: ProviderId::Primary,
+            state: "STATE123".into(),
+            verifier: "the-verifier".into(),
+            nonce: "NONCE789".into(),
+            return_to: "/app/projects".into(),
+            exp: now_unix_secs() + 300,
+        };
+        let url = authorize_url(&cfg(), &pre);
+        assert!(url.starts_with("https://idp.example.com/oauth/authorize?"));
+        assert!(url.contains("response_type=code"));
+        assert!(url.contains("client_id=client123"));
+        assert!(url.contains("redirect_uri=https%3A%2F%2Fapp.example.com%2Fauth%2Fcallback"));
+        assert!(url.contains("scope=openid%20email%20profile"));
+        assert!(url.contains("state=STATE123"));
+        assert!(url.contains("nonce=NONCE789"));
+        let challenge = pkce_challenge("the-verifier");
+        assert!(url.contains(&format!("code_challenge={challenge}")));
+        assert!(url.contains("code_challenge_method=S256"));
+    }
+
+    /// Apple refuses an authorization request that asks for `name` or `email`
+    /// without `response_mode=form_post`, and `profile` is not one of the
+    /// scope values it accepts. Sending the shared query-mode request to Apple
+    /// therefore fails every Apple sign-in at the authorization step, before
+    /// any of the mocked token-exchange coverage is reached.
+    #[test]
+    fn apple_authorize_url_asks_for_form_post_and_only_scopes_apple_accepts() {
+        let apple = OAuthConfig::new_apple(
+            "com.example.navigator",
+            "team-test",
+            "key-test",
+            test_apple_private_key_pem().as_bytes(),
+            "https://app.example.com/auth/callback",
+            "https://appleid.apple.com/auth/authorize",
+            "https://appleid.apple.com/auth/token",
+        )
+        .expect("test Apple config builds");
+        let pre = PreAuth {
+            provider: ProviderId::Apple,
+            state: "STATE123".into(),
+            verifier: "the-verifier".into(),
+            nonce: "NONCE789".into(),
+            return_to: "/app/projects".into(),
+            exp: now_unix_secs() + 300,
+        };
+
+        let url = authorize_url(&apple, &pre);
+        assert!(
+            url.contains("response_mode=form_post"),
+            "Apple rejects a scoped request without form_post: {url}"
+        );
+        assert!(
+            url.contains(&urlencode("openid email")),
+            "Apple must be asked for the address it will return: {url}"
+        );
+        assert!(
+            !url.contains("profile"),
+            "`profile` is not an Apple scope value: {url}"
+        );
+    }
+
+    /// The existing providers keep the query-mode request they have always
+    /// sent: `response_mode` is Apple's requirement, not a global one, and a
+    /// stray parameter here would change a live Google and Entra URL.
+    #[test]
+    fn query_mode_providers_send_no_response_mode_and_keep_their_scope() {
+        for provider in [ProviderId::Primary, ProviderId::Microsoft] {
+            let cfg = cfg().with_provider(provider);
+            let pre = PreAuth {
+                provider,
+                state: "S".into(),
+                verifier: "v".into(),
+                nonce: "n".into(),
+                return_to: "/".into(),
+                exp: now_unix_secs() + 300,
+            };
+            let url = authorize_url(&cfg, &pre);
+            assert!(!url.contains("response_mode"), "{provider:?}: {url}");
+            assert!(
+                url.contains(&urlencode("openid email profile")),
+                "{provider:?}: {url}"
+            );
+        }
+    }
+
+    /// A `Lax` cookie is withheld on the cross-site POST Apple sends, so the
+    /// callback would find no pre-auth cookie and reject its own valid state.
+    /// `None` is only honoured alongside `Secure`, so the insecure lane must
+    /// stay `Lax` rather than emit a cookie the browser discards.
+    #[test]
+    fn a_form_post_provider_gets_a_cross_site_pre_auth_cookie_only_when_secure() {
+        let cross_site_secure = pre_auth_cookie("v".into(), true, true);
+        assert_eq!(cross_site_secure.same_site(), Some(SameSite::None));
+        assert!(cross_site_secure.secure().unwrap_or(false));
+
+        // Query-mode providers keep `Lax`, which is the CSRF-tightest value
+        // that still rides along on a top-level redirect back from the IdP.
+        let query_mode = pre_auth_cookie("v".into(), true, false);
+        assert_eq!(query_mode.same_site(), Some(SameSite::Lax));
+
+        // No `Secure`, so `None` would be dropped by the browser entirely.
+        let insecure = pre_auth_cookie("v".into(), false, true);
+        assert_eq!(insecure.same_site(), Some(SameSite::Lax));
+    }
+
+    #[test]
+    fn authorize_url_appends_with_amp_when_endpoint_has_existing_query() {
+        let cfg = OAuthConfig::new(
+            "c",
+            "s",
+            "http://x",
+            "https://idp.example.com/authorize?foo=bar",
+            "https://idp.example.com/token",
+        );
+        let pre = PreAuth {
+            provider: ProviderId::Primary,
+            state: "S".into(),
+            verifier: "v".into(),
+            nonce: "n".into(),
+            return_to: "/".into(),
+            exp: now_unix_secs() + 60,
+        };
+        let url = authorize_url(&cfg, &pre);
+        assert!(url.starts_with("https://idp.example.com/authorize?foo=bar&response_type="));
+    }
+
+    #[test]
+    fn pre_auth_expires_in_the_future_and_carries_distinct_state_and_verifier() {
+        let p = PreAuth::new("/somewhere".into());
+        assert!(p.exp > now_unix_secs());
+        assert!(!p.is_expired());
+        assert_ne!(p.state, p.verifier);
+        assert_eq!(p.return_to, "/somewhere");
+    }
+
+    #[test]
+    fn default_return_to_is_the_neutral_empty_sentinel() {
+        // Empty, not a concrete path: the landing is role-dependent and
+        // `post_login_landing` resolves it once the tier is known.
+        assert_eq!(default_return_to(), "");
+    }
+
+    #[test]
+    fn post_login_landing_sends_firm_tiers_to_the_team_home() {
+        for role in [Role::Owner, Role::Admin, Role::Lawyer, Role::Clerk] {
+            assert_eq!(post_login_landing(role, ""), "/app/team", "{role:?}");
+        }
+    }
+
+    #[test]
+    fn post_login_landing_sends_a_client_to_their_matters() {
+        assert_eq!(post_login_landing(Role::Client, ""), "/app/projects");
+    }
+
+    /// A stale `/portal` deep link is folded into the tier landing for every
+    /// tier, not just the two this once covered.
+    ///
+    /// The retired namespace is served by nothing and deliberately has no
+    /// redirect shim — `GET /portal` is a 404, pinned by
+    /// `server/tests/routes.rs::the_retired_project_prefixes_are_not_served`.
+    /// This is the one place the old path is still read, and it is not a shim
+    /// for it: it sanitizes `return_to` on the login door, where a link already
+    /// sitting in sent email arrives. Dropping the comparison would honor it as
+    /// an explicit deep link and land a person on a 404 the instant they
+    /// authenticated, which is worse than the one string compare it costs.
+    #[test]
+    fn post_login_landing_resolves_the_retired_portal_path_per_role() {
+        for role in [Role::Owner, Role::Admin, Role::Lawyer, Role::Clerk] {
+            assert_eq!(post_login_landing(role, "/portal"), "/app/team", "{role:?}");
+        }
+        assert_eq!(post_login_landing(Role::Client, "/portal"), "/app/projects");
+    }
+
+    #[test]
+    fn post_login_landing_honors_an_explicit_deep_link() {
+        // An anonymous bounce recorded the page the visitor was reaching for;
+        // it is returned unchanged regardless of tier.
+        for role in [Role::Owner, Role::Lawyer, Role::Client] {
+            assert_eq!(
+                post_login_landing(role, "/app/projects/atlas-llc"),
+                "/app/projects/atlas-llc",
+                "{role:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn pre_auth_marked_expired_when_exp_in_past() {
+        let p = PreAuth {
+            provider: ProviderId::Primary,
+            state: "s".into(),
+            verifier: "v".into(),
+            nonce: "n".into(),
+            return_to: "/".into(),
+            exp: now_unix_secs() - 1,
+        };
+        assert!(p.is_expired());
+    }
+
+    #[test]
+    fn auth_cookies_carry_secure_only_when_requested() {
+        use super::{login_csrf_cookie, pre_auth_cookie, session_cookie};
+        for builder in [
+            session_cookie as fn(String, bool) -> _,
+            // The cross-site variant is exercised by
+            // `a_form_post_provider_gets_a_cross_site_pre_auth_cookie_only_when_secure`;
+            // Secure is unconditional, so either value proves this property.
+            |value, secure| pre_auth_cookie(value, secure, false),
+            login_csrf_cookie,
+        ] {
+            assert_eq!(builder("v".into(), true).secure(), Some(true));
+            assert_eq!(builder("v".into(), false).secure(), Some(false));
+            // HttpOnly is unconditional regardless of the Secure flag.
+            assert_eq!(builder("v".into(), false).http_only(), Some(true));
+        }
+    }
+
+    #[tokio::test]
+    async fn id_token_verifier_accepts_a_valid_signed_token() {
+        let verifier = oidc_verifier("client123");
+        let nonce = test_nonce();
+        let token = sign_id_token(
+            "client123",
+            &nonce,
+            "rauthy-libra-subject",
+            "libra@example.com",
+            "Libra",
+        );
+        let claims = verifier.verify(&token, &nonce).await.expect("valid token");
+        assert_eq!(claims.sub, "rauthy-libra-subject");
+        assert_eq!(claims.email.as_deref(), Some("libra@example.com"));
+    }
+
+    #[tokio::test]
+    async fn id_token_verifier_rejects_a_nonce_mismatch() {
+        let verifier = oidc_verifier("client123");
+        let token_nonce = test_nonce();
+        let expected_nonce = test_nonce();
+        let token = sign_id_token("client123", &token_nonce, "s", "e@person.example", "N");
+        // A token whose nonce doesn't match the login's pre-auth nonce is
+        // a replay/injection and must be refused.
+        let err = verifier.verify(&token, &expected_nonce).await.unwrap_err();
+        assert!(matches!(err, IdTokenError::Nonce));
+    }
+
+    #[tokio::test]
+    async fn id_token_verifier_rejects_a_token_minted_for_another_audience() {
+        let verifier = oidc_verifier("client123");
+        let nonce = test_nonce();
+        // Signed for a *different* client of the same IdP — the
+        // token-confusion attack. Audience pinning rejects it.
+        let token = sign_id_token("other-client", &nonce, "s", "e@person.example", "N");
+        let err = verifier.verify(&token, &nonce).await.unwrap_err();
+        assert!(matches!(err, IdTokenError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn id_token_verifier_rejects_garbage_and_unsigned_tokens() {
+        let verifier = oidc_verifier("client123");
+        assert!(verifier.verify("not-a-jwt", "n").await.is_err());
+        // Unsigned "alg:none"-style token: header.payload with no usable
+        // kid / signature → rejected before any claim is trusted.
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"sub":"x","nonce":"n","iss":"https://idp.test","aud":"client123"}"#);
+        let unsigned = format!("aGVhZGVy.{payload}.");
+        assert!(verifier.verify(&unsigned, "n").await.is_err());
+    }
+
+    /// ENG-326: a provider key rotation must not need a restart. An
+    /// unrecognised `kid` refetches the JWKS immediately, but a flood of
+    /// tokens carrying the same unrecognised `kid` must not turn into a
+    /// flood of requests against the provider — at most one refetch per
+    /// [`super::JWKS_REFETCH_FLOOR`].
+    #[tokio::test]
+    async fn unknown_kid_refetches_at_most_once_per_floor_interval() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // A fixed, valid RSA key under a `kid` the test tokens never carry —
+        // the point of this test is counting fetches, not a successful
+        // verification. Sourced from RFC 7517 §A.1, reused from the
+        // `auth::tests` JWKS fixtures.
+        Mock::given(method("GET"))
+            .and(path("/jwks"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "keys": [{
+                    "kid": "provider-key-1",
+                    "kty": "RSA",
+                    "n": "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw",
+                    "e": "AQAB",
+                    "alg": "RS256",
+                }],
+            })))
+            .mount(&server)
+            .await;
+
+        // `fetch_and_build`, not `from_jwks_url`: the latter spawns a
+        // background task that outlives this test's process and gets
+        // flagged "leaky" by nextest. This test only needs the on-demand
+        // refetch-on-unknown-kid path, which doesn't depend on that task.
+        let jwks_url = format!("{}/jwks", server.uri());
+        let verifier = IdTokenVerifier::fetch_and_build(
+            &jwks_url,
+            "https://idp.test",
+            "client123",
+            IssuerPolicy::Exact,
+            Algorithm::RS256,
+        )
+        .await
+        .expect("mock JWKS fetches");
+
+        let fetch_count = || async {
+            server
+                .received_requests()
+                .await
+                .expect("request recording is on by default")
+                .iter()
+                .filter(|r| r.url.path() == "/jwks")
+                .count()
+        };
+        assert_eq!(fetch_count().await, 1, "the boot fetch");
+
+        // Every one of these tokens carries a `kid` the mock JWKS never
+        // serves, so every call takes the unknown-kid path.
+        let nonce = test_nonce();
+        let token = sign_id_token_with_kid(
+            "client123",
+            &nonce,
+            "s",
+            "e@person.example",
+            "N",
+            "rotated-away-kid",
+        );
+
+        let err = verifier.verify(&token, &nonce).await.unwrap_err();
+        assert!(matches!(err, IdTokenError::UnknownKid));
+        assert_eq!(fetch_count().await, 2, "first unknown kid refetches once");
+
+        for _ in 0..3 {
+            let err = verifier.verify(&token, &nonce).await.unwrap_err();
+            assert!(matches!(err, IdTokenError::UnknownKid));
+        }
+        assert_eq!(
+            fetch_count().await,
+            2,
+            "repeated unknown kids within the floor trigger no further refetch",
+        );
+    }
+
+    /// Generate a unique nonce for a unit test using the production path.
+    fn test_nonce() -> String {
+        random_token_32()
+    }
+
+    #[test]
+    fn id_token_payload_decodes_sub_and_email() {
+        // header.payload.sig — header and sig are irrelevant here.
+        // Roles are deliberately *not* part of the payload schema:
+        // the IdP only carries identity, the DB carries authz.
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            br#"{"sub":"rauthy-libra-subject","email":"libra@example.com","name":"Libra"}"#,
+        );
+        let jwt = format!("aGVhZGVy.{payload}.c2ln");
+        let claims = decode_unverified_payload(&jwt).unwrap();
+        assert_eq!(claims.sub, "rauthy-libra-subject");
+        assert_eq!(claims.email.as_deref(), Some("libra@example.com"));
+        assert_eq!(claims.name.as_deref(), Some("Libra"));
+    }
+
+    #[test]
+    fn id_token_payload_returns_none_for_garbage() {
+        assert!(decode_unverified_payload("not-a-jwt").is_none());
+        assert!(decode_unverified_payload("only.two").is_none());
+        assert!(decode_unverified_payload("a.b.c").is_none());
+    }
+
+    #[test]
+    fn constant_time_eq_matches_only_equal_byte_strings() {
+        assert!(constant_time_eq(b"abc123", b"abc123"));
+        assert!(!constant_time_eq(b"abc123", b"abc124"));
+        // Length mismatch is never equal (and never panics).
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn identity_password_config_from_env_is_opt_in() {
+        // The helper reads process env; assert the shape of the decision
+        // without stomping a shared env var by checking the default
+        // endpoint constant the prod path falls back to.
+        assert_eq!(
+            IdentityPasswordConfig::DEFAULT_ENDPOINT,
+            "https://identitytoolkit.googleapis.com",
+        );
+    }
+
+    /// A token exchange carries the client secret and the authorization code,
+    /// so the request must not cross a network in the clear. `https` is one way
+    /// to guarantee that; a loopback host is the other, because the request
+    /// never leaves the machine. Everything else is refused.
+    #[test]
+    fn a_loopback_token_endpoint_needs_no_tls() {
+        for endpoint in [
+            "http://localhost:8080/auth/v1/oidc/token",
+            "http://LOCALHOST:8080/auth/v1/oidc/token",
+            "http://127.0.0.1:20427/auth/v1/oidc/token",
+            "http://127.1.2.3/token",
+            "http://[::1]:8080/token",
+        ] {
+            let url = url::Url::parse(endpoint).expect("parses");
+            assert!(
+                token_endpoint_is_confidential(&url),
+                "{endpoint} never leaves the machine, so it carries the secret safely"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plain_http_token_endpoint_off_the_loopback_is_refused() {
+        for endpoint in [
+            "http://idp.example.com/token",
+            "http://192.168.1.10/token",
+            "http://10.0.0.1/token",
+        ] {
+            let url = url::Url::parse(endpoint).expect("parses");
+            assert!(
+                !token_endpoint_is_confidential(&url),
+                "{endpoint} sends a client secret across a network in the clear"
+            );
+        }
+    }
+
+    /// The loopback exemption matches the host exactly. A name that merely
+    /// contains or ends with `localhost` resolves wherever its owner points it,
+    /// so it is an ordinary network host.
+    #[test]
+    fn a_hostname_that_merely_looks_like_the_loopback_is_refused() {
+        for endpoint in [
+            "http://localhost.example.com/token",
+            "http://notlocalhost/token",
+            "http://localhost.evil.test/token",
+        ] {
+            let url = url::Url::parse(endpoint).expect("parses");
+            assert!(
+                !token_endpoint_is_confidential(&url),
+                "{endpoint} is a network host, not the loopback"
+            );
+        }
+    }
+
+    #[test]
+    fn https_is_confidential_wherever_it_points() {
+        for endpoint in [
+            "https://idp.example.com/token",
+            "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+        ] {
+            let url = url::Url::parse(endpoint).expect("parses");
+            assert!(token_endpoint_is_confidential(&url), "{endpoint}");
+        }
+    }
+
+    /// A URL with no host cannot be reasoned about at all, so it is refused
+    /// whatever its scheme.
+    #[test]
+    fn a_hostless_token_endpoint_is_refused() {
+        for endpoint in ["file:///tmp/token", "data:text/plain,token"] {
+            let url = url::Url::parse(endpoint).expect("parses");
+            assert!(!token_endpoint_is_confidential(&url), "{endpoint}");
+        }
+    }
+
+    /// RFC 8252 §8.3's loopback property belongs to plain HTTP: the request
+    /// never leaves the machine. A different scheme carried over the same
+    /// loopback host is not that property — it is an unrelated protocol that
+    /// happens to name `localhost` — so it must still be refused.
+    #[test]
+    fn a_non_http_scheme_on_the_loopback_is_refused() {
+        for endpoint in [
+            "ftp://localhost/token",
+            "ftp://127.0.0.1/token",
+            "ws://localhost/token",
+            "ws://[::1]/token",
+            "ssh://localhost/token",
+        ] {
+            let url = url::Url::parse(endpoint).expect("parses");
+            assert!(
+                !token_endpoint_is_confidential(&url),
+                "{endpoint} is neither HTTPS nor plain HTTP, so the loopback \
+                 carve-out must not apply even though the host is loopback"
+            );
+        }
+    }
+}

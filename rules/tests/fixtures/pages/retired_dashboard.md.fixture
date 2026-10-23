@@ -1,0 +1,8 @@
+---
+kind: docket_deadline_board
+title: Case timeline
+lenses:
+  lawyer: [deadline_board, boundary_note, provenance_statement]
+---
+
+# Case timeline

@@ -1,0 +1,13 @@
+# A task-owned KIND cluster for `navigator dev forgejo up` and `smoke` without
+# the rest of the dependency tier (the CI Forgejo job). Rauthy's NodePort is
+# mapped so the browser-facing issuer, http://localhost:30080/auth/v1/, is the
+# one the Forgejo pod reaches through its loopback bridge. Forgejo itself is
+# reached through a port-forward and needs no mapping.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 30080
+        protocol: TCP

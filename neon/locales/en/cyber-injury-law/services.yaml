@@ -1,0 +1,41 @@
+head_title: "{site_name} | Injury and cybercrime claims"
+meta_description: >-
+  Cyber Injury Law reviews car accidents, negligence, medical malpractice,
+  data theft, cybercrime, and online abuse. Attorney advertisement.
+title: Injury claims and cybercrime
+hero_mark: scales
+tagline: We use AI to put more money in your pocket.
+hero_lines:
+  - text: A lawyer can review what happened.
+    accent_words: 0
+hero_lead: >-
+  We review car accidents, negligence, medical malpractice, data theft,
+  cybercrime, and online abuse. Tell us what happened when you contact us.
+hero_cta:
+  href: "/#cyber-assessment"
+  label: Ask about your situation
+skin: practice
+bands:
+  - kind: cards
+    anchor: consultation
+    overline: Matters we review
+    heading: Injury claims and cybercrime
+    description: >-
+      The firm reviews the facts and applicable law before deciding whether
+      it can offer representation. Contact us to discuss your situation.
+    items:
+      - title: Vehicle collisions
+        body:
+          - - text: Car, truck, motorcycle, and pedestrian claims after a collision.
+      - title: Negligence and premises
+        body:
+          - - text: Injuries from someone else's carelessness, including injuries on another person's property.
+      - title: Medical negligence
+        body:
+          - - text: Injuries involving medical care. A review of the circumstances and records helps determine whether a claim may fit.
+      - title: Data theft and cybercrime
+        body:
+          - - text: Stolen personal information, compromised accounts, online fraud, or other cybercrime.
+      - title: Digital stalking and online abuse
+        body:
+          - - text: Repeated unwanted contact, monitoring, or harassment through digital tools.

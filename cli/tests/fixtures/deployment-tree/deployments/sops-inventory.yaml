@@ -1,0 +1,107 @@
+# The names, never the values, that a deployment may keep in its per-value
+# SOPS file. This is safe to commit: SOPS key names must remain plaintext so
+# reviewers and the no-decrypt shipping lane can audit the shape.
+#
+# Every key below `common` must be present in both rows or neither. That lets
+# providers be added in deliberate pairs. Every value in either row must be
+# SOPS ciphertext. The deployment invariant remains the authority for whether
+# each provisioned row has every required value.
+common:
+  SESSION_SECRET: application session signing key
+  OAUTH_CLIENT_SECRET: Google browser OAuth client secret
+  OAUTH_MICROSOFT_CLIENT_SECRET: Microsoft Entra browser OAuth client secret
+  OAUTH_APPLE_TEAM_ID: Apple Developer Team ID for Sign in with Apple
+  OAUTH_APPLE_KEY_ID: Sign in with Apple key identifier
+  OAUTH_APPLE_PRIVATE_KEY: Sign in with Apple ES256 private key (PKCS#8 PEM, multiline)
+  HCAPTCHA_SECRET: hCaptcha account secret redeeming the public lead forms' challenge
+  RESTATE_BROKER_URL: Restate workflow broker URL
+  RESTATE_INGRESS_URL: Restate invocation ingress URL
+  RESTATE_AUTH_TOKEN: Restate invocation bearer token
+  SENDGRID_API_KEY: restricted outbound mail API key
+  SENDGRID_FROM_EMAIL: authenticated sender address
+  SENDGRID_INBOUND_SECRET: inbound parse webhook path secret
+  SENDGRID_INBOUND_PUBLIC_KEY: inbound parse webhook signature verification key
+  SENDGRID_EVENTS_SECRET: event webhook path secret
+  SENDGRID_EVENTS_PUBLIC_KEY: event webhook signature verification key
+  NAVIGATOR_GITHUB_APP_PRIVATE_KEY: deployment GitHub App private key
+  NAVIGATOR_GIT_WRITER_TOKEN: internal Git writer bearer token
+  NAVIGATOR_SURREAL_USER: SurrealDB administrator user
+  NAVIGATOR_SURREAL_PASSWORD: SurrealDB administrator password
+  SLACK_BOT_TOKEN: Slack bot token for the app's Slack integration
+  DASH0_TOKEN: Dash0 ingest-only auth token scoped to each row's dataset
+  TWILIO_ACCOUNT_SID: Twilio account SID the admin inbox sends texts as
+  TWILIO_AUTH_TOKEN: Twilio auth token verifying inbound SMS webhook signatures
+
+# Each row keeps its own value: a key here may appear in either row, both,
+# or neither, with no parity rule, because each row names a resource in its
+# own project. The runtime KMS key seals Firm integration secrets and Brand
+# social account tokens, and stands alone from the Notion lane.
+independent:
+  NAVIGATOR_RUNTIME_KMS_KEY: the row's own dedicated runtime KMS key resource name
+  NAVIGATOR_IDENTITY_PLATFORM_API_KEY: the row's own Identity Platform browser key; turns on email/password sign-in
+  SLACK_WEBHOOK_URL: the row's own Slack incoming webhook DriDigest posts to when the DBOS executor hosts it
+
+# Brand social app credentials belong to production alone. Staging never
+# receives a copy: a row without them declines social account connection and
+# webhook ingest outright. The public app ids are config.toml coordinates.
+production_only:
+  NAVIGATOR_META_APP_SECRET: Meta app secret for Facebook Page and Instagram account OAuth
+  NAVIGATOR_META_WEBHOOK_VERIFY_TOKEN: Meta webhook subscription verify token
+  NAVIGATOR_META_WEBHOOK_APP_SECRET: Meta app secret verifying X-Hub-Signature-256 on webhook deliveries
+  NAVIGATOR_THREADS_APP_SECRET: Threads app secret for Threads profile OAuth
+  NAVIGATOR_LINKEDIN_CLIENT_SECRET: LinkedIn Company Page OAuth client secret
+  NAVIGATOR_YOUTUBE_CLIENT_SECRET: YouTube production OAuth app secret
+  NAVIGATOR_X_CLIENT_SECRET: X production OAuth app secret
+  NAVIGATOR_TIKTOK_BUSINESS_APP_SECRET: TikTok for Business production OAuth app secret
+
+# The GitHub automation receiver and Firm Notion trial are deliberately
+# single-homed in staging. The Notion database id is encrypted per value even
+# though it only identifies a database: the Navigator manifest projects it
+# from Secret Manager into the web pod, and it does not belong in production
+# until that row independently enables the Notion lane. Firm Slack and Notion
+# tokens live in the staging Firm's admin Integration secrets, not in this
+# file or the per-Project SLACK_BOT_TOKEN above.
+staging_only:
+  NAVIGATOR_GITHUB_WEBHOOK_SECRET: GitHub webhook HMAC secret
+  NAVIGATOR_NOTION_DATABASE_ID: parent database in the staging Notion workspace
+  NAVIGATOR_SMS_TEST_RECIPIENTS: personal numbers simulated-matters staging may text; production has real matters
+
+# These values are consumed by the human-operated `ops ship` registration
+# step, not by either pod. Keep them out of secrets.enc.yaml and Secret
+# Manager's runtime projection.
+operator_only:
+  RESTATE_ADMIN_URL: Restate administration endpoint
+  RESTATE_ADMIN_TOKEN: Restate administration bearer token
+
+# These files are opt-in service inputs, never part of secrets.enc.yaml and
+# never projected through the web/workflow envFrom Secret.
+postgres_service_only:
+  NAVIGATOR_POSTGRES_PASSWORD: PostgreSQL bootstrap role password
+  NAVIGATOR_POSTGRES_TLS_CERTIFICATE: PostgreSQL server TLS certificate
+  NAVIGATOR_POSTGRES_TLS_PRIVATE_KEY: PostgreSQL server TLS private key
+
+# Optional in the same PostgreSQL service file, all four or none: one password
+# per least-privilege login and the CA bundle clients verify the server with.
+# Each login is projected as its own mounted Secret, never through envFrom.
+postgres_client_service_only:
+  NAVIGATOR_POSTGRES_CA_CERT: CA certificate that signs the PostgreSQL server certificate
+  NAVIGATOR_POSTGRES_APP_PASSWORD: navigator_app runtime login password
+  NAVIGATOR_POSTGRES_MIGRATOR_PASSWORD: navigator_owner migration login password
+  NAVIGATOR_POSTGRES_BACKUP_PASSWORD: navigator_backup replication login password
+
+# Optional in the same PostgreSQL service file, beside the client logins above:
+# the DBOS executor's login, projected as its own mounted Secret.
+postgres_dbos_service_only:
+  NAVIGATOR_POSTGRES_DBOS_PASSWORD: navigator_dbos DBOS executor login password
+
+forgejo_service_only:
+  NAVIGATOR_FORGEJO_DATABASE_PASSWORD: Forgejo's dedicated PostgreSQL role password
+  NAVIGATOR_FORGEJO_SECRET_KEY: Forgejo session and encryption key
+  NAVIGATOR_FORGEJO_INTERNAL_TOKEN: Forgejo internal API token
+  NAVIGATOR_FORGEJO_OAUTH2_JWT_SECRET: Forgejo OAuth2 JWT signing secret
+  NAVIGATOR_FORGEJO_POSTGRES_CA_CERT: PostgreSQL CA certificate trusted by Forgejo
+
+# Optional as a set: Forgejo's OIDC client at the installation's issuer. Its public
+# client id is the NAVIGATOR_FORGEJO_OIDC_CLIENT_ID config.toml coordinate.
+forgejo_oidc_service_only:
+  NAVIGATOR_FORGEJO_OIDC_CLIENT_SECRET: Forgejo OIDC client secret at the installation issuer

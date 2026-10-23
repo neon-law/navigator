@@ -1,0 +1,170 @@
+name: release-cut
+
+# ENG-931 step 4, first half: the scheduled version-only pull request.
+# `docs/gitops.md#one-workflow-owns-publishing--deployyml` already governs
+# everything AFTER a bump lands on `main` — `deploy.yml` proves the
+# workspace, builds every image, and creates the immutable tag. This
+# workflow only proposes the bump and arranges its own merge. It creates no
+# tag, builds no image, and ships nothing.
+#
+# DISABLED BY DEFAULT, ON PURPOSE. Both jobs below refuse to do anything
+# unless `vars.RELEASE_TRAIN_ENABLED` is the literal string `true`, which
+# this repository does not set. Flipping it on is a deliberate, separate
+# operator act with its own prerequisites — see docs/release-automation.md —
+# and is out of scope for the change that introduced this file.
+#
+# "NARROWLY SCOPED" IS ENFORCED, NOT ASSUMED. The pull request this workflow
+# opens can only ever be the output of `ops cut-release`: a version bump, its
+# `Cargo.lock`, and swept action pins (`docs/gitops.md#one-workflow-owns-
+# publishing--deployyml`). `merge` re-verifies that shape against the PR's
+# actual diff before touching it — it never trusts the branch name alone —
+# and merges with a token that can hold no more than `contents: write` +
+# `pull_requests: write` on this one repository, the same minimal grant
+# `docs/gitops.md`'s "Auto-merge identity" callout describes for
+# `navigator-merge-queue`. That grant cannot be reused to merge an ordinary
+# code change: `cli/tests/release_cut_workflow.rs` holds both the shape check
+# and the identity's absence of a `workflows` permission.
+#
+# Code review is untouched by any of this. `production`'s signed-commit,
+# linear-history, and required-`ci`-check rules carry no bypass actor
+# (`docs/gitops.md#review-gate-two-rulesets-with-a-narrow-bypass`), so they
+# bind this PR exactly as they bind a human's. What is automated is the
+# review-gate's approval requirement for THIS one mechanical shape, and only
+# once the release App is a resolvable CODEOWNERS entry scoped to the exact
+# paths above — a cutover prerequisite this file does not itself land. See
+# docs/release-automation.md#what-remains-before-cutover.
+
+on:
+  schedule:
+    # 09:00 UTC — mid-morning for whoever would otherwise open this PR by
+    # hand.
+    - cron: "0 9 * * *"
+
+concurrency:
+  # One cut in flight at a time. `ops cut-release` already refuses a covered
+  # date; this stops a second scheduled run from opening a second PR for a
+  # bump the first run has not merged yet.
+  group: release-cut
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  cut:
+    name: open the daily version bump
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    if: vars.RELEASE_TRAIN_ENABLED == 'true'
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      pr-number: ${{ steps.open.outputs.pr-number }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: skip if a release PR is already open
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          open="$(gh pr list --base main --search 'head:release-train/cut- is:open' --json number --jq 'length')"
+          echo "count=${open}" >> "${GITHUB_OUTPUT}"
+
+      - name: probe today's candidate version
+        id: candidate
+        if: steps.existing.outputs.count == '0'
+        run: |
+          set -euo pipefail
+          if cargo run --locked -p cli --quiet -- ops cut-release --dry-run > /tmp/candidate; then
+              echo "tag=$(cat /tmp/candidate)" >> "${GITHUB_OUTPUT}"
+          else
+              echo "::notice::no new release for today's date — $(cat /tmp/candidate 2>/dev/null || true)"
+          fi
+
+      - name: "post progress to #navigator"
+        if: steps.candidate.outputs.tag != ''
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: release-cut
+          step: writing the version bump
+          tag: ${{ steps.candidate.outputs.tag }}
+
+      - name: write the bump and open the PR
+        id: open
+        if: steps.candidate.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.candidate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "navigator-release-train"
+          git config user.email "release-train@users.noreply.github.com"
+          git switch -c "release-train/cut-${TAG}"
+          cargo run --locked -p cli --quiet -- ops cut-release
+          cargo run --locked -p cli --quiet -- ops release pins
+          git push -u origin "release-train/cut-${TAG}"
+          url="$(gh pr create --base main --head "release-train/cut-${TAG}" \
+              --title "chore(release): cut ${TAG}" \
+              --body "Automated daily version bump (ENG-931). Merges itself once \`ci\` is green and its diff is release-shaped; \`deploy.yml\` takes over from there.")"
+          echo "pr-number=${url##*/}" >> "${GITHUB_OUTPUT}"
+
+  merge:
+    name: merge the version bump once ci is green
+    needs: cut
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    if: vars.RELEASE_TRAIN_ENABLED == 'true' && needs.cut.outputs.pr-number != ''
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: mint the release-train App token
+        id: app-token
+        if: vars.RELEASE_APP_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      # THE WHOLE SCOPE CHECK. This App's grant is `contents: write` +
+      # `pull_requests: write` and nothing else — no `workflows`, mirroring
+      # `docs/gitops.md`'s auto-merge identity — so the only thing standing
+      # between that grant and an arbitrary code merge is this diff check. It
+      # must run, and must refuse, before the merge call below ever executes.
+      - name: refuse to merge anything but a release-shaped diff
+        if: steps.app-token.outputs.token
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          NUMBER: ${{ needs.cut.outputs.pr-number }}
+        run: |
+          set -euo pipefail
+          files="$(gh pr diff "${NUMBER}" --name-only)"
+          while IFS= read -r path; do
+              [ -z "${path}" ] && continue
+              case "${path}" in
+                  Cargo.toml|Cargo.lock|.github/workflows/*|.github/actions/*/action.yml) ;;
+                  *)
+                      echo "::error::release PR #${NUMBER} touches ${path}, which ops cut-release never writes — refusing to auto-merge"
+                      exit 1
+                      ;;
+              esac
+          done <<< "${files}"
+
+      - name: wait for the required check, then merge
+        if: steps.app-token.outputs.token
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          NUMBER: ${{ needs.cut.outputs.pr-number }}
+        run: |
+          set -euo pipefail
+          gh pr checks "${NUMBER}" --watch --required --interval 30
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/pulls/${NUMBER}/merge" -f merge_method=squash
+
+      - name: report an unconfigured release App
+        if: steps.app-token.outputs.token == '' && vars.RELEASE_APP_ID == ''
+        run: |
+          echo "::notice::RELEASE_APP_ID is unset — release PR #${{ needs.cut.outputs.pr-number }} is open and waiting for a human to merge it. Expected until the release App is provisioned; see docs/release-automation.md."

@@ -1,0 +1,23 @@
+questionnaire:
+  BEGIN:
+    _: custom_text__mission_statement
+  custom_text__mission_statement:
+    _: people__board_members
+  people__board_members:
+    _: person__registered_agent
+  person__registered_agent:
+    _: END
+  END: {}
+prompts:
+  registered_agent: Who is the registered agent for?
+  mission_statement: "What is the {{for_label}}?"
+workflow:
+  BEGIN:
+    _: board_signatures
+  board_signatures:
+    _: lawyer_review
+  lawyer_review:
+    _: mailroom_send
+  mailroom_send:
+    _: END
+  END: {}

@@ -1,0 +1,18 @@
+apiVersion: monitoring.googleapis.com/v1
+kind: Rules
+metadata:
+  name: navigator-postgres-mirror-recovery
+  namespace: navigator
+spec:
+  groups:
+    - name: postgres-mirror
+      interval: 1m
+      rules:
+        - alert: PostgresMirrorRecoveryIncomplete
+          expr: max(kube_job_status_failed{job_name=~"navigator-postgres-mirror-recovery-.*"}) > 0 or time() - max(kube_cronjob_status_last_successful_time{cronjob="navigator-postgres-mirror-recovery"}) > 2400 or (max(kube_cronjob_info{cronjob="navigator-postgres-mirror-recovery"}) unless max(kube_cronjob_status_last_successful_time{cronjob="navigator-postgres-mirror-recovery"}))
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: PostgreSQL mirror recovery failed or is overdue
+            description: Inspect reconciliation counts and sanitized failures; the Surreal write has already committed.

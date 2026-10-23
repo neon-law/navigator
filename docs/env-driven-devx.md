@@ -1,0 +1,100 @@
+# Env-driven orchestration — one config surface, three audiences
+
+`NAVIGATOR_ENVIRONMENT` is the deployment-profile selector shared by the server, `workflows-service`, and shipping
+preflight. Exact `dev` selects development; exact `production`, empty, or unset selects production. Any other value,
+case variant, or surrounding whitespace is an error. Local KIND uses `dev`; every hosted deployment uses `production`,
+the three `*-staging` rows included, because staging names a role in the release order, not an application value.
+
+It changes neither database engine nor authorization. Every boot applies two seed layers that reach production — the
+canonical seed every deployment shares, and the booting brand's own seed — and `dev` additionally and idempotently
+applies the sample-matter fixture. Local boot also refreshes and stages each sample application before writing
+`.devx/env` for `web`.
+
+The brand layer is selected by the binary rather than by this variable: the brand layer seeds the Firm's own data, and a
+white-label `tenant` boot seeds none; each brand declares its `BrandSeed` in the `Brand` value it hands to the shared
+run loop. That split is why one deployment's postal identities never appear in another's database. All three layers are
+idempotent, so a reset and recreate restores the same baseline.
+
+A **deployment operator** owns Kubernetes, cloud accounts, secrets, domains, and these environment values. That person
+is distinct from a Navigator application **admin**, whose database role grants application authorization but no
+infrastructure access.
+
+`navigator` owns orchestration in `cli/src/devx/mod.rs`; one environment surface serves:
+
+1. **Local dev:** `navigator dev up` against KIND; defaults need no `.env`.
+2. **Every cloud deployment:** `navigator ops gcp setup` against that deployment's own project, then `navigator ops
+   ship`. All six are provisioned and shipped by the same pipeline; there is no reduced staging substrate.
+3. **OSS/multi-cloud:** supply cluster, namespace, overlays, and ports through `.env`, without Rust edits.
+
+## The seam: one `KindConfig`, resolved once
+
+`cli::devx::KindConfig` resolves all KIND/local values once, applies `DEFAULT_*` fallbacks, and is threaded through
+`up`, `deploy`, `down`, `status`, environment rendering, and lifecycle helpers. Add each new knob only to this seam.
+`.env.example` is the operator-facing list of variables and defaults.
+
+## Naming: role, not provider
+
+Variables are named `NAVIGATOR_<scope>_<thing>` so `.env.example` reads as one coherent table rather than two dialects:
+
+- **Shared concepts get one var.** A Kubernetes namespace is the same idea in KIND and GKE, so it is
+  `NAVIGATOR_K8S_NAMESPACE` (no `KIND`/`GKE` prefix).
+- **Provider-specific concepts fork by scope.** The cluster name differs by provider — prod already has
+  `NAVIGATOR_GKE_CLUSTER_NAME`, so the KIND cluster is `NAVIGATOR_KIND_CLUSTER`.
+- **Overlay paths generalize.** `NAVIGATOR_KIND_OVERLAY` (full local stack) and `NAVIGATOR_GKE_OVERLAY` are the same
+  idea at two scopes; a fork points either at its own kustomize overlay.
+
+## Host ports
+
+The host ports split into two categories with very different blast radius:
+
+- **Port-forward ports:** SurrealDB, Restate ingress/admin, SeaweedFS S3, OpenObserve UI and OTLP ingest, and the local
+  server — which binds one port per registered brand it can reach locally rather than only one. Every host in
+  `views::brand::BrandKey::hosts` is a real production/staging domain, so every non-default brand needs its own local
+  port instead of a `Host:` header a developer's machine has no DNS to send. The house-brand ports are
+  `NAVIGATOR_LOCAL_DELETE_YOUR_DATA_PORT` and `NAVIGATOR_LOCAL_LAWYER_SHOOK_PORT`; `web` binds them alongside `PORT`.
+- **Create-time NodePort mappings:** ingress HTTP/HTTPS and Rauthy, rendered into `k8s/kind-config.yaml`.
+
+The CLI renders a temporary KIND config and changes only requested `hostPort` values. Port-forward changes, including
+SeaweedFS, require no cluster recreation.
+
+## Native shared runtime
+
+`navigator dev worktree-env up --runtime native` is opt-in; KIND remains the default runtime. The native lane uses the
+same host lock and descriptor-based slot reservation as KIND. Host `web`, one Restate server, and one
+`workflows-service` keep their worktree slot; SurrealDB, Rauthy, and SeaweedFS are one shared host process set. Each
+Restate server uses TCP listeners and its own `.devx/restate/data` journal; its fabric, ingress, and admin listeners are
+derived from the worktree slot. Each worker uses its own listen and health ports, is built from the checkout, and is
+registered against that worktree's private Restate admin listener through the same registration machinery used by cloud
+deployments. `dev worker-reload` stops and replaces only the recorded worker, then re-registers it.
+
+The native registry records each process's PID, complete command, and process-start identity together with each
+worktree's private SurrealDB database and SeaweedFS bucket/key set. A process record is host-wide, so each claim also
+keeps its own copy of the identities it attached to. A second worktree adopts a verified listener, and a recycled PID is
+treated as stale unless all identity fields still match.
+
+`down` removes only the calling worktree's database, buckets, and claim. Shared processes remain until the final live
+claim leaves. `worktree-env sweep` is a dry run by default and classifies each native claim on both kinds of evidence: a
+claim is live while its checkout is present **and** one of the processes it recorded still answers to the recorded
+identity. A checkout survives a reboot, so the path alone cannot tell a working tier from a claim whose processes died
+with the host. Evidence only ever narrows the live set — a claim that recorded no processes is judged by its checkout
+alone, because an absent record is not proof of a dead process, and the identity check never reads a port, because a
+dependency that is running but refusing connections is still a process a live worktree is using. `--apply` removes only
+the orphaned tenants and task-owned state, and never a shared process another live claim is using. The registry lives at
+`~/.navigator/native-runtime.json` by default and may be relocated with `NAVIGATOR_NATIVE_REGISTRY`; its sibling
+`native-runtime/` directory holds shared process state.
+
+## Testing
+
+Tests in `cli/src/devx/mod.rs` require default/override coverage, ports in generated `.devx/env`, byte-identical default
+KIND config, and override diffs limited to `hostPort` lines. Native tests cover distinct worktree slots, TCP-only
+Restate configuration with one partition, process identity, and teardown ownership. Every readiness-gate member is
+supervised natively, deferred to a named issue, or exempt with a recorded reason, and a test holds that partition exact.
+`OpenObserve` is exempt because telemetry export is opt-in. `ClamAV` is optional on the native lane: `.devx/env` still
+names `NAVIGATOR_CLAMD_ADDR`, so `web` boots, and its fail-closed scanner refuses attachment uploads until a `clamd`
+listens there; use `--runtime kind` to exercise uploads. Both exemptions print at the end of a native `up`.
+
+## Related
+
+- `AGENTS.md` — local development contract.
+- [`cloud-operations.md`](cloud-operations.md) and `.env.example` — production environment surface.
+- [`oss-install.md`](oss-install.md) — GCP provisioning conventions.

@@ -1,0 +1,1189 @@
+/* The firm's public marketing surface: the home page and the practice
+ * pages beneath it.
+ *
+ * Everything here draws its colour from the `--nav-*` tokens, so both colour
+ * schemes are handled by `tokens.css` rather than by a second set of rules
+ * here. The one exception is the tinted band and card fills, which need a wash
+ * of the brand at a low alpha; those use `color-mix` against the surface so
+ * they follow the scheme too.
+ *
+ * The type scale is deliberately larger than the app surface's. These are the
+ * only pages a stranger reads before deciding whether to write to us. */
+
+.fm-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- Shared band scaffolding -------------------------------------------- */
+
+.fm-band {
+  padding-block: clamp(3rem, 7vw, 5.5rem);
+  padding-inline: 1.5rem;
+}
+
+.fm-band__inner {
+  max-width: 72rem;
+  margin-inline: auto;
+}
+
+.fm-band__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: center;
+  text-align: center;
+  margin-block-end: clamp(2rem, 4vw, 3rem);
+}
+
+.fm-overline {
+  margin: 0;
+  color: var(--nav-color-primary);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.fm-band__title {
+  margin: 0;
+  font-family: var(--nav-font-family);
+  font-size: clamp(2rem, 4.5vw, 3rem);
+  font-weight: 600;
+  line-height: 1.1;
+  text-wrap: balance;
+}
+
+.fm-band__description {
+  margin: 0;
+  max-width: 46rem;
+  color: var(--nav-color-text-muted);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.fm-video {
+  display: block;
+  width: min(100%, 64rem);
+  aspect-ratio: 16 / 9;
+  margin-inline: auto;
+  background: #000;
+  object-fit: contain;
+}
+
+/* ---- Hero ---------------------------------------------------------------- */
+
+.fm-hero {
+  padding-block: clamp(3.5rem, 9vw, 7rem) clamp(2rem, 5vw, 3.5rem);
+  padding-inline: 1.5rem;
+  /* A soft brand wash behind the opening screen, fading into the page. */
+  background:
+    radial-gradient(
+      70rem 28rem at 50% -6rem,
+      color-mix(in srgb, var(--nav-color-primary) 14%, transparent),
+      transparent 70%
+    );
+}
+
+.fm-hero__inner {
+  max-width: 58rem;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.25rem;
+  text-align: center;
+}
+
+/* Product/practice identity, drawn by the same component the Rust in Peace
+   four-card slide uses. The round frame gives the line mark enough presence to
+   read as a page logo without turning it into a second wordmark. */
+.fm-hero__mark {
+  width: clamp(4.25rem, 9vw, 6.5rem);
+  height: clamp(4.25rem, 9vw, 6.5rem);
+  padding: 1rem;
+  border: 1px solid color-mix(in oklab, var(--nav-color-primary) 42%, transparent);
+  border-radius: 50%;
+  color: var(--nav-color-primary);
+  background: color-mix(in oklab, var(--nav-color-primary) 9%, var(--nav-color-surface));
+  box-shadow: 0 1rem 3rem color-mix(in oklab, var(--nav-color-primary) 15%, transparent);
+}
+
+.fm-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.375rem 0.875rem;
+  border: 1px solid color-mix(in srgb, var(--nav-color-primary) 40%, transparent);
+  border-radius: 999px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.fm-badge__dot {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: var(--nav-color-primary);
+}
+
+.fm-hero__title {
+  margin: 0;
+  font-family: var(--nav-font-family);
+  font-size: clamp(2.5rem, 7vw, 4.5rem);
+  font-weight: 600;
+  line-height: 1.05;
+  text-wrap: balance;
+}
+
+.fm-hero__tagline {
+  margin: 0;
+  max-width: 52rem;
+  color: var(--nav-color-primary);
+  font-family: var(--nav-font-family);
+  font-size: clamp(1.25rem, 2.8vw, 1.75rem);
+  font-style: italic;
+  font-weight: 500;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.fm-hero__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 44rem;
+}
+
+.fm-hero__body p {
+  margin: 0;
+  color: var(--nav-color-text-muted);
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.fm-hero__body strong {
+  color: var(--nav-color-text);
+  font-weight: 600;
+}
+
+.fm-hero__pullquote {
+  max-width: 40rem;
+  margin: 0;
+  padding-block-start: 1.25rem;
+  border-block-start: 1px solid
+    color-mix(in srgb, var(--nav-color-primary) 25%, transparent);
+  font-family: var(--nav-font-family);
+  font-size: 1.125rem;
+  font-style: italic;
+  line-height: 1.5;
+  text-wrap: balance;
+}
+
+/* An audience page opens smaller: it is an argument, not an identity. */
+.fm-hero--page .fm-hero__title {
+  font-size: clamp(2.25rem, 5.5vw, 3.5rem);
+}
+
+/* ---- Statement ----------------------------------------------------------- */
+
+.fm-band--statement .fm-band__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.25rem;
+  text-align: center;
+}
+
+.fm-statement__lead {
+  max-width: 55rem;
+  margin: 0;
+  font-family: var(--nav-font-family);
+  font-size: clamp(1.5rem, 3.5vw, 2.25rem);
+  font-weight: 500;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+.fm-statement__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 46rem;
+}
+
+.fm-statement__body p {
+  margin: 0;
+  color: var(--nav-color-text-muted);
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.fm-statement__body strong {
+  color: var(--nav-color-text);
+  font-weight: 600;
+}
+
+/* ---- Cards --------------------------------------------------------------- */
+
+.fm-cards {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 60rem) {
+  .fm-cards {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.fm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: clamp(1.5rem, 3vw, 2rem);
+  border: 1px solid color-mix(in srgb, var(--nav-color-primary) 20%, transparent);
+  border-radius: var(--nav-radius-lg);
+  background: var(--nav-color-surface);
+}
+
+.fm-card__title {
+  margin: 0;
+  font-family: var(--nav-font-family);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.fm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fm-chip {
+  padding: 0.3125rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--nav-color-primary) 30%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nav-color-primary) 6%, transparent);
+  font-size: 0.8125rem;
+  line-height: 1.3;
+}
+
+.fm-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.fm-card__body p {
+  margin: 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.fm-card__body strong {
+  color: var(--nav-color-text);
+  font-weight: 600;
+}
+
+.fm-card__link {
+  margin-block-start: auto;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+/* ---- Individual services ------------------------------------------------ */
+
+/* The one band on a marketing page that a reader operates rather than reads.
+   Its list reuses `.fm-cards` / `.fm-card`, so only the search chrome and the
+   per-service detail need rules of their own. */
+
+.fm-services__search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  width: min(100%, 44rem);
+  margin: 0 auto 1rem;
+}
+
+.fm-services__input {
+  flex: 1 1 18rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-lg);
+  background: var(--nav-color-surface);
+  color: var(--nav-color-text);
+  font: inherit;
+  font-size: 1rem;
+}
+
+.fm-services__input:focus-visible {
+  outline: 2px solid var(--nav-color-primary);
+  outline-offset: 2px;
+}
+
+.fm-services__examples {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+/* The chips are real links, not buttons: each carries its own `?q=`, so one
+   works with no JavaScript and can be opened in a new tab or bookmarked. */
+.fm-services__example {
+  display: inline-block;
+  padding: 0.375rem 0.875rem;
+  border: 1px solid color-mix(in srgb, var(--nav-color-primary) 30%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nav-color-primary) 6%, transparent);
+  color: var(--nav-color-text);
+  font-size: 0.875rem;
+  line-height: 1.3;
+  text-decoration: none;
+}
+
+.fm-services__example:hover,
+.fm-services__example:focus-visible {
+  background: color-mix(in srgb, var(--nav-color-primary) 14%, transparent);
+}
+
+.fm-services__count {
+  margin: 0 0 1.5rem;
+  color: var(--nav-color-text-muted);
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+/* A search that finds nothing still says something. A blank band reads as a
+   broken page; this reads as an answer. */
+.fm-services__empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: center;
+  padding: clamp(1.5rem, 4vw, 3rem);
+  border: 1px dashed color-mix(in srgb, var(--nav-color-primary) 30%, transparent);
+  border-radius: var(--nav-radius-lg);
+  color: var(--nav-color-text-muted);
+  text-align: center;
+}
+
+.fm-services__empty-heading {
+  margin: 0;
+  color: var(--nav-color-text);
+  font-family: var(--nav-font-family);
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.fm-services__empty p {
+  margin: 0;
+  max-width: 48ch;
+}
+
+.fm-services__service {
+  gap: 0.625rem;
+}
+
+.fm-services__category {
+  margin: 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.8125rem;
+}
+
+/* A Notation package has two honest ways to buy it. Put them next to each
+   other so the reader compares the a la carte and plan price without doing
+   arithmetic or hunting through a paragraph. */
+.fm-services__pricing {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.5rem;
+  margin: 0.25rem 0 0;
+}
+
+.fm-services__price-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--nav-color-text-muted) 28%, transparent);
+  border-radius: 0.5rem;
+}
+
+.fm-services__price-choice--plan {
+  border-color: color-mix(in srgb, var(--nav-color-primary) 45%, transparent);
+  background: color-mix(in srgb, var(--nav-color-primary) 10%, var(--nav-color-surface));
+}
+
+.fm-services__fee-label {
+  flex-basis: 100%;
+  color: var(--nav-color-text-muted);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fm-services__fee-amount {
+  color: var(--nav-color-text);
+  font-family: var(--nav-font-family);
+  font-size: 1.375rem;
+  font-weight: 600;
+}
+
+.fm-services__fee-period {
+  color: var(--nav-color-text-muted);
+  font-size: 0.875rem;
+}
+
+/* The one-line explanation under a service card's Start link. It sits with
+   the link, not the scope list, so it reads as part of the door rather than
+   as another thing the service includes. */
+
+.fm-services__start-microcopy {
+  margin: 0.25rem 0 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.fm-services__includes-label {
+  margin: 0.5rem 0 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fm-services__includes {
+  margin: 0;
+  padding-inline-start: 1.125rem;
+  color: var(--nav-color-text-muted);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.fm-services__package {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.25rem 0 0;
+  padding: 0.75rem 0.875rem;
+  background: color-mix(in srgb, var(--nav-color-primary) 8%, var(--nav-color-surface));
+  border-radius: 0.5rem;
+}
+
+.fm-services__package-badge,
+.fm-services__package-members-label {
+  margin: 0;
+}
+
+/* The 600 stop, not the 500 one. This badge is the only *text* that sits on
+   `.fm-services__package`'s 8% primary tint, and the tint is what eats the
+   headroom `tokens.css` warns about: the firm's 500 clears 4.89:1 on a plain
+   surface but only 4.41:1 once 8% of itself is mixed into that surface, under
+   the 4.5:1 floor for 11px text. Stepping the ink to `primary-hover` — the
+   alias for 600, and the lighter stop in dark — takes the tightest palette to
+   5.57:1. */
+.fm-services__package-badge {
+  color: var(--nav-color-primary-hover);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fm-services__package-members {
+  margin: 0.15rem 0 0;
+  padding-inline-start: 1.125rem;
+  color: var(--nav-color-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+/* ---- Connected Project -------------------------------------------------- */
+
+.fm-band--project-network {
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 45%, color-mix(in oklab, var(--nav-color-primary) 11%, transparent), transparent 38%),
+    color-mix(in srgb, var(--nav-color-primary) 3%, transparent);
+}
+
+.fm-project-network {
+  margin: 0;
+}
+
+.fm-project-network__map {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "core"
+    "left"
+    "right";
+  gap: 1rem;
+  max-width: 66rem;
+  margin-inline: auto;
+}
+
+.fm-project-network__core,
+.fm-project-network__node {
+  position: relative;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-lg);
+  background: var(--nav-color-surface);
+}
+
+.fm-project-network__core {
+  grid-area: core;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: clamp(1.75rem, 4vw, 2.5rem);
+  text-align: center;
+  box-shadow: 0 1.25rem 3rem color-mix(in oklab, var(--nav-color-primary) 15%, transparent);
+}
+
+.fm-project-network__wheel {
+  width: clamp(4.5rem, 10vw, 6.5rem);
+  height: clamp(4.5rem, 10vw, 6.5rem);
+  margin-block-end: 0.75rem;
+}
+
+.fm-project-network__eyebrow,
+.fm-project-network__external-label {
+  margin: 0;
+  color: var(--nav-color-primary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.fm-project-network__core h3,
+.fm-project-network__node h3 {
+  margin: 0;
+  font-family: var(--nav-font-family);
+  font-size: 1.125rem;
+  line-height: 1.2;
+}
+
+.fm-project-network__core h3 {
+  margin-block: 0.3rem 0.5rem;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+}
+
+.fm-project-network__core > p:last-child,
+.fm-project-network__node p {
+  margin: 0.5rem 0 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.fm-project-network__lane {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  grid-area: left;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fm-project-network__lane--right {
+  grid-area: right;
+}
+
+.fm-project-network__node {
+  padding: 1.1rem;
+}
+
+.fm-project-network__node--left {
+  border-color: color-mix(in srgb, #52749a 40%, var(--nav-color-border));
+}
+
+.fm-project-network__node--right {
+  border-color: color-mix(in srgb, #4f9b79 40%, var(--nav-color-border));
+}
+
+.fm-project-network__tool-panels {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  margin-block-start: 1.5rem;
+}
+
+.fm-project-network__external {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px dashed color-mix(in srgb, var(--nav-color-primary) 45%, var(--nav-color-border));
+  border-radius: var(--nav-radius-lg);
+  background: color-mix(in srgb, var(--nav-color-surface) 82%, transparent);
+}
+
+.fm-project-network__external--saas {
+  grid-column: 1 / -1;
+}
+
+.fm-project-network__tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fm-project-network__tool {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--nav-color-primary) 28%, transparent);
+  border-radius: 999px;
+  background: var(--nav-color-surface);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+@media (min-width: 42rem) {
+  .fm-project-network__tool-panels {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 56rem) {
+  .fm-project-network__map {
+    grid-template-columns: minmax(0, 1fr) minmax(13rem, 0.86fr) minmax(0, 1fr);
+    grid-template-areas:
+      "left core right";
+    align-items: stretch;
+    column-gap: clamp(2rem, 6vw, 5rem);
+  }
+
+  .fm-project-network__lane {
+    grid-template-columns: 1fr;
+    align-content: center;
+  }
+
+  .fm-project-network__core {
+    justify-content: center;
+  }
+
+  .fm-project-network__node::after {
+    position: absolute;
+    top: 50%;
+    width: clamp(2rem, 6vw, 5rem);
+    border-block-start: 1px solid color-mix(in srgb, var(--nav-color-primary) 55%, transparent);
+    content: "";
+  }
+
+  .fm-project-network__node--left::after {
+    right: calc(clamp(2rem, 6vw, 5rem) * -1);
+  }
+
+  .fm-project-network__node--right::after {
+    left: calc(clamp(2rem, 6vw, 5rem) * -1);
+  }
+}
+
+/* ---- Steps --------------------------------------------------------------- */
+
+.fm-band--steps {
+  background: color-mix(in srgb, var(--nav-color-primary) 5%, transparent);
+}
+
+.fm-steps {
+  counter-reset: fm-step;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-width: 52rem;
+  margin-inline: auto;
+}
+
+.fm-step {
+  counter-increment: fm-step;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.5rem 1.25rem;
+  padding: 1.5rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-lg);
+  background: var(--nav-color-surface);
+}
+
+.fm-step::before {
+  content: counter(fm-step);
+  grid-row: 1 / span 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+  font-family: var(--nav-font-family);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.fm-step__title {
+  margin: 0;
+  align-self: center;
+  font-family: var(--nav-font-family);
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.fm-step__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.fm-step__body p {
+  margin: 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.fm-step__body strong {
+  color: var(--nav-color-text);
+  font-weight: 600;
+}
+
+.fm-step__figure {
+  grid-column: 1 / -1;
+  margin: 0.5rem 0 0;
+}
+
+.fm-step__figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-md);
+}
+
+/* ---- Call to action ------------------------------------------------------ */
+
+.fm-band--cta .fm-band__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  text-align: center;
+}
+
+.fm-cta__heading {
+  margin: 0;
+  font-family: var(--nav-font-family);
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
+  font-weight: 600;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.fm-cta__body {
+  margin: 0;
+  max-width: 42rem;
+  color: var(--nav-color-text-muted);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+/* ---- Contact address ----------------------------------------------------- */
+
+.fm-action {
+  margin: 0;
+}
+
+.fm-action__address {
+  color: var(--nav-color-text);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+/* ---- The firm's practice skin ------------------------------------------- */
+
+/* One renderer serves both of the firm's marketing looks, and they want
+   different typography. A page that names `PageSkin::Practice` gets the
+   look the `/disputes` and `/business` pages wear: an eyebrow over a
+   serif statement, left-aligned, with the body in the firm's card.
+
+   The rules mirror `litigation.css` rather than importing it — that sheet is the
+   litigation page's own and is hoisted only there — but the card, the glow, and
+   the eyebrow come from `brand-firm.css`, which a practice-skin page hoists (see
+   `MarketingShell`'s `firm_components`). Everything below is scoped under the
+   modifier, so the plain `PageSkin::Marketing` pages are untouched.
+
+   The base layer centres every band: `.fm-hero__inner`, `.fm-band__heading`, and
+   `.fm-band--statement .fm-band__inner` all set `align-items: center` and
+   `text-align: center`, and the inners carry `margin-inline: auto`. A practice
+   page reads as one column of prose, so each of those is undone explicitly —
+   `text-align` alone would leave the blocks centred inside their own max-width. */
+
+/* The shell supplies the shared horizontal inset and full-width opening wash.
+   Keep the hero and bands aligned with the other practice pages. */
+.fm-page--practice .fm-hero--page {
+  position: relative;
+  overflow: hidden;
+  padding: clamp(2.5rem, 7vw, 5rem) 0 clamp(2rem, 5vw, 3rem);
+  background: none;
+}
+
+/* The band's own inline padding is what pushed a practice page's content
+   24px right of `/disputes` and `/business`; the shell's 1rem is
+   already the inset every other practice-skin element aligns to. */
+.fm-page--practice .fm-band {
+  padding-inline: 0;
+}
+
+.fm-page--practice .fm-hero__glow {
+  inset-inline: -25vw;
+}
+
+.fm-page--practice .fm-hero__inner {
+  position: relative;
+  z-index: 1;
+  align-items: flex-start;
+  max-width: 46rem;
+  margin-inline: 0;
+  text-align: start;
+}
+
+.fm-page--practice .fm-hero__mark {
+  color: var(--firm-brand);
+  border-color: var(--firm-brand-edge);
+  background: var(--firm-brand-tint);
+  box-shadow: 0 1rem 3rem var(--firm-brand-glow);
+}
+
+/* The statement, in the firm's serif at the practice pages' size. */
+.fm-page--practice .fm-hero__title {
+  font-family: var(--firm-serif);
+  font-size: clamp(2.25rem, 6vw, 3.75rem);
+  font-weight: 600;
+  line-height: 1.05;
+}
+
+/* One line of the statement. The statement decides its own breaks rather than
+   taking whatever the viewport gives it, so each line is a block. */
+.fm-page--practice .fm-hero__line {
+  display: block;
+}
+
+/* One word of the statement. The opening words carry the firm's colour, the way
+   `/disputes` sets "Litigation attorneys" — the practice name in brand, the
+   claim after it in text.
+
+   The gap between words is a margin rather than a space in the markup: each word
+   is its own inline-block, and an inline-block collapses the whitespace at its
+   own end, so a space in the view would render as nothing and run the heading
+   together. No reveal animation here — `/disputes` staggers its words on
+   entry, and that flourish belongs to the page the firm leads with rather than
+   to every practice page. */
+.fm-page--practice .fm-word {
+  display: inline-block;
+  margin-inline-end: 0.26em;
+}
+
+.fm-page--practice .fm-word--accent {
+  color: var(--firm-brand);
+}
+
+/* The paragraph under the statement, at the practice pages' lead size. */
+.fm-page--practice .fm-hero__lead {
+  margin: 0;
+  max-width: 44rem;
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--nav-color-text-muted);
+}
+
+/* The one call to action in the hero wears the firm's colour rather than the
+   product chrome's cyan. `theme.css` sets the primary button through
+   `.nav-theme a.nav-btn--primary`, so this has to match that specificity to
+   win — the same pairing `/disputes` uses for the same button. */
+.nav-theme a.nav-btn--primary.fm-hero__cta,
+.nav-theme a.nav-btn--primary.fm-hero__cta:hover,
+.nav-theme a.nav-btn--primary.fm-hero__cta:focus-visible {
+  border-color: var(--firm-brand);
+  background: var(--firm-brand);
+  color: var(--firm-on-brand);
+}
+
+.nav-theme a.nav-btn--primary.fm-hero__cta:hover,
+.nav-theme a.nav-btn--primary.fm-hero__cta:focus-visible {
+  border-color: var(--firm-brand-strong);
+  background: var(--firm-brand-strong);
+}
+
+/* Every band reads as one left-aligned column. */
+.fm-page--practice .fm-band__inner {
+  max-width: 62rem;
+  margin-inline: 0;
+}
+
+.fm-page--practice .fm-band__heading {
+  align-items: flex-start;
+  text-align: start;
+}
+
+.fm-page--practice .fm-band__title {
+  font-family: var(--firm-serif);
+}
+
+.fm-page--practice .fm-band--statement .fm-band__inner {
+  align-items: flex-start;
+  text-align: start;
+}
+
+/* A statement's lead is its display line, in the serif the practice pages use. */
+.fm-page--practice .fm-statement__lead {
+  max-width: 40rem;
+  font-family: var(--firm-serif);
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+/* The prose sits in the firm's card, the way the practice pages carry a body. */
+.fm-page--practice .fm-band--statement .fm-statement__body {
+  max-width: none;
+  padding: clamp(1.5rem, 4vw, 2.25rem);
+  border: 1px solid var(--nav-color-border);
+  border-radius: 1rem;
+  background: var(--nav-color-surface);
+}
+
+.fm-page--practice .fm-statement__body p {
+  max-width: 68ch;
+  color: var(--nav-color-text);
+}
+
+/* ---- CLI downloads ------------------------------------------------------- */
+
+/* The three boxes ARE the home page's `.home-practice`, and `home.css` supplies
+   every part of that: the three-column grid, the border, the lift, and the
+   radial wash that swells across the whole box on hover. `MarketingShell`
+   hoists that sheet for any page carrying a downloads band, so the rules here
+   are only the parts a download box has and a practice box does not — the
+   version line above the grid, the filename inside each box, and the
+   package-manager block underneath. Nothing here restates a `.home-practice`
+   rule; a copy would be the same declarations with a second place to drift. */
+
+.fm-downloads__version {
+  margin: 0 0 clamp(1.25rem, 3vw, 2rem);
+  text-align: center;
+  color: var(--nav-color-text-muted);
+  font-size: 0.9375rem;
+}
+
+/* The version, set as the string it is. A reader retypes this into an issue or
+   a shell far more often than they read it as prose. */
+.fm-downloads__tag {
+  padding: 0.15em 0.45em;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 0.375rem;
+  background: var(--nav-color-surface);
+  color: var(--nav-color-text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+/* `home.css` sizes the grid for the foot of the home page, where the boxes
+   close the document. Here they are the band's subject, so they take the band's
+   own width and a little more air between them. */
+.fm-downloads__grid {
+  max-width: 60rem;
+  margin-inline: auto;
+}
+
+@media (min-width: 48rem) {
+  .fm-downloads__grid {
+    gap: 1.75rem;
+  }
+}
+
+/* Two platforms ship — macOS and Linux — so the band keeps two columns where
+   the home grid widens to three. Both classes, to outrank `home.css`. */
+@media (min-width: 60rem) {
+  .home-practices__grid.fm-downloads__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* A download box centres on its mark the way the practice boxes do, and its
+   text stays centred under it — three short labels read as a row of choices,
+   where the home page's sentences read as prose. */
+.fm-download {
+  align-items: center;
+  text-align: center;
+  padding-block: clamp(1.75rem, 4vw, 2.5rem);
+}
+
+/* The filename, pinned to the bottom of the box so three boxes of unequal prose
+   still line their filenames up. Muted and monospaced: it is not the box's
+   message, it is the receipt for clicking it. */
+.fm-download__file {
+  margin: auto 0 0;
+  padding-block-start: 0.35rem;
+  color: var(--nav-color-text-muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+/* ---- The package-manager route ------------------------------------------- */
+
+.fm-package {
+  max-width: 60rem;
+  margin: clamp(2rem, 4vw, 3rem) auto 0;
+  padding: clamp(1.5rem, 3vw, 2rem);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-lg);
+  background: var(--nav-color-surface);
+}
+
+.fm-package__heading {
+  margin: 0 0 0.75rem;
+  font-family: var(--nav-font-family);
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.fm-package__body p {
+  margin: 0 0 0.75rem;
+  max-width: 68ch;
+  color: var(--nav-color-text-muted);
+}
+
+/* One command per block, so triple-clicking a line selects that command and not
+   its neighbour. `overflow-x` rather than wrapping: a wrapped shell command
+   pasted into a terminal is a command a reader has to repair. */
+.fm-package__command {
+  margin: 0.5rem 0 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 0.5rem;
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
+.fm-card__logo { object-fit: contain; object-position: left center; margin-bottom: 1rem; }
+
+/* Nautilus keeps the shared practice layout and controls, with an ocean palette. */
+.fm-page--nautilus {
+  background: #061f2b;
+  color: #e6faf7;
+  --nav-color-text: #e6faf7;
+  --nav-color-text-muted: #b6d4d6;
+}
+.fm-page--nautilus .fm-hero {
+  min-height: 48rem;
+  background: radial-gradient(ellipse at 85% 40%, #125062 0, transparent 60%), #061f2b;
+  position: relative;
+  overflow: hidden;
+}
+.fm-page--nautilus .fm-hero::after {
+  content: "";
+  position: absolute;
+  inset: 2rem -3rem 0 45%;
+  background: url('/public/images/nautilus-shell.svg') center / contain no-repeat;
+  pointer-events: none;
+}
+.fm-page--nautilus .fm-hero__inner {
+  position: relative;
+  z-index: 1;
+  margin-left: clamp(1.5rem, 5vw, 5rem);
+  margin-right: 0;
+  max-width: 48rem;
+  text-align: left;
+}
+.fm-page--nautilus .fm-hero__title {
+  font-size: clamp(3.25rem, 5.5vw, 6rem);
+  max-width: 12ch;
+  line-height: .98;
+  color: #effff9;
+}
+.fm-page--nautilus .fm-hero__lead { max-width: 36rem; color: #c6e5e5; }
+.fm-page--nautilus .firm-eyebrow,
+.fm-page--nautilus .fm-overline { color: #7ae3d5; }
+.fm-page--nautilus .fm-band { border-color: #2e5966; }
+.fm-page--nautilus .fm-band__title,
+.fm-page--nautilus .fm-statement__lead { color: #effff9; }
+.fm-page--nautilus .fm-card { background: #103544; border-color: #47727b; color: #e6faf7; }
+.fm-page--nautilus .fm-card__title { color: #effff9; }
+.fm-page--nautilus .fm-card__body,
+.fm-page--nautilus .fm-band__description { color: #c6e5e5; }
+.fm-page--nautilus .fm-band--enrollment { background: #e6f5ef; color: #102f39; }
+.fm-page--nautilus .fm-band--enrollment .fm-band__title { color: #102f39; }
+.fm-page--nautilus [data-nautilus-intake] { max-width: 42rem; margin: 2rem auto 0; }
+.fm-page--nautilus progress { width: 100%; accent-color: #126a70; }
+.fm-page--nautilus [hidden] { display: none !important; }
+.fm-page--nautilus dt { font-weight: 700; margin-top: 1rem; }
+.fm-page--nautilus dd { margin: .4rem 0 1rem; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .fm-page--nautilus .fm-hero { min-height: 0; padding-bottom: 15rem; }
+  .fm-page--nautilus .fm-hero::after { inset: auto -3rem -6rem 20%; height: 26rem; opacity: .6; }
+  .fm-page--nautilus .fm-hero__inner { margin: 0 1.5rem; }
+}
+.fm-page--nautilus {
+  --nav-color-surface: #103544;
+  --nav-color-border: #47727b;
+}
+.fm-page--nautilus .fm-band { padding-inline: clamp(1.5rem, 5vw, 5rem); }
+.fm-page--nautilus .fm-band__inner { max-width: 76rem; margin-inline: auto; }
+.fm-page--nautilus .fm-band--enrollment {
+  --nav-color-surface: #ffffff;
+  --nav-color-text: #102f39;
+  --nav-color-text-muted: #38515a;
+  --nav-color-border: #6a868b;
+}
+
+.fm-page--nautilus .fm-hero__mark { display: none; }
+
+.fm-page--nautilus [data-nautilus-intake] form > button + button { margin-left: .5rem; }
+.fm-page--nautilus a:not(.nav-btn) { color: #8be9df; }
+.fm-page--nautilus .fm-band--enrollment a:not(.nav-btn) { color: #1b6670; }

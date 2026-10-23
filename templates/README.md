@@ -1,0 +1,185 @@
+# Notations
+
+This tree holds Neon Law Navigator's **notations** — the executable form of the firm's legal work. A notation is one
+markdown file that carries three things at once: the **template** (the legal prose the client signs), the
+**questionnaire** that gathers the answers that fill it in, and the **workflow** that advances the document from intake
+through attorney review to signature, filing, or closing. Templates, questionnaires, and workflows are not three
+separate files — they are three faces of one notation.
+
+When a notation is bound to a respondent and a Project it comes to life as a running **Notation** (capital N): the live
+matter whose questions get answered and whose workflow advances. That runtime vocabulary is taught in
+[`docs/notation.md`](../docs/notation.md); this page is about how the notation tree is organized, named, and checked.
+
+Every notation has YAML frontmatter with `title`, `jurisdiction`, `respondent_type`, `confidential`, and the
+`questionnaire:` / `workflow:` state machines. The body is legal prose with `{{question_code}}` placeholders. Every key
+is explained, in plain English and for attorneys, in [`docs/frontmatter.md`](../docs/frontmatter.md).
+
+A notation's template half is also called a **Draft** — the lawyer's word for the same authored file, used
+interchangeably with Template. See the [Draft](../docs/glossary/draft.md) glossary entry, which also separates it from
+the lowercase `draft` states that appear inside a running Notation.
+
+## Business library
+
+These nine review drafts pair plain legal prose with typed parties, dates, and governing law, plus fillable commercial
+schedules. Each workflow requires lawyer review and supports a revision loop. Public previews let a reader try the
+questionnaire without saving answers; a real Notation belongs to a Project.
+
+- [Mutual Non-Disclosure Agreement](notations/neon_law/mutual_nda.md)
+- [One-Way Non-Disclosure Agreement](notations/neon_law/one_way_nda.md)
+- [Advisor Agreement](notations/neon_law/advisor_agreement.md)
+- [Master Services Agreement](notations/neon_law/master_services_agreement.md)
+- [Employee Offer Letter](notations/neon_law/employee_offer_letter.md)
+- [Business Associate Agreement](notations/neon_law/business_associate_agreement.md)
+- [U.S. Data Processing Addendum](notations/neon_law/dpa_us.md)
+- [Global Data Processing Addendum](notations/neon_law/dpa_global.md)
+- [Privacy Policy](notations/neon_law/privacy_policy.md)
+
+The [source inventory and drafting decisions](../docs/business-notations.md) record how these drafts differ from the
+public templates they started from. These drafts require transaction-specific legal review before use.
+
+## Three shelves
+
+The tree has exactly three top-level shelves:
+
+```text
+templates/
+├── github/
+├── notations/
+└── README.md
+```
+
+Every legal notation lives under `notations/`, which itself has two shelves — `notations/forms/` and
+`notations/neon_law/`:
+
+```text
+templates/notations/
+├── forms/
+└── neon_law/
+```
+
+`notations/forms/` holds government form-backed templates. Its paths (below `notations/`) mirror the public assets
+bucket. If the blank PDF is stored at `gs://<assets-bucket>/forms/united_states/nevada/state/nv__llc_formation.pdf`, the
+local canonical copy lives at:
+
+```text
+templates/notations/forms/united_states/nevada/state/nv__llc_formation.pdf
+templates/notations/forms/united_states/nevada/state/nv__llc_formation.fields.toml
+templates/notations/forms/united_states/nevada/state/nv__llc_formation.md
+```
+
+The markdown file is the catalog card and workflow. Its filename stem is the form identity:
+
+```yaml
+title: Nevada LLC Formation
+jurisdiction: NV
+origin_url: https://www.nvsos.gov/businesses/commercial-recordings/forms-fees/all-business-forms
+respondent_type: person_and_entity
+confidential: false
+output: form
+form: nv__llc_formation
+```
+
+`origin_url` is the government page where the blank can be obtained. Git records the exact bytes we vendored; the URL
+records where those bytes came from.
+
+`notations/neon_law/` holds the firm's letters, sample litigation documents, and business templates:
+
+```text
+templates/notations/neon_law/
+├── onboarding__letter.md
+└── offboarding__letter.md
+```
+
+Each file declares its own confidentiality classification. Public business templates contain no client data. The marks
+are reserved. **NEON LAW** is a registered trademark of Neon Law IP LLC (U.S. Reg. No. 6,325,650);
+**DELETEYOURDATA.COM™** and **LAWYER SHOOK™** are common-law marks of Shook Law PC; see the [Trademark note in the root
+README.md](../README.md#trademark). A rebrand goes through the white-label seam.
+
+`navigator project gate` rejects any legal template outside `notations/forms/` or `notations/neon_law/`. Those two
+shelves are the whole legal-notation surface; `github/` sits beside `notations/` for engineering intake, and nowhere
+else qualifies.
+
+`github/` holds the engineering intake notations — the questionnaires that gather what a GitHub issue or pull request
+needs before it is opened, and the bodies that render the answers into the text that gets posted. They declare `kind:
+github` and hold exactly two files, because GitHub opens exactly two things from a questionnaire:
+
+```text
+templates/github/
+├── create_issue.md
+└── create_pull_request.md
+```
+
+A GitHub notation borrows the questionnaire grammar the legal notations use, so it reads the same way, but it is not a
+legal instrument: it binds to no respondent, declares no jurisdiction or `confidential:` classification, never reaches
+lawyer review, and is never imported as a `templates` row. The rules it is held to are the questionnaire-grammar subset
+(`N101`, `N103`, `N104`, `N113`, `N115`, `N118`, `N120`) plus `N119`, which pins the shelf's contract.
+
+Both files ask the same two questions before anything else. **The change surface** — `web`, `api`, `infrastructure`, or
+`form` — says what the change touches, and each value implies the gate the work has to clear; hover any of them in an
+editor to see which. It is asked identically on the issue and the pull request so the answer carries from one to the
+other. **The Engineering Council question** records whether the council convenes, because `AGENTS.md` says councils are
+used only when earned and that judgment should be written down rather than remembered. Beyond those two, each file asks
+for the narrative it renders: the issue states the observed problem, scope, acceptance criteria, covering tests, and
+blast radius; the pull request states what changed, the covering test, the gates that ran, and the walkthrough.
+
+## Naming convention
+
+The `navigator project gate` command enforces these with the N-family notation rules:
+
+1. **Only `notations/forms/`, `notations/neon_law/`, and `github/` are valid template locations.**
+2. **Every legal template declares `jurisdiction:`**, using a code from `store/seeds/Jurisdiction.yaml` such as `NV`,
+   `CA`, or `US`. A `github/` notation declares none — it is engineering intake, not legal work.
+3. **Form codes are jurisdiction-first**: `nv__llc_formation`, `us__form_990`. The filename stem starts with that
+   jurisdiction prefix, and the `form` binding matches the stem.
+4. **Shared firm codes are role-first**: `onboarding__letter`, `offboarding__letter`.
+5. **Every path segment is lowercase `snake_case`**.
+
+Run it from the repository root before committing. One run covers this tree and every other workspace README, and the
+gate classifies each file automatically, so there is no path or mode flag to pass:
+
+```bash
+cargo run -p cli --quiet -- project gate
+```
+
+## Authoring with live feedback — the LSP
+
+You do not have to run the gate by hand to find a problem. The same rule engine ships as a small language server,
+`navigator-lsp`, that any editor (VS Code, Zed, Neovim, Helix, Emacs) can attach to `*.md`. As you type a notation it
+underlines what is wrong, in place:
+
+- a **red** underline is a blocking error — a missing `title`, an unknown `respondent_type`, a `workflow` with no
+  `lawyer_review`, or a machine-driven notation that declares only one of `questionnaire:` / `workflow:`;
+- a **yellow** underline is a non-blocking advisory — most often a workflow step that is allowed but not built yet.
+
+Hover any underline for the rule and the fix. The server runs entirely on your machine and sends nothing anywhere — the
+same confidentiality the `confidential:` key is there to protect. The frontmatter keys it checks are documented for
+attorneys in [`docs/frontmatter.md`](../docs/frontmatter.md); editor setup is in
+[`docs/lsp/README.md`](../docs/lsp/README.md).
+
+## Adding a form template
+
+1. Put the blank PDF under the bucket-shaped local path:
+   `templates/notations/forms/<country>/<jurisdiction>/<office>/<code>.pdf`.
+2. Add a sibling `<code>.fields.toml` when the form is fillable.
+3. Add a sibling `<code>.md` whose stem is the form code and whose `origin_url` is the government source.
+4. Add the PDF to `forms/src/lib.rs` so the binary embeds the same bytes the repo carries.
+5. Run `cargo run -p cli -- project gate` and the `forms` crate tests.
+
+## Licensing
+
+This tree is licensed on the same terms as the rest of the repository, and deliberately so.
+
+**Navigator’s original notation material is `MIT OR Apache-2.0`** — legal prose, questionnaire prompts, and workflow
+definitions follow the same license as the code. Preserve the applicable copyright and attribution notices when
+redistributing or adapting them. Copyright in Neon Law IP LLC's original material remains with Neon Law IP LLC;
+contributors retain their own copyright unless a separate agreement provides otherwise. See [LICENSE](../LICENSE),
+[LICENSE-MIT](../LICENSE-MIT), [LICENSE-APACHE-2](../LICENSE-APACHE-2), [NOTICE](../NOTICE), and [contributor
+terms](../CONTRIBUTORS.md).
+
+**The blank government PDFs under `notations/forms/` are not Neon Law IP LLC's to license.** They are works of the
+issuing state or federal agency, reproduced here so the binary embeds the same bytes the repo carries. Neon Law IP LLC
+claims no copyright in them and grants none. What it does license is its own material beside each one: the catalog card,
+the `.fields.toml` field map, and the workflow that fills the form in.
+
+**A template change is still attorney-reviewed.** The licence makes the prose free to reuse; it does not make the prose
+safe to change unreviewed. A change here alters a document a real client may sign.

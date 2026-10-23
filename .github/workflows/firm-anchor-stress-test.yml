@@ -1,0 +1,141 @@
+# The firm-anchor race, stress-tested off the PR critical path (ENG-312, ENG-441).
+#
+# Why this exists rather than a merge-gate assertion: the fork is rare. One
+# occurrence in 82 gate runs, which puts the per-run rate somewhere in
+# 0.04%-8.7% (95% Poisson on a single event) — too wide to catch inside a
+# per-PR budget, and wide enough that a green gate run says almost nothing.
+# Racing it once per PR is what let recurrences land on unrelated branches
+# (#57, #63, ENG-272; #114, ENG-312) instead of being caught here.
+#
+# So the volume moves here: thousands of races nightly, and a fork fails THIS
+# lane, on a schedule, where it is a signal about the store rather than a red
+# gate on someone's footer-CSS change.
+#
+# `left: 2` means two rows were allowed to hold the anchor key. It is a
+# data-integrity failure, never contention noise, and it is never resolved by
+# re-running — see ENG-272. If this lane goes red, read it.
+name: firm-anchor-stress-test
+
+on:
+  schedule:
+    # Nightly, well clear of the working day.
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: iterations, each racing 4 concurrent copies x 8 rounds
+        default: "600"
+
+jobs:
+  stress-test:
+    # The class the fork was observed on. It is scheduler-dependent, so the
+    # runner is part of the reproduction, not an implementation detail.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C strip=symbols"
+    steps:
+      - name: install lld
+        run: sudo apt-get update && sudo apt-get install -y lld
+
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: 1.98.0
+
+      # The gate races this binary under coverage instrumentation, and that is
+      # the build the fork was observed in. Counter writes on every branch widen
+      # the window inside the claim, so an uninstrumented stress test is not the same
+      # experiment.
+      - name: install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: cache the Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: stress-test the firm-anchor race
+        run: |
+          set -uo pipefail
+          echo "nproc: $(nproc)"
+          echo "arch : $(uname -m)"
+          eval "$(cargo llvm-cov show-env --export-prefix)"
+          cargo llvm-cov clean --profraw-only
+
+          BIN=$(cargo test -p store --test firm_anchor_race --no-run --locked \
+                  --message-format=json 2>/dev/null \
+                | jq -r 'select(.executable != null and .target.name == "firm_anchor_race") | .executable' \
+                | tail -1)
+          test -n "$BIN" || { echo "::error::could not locate the race binary"; exit 1; }
+          echo "binary: $BIN"
+
+          ROUTE_BIN=$(cargo test -p server --test routes --no-run --locked \
+                  --message-format=json 2>/dev/null \
+                | jq -r 'select(.executable != null and .target.name == "routes") | .executable' \
+                | tail -1)
+          test -n "$ROUTE_BIN" || { echo "::error::could not locate the route race binary"; exit 1; }
+          echo "route binary: $ROUTE_BIN"
+
+          ITERS="${{ inputs.iterations || '600' }}"
+          # ENG-312: name the branch each racer left `take_claim` through, so a
+          # fork arrives with the mechanism attached instead of just a count.
+          export NAV_ANCHOR_TRACE=1
+          # Oversubscribe: 4 copies x 8 tokio workers on 4 vCPU. An idle machine
+          # hides this for hundreds of rounds.
+          CONC=4
+
+          forks=0
+          for i in $(seq 1 "$ITERS"); do
+            pids=""; rc=0
+            for j in $(seq 1 "$CONC"); do
+              "$BIN" --exact concurrent_creates_land_exactly_one_anchor \
+                --test-threads=1 > "/tmp/out.$j" 2>&1 &
+              pids="$pids $!"
+            done
+            for p in $pids; do wait "$p" || rc=1; done
+            if [ "$rc" -ne 0 ]; then
+              forks=$((forks + 1))
+              echo "::error::iteration $i forked the firm anchor"
+              # The whole output of the copy that forked: the ANCHOR trace lines
+              # are the point, not the panic line.
+              for f in /tmp/out.*; do
+                grep -q "panicked at" "$f" || continue
+                echo "--- $f ---"
+                cat "$f"
+              done
+            fi
+            [ $((i % 50)) -eq 0 ] && echo "... $i iterations, $forks forks"
+          done
+
+          races=$((ITERS * CONC * 8))
+          echo "=== $forks forks in $ITERS iterations (~$races races) ==="
+          if [ "$forks" -ne 0 ]; then
+            echo "::error::the firm anchor forked $forks time(s) — this is a data-integrity failure, not a flake; do not re-run to clear it"
+            exit 1
+          fi
+
+          # ENG-441: the PR gate keeps the two fresh-engine route races to one
+          # bounded round. Repeat every route-level assertion at its original
+          # twelve-round volume here, alongside ENG-312's store reproduction.
+          ROUTE_ROUNDS=12
+          route_failures=0
+          for test_name in \
+            concurrent_creates_cannot_fork_the_firm_anchor \
+            a_delete_racing_a_rename_into_the_firm_name_never_removes_the_anchor \
+            a_rename_racing_a_rename_into_the_firm_name_never_loses_the_anchor; do
+            for round in $(seq 1 "$ROUTE_ROUNDS"); do
+              output="/tmp/route-${test_name}-${round}"
+              "$ROUTE_BIN" --exact "$test_name" --test-threads=1 > "$output" 2>&1 || {
+                route_failures=$((route_failures + 1))
+                echo "::error::route test $test_name failed in stress-test round $round — this is a data-integrity failure, not a flake; do not re-run to clear it"
+                cat "$output"
+              }
+            done
+          done
+          echo "=== $route_failures route failures across $ROUTE_ROUNDS rounds per test ==="
+          if [ "$route_failures" -ne 0 ]; then
+            echo "::error::the route-level firm-anchor reproduction failed — do not re-run to clear it"
+            exit 1
+          fi

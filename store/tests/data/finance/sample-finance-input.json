@@ -1,0 +1,6468 @@
+{
+  "notice": "Synthetic data. No real firm, person, or figure.",
+  "seed": 20260930,
+  "states": [
+    {
+      "code": "A",
+      "name": "State A"
+    },
+    {
+      "code": "B",
+      "name": "State B"
+    },
+    {
+      "code": "C",
+      "name": "State C"
+    },
+    {
+      "code": "D",
+      "name": "State D"
+    },
+    {
+      "code": "E",
+      "name": "State E"
+    }
+  ],
+  "verticals": [
+    {
+      "key": "special-education",
+      "name": "Special Education"
+    },
+    {
+      "key": "civil-litigation",
+      "name": "Civil Litigation"
+    },
+    {
+      "key": "family-law",
+      "name": "Family Law"
+    },
+    {
+      "key": "estate-planning",
+      "name": "Estate Planning"
+    },
+    {
+      "key": "immigration",
+      "name": "Immigration"
+    },
+    {
+      "key": "personal-injury",
+      "name": "Personal Injury"
+    },
+    {
+      "key": "business",
+      "name": "Business"
+    },
+    {
+      "key": "criminal-defense",
+      "name": "Criminal Defense"
+    }
+  ],
+  "attorneys": [
+    {
+      "id": "atty-01",
+      "name": "Alex Samplewood",
+      "home_state": "A"
+    },
+    {
+      "id": "atty-02",
+      "name": "Blair Fixtureton",
+      "home_state": "A"
+    },
+    {
+      "id": "atty-03",
+      "name": "Casey Mockford",
+      "home_state": "A"
+    },
+    {
+      "id": "atty-04",
+      "name": "Devon Testerly",
+      "home_state": "B"
+    },
+    {
+      "id": "atty-05",
+      "name": "Eden Placeholder",
+      "home_state": "B"
+    },
+    {
+      "id": "atty-06",
+      "name": "Finley Syntheton",
+      "home_state": "C"
+    },
+    {
+      "id": "atty-07",
+      "name": "Gray Exampleton",
+      "home_state": "C"
+    },
+    {
+      "id": "atty-08",
+      "name": "Harper Dummyfield",
+      "home_state": "D"
+    },
+    {
+      "id": "atty-09",
+      "name": "Indy Fakeman",
+      "home_state": "D"
+    },
+    {
+      "id": "atty-10",
+      "name": "Jules Notreal",
+      "home_state": "E"
+    },
+    {
+      "id": "atty-11",
+      "name": "Kit Stubbs",
+      "home_state": "E"
+    },
+    {
+      "id": "atty-12",
+      "name": "Lane Mockingly",
+      "home_state": "E"
+    }
+  ],
+  "months": [
+    "2025-10",
+    "2025-11",
+    "2025-12",
+    "2026-01",
+    "2026-02",
+    "2026-03",
+    "2026-04",
+    "2026-05",
+    "2026-06",
+    "2026-07",
+    "2026-08",
+    "2026-09"
+  ],
+  "matters": [
+    {
+      "id": "m-0001",
+      "month": "2025-10",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-03",
+      "rain_maker": "atty-11",
+      "billed_cents": 280000,
+      "collected_cents": 275000
+    },
+    {
+      "id": "m-0002",
+      "month": "2025-10",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 325000,
+      "collected_cents": 307000
+    },
+    {
+      "id": "m-0003",
+      "month": "2025-10",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-03",
+      "rain_maker": "atty-12",
+      "billed_cents": 300000,
+      "collected_cents": 233000
+    },
+    {
+      "id": "m-0004",
+      "month": "2025-10",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-03",
+      "rain_maker": "atty-04",
+      "billed_cents": 1275000,
+      "collected_cents": 1172000
+    },
+    {
+      "id": "m-0005",
+      "month": "2025-10",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-03",
+      "rain_maker": "atty-07",
+      "billed_cents": 1110000,
+      "collected_cents": 861000
+    },
+    {
+      "id": "m-0006",
+      "month": "2025-10",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-02",
+      "rain_maker": "atty-03",
+      "billed_cents": 780000,
+      "collected_cents": 654000
+    },
+    {
+      "id": "m-0007",
+      "month": "2025-10",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-12",
+      "billed_cents": 470000,
+      "collected_cents": 436000
+    },
+    {
+      "id": "m-0008",
+      "month": "2025-10",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-03",
+      "rain_maker": "atty-07",
+      "billed_cents": 355000,
+      "collected_cents": 303000
+    },
+    {
+      "id": "m-0009",
+      "month": "2025-10",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-01",
+      "rain_maker": "atty-12",
+      "billed_cents": 485000,
+      "collected_cents": 375000
+    },
+    {
+      "id": "m-0010",
+      "month": "2025-10",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-01",
+      "rain_maker": "atty-01",
+      "billed_cents": 775000,
+      "collected_cents": 633000
+    },
+    {
+      "id": "m-0011",
+      "month": "2025-10",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 670000,
+      "collected_cents": 573000
+    },
+    {
+      "id": "m-0012",
+      "month": "2025-10",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-03",
+      "rain_maker": "atty-06",
+      "billed_cents": 700000,
+      "collected_cents": 524000
+    },
+    {
+      "id": "m-0013",
+      "month": "2025-10",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 920000,
+      "collected_cents": 721000
+    },
+    {
+      "id": "m-0014",
+      "month": "2025-10",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 455000,
+      "collected_cents": 393000
+    },
+    {
+      "id": "m-0015",
+      "month": "2025-10",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-05",
+      "rain_maker": "atty-06",
+      "billed_cents": 1820000,
+      "collected_cents": 1630000
+    },
+    {
+      "id": "m-0016",
+      "month": "2025-10",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 1025000,
+      "collected_cents": 857000
+    },
+    {
+      "id": "m-0017",
+      "month": "2025-10",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-05",
+      "rain_maker": "atty-01",
+      "billed_cents": 385000,
+      "collected_cents": 310000
+    },
+    {
+      "id": "m-0018",
+      "month": "2025-10",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-04",
+      "rain_maker": "atty-01",
+      "billed_cents": 635000,
+      "collected_cents": 565000
+    },
+    {
+      "id": "m-0019",
+      "month": "2025-10",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-04",
+      "rain_maker": "atty-03",
+      "billed_cents": 560000,
+      "collected_cents": 477000
+    },
+    {
+      "id": "m-0020",
+      "month": "2025-10",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-05",
+      "rain_maker": "atty-06",
+      "billed_cents": 330000,
+      "collected_cents": 305000
+    },
+    {
+      "id": "m-0021",
+      "month": "2025-10",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-04",
+      "rain_maker": "atty-12",
+      "billed_cents": 565000,
+      "collected_cents": 542000
+    },
+    {
+      "id": "m-0022",
+      "month": "2025-10",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 465000,
+      "collected_cents": 411000
+    },
+    {
+      "id": "m-0023",
+      "month": "2025-10",
+      "state": "C",
+      "vertical": "civil-litigation",
+      "lead": "atty-06",
+      "rain_maker": "atty-12",
+      "billed_cents": 805000,
+      "collected_cents": 651000
+    },
+    {
+      "id": "m-0024",
+      "month": "2025-10",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 835000,
+      "collected_cents": 685000
+    },
+    {
+      "id": "m-0025",
+      "month": "2025-10",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-07",
+      "rain_maker": "atty-11",
+      "billed_cents": 385000,
+      "collected_cents": 301000
+    },
+    {
+      "id": "m-0026",
+      "month": "2025-10",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-06",
+      "rain_maker": "atty-02",
+      "billed_cents": 480000,
+      "collected_cents": 451000
+    },
+    {
+      "id": "m-0027",
+      "month": "2025-10",
+      "state": "C",
+      "vertical": "immigration",
+      "lead": "atty-07",
+      "rain_maker": "atty-09",
+      "billed_cents": 505000,
+      "collected_cents": 406000
+    },
+    {
+      "id": "m-0028",
+      "month": "2025-10",
+      "state": "C",
+      "vertical": "personal-injury",
+      "lead": "atty-07",
+      "rain_maker": "atty-05",
+      "billed_cents": 3410000,
+      "collected_cents": 2930000
+    },
+    {
+      "id": "m-0029",
+      "month": "2025-10",
+      "state": "C",
+      "vertical": "business",
+      "lead": "atty-06",
+      "rain_maker": "atty-02",
+      "billed_cents": 1175000,
+      "collected_cents": 926000
+    },
+    {
+      "id": "m-0030",
+      "month": "2025-10",
+      "state": "C",
+      "vertical": "criminal-defense",
+      "lead": "atty-07",
+      "rain_maker": "atty-04",
+      "billed_cents": 1195000,
+      "collected_cents": 1021000
+    },
+    {
+      "id": "m-0031",
+      "month": "2025-10",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-08",
+      "rain_maker": "atty-10",
+      "billed_cents": 565000,
+      "collected_cents": 424000
+    },
+    {
+      "id": "m-0032",
+      "month": "2025-10",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-08",
+      "rain_maker": "atty-09",
+      "billed_cents": 190000,
+      "collected_cents": 146000
+    },
+    {
+      "id": "m-0033",
+      "month": "2025-10",
+      "state": "D",
+      "vertical": "family-law",
+      "lead": "atty-09",
+      "rain_maker": "atty-04",
+      "billed_cents": 695000,
+      "collected_cents": 547000
+    },
+    {
+      "id": "m-0034",
+      "month": "2025-10",
+      "state": "D",
+      "vertical": "estate-planning",
+      "lead": "atty-09",
+      "rain_maker": "atty-08",
+      "billed_cents": 450000,
+      "collected_cents": 441000
+    },
+    {
+      "id": "m-0035",
+      "month": "2025-10",
+      "state": "D",
+      "vertical": "immigration",
+      "lead": "atty-09",
+      "rain_maker": "atty-05",
+      "billed_cents": 515000,
+      "collected_cents": 490000
+    },
+    {
+      "id": "m-0036",
+      "month": "2025-10",
+      "state": "D",
+      "vertical": "personal-injury",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 1665000,
+      "collected_cents": 1343000
+    },
+    {
+      "id": "m-0037",
+      "month": "2025-10",
+      "state": "D",
+      "vertical": "business",
+      "lead": "atty-08",
+      "rain_maker": "atty-05",
+      "billed_cents": 1220000,
+      "collected_cents": 1157000
+    },
+    {
+      "id": "m-0038",
+      "month": "2025-10",
+      "state": "D",
+      "vertical": "criminal-defense",
+      "lead": "atty-09",
+      "rain_maker": "atty-01",
+      "billed_cents": 835000,
+      "collected_cents": 725000
+    },
+    {
+      "id": "m-0039",
+      "month": "2025-10",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 385000,
+      "collected_cents": 364000
+    },
+    {
+      "id": "m-0040",
+      "month": "2025-10",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-02",
+      "billed_cents": 425000,
+      "collected_cents": 326000
+    },
+    {
+      "id": "m-0041",
+      "month": "2025-10",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 610000,
+      "collected_cents": 535000
+    },
+    {
+      "id": "m-0042",
+      "month": "2025-10",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-11",
+      "rain_maker": "atty-09",
+      "billed_cents": 2285000,
+      "collected_cents": 2096000
+    },
+    {
+      "id": "m-0043",
+      "month": "2025-10",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-11",
+      "rain_maker": "atty-10",
+      "billed_cents": 320000,
+      "collected_cents": 250000
+    },
+    {
+      "id": "m-0044",
+      "month": "2025-10",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 360000,
+      "collected_cents": 340000
+    },
+    {
+      "id": "m-0045",
+      "month": "2025-10",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 175000,
+      "collected_cents": 134000
+    },
+    {
+      "id": "m-0046",
+      "month": "2025-10",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 540000,
+      "collected_cents": 436000
+    },
+    {
+      "id": "m-0047",
+      "month": "2025-10",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-12",
+      "rain_maker": "atty-10",
+      "billed_cents": 875000,
+      "collected_cents": 756000
+    },
+    {
+      "id": "m-0048",
+      "month": "2025-10",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-11",
+      "rain_maker": "atty-05",
+      "billed_cents": 730000,
+      "collected_cents": 675000
+    },
+    {
+      "id": "m-0049",
+      "month": "2025-10",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 1335000,
+      "collected_cents": 1068000
+    },
+    {
+      "id": "m-0050",
+      "month": "2025-10",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-12",
+      "rain_maker": "atty-02",
+      "billed_cents": 725000,
+      "collected_cents": 568000
+    },
+    {
+      "id": "m-0051",
+      "month": "2025-11",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-02",
+      "rain_maker": "atty-03",
+      "billed_cents": 520000,
+      "collected_cents": 437000
+    },
+    {
+      "id": "m-0052",
+      "month": "2025-11",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-01",
+      "rain_maker": "atty-04",
+      "billed_cents": 195000,
+      "collected_cents": 182000
+    },
+    {
+      "id": "m-0053",
+      "month": "2025-11",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 490000,
+      "collected_cents": 392000
+    },
+    {
+      "id": "m-0054",
+      "month": "2025-11",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-02",
+      "rain_maker": "atty-10",
+      "billed_cents": 1925000,
+      "collected_cents": 1704000
+    },
+    {
+      "id": "m-0055",
+      "month": "2025-11",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-02",
+      "rain_maker": "atty-11",
+      "billed_cents": 860000,
+      "collected_cents": 670000
+    },
+    {
+      "id": "m-0056",
+      "month": "2025-11",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-03",
+      "rain_maker": "atty-02",
+      "billed_cents": 175000,
+      "collected_cents": 132000
+    },
+    {
+      "id": "m-0057",
+      "month": "2025-11",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-03",
+      "rain_maker": "atty-02",
+      "billed_cents": 390000,
+      "collected_cents": 295000
+    },
+    {
+      "id": "m-0058",
+      "month": "2025-11",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-01",
+      "rain_maker": "atty-11",
+      "billed_cents": 275000,
+      "collected_cents": 237000
+    },
+    {
+      "id": "m-0059",
+      "month": "2025-11",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-02",
+      "rain_maker": "atty-10",
+      "billed_cents": 765000,
+      "collected_cents": 705000
+    },
+    {
+      "id": "m-0060",
+      "month": "2025-11",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-01",
+      "rain_maker": "atty-07",
+      "billed_cents": 495000,
+      "collected_cents": 397000
+    },
+    {
+      "id": "m-0061",
+      "month": "2025-11",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 540000,
+      "collected_cents": 513000
+    },
+    {
+      "id": "m-0062",
+      "month": "2025-11",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 520000,
+      "collected_cents": 446000
+    },
+    {
+      "id": "m-0063",
+      "month": "2025-11",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-05",
+      "rain_maker": "atty-03",
+      "billed_cents": 1040000,
+      "collected_cents": 838000
+    },
+    {
+      "id": "m-0064",
+      "month": "2025-11",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-04",
+      "rain_maker": "atty-05",
+      "billed_cents": 300000,
+      "collected_cents": 256000
+    },
+    {
+      "id": "m-0065",
+      "month": "2025-11",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-04",
+      "rain_maker": "atty-11",
+      "billed_cents": 495000,
+      "collected_cents": 382000
+    },
+    {
+      "id": "m-0066",
+      "month": "2025-11",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-05",
+      "rain_maker": "atty-06",
+      "billed_cents": 645000,
+      "collected_cents": 485000
+    },
+    {
+      "id": "m-0067",
+      "month": "2025-11",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 800000,
+      "collected_cents": 758000
+    },
+    {
+      "id": "m-0068",
+      "month": "2025-11",
+      "state": "B",
+      "vertical": "personal-injury",
+      "lead": "atty-05",
+      "rain_maker": "atty-07",
+      "billed_cents": 2970000,
+      "collected_cents": 2784000
+    },
+    {
+      "id": "m-0069",
+      "month": "2025-11",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 920000,
+      "collected_cents": 812000
+    },
+    {
+      "id": "m-0070",
+      "month": "2025-11",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 250000,
+      "collected_cents": 245000
+    },
+    {
+      "id": "m-0071",
+      "month": "2025-11",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-05",
+      "rain_maker": "atty-03",
+      "billed_cents": 745000,
+      "collected_cents": 613000
+    },
+    {
+      "id": "m-0072",
+      "month": "2025-11",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-06",
+      "rain_maker": "atty-12",
+      "billed_cents": 420000,
+      "collected_cents": 340000
+    },
+    {
+      "id": "m-0073",
+      "month": "2025-11",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 480000,
+      "collected_cents": 384000
+    },
+    {
+      "id": "m-0074",
+      "month": "2025-11",
+      "state": "C",
+      "vertical": "civil-litigation",
+      "lead": "atty-06",
+      "rain_maker": "atty-03",
+      "billed_cents": 1015000,
+      "collected_cents": 830000
+    },
+    {
+      "id": "m-0075",
+      "month": "2025-11",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-06",
+      "rain_maker": "atty-10",
+      "billed_cents": 395000,
+      "collected_cents": 309000
+    },
+    {
+      "id": "m-0076",
+      "month": "2025-11",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 220000,
+      "collected_cents": 186000
+    },
+    {
+      "id": "m-0077",
+      "month": "2025-11",
+      "state": "C",
+      "vertical": "immigration",
+      "lead": "atty-06",
+      "rain_maker": "atty-02",
+      "billed_cents": 875000,
+      "collected_cents": 791000
+    },
+    {
+      "id": "m-0078",
+      "month": "2025-11",
+      "state": "C",
+      "vertical": "business",
+      "lead": "atty-06",
+      "rain_maker": "atty-02",
+      "billed_cents": 760000,
+      "collected_cents": 659000
+    },
+    {
+      "id": "m-0079",
+      "month": "2025-11",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-09",
+      "rain_maker": "atty-10",
+      "billed_cents": 185000,
+      "collected_cents": 165000
+    },
+    {
+      "id": "m-0080",
+      "month": "2025-11",
+      "state": "D",
+      "vertical": "civil-litigation",
+      "lead": "atty-08",
+      "rain_maker": "atty-09",
+      "billed_cents": 1115000,
+      "collected_cents": 1048000
+    },
+    {
+      "id": "m-0081",
+      "month": "2025-11",
+      "state": "D",
+      "vertical": "estate-planning",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 185000,
+      "collected_cents": 182000
+    },
+    {
+      "id": "m-0082",
+      "month": "2025-11",
+      "state": "D",
+      "vertical": "immigration",
+      "lead": "atty-09",
+      "rain_maker": "atty-10",
+      "billed_cents": 700000,
+      "collected_cents": 570000
+    },
+    {
+      "id": "m-0083",
+      "month": "2025-11",
+      "state": "D",
+      "vertical": "personal-injury",
+      "lead": "atty-08",
+      "rain_maker": "atty-02",
+      "billed_cents": 1160000,
+      "collected_cents": 1060000
+    },
+    {
+      "id": "m-0084",
+      "month": "2025-11",
+      "state": "D",
+      "vertical": "criminal-defense",
+      "lead": "atty-08",
+      "rain_maker": "atty-10",
+      "billed_cents": 665000,
+      "collected_cents": 657000
+    },
+    {
+      "id": "m-0085",
+      "month": "2025-11",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 425000,
+      "collected_cents": 353000
+    },
+    {
+      "id": "m-0086",
+      "month": "2025-11",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 605000,
+      "collected_cents": 451000
+    },
+    {
+      "id": "m-0087",
+      "month": "2025-11",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 1695000,
+      "collected_cents": 1592000
+    },
+    {
+      "id": "m-0088",
+      "month": "2025-11",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-10",
+      "rain_maker": "atty-01",
+      "billed_cents": 665000,
+      "collected_cents": 592000
+    },
+    {
+      "id": "m-0089",
+      "month": "2025-11",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-12",
+      "rain_maker": "atty-01",
+      "billed_cents": 985000,
+      "collected_cents": 762000
+    },
+    {
+      "id": "m-0090",
+      "month": "2025-11",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-10",
+      "rain_maker": "atty-04",
+      "billed_cents": 185000,
+      "collected_cents": 144000
+    },
+    {
+      "id": "m-0091",
+      "month": "2025-11",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-11",
+      "rain_maker": "atty-12",
+      "billed_cents": 540000,
+      "collected_cents": 529000
+    },
+    {
+      "id": "m-0092",
+      "month": "2025-11",
+      "state": "E",
+      "vertical": "personal-injury",
+      "lead": "atty-10",
+      "rain_maker": "atty-11",
+      "billed_cents": 1925000,
+      "collected_cents": 1704000
+    },
+    {
+      "id": "m-0093",
+      "month": "2025-11",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 935000,
+      "collected_cents": 694000
+    },
+    {
+      "id": "m-0094",
+      "month": "2025-11",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 575000,
+      "collected_cents": 501000
+    },
+    {
+      "id": "m-0095",
+      "month": "2025-12",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 500000,
+      "collected_cents": 432000
+    },
+    {
+      "id": "m-0096",
+      "month": "2025-12",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-03",
+      "rain_maker": "atty-08",
+      "billed_cents": 520000,
+      "collected_cents": 491000
+    },
+    {
+      "id": "m-0097",
+      "month": "2025-12",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-01",
+      "rain_maker": "atty-01",
+      "billed_cents": 1065000,
+      "collected_cents": 935000
+    },
+    {
+      "id": "m-0098",
+      "month": "2025-12",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-06",
+      "billed_cents": 645000,
+      "collected_cents": 579000
+    },
+    {
+      "id": "m-0099",
+      "month": "2025-12",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-02",
+      "rain_maker": "atty-01",
+      "billed_cents": 215000,
+      "collected_cents": 179000
+    },
+    {
+      "id": "m-0100",
+      "month": "2025-12",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-01",
+      "rain_maker": "atty-01",
+      "billed_cents": 350000,
+      "collected_cents": 344000
+    },
+    {
+      "id": "m-0101",
+      "month": "2025-12",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 610000,
+      "collected_cents": 486000
+    },
+    {
+      "id": "m-0102",
+      "month": "2025-12",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-01",
+      "rain_maker": "atty-09",
+      "billed_cents": 555000,
+      "collected_cents": 439000
+    },
+    {
+      "id": "m-0103",
+      "month": "2025-12",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-03",
+      "rain_maker": "atty-10",
+      "billed_cents": 485000,
+      "collected_cents": 373000
+    },
+    {
+      "id": "m-0104",
+      "month": "2025-12",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-06",
+      "billed_cents": 535000,
+      "collected_cents": 419000
+    },
+    {
+      "id": "m-0105",
+      "month": "2025-12",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 490000,
+      "collected_cents": 472000
+    },
+    {
+      "id": "m-0106",
+      "month": "2025-12",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-04",
+      "rain_maker": "atty-07",
+      "billed_cents": 1290000,
+      "collected_cents": 963000
+    },
+    {
+      "id": "m-0107",
+      "month": "2025-12",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 675000,
+      "collected_cents": 654000
+    },
+    {
+      "id": "m-0108",
+      "month": "2025-12",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-04",
+      "rain_maker": "atty-03",
+      "billed_cents": 215000,
+      "collected_cents": 171000
+    },
+    {
+      "id": "m-0109",
+      "month": "2025-12",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-05",
+      "rain_maker": "atty-03",
+      "billed_cents": 825000,
+      "collected_cents": 639000
+    },
+    {
+      "id": "m-0110",
+      "month": "2025-12",
+      "state": "B",
+      "vertical": "personal-injury",
+      "lead": "atty-05",
+      "rain_maker": "atty-11",
+      "billed_cents": 1850000,
+      "collected_cents": 1392000
+    },
+    {
+      "id": "m-0111",
+      "month": "2025-12",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-04",
+      "rain_maker": "atty-10",
+      "billed_cents": 320000,
+      "collected_cents": 287000
+    },
+    {
+      "id": "m-0112",
+      "month": "2025-12",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-05",
+      "rain_maker": "atty-11",
+      "billed_cents": 900000,
+      "collected_cents": 833000
+    },
+    {
+      "id": "m-0113",
+      "month": "2025-12",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-07",
+      "rain_maker": "atty-04",
+      "billed_cents": 435000,
+      "collected_cents": 357000
+    },
+    {
+      "id": "m-0114",
+      "month": "2025-12",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 1010000,
+      "collected_cents": 777000
+    },
+    {
+      "id": "m-0115",
+      "month": "2025-12",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 445000,
+      "collected_cents": 360000
+    },
+    {
+      "id": "m-0116",
+      "month": "2025-12",
+      "state": "C",
+      "vertical": "business",
+      "lead": "atty-07",
+      "rain_maker": "atty-05",
+      "billed_cents": 945000,
+      "collected_cents": 914000
+    },
+    {
+      "id": "m-0117",
+      "month": "2025-12",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 295000,
+      "collected_cents": 281000
+    },
+    {
+      "id": "m-0118",
+      "month": "2025-12",
+      "state": "D",
+      "vertical": "family-law",
+      "lead": "atty-09",
+      "rain_maker": "atty-01",
+      "billed_cents": 495000,
+      "collected_cents": 459000
+    },
+    {
+      "id": "m-0119",
+      "month": "2025-12",
+      "state": "D",
+      "vertical": "business",
+      "lead": "atty-08",
+      "rain_maker": "atty-01",
+      "billed_cents": 345000,
+      "collected_cents": 288000
+    },
+    {
+      "id": "m-0120",
+      "month": "2025-12",
+      "state": "D",
+      "vertical": "criminal-defense",
+      "lead": "atty-08",
+      "rain_maker": "atty-10",
+      "billed_cents": 1305000,
+      "collected_cents": 1107000
+    },
+    {
+      "id": "m-0121",
+      "month": "2025-12",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 355000,
+      "collected_cents": 310000
+    },
+    {
+      "id": "m-0122",
+      "month": "2025-12",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-11",
+      "rain_maker": "atty-09",
+      "billed_cents": 230000,
+      "collected_cents": 223000
+    },
+    {
+      "id": "m-0123",
+      "month": "2025-12",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-01",
+      "billed_cents": 345000,
+      "collected_cents": 264000
+    },
+    {
+      "id": "m-0124",
+      "month": "2025-12",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-12",
+      "rain_maker": "atty-02",
+      "billed_cents": 1305000,
+      "collected_cents": 1193000
+    },
+    {
+      "id": "m-0125",
+      "month": "2025-12",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 960000,
+      "collected_cents": 735000
+    },
+    {
+      "id": "m-0126",
+      "month": "2025-12",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 460000,
+      "collected_cents": 391000
+    },
+    {
+      "id": "m-0127",
+      "month": "2025-12",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-10",
+      "rain_maker": "atty-06",
+      "billed_cents": 345000,
+      "collected_cents": 340000
+    },
+    {
+      "id": "m-0128",
+      "month": "2025-12",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 300000,
+      "collected_cents": 247000
+    },
+    {
+      "id": "m-0129",
+      "month": "2025-12",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 1035000,
+      "collected_cents": 770000
+    },
+    {
+      "id": "m-0130",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-02",
+      "rain_maker": "atty-04",
+      "billed_cents": 615000,
+      "collected_cents": 511000
+    },
+    {
+      "id": "m-0131",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 510000,
+      "collected_cents": 381000
+    },
+    {
+      "id": "m-0132",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 355000,
+      "collected_cents": 296000
+    },
+    {
+      "id": "m-0133",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-02",
+      "rain_maker": "atty-01",
+      "billed_cents": 520000,
+      "collected_cents": 395000
+    },
+    {
+      "id": "m-0134",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-02",
+      "billed_cents": 365000,
+      "collected_cents": 293000
+    },
+    {
+      "id": "m-0135",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-02",
+      "rain_maker": "atty-12",
+      "billed_cents": 375000,
+      "collected_cents": 339000
+    },
+    {
+      "id": "m-0136",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-03",
+      "rain_maker": "atty-09",
+      "billed_cents": 400000,
+      "collected_cents": 377000
+    },
+    {
+      "id": "m-0137",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-03",
+      "rain_maker": "atty-07",
+      "billed_cents": 155000,
+      "collected_cents": 142000
+    },
+    {
+      "id": "m-0138",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-02",
+      "rain_maker": "atty-01",
+      "billed_cents": 715000,
+      "collected_cents": 557000
+    },
+    {
+      "id": "m-0139",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 680000,
+      "collected_cents": 551000
+    },
+    {
+      "id": "m-0140",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "personal-injury",
+      "lead": "atty-02",
+      "rain_maker": "atty-11",
+      "billed_cents": 2315000,
+      "collected_cents": 1824000
+    },
+    {
+      "id": "m-0141",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-01",
+      "rain_maker": "atty-04",
+      "billed_cents": 440000,
+      "collected_cents": 398000
+    },
+    {
+      "id": "m-0142",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 645000,
+      "collected_cents": 583000
+    },
+    {
+      "id": "m-0143",
+      "month": "2026-01",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-01",
+      "rain_maker": "atty-03",
+      "billed_cents": 910000,
+      "collected_cents": 713000
+    },
+    {
+      "id": "m-0144",
+      "month": "2026-01",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-04",
+      "rain_maker": "atty-05",
+      "billed_cents": 220000,
+      "collected_cents": 201000
+    },
+    {
+      "id": "m-0145",
+      "month": "2026-01",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 195000,
+      "collected_cents": 154000
+    },
+    {
+      "id": "m-0146",
+      "month": "2026-01",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-05",
+      "rain_maker": "atty-06",
+      "billed_cents": 535000,
+      "collected_cents": 405000
+    },
+    {
+      "id": "m-0147",
+      "month": "2026-01",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 1660000,
+      "collected_cents": 1265000
+    },
+    {
+      "id": "m-0148",
+      "month": "2026-01",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-04",
+      "rain_maker": "atty-11",
+      "billed_cents": 840000,
+      "collected_cents": 696000
+    },
+    {
+      "id": "m-0149",
+      "month": "2026-01",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 520000,
+      "collected_cents": 394000
+    },
+    {
+      "id": "m-0150",
+      "month": "2026-01",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-04",
+      "rain_maker": "atty-03",
+      "billed_cents": 220000,
+      "collected_cents": 199000
+    },
+    {
+      "id": "m-0151",
+      "month": "2026-01",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 460000,
+      "collected_cents": 366000
+    },
+    {
+      "id": "m-0152",
+      "month": "2026-01",
+      "state": "B",
+      "vertical": "personal-injury",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 4040000,
+      "collected_cents": 3148000
+    },
+    {
+      "id": "m-0153",
+      "month": "2026-01",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-05",
+      "rain_maker": "atty-02",
+      "billed_cents": 320000,
+      "collected_cents": 289000
+    },
+    {
+      "id": "m-0154",
+      "month": "2026-01",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-04",
+      "rain_maker": "atty-01",
+      "billed_cents": 1475000,
+      "collected_cents": 1446000
+    },
+    {
+      "id": "m-0155",
+      "month": "2026-01",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-05",
+      "rain_maker": "atty-08",
+      "billed_cents": 750000,
+      "collected_cents": 563000
+    },
+    {
+      "id": "m-0156",
+      "month": "2026-01",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 275000,
+      "collected_cents": 207000
+    },
+    {
+      "id": "m-0157",
+      "month": "2026-01",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 275000,
+      "collected_cents": 259000
+    },
+    {
+      "id": "m-0158",
+      "month": "2026-01",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 865000,
+      "collected_cents": 698000
+    },
+    {
+      "id": "m-0159",
+      "month": "2026-01",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 955000,
+      "collected_cents": 855000
+    },
+    {
+      "id": "m-0160",
+      "month": "2026-01",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-06",
+      "rain_maker": "atty-08",
+      "billed_cents": 200000,
+      "collected_cents": 191000
+    },
+    {
+      "id": "m-0161",
+      "month": "2026-01",
+      "state": "C",
+      "vertical": "immigration",
+      "lead": "atty-07",
+      "rain_maker": "atty-11",
+      "billed_cents": 665000,
+      "collected_cents": 522000
+    },
+    {
+      "id": "m-0162",
+      "month": "2026-01",
+      "state": "C",
+      "vertical": "personal-injury",
+      "lead": "atty-06",
+      "rain_maker": "atty-01",
+      "billed_cents": 1015000,
+      "collected_cents": 756000
+    },
+    {
+      "id": "m-0163",
+      "month": "2026-01",
+      "state": "C",
+      "vertical": "business",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 1350000,
+      "collected_cents": 1226000
+    },
+    {
+      "id": "m-0164",
+      "month": "2026-01",
+      "state": "C",
+      "vertical": "criminal-defense",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 1165000,
+      "collected_cents": 1139000
+    },
+    {
+      "id": "m-0165",
+      "month": "2026-01",
+      "state": "C",
+      "vertical": "criminal-defense",
+      "lead": "atty-06",
+      "rain_maker": "atty-09",
+      "billed_cents": 1370000,
+      "collected_cents": 1165000
+    },
+    {
+      "id": "m-0166",
+      "month": "2026-01",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-09",
+      "rain_maker": "atty-06",
+      "billed_cents": 480000,
+      "collected_cents": 358000
+    },
+    {
+      "id": "m-0167",
+      "month": "2026-01",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 310000,
+      "collected_cents": 252000
+    },
+    {
+      "id": "m-0168",
+      "month": "2026-01",
+      "state": "D",
+      "vertical": "family-law",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 710000,
+      "collected_cents": 696000
+    },
+    {
+      "id": "m-0169",
+      "month": "2026-01",
+      "state": "D",
+      "vertical": "estate-planning",
+      "lead": "atty-08",
+      "rain_maker": "atty-04",
+      "billed_cents": 510000,
+      "collected_cents": 492000
+    },
+    {
+      "id": "m-0170",
+      "month": "2026-01",
+      "state": "D",
+      "vertical": "immigration",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 530000,
+      "collected_cents": 424000
+    },
+    {
+      "id": "m-0171",
+      "month": "2026-01",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 195000,
+      "collected_cents": 171000
+    },
+    {
+      "id": "m-0172",
+      "month": "2026-01",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-08",
+      "billed_cents": 235000,
+      "collected_cents": 214000
+    },
+    {
+      "id": "m-0173",
+      "month": "2026-01",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-11",
+      "rain_maker": "atty-12",
+      "billed_cents": 505000,
+      "collected_cents": 472000
+    },
+    {
+      "id": "m-0174",
+      "month": "2026-01",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-12",
+      "rain_maker": "atty-06",
+      "billed_cents": 1400000,
+      "collected_cents": 1230000
+    },
+    {
+      "id": "m-0175",
+      "month": "2026-01",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-10",
+      "rain_maker": "atty-12",
+      "billed_cents": 470000,
+      "collected_cents": 366000
+    },
+    {
+      "id": "m-0176",
+      "month": "2026-01",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 220000,
+      "collected_cents": 207000
+    },
+    {
+      "id": "m-0177",
+      "month": "2026-01",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-10",
+      "rain_maker": "atty-01",
+      "billed_cents": 645000,
+      "collected_cents": 502000
+    },
+    {
+      "id": "m-0178",
+      "month": "2026-01",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-11",
+      "rain_maker": "atty-02",
+      "billed_cents": 355000,
+      "collected_cents": 270000
+    },
+    {
+      "id": "m-0179",
+      "month": "2026-01",
+      "state": "E",
+      "vertical": "personal-injury",
+      "lead": "atty-12",
+      "rain_maker": "atty-09",
+      "billed_cents": 3115000,
+      "collected_cents": 2453000
+    },
+    {
+      "id": "m-0180",
+      "month": "2026-01",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-12",
+      "rain_maker": "atty-06",
+      "billed_cents": 730000,
+      "collected_cents": 618000
+    },
+    {
+      "id": "m-0181",
+      "month": "2026-01",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 480000,
+      "collected_cents": 471000
+    },
+    {
+      "id": "m-0182",
+      "month": "2026-01",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 665000,
+      "collected_cents": 507000
+    },
+    {
+      "id": "m-0183",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-02",
+      "rain_maker": "atty-01",
+      "billed_cents": 375000,
+      "collected_cents": 289000
+    },
+    {
+      "id": "m-0184",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-02",
+      "rain_maker": "atty-01",
+      "billed_cents": 240000,
+      "collected_cents": 211000
+    },
+    {
+      "id": "m-0185",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-01",
+      "rain_maker": "atty-10",
+      "billed_cents": 585000,
+      "collected_cents": 457000
+    },
+    {
+      "id": "m-0186",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-03",
+      "rain_maker": "atty-10",
+      "billed_cents": 825000,
+      "collected_cents": 689000
+    },
+    {
+      "id": "m-0187",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 985000,
+      "collected_cents": 974000
+    },
+    {
+      "id": "m-0188",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-02",
+      "rain_maker": "atty-06",
+      "billed_cents": 575000,
+      "collected_cents": 507000
+    },
+    {
+      "id": "m-0189",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-02",
+      "rain_maker": "atty-01",
+      "billed_cents": 390000,
+      "collected_cents": 319000
+    },
+    {
+      "id": "m-0190",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 485000,
+      "collected_cents": 446000
+    },
+    {
+      "id": "m-0191",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 190000,
+      "collected_cents": 154000
+    },
+    {
+      "id": "m-0192",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-01",
+      "rain_maker": "atty-04",
+      "billed_cents": 175000,
+      "collected_cents": 156000
+    },
+    {
+      "id": "m-0193",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-03",
+      "rain_maker": "atty-10",
+      "billed_cents": 345000,
+      "collected_cents": 268000
+    },
+    {
+      "id": "m-0194",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-02",
+      "rain_maker": "atty-03",
+      "billed_cents": 300000,
+      "collected_cents": 260000
+    },
+    {
+      "id": "m-0195",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-03",
+      "rain_maker": "atty-05",
+      "billed_cents": 845000,
+      "collected_cents": 631000
+    },
+    {
+      "id": "m-0196",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "personal-injury",
+      "lead": "atty-03",
+      "rain_maker": "atty-04",
+      "billed_cents": 3345000,
+      "collected_cents": 3163000
+    },
+    {
+      "id": "m-0197",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-01",
+      "rain_maker": "atty-09",
+      "billed_cents": 985000,
+      "collected_cents": 862000
+    },
+    {
+      "id": "m-0198",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-03",
+      "rain_maker": "atty-02",
+      "billed_cents": 500000,
+      "collected_cents": 370000
+    },
+    {
+      "id": "m-0199",
+      "month": "2026-02",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-01",
+      "rain_maker": "atty-01",
+      "billed_cents": 320000,
+      "collected_cents": 289000
+    },
+    {
+      "id": "m-0200",
+      "month": "2026-02",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-04",
+      "rain_maker": "atty-02",
+      "billed_cents": 375000,
+      "collected_cents": 337000
+    },
+    {
+      "id": "m-0201",
+      "month": "2026-02",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 370000,
+      "collected_cents": 292000
+    },
+    {
+      "id": "m-0202",
+      "month": "2026-02",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 1295000,
+      "collected_cents": 1081000
+    },
+    {
+      "id": "m-0203",
+      "month": "2026-02",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-04",
+      "rain_maker": "atty-11",
+      "billed_cents": 700000,
+      "collected_cents": 535000
+    },
+    {
+      "id": "m-0204",
+      "month": "2026-02",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 760000,
+      "collected_cents": 595000
+    },
+    {
+      "id": "m-0205",
+      "month": "2026-02",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-05",
+      "rain_maker": "atty-07",
+      "billed_cents": 495000,
+      "collected_cents": 485000
+    },
+    {
+      "id": "m-0206",
+      "month": "2026-02",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 225000,
+      "collected_cents": 181000
+    },
+    {
+      "id": "m-0207",
+      "month": "2026-02",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-05",
+      "rain_maker": "atty-06",
+      "billed_cents": 170000,
+      "collected_cents": 133000
+    },
+    {
+      "id": "m-0208",
+      "month": "2026-02",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-04",
+      "rain_maker": "atty-07",
+      "billed_cents": 440000,
+      "collected_cents": 383000
+    },
+    {
+      "id": "m-0209",
+      "month": "2026-02",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 990000,
+      "collected_cents": 880000
+    },
+    {
+      "id": "m-0210",
+      "month": "2026-02",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-04",
+      "rain_maker": "atty-10",
+      "billed_cents": 420000,
+      "collected_cents": 403000
+    },
+    {
+      "id": "m-0211",
+      "month": "2026-02",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-07",
+      "rain_maker": "atty-01",
+      "billed_cents": 505000,
+      "collected_cents": 427000
+    },
+    {
+      "id": "m-0212",
+      "month": "2026-02",
+      "state": "C",
+      "vertical": "civil-litigation",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 2140000,
+      "collected_cents": 2104000
+    },
+    {
+      "id": "m-0213",
+      "month": "2026-02",
+      "state": "C",
+      "vertical": "civil-litigation",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 950000,
+      "collected_cents": 895000
+    },
+    {
+      "id": "m-0214",
+      "month": "2026-02",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 455000,
+      "collected_cents": 372000
+    },
+    {
+      "id": "m-0215",
+      "month": "2026-02",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-06",
+      "rain_maker": "atty-04",
+      "billed_cents": 495000,
+      "collected_cents": 436000
+    },
+    {
+      "id": "m-0216",
+      "month": "2026-02",
+      "state": "C",
+      "vertical": "immigration",
+      "lead": "atty-07",
+      "rain_maker": "atty-08",
+      "billed_cents": 295000,
+      "collected_cents": 286000
+    },
+    {
+      "id": "m-0217",
+      "month": "2026-02",
+      "state": "C",
+      "vertical": "business",
+      "lead": "atty-06",
+      "rain_maker": "atty-07",
+      "billed_cents": 1310000,
+      "collected_cents": 1111000
+    },
+    {
+      "id": "m-0218",
+      "month": "2026-02",
+      "state": "C",
+      "vertical": "criminal-defense",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 1380000,
+      "collected_cents": 1203000
+    },
+    {
+      "id": "m-0219",
+      "month": "2026-02",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 455000,
+      "collected_cents": 349000
+    },
+    {
+      "id": "m-0220",
+      "month": "2026-02",
+      "state": "D",
+      "vertical": "civil-litigation",
+      "lead": "atty-09",
+      "rain_maker": "atty-08",
+      "billed_cents": 545000,
+      "collected_cents": 450000
+    },
+    {
+      "id": "m-0221",
+      "month": "2026-02",
+      "state": "D",
+      "vertical": "estate-planning",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 315000,
+      "collected_cents": 243000
+    },
+    {
+      "id": "m-0222",
+      "month": "2026-02",
+      "state": "D",
+      "vertical": "immigration",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 670000,
+      "collected_cents": 647000
+    },
+    {
+      "id": "m-0223",
+      "month": "2026-02",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-10",
+      "rain_maker": "atty-02",
+      "billed_cents": 440000,
+      "collected_cents": 428000
+    },
+    {
+      "id": "m-0224",
+      "month": "2026-02",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-03",
+      "billed_cents": 265000,
+      "collected_cents": 253000
+    },
+    {
+      "id": "m-0225",
+      "month": "2026-02",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 230000,
+      "collected_cents": 174000
+    },
+    {
+      "id": "m-0226",
+      "month": "2026-02",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 1460000,
+      "collected_cents": 1158000
+    },
+    {
+      "id": "m-0227",
+      "month": "2026-02",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-11",
+      "rain_maker": "atty-04",
+      "billed_cents": 425000,
+      "collected_cents": 343000
+    },
+    {
+      "id": "m-0228",
+      "month": "2026-02",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-10",
+      "rain_maker": "atty-07",
+      "billed_cents": 975000,
+      "collected_cents": 836000
+    },
+    {
+      "id": "m-0229",
+      "month": "2026-02",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-12",
+      "rain_maker": "atty-03",
+      "billed_cents": 485000,
+      "collected_cents": 410000
+    },
+    {
+      "id": "m-0230",
+      "month": "2026-02",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-11",
+      "rain_maker": "atty-01",
+      "billed_cents": 450000,
+      "collected_cents": 399000
+    },
+    {
+      "id": "m-0231",
+      "month": "2026-02",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-11",
+      "rain_maker": "atty-03",
+      "billed_cents": 745000,
+      "collected_cents": 672000
+    },
+    {
+      "id": "m-0232",
+      "month": "2026-02",
+      "state": "E",
+      "vertical": "personal-injury",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 1770000,
+      "collected_cents": 1422000
+    },
+    {
+      "id": "m-0233",
+      "month": "2026-02",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-12",
+      "rain_maker": "atty-11",
+      "billed_cents": 1150000,
+      "collected_cents": 1045000
+    },
+    {
+      "id": "m-0234",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-01",
+      "rain_maker": "atty-08",
+      "billed_cents": 280000,
+      "collected_cents": 220000
+    },
+    {
+      "id": "m-0235",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-01",
+      "rain_maker": "atty-07",
+      "billed_cents": 585000,
+      "collected_cents": 512000
+    },
+    {
+      "id": "m-0236",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-01",
+      "rain_maker": "atty-07",
+      "billed_cents": 260000,
+      "collected_cents": 245000
+    },
+    {
+      "id": "m-0237",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 2155000,
+      "collected_cents": 1671000
+    },
+    {
+      "id": "m-0238",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-01",
+      "rain_maker": "atty-10",
+      "billed_cents": 1945000,
+      "collected_cents": 1639000
+    },
+    {
+      "id": "m-0239",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-06",
+      "billed_cents": 375000,
+      "collected_cents": 329000
+    },
+    {
+      "id": "m-0240",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-10",
+      "billed_cents": 1090000,
+      "collected_cents": 869000
+    },
+    {
+      "id": "m-0241",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-02",
+      "rain_maker": "atty-09",
+      "billed_cents": 285000,
+      "collected_cents": 271000
+    },
+    {
+      "id": "m-0242",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-01",
+      "rain_maker": "atty-03",
+      "billed_cents": 425000,
+      "collected_cents": 404000
+    },
+    {
+      "id": "m-0243",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-01",
+      "rain_maker": "atty-05",
+      "billed_cents": 870000,
+      "collected_cents": 774000
+    },
+    {
+      "id": "m-0244",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-03",
+      "rain_maker": "atty-12",
+      "billed_cents": 850000,
+      "collected_cents": 709000
+    },
+    {
+      "id": "m-0245",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "personal-injury",
+      "lead": "atty-01",
+      "rain_maker": "atty-07",
+      "billed_cents": 3525000,
+      "collected_cents": 2967000
+    },
+    {
+      "id": "m-0246",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "personal-injury",
+      "lead": "atty-03",
+      "rain_maker": "atty-12",
+      "billed_cents": 1175000,
+      "collected_cents": 1077000
+    },
+    {
+      "id": "m-0247",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-03",
+      "rain_maker": "atty-10",
+      "billed_cents": 560000,
+      "collected_cents": 496000
+    },
+    {
+      "id": "m-0248",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-01",
+      "rain_maker": "atty-11",
+      "billed_cents": 805000,
+      "collected_cents": 609000
+    },
+    {
+      "id": "m-0249",
+      "month": "2026-03",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-02",
+      "rain_maker": "atty-07",
+      "billed_cents": 290000,
+      "collected_cents": 260000
+    },
+    {
+      "id": "m-0250",
+      "month": "2026-03",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-03",
+      "billed_cents": 235000,
+      "collected_cents": 183000
+    },
+    {
+      "id": "m-0251",
+      "month": "2026-03",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-04",
+      "rain_maker": "atty-11",
+      "billed_cents": 370000,
+      "collected_cents": 342000
+    },
+    {
+      "id": "m-0252",
+      "month": "2026-03",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 620000,
+      "collected_cents": 521000
+    },
+    {
+      "id": "m-0253",
+      "month": "2026-03",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 430000,
+      "collected_cents": 334000
+    },
+    {
+      "id": "m-0254",
+      "month": "2026-03",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 435000,
+      "collected_cents": 365000
+    },
+    {
+      "id": "m-0255",
+      "month": "2026-03",
+      "state": "B",
+      "vertical": "personal-injury",
+      "lead": "atty-05",
+      "rain_maker": "atty-06",
+      "billed_cents": 3410000,
+      "collected_cents": 2528000
+    },
+    {
+      "id": "m-0256",
+      "month": "2026-03",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-04",
+      "rain_maker": "atty-07",
+      "billed_cents": 895000,
+      "collected_cents": 804000
+    },
+    {
+      "id": "m-0257",
+      "month": "2026-03",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-04",
+      "rain_maker": "atty-08",
+      "billed_cents": 1205000,
+      "collected_cents": 916000
+    },
+    {
+      "id": "m-0258",
+      "month": "2026-03",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 1080000,
+      "collected_cents": 832000
+    },
+    {
+      "id": "m-0259",
+      "month": "2026-03",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-06",
+      "rain_maker": "atty-10",
+      "billed_cents": 210000,
+      "collected_cents": 167000
+    },
+    {
+      "id": "m-0260",
+      "month": "2026-03",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-07",
+      "rain_maker": "atty-01",
+      "billed_cents": 425000,
+      "collected_cents": 350000
+    },
+    {
+      "id": "m-0261",
+      "month": "2026-03",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-06",
+      "rain_maker": "atty-11",
+      "billed_cents": 435000,
+      "collected_cents": 417000
+    },
+    {
+      "id": "m-0262",
+      "month": "2026-03",
+      "state": "C",
+      "vertical": "civil-litigation",
+      "lead": "atty-06",
+      "rain_maker": "atty-02",
+      "billed_cents": 1650000,
+      "collected_cents": 1339000
+    },
+    {
+      "id": "m-0263",
+      "month": "2026-03",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-06",
+      "rain_maker": "atty-04",
+      "billed_cents": 735000,
+      "collected_cents": 557000
+    },
+    {
+      "id": "m-0264",
+      "month": "2026-03",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 180000,
+      "collected_cents": 134000
+    },
+    {
+      "id": "m-0265",
+      "month": "2026-03",
+      "state": "C",
+      "vertical": "immigration",
+      "lead": "atty-06",
+      "rain_maker": "atty-11",
+      "billed_cents": 420000,
+      "collected_cents": 334000
+    },
+    {
+      "id": "m-0266",
+      "month": "2026-03",
+      "state": "C",
+      "vertical": "immigration",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 220000,
+      "collected_cents": 217000
+    },
+    {
+      "id": "m-0267",
+      "month": "2026-03",
+      "state": "C",
+      "vertical": "business",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 1250000,
+      "collected_cents": 928000
+    },
+    {
+      "id": "m-0268",
+      "month": "2026-03",
+      "state": "C",
+      "vertical": "criminal-defense",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 630000,
+      "collected_cents": 570000
+    },
+    {
+      "id": "m-0269",
+      "month": "2026-03",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 460000,
+      "collected_cents": 446000
+    },
+    {
+      "id": "m-0270",
+      "month": "2026-03",
+      "state": "D",
+      "vertical": "civil-litigation",
+      "lead": "atty-08",
+      "rain_maker": "atty-06",
+      "billed_cents": 1805000,
+      "collected_cents": 1337000
+    },
+    {
+      "id": "m-0271",
+      "month": "2026-03",
+      "state": "D",
+      "vertical": "family-law",
+      "lead": "atty-09",
+      "rain_maker": "atty-06",
+      "billed_cents": 1080000,
+      "collected_cents": 880000
+    },
+    {
+      "id": "m-0272",
+      "month": "2026-03",
+      "state": "D",
+      "vertical": "estate-planning",
+      "lead": "atty-08",
+      "rain_maker": "atty-06",
+      "billed_cents": 245000,
+      "collected_cents": 202000
+    },
+    {
+      "id": "m-0273",
+      "month": "2026-03",
+      "state": "D",
+      "vertical": "immigration",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 330000,
+      "collected_cents": 284000
+    },
+    {
+      "id": "m-0274",
+      "month": "2026-03",
+      "state": "D",
+      "vertical": "criminal-defense",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 595000,
+      "collected_cents": 494000
+    },
+    {
+      "id": "m-0275",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 400000,
+      "collected_cents": 323000
+    },
+    {
+      "id": "m-0276",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-02",
+      "billed_cents": 295000,
+      "collected_cents": 238000
+    },
+    {
+      "id": "m-0277",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 570000,
+      "collected_cents": 509000
+    },
+    {
+      "id": "m-0278",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 2205000,
+      "collected_cents": 1729000
+    },
+    {
+      "id": "m-0279",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 700000,
+      "collected_cents": 649000
+    },
+    {
+      "id": "m-0280",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-11",
+      "rain_maker": "atty-10",
+      "billed_cents": 1070000,
+      "collected_cents": 897000
+    },
+    {
+      "id": "m-0281",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-11",
+      "rain_maker": "atty-08",
+      "billed_cents": 810000,
+      "collected_cents": 613000
+    },
+    {
+      "id": "m-0282",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-12",
+      "rain_maker": "atty-03",
+      "billed_cents": 375000,
+      "collected_cents": 349000
+    },
+    {
+      "id": "m-0283",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-11",
+      "rain_maker": "atty-10",
+      "billed_cents": 400000,
+      "collected_cents": 373000
+    },
+    {
+      "id": "m-0284",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-10",
+      "rain_maker": "atty-09",
+      "billed_cents": 685000,
+      "collected_cents": 547000
+    },
+    {
+      "id": "m-0285",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "personal-injury",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 615000,
+      "collected_cents": 547000
+    },
+    {
+      "id": "m-0286",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 1020000,
+      "collected_cents": 996000
+    },
+    {
+      "id": "m-0287",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-12",
+      "rain_maker": "atty-07",
+      "billed_cents": 1145000,
+      "collected_cents": 1027000
+    },
+    {
+      "id": "m-0288",
+      "month": "2026-03",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-10",
+      "rain_maker": "atty-07",
+      "billed_cents": 750000,
+      "collected_cents": 725000
+    },
+    {
+      "id": "m-0289",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-01",
+      "rain_maker": "atty-01",
+      "billed_cents": 400000,
+      "collected_cents": 331000
+    },
+    {
+      "id": "m-0290",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 620000,
+      "collected_cents": 478000
+    },
+    {
+      "id": "m-0291",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 600000,
+      "collected_cents": 542000
+    },
+    {
+      "id": "m-0292",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-03",
+      "rain_maker": "atty-10",
+      "billed_cents": 1780000,
+      "collected_cents": 1459000
+    },
+    {
+      "id": "m-0293",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-01",
+      "rain_maker": "atty-04",
+      "billed_cents": 1460000,
+      "collected_cents": 1370000
+    },
+    {
+      "id": "m-0294",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 720000,
+      "collected_cents": 660000
+    },
+    {
+      "id": "m-0295",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 835000,
+      "collected_cents": 764000
+    },
+    {
+      "id": "m-0296",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-01",
+      "billed_cents": 285000,
+      "collected_cents": 221000
+    },
+    {
+      "id": "m-0297",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-01",
+      "rain_maker": "atty-11",
+      "billed_cents": 485000,
+      "collected_cents": 429000
+    },
+    {
+      "id": "m-0298",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-01",
+      "rain_maker": "atty-07",
+      "billed_cents": 475000,
+      "collected_cents": 406000
+    },
+    {
+      "id": "m-0299",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-01",
+      "rain_maker": "atty-01",
+      "billed_cents": 860000,
+      "collected_cents": 768000
+    },
+    {
+      "id": "m-0300",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 345000,
+      "collected_cents": 288000
+    },
+    {
+      "id": "m-0301",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "personal-injury",
+      "lead": "atty-02",
+      "rain_maker": "atty-10",
+      "billed_cents": 1720000,
+      "collected_cents": 1288000
+    },
+    {
+      "id": "m-0302",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 545000,
+      "collected_cents": 444000
+    },
+    {
+      "id": "m-0303",
+      "month": "2026-04",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-01",
+      "rain_maker": "atty-12",
+      "billed_cents": 1325000,
+      "collected_cents": 1053000
+    },
+    {
+      "id": "m-0304",
+      "month": "2026-04",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 525000,
+      "collected_cents": 508000
+    },
+    {
+      "id": "m-0305",
+      "month": "2026-04",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-09",
+      "billed_cents": 550000,
+      "collected_cents": 441000
+    },
+    {
+      "id": "m-0306",
+      "month": "2026-04",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 1065000,
+      "collected_cents": 932000
+    },
+    {
+      "id": "m-0307",
+      "month": "2026-04",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-04",
+      "rain_maker": "atty-08",
+      "billed_cents": 485000,
+      "collected_cents": 435000
+    },
+    {
+      "id": "m-0308",
+      "month": "2026-04",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-05",
+      "rain_maker": "atty-07",
+      "billed_cents": 445000,
+      "collected_cents": 346000
+    },
+    {
+      "id": "m-0309",
+      "month": "2026-04",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-05",
+      "rain_maker": "atty-12",
+      "billed_cents": 320000,
+      "collected_cents": 249000
+    },
+    {
+      "id": "m-0310",
+      "month": "2026-04",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 185000,
+      "collected_cents": 182000
+    },
+    {
+      "id": "m-0311",
+      "month": "2026-04",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-05",
+      "rain_maker": "atty-08",
+      "billed_cents": 795000,
+      "collected_cents": 732000
+    },
+    {
+      "id": "m-0312",
+      "month": "2026-04",
+      "state": "B",
+      "vertical": "personal-injury",
+      "lead": "atty-05",
+      "rain_maker": "atty-12",
+      "billed_cents": 1410000,
+      "collected_cents": 1382000
+    },
+    {
+      "id": "m-0313",
+      "month": "2026-04",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 1435000,
+      "collected_cents": 1280000
+    },
+    {
+      "id": "m-0314",
+      "month": "2026-04",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-04",
+      "rain_maker": "atty-08",
+      "billed_cents": 1240000,
+      "collected_cents": 1168000
+    },
+    {
+      "id": "m-0315",
+      "month": "2026-04",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 930000,
+      "collected_cents": 708000
+    },
+    {
+      "id": "m-0316",
+      "month": "2026-04",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-05",
+      "rain_maker": "atty-01",
+      "billed_cents": 650000,
+      "collected_cents": 606000
+    },
+    {
+      "id": "m-0317",
+      "month": "2026-04",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 605000,
+      "collected_cents": 455000
+    },
+    {
+      "id": "m-0318",
+      "month": "2026-04",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 555000,
+      "collected_cents": 415000
+    },
+    {
+      "id": "m-0319",
+      "month": "2026-04",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-06",
+      "rain_maker": "atty-02",
+      "billed_cents": 535000,
+      "collected_cents": 490000
+    },
+    {
+      "id": "m-0320",
+      "month": "2026-04",
+      "state": "C",
+      "vertical": "civil-litigation",
+      "lead": "atty-06",
+      "rain_maker": "atty-01",
+      "billed_cents": 2030000,
+      "collected_cents": 1785000
+    },
+    {
+      "id": "m-0321",
+      "month": "2026-04",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-06",
+      "rain_maker": "atty-12",
+      "billed_cents": 980000,
+      "collected_cents": 773000
+    },
+    {
+      "id": "m-0322",
+      "month": "2026-04",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-06",
+      "rain_maker": "atty-10",
+      "billed_cents": 220000,
+      "collected_cents": 167000
+    },
+    {
+      "id": "m-0323",
+      "month": "2026-04",
+      "state": "C",
+      "vertical": "criminal-defense",
+      "lead": "atty-07",
+      "rain_maker": "atty-10",
+      "billed_cents": 1050000,
+      "collected_cents": 909000
+    },
+    {
+      "id": "m-0324",
+      "month": "2026-04",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 545000,
+      "collected_cents": 412000
+    },
+    {
+      "id": "m-0325",
+      "month": "2026-04",
+      "state": "D",
+      "vertical": "civil-litigation",
+      "lead": "atty-09",
+      "rain_maker": "atty-04",
+      "billed_cents": 1680000,
+      "collected_cents": 1552000
+    },
+    {
+      "id": "m-0326",
+      "month": "2026-04",
+      "state": "D",
+      "vertical": "family-law",
+      "lead": "atty-09",
+      "rain_maker": "atty-07",
+      "billed_cents": 1010000,
+      "collected_cents": 945000
+    },
+    {
+      "id": "m-0327",
+      "month": "2026-04",
+      "state": "D",
+      "vertical": "estate-planning",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 185000,
+      "collected_cents": 150000
+    },
+    {
+      "id": "m-0328",
+      "month": "2026-04",
+      "state": "D",
+      "vertical": "estate-planning",
+      "lead": "atty-09",
+      "rain_maker": "atty-10",
+      "billed_cents": 195000,
+      "collected_cents": 147000
+    },
+    {
+      "id": "m-0329",
+      "month": "2026-04",
+      "state": "D",
+      "vertical": "business",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 410000,
+      "collected_cents": 351000
+    },
+    {
+      "id": "m-0330",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-11",
+      "rain_maker": "atty-01",
+      "billed_cents": 510000,
+      "collected_cents": 449000
+    },
+    {
+      "id": "m-0331",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-11",
+      "rain_maker": "atty-01",
+      "billed_cents": 215000,
+      "collected_cents": 183000
+    },
+    {
+      "id": "m-0332",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 505000,
+      "collected_cents": 379000
+    },
+    {
+      "id": "m-0333",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 1945000,
+      "collected_cents": 1778000
+    },
+    {
+      "id": "m-0334",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-10",
+      "rain_maker": "atty-05",
+      "billed_cents": 775000,
+      "collected_cents": 722000
+    },
+    {
+      "id": "m-0335",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 305000,
+      "collected_cents": 288000
+    },
+    {
+      "id": "m-0336",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-10",
+      "rain_maker": "atty-07",
+      "billed_cents": 180000,
+      "collected_cents": 142000
+    },
+    {
+      "id": "m-0337",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-10",
+      "rain_maker": "atty-06",
+      "billed_cents": 155000,
+      "collected_cents": 136000
+    },
+    {
+      "id": "m-0338",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-12",
+      "rain_maker": "atty-03",
+      "billed_cents": 345000,
+      "collected_cents": 337000
+    },
+    {
+      "id": "m-0339",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-12",
+      "rain_maker": "atty-08",
+      "billed_cents": 835000,
+      "collected_cents": 733000
+    },
+    {
+      "id": "m-0340",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "personal-injury",
+      "lead": "atty-10",
+      "rain_maker": "atty-08",
+      "billed_cents": 1825000,
+      "collected_cents": 1462000
+    },
+    {
+      "id": "m-0341",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-10",
+      "rain_maker": "atty-08",
+      "billed_cents": 525000,
+      "collected_cents": 509000
+    },
+    {
+      "id": "m-0342",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-10",
+      "rain_maker": "atty-02",
+      "billed_cents": 990000,
+      "collected_cents": 908000
+    },
+    {
+      "id": "m-0343",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-11",
+      "rain_maker": "atty-03",
+      "billed_cents": 435000,
+      "collected_cents": 368000
+    },
+    {
+      "id": "m-0344",
+      "month": "2026-04",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-10",
+      "rain_maker": "atty-04",
+      "billed_cents": 840000,
+      "collected_cents": 799000
+    },
+    {
+      "id": "m-0345",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 290000,
+      "collected_cents": 277000
+    },
+    {
+      "id": "m-0346",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-02",
+      "rain_maker": "atty-07",
+      "billed_cents": 505000,
+      "collected_cents": 441000
+    },
+    {
+      "id": "m-0347",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-03",
+      "rain_maker": "atty-01",
+      "billed_cents": 395000,
+      "collected_cents": 384000
+    },
+    {
+      "id": "m-0348",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-03",
+      "rain_maker": "atty-07",
+      "billed_cents": 1815000,
+      "collected_cents": 1432000
+    },
+    {
+      "id": "m-0349",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 360000,
+      "collected_cents": 282000
+    },
+    {
+      "id": "m-0350",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 980000,
+      "collected_cents": 797000
+    },
+    {
+      "id": "m-0351",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-05",
+      "billed_cents": 1045000,
+      "collected_cents": 869000
+    },
+    {
+      "id": "m-0352",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 400000,
+      "collected_cents": 342000
+    },
+    {
+      "id": "m-0353",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 175000,
+      "collected_cents": 136000
+    },
+    {
+      "id": "m-0354",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-01",
+      "rain_maker": "atty-09",
+      "billed_cents": 630000,
+      "collected_cents": 601000
+    },
+    {
+      "id": "m-0355",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-01",
+      "rain_maker": "atty-04",
+      "billed_cents": 380000,
+      "collected_cents": 363000
+    },
+    {
+      "id": "m-0356",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "personal-injury",
+      "lead": "atty-03",
+      "rain_maker": "atty-04",
+      "billed_cents": 1015000,
+      "collected_cents": 842000
+    },
+    {
+      "id": "m-0357",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-01",
+      "rain_maker": "atty-01",
+      "billed_cents": 315000,
+      "collected_cents": 244000
+    },
+    {
+      "id": "m-0358",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-03",
+      "rain_maker": "atty-02",
+      "billed_cents": 960000,
+      "collected_cents": 931000
+    },
+    {
+      "id": "m-0359",
+      "month": "2026-05",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-02",
+      "rain_maker": "atty-10",
+      "billed_cents": 440000,
+      "collected_cents": 341000
+    },
+    {
+      "id": "m-0360",
+      "month": "2026-05",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 200000,
+      "collected_cents": 171000
+    },
+    {
+      "id": "m-0361",
+      "month": "2026-05",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-11",
+      "billed_cents": 335000,
+      "collected_cents": 294000
+    },
+    {
+      "id": "m-0362",
+      "month": "2026-05",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 2225000,
+      "collected_cents": 1840000
+    },
+    {
+      "id": "m-0363",
+      "month": "2026-05",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 2050000,
+      "collected_cents": 1963000
+    },
+    {
+      "id": "m-0364",
+      "month": "2026-05",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 285000,
+      "collected_cents": 256000
+    },
+    {
+      "id": "m-0365",
+      "month": "2026-05",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-04",
+      "rain_maker": "atty-08",
+      "billed_cents": 310000,
+      "collected_cents": 257000
+    },
+    {
+      "id": "m-0366",
+      "month": "2026-05",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 730000,
+      "collected_cents": 602000
+    },
+    {
+      "id": "m-0367",
+      "month": "2026-05",
+      "state": "B",
+      "vertical": "personal-injury",
+      "lead": "atty-04",
+      "rain_maker": "atty-08",
+      "billed_cents": 3235000,
+      "collected_cents": 2802000
+    },
+    {
+      "id": "m-0368",
+      "month": "2026-05",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-05",
+      "rain_maker": "atty-10",
+      "billed_cents": 1105000,
+      "collected_cents": 998000
+    },
+    {
+      "id": "m-0369",
+      "month": "2026-05",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 280000,
+      "collected_cents": 241000
+    },
+    {
+      "id": "m-0370",
+      "month": "2026-05",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-07",
+      "rain_maker": "atty-06",
+      "billed_cents": 500000,
+      "collected_cents": 371000
+    },
+    {
+      "id": "m-0371",
+      "month": "2026-05",
+      "state": "C",
+      "vertical": "civil-litigation",
+      "lead": "atty-07",
+      "rain_maker": "atty-09",
+      "billed_cents": 730000,
+      "collected_cents": 591000
+    },
+    {
+      "id": "m-0372",
+      "month": "2026-05",
+      "state": "C",
+      "vertical": "civil-litigation",
+      "lead": "atty-07",
+      "rain_maker": "atty-02",
+      "billed_cents": 810000,
+      "collected_cents": 730000
+    },
+    {
+      "id": "m-0373",
+      "month": "2026-05",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-06",
+      "rain_maker": "atty-11",
+      "billed_cents": 330000,
+      "collected_cents": 318000
+    },
+    {
+      "id": "m-0374",
+      "month": "2026-05",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 455000,
+      "collected_cents": 364000
+    },
+    {
+      "id": "m-0375",
+      "month": "2026-05",
+      "state": "C",
+      "vertical": "personal-injury",
+      "lead": "atty-06",
+      "rain_maker": "atty-09",
+      "billed_cents": 2255000,
+      "collected_cents": 1936000
+    },
+    {
+      "id": "m-0376",
+      "month": "2026-05",
+      "state": "C",
+      "vertical": "business",
+      "lead": "atty-06",
+      "rain_maker": "atty-10",
+      "billed_cents": 805000,
+      "collected_cents": 740000
+    },
+    {
+      "id": "m-0377",
+      "month": "2026-05",
+      "state": "C",
+      "vertical": "criminal-defense",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 660000,
+      "collected_cents": 542000
+    },
+    {
+      "id": "m-0378",
+      "month": "2026-05",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-08",
+      "rain_maker": "atty-03",
+      "billed_cents": 265000,
+      "collected_cents": 258000
+    },
+    {
+      "id": "m-0379",
+      "month": "2026-05",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 260000,
+      "collected_cents": 195000
+    },
+    {
+      "id": "m-0380",
+      "month": "2026-05",
+      "state": "D",
+      "vertical": "estate-planning",
+      "lead": "atty-09",
+      "rain_maker": "atty-04",
+      "billed_cents": 155000,
+      "collected_cents": 138000
+    },
+    {
+      "id": "m-0381",
+      "month": "2026-05",
+      "state": "D",
+      "vertical": "personal-injury",
+      "lead": "atty-09",
+      "rain_maker": "atty-04",
+      "billed_cents": 3155000,
+      "collected_cents": 2680000
+    },
+    {
+      "id": "m-0382",
+      "month": "2026-05",
+      "state": "D",
+      "vertical": "criminal-defense",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 1020000,
+      "collected_cents": 978000
+    },
+    {
+      "id": "m-0383",
+      "month": "2026-05",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-10",
+      "billed_cents": 585000,
+      "collected_cents": 509000
+    },
+    {
+      "id": "m-0384",
+      "month": "2026-05",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 420000,
+      "collected_cents": 376000
+    },
+    {
+      "id": "m-0385",
+      "month": "2026-05",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-11",
+      "rain_maker": "atty-04",
+      "billed_cents": 275000,
+      "collected_cents": 234000
+    },
+    {
+      "id": "m-0386",
+      "month": "2026-05",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-12",
+      "rain_maker": "atty-03",
+      "billed_cents": 1385000,
+      "collected_cents": 1075000
+    },
+    {
+      "id": "m-0387",
+      "month": "2026-05",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-11",
+      "rain_maker": "atty-10",
+      "billed_cents": 600000,
+      "collected_cents": 592000
+    },
+    {
+      "id": "m-0388",
+      "month": "2026-05",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 370000,
+      "collected_cents": 339000
+    },
+    {
+      "id": "m-0389",
+      "month": "2026-05",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 275000,
+      "collected_cents": 248000
+    },
+    {
+      "id": "m-0390",
+      "month": "2026-05",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-12",
+      "rain_maker": "atty-06",
+      "billed_cents": 595000,
+      "collected_cents": 584000
+    },
+    {
+      "id": "m-0391",
+      "month": "2026-05",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-12",
+      "rain_maker": "atty-05",
+      "billed_cents": 220000,
+      "collected_cents": 209000
+    },
+    {
+      "id": "m-0392",
+      "month": "2026-05",
+      "state": "E",
+      "vertical": "personal-injury",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 3210000,
+      "collected_cents": 3079000
+    },
+    {
+      "id": "m-0393",
+      "month": "2026-05",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 720000,
+      "collected_cents": 549000
+    },
+    {
+      "id": "m-0394",
+      "month": "2026-05",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-12",
+      "rain_maker": "atty-05",
+      "billed_cents": 805000,
+      "collected_cents": 599000
+    },
+    {
+      "id": "m-0395",
+      "month": "2026-05",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 430000,
+      "collected_cents": 366000
+    },
+    {
+      "id": "m-0396",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-01",
+      "rain_maker": "atty-07",
+      "billed_cents": 640000,
+      "collected_cents": 520000
+    },
+    {
+      "id": "m-0397",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-01",
+      "rain_maker": "atty-10",
+      "billed_cents": 350000,
+      "collected_cents": 267000
+    },
+    {
+      "id": "m-0398",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-03",
+      "rain_maker": "atty-11",
+      "billed_cents": 305000,
+      "collected_cents": 268000
+    },
+    {
+      "id": "m-0399",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-02",
+      "rain_maker": "atty-11",
+      "billed_cents": 515000,
+      "collected_cents": 499000
+    },
+    {
+      "id": "m-0400",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 1965000,
+      "collected_cents": 1489000
+    },
+    {
+      "id": "m-0401",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 740000,
+      "collected_cents": 685000
+    },
+    {
+      "id": "m-0402",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 345000,
+      "collected_cents": 337000
+    },
+    {
+      "id": "m-0403",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 750000,
+      "collected_cents": 625000
+    },
+    {
+      "id": "m-0404",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-02",
+      "rain_maker": "atty-01",
+      "billed_cents": 270000,
+      "collected_cents": 231000
+    },
+    {
+      "id": "m-0405",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-01",
+      "rain_maker": "atty-02",
+      "billed_cents": 295000,
+      "collected_cents": 239000
+    },
+    {
+      "id": "m-0406",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-01",
+      "rain_maker": "atty-01",
+      "billed_cents": 350000,
+      "collected_cents": 260000
+    },
+    {
+      "id": "m-0407",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 695000,
+      "collected_cents": 560000
+    },
+    {
+      "id": "m-0408",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "personal-injury",
+      "lead": "atty-03",
+      "rain_maker": "atty-09",
+      "billed_cents": 2235000,
+      "collected_cents": 2191000
+    },
+    {
+      "id": "m-0409",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 700000,
+      "collected_cents": 633000
+    },
+    {
+      "id": "m-0410",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-03",
+      "rain_maker": "atty-01",
+      "billed_cents": 1285000,
+      "collected_cents": 1180000
+    },
+    {
+      "id": "m-0411",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-02",
+      "rain_maker": "atty-10",
+      "billed_cents": 1320000,
+      "collected_cents": 1159000
+    },
+    {
+      "id": "m-0412",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-02",
+      "rain_maker": "atty-11",
+      "billed_cents": 880000,
+      "collected_cents": 659000
+    },
+    {
+      "id": "m-0413",
+      "month": "2026-06",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-02",
+      "rain_maker": "atty-12",
+      "billed_cents": 570000,
+      "collected_cents": 558000
+    },
+    {
+      "id": "m-0414",
+      "month": "2026-06",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 540000,
+      "collected_cents": 437000
+    },
+    {
+      "id": "m-0415",
+      "month": "2026-06",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 470000,
+      "collected_cents": 424000
+    },
+    {
+      "id": "m-0416",
+      "month": "2026-06",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-08",
+      "billed_cents": 500000,
+      "collected_cents": 428000
+    },
+    {
+      "id": "m-0417",
+      "month": "2026-06",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-05",
+      "rain_maker": "atty-02",
+      "billed_cents": 2335000,
+      "collected_cents": 1890000
+    },
+    {
+      "id": "m-0418",
+      "month": "2026-06",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-05",
+      "rain_maker": "atty-11",
+      "billed_cents": 2315000,
+      "collected_cents": 1787000
+    },
+    {
+      "id": "m-0419",
+      "month": "2026-06",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-05",
+      "rain_maker": "atty-09",
+      "billed_cents": 380000,
+      "collected_cents": 298000
+    },
+    {
+      "id": "m-0420",
+      "month": "2026-06",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 170000,
+      "collected_cents": 134000
+    },
+    {
+      "id": "m-0421",
+      "month": "2026-06",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 470000,
+      "collected_cents": 416000
+    },
+    {
+      "id": "m-0422",
+      "month": "2026-06",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-04",
+      "rain_maker": "atty-02",
+      "billed_cents": 650000,
+      "collected_cents": 497000
+    },
+    {
+      "id": "m-0423",
+      "month": "2026-06",
+      "state": "B",
+      "vertical": "personal-injury",
+      "lead": "atty-05",
+      "rain_maker": "atty-08",
+      "billed_cents": 3030000,
+      "collected_cents": 2722000
+    },
+    {
+      "id": "m-0424",
+      "month": "2026-06",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-04",
+      "rain_maker": "atty-05",
+      "billed_cents": 355000,
+      "collected_cents": 350000
+    },
+    {
+      "id": "m-0425",
+      "month": "2026-06",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 505000,
+      "collected_cents": 463000
+    },
+    {
+      "id": "m-0426",
+      "month": "2026-06",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-05",
+      "rain_maker": "atty-10",
+      "billed_cents": 825000,
+      "collected_cents": 716000
+    },
+    {
+      "id": "m-0427",
+      "month": "2026-06",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 585000,
+      "collected_cents": 479000
+    },
+    {
+      "id": "m-0428",
+      "month": "2026-06",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-06",
+      "rain_maker": "atty-04",
+      "billed_cents": 415000,
+      "collected_cents": 398000
+    },
+    {
+      "id": "m-0429",
+      "month": "2026-06",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 385000,
+      "collected_cents": 326000
+    },
+    {
+      "id": "m-0430",
+      "month": "2026-06",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-07",
+      "rain_maker": "atty-05",
+      "billed_cents": 780000,
+      "collected_cents": 735000
+    },
+    {
+      "id": "m-0431",
+      "month": "2026-06",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-07",
+      "rain_maker": "atty-02",
+      "billed_cents": 735000,
+      "collected_cents": 608000
+    },
+    {
+      "id": "m-0432",
+      "month": "2026-06",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-06",
+      "rain_maker": "atty-12",
+      "billed_cents": 415000,
+      "collected_cents": 361000
+    },
+    {
+      "id": "m-0433",
+      "month": "2026-06",
+      "state": "C",
+      "vertical": "immigration",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 815000,
+      "collected_cents": 643000
+    },
+    {
+      "id": "m-0434",
+      "month": "2026-06",
+      "state": "C",
+      "vertical": "business",
+      "lead": "atty-07",
+      "rain_maker": "atty-06",
+      "billed_cents": 1015000,
+      "collected_cents": 1001000
+    },
+    {
+      "id": "m-0435",
+      "month": "2026-06",
+      "state": "C",
+      "vertical": "criminal-defense",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 435000,
+      "collected_cents": 400000
+    },
+    {
+      "id": "m-0436",
+      "month": "2026-06",
+      "state": "C",
+      "vertical": "criminal-defense",
+      "lead": "atty-06",
+      "rain_maker": "atty-12",
+      "billed_cents": 1285000,
+      "collected_cents": 1241000
+    },
+    {
+      "id": "m-0437",
+      "month": "2026-06",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-08",
+      "rain_maker": "atty-11",
+      "billed_cents": 180000,
+      "collected_cents": 140000
+    },
+    {
+      "id": "m-0438",
+      "month": "2026-06",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-08",
+      "rain_maker": "atty-01",
+      "billed_cents": 450000,
+      "collected_cents": 342000
+    },
+    {
+      "id": "m-0439",
+      "month": "2026-06",
+      "state": "D",
+      "vertical": "family-law",
+      "lead": "atty-09",
+      "rain_maker": "atty-02",
+      "billed_cents": 445000,
+      "collected_cents": 409000
+    },
+    {
+      "id": "m-0440",
+      "month": "2026-06",
+      "state": "D",
+      "vertical": "immigration",
+      "lead": "atty-08",
+      "rain_maker": "atty-07",
+      "billed_cents": 760000,
+      "collected_cents": 626000
+    },
+    {
+      "id": "m-0441",
+      "month": "2026-06",
+      "state": "D",
+      "vertical": "personal-injury",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 3490000,
+      "collected_cents": 3451000
+    },
+    {
+      "id": "m-0442",
+      "month": "2026-06",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 610000,
+      "collected_cents": 515000
+    },
+    {
+      "id": "m-0443",
+      "month": "2026-06",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-10",
+      "rain_maker": "atty-05",
+      "billed_cents": 385000,
+      "collected_cents": 367000
+    },
+    {
+      "id": "m-0444",
+      "month": "2026-06",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-10",
+      "rain_maker": "atty-07",
+      "billed_cents": 270000,
+      "collected_cents": 238000
+    },
+    {
+      "id": "m-0445",
+      "month": "2026-06",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 1650000,
+      "collected_cents": 1542000
+    },
+    {
+      "id": "m-0446",
+      "month": "2026-06",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-12",
+      "rain_maker": "atty-06",
+      "billed_cents": 810000,
+      "collected_cents": 645000
+    },
+    {
+      "id": "m-0447",
+      "month": "2026-06",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-10",
+      "rain_maker": "atty-04",
+      "billed_cents": 285000,
+      "collected_cents": 226000
+    },
+    {
+      "id": "m-0448",
+      "month": "2026-06",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 250000,
+      "collected_cents": 245000
+    },
+    {
+      "id": "m-0449",
+      "month": "2026-06",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 805000,
+      "collected_cents": 634000
+    },
+    {
+      "id": "m-0450",
+      "month": "2026-06",
+      "state": "E",
+      "vertical": "personal-injury",
+      "lead": "atty-10",
+      "rain_maker": "atty-09",
+      "billed_cents": 1450000,
+      "collected_cents": 1296000
+    },
+    {
+      "id": "m-0451",
+      "month": "2026-06",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-11",
+      "rain_maker": "atty-04",
+      "billed_cents": 1385000,
+      "collected_cents": 1185000
+    },
+    {
+      "id": "m-0452",
+      "month": "2026-06",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 535000,
+      "collected_cents": 473000
+    },
+    {
+      "id": "m-0453",
+      "month": "2026-06",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-11",
+      "rain_maker": "atty-10",
+      "billed_cents": 315000,
+      "collected_cents": 290000
+    },
+    {
+      "id": "m-0454",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-03",
+      "rain_maker": "atty-05",
+      "billed_cents": 320000,
+      "collected_cents": 303000
+    },
+    {
+      "id": "m-0455",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-02",
+      "rain_maker": "atty-09",
+      "billed_cents": 370000,
+      "collected_cents": 359000
+    },
+    {
+      "id": "m-0456",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-02",
+      "rain_maker": "atty-08",
+      "billed_cents": 525000,
+      "collected_cents": 492000
+    },
+    {
+      "id": "m-0457",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 195000,
+      "collected_cents": 165000
+    },
+    {
+      "id": "m-0458",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-01",
+      "rain_maker": "atty-06",
+      "billed_cents": 665000,
+      "collected_cents": 600000
+    },
+    {
+      "id": "m-0459",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-03",
+      "rain_maker": "atty-06",
+      "billed_cents": 1340000,
+      "collected_cents": 1151000
+    },
+    {
+      "id": "m-0460",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 305000,
+      "collected_cents": 260000
+    },
+    {
+      "id": "m-0461",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-01",
+      "rain_maker": "atty-06",
+      "billed_cents": 785000,
+      "collected_cents": 650000
+    },
+    {
+      "id": "m-0462",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-01",
+      "rain_maker": "atty-09",
+      "billed_cents": 360000,
+      "collected_cents": 284000
+    },
+    {
+      "id": "m-0463",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-01",
+      "rain_maker": "atty-01",
+      "billed_cents": 165000,
+      "collected_cents": 134000
+    },
+    {
+      "id": "m-0464",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 580000,
+      "collected_cents": 537000
+    },
+    {
+      "id": "m-0465",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-03",
+      "rain_maker": "atty-07",
+      "billed_cents": 230000,
+      "collected_cents": 208000
+    },
+    {
+      "id": "m-0466",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "personal-injury",
+      "lead": "atty-01",
+      "rain_maker": "atty-12",
+      "billed_cents": 1685000,
+      "collected_cents": 1392000
+    },
+    {
+      "id": "m-0467",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "personal-injury",
+      "lead": "atty-03",
+      "rain_maker": "atty-04",
+      "billed_cents": 1280000,
+      "collected_cents": 1111000
+    },
+    {
+      "id": "m-0468",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-02",
+      "rain_maker": "atty-04",
+      "billed_cents": 830000,
+      "collected_cents": 793000
+    },
+    {
+      "id": "m-0469",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-02",
+      "rain_maker": "atty-04",
+      "billed_cents": 1260000,
+      "collected_cents": 1154000
+    },
+    {
+      "id": "m-0470",
+      "month": "2026-07",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-01",
+      "rain_maker": "atty-05",
+      "billed_cents": 365000,
+      "collected_cents": 297000
+    },
+    {
+      "id": "m-0471",
+      "month": "2026-07",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-09",
+      "billed_cents": 185000,
+      "collected_cents": 154000
+    },
+    {
+      "id": "m-0472",
+      "month": "2026-07",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-08",
+      "billed_cents": 400000,
+      "collected_cents": 312000
+    },
+    {
+      "id": "m-0473",
+      "month": "2026-07",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-07",
+      "billed_cents": 535000,
+      "collected_cents": 495000
+    },
+    {
+      "id": "m-0474",
+      "month": "2026-07",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 605000,
+      "collected_cents": 448000
+    },
+    {
+      "id": "m-0475",
+      "month": "2026-07",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 2365000,
+      "collected_cents": 1940000
+    },
+    {
+      "id": "m-0476",
+      "month": "2026-07",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 665000,
+      "collected_cents": 547000
+    },
+    {
+      "id": "m-0477",
+      "month": "2026-07",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-04",
+      "rain_maker": "atty-07",
+      "billed_cents": 860000,
+      "collected_cents": 830000
+    },
+    {
+      "id": "m-0478",
+      "month": "2026-07",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-05",
+      "rain_maker": "atty-11",
+      "billed_cents": 510000,
+      "collected_cents": 435000
+    },
+    {
+      "id": "m-0479",
+      "month": "2026-07",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-04",
+      "rain_maker": "atty-07",
+      "billed_cents": 220000,
+      "collected_cents": 198000
+    },
+    {
+      "id": "m-0480",
+      "month": "2026-07",
+      "state": "B",
+      "vertical": "personal-injury",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 1985000,
+      "collected_cents": 1914000
+    },
+    {
+      "id": "m-0481",
+      "month": "2026-07",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 775000,
+      "collected_cents": 620000
+    },
+    {
+      "id": "m-0482",
+      "month": "2026-07",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-05",
+      "rain_maker": "atty-12",
+      "billed_cents": 325000,
+      "collected_cents": 315000
+    },
+    {
+      "id": "m-0483",
+      "month": "2026-07",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-05",
+      "rain_maker": "atty-11",
+      "billed_cents": 595000,
+      "collected_cents": 453000
+    },
+    {
+      "id": "m-0484",
+      "month": "2026-07",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-07",
+      "rain_maker": "atty-05",
+      "billed_cents": 555000,
+      "collected_cents": 461000
+    },
+    {
+      "id": "m-0485",
+      "month": "2026-07",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-06",
+      "rain_maker": "atty-02",
+      "billed_cents": 305000,
+      "collected_cents": 276000
+    },
+    {
+      "id": "m-0486",
+      "month": "2026-07",
+      "state": "C",
+      "vertical": "civil-litigation",
+      "lead": "atty-07",
+      "rain_maker": "atty-06",
+      "billed_cents": 780000,
+      "collected_cents": 742000
+    },
+    {
+      "id": "m-0487",
+      "month": "2026-07",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-07",
+      "rain_maker": "atty-01",
+      "billed_cents": 370000,
+      "collected_cents": 291000
+    },
+    {
+      "id": "m-0488",
+      "month": "2026-07",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-07",
+      "rain_maker": "atty-08",
+      "billed_cents": 355000,
+      "collected_cents": 291000
+    },
+    {
+      "id": "m-0489",
+      "month": "2026-07",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-06",
+      "rain_maker": "atty-09",
+      "billed_cents": 235000,
+      "collected_cents": 198000
+    },
+    {
+      "id": "m-0490",
+      "month": "2026-07",
+      "state": "C",
+      "vertical": "immigration",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 445000,
+      "collected_cents": 429000
+    },
+    {
+      "id": "m-0491",
+      "month": "2026-07",
+      "state": "C",
+      "vertical": "personal-injury",
+      "lead": "atty-06",
+      "rain_maker": "atty-02",
+      "billed_cents": 4200000,
+      "collected_cents": 3615000
+    },
+    {
+      "id": "m-0492",
+      "month": "2026-07",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-09",
+      "rain_maker": "atty-08",
+      "billed_cents": 315000,
+      "collected_cents": 280000
+    },
+    {
+      "id": "m-0493",
+      "month": "2026-07",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-09",
+      "rain_maker": "atty-12",
+      "billed_cents": 360000,
+      "collected_cents": 304000
+    },
+    {
+      "id": "m-0494",
+      "month": "2026-07",
+      "state": "D",
+      "vertical": "civil-litigation",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 1055000,
+      "collected_cents": 933000
+    },
+    {
+      "id": "m-0495",
+      "month": "2026-07",
+      "state": "D",
+      "vertical": "family-law",
+      "lead": "atty-09",
+      "rain_maker": "atty-10",
+      "billed_cents": 495000,
+      "collected_cents": 439000
+    },
+    {
+      "id": "m-0496",
+      "month": "2026-07",
+      "state": "D",
+      "vertical": "estate-planning",
+      "lead": "atty-09",
+      "rain_maker": "atty-08",
+      "billed_cents": 480000,
+      "collected_cents": 468000
+    },
+    {
+      "id": "m-0497",
+      "month": "2026-07",
+      "state": "D",
+      "vertical": "immigration",
+      "lead": "atty-09",
+      "rain_maker": "atty-07",
+      "billed_cents": 810000,
+      "collected_cents": 699000
+    },
+    {
+      "id": "m-0498",
+      "month": "2026-07",
+      "state": "D",
+      "vertical": "business",
+      "lead": "atty-08",
+      "rain_maker": "atty-09",
+      "billed_cents": 545000,
+      "collected_cents": 423000
+    },
+    {
+      "id": "m-0499",
+      "month": "2026-07",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-10",
+      "rain_maker": "atty-02",
+      "billed_cents": 305000,
+      "collected_cents": 296000
+    },
+    {
+      "id": "m-0500",
+      "month": "2026-07",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-11",
+      "rain_maker": "atty-02",
+      "billed_cents": 565000,
+      "collected_cents": 455000
+    },
+    {
+      "id": "m-0501",
+      "month": "2026-07",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 645000,
+      "collected_cents": 592000
+    },
+    {
+      "id": "m-0502",
+      "month": "2026-07",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-12",
+      "rain_maker": "atty-09",
+      "billed_cents": 855000,
+      "collected_cents": 820000
+    },
+    {
+      "id": "m-0503",
+      "month": "2026-07",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-11",
+      "rain_maker": "atty-08",
+      "billed_cents": 725000,
+      "collected_cents": 560000
+    },
+    {
+      "id": "m-0504",
+      "month": "2026-07",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-12",
+      "rain_maker": "atty-04",
+      "billed_cents": 450000,
+      "collected_cents": 357000
+    },
+    {
+      "id": "m-0505",
+      "month": "2026-07",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 345000,
+      "collected_cents": 272000
+    },
+    {
+      "id": "m-0506",
+      "month": "2026-07",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-11",
+      "rain_maker": "atty-01",
+      "billed_cents": 350000,
+      "collected_cents": 317000
+    },
+    {
+      "id": "m-0507",
+      "month": "2026-07",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-11",
+      "rain_maker": "atty-09",
+      "billed_cents": 295000,
+      "collected_cents": 262000
+    },
+    {
+      "id": "m-0508",
+      "month": "2026-07",
+      "state": "E",
+      "vertical": "personal-injury",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 3240000,
+      "collected_cents": 2500000
+    },
+    {
+      "id": "m-0509",
+      "month": "2026-07",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 1445000,
+      "collected_cents": 1323000
+    },
+    {
+      "id": "m-0510",
+      "month": "2026-07",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-10",
+      "rain_maker": "atty-12",
+      "billed_cents": 410000,
+      "collected_cents": 351000
+    },
+    {
+      "id": "m-0511",
+      "month": "2026-07",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-10",
+      "rain_maker": "atty-01",
+      "billed_cents": 700000,
+      "collected_cents": 560000
+    },
+    {
+      "id": "m-0512",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-01",
+      "rain_maker": "atty-04",
+      "billed_cents": 590000,
+      "collected_cents": 583000
+    },
+    {
+      "id": "m-0513",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-01",
+      "rain_maker": "atty-08",
+      "billed_cents": 320000,
+      "collected_cents": 282000
+    },
+    {
+      "id": "m-0514",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-01",
+      "rain_maker": "atty-01",
+      "billed_cents": 600000,
+      "collected_cents": 485000
+    },
+    {
+      "id": "m-0515",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 2105000,
+      "collected_cents": 1585000
+    },
+    {
+      "id": "m-0516",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-01",
+      "rain_maker": "atty-08",
+      "billed_cents": 2110000,
+      "collected_cents": 2034000
+    },
+    {
+      "id": "m-0517",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-01",
+      "rain_maker": "atty-10",
+      "billed_cents": 1055000,
+      "collected_cents": 1036000
+    },
+    {
+      "id": "m-0518",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-02",
+      "rain_maker": "atty-04",
+      "billed_cents": 575000,
+      "collected_cents": 529000
+    },
+    {
+      "id": "m-0519",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 435000,
+      "collected_cents": 360000
+    },
+    {
+      "id": "m-0520",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-03",
+      "rain_maker": "atty-10",
+      "billed_cents": 310000,
+      "collected_cents": 278000
+    },
+    {
+      "id": "m-0521",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-02",
+      "rain_maker": "atty-03",
+      "billed_cents": 355000,
+      "collected_cents": 302000
+    },
+    {
+      "id": "m-0522",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-03",
+      "rain_maker": "atty-06",
+      "billed_cents": 455000,
+      "collected_cents": 405000
+    },
+    {
+      "id": "m-0523",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-01",
+      "rain_maker": "atty-01",
+      "billed_cents": 685000,
+      "collected_cents": 531000
+    },
+    {
+      "id": "m-0524",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "personal-injury",
+      "lead": "atty-01",
+      "rain_maker": "atty-02",
+      "billed_cents": 3730000,
+      "collected_cents": 3591000
+    },
+    {
+      "id": "m-0525",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "personal-injury",
+      "lead": "atty-03",
+      "rain_maker": "atty-10",
+      "billed_cents": 2655000,
+      "collected_cents": 2227000
+    },
+    {
+      "id": "m-0526",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-03",
+      "rain_maker": "atty-05",
+      "billed_cents": 900000,
+      "collected_cents": 681000
+    },
+    {
+      "id": "m-0527",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-03",
+      "rain_maker": "atty-12",
+      "billed_cents": 395000,
+      "collected_cents": 378000
+    },
+    {
+      "id": "m-0528",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 1165000,
+      "collected_cents": 893000
+    },
+    {
+      "id": "m-0529",
+      "month": "2026-08",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-03",
+      "rain_maker": "atty-07",
+      "billed_cents": 280000,
+      "collected_cents": 212000
+    },
+    {
+      "id": "m-0530",
+      "month": "2026-08",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 325000,
+      "collected_cents": 271000
+    },
+    {
+      "id": "m-0531",
+      "month": "2026-08",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 460000,
+      "collected_cents": 353000
+    },
+    {
+      "id": "m-0532",
+      "month": "2026-08",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 215000,
+      "collected_cents": 168000
+    },
+    {
+      "id": "m-0533",
+      "month": "2026-08",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-04",
+      "rain_maker": "atty-07",
+      "billed_cents": 1570000,
+      "collected_cents": 1246000
+    },
+    {
+      "id": "m-0534",
+      "month": "2026-08",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-05",
+      "rain_maker": "atty-11",
+      "billed_cents": 360000,
+      "collected_cents": 331000
+    },
+    {
+      "id": "m-0535",
+      "month": "2026-08",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-05",
+      "rain_maker": "atty-02",
+      "billed_cents": 370000,
+      "collected_cents": 292000
+    },
+    {
+      "id": "m-0536",
+      "month": "2026-08",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-05",
+      "rain_maker": "atty-11",
+      "billed_cents": 735000,
+      "collected_cents": 653000
+    },
+    {
+      "id": "m-0537",
+      "month": "2026-08",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-05",
+      "rain_maker": "atty-12",
+      "billed_cents": 525000,
+      "collected_cents": 474000
+    },
+    {
+      "id": "m-0538",
+      "month": "2026-08",
+      "state": "B",
+      "vertical": "personal-injury",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 2630000,
+      "collected_cents": 2182000
+    },
+    {
+      "id": "m-0539",
+      "month": "2026-08",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-04",
+      "rain_maker": "atty-02",
+      "billed_cents": 765000,
+      "collected_cents": 745000
+    },
+    {
+      "id": "m-0540",
+      "month": "2026-08",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 1110000,
+      "collected_cents": 1038000
+    },
+    {
+      "id": "m-0541",
+      "month": "2026-08",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-04",
+      "rain_maker": "atty-09",
+      "billed_cents": 680000,
+      "collected_cents": 613000
+    },
+    {
+      "id": "m-0542",
+      "month": "2026-08",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-04",
+      "rain_maker": "atty-07",
+      "billed_cents": 1120000,
+      "collected_cents": 843000
+    },
+    {
+      "id": "m-0543",
+      "month": "2026-08",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-07",
+      "rain_maker": "atty-02",
+      "billed_cents": 410000,
+      "collected_cents": 376000
+    },
+    {
+      "id": "m-0544",
+      "month": "2026-08",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-07",
+      "rain_maker": "atty-02",
+      "billed_cents": 445000,
+      "collected_cents": 433000
+    },
+    {
+      "id": "m-0545",
+      "month": "2026-08",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-06",
+      "rain_maker": "atty-05",
+      "billed_cents": 995000,
+      "collected_cents": 867000
+    },
+    {
+      "id": "m-0546",
+      "month": "2026-08",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 490000,
+      "collected_cents": 449000
+    },
+    {
+      "id": "m-0547",
+      "month": "2026-08",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 265000,
+      "collected_cents": 200000
+    },
+    {
+      "id": "m-0548",
+      "month": "2026-08",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-06",
+      "rain_maker": "atty-04",
+      "billed_cents": 205000,
+      "collected_cents": 193000
+    },
+    {
+      "id": "m-0549",
+      "month": "2026-08",
+      "state": "C",
+      "vertical": "immigration",
+      "lead": "atty-06",
+      "rain_maker": "atty-02",
+      "billed_cents": 305000,
+      "collected_cents": 297000
+    },
+    {
+      "id": "m-0550",
+      "month": "2026-08",
+      "state": "C",
+      "vertical": "personal-injury",
+      "lead": "atty-06",
+      "rain_maker": "atty-05",
+      "billed_cents": 3175000,
+      "collected_cents": 2597000
+    },
+    {
+      "id": "m-0551",
+      "month": "2026-08",
+      "state": "C",
+      "vertical": "business",
+      "lead": "atty-06",
+      "rain_maker": "atty-11",
+      "billed_cents": 390000,
+      "collected_cents": 336000
+    },
+    {
+      "id": "m-0552",
+      "month": "2026-08",
+      "state": "C",
+      "vertical": "criminal-defense",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 1310000,
+      "collected_cents": 1227000
+    },
+    {
+      "id": "m-0553",
+      "month": "2026-08",
+      "state": "C",
+      "vertical": "criminal-defense",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 1145000,
+      "collected_cents": 1050000
+    },
+    {
+      "id": "m-0554",
+      "month": "2026-08",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 395000,
+      "collected_cents": 307000
+    },
+    {
+      "id": "m-0555",
+      "month": "2026-08",
+      "state": "D",
+      "vertical": "civil-litigation",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 2300000,
+      "collected_cents": 2190000
+    },
+    {
+      "id": "m-0556",
+      "month": "2026-08",
+      "state": "D",
+      "vertical": "family-law",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 1065000,
+      "collected_cents": 870000
+    },
+    {
+      "id": "m-0557",
+      "month": "2026-08",
+      "state": "D",
+      "vertical": "personal-injury",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 845000,
+      "collected_cents": 717000
+    },
+    {
+      "id": "m-0558",
+      "month": "2026-08",
+      "state": "D",
+      "vertical": "business",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 505000,
+      "collected_cents": 379000
+    },
+    {
+      "id": "m-0559",
+      "month": "2026-08",
+      "state": "D",
+      "vertical": "criminal-defense",
+      "lead": "atty-09",
+      "rain_maker": "atty-01",
+      "billed_cents": 300000,
+      "collected_cents": 228000
+    },
+    {
+      "id": "m-0560",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 605000,
+      "collected_cents": 498000
+    },
+    {
+      "id": "m-0561",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-10",
+      "rain_maker": "atty-06",
+      "billed_cents": 590000,
+      "collected_cents": 497000
+    },
+    {
+      "id": "m-0562",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-10",
+      "rain_maker": "atty-11",
+      "billed_cents": 480000,
+      "collected_cents": 366000
+    },
+    {
+      "id": "m-0563",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 2315000,
+      "collected_cents": 2026000
+    },
+    {
+      "id": "m-0564",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-10",
+      "rain_maker": "atty-12",
+      "billed_cents": 1045000,
+      "collected_cents": 801000
+    },
+    {
+      "id": "m-0565",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 530000,
+      "collected_cents": 473000
+    },
+    {
+      "id": "m-0566",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 515000,
+      "collected_cents": 477000
+    },
+    {
+      "id": "m-0567",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-10",
+      "rain_maker": "atty-10",
+      "billed_cents": 365000,
+      "collected_cents": 361000
+    },
+    {
+      "id": "m-0568",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-10",
+      "rain_maker": "atty-02",
+      "billed_cents": 835000,
+      "collected_cents": 752000
+    },
+    {
+      "id": "m-0569",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-10",
+      "rain_maker": "atty-01",
+      "billed_cents": 485000,
+      "collected_cents": 410000
+    },
+    {
+      "id": "m-0570",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "personal-injury",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 1350000,
+      "collected_cents": 1290000
+    },
+    {
+      "id": "m-0571",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 1080000,
+      "collected_cents": 916000
+    },
+    {
+      "id": "m-0572",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-11",
+      "rain_maker": "atty-09",
+      "billed_cents": 925000,
+      "collected_cents": 873000
+    },
+    {
+      "id": "m-0573",
+      "month": "2026-08",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-11",
+      "rain_maker": "atty-01",
+      "billed_cents": 1135000,
+      "collected_cents": 1059000
+    },
+    {
+      "id": "m-0574",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-03",
+      "rain_maker": "atty-06",
+      "billed_cents": 450000,
+      "collected_cents": 358000
+    },
+    {
+      "id": "m-0575",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-01",
+      "rain_maker": "atty-04",
+      "billed_cents": 445000,
+      "collected_cents": 346000
+    },
+    {
+      "id": "m-0576",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "special-education",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 335000,
+      "collected_cents": 275000
+    },
+    {
+      "id": "m-0577",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 2210000,
+      "collected_cents": 1971000
+    },
+    {
+      "id": "m-0578",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "civil-litigation",
+      "lead": "atty-01",
+      "rain_maker": "atty-12",
+      "billed_cents": 2030000,
+      "collected_cents": 1992000
+    },
+    {
+      "id": "m-0579",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-01",
+      "rain_maker": "atty-08",
+      "billed_cents": 930000,
+      "collected_cents": 698000
+    },
+    {
+      "id": "m-0580",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 395000,
+      "collected_cents": 347000
+    },
+    {
+      "id": "m-0581",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "family-law",
+      "lead": "atty-03",
+      "rain_maker": "atty-03",
+      "billed_cents": 515000,
+      "collected_cents": 488000
+    },
+    {
+      "id": "m-0582",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-02",
+      "rain_maker": "atty-02",
+      "billed_cents": 360000,
+      "collected_cents": 331000
+    },
+    {
+      "id": "m-0583",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "estate-planning",
+      "lead": "atty-03",
+      "rain_maker": "atty-08",
+      "billed_cents": 220000,
+      "collected_cents": 212000
+    },
+    {
+      "id": "m-0584",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-03",
+      "rain_maker": "atty-04",
+      "billed_cents": 215000,
+      "collected_cents": 211000
+    },
+    {
+      "id": "m-0585",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-03",
+      "rain_maker": "atty-11",
+      "billed_cents": 435000,
+      "collected_cents": 420000
+    },
+    {
+      "id": "m-0586",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "immigration",
+      "lead": "atty-01",
+      "rain_maker": "atty-04",
+      "billed_cents": 315000,
+      "collected_cents": 276000
+    },
+    {
+      "id": "m-0587",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "personal-injury",
+      "lead": "atty-02",
+      "rain_maker": "atty-07",
+      "billed_cents": 2980000,
+      "collected_cents": 2491000
+    },
+    {
+      "id": "m-0588",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "personal-injury",
+      "lead": "atty-03",
+      "rain_maker": "atty-02",
+      "billed_cents": 1650000,
+      "collected_cents": 1221000
+    },
+    {
+      "id": "m-0589",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "business",
+      "lead": "atty-01",
+      "rain_maker": "atty-05",
+      "billed_cents": 650000,
+      "collected_cents": 609000
+    },
+    {
+      "id": "m-0590",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-01",
+      "rain_maker": "atty-10",
+      "billed_cents": 270000,
+      "collected_cents": 209000
+    },
+    {
+      "id": "m-0591",
+      "month": "2026-09",
+      "state": "A",
+      "vertical": "criminal-defense",
+      "lead": "atty-03",
+      "rain_maker": "atty-09",
+      "billed_cents": 820000,
+      "collected_cents": 734000
+    },
+    {
+      "id": "m-0592",
+      "month": "2026-09",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-04",
+      "rain_maker": "atty-07",
+      "billed_cents": 465000,
+      "collected_cents": 456000
+    },
+    {
+      "id": "m-0593",
+      "month": "2026-09",
+      "state": "B",
+      "vertical": "special-education",
+      "lead": "atty-05",
+      "rain_maker": "atty-01",
+      "billed_cents": 245000,
+      "collected_cents": 226000
+    },
+    {
+      "id": "m-0594",
+      "month": "2026-09",
+      "state": "B",
+      "vertical": "civil-litigation",
+      "lead": "atty-05",
+      "rain_maker": "atty-08",
+      "billed_cents": 790000,
+      "collected_cents": 736000
+    },
+    {
+      "id": "m-0595",
+      "month": "2026-09",
+      "state": "B",
+      "vertical": "family-law",
+      "lead": "atty-04",
+      "rain_maker": "atty-03",
+      "billed_cents": 480000,
+      "collected_cents": 373000
+    },
+    {
+      "id": "m-0596",
+      "month": "2026-09",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-04",
+      "rain_maker": "atty-03",
+      "billed_cents": 250000,
+      "collected_cents": 218000
+    },
+    {
+      "id": "m-0597",
+      "month": "2026-09",
+      "state": "B",
+      "vertical": "estate-planning",
+      "lead": "atty-05",
+      "rain_maker": "atty-08",
+      "billed_cents": 460000,
+      "collected_cents": 444000
+    },
+    {
+      "id": "m-0598",
+      "month": "2026-09",
+      "state": "B",
+      "vertical": "immigration",
+      "lead": "atty-04",
+      "rain_maker": "atty-04",
+      "billed_cents": 515000,
+      "collected_cents": 487000
+    },
+    {
+      "id": "m-0599",
+      "month": "2026-09",
+      "state": "B",
+      "vertical": "business",
+      "lead": "atty-04",
+      "rain_maker": "atty-05",
+      "billed_cents": 445000,
+      "collected_cents": 409000
+    },
+    {
+      "id": "m-0600",
+      "month": "2026-09",
+      "state": "B",
+      "vertical": "criminal-defense",
+      "lead": "atty-05",
+      "rain_maker": "atty-05",
+      "billed_cents": 455000,
+      "collected_cents": 372000
+    },
+    {
+      "id": "m-0601",
+      "month": "2026-09",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-07",
+      "rain_maker": "atty-10",
+      "billed_cents": 630000,
+      "collected_cents": 574000
+    },
+    {
+      "id": "m-0602",
+      "month": "2026-09",
+      "state": "C",
+      "vertical": "special-education",
+      "lead": "atty-06",
+      "rain_maker": "atty-02",
+      "billed_cents": 575000,
+      "collected_cents": 524000
+    },
+    {
+      "id": "m-0603",
+      "month": "2026-09",
+      "state": "C",
+      "vertical": "civil-litigation",
+      "lead": "atty-07",
+      "rain_maker": "atty-09",
+      "billed_cents": 1190000,
+      "collected_cents": 946000
+    },
+    {
+      "id": "m-0604",
+      "month": "2026-09",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-07",
+      "rain_maker": "atty-08",
+      "billed_cents": 290000,
+      "collected_cents": 250000
+    },
+    {
+      "id": "m-0605",
+      "month": "2026-09",
+      "state": "C",
+      "vertical": "family-law",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 1080000,
+      "collected_cents": 884000
+    },
+    {
+      "id": "m-0606",
+      "month": "2026-09",
+      "state": "C",
+      "vertical": "estate-planning",
+      "lead": "atty-07",
+      "rain_maker": "atty-06",
+      "billed_cents": 455000,
+      "collected_cents": 384000
+    },
+    {
+      "id": "m-0607",
+      "month": "2026-09",
+      "state": "C",
+      "vertical": "immigration",
+      "lead": "atty-07",
+      "rain_maker": "atty-01",
+      "billed_cents": 815000,
+      "collected_cents": 734000
+    },
+    {
+      "id": "m-0608",
+      "month": "2026-09",
+      "state": "C",
+      "vertical": "personal-injury",
+      "lead": "atty-07",
+      "rain_maker": "atty-07",
+      "billed_cents": 2795000,
+      "collected_cents": 2411000
+    },
+    {
+      "id": "m-0609",
+      "month": "2026-09",
+      "state": "C",
+      "vertical": "business",
+      "lead": "atty-06",
+      "rain_maker": "atty-06",
+      "billed_cents": 1400000,
+      "collected_cents": 1292000
+    },
+    {
+      "id": "m-0610",
+      "month": "2026-09",
+      "state": "C",
+      "vertical": "criminal-defense",
+      "lead": "atty-06",
+      "rain_maker": "atty-08",
+      "billed_cents": 440000,
+      "collected_cents": 353000
+    },
+    {
+      "id": "m-0611",
+      "month": "2026-09",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-09",
+      "rain_maker": "atty-07",
+      "billed_cents": 380000,
+      "collected_cents": 328000
+    },
+    {
+      "id": "m-0612",
+      "month": "2026-09",
+      "state": "D",
+      "vertical": "special-education",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 210000,
+      "collected_cents": 179000
+    },
+    {
+      "id": "m-0613",
+      "month": "2026-09",
+      "state": "D",
+      "vertical": "civil-litigation",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 815000,
+      "collected_cents": 723000
+    },
+    {
+      "id": "m-0614",
+      "month": "2026-09",
+      "state": "D",
+      "vertical": "civil-litigation",
+      "lead": "atty-09",
+      "rain_maker": "atty-05",
+      "billed_cents": 1020000,
+      "collected_cents": 910000
+    },
+    {
+      "id": "m-0615",
+      "month": "2026-09",
+      "state": "D",
+      "vertical": "family-law",
+      "lead": "atty-09",
+      "rain_maker": "atty-09",
+      "billed_cents": 785000,
+      "collected_cents": 650000
+    },
+    {
+      "id": "m-0616",
+      "month": "2026-09",
+      "state": "D",
+      "vertical": "family-law",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 895000,
+      "collected_cents": 749000
+    },
+    {
+      "id": "m-0617",
+      "month": "2026-09",
+      "state": "D",
+      "vertical": "business",
+      "lead": "atty-08",
+      "rain_maker": "atty-06",
+      "billed_cents": 390000,
+      "collected_cents": 340000
+    },
+    {
+      "id": "m-0618",
+      "month": "2026-09",
+      "state": "D",
+      "vertical": "criminal-defense",
+      "lead": "atty-08",
+      "rain_maker": "atty-08",
+      "billed_cents": 730000,
+      "collected_cents": 561000
+    },
+    {
+      "id": "m-0619",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-05",
+      "billed_cents": 485000,
+      "collected_cents": 372000
+    },
+    {
+      "id": "m-0620",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-11",
+      "rain_maker": "atty-05",
+      "billed_cents": 610000,
+      "collected_cents": 588000
+    },
+    {
+      "id": "m-0621",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-11",
+      "rain_maker": "atty-02",
+      "billed_cents": 270000,
+      "collected_cents": 204000
+    },
+    {
+      "id": "m-0622",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "special-education",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 625000,
+      "collected_cents": 565000
+    },
+    {
+      "id": "m-0623",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "civil-litigation",
+      "lead": "atty-11",
+      "rain_maker": "atty-04",
+      "billed_cents": 810000,
+      "collected_cents": 681000
+    },
+    {
+      "id": "m-0624",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "family-law",
+      "lead": "atty-10",
+      "rain_maker": "atty-05",
+      "billed_cents": 730000,
+      "collected_cents": 658000
+    },
+    {
+      "id": "m-0625",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 205000,
+      "collected_cents": 193000
+    },
+    {
+      "id": "m-0626",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "estate-planning",
+      "lead": "atty-12",
+      "rain_maker": "atty-12",
+      "billed_cents": 250000,
+      "collected_cents": 235000
+    },
+    {
+      "id": "m-0627",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 795000,
+      "collected_cents": 622000
+    },
+    {
+      "id": "m-0628",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "immigration",
+      "lead": "atty-10",
+      "rain_maker": "atty-05",
+      "billed_cents": 840000,
+      "collected_cents": 816000
+    },
+    {
+      "id": "m-0629",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "personal-injury",
+      "lead": "atty-10",
+      "rain_maker": "atty-03",
+      "billed_cents": 915000,
+      "collected_cents": 905000
+    },
+    {
+      "id": "m-0630",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "personal-injury",
+      "lead": "atty-11",
+      "rain_maker": "atty-11",
+      "billed_cents": 1185000,
+      "collected_cents": 923000
+    },
+    {
+      "id": "m-0631",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-12",
+      "rain_maker": "atty-04",
+      "billed_cents": 1265000,
+      "collected_cents": 1138000
+    },
+    {
+      "id": "m-0632",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "business",
+      "lead": "atty-11",
+      "rain_maker": "atty-12",
+      "billed_cents": 920000,
+      "collected_cents": 845000
+    },
+    {
+      "id": "m-0633",
+      "month": "2026-09",
+      "state": "E",
+      "vertical": "criminal-defense",
+      "lead": "atty-12",
+      "rain_maker": "atty-03",
+      "billed_cents": 575000,
+      "collected_cents": 531000
+    }
+  ]
+}

@@ -1,0 +1,140 @@
+name: PostgreSQL PVC persistence
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  persistence:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v7
+    - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5
+      with:
+        version: v1.37.0
+    - name: Install pinned KIND
+      run: |
+        curl -fsSL https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 -o /tmp/kind
+        echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  /tmp/kind' | sha256sum -c -
+        chmod +x /tmp/kind
+        sudo mv /tmp/kind /usr/local/bin/kind
+    - name: Create isolated cluster and synthetic secrets
+      run: |
+        kind create cluster --name postgres-persistence --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5 --kubeconfig /tmp/postgres-kind.config --wait 120s
+        export KUBECONFIG=/tmp/postgres-kind.config
+        echo 'KUBECONFIG=/tmp/postgres-kind.config' >> "$GITHUB_ENV"
+        kubectl create namespace navigator
+        openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=navigator-postgres' -addext 'subjectAltName=DNS:navigator-postgres,DNS:navigator-postgres.navigator.svc.cluster.local' -keyout /tmp/postgres.key -out /tmp/postgres.crt 2>/dev/null
+        kubectl -n navigator create secret tls navigator-postgres-tls --cert=/tmp/postgres.crt --key=/tmp/postgres.key
+        kubectl -n navigator create secret generic navigator-postgres-auth --from-literal=password=synthetic
+        kubectl apply -k k8s/overlays/kind-postgres-persistence
+        kubectl -n navigator rollout status statefulset/navigator-postgres --timeout=180s
+    - name: Prove claim retention and TLS
+      run: |
+        set -euo pipefail
+        for lane in staging production; do
+          kubectl kustomize "examples/deploy/k8s/gke/postgres/$lane" > "/tmp/$lane.yaml"
+          if [[ "$lane" == staging ]]; then
+            namespace=navigator
+            capacity=100Gi
+          else
+            namespace=navigator
+            capacity=100Gi
+          fi
+          grep -q "namespace: $namespace" "/tmp/$lane.yaml"
+          grep -q 'image: ghcr.io/neon-law-source-code/neon-law-postgres@sha256:4cc70fee3aa9e53455bd1612d0a5be1f06962f5bcdcda4c6bff47e2b46db969e' "/tmp/$lane.yaml"
+          grep -q "storage: $capacity" "/tmp/$lane.yaml"
+          grep -q 'reclaimPolicy: Retain' "/tmp/$lane.yaml"
+          grep -q 'whenDeleted: Retain' "/tmp/$lane.yaml"
+          grep -q 'whenScaled: Retain' "/tmp/$lane.yaml"
+          grep -q 'replication-type: regional-pd' "/tmp/$lane.yaml"
+        done
+        pod=navigator-postgres-0
+        pvc=data-navigator-postgres-0
+        sql() { kubectl -n navigator exec "$pod" -- psql -U postgres -d navigator -v ON_ERROR_STOP=1 -Atc "$1"; }
+        sql "CREATE TABLE persistence_proof (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), inserted_at timestamptz NOT NULL DEFAULT now()); INSERT INTO persistence_proof DEFAULT VALUES; CREATE EXTENSION age; LOAD 'age'; SET search_path = ag_catalog, public; SELECT create_graph('persistence_graph'); SELECT * FROM cypher('persistence_graph', \$\$ CREATE (:Proof {value: 'retained'}) RETURN 1 \$\$) AS (value agtype);"
+        old_pod=$(kubectl -n navigator get pod "$pod" -o jsonpath='{.metadata.uid}')
+        old_pvc=$(kubectl -n navigator get pvc "$pvc" -o jsonpath='{.metadata.uid}')
+        kubectl -n navigator delete pod "$pod" --wait=true
+        kubectl -n navigator wait --for=condition=ready "pod/$pod" --timeout=180s
+        test "$old_pod" != "$(kubectl -n navigator get pod "$pod" -o jsonpath='{.metadata.uid}')"
+        test "$old_pvc" = "$(kubectl -n navigator get pvc "$pvc" -o jsonpath='{.metadata.uid}')"
+        test "$(sql 'SELECT count(*) FROM persistence_proof')" = 1
+        test "$(sql "LOAD 'age'; SET search_path = ag_catalog, public; SELECT * FROM cypher('persistence_graph', \$\$ MATCH (p:Proof) RETURN count(p) \$\$) AS (value agtype);" | tail -1)" = 1
+        kubectl -n navigator scale statefulset/navigator-postgres --replicas=0
+        kubectl -n navigator wait --for=delete "pod/$pod" --timeout=180s
+        test "$old_pvc" = "$(kubectl -n navigator get pvc "$pvc" -o jsonpath='{.metadata.uid}')"
+        kubectl -n navigator delete statefulset navigator-postgres --wait=true
+        test "$old_pvc" = "$(kubectl -n navigator get pvc "$pvc" -o jsonpath='{.metadata.uid}')"
+        kubectl apply -k k8s/overlays/kind-postgres-persistence
+        kubectl -n navigator rollout status statefulset/navigator-postgres --timeout=180s
+        test "$(sql 'SELECT count(*) FROM persistence_proof')" = 1
+        test "$old_pvc" = "$(kubectl -n navigator get pvc "$pvc" -o jsonpath='{.metadata.uid}')"
+        kubectl -n navigator exec "$pod" -- sh -ec 'PGPASSWORD=$(cat /etc/postgres/auth/password) psql "host=127.0.0.1 dbname=navigator user=postgres sslmode=require" -v ON_ERROR_STOP=1 -c "SELECT 1"'
+        if kubectl -n navigator exec "$pod" -- psql 'host=127.0.0.1 dbname=navigator user=postgres sslmode=disable' -c 'SELECT 1'; then
+          echo 'Unencrypted access unexpectedly succeeded' >&2
+          exit 1
+        fi
+        echo 'PASS: new pod, same PVC, retained SQL/AGE, scale/recreation, TLS-only access'
+    - name: Prove least-privilege login roles
+      run: |
+        set -euo pipefail
+        for login in app migrator backup; do
+          kubectl -n navigator create secret generic "navigator-postgres-$login" --from-literal=password="synthetic-$login" --from-file=ca.crt=/tmp/postgres.crt
+        done
+        converge() {
+          kubectl -n navigator delete job navigator-postgres-roles --ignore-not-found --wait=true
+          kubectl apply -k k8s/postgres/access
+          if ! kubectl -n navigator wait --for=condition=complete job/navigator-postgres-roles --timeout=180s; then
+            kubectl -n navigator describe job/navigator-postgres-roles >&2
+            kubectl -n navigator logs job/navigator-postgres-roles --all-containers >&2 || true
+            exit 1
+          fi
+        }
+        converge
+        converge
+        sql() { kubectl -n navigator exec navigator-postgres-0 -- psql -U postgres -d navigator -v ON_ERROR_STOP=1 -Atc "$1"; }
+        as() {
+          kubectl -n navigator exec navigator-postgres-0 -- env PGPASSWORD="synthetic-$1" psql "host=navigator-postgres.navigator.svc.cluster.local hostaddr=127.0.0.1 dbname=navigator user=navigator_$2 sslmode=verify-full sslrootcert=/etc/postgres/tls/tls.crt" -v ON_ERROR_STOP=1 -Atc "$3"
+        }
+        refuse() {
+          if as "$@" 2>/dev/null; then
+            echo "unexpectedly allowed for navigator_$2: $3" >&2
+            exit 1
+          fi
+        }
+        as migrator owner 'CREATE TABLE least_privilege_proof (id int PRIMARY KEY, note text)'
+        as app app "INSERT INTO least_privilege_proof VALUES (1, 'runtime write')"
+        test "$(as app app 'SELECT count(*) FROM least_privilege_proof')" = 1
+        test "$(as app app 'SELECT count(*) FROM persistence_proof')" = 1
+        refuse app app 'CREATE TABLE runtime_ddl (id int)'
+        refuse app app 'DROP TABLE least_privilege_proof'
+        refuse app app 'TRUNCATE least_privilege_proof'
+        refuse app app 'ALTER TABLE least_privilege_proof ADD COLUMN extra text'
+        refuse app app 'SELECT count(*) FROM ag_catalog.ag_graph'
+        refuse app app 'CREATE TEMP TABLE runtime_temp (id int)'
+        refuse backup backup 'SELECT 1'
+        refuse migrator app 'SELECT 1'
+        sql "SELECT rolname || ':' || rolsuper || rolcreaterole || rolcreatedb || rolreplication FROM pg_roles WHERE rolname LIKE 'navigator\_%' ORDER BY 1" > /tmp/roles.txt
+        printf '%s\n' navigator_app:falsefalsefalsefalse navigator_backup:falsefalsefalsetrue navigator_owner:falsefalsefalsefalse | diff -u - /tmp/roles.txt
+        test "$(sql "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = 'persistence_proof'")" = navigator_owner
+        echo 'PASS: idempotent roles, runtime DML only, no DDL, backup login cannot read data'
+    - name: Cleanup task cluster
+      if: always()
+      run: kind delete cluster --name postgres-persistence
+'on':
+  pull_request:
+    paths:
+    - k8s/postgres/**
+    - k8s/overlays/kind-postgres-persistence/**
+    - examples/deploy/k8s/gke/postgres/**
+    - .github/workflows/postgres-persistence.yml
+  push:
+    branches:
+    - main
+    paths:
+    - k8s/postgres/**
+    - k8s/overlays/kind-postgres-persistence/**
+    - examples/deploy/k8s/gke/postgres/**
+    - .github/workflows/postgres-persistence.yml
+  workflow_dispatch: null

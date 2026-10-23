@@ -1,0 +1,171 @@
+# The design system
+
+The browser UI is the **Dioxus Components** theme: Rust components in `webapp/src/components/`, styled by
+`server/public/css/theme.css`, rendered server-side by `portal` and hydrated by the same-origin wasm bundle.
+[`workspace-layout.md`](workspace-layout.md) maps the crates. `/design` is the living gallery — every block on it is the
+production component, so the page cannot drift from what ships.
+
+## Summary
+
+- **One component tree, brand-agnostic, two render modes.** The same component renders an anonymous page that ships no
+  hydration bundle and drives an authenticated, hydrated one.
+- **`webapp::components` is a leaf.** No router, no session, no application state, no data access, no brand colour.
+- **Semantic tokens only.** A component emits a class name; the token module decides what `--nav-*` it resolves to.
+- **Rust only.** No Node toolchain, no CDN, no Bootstrap, no HTMX, no Alpine. The design system has one exception, and
+  it is not part of the component tree: a public page on a production deployment loads the analytics script from its
+  vendor's origin, injected by the render middleware and admitted by a route-scoped CSP. Nothing a component renders may
+  reach off-origin.
+
+```bash
+cargo run -p cli -- dev worktree-env up --path "$PWD"
+set -a; source .devx/env; set +a
+cargo run -p neon   # then open /design after signing in
+```
+
+For automatic rebuilds and browser refresh, run `cargo run -p cli -- dev serve` after the worktree environment is up. It
+loads `.devx/env`, requires a development environment and a loopback URL, and starts the real `neon` server. Rust and
+catalog edits rebuild the application; static-asset edits refresh the browser directly. A failed build leaves the
+previous server running until the next edit. Ctrl-C stops the watcher and its server. The dependency tier remains owned
+by `dev worktree-env`.
+
+The browser refresh middleware exists only in debug builds, is explicitly enabled by this command, and binds the preview
+to loopback. It serves its script from the same origin without relaxing CSP. This is rebuild-and-refresh, not
+preservation of application state across Rust changes. It uses the same separation as [Tower
+LiveReload](https://docs.rs/tower-livereload/latest/tower_livereload/): a source watcher rebuilds the application and a
+browser client reloads it. Navigator keeps that orchestration inside its Rust CLI.
+
+## The leaf contract
+
+A navigable component takes an `href` and renders a plain `<a>`. Nothing in the module imports a router, which is what
+lets one component library serve a server-only marketing page *and* an interactive application: navigation is injected
+at the call site rather than imported into the component.
+
+| Rule | Enforced by |
+| --- | --- |
+| No `portal`, `server`, `store`, `sea_orm`, or `cloud` import | `webapp::components::leaf_contract` |
+| No router import, no `AppState`, no `SessionData` | `webapp::components::leaf_contract` |
+| No literal colour — `--nav-*` tokens only | `webapp::components::leaf_contract` |
+| A gallery entry for every component | `webapp::design::tests` |
+
+`views::components::code` is the one permitted crossing: `code.rs` calls its pure `syntect` highlighter inside a
+`#[server]` body. That is a rendering helper with no request, session, or route in it. Tighten the forbidden list before
+widening that exception.
+
+A raw colour value pins one legal identity into shared code, so it is a defect rather than a style choice.
+
+## Brand tokens
+
+One contract, three sets of values. Nothing in `webapp/src/components/` changes to render a different brand.
+
+1. `server/public/css/tokens.css` declares the `--nav-*` layer — ramp, surfaces, text, radius, font — and its
+   `prefers-color-scheme: dark` overrides. `theme.css` imports it before shared rules, so a downstream stylesheet can
+   override primary, secondary, and font tokens without changing markup or adding a build pipeline.
+2. Shared component rules in `server/public/css/theme.css` consume that layer:
+   `.nav-card`, `.nav-btn`, `.nav-table`, `.nav-toast`, and the page chrome each read `var(--nav-…)`, never a hex value.
+3. A component emits only those class names. It never carries a colour of its own.
+
+**Per-brand overrides, resolved per request.** Every brand key has a tokens stylesheet at
+`/public/css/brand-<key>-tokens.css`, rendered from that brand row's typeface and palette ids (falling back to the
+compiled registry when the store has no row). The closed catalogs live in `views::brand_presentation`: four typefaces
+(GORP Serif, Tinos, system serif, system sans) and three palettes taken from the former static sheets (Neon teal,
+DeleteYourData red, legal pad). `webapp::brand_style::brand_tokens_href` computes the href from the key's string form;
+it is hoisted on every public page by `webapp::public_chrome::PublicFooter`, and on every `/app` page beside `theme.css`
+via `webapp::app_chrome::app_tokens_href_from_context`. A page that renders only the theme stylesheet and skips this
+second one is missing it and will not wear its host's brand. Edit the ids at `/app/admin/brands/{key}/edit`.
+
+The `/design` palette section paints each swatch from its own token, so the gallery shows whichever brand the request
+resolved to.
+
+**The inherited trap:** SSR tests check class names, not CSS. A page whose chrome rules were never added to `theme.css`
+ships green and renders unstyled. Every migrated surface adds its chrome rules in the same pull request.
+
+## Two render modes
+
+- **Anonymous, server-rendered** — the firm host's public Dioxus pages (`neon::firm_public_dioxus_routers`) mount
+  outside the session boundary. Content resolves from the request's resolved brand on the server, so the page is
+  readable with no client bundle.
+- **Authenticated and hydrated** — the lawyer, admin, and portal clusters mount inside the session boundary. Dioxus
+  ships hydration data as inline scripts, which the strict `script-src` blocks; the per-response nonce middleware is the
+  fix, never `unsafe-inline`.
+
+## Adding a component
+
+1. One file in `webapp/src/components/`, exported from `components.rs`.
+2. Take data and callbacks as props. Navigate through an `href` prop and a plain anchor, never an imported router.
+3. Semantic class names only; add the matching rules to `server/public/css/theme.css` in the same pull request.
+4. A test beside it rendering the component through `dioxus_ssr` and asserting the aria semantics and theme classes.
+   `breadcrumb.rs` is the reference.
+5. Render it in `webapp/src/design.rs`; `gallery_source_mentions_every_exported_component` fails the build otherwise.
+6. `cargo nextest run -p webapp --lib && cargo nextest run -p portal --lib`.
+
+## Forms
+
+Page modules name fields with `webapp::components::{Field, FormCard}`; the component library renders the controls and
+the page carries `nav-btn` on any standalone button. Hidden inputs are wiring and remain the page's responsibility. The
+executable source contract is `webapp::components::control_contract` in `webapp/src/components.rs`: it scans page
+modules for raw `input`, `select`, `textarea`, and `button` RSX openers, allows existing debt only while it is
+explicitly pinned, and requires that debt to ratchet down. Add a primitive to the library and show it in `/design`
+instead of adding another page-local control.
+
+## Accessibility
+
+The public sites are a legal-services front door:
+
+- **Assert on role and accessible name in tests,** not on colour.
+- **Decorative versus meaningful SVG.** An unlabelled `Icon` is `aria-hidden`; a labelled one carries its name in a
+  `<title>`.
+- **Announce the current location** with `aria-current="page"`, never colour alone.
+- **Keep the focus ring.** It is in the `.nav-btn` base rule; dropping it in a variant is a defect.
+- **Check contrast in both schemes.** Verify link and muted text against WCAG 2.2 AA in light and dark.
+- **Landmarks, one `h1` per page.** The shell supplies `header`, `nav[aria-label]`, and `footer`; the page supplies one
+  `main`. A shell rendered as a preview inside another page passes `main_landmark: false` so it does not nest a second
+  landmark.
+
+Dioxus SSR wraps text nodes in hydration comments, so a markup assertion matches `>Text<` rather than `class="x">Text`,
+and attributes escape `&` as `&#38;`.
+
+## Keyboard shortcuts
+
+[`webapp::keyboard`](../webapp/src/keyboard.rs) is the one registry every shortcut is declared in, and the one place its
+notation and chord map are defined. A declaration is a key, a description, a scope (`global` or `page`) and an action.
+`server/public/js/keyboard-shortcuts.js` reads the declarations out of the page, runs the action a match names, and
+fills the `?` overlay from the same list, so a key that works is a key that is listed.
+
+- **Notation.** `?`, `1`, `Mod+Enter`, `Alt+ArrowLeft`; `Mod` is ⌘ on Apple platforms and Ctrl elsewhere. A chord is
+  keys separated by spaces (`g m`) and lapses after one second. `1-9` is one declaration for the digit row.
+- **Text fields.** A bare key never fires while focus is in a text input, textarea, select or contenteditable region. A
+  declaration opts in with `in_fields`; only a modified key such as `Mod+Enter` should. A chord never starts or finishes
+  in a field.
+- **Where it mounts.** `ShortcutHost` rides in `AppProfileMenu`, which every authenticated page renders, so no page
+  wires it. The client intake has no navbar and hosts it itself. A page with shortcuts of its own renders
+  `PageShortcuts`; `QuestionStage` does, for both questionnaire walkers.
+- **The overlay** is a native modal `<dialog>` labelled "Keyboard shortcuts": the platform supplies the focus trap, the
+  inert background and `Esc`, and focus returns to where it was when it closes.
+- **Chords.** `g m`, `g n` and `g d` are defined once in `NAVIGATION_CHORDS`. `app_pages()` names the pages this
+  application has a top-level route for, and a page left out has no chord and no row in the overlay. A matter's
+  notations and documents live under the matter, so only `g m` is registered here.
+- **Questionnaire.** `Mod+Enter` submits the question form (the server advances it, or completes the questionnaire),
+  even from a text field. `1`–`9` pick the matching radio or checkbox when focus is not in a text field. Each question
+  loads with focus in its first input. `Mod+Backspace` and `Alt+ArrowLeft` return to the previous question when focus is
+  outside an editable field; text editing keeps the browser's native Backspace behavior. Re-answering appends a new
+  answer, preserving the earlier answer while reads select the latest. A stale form cannot bind its value to a new
+  question, and a completed or reviewed questionnaire cannot be reopened.
+
+`server/tests/browser_e2e.rs` walks both questionnaires to completion with the keyboard, and checks the overlay and the
+chords against a live page.
+
+## Gates
+
+CI's `cargo test (workspace)` job runs the whole suite plus `clippy --workspace --all-targets -D warnings`. Locally, run
+the affected package rather than the workspace sweep.
+
+## Boundaries
+
+- **Generated PDFs use Typst; transactional email uses server-rendered string templates.**
+  See [`AGENTS.md`](../AGENTS.md).
+- **Table state stays in the URL.** Filtering, sorting, and pagination are server-validated query parameters: `?sort=`
+  follows the JSON:API 1.1 contract and an unadvertised key returns `400`; `?page=` is 1-indexed. The `/design` demo
+  table is the reference implementation, guarded by `reject_unadvertised_design_sort`.
+- **No CDN, ever.** Every asset is same-origin. Swagger UI (`/app/api`) stays vendored rather than rewritten;
+  `server/tests/no_cdn_assets.rs` is the build-time backstop.
+- **No rich-text editor.** Long-form input is a plain `<textarea>`.

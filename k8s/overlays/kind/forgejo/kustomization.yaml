@@ -1,0 +1,83 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Opt-in KIND Forgejo: the retained PostgreSQL server (1 GiB), its
+# least-privilege roles, Forgejo's own login and database, Forgejo, and one
+# Actions runner. Applied by `navigator dev forgejo up` onto a tier that
+# already runs Rauthy; that command also provisions every synthetic Secret
+# these manifests read. See docs/forgejo-kind.md.
+
+namespace: navigator
+
+resources:
+  - ../../kind-postgres-persistence
+  - ../../../postgres/access
+  - ../../../forgejo/database
+  - ../../../forgejo
+  - ../../../forgejo/runner
+  - identity.yaml
+
+patches:
+  - path: forgejo-kind.yaml
+  - target:
+      kind: StatefulSet
+      name: navigator-forgejo
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 1Gi
+      # Rauthy publishes one issuer, http://localhost:<rauthy-port>/auth/v1/.
+      # This native sidecar bridges that address inside the pod, exactly as
+      # `rauthy-loopback-proxy` does for navigator-web.
+      - op: add
+        path: /spec/template/spec/initContainers/0
+        value:
+          name: rauthy-loopback-proxy
+          image: nginxinc/nginx-unprivileged:1.29.4-alpine@sha256:a6c4f61f456b85b8fdf7ec7ab28cc3e299440e6fb4a9dea520e5fd8fd440025e
+          restartPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: rauthy-loopback-proxy
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: loopback-tmp
+              mountPath: /tmp
+            - name: loopback-tmp
+              mountPath: /var/cache/nginx
+              subPath: cache
+            - name: loopback-tmp
+              mountPath: /run
+              subPath: run
+      # Forgejo loads the signing key with its settings, so the migrating
+      # `identity` init container mounts it too.
+      - op: test
+        path: /spec/template/spec/initContainers/2/name
+        value: identity
+      - op: add
+        path: /spec/template/spec/initContainers/2/volumeMounts/-
+        value:
+          name: signing
+          mountPath: /etc/forgejo-signing
+          readOnly: true
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: rauthy-loopback-proxy
+          configMap:
+            name: rauthy-loopback-proxy
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: loopback-tmp
+          emptyDir: {}

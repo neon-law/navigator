@@ -1,0 +1,82 @@
+---
+# `entity_type` carries a unique index on `name` alone (`store/src/schema/navigator.surql`):
+# a legal form is a form regardless of where it is used, so two records with the same name
+# collapse to one seeded row. `jurisdiction` below is per-record documentation of which
+# jurisdiction motivated adding the form — it is not part of the lookup key.
+#
+# Non-US forms stay under `Foreign Company` plus a `jurisdiction` link rather than growing
+# one entity type per country (see the Germany record below): add a new top-level form only
+# when a jurisdiction's own statute makes it a genuinely distinct designation, the way
+# Florida's P.A. is distinct from a `Professional Corporation`.
+lookup_fields:
+  - name
+records:
+  - name: C-Corp
+    jurisdiction:
+      name: Delaware
+      jurisdiction_type: state
+  - name: C-Corp
+    jurisdiction:
+      name: Nevada
+      jurisdiction_type: state
+  - name: Single Member LLC
+    jurisdiction:
+      name: Nevada
+      jurisdiction_type: state
+  - name: Multi Member LLC
+    jurisdiction:
+      name: Nevada
+      jurisdiction_type: state
+  - name: Professional LLC
+    jurisdiction:
+      name: Nevada
+      jurisdiction_type: state
+  - name: Limited Liability Partnership
+    jurisdiction:
+      name: Nevada
+      jurisdiction_type: state
+  # A California law corporation is a Moscone-Knox professional corporation
+  # (Corp. Code § 13400 et seq.) that renders legal services. It is not on the
+  # § 13401(b) exemption list, so it may not practise without a currently
+  # effective State Bar certificate of registration (§ 13404).
+  - name: Professional Corporation
+    jurisdiction:
+      name: California
+      jurisdiction_type: state
+  # A Florida professional association is its own designation under the
+  # Professional Service Corporation and Limited Liability Company Act
+  # (Ch. 621, Fla. Stat.), not a Professional Corporation.
+  - name: Professional Association
+    jurisdiction:
+      name: Florida
+      jurisdiction_type: state
+  - name: 501(c)(3) Non-Profit
+    icon: "hero-heart"
+    jurisdiction:
+      name: Nevada
+      jurisdiction_type: state
+  - name: Family Trust
+    icon: "hero-user-group"
+    jurisdiction:
+      name: Nevada
+      jurisdiction_type: state
+  - name: Human
+    icon: "hero-user"
+    jurisdiction:
+      name: Nevada
+      jurisdiction_type: state
+  - name: Human
+    icon: "hero-user"
+    jurisdiction:
+      name: California
+      jurisdiction_type: state
+  - name: Human
+    icon: "hero-user"
+    jurisdiction:
+      name: Washington
+      jurisdiction_type: state
+  - name: Foreign Company
+    icon: "hero-globe-alt"
+    jurisdiction:
+      name: Germany
+      jurisdiction_type: country

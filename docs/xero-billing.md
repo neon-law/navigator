@@ -1,0 +1,196 @@
+# Xero billing — setup, invoice flow, and production cutover
+
+**All accounting originates in Xero.** Navigator does not compute, discount, or raise money: lawyers agree a matter's
+price with the client and raise the invoice in Xero directly. This page covers the **receivables** side — how a Xero
+invoice reaches the portal and how its paid-status is reconciled back — and how **one custom connection per
+organisation** keeps test activity off the live ledger. The **client-trust** side of the same integration, where Xero is
+equally the books, is [`trust-accounting.md`](trust-accounting.md).
+
+Local sandbox values use a gitignored `.env`; production values live in that deployment's `secrets.enc.yaml` per
+[`deployment-secrets.md`](deployment-secrets.md). The environment-variable convention is in
+[`third-party-integrations.md`](third-party-integrations.md). This page is the Xero specifics.
+
+The billing seam lives in [`billing/src/lib.rs`](../billing/src/lib.rs) (the `BillingProvider` trait + the
+`XeroBillingProvider` and `StubBillingProvider` impls), client-credentials auth in
+[`billing/src/xero_auth.rs`](../billing/src/xero_auth.rs), and the worker-side nightly reconcile in
+[`billing-workflows`](../billing-workflows/). The crate is re-exported as `portal::billing` so the app and tests share
+one trait. An unconfigured vendor falls back to the in-process stub, so a fresh checkout boots and self-tests without a
+Xero account.
+
+## One connection per organisation (the contrast with DocuSign)
+
+DocuSign promotes **one app** across environments — at Go-Live the integration key is *copied*, so demo and production
+share a GUID. **Xero is the opposite.** A Xero *custom connection* is a machine-to-machine app bound to exactly **one
+organisation**, so each environment needs its **own** connection:
+
+| Environment | Connection | Organisation | Ledger weight | Cost |
+| --- | --- | --- | --- | --- |
+| dev / CI | sandbox custom connection | the free **demo company** | none — resets periodically | free |
+| production | live custom connection | the firm's real **organisation** | real receivables | $5/mo USD |
+
+Both use the same `XERO_*` variable names — the env *file* is the namespace (`.env` = sandbox, `.env.production` =
+live), so no code branches on environment. The connected org is fixed per connection and sent as the `Xero-Tenant-Id`
+header on every Accounting API call.
+
+### Testing never touches the live ledger
+
+The demo company is the one free, non-binding target: invoices and contacts created there carry no receivable weight and
+are self-cleaning (the demo org resets periodically). That is why dev, CI, and the live grounding test all point at the
+demo company — a leaked sandbox secret cannot raise a real invoice against a real client.
+
+## Who raises the invoice: lawyers, in Xero
+
+A matter is a relationship the firm opens, priced bespoke per client. Lawyers agree the price with the client and raise
+the **`ACCREC`** (accounts-receivable) invoice **in Xero directly**. No Navigator handler and no Restate workflow raises
+one, and no Navigator code applies a discount or otherwise computes what a client owes. Navigator's job is to record the
+legal work.
+
+What Navigator does hold is a **read-only mirror**: the `xero_invoice` table carries the Xero `InvoiceID`, reference,
+amount, dates, and paid-status for **every** invoice tagged to a matter. The row is keyed on the Xero invoice id;
+several invoices may share one `project_id`. Lawyers set Xero `Reference` to `Matter <project uuid>` or `Matter <project
+code>`. The nightly ingest lists `ACCREC` invoices, upserts each that resolves to a live Project, and skips DRAFT,
+DELETED, and any invoice whose reference does not match a Project (counted as unscoped — no row). That mirror backs the
+per-project invoice list in the portal and the Firm trailing-30-day graphs, so nobody has to open Xero to see whether a
+matter is paid. Navigator **never holds client funds, card data, or bank credentials** — Xero reconciles against the
+firm's bank itself. The integration boundary is the Xero Accounting API and nothing beyond it.
+
+**A trust receipt is not an invoice.** A client's deposit into the firm's IOLTA account is a bank transaction on a
+pooled trust account, not an `ACCREC` invoice, and the ingest never writes one into `xero_invoice`. What connects the
+two is the **withdrawal**: when the firm draws earned fees out of trust, its allocation lines name the invoices it
+settles, and each matter's share posts against that matter's trust ledger. See
+[`trust-accounting.md`](trust-accounting.md).
+
+## The one exception: a Client's self-serve Purchase
+
+A signed-in Client may buy an [Offering](glossary/offering.md) at its published price from `/purchases`: a consultation,
+or a Delete Your Data plan billed monthly or yearly. That [Purchase](glossary/purchase.md) belongs to no matter, so it
+is not mirrored into `xero_invoice`; it lives in the PostgreSQL `purchase` table.
+
+1. `portal::purchases::buy` records the Purchase, finds or creates the Xero contact by email, and raises an `ACCREC`,
+   `AUTHORISED` invoice due in 14 days with the Purchase id as the `Idempotency-Key`. It reads the invoice's
+   `OnlineInvoice` URL and sends the Client there to pay.
+2. Xero emails the invoice and collects payment.
+3. Once `GET /Invoices/{id}` reports `PAID`, `portal::purchases::activate_if_paid` turns the Purchase active. A monthly
+   or yearly Purchase then gets a Xero `RepeatingInvoice` (keyed on the Purchase id, `ApprovedForSending`) starting one
+   period later, so Xero raises and emails every renewal itself.
+
+The DBOS `PurchaseActivation` schedule runs step 3 every five minutes; the purchase page also runs it for the viewer's
+open invoices. The page refuses to sell without `XERO_TENANT_ID`, because the in-process stub must never stand in for a
+real invoice. Creating repeating invoices needs the connection's invoice-write scope; check that the custom connection's
+granted scopes cover `RepeatingInvoices` before enabling the schedule in production.
+
+## Where the price comes from: the matter, agreed per client
+
+There is no catalog and no published price. Every engagement is bespoke: lawyers agree the figure with the client for
+that matter and raise the invoice in Xero directly. What was actually billed is the Xero invoice, mirrored read-only
+into `xero_invoice` — nothing in Navigator computes, quotes, or anchors a price.
+
+An invoice line carries the firm-wide default account code. Tagging invoices to a project is the `Reference` convention
+above; the pooled IOLTA account a matter's client funds sit in is derived from the matter's jurisdiction instead, and is
+described in [`trust-accounting.md`](trust-accounting.md).
+
+## Authentication: client-credentials grant (preferred)
+
+A custom connection authenticates with the OAuth 2.0 **client-credentials** grant — no user, no redirect, no consent
+ceremony. [`XeroClientCredentials`](../billing/src/xero_auth.rs) mints a short-lived Accounting API token and refreshes
+it itself, so there is no 30-minute token to rotate by hand. Set the client-credentials pair to activate it:
+
+- `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET` — the custom connection's credentials (the secret is shown **once** at
+  creation).
+- `XERO_TENANT_ID` — the connected org's GUID (`Xero-Tenant-Id` header). Optional for the live test, which can
+  auto-discover it from the `/connections` endpoint since a custom connection binds to one org.
+- `XERO_SCOPE` — optional; defaults to `accounting.contacts accounting.invoices accounting.settings.read
+  accounting.transactions.read`. The two `.read` scopes are what the IOLTA mirror needs to read the pooled trust bank
+  accounts and the transactions that move through them — and no more, so a leaked token cannot move client funds.
+
+A static `XERO_ACCESS_TOKEN` is accepted as a fallback for a quick local smoke test, but Xero expires it in ~30 minutes
+and it is ignored when the client-credentials pair is set. The real provider activates when `XERO_TENANT_ID` is present
+together with **either** the client-credentials pair **or** a static access token; otherwise `web` uses the stub.
+
+## Sandbox setup (one-time) — sign up and create the custom connection
+
+1. **Create a Xero developer account.** Sign up free at [developer.xero.com](https://developer.xero.com/) and sign in to
+   **My Apps**.
+2. **Have a demo company.** From your Xero account, enable the **Demo Company** (My Xero → "Try the demo company"). It
+   is free, pre-populated, and resets periodically — the right target for dev and CI.
+3. **Create a custom connection.** In My Apps → **New app** → choose **Custom connection** (the machine-to-machine,
+   client-credentials app type). Name it (e.g. `Neon Law Navigator (demo)`), and add the **integrator** email that will
+   authorise it.
+4. **Select scopes.** Grant exactly `accounting.contacts`, `accounting.invoices`, `accounting.settings.read`, and
+   `accounting.transactions.read` — the last two for the IOLTA mirror, both read-only. A custom connection offers only
+   granular scopes — the legacy parent `accounting.transactions` is **not** offered, and requesting it fails token
+   minting with `invalid_scope`.
+5. **Authorise the connection against the demo company.** The integrator opens the authorisation link Xero generates and
+   connects it to the **demo company** org. This binds the connection to that one organisation.
+6. **Copy the credentials.** From the connection's Configuration, copy the **Client ID** → `XERO_CLIENT_ID` and generate
+   the **Client Secret** (shown once) → `XERO_CLIENT_SECRET`. Set `XERO_TENANT_ID` to the demo org's GUID (or leave it
+   unset locally and let the live test discover it).
+
+For production, repeat steps 3–6 with a **separate** custom connection authorised against the firm's **live**
+organisation (a paid $5/mo single-org app), and put those credentials in the production deployment's `secrets.enc.yaml`.
+
+## Running the live test (grounding)
+
+The live test in [`server/tests/xero_sandbox.rs`](../server/tests/xero_sandbox.rs) mints a real client-credentials token
+against the demo-company connection and drives `ensure_contact` twice with the same unique name — the first call
+**creates** the contact, the second must **find** it and return the *same* `ContactID`. This is the only test that
+catches a regression in our understanding of Xero's API (a wrong `where` predicate, a bad scope, a rejected payload). It
+self-skips green when no creds are present and runs only under the explicit `NAVIGATOR_RUN_LIVE_SANDBOX=1` opt-in, so it
+never fires on an ambient-credentials `cargo test`:
+
+```bash
+set -a; source .env; set +a
+NAVIGATOR_RUN_LIVE_SANDBOX=1 cargo test -p server --test xero_sandbox -- --nocapture
+```
+
+It reads the CI `XERO_SANDBOX_*` names first, each falling back to the canonical `XERO_*` name, so a local `.env` drives
+it without separate sandbox vars.
+
+## Nightly ingest and paid-status reconciliation
+
+The invoice is raised in Xero. The nightly `ReconcileInvoices` workflow (worker-side, in
+[`billing-workflows`](../billing-workflows/)) first **lists** `ACCREC` invoices and upserts each Project-scoped row into
+`xero_invoice`, folding `Status` and `AmountPaid` from that list so a first-night Paid invoice already shows Paid. It
+then calls `get_invoice` for each mirrored invoice still open (`AUTHORISED`, not `PAID`/`VOIDED`) and folds Xero's
+paid-status into the mirror. The portal never calls Xero live.
+
+The same nightly run then refreshes the IOLTA side: the pooled bank account mirrored for each state, the client deposits
+and refunds that moved through it, and any withdrawal that settles invoices. Its report counts what it posted and what
+it refused — an invoice with no matter reference, a deposit that does not sit on its matter's pool, a withdrawal whose
+lines do not add up. This workflow only ever *reads* from Xero. Like every workflow, it is hosted by `workflows-service`
+— no per-workflow worker pod.
+
+### Slack reports the nightly run
+
+After the mirror settles, the same run posts its report to Slack **`#finance`** as a second journaled step, so a retry
+of the post never re-runs the reconcile. It uses the same Slack App installation and Web API bot as `#general`, not a
+second credential or an incoming webhook. Invite that app to the channel and set `SLACK_FINANCE_CHANNEL_ID`; an unset
+value fails the run as a **terminal error** rather than reconciling with nowhere to report it.
+
+The app's visible display name is managed in the Slack workspace, separately from its installed identifiers and the
+deployment credential. New installations should use **Navigator** as the display name. Verify the actual workspace
+display name before enabling live reports; changing it is an external Slack administration step, not a Navigator code
+change.
+
+The copy is firm-internal: invoice counts, trust counts, and one line per matter that moved, naming the **Project code**
+and the **cents**. Never a client's name, email address, or portal link. Invoices whose Xero `Reference` names no matter
+are a **count** — dumping the Xero contact names behind them would put client identities in a channel that has no need
+for them. A simulated-matters deployment folds in the staging disclosure, the same signal `#general` gets.
+
+## Production cutover
+
+1. Create the **live** custom connection (separate from the demo one) authorised against the firm's real organisation.
+2. Put its `XERO_CLIENT_ID` / `XERO_CLIENT_SECRET` / `XERO_TENANT_ID` in the production deployment's
+   `secrets.enc.yaml` (applied to Secret Manager and projected into the `navigator-web-secrets` Secret), never in
+   plaintext source.
+3. Confirm the live org grants the same `accounting.contacts accounting.invoices` scopes.
+4. Verify with one real invoice raised in the live org, `Reference` set to `Matter <project code>`, that
+   `ReconcileInvoices` ingests it onto the portal list and mirrors its paid-status.
+
+## Related
+
+- [`trust-accounting.md`](trust-accounting.md) — the client-trust (IOLTA) side of this integration.
+- [`third-party-integrations.md`](third-party-integrations.md) — the per-environment vendor-account convention and the
+  full integration catalog.
+- [`docusign-esignature.md`](docusign-esignature.md) — the sibling e-signature integration (one app, two environments).
+  [`deployment-secrets.md`](deployment-secrets.md) — how production secrets are rendered.

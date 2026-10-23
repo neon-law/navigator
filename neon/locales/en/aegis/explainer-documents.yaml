@@ -1,0 +1,54 @@
+head_title: "{site_name} | Reviewing a criminal record"
+meta_description: >-
+  Reviewing a criminal record. A plain-language explainer from {site_name}. General information; individual
+  advice requires an engagement.
+title: "Reviewing a criminal record"
+tagline: Plain-language explainers
+hero_lines:
+  - text: "Reviewing a criminal record"
+    accent_words: 0
+hero_lead: >-
+  A record review starts with the actual case documents. Sealing, expungement, and other forms of relief have
+  different meanings and requirements in different jurisdictions.
+hero_cta:
+  href: "https://calendar.notion.so/meet/nick-shook/or15n4yy7"
+  label: Request a conversation
+skin: practice
+bands:
+  - kind: steps
+    anchor: guide
+    overline: Getting oriented
+    heading: Read the guide
+    items:
+      - title: "Find the case and disposition"
+        body:
+          - - text: >-
+                Gather the court name, case number, charging documents, and final disposition if available. A
+                dismissal, acquittal, plea, and conviction describe different outcomes.
+      - title: "Identify what you need to understand"
+        body:
+          - - text: >-
+                Explain whether the question concerns a background check, an application, or a particular record.
+                Keep copies of the wording you are being asked to answer; avoid sending sensitive documents in an
+                initial message.
+      - title: "Confirm the available procedure"
+        body:
+          - - text: >-
+                A lawyer needs the jurisdiction and complete record to assess possible relief. Do not assume a
+                record can be removed, that relief is automatic, or that every recipient will treat it the same way.
+  - kind: cards
+    overline: Continue reading
+    heading: More explainers
+    items:
+      - title: "Before an investigation interview"
+        href: /explainers/first-steps
+        href_label: Read the explainer
+      - title: "How a criminal case moves"
+        href: /explainers/process
+        href_label: Read the explainer
+  - kind: statement
+    heading: About this guide
+    body:
+      - - text: >-
+            General information, not advice about your matter. We confirm jurisdiction, conflicts, scope, and
+            fees before accepting work. Attorney advertisement.

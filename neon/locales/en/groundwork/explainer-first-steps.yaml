@@ -1,0 +1,60 @@
+head_title: "{site_name} | Before buying or selling property"
+meta_description: >-
+  Before buying or selling property. A plain-language explainer from {site_name}. General information;
+  individual advice requires an engagement.
+title: "Before buying or selling property"
+tagline: Plain-language explainers
+hero_lines:
+  - text: "Before buying or selling property"
+    accent_words: 0
+hero_lead: >-
+  A property transaction brings together the contract, the property, the financing, and the closing.
+  Organizing those pieces makes a legal review more useful.
+hero_cta:
+  href: "https://calendar.notion.so/meet/nick-shook/or15n4yy7"
+  label: Request a conversation
+skin: practice
+bands:
+  - kind: steps
+    anchor: guide
+    overline: Getting oriented
+    heading: Read the guide
+    items:
+      - title: "Start with the agreement"
+        body:
+          - - text: >-
+                Gather the proposed or signed purchase agreement and every amendment. Identify the parties, the
+                property, the deposit, the proposed closing date, and any dates already set out in the documents.
+      - title: "List the open questions"
+        body:
+          - - text: >-
+                Write down what needs review: inspection terms, financing conditions, title materials, shared
+                access, or the responsibilities at closing. These are questions for the review, rather than a
+                checklist that confirms the property is ready to transfer.
+      - title: "Understand the mortgage disclosure"
+        body:
+          - - text: >-
+                The CFPB Closing Disclosure explainer walks through mortgage terms, projected payments, and closing
+                costs. Compare the disclosure with your loan estimate and ask about differences. Mortgage
+                disclosures do not replace review of the purchase contract or title.
+  - kind: statement
+    heading: Read the source
+    body:
+      - - text: "CFPB: Closing Disclosure explainer"
+          href: "https://www.consumerfinance.gov/owning-a-home/closing-disclosure/"
+  - kind: cards
+    overline: Continue reading
+    heading: More explainers
+    items:
+      - title: "Reading a lease before signing"
+        href: /explainers/process
+        href_label: Read the explainer
+      - title: "Preparing for a property dispute"
+        href: /explainers/documents
+        href_label: Read the explainer
+  - kind: statement
+    heading: About this guide
+    body:
+      - - text: >-
+            General information, not advice about your matter. We confirm jurisdiction, conflicts, scope, and
+            fees before accepting work. Attorney advertisement.

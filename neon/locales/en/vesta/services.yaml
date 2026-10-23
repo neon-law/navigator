@@ -1,0 +1,190 @@
+head_title: "{site_name} | Estate plans tailored to you"
+meta_description: >-
+  Estate plans from $1,111, tailored to your life and wishes. Nevada asset protection
+  planning when appropriate under applicable law. Attorney advertisement.
+title: Estate planning
+hero_mark: gavel
+tagline: Your life, your meaning, your legacy
+hero_lines:
+  - text: A legacy that reaches beyond your lifetime.
+    accent_words: 0
+hero_lead: >-
+  Bring your spiritual beliefs and the story of your life to estate planning.
+  We explore your wishes for your care, your property, and the people you love.
+  Your get-to-know-you session can begin with an optional astrology reading
+  to reflect on purpose, relationships, and what you want to carry forward.
+  Readings are for personal reflection; your choices guide the legal plan.
+  Basic estate plans for one person start at $1,111 and include a will, financial
+  power of attorney, health-care directive, health-care power of attorney, a planning
+  meeting, attorney preparation and review, one round of revisions before signing,
+  and signing guidance. We confirm the services and signing arrangements in writing.
+  Living trusts, advanced asset protection or tax planning, property transfers,
+  probate, trust administration, and later updates require a separate quote.
+  A Nevada asset protection trust may be the right path; we assess that
+  with you under the laws that apply. We work with people across the
+  country when the matter and applicable law permit. We also help with
+  estate or trust administration.
+  Shook Law PC is the law firm you retain. Attorney responsible for this
+  page: Nicholas Shook.
+hero_cta:
+  href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
+  label: Book a meet & greet
+skin: practice
+bands:
+  - kind: cards
+    anchor: nevada-trusts
+    overline: Nevada asset protection trusts
+    heading: Start with the right questions
+    description: >-
+      Nevada law permits certain irrevocable spendthrift trusts that may
+      benefit the person who creates them. Whether one fits depends on your
+      residence, assets, obligations, tax position, and the laws of other
+      relevant states. We set the scope in writing. No trust guarantees
+      protection from every creditor claim.
+    items:
+      - title: Your position
+        body:
+          - - text: >-
+                We review your goals, existing obligations, and the assets you
+                would consider transferring. A trust is not a way to erase a
+                claim or avoid a duty you already owe.
+      - title: Nevada requirements
+        body:
+          - - text: >-
+                If the person creating the trust is also a beneficiary, Nevada
+                law requires a qualified Nevada trustee and administration in
+                Nevada. We plan for those requirements from the start.
+      - title: Across state lines
+        body:
+          - - text: >-
+                Your home state's law may matter. We assess where we may act,
+                explain any limits on our role, and coordinate with local
+                counsel or tax advisers when needed.
+  - kind: cards
+    anchor: plan
+    overline: Your plan
+    heading: Make your wishes clear
+    description: >-
+      We listen to what matters to you, then shape an estate plan around it.
+      A licensed attorney prepares and reviews your plan. We agree on the
+      services and fees in writing, including any Nevada asset protection
+      planning and updates.
+      Administration and trustee service require separate terms.
+    items:
+      - title: Your property
+        body:
+          - - text: Decide who receives what, and discuss whether a will or living trust fits your plans.
+      - title: Your finances and care
+        body:
+          - - text: Name the people who can act for you and record your wishes for medical care.
+      - title: Your changes
+        body:
+          - - text: Return as your life changes to discuss updates to your plan.
+  - kind: cards
+    anchor: trust-administration
+    overline: Trust administration
+    heading: Help carrying out the plan
+    description: >-
+      We can discuss estate or trust administration after death. We also
+      guide trustees during incapacity or while a trust continues. The
+      governing documents, property, applicable law, and our role shape
+      each engagement.
+    items:
+      - title: Authority and next steps
+        body:
+          - - text: >-
+                Review the trust and amendments, confirm the trustee's
+                authority, and identify applicable notices and deadlines.
+      - title: Records and communication
+        body:
+          - - text: >-
+                Get legal guidance on property inventories, beneficiary
+                communications, creditor issues, and trust accountings.
+      - title: Distributions and ongoing duties
+        body:
+          - - text: >-
+                Plan distributions under the trust and coordinate with tax
+                professionals where needed. Some trusts continue for years;
+                others are ready to close after their duties are fulfilled.
+  - kind: cards
+    anchor: administration-engagement
+    overline: Start with a conversation
+    heading: Custom scope and fees
+    description: >-
+      Contact us for an individual assessment of administration work. We
+      identify who we represent,
+      complete a conflict review, and agree on services, fees, and expenses
+      in a written engagement before work begins.
+    items:
+      - title: Tell us where you are
+        body:
+          - - text: >-
+                Start with your role and what help you need. We explain
+                which records to gather and how to share them after the
+                initial review. You do not need every answer to reach out.
+          - - text: Contact us about trust administration
+              href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
+      - title: Know who your lawyer represents
+        body:
+          - - text: >-
+                Representing a trustee does not automatically make us the
+                lawyer for every beneficiary or family member. Prior estate
+                planning work and competing interests can affect whether
+                we can accept the matter. Independent counsel may be needed.
+      - title: Agree on the work
+        body:
+          - - text: >-
+                Legal guidance for a trustee and accepting a trustee
+                appointment are separate roles. Tax return preparation,
+                investment management, and contested court proceedings are
+                included only if expressly agreed with the appropriate
+                professionals.
+  - kind: cards
+    anchor: trustee
+    overline: Individual trustee services
+    heading: Need someone to carry out the trust?
+    description: >-
+      Nicholas Shook may accept appointment as an individual trustee in
+      appropriate matters. Acceptance is not automatic: we first review the
+      trust document, governing law, assets, administration, conflicts, and
+      fees. Adding a name in Navigator does not appoint anyone as trustee.
+    items:
+      - title: Nevada asset-protection trusts
+        body:
+          - - text: >-
+                A self-settled Nevada asset-protection trust generally needs a
+                qualified Nevada trustee and real Nevada administration. We can
+                evaluate an individual co-trustee role and coordinate with the
+                qualified Nevada trustee the trust may require.
+      - title: Life-insurance trusts
+        body:
+          - - text: >-
+                Trustee powers over a life-insurance policy can affect the
+                trust's intended estate-tax treatment. We review the insured,
+                the person creating the trust, the proposed powers, and whether
+                an independent trustee is appropriate.
+      - title: A separate fiduciary engagement
+        body:
+          - - text: >-
+                Trustee service is fiduciary administration, not software
+                access. Scope, compensation, and any legal representation
+                are set out in written terms before an appointment is accepted.
+  - kind: cards
+    anchor: record
+    overline: Optional blockchain record
+    heading: A blockchain record of one version
+    description: >-
+      Available by request. Preserve evidence of a signed version you expect
+      to keep. An earlier record stays on the chain if you change your plan
+      and record a new version.
+    items:
+      - title: Signing still matters
+        body:
+          - - text: >-
+                A blockchain record does not replace required signatures,
+                witnesses, or notarization. It does not make your plan
+                unchangeable.
+      - title: Explore your plan
+        body:
+          - - text: See the lifetime plan and how to get started.
+              href: /#your-plan

@@ -1,0 +1,131 @@
+# Point-in-time restore drill. Restores the newest completed base backup (or
+# RESTORE_BASE_BACKUP) plus archived WAL into scratch storage, recovers to
+# RECOVERY_TARGET_TIME (or the end of the archive), promotes, and logs the
+# recovery point, recovery duration, databases, extensions, table row counts
+# and AGE graph sizes. It reads backups only and never connects to the live
+# server, so it carries no postgres-client label.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: navigator-postgres-restore-drill
+  labels:
+    app: navigator-postgres-restore-drill
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app: navigator-postgres-restore-drill
+    spec:
+      restartPolicy: Never
+      serviceAccountName: navigator-postgres-backup
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: fetch
+          image: google-cloud-cli:540.0.0-slim
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - /etc/navigator/postgres/drill/fetch-backup.sh
+          env:
+            - name: BACKUP_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-backup-target
+                  key: bucket
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: RESTORE_BASE_BACKUP
+              value: latest
+            - name: HOME
+              value: /tmp
+            - name: CLOUDSDK_CONFIG
+              value: /tmp/gcloud
+          securityContext:
+            # Cloud SDK downloads resolve the UID through passwd. Its
+            # cloudsdk user is 1000; the shared volume retains fsGroup 999.
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+              ephemeral-storage: 256Mi
+            limits:
+              memory: 1Gi
+              ephemeral-storage: 256Mi
+          volumeMounts:
+            - name: restore
+              mountPath: /restore
+            - name: drill
+              mountPath: /etc/navigator/postgres/drill
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: restore
+          image: neon-law-postgres:16.15-age1.6.0-vector0.8.2
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - /etc/navigator/postgres/drill/restore.sh
+          env:
+            - name: RECOVERY_TARGET_TIME
+              value: ""
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+              ephemeral-storage: 256Mi
+            limits:
+              memory: 2Gi
+              ephemeral-storage: 256Mi
+          volumeMounts:
+            - name: restore
+              mountPath: /restore
+            - name: drill
+              mountPath: /etc/navigator/postgres/drill
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: socket
+              mountPath: /var/run/postgresql
+      volumes:
+        - name: restore
+          ephemeral:
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 100Gi
+        - name: drill
+          configMap:
+            name: navigator-postgres-restore-drill
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: socket
+          emptyDir:
+            sizeLimit: 16Mi

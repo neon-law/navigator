@@ -1,0 +1,21 @@
+questionnaire:
+  BEGIN:
+    _: custom_text__dissolution_reason
+  custom_text__dissolution_reason:
+    _: custom_yes_no__final_debts_settled
+  custom_yes_no__final_debts_settled:
+    _: END
+  END: {}
+prompts:
+  dissolution_reason: "What is the {{for_label}}?"
+  final_debts_settled: Have all final debts been settled?
+workflow:
+  BEGIN:
+    _: member_signatures
+  member_signatures:
+    _: lawyer_review
+  lawyer_review:
+    _: mailroom_send
+  mailroom_send:
+    _: END
+  END: {}

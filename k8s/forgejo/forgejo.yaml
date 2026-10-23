@@ -1,0 +1,231 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: navigator-forgejo
+spec:
+  selector:
+    app: navigator-forgejo
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: navigator-forgejo-headless
+spec:
+  clusterIP: None
+  selector:
+    app: navigator-forgejo
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: navigator-forgejo
+spec:
+  serviceName: navigator-forgejo-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: navigator-forgejo
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  template:
+    metadata:
+      labels:
+        app: navigator-forgejo
+        navigator.neonlaw.org/postgres-client: "true"
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        # Render the effective app.ini. Registration stays closed unless the
+        # `navigator-forgejo-admission` allowlist names valid domains.
+        - name: admission
+          image: forgejo:15.0.9-rootless
+          command: ["/bin/sh", "/etc/navigator/forgejo/scripts/admission.sh"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: scripts
+              mountPath: /etc/navigator/forgejo/scripts
+              readOnly: true
+            - name: config-base
+              mountPath: /etc/forgejo-base
+              readOnly: true
+            - name: admission
+              mountPath: /etc/forgejo-admission
+              readOnly: true
+            - name: config
+              mountPath: /etc/forgejo
+        # Migrate the schema, then converge the one OIDC sign-in source.
+        - name: identity
+          image: forgejo:15.0.9-rootless
+          command: ["/bin/sh", "/etc/navigator/forgejo/scripts/identity.sh"]
+          env:
+            - name: GITEA_TEMP
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+            - name: PGSSLROOTCERT
+              value: /etc/postgres/ca/ca.crt
+            - name: HOME
+              value: /var/lib/gitea
+            - name: USER
+              value: git
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: scripts
+              mountPath: /etc/navigator/forgejo/scripts
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/gitea
+            - name: config
+              mountPath: /etc/forgejo
+              readOnly: true
+            - name: postgres-ca
+              mountPath: /etc/postgres/ca
+              readOnly: true
+            - name: oidc
+              mountPath: /etc/forgejo-oidc
+              readOnly: true
+            - name: oidc-secret
+              mountPath: /etc/forgejo-oidc-secret
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: forgejo
+          image: forgejo:15.0.9-rootless
+          command: ["/usr/local/bin/forgejo"]
+          args: ["web", "--config", "/etc/forgejo/app.ini", "--work-path", "/var/lib/gitea"]
+          env:
+            - name: GITEA_TEMP
+              value: /tmp
+            - name: TMPDIR
+              value: /tmp
+            - name: PGSSLROOTCERT
+              value: /etc/postgres/ca/ca.crt
+            - name: HOME
+              value: /var/lib/gitea
+            - name: USER
+              value: git
+          ports:
+            - name: http
+              containerPort: 3000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/gitea
+            - name: config
+              mountPath: /etc/forgejo
+              readOnly: true
+            - name: postgres-ca
+              mountPath: /etc/postgres/ca
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # The deployment's base app.ini and OAuth2 JWT secret, rendered by
+        # `navigator ops secrets apply --service forgejo`.
+        - name: config-base
+          secret:
+            secretName: navigator-forgejo-config
+            defaultMode: 0440
+        # The effective app.ini that admission.sh renders at each start.
+        - name: config
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: scripts
+          configMap:
+            name: navigator-forgejo-scripts
+            defaultMode: 0555
+        # The email-domain allowlist seam: key `email_domain_allowlist`.
+        - name: admission
+          configMap:
+            name: navigator-forgejo-admission
+            optional: true
+        # The installation's OIDC issuer: keys `name`, `discovery_url`, and
+        # `client_id`, with `client_secret` in the Secret of the same name.
+        - name: oidc
+          configMap:
+            name: navigator-forgejo-oidc
+            optional: true
+        - name: oidc-secret
+          secret:
+            secretName: navigator-forgejo-oidc
+            optional: true
+            defaultMode: 0440
+        - name: postgres-ca
+          secret:
+            secretName: navigator-forgejo-postgres-ca
+            defaultMode: 0440
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi

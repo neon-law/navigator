@@ -1,0 +1,59 @@
+# Daily trigger for the `NotationReset` workflow, hosted by workflows-service.
+# The workflow deletes every Notation draft on the deployment — a Notation still at `BEGIN` or
+# `intake_persisted` with no document and no signature, plus every stored preview draft — together
+# with its dependent rows, then posts one message to #messages or #staging-messages naming the
+# environment, the counts, the duration, and any ids that failed. A zero-count run posts too, so a
+# missing post means the job did not run.
+# Schedule is 04:20 UTC daily (20:20 fixed PST, UTC-8); the UTC date is the idempotency key.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: notation-reset-trigger
+  namespace: navigator
+  labels:
+    app: notation-reset-trigger
+spec:
+  schedule: "20 4 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            app: notation-reset-trigger
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notation-reset-trigger
+              image: YOUR_IMAGE_REGISTRY/navigator-notation-reset-trigger:YY.M.D
+              imagePullPolicy: Always
+              env:
+                - name: RESTATE_INGRESS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: RESTATE_INGRESS_URL
+                      optional: true
+                - name: RESTATE_AUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: RESTATE_AUTH_TOKEN
+                      optional: true
+                - name: RUST_LOG
+                  value: info
+              envFrom:
+                - configMapRef:
+                    name: navigator-otel-env
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 64Mi
+                limits:
+                  memory: 128Mi

@@ -1,0 +1,19 @@
+# The public handle the Brand holds on each provider. A handle is not a
+# credential and exists before anyone connects the account; a Post's social link
+# may only name a handle recorded here.
+records:
+  - brand: neon
+    provider: x
+    handle: NeonLawUSA
+  - brand: vesta
+    provider: facebook
+    handle: Vesta-Estate-Planning
+  - brand: vesta
+    provider: tiktok
+    handle: vesta.estate.planning
+  - brand: vesta
+    provider: instagram
+    handle: vesta.estate.planning
+  - brand: vesta
+    provider: threads
+    handle: vesta.estate.planning

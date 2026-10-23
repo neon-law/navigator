@@ -1,0 +1,285 @@
+#![allow(clippy::doc_markdown)]
+//! Integration tests for `GET /app/api/project-lifecycle` — the admin-only
+//! deployment-wide lifecycle read.
+
+use std::collections::BTreeSet;
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use http_body_util::BodyExt;
+use portal::session::SessionData;
+use portal::{AppState, SessionStore};
+use store::persons::Role;
+use store::projects::{
+    transition_project, transition_project_with_reason, ClosureReason, NewProject, Transition,
+};
+use store::test_support::{mem_surreal, seed_entity};
+use tower::ServiceExt;
+use uuid::Uuid;
+
+const KEY: &str = "api-project-lifecycle-test-key";
+const PATH: &str = "/app/api/project-lifecycle";
+
+struct Fixture {
+    app: axum::Router,
+    surreal: store::surreal::SurrealDb,
+    admin: String,
+    lawyer: String,
+    client: String,
+    codes: [String; 3],
+    ids: [Uuid; 3],
+}
+
+fn bearer(role: Role) -> String {
+    let session = SessionData::fresh("api-project-lifecycle-sub", role);
+    format!("Bearer {}", SessionStore::new(KEY).encode(&session))
+}
+
+async fn build_fixture() -> Fixture {
+    let surreal = mem_surreal().await;
+    let entity_id = seed_entity(&surreal).await;
+    let suffix = Uuid::now_v7().simple().to_string();
+    let codes = [
+        format!("open-{}", &suffix[..8]),
+        format!("closed-{}", &suffix[..8]),
+        format!("archived-{}", &suffix[..8]),
+    ];
+
+    let mut ids = Vec::new();
+    for code in &codes {
+        ids.push(
+            store::projects::create(
+                &surreal,
+                &NewProject {
+                    code: code.clone(),
+                    name: "Matter".into(),
+                    status: "open".into(),
+                    entity_id,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id,
+        );
+    }
+    let mut response = surreal
+        .query(
+            "CREATE $asset SET project_id = $project_id, storage_key = 'test', \
+             content_type = 'application/pdf', byte_size = 1, sha256_hex = 'fixture-sha', \
+             kind = 'offboarding', visibility = 'internal', metadata = NONE",
+        )
+        .bind(("asset", store::surreal::record_id("asset", Uuid::now_v7())))
+        .bind(("project_id", store::surreal::record_id("project", ids[1])))
+        .await
+        .unwrap();
+    let _: Option<serde_json::Value> = response.take(0).unwrap();
+    transition_project_with_reason(
+        &surreal,
+        ids[1],
+        Transition::Close,
+        Some(ClosureReason::PitchDeclined),
+        None,
+    )
+    .await
+    .unwrap();
+    transition_project(&surreal, ids[2], Transition::Archive, None)
+        .await
+        .unwrap();
+
+    let ids: [Uuid; 3] = ids.try_into().unwrap();
+    let state = AppState {
+        sessions: SessionStore::new(KEY),
+        ..portal::test_support::app_state(surreal.clone()).await
+    };
+    Fixture {
+        app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
+        surreal,
+        admin: bearer(Role::Admin),
+        lawyer: bearer(Role::Lawyer),
+        client: bearer(Role::Client),
+        codes,
+        ids,
+    }
+}
+
+async fn get(fx: &Fixture, auth: Option<&str>) -> axum::http::Response<Body> {
+    let mut request = Request::builder().method("GET").uri(PATH);
+    if let Some(auth) = auth {
+        request = request.header("authorization", auth);
+    }
+    fx.app
+        .clone()
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+
+async fn json(response: axum::http::Response<Body>) -> serde_json::Value {
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn admin_reads_every_project_lifecycle_without_matter_content() {
+    let fx = build_fixture().await;
+    let response = get(&fx, Some(&fx.admin)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let rows = json(response).await.as_array().unwrap().clone();
+    assert_eq!(rows.len(), 3);
+
+    let fields: BTreeSet<&str> = rows[0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        fields,
+        BTreeSet::from([
+            "brand",
+            "code",
+            "status",
+            "firm_id",
+            "closed_at",
+            "closure_reason",
+            "source_state"
+        ])
+    );
+
+    let by_code = rows
+        .into_iter()
+        .map(|row| (row["code"].as_str().unwrap().to_owned(), row))
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(by_code[&fx.codes[0]]["status"], "open");
+    assert!(by_code[&fx.codes[0]]["closed_at"].is_null());
+    assert_eq!(by_code[&fx.codes[1]]["status"], "closed");
+    assert!(by_code[&fx.codes[1]]["closed_at"].is_string());
+    assert_eq!(by_code[&fx.codes[1]]["closure_reason"], "pitch_declined");
+    assert_eq!(by_code[&fx.codes[2]]["status"], "archived");
+    assert!(by_code[&fx.codes[2]]["closed_at"].is_string());
+    assert!(by_code[&fx.codes[2]]["closure_reason"].is_null());
+
+    // None of the three fixture matters ever recorded a repository, which is
+    // a legitimate resting state distinct from a stalled or failed one.
+    for code in &fx.codes {
+        assert_eq!(by_code[code]["source_state"], "not_enabled");
+    }
+}
+
+/// A repository recorded outside reconcile's own provisioning pass — a
+/// direct `PATCH` or a legacy row — reads as `unknown` rather than
+/// `attached`, because `forge_provisioned_at` was never stamped and the
+/// columns cannot say why.
+#[tokio::test]
+async fn a_repository_url_with_no_provisioned_stamp_reads_as_unknown() {
+    let fx = build_fixture().await;
+    store::projects::set_repository_url(
+        &fx.surreal,
+        fx.ids[0],
+        Some("https://forge.example/an-organization/acme"),
+    )
+    .await
+    .unwrap();
+
+    let rows = json(get(&fx, Some(&fx.admin)).await)
+        .await
+        .as_array()
+        .unwrap()
+        .clone();
+    let open_row = rows.iter().find(|row| row["code"] == fx.codes[0]).unwrap();
+    assert_eq!(open_row["source_state"], "unknown");
+}
+
+#[tokio::test]
+async fn only_the_admin_tier_reaches_the_project_lifecycle_read() {
+    let fx = build_fixture().await;
+    assert_eq!(get(&fx, Some(&fx.admin)).await.status(), StatusCode::OK);
+    assert_eq!(
+        get(&fx, Some(&fx.lawyer)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        get(&fx, Some(&fx.client)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(get(&fx, None).await.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn matter_status_requires_participation_and_reports_filed_onboarding() {
+    let fx = build_fixture().await;
+    let lawyer = store::persons::create(
+        &fx.surreal,
+        &store::persons::NewPerson::with_role("Lawyer", "status@example.com", Role::Lawyer),
+    )
+    .await
+    .unwrap();
+    let mut session = SessionData::fresh("status-lawyer", Role::Lawyer);
+    session.person_id = Some(lawyer.id);
+    let auth = format!("Bearer {}", SessionStore::new(KEY).encode(&session));
+    let uri = format!("/app/api/projects/{}/status", fx.ids[0]);
+    let call = || {
+        Request::builder()
+            .uri(&uri)
+            .header("authorization", &auth)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let response = fx.app.clone().oneshot(call()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    store::projects::add_participation(&fx.surreal, fx.ids[0], lawyer.id, "lawyer")
+        .await
+        .unwrap();
+    let response = fx.app.clone().oneshot(call()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json(response).await;
+    assert_eq!(body["status"], "pitch");
+    assert_eq!(body["onboarding"]["filed"], false);
+    assert!(!body["missing"].as_array().unwrap().is_empty());
+    let asset = Uuid::now_v7();
+    fx.surreal
+        .query(
+            "CREATE $asset SET project_id = $project, storage_key = 'test', \
+        content_type = 'application/pdf', byte_size = 1, sha256_hex = 'fixture-sha', \
+        kind = 'onboarding', visibility = 'internal', metadata = NONE",
+        )
+        .bind(("asset", store::surreal::record_id("asset", asset)))
+        .bind(("project", store::surreal::record_id("project", fx.ids[0])))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    let response = fx.app.clone().oneshot(call()).await.unwrap();
+    let body = json(response).await;
+    assert_eq!(body["status"], "active");
+    assert_eq!(body["onboarding"]["filed"], true);
+    assert_eq!(body["onboarding"]["documents"][0]["visibility"], "internal");
+    assert_eq!(body["onboarding"]["execution_verified"], false);
+    assert!(body["opened_at"].is_string());
+    assert_eq!(body["source_state"], "not_enabled");
+    assert!(body["missing"].as_array().unwrap().is_empty());
+    assert!(body.get("repository_url").is_none());
+    for (id, expected) in [(fx.ids[1], "closed"), (fx.ids[2], "archived")] {
+        store::projects::add_participation(&fx.surreal, id, lawyer.id, "lawyer")
+            .await
+            .unwrap();
+        let response = fx
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/app/api/projects/{id}/status"))
+                    .header("authorization", &auth)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json(response).await;
+        assert_eq!(body["status"], expected);
+        assert!(body["closed_at"].is_string());
+        assert!(body["missing"].as_array().unwrap().is_empty());
+    }
+}

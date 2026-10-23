@@ -1,0 +1,56 @@
+head_title: "{site_name} | Services"
+meta_description: >-
+  Aegis Criminal Defense. Your rights. Your defense. Your next step.
+  A practice of Shook Law PC. Scope and fees are confirmed in writing.
+title: Aegis Criminal Defense services
+hero_mark: scales
+tagline: Your rights. Your defense. Your next step.
+hero_lines:
+  - text: "Facing criminal charges? Start with a conversation."
+    accent_words: 0
+hero_lead: >-
+  Aegis Criminal Defense is a practice of Shook Law PC.
+  Tell us what needs attention. A lawyer reviews the matter and jurisdiction
+  before an engagement. The written agreement identifies the lawyers,
+  scope, and fees. Attorney advertisement.
+hero_cta:
+  href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
+  label: Request a conversation
+skin: practice
+bands:
+  - kind: cards
+    anchor: work
+    overline: The work
+    heading: What to talk with us about
+    description: We confirm the work we can accept after reviewing the facts and jurisdiction.
+    items:
+      - title: Criminal charges
+        body:
+          - - text: >-
+                Tell us about the charge, court, and next scheduled date. A lawyer reviews whether the matter fits the practice.
+      - title: An investigation
+        body:
+          - - text: >-
+                If you are seeking counsel about an investigation, start with a request for contact. Representation begins only after a written engagement.
+      - title: A criminal record
+        body:
+          - - text: >-
+                Ask about review of a past case and possible record relief. Available options depend on the record and jurisdiction.
+  - kind: cards
+    anchor: process
+    overline: Getting started
+    heading: Make the next step clear
+    items:
+      - title: Tell us where things stand
+        body:
+          - - text: Share the type of matter and any upcoming date. Keep sensitive details out of the first message.
+      - title: Confirm the engagement
+        body:
+          - - text: We review the facts, jurisdiction, and conflicts before agreeing to representation.
+      - title: Put the work in writing
+        body:
+          - - text: The engagement identifies the lawyers, scope, and fees before work begins.
+  - kind: cta
+    heading: Start with a conversation
+    body: A contact request does not create an attorney-client relationship or confirm availability for a deadline.
+    email: "{firm_email}"

@@ -1,0 +1,75 @@
+# One Forgejo Actions runner, registered against `navigator-forgejo`.
+#
+# The runner's configuration, including its connection UUID and token, is the
+# `config.yml` key of the `navigator-forgejo-runner` Secret; the server side
+# of the same registration is `forgejo forgejo-cli actions register` with the
+# shared secret. The `host` executor runs each job inside this unprivileged
+# container: no Docker socket, no privileged mode, no Kubernetes API token.
+# It shares one filesystem across jobs, so it is not an isolation boundary for
+# untrusted Project workflows.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navigator-forgejo-runner
+  labels:
+    app: navigator-forgejo-runner
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: navigator-forgejo-runner
+  template:
+    metadata:
+      labels:
+        app: navigator-forgejo-runner
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runner
+          image: forgejo-runner:13.2.0
+          command: ["/bin/forgejo-runner", "daemon", "--config", "/etc/forgejo-runner/config.yml"]
+          env:
+            - name: HOME
+              value: /data
+            - name: TMPDIR
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/forgejo-runner
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          secret:
+            secretName: navigator-forgejo-runner
+            defaultMode: 0440
+        - name: data
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

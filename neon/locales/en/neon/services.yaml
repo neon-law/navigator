@@ -1,0 +1,171 @@
+head_title: "{site_name} | Legal services"
+meta_description: >-
+  Find business counsel, immigration, estate planning, non-legal privacy services, injury,
+  divorce, and other legal help across Neon Law and our brands.
+title: Legal services
+hero_mark: gavel
+tagline: "{shared:services.title}"
+hero_lines:
+  - text: "{shared:services.title}"
+    accent_words: 0
+hero_lead: "{shared:services.lede}"
+hero_cta:
+  href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
+  label: Book Consultation
+skin: practice
+bands:
+  - kind: cards
+    anchor: brands
+    overline: Our brands
+    heading: Find a practice for your next step
+    description: >-
+      Find the practice that fits your needs. Our brands introduce the work
+      and the lawyers who handle it; each engagement sets its own scope.
+    items:
+      - title: Abhaya Immigration
+        brand: abhaya
+        body:
+          - - text: >-
+                Work visas, family petitions, green cards, citizenship,
+                consular processing, employer sponsorship, and responses
+                to USCIS notices.
+          - - text: >-
+                O-1, H-1B, TN, E-1, E-2, E-3, J-1, L-1, P-1, R-1,
+                K-1, EB-1, EB-2 NIW, EB-2 PERM, EB-3, and EB-5 matters.
+        href: /immigration
+        href_label: Explore immigration services
+      - title: Vesta Estate Planning
+        brand: vesta
+        body:
+          - - text: >-
+                Estate planning, wills, trusts, Nevada asset protection
+                trust planning, and trust administration.
+        href: https://www.vestaestateplanning.com/
+        href_label: Explore Vesta
+      - title: DeleteYourData.com
+        brand: delete-your-data
+        body:
+          - - text: >-
+                Data removal and privacy protection, with optional privacy
+                and credit monitoring. This is a non-legal service. Legal representation requires a separate engagement.
+        href: https://www.deleteyourdata.com/
+        href_label: Explore privacy services
+      - title: DeleteYourDebt.com
+        brand: delete-your-debt
+        body:
+          - - text: >-
+                Connect with PandA Law for debt-relief work in Nevada,
+                Washington, New York, and California. The written engagement
+                identifies the lawyers, scope, and fees.
+        href: /delete-your-debt
+        href_label: Explore debt relief
+      - title: Misericordia Injury Law
+        brand: misericordia
+        body:
+          - - text: >-
+                Car, truck, motorcycle, pedestrian, premises, and wrongful
+                death claims.
+        href: https://www.misericordialaw.com/
+        href_label: Explore Misericordia
+      - title: CyberInjuryLaw
+        brand: cyber-injury-law
+        body:
+          - - text: >-
+                Car accidents, negligence, medical malpractice, data theft,
+                and cybercrime. We use AI to put more money in your pocket.
+        href: https://www.cyberinjurylaw.com/
+        href_label: Explore CyberInjuryLaw
+      - title: Summons Defense
+        brand: summons
+        body:
+          - - text: >-
+                Local counsel for accepted NYC OATH Hearings Division matters.
+                Private counsel, not affiliated with the City of New York or OATH.
+        href: https://www.summonsdefense.nyc/
+        href_label: Explore summons defense
+      - title: Daybridge Divorce Law
+        brand: daybridge
+        body:
+          - - text: >-
+                Divorce for couples who agree. Joint representation only
+                where permitted, after conflict review and informed written consent.
+        href: https://www.daybridgedivorce.com/
+        href_label: Explore Daybridge
+      - title: Death & Divorce
+        brand: death-and-divorce
+        body:
+          - - text: >-
+                Counsel for divorce and probate, with the work and fees
+                confirmed in a written engagement.
+        href: https://www.deathanddivorcelaw.com/
+        href_label: Explore Death & Divorce
+      - title: Aegis Criminal Defense
+        brand: aegis
+        body:
+          - - text: Criminal defense. Scope, fees, and jurisdiction are confirmed before an engagement.
+        href: https://www.aegiscriminaldefense.com/
+        href_label: Explore Aegis
+      - title: Groundwork Real Estate Law
+        brand: groundwork
+        body:
+          - - text: Real estate legal services. Scope, fees, and jurisdiction are confirmed before an engagement.
+        href: https://www.groundworkrealestatelaw.com/
+        href_label: Explore Groundwork
+  - kind: services
+    anchor: fees
+    overline: "{shared:services.eyebrow}"
+    heading: "{shared:services.catalog_heading}"
+    description: >-
+      Choose the help you need. We will explain the scope and any government
+      fees before work starts.
+    search_label: Search individual services
+    search_placeholder: A contract, my business, a will, a dispute
+    submit_label: Search
+    examples:
+      - label: My business
+        query: business
+      - label: A contract
+        query: contract
+      - label: My family
+        query: family
+      - label: A dispute
+        query: dispute
+    fee_label: Price
+    includes_label: What this includes
+    package_badge: Notation package
+    package_members_label: Package includes
+    members_badge: Plan required
+    state_fee_badge: Government fees cost extra
+    empty: We could not find a match.
+    empty_help: >-
+      Tell us what you need and we will let you know whether we can help.
+    clear_label: Show all services
+  - kind: steps
+    anchor: how
+    overline: How it works
+    heading: How it works
+    description: >-
+      Tell us what you need. We will explain the service, its cost, and what we
+      need from you before work begins.
+    items:
+      - title: Create an account
+        body:
+          - - text: Set up your account so everything about your matter lives in one place.
+      - title: Answer some questions
+        body:
+          - - text: A short questionnaire, scoped to what your filing actually needs.
+      - title: Upload your documentation
+        body:
+          - - text: Add the documents your matter calls for; we tell you which ones.
+      - title: We complete the work we agree on
+        body:
+          - - text: A licensed attorney reviews the work and we keep you informed.
+  - kind: cta
+    heading: Tell us what you need.
+    body: >-
+      If you are not sure which service fits, book a consultation. We will help you choose
+      your next step.
+    email: "{firm_email}"
+    action:
+      href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
+      label: Book Consultation

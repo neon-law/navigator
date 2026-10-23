@@ -1,0 +1,209 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: navigator-postgres
+spec:
+  selector:
+    app: navigator-postgres
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: navigator-postgres
+spec:
+  serviceName: navigator-postgres-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: navigator-postgres
+  template:
+    metadata:
+      labels:
+        app: navigator-postgres
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      containers:
+      - name: postgres
+        image: neon-law-postgres:16.15-age1.6.0-vector0.8.2
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: POSTGRES_DB
+          value: navigator
+        - name: POSTGRES_USER
+          value: postgres
+        - name: POSTGRES_PASSWORD_FILE
+          value: /etc/postgres/auth/password
+        - name: POSTGRES_INITDB_ARGS
+          value: --auth-host=scram-sha-256
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        - name: PGSSLMODE
+          value: require
+        ports:
+        - name: postgres
+          containerPort: 5432
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        readinessProbe:
+          exec: &id001
+            command:
+            - pg_isready
+            - -h
+            - 127.0.0.1
+            - -U
+            - postgres
+            - -d
+            - navigator
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          exec: *id001
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 6
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+            ephemeral-storage: 1Gi
+          limits:
+            cpu: '1'
+            memory: 2Gi
+            ephemeral-storage: 1Gi
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+        - name: tmp
+          mountPath: /tmp
+        - name: socket
+          mountPath: /var/run/postgresql
+        - name: auth
+          mountPath: /etc/postgres/auth
+          readOnly: true
+        - name: tls
+          mountPath: /etc/postgres/tls
+          readOnly: true
+        - name: config
+          mountPath: /etc/postgres/config
+          readOnly: true
+        args:
+        - -c
+        - ssl=on
+        - -c
+        - ssl_cert_file=/etc/postgres/tls/tls.crt
+        - -c
+        - ssl_key_file=/etc/postgres/tls/tls.key
+        - -c
+        - hba_file=/etc/postgres/config/pg_hba.conf
+        - -c
+        - wal_level=replica
+        - -c
+        - max_slot_wal_keep_size=4GB
+        startupProbe:
+          exec: *id001
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 60
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: socket
+        emptyDir: {}
+      - name: auth
+        secret:
+          secretName: navigator-postgres-auth
+          defaultMode: 416
+      - name: tls
+        secret:
+          secretName: navigator-postgres-tls
+          defaultMode: 416
+      - name: config
+        configMap:
+          name: navigator-postgres-config
+      terminationGracePeriodSeconds: 120
+      automountServiceAccountToken: false
+  # Every hosted row runs the same 100 GiB data volume; this is its only
+  # definition. A template change is immutable on a live StatefulSet, so
+  # `ops ship` expands the bound claim in place and recreates the StatefulSet
+  # object with `--cascade=orphan` (docs/postgres-kubernetes.md). Local KIND
+  # overlays patch it down to 1 GiB.
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 100Gi
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: navigator-postgres-headless
+spec:
+  clusterIP: None
+  selector:
+    app: navigator-postgres
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: postgres
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: navigator-postgres-config
+data:
+  pg_hba.conf: 'local all all peer
+
+    hostssl all all 0.0.0.0/0 scram-sha-256
+
+    hostssl all all ::/0 scram-sha-256
+
+    hostssl replication navigator_backup 0.0.0.0/0 scram-sha-256
+
+    hostssl replication navigator_backup ::/0 scram-sha-256
+
+    hostnossl all all 0.0.0.0/0 reject
+
+    hostnossl all all ::/0 reject
+
+    '
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: navigator-postgres
+spec:
+  podSelector:
+    matchLabels:
+      app: navigator-postgres
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          navigator.neonlaw.org/postgres-client: 'true'
+    ports:
+    - protocol: TCP
+      port: 5432
+  egress: []

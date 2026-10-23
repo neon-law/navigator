@@ -1,0 +1,1824 @@
+//! `devx observability` — stand up the `OTel` Collector seam in a prod
+//! cluster and wire the long-running binaries to it.
+//!
+//! This is the deterministic, in-binary form of the operator steps in
+//! [`examples/deploy/k8s/observability/README.md`]. Production is
+//! managed by direct `kubectl`/`gcloud` (no Config Sync, and the
+//! `navigator-otel-env` `ConfigMap` the deployment manifests `envFrom` is
+//! *not* part of any overlay `ship` applies), so without this
+//! command the collector never gets deployed and every binary's
+//! `OTEL_EXPORTER_OTLP_ENDPOINT` stays unset — telemetry silently never
+//! leaves the pod. `devx observability apply` closes that gap in one
+//! idempotent command:
+//!
+//! 1. **GSA + IAM** — ensure the `navigator-otel` Google service account
+//!    exists, carries `roles/cloudtrace.agent` +
+//!    `roles/monitoring.metricWriter` + `roles/logging.logWriter`, and is
+//!    bound to the in-cluster `otel-collector` KSA via Workload Identity.
+//! 2. **Collector** — render the bundled manifests with the project id
+//!    substituted and the optional Dash0 coordinates, then `kubectl apply`
+//!    them: the Collector Deployment +
+//!    Service, the `otel-collector-config`, the shared
+//!    `navigator-otel-env` `ConfigMap`, and the GMP self-monitoring
+//!    (`PodMonitoring` + alert `Rules`).
+//! 3. **Wire the binaries** — patch `navigator-web` and
+//!    `workflows-service` to `envFrom` the `navigator-otel-env` `ConfigMap`
+//!    so `OTEL_EXPORTER_OTLP_ENDPOINT` reaches `telemetry::init`. This is
+//!    a one-time `kubectl patch` — the shared `navigator-otel-env`
+//!    `ConfigMap` reference already lives in the manifests `ship` renders
+//!    and reconciles, so subsequent ships keep the wiring in place.
+//!
+//! Everything per-deployment flows through the environment via the same
+//! [`ShipConfig`] `ship` uses — there is no literal project
+//! id, region, cluster, namespace, or context in this file.
+//!
+//! ## Testing
+//!
+//! The orchestration shells out to `gcloud`/`kubectl`, so it isn't
+//! unit-tested. The pure pieces — manifest rendering, the deployment's
+//! render-time Dash0 opt-in, and the `envFrom` patch builder — are covered by
+//! the `tests` module below.
+
+use std::fmt::Write as _;
+use std::fs;
+use std::process::Command;
+use std::thread::sleep;
+use std::time::Duration;
+
+use anyhow::{bail, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use k8s_openapi::api::core::v1::Endpoints;
+use kube::{api::Api, Client as KubernetesClient, Config as KubernetesConfig};
+use serde::Deserialize;
+use serde_json::Value;
+use sha2::{Digest as _, Sha256};
+
+use super::gcp::{
+    auth::adc_token_provider,
+    client::{GcpClient, GcpService},
+};
+use super::ship::ShipConfig;
+use super::{require_auth, require_tools, run};
+
+/// In-cluster Deployment + container names (workspace conventions, same
+/// as `ship`). Each long-running binary gets the collector
+/// endpoint via `envFrom` the shared `ConfigMap`.
+const WEB_DEPLOYMENT: &str = "navigator-web";
+const WEB_CONTAINER: &str = "web";
+const WORKFLOWS_DEPLOYMENT: &str = "workflows-service";
+const WORKFLOWS_CONTAINER: &str = "worker";
+
+/// The Collector's Google service account short name + the KSA it backs.
+const OTEL_GSA: &str = "navigator-otel";
+const OTEL_KSA: &str = "otel-collector";
+/// The shared `ConfigMap` that carries `OTEL_EXPORTER_OTLP_ENDPOINT` — one
+/// source of truth for the collector URL, `envFrom`'d by every binary.
+const OTEL_ENV_CONFIGMAP: &str = "navigator-otel-env";
+/// The telemetry-write roles the Collector's GSA needs to fan OTLP out to
+/// Google Cloud (traces, metrics, logs respectively).
+const OTEL_ROLES: &[&str] = &[
+    "roles/cloudtrace.agent",
+    "roles/monitoring.metricWriter",
+    "roles/logging.logWriter",
+];
+/// Fresh GKE and IAM control-plane components can acknowledge creation before
+/// their admission or policy services accept a dependent request. Retry only
+/// idempotent operations through that bounded propagation window.
+const CONTROL_PLANE_PROPAGATION_ATTEMPTS: usize = 6;
+/// A cold Autopilot cluster can take a few minutes to start the managed
+/// Prometheus admission webhook after the control plane reports RUNNING.
+/// This is a readiness poll, not a blind apply retry.
+const GMP_WEBHOOK_PROPAGATION_ATTEMPTS: usize = 37;
+const CONTROL_PLANE_PROPAGATION_DELAY: Duration = Duration::from_secs(5);
+const GMP_SYSTEM_NAMESPACE: &str = "gke-gmp-system";
+const GMP_OPERATOR_ENDPOINTS: &str = "gmp-operator";
+
+/// The Collector + `ConfigMap`s + Service + self-monitoring manifests,
+/// bundled into the binary so the command is self-contained. Both carry
+/// the `YOUR_PROJECT_ID` placeholder convention (`otel-collector.yaml`
+/// twice: the WI GSA annotation + the `googlecloud` exporter project;
+/// `collector-monitoring.yaml` has none) — `render_manifest` substitutes
+/// the real project id.
+const OTEL_COLLECTOR_YAML: &str =
+    include_str!("../../../examples/deploy/k8s/observability/otel-collector.yaml");
+const COLLECTOR_MONITORING_YAML: &str =
+    include_str!("../../../examples/deploy/k8s/observability/collector-monitoring.yaml");
+
+/// The placeholder every deploy-side manifest carries for the GCP project.
+const PROJECT_PLACEHOLDER: &str = "YOUR_PROJECT_ID";
+const NAMESPACE_PLACEHOLDER: &str = "YOUR_NAMESPACE";
+const CONFIG_CHECKSUM_PLACEHOLDER: &str = "YOUR_CONFIG_CHECKSUM";
+const DASH0_ENDPOINT_KEY: &str = "DASH0_ENDPOINT";
+const DASH0_DATASET_KEY: &str = "DASH0_DATASET";
+const DASH0_TOKEN_KEY: &str = "DASH0_TOKEN";
+const DASH0_ENDPOINT_PLACEHOLDER: &str = "YOUR_DASH0_ENDPOINT";
+const DASH0_DATASET_PLACEHOLDER: &str = "YOUR_DASH0_DATASET";
+const DASH0_TRACE_SAMPLING_PERCENTAGE_KEY: &str = "DASH0_TRACE_SAMPLING_PERCENTAGE";
+const DASH0_TRACE_SAMPLING_PERCENTAGE_PLACEHOLDER: &str = "YOUR_DASH0_TRACE_SAMPLING_PERCENTAGE";
+const DEFAULT_DASH0_TRACE_SAMPLING_PERCENTAGE: &str = "20";
+const WEB_SECRET_NAME_PLACEHOLDER: &str = "YOUR_WEB_SECRET_NAME";
+const DASH0_EXPORTER_BLOCK: &str = r#"      # Render-time opt-in: the renderer removes this exporter when
+      # the selected deployment has not supplied all three DASH0_* values.
+      otlp/dash0:
+        endpoint: ${env:DASH0_ENDPOINT}
+        headers:
+          Authorization: "Bearer ${env:DASH0_TOKEN}"
+          Dash0-Dataset: "${env:DASH0_DATASET}"
+"#;
+const DASH0_COORDINATE_ENV_BLOCK: &str = r"            - name: DASH0_ENDPOINT
+              value: YOUR_DASH0_ENDPOINT
+            - name: DASH0_DATASET
+              value: YOUR_DASH0_DATASET
+";
+const DASH0_TRACES_PIPELINE: &str = r"        traces/dash0:
+          receivers: [otlp]
+          processors: [memory_limiter, resourcedetection, redaction, filter/dash0_noise, tail_sampling/dash0, batch]
+          exporters: [otlp/dash0]
+";
+const DASH0_FILTER_BLOCK: &str = r#"      # Dash0-only noise filter. These are successful operational or static
+      # HTTP requests that carry no application decision. The status guard
+      # keeps every 4xx/5xx response; a span whose status attribute is absent
+      # is also kept, because an ordering comparison against nil is false and
+      # so the drop condition never matches. error_mode=ignore covers the
+      # remaining evaluation errors (a non-string route reaching IsMatch).
+      filter/dash0_noise:
+        error_mode: ignore
+        traces:
+          span:
+            - 'attributes["http.route"] == "/health" and attributes["http.response.status_code"] < 400'
+            - 'attributes["http.route"] == "/readyz" and attributes["http.response.status_code"] < 400'
+            - 'attributes["http.route"] == "/app/health" and attributes["http.response.status_code"] < 400'
+            - 'attributes["http.route"] == "/app/readyz" and attributes["http.response.status_code"] < 400'
+            - 'attributes["http.route"] == "/version" and attributes["http.response.status_code"] < 400'
+            - 'attributes["http.route"] == "/robots.txt" and attributes["http.response.status_code"] < 400'
+            - 'attributes["http.route"] == "/sitemap.xml" and attributes["http.response.status_code"] < 400'
+            - 'attributes["http.route"] == "/llms.txt" and attributes["http.response.status_code"] < 400'
+            - 'IsMatch(attributes["http.route"], "^/(assets|public)/") and attributes["http.response.status_code"] < 400'
+"#;
+const DASH0_SAMPLING_ENV_BLOCK: &str = r#"            - name: DASH0_TRACE_SAMPLING_PERCENTAGE
+              value: "YOUR_DASH0_TRACE_SAMPLING_PERCENTAGE"
+"#;
+const DASH0_TAIL_SAMPLING_BLOCK: &str = r"      tail_sampling/dash0:
+        decision_wait: 10s
+        num_traces: 50000
+        policies:
+          - name: keep-errors
+            type: status_code
+            status_code:
+              status_codes: [ERROR]
+          - name: keep-audit
+            type: boolean_attribute
+            boolean_attribute:
+              key: audit
+              value: true
+          - name: keep-navigator
+            type: boolean_attribute
+            boolean_attribute:
+              key: navigator.keep
+              value: true
+          - name: probabilistic-rest
+            type: probabilistic
+            probabilistic:
+              sampling_percentage: ${env:DASH0_TRACE_SAMPLING_PERCENTAGE}
+";
+
+/// The narrow GKE control-plane response required to connect a Rust
+/// Kubernetes client without depending on an operator's kubeconfig or a
+/// `kubectl` subprocess. The Google Cloud SDK-backed ADC token authorizes
+/// both the Container API read and the Kubernetes API request.
+#[derive(Debug, Deserialize)]
+struct GkeClusterConnectionResponse {
+    endpoint: String,
+    status: String,
+    #[serde(rename = "masterAuth")]
+    master_auth: GkeMasterAuth,
+}
+
+#[derive(Debug, Deserialize)]
+struct GkeMasterAuth {
+    #[serde(rename = "clusterCaCertificate")]
+    cluster_ca_certificate: String,
+}
+
+struct GkeClusterConnection {
+    endpoint: String,
+    /// One DER body per certificate in the cluster CA bundle — the shape
+    /// `kube::Config::root_cert` takes, not the PEM the API returns.
+    ca_certificate: Vec<Vec<u8>>,
+}
+
+/// Options parsed from the `devx observability apply` flags.
+#[derive(Debug, Clone)]
+pub struct ObservabilityOpts {
+    /// Deployment directory under `deployments/` to stand the Collector up
+    /// in. Explicit like `ops ship`'s — never inherited from a shell.
+    pub deployment: String,
+    /// The directory holding the `deployments/` tree, when it is not the
+    /// workspace. See [`super::deployments::root`].
+    pub deployments_dir: Option<std::path::PathBuf>,
+    /// Read the row from this project's published record instead of a tree.
+    pub project_id: Option<String>,
+    /// Print every command instead of running it.
+    pub dry_run: bool,
+}
+
+/// Entry point for `Cmd::Observability`.
+pub fn run_observability(opts: &ObservabilityOpts) -> Result<()> {
+    let deployment = if let Some(project) = &opts.project_id {
+        anyhow::ensure!(
+            opts.deployments_dir.is_none(),
+            "--project-id conflicts with --deployments-dir"
+        );
+        super::deployment_config::load(project, &opts.deployment)?
+    } else {
+        let root = super::deployments::root(opts.deployments_dir.as_deref())?;
+        super::deployments::Deployment::load(&root, &opts.deployment)?
+    };
+    let cfg = ShipConfig::from_deployment(&deployment)?;
+    let dash0 = dash0_coordinates(&deployment);
+    let dash0_sampling_percentage = dash0_sampling_percentage(&deployment)?;
+    require_tools(&["kubectl", "gcloud"])?;
+    if !opts.dry_run {
+        require_auth(&["gcloud"])?;
+    }
+    eprintln!(
+        "==> observability: standing up the `OTel` collector in {} ({})",
+        cfg.project_id, cfg.context
+    );
+    ensure_gsa_iam(&cfg, opts.dry_run)?;
+    apply_manifests(&cfg, dash0, dash0_sampling_percentage, opts.dry_run)?;
+    wire_binaries(&cfg, opts.dry_run)?;
+    eprintln!(
+        "==> observability ready. Roll the binaries so they pick up the endpoint \
+         (a `devx ship` set-image, or `kubectl rollout restart`), then look for \
+         traces in Cloud Trace + the `navigator.workflow.trigger.fired` metric."
+    );
+    Ok(())
+}
+
+/// Step 1 — ensure the Collector's GSA exists, carries the three
+/// telemetry-write roles, and is bound to the in-cluster KSA via Workload
+/// Identity. Every call is idempotent: the GSA is created only when absent
+/// (`describe` probe), and the IAM bindings are no-ops when already present.
+fn ensure_gsa_iam(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
+    let gsa = gsa_email(&cfg.project_id);
+    let workload_identity_member = format!(
+        "serviceAccount:{}.svc.id.goog[{}/{OTEL_KSA}]",
+        cfg.project_id, cfg.namespace
+    );
+    ensure_gsa_iam_with(
+        GsaIam {
+            gsa: &gsa,
+            workload_identity_member: &workload_identity_member,
+        },
+        || read_iam_policy(project_iam_policy_command(cfg)),
+        || gsa_exists(cfg, &gsa),
+        || {
+            exec(
+                dry_run,
+                Command::new("gcloud")
+                    .args(["iam", "service-accounts", "create", OTEL_GSA])
+                    .arg(format!("--project={}", cfg.project_id))
+                    .args(["--display-name", "Neon Law Navigator `OTel` Collector"]),
+            )
+        },
+        || read_iam_policy(service_account_iam_policy_command(cfg, &gsa)),
+        |role| {
+            exec_with_control_plane_retry(
+                "IAM binding",
+                dry_run,
+                CONTROL_PLANE_PROPAGATION_ATTEMPTS,
+                || project_binding_command(cfg, &gsa, role),
+            )
+        },
+        || {
+            exec_with_control_plane_retry(
+                "Workload Identity binding",
+                dry_run,
+                CONTROL_PLANE_PROPAGATION_ATTEMPTS,
+                || workload_identity_binding_command(cfg, &gsa),
+            )
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+struct GsaIam<'a> {
+    gsa: &'a str,
+    workload_identity_member: &'a str,
+}
+
+/// Read the existing policies before adding a binding. A service account that
+/// does not exist must be created before its policy can be read; every later
+/// binding write is still preceded by both policy reads. A read failure is not
+/// evidence that a binding exists: it remains an error so a permission failure
+/// cannot turn into a false converged result.
+fn ensure_gsa_iam_with(
+    iam: GsaIam<'_>,
+    read_project_policy: impl FnOnce() -> Result<Value>,
+    gsa_exists: impl FnOnce() -> Result<bool>,
+    create_gsa: impl FnOnce() -> Result<()>,
+    read_service_account_policy: impl FnOnce() -> Result<Value>,
+    mut bind_project_role: impl FnMut(&str) -> Result<()>,
+    bind_workload_identity: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let project_policy = read_project_policy()?;
+    if gsa_exists()? {
+        eprintln!("==> GSA {} already exists", iam.gsa);
+    } else {
+        eprintln!("==> creating GSA {}", iam.gsa);
+        create_gsa()?;
+    }
+    let service_account_policy = read_service_account_policy()?;
+    let project_member = format!("serviceAccount:{}", iam.gsa);
+
+    // Bind the telemetry-write roles one at a time. `add-iam-policy-binding`
+    // is read-modify-write on the project policy, so a tight loop can lose an
+    // etag race. Each role is distinct, and an already-converged unconditional
+    // binding is skipped instead of requiring write permission for a no-op.
+    for role in OTEL_ROLES {
+        if policy_grants_unconditional(&project_policy, role, &project_member) {
+            eprintln!("==> {role} → {} already bound", iam.gsa);
+        } else {
+            eprintln!("==> binding {role} → {}", iam.gsa);
+            bind_project_role(role)?;
+        }
+    }
+    if policy_grants_unconditional(
+        &service_account_policy,
+        "roles/iam.workloadIdentityUser",
+        iam.workload_identity_member,
+    ) {
+        eprintln!(
+            "==> Workload Identity {OTEL_KSA} KSA → {} already bound",
+            iam.gsa
+        );
+    } else {
+        eprintln!("==> binding Workload Identity {OTEL_KSA} KSA → {}", iam.gsa);
+        bind_workload_identity()?;
+    }
+    Ok(())
+}
+
+fn project_iam_policy_command(cfg: &ShipConfig) -> Command {
+    let mut command = Command::new("gcloud");
+    command
+        .args(["projects", "get-iam-policy", &cfg.project_id])
+        .arg("--format=json");
+    command
+}
+
+fn service_account_iam_policy_command(cfg: &ShipConfig, gsa: &str) -> Command {
+    let mut command = Command::new("gcloud");
+    command
+        .args(["iam", "service-accounts", "get-iam-policy", gsa])
+        .arg(format!("--project={}", cfg.project_id))
+        .arg("--format=json");
+    command
+}
+
+fn project_binding_command(cfg: &ShipConfig, gsa: &str, role: &str) -> Command {
+    let mut command = Command::new("gcloud");
+    command
+        .args(["projects", "add-iam-policy-binding", &cfg.project_id])
+        .arg(format!("--member=serviceAccount:{gsa}"))
+        .arg(format!("--role={role}"))
+        .args(["--condition", "None"]);
+    command
+}
+
+fn workload_identity_binding_command(cfg: &ShipConfig, gsa: &str) -> Command {
+    let mut command = Command::new("gcloud");
+    command
+        .args(["iam", "service-accounts", "add-iam-policy-binding", gsa])
+        .arg(format!("--project={}", cfg.project_id))
+        .args(["--role", "roles/iam.workloadIdentityUser"])
+        .arg(format!(
+            "--member=serviceAccount:{}.svc.id.goog[{}/{OTEL_KSA}]",
+            cfg.project_id, cfg.namespace
+        ));
+    command
+}
+
+fn read_iam_policy(mut command: Command) -> Result<Value> {
+    let rendered = render_command(&command);
+    let output = command
+        .output()
+        .with_context(|| format!("run {rendered}"))?;
+    if !output.status.success() {
+        bail!(
+            "read IAM policy failed ({}) for {rendered}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim(),
+        );
+    }
+    serde_json::from_slice(&output.stdout)
+        .with_context(|| format!("parse IAM policy returned by {rendered}"))
+}
+
+fn policy_grants_unconditional(policy: &Value, role: &str, member: &str) -> bool {
+    policy
+        .get("bindings")
+        .and_then(Value::as_array)
+        .is_some_and(|bindings| {
+            bindings.iter().any(|binding| {
+                binding.get("role").and_then(Value::as_str) == Some(role)
+                    && binding
+                        .get("members")
+                        .and_then(Value::as_array)
+                        .is_some_and(|members| {
+                            members
+                                .iter()
+                                .any(|candidate| candidate.as_str() == Some(member))
+                        })
+                    && binding.get("condition").is_none_or(Value::is_null)
+            })
+        })
+}
+
+fn render_command(command: &Command) -> String {
+    std::iter::once(command.get_program().to_string_lossy().into_owned())
+        .chain(
+            command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned()),
+        )
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Retry an idempotent control-plane operation while a just-created GSA or
+/// managed admission webhook propagates. Permanent failures remain visible
+/// after the bounded window instead of being silently swallowed.
+fn exec_with_control_plane_retry(
+    operation: &str,
+    dry_run: bool,
+    attempts: usize,
+    mut command: impl FnMut() -> Command,
+) -> Result<()> {
+    for attempt in 1..=attempts {
+        let mut operation_command = command();
+        match exec(dry_run, &mut operation_command) {
+            Ok(()) => return Ok(()),
+            Err(_) if attempt < attempts => {
+                eprintln!(
+                    "==> {operation} did not settle (attempt {attempt}/{attempts}); retrying in {}s",
+                    CONTROL_PLANE_PROPAGATION_DELAY.as_secs()
+                );
+                sleep(CONTROL_PLANE_PROPAGATION_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("the bounded control-plane retry loop always returns")
+}
+
+/// Step 2 — render the bundled manifests with the project id substituted
+/// and `kubectl apply` them (context-pinned, the manifests carry their own
+/// namespace). The collector config is in a `ConfigMap`, so a server-side
+/// apply can't catch a bad collector pipeline — the operator confirms the
+/// rollout settles afterward (this command waits on it).
+fn apply_manifests(
+    cfg: &ShipConfig,
+    dash0: Option<(&str, &str)>,
+    dash0_sampling_percentage: &str,
+    dry_run: bool,
+) -> Result<()> {
+    for (name, template) in [
+        ("otel-collector.yaml", OTEL_COLLECTOR_YAML),
+        ("collector-monitoring.yaml", COLLECTOR_MONITORING_YAML),
+    ] {
+        let rendered = render_manifest(
+            template,
+            &cfg.project_id,
+            &cfg.namespace,
+            &cfg.secret_name,
+            dash0,
+            dash0_sampling_percentage,
+        )?;
+        let path = std::env::temp_dir().join(format!("navigator-otel-{name}"));
+        if dry_run {
+            eprintln!(
+                "DRY-RUN: would render {name} → {} and apply it",
+                path.display()
+            );
+            continue;
+        }
+        fs::write(&path, rendered)
+            .with_context(|| format!("write rendered {name} to {}", path.display()))?;
+        if name == "collector-monitoring.yaml" {
+            wait_for_gmp_operator(cfg, dry_run)?;
+        }
+        eprintln!("==> applying {name}");
+        exec_with_control_plane_retry(name, false, CONTROL_PLANE_PROPAGATION_ATTEMPTS, || {
+            let mut command = Command::new("kubectl");
+            command
+                .args(["--context", &cfg.context, "apply", "-f"])
+                .arg(&path);
+            command
+        })?;
+        let _ = fs::remove_file(&path);
+    }
+    if dry_run {
+        eprintln!("DRY-RUN: would wait for the otel-collector rollout");
+        return Ok(());
+    }
+    eprintln!("==> waiting for the otel-collector rollout");
+    run(Command::new("kubectl").args([
+        "--context",
+        &cfg.context,
+        "-n",
+        &cfg.namespace,
+        "rollout",
+        "status",
+        "deployment/otel-collector",
+        "--timeout=120s",
+    ]))
+}
+
+/// Wait for the actual managed Prometheus admission endpoint before applying
+/// the manifest that triggers it. The Container API supplies the selected
+/// cluster's endpoint and CA; the Rust Kubernetes client then observes the
+/// only readiness signal that matters: a ready `gmp-operator` endpoint.
+fn wait_for_gmp_operator(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
+    if dry_run {
+        eprintln!(
+            "DRY-RUN: would use Google ADC + the GKE Container API to wait for \
+             {GMP_SYSTEM_NAMESPACE}/{GMP_OPERATOR_ENDPOINTS} endpoints"
+        );
+        return Ok(());
+    }
+
+    eprintln!(
+        "==> waiting for {GMP_SYSTEM_NAMESPACE}/{GMP_OPERATOR_ENDPOINTS} endpoints via Google ADC + GKE API"
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("create GKE readiness runtime")?;
+    let token_provider = runtime.block_on(adc_token_provider())?;
+    let gcp = GcpClient::new(token_provider.clone());
+    let connection = runtime.block_on(gke_cluster_connection(&gcp, cfg))?;
+    let token = runtime.block_on(token_provider.token())?;
+    // Inside the runtime, not beside it. `kube` builds a tower buffer whose
+    // worker is spawned at construction, so building the client off-runtime
+    // panics with "there is no reactor running" before it ever reaches the
+    // cluster — the constructor is not async, which is exactly what makes
+    // the requirement easy to miss.
+    let client = runtime.block_on(async { kubernetes_client(connection, token) })?;
+    let endpoints: Api<Endpoints> = Api::namespaced(client, GMP_SYSTEM_NAMESPACE);
+
+    for attempt in 1..=GMP_WEBHOOK_PROPAGATION_ATTEMPTS {
+        let operator = runtime
+            .block_on(endpoints.get_opt(GMP_OPERATOR_ENDPOINTS))
+            .context("read GKE managed Prometheus operator endpoints")?;
+        if gmp_operator_is_ready(operator.as_ref()) {
+            eprintln!("==> {GMP_SYSTEM_NAMESPACE}/{GMP_OPERATOR_ENDPOINTS} endpoints are ready");
+            return Ok(());
+        }
+        if attempt == GMP_WEBHOOK_PROPAGATION_ATTEMPTS {
+            bail!(
+                "GKE managed Prometheus operator did not publish ready endpoints after three minutes; inspect with: \
+                 kubectl --context {} -n {GMP_SYSTEM_NAMESPACE} get deployment,pods,endpoints {GMP_OPERATOR_ENDPOINTS}",
+                cfg.context,
+            );
+        }
+        eprintln!(
+            "==> {GMP_SYSTEM_NAMESPACE}/{GMP_OPERATOR_ENDPOINTS} has no ready endpoints \
+             (attempt {attempt}/{GMP_WEBHOOK_PROPAGATION_ATTEMPTS}); retrying in {}s",
+            CONTROL_PLANE_PROPAGATION_DELAY.as_secs()
+        );
+        sleep(CONTROL_PLANE_PROPAGATION_DELAY);
+    }
+    unreachable!("the bounded GMP endpoint readiness loop always returns")
+}
+
+async fn gke_cluster_connection(
+    client: &GcpClient,
+    cfg: &ShipConfig,
+) -> Result<GkeClusterConnection> {
+    let path = format!(
+        "/v1/projects/{}/locations/{}/clusters/{}",
+        cfg.project_id, cfg.location, cfg.cluster
+    );
+    let response = client
+        .get(GcpService::Container, &path)
+        .await
+        .context("read GKE cluster connection from the Container API")?;
+    if !(200..=299).contains(&response.status_u16()) {
+        bail!("GKE Container API did not return the selected cluster connection");
+    }
+    parse_gke_cluster_connection(&response.into_text())
+}
+
+fn parse_gke_cluster_connection(response: &str) -> Result<GkeClusterConnection> {
+    let response: GkeClusterConnectionResponse =
+        serde_json::from_str(response).context("parse GKE cluster connection response")?;
+    if response.status != "RUNNING" {
+        bail!(
+            "GKE cluster is not RUNNING yet (status: {})",
+            response.status
+        );
+    }
+    if response.endpoint.trim().is_empty() {
+        bail!("GKE Container API returned an empty cluster endpoint");
+    }
+    let ca_certificate = BASE64_STANDARD
+        .decode(response.master_auth.cluster_ca_certificate)
+        .context("decode GKE cluster CA certificate")?;
+    if ca_certificate.is_empty() {
+        bail!("GKE Container API returned an empty cluster CA certificate");
+    }
+    Ok(GkeClusterConnection {
+        endpoint: response.endpoint,
+        ca_certificate: pem_certificates_to_der(&ca_certificate)?,
+    })
+}
+
+/// Split a PEM certificate bundle into its DER bodies.
+///
+/// The Container API hands back `masterAuth.clusterCaCertificate` as
+/// base64-encoded **PEM**, so decoding that base64 yields PEM text, not a
+/// certificate. `kube::Config::root_cert` wants one DER blob per
+/// certificate, and handing it PEM fails the handshake with rustls's
+/// `invalid peer certificate: BadEncoding` — a message that describes the
+/// GKE control plane's certificate rather than the encoding mistake that
+/// is actually ours.
+///
+/// A bundle rather than a single certificate because a cluster CA may be
+/// issued under a chain, and dropping every block but the first would
+/// fail only for the clusters that have one.
+fn pem_certificates_to_der(pem: &[u8]) -> Result<Vec<Vec<u8>>> {
+    const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+    const END: &str = "-----END CERTIFICATE-----";
+
+    let text = std::str::from_utf8(pem).context("GKE cluster CA certificate is not UTF-8 PEM")?;
+    let mut der = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(BEGIN) {
+        let body = &rest[start + BEGIN.len()..];
+        let Some(end) = body.find(END) else {
+            bail!("GKE cluster CA certificate has a PEM block with no END marker");
+        };
+        let base64: String = body[..end].split_whitespace().collect();
+        der.push(
+            BASE64_STANDARD
+                .decode(&base64)
+                .context("decode a GKE cluster CA PEM block")?,
+        );
+        rest = &body[end + END.len()..];
+    }
+    if der.is_empty() {
+        bail!("GKE cluster CA certificate carries no PEM certificate block");
+    }
+    Ok(der)
+}
+
+fn kubernetes_client(connection: GkeClusterConnection, token: String) -> Result<KubernetesClient> {
+    // The GKE API server is HTTPS, and `kube` handshakes through rustls,
+    // which panics rather than choosing between the two providers this
+    // workspace links. `store::surreal::connect` installs one for its own
+    // endpoint; this is a different process seam and reaches no Surreal
+    // engine, so it installs one too. Without it `ops observability`
+    // aborts mid-run — after applying the collector and before the
+    // `Rules` object that needs the operator it was about to wait for.
+    store::surreal::install_tls_provider();
+    let cluster_url = format!("https://{}", connection.endpoint)
+        .parse()
+        .context("parse GKE cluster endpoint")?;
+    let mut config = KubernetesConfig::new(cluster_url);
+    config.root_cert = Some(connection.ca_certificate);
+    config.auth_info.token = Some(token.into());
+    KubernetesClient::try_from(config).context("create GKE Kubernetes API client")
+}
+
+fn gmp_operator_is_ready(endpoints: Option<&Endpoints>) -> bool {
+    endpoints
+        .and_then(|endpoints| endpoints.subsets.as_ref())
+        .into_iter()
+        .flatten()
+        .filter_map(|subset| subset.addresses.as_ref())
+        .any(|addresses| !addresses.is_empty())
+}
+
+/// Step 3 — patch `navigator-web` and `workflows-service` so the binary
+/// container `envFrom`s the `navigator-otel-env` `ConfigMap` (alongside the
+/// existing Secret). That supplies `OTEL_EXPORTER_OTLP_ENDPOINT`, which is
+/// what flips `telemetry::init` from stdout-only to JSON + OTLP export.
+fn wire_binaries(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
+    for (deployment, container) in [
+        (WEB_DEPLOYMENT, WEB_CONTAINER),
+        (WORKFLOWS_DEPLOYMENT, WORKFLOWS_CONTAINER),
+    ] {
+        if !dry_run && !deployment_exists(cfg, deployment)? {
+            eprintln!(
+                "==> {deployment} does not exist yet; ship will create it with \
+                 {OTEL_ENV_CONFIGMAP} already wired"
+            );
+            continue;
+        }
+        let patch = envfrom_patch(container, &cfg.secret_name);
+        eprintln!("==> wiring {deployment} ({container}) → {OTEL_ENV_CONFIGMAP}");
+        exec(
+            dry_run,
+            Command::new("kubectl")
+                .args(["--context", &cfg.context, "-n", &cfg.namespace])
+                .args(["patch", "deployment", deployment, "--type=strategic", "-p"])
+                .arg(&patch),
+        )?;
+    }
+    Ok(())
+}
+
+fn deployment_exists(cfg: &ShipConfig, deployment: &str) -> Result<bool> {
+    let output = Command::new("kubectl")
+        .args(["--context", &cfg.context, "-n", &cfg.namespace])
+        .args(["get", "deployment", deployment])
+        .output()
+        .with_context(|| format!("probe deployment/{deployment}"))?;
+    if output.status.success() {
+        return Ok(true);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("NotFound") || stderr.contains("not found") {
+        return Ok(false);
+    }
+    bail!(
+        "could not probe deployment/{deployment} in {}: {}",
+        cfg.namespace,
+        stderr.trim()
+    )
+}
+
+/// The Collector GSA's full email for a project.
+fn gsa_email(project_id: &str) -> String {
+    format!("{OTEL_GSA}@{project_id}.iam.gserviceaccount.com")
+}
+
+/// True when the GSA already exists — `gcloud … describe` exits non-zero
+/// when it does not, which we map to "create it". Under `--dry-run` we
+/// assume absent so the create command is the one printed.
+fn gsa_exists(cfg: &ShipConfig, gsa: &str) -> Result<bool> {
+    let status = Command::new("gcloud")
+        .args(["iam", "service-accounts", "describe", gsa])
+        .arg(format!("--project={}", cfg.project_id))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context("probe whether the navigator-otel GSA exists")?;
+    Ok(status.success())
+}
+
+/// Render a deploy-side manifest by substituting the project, namespace, and
+/// web Secret placeholders and, when fully configured, enabling the Dash0
+/// exporter and its trace lane at `sampling_percentage`. Pure so the
+/// substitution is unit-testable.
+pub fn render_manifest(
+    template: &str,
+    project_id: &str,
+    namespace: &str,
+    secret_name: &str,
+    dash0: Option<(&str, &str)>,
+    sampling_percentage: &str,
+) -> Result<String> {
+    if secret_name.trim().is_empty() {
+        bail!("NAVIGATOR_WEB_SECRET_NAME must be set before rendering observability manifests");
+    }
+    validate_sampling_percentage(sampling_percentage)?;
+    let rendered = template
+        .replace(PROJECT_PLACEHOLDER, project_id)
+        .replace(NAMESPACE_PLACEHOLDER, namespace)
+        .replace(WEB_SECRET_NAME_PLACEHOLDER, secret_name);
+    // The removal blocks are matched against the template verbatim, so the
+    // absent branch has to run before any DASH0_* placeholder is substituted
+    // — otherwise the removal text no longer matches what is there.
+    let rendered = match dash0 {
+        Some((endpoint, dataset)) => rendered
+            .replace(DASH0_ENDPOINT_PLACEHOLDER, endpoint)
+            .replace(DASH0_DATASET_PLACEHOLDER, dataset)
+            .replace(
+                DASH0_TRACE_SAMPLING_PERCENTAGE_PLACEHOLDER,
+                sampling_percentage.trim(),
+            ),
+        None => rendered
+            .replace(DASH0_EXPORTER_BLOCK, "")
+            .replace(DASH0_COORDINATE_ENV_BLOCK, "")
+            .replace(DASH0_SAMPLING_ENV_BLOCK, "")
+            .replace(DASH0_TRACES_PIPELINE, "")
+            .replace(DASH0_FILTER_BLOCK, "")
+            .replace(DASH0_TAIL_SAMPLING_BLOCK, "")
+            .replace(", otlp/dash0", ""),
+    };
+    if template.contains(CONFIG_CHECKSUM_PLACEHOLDER) {
+        let checksum = collector_config_checksum(&rendered)?;
+        Ok(rendered.replace(CONFIG_CHECKSUM_PLACEHOLDER, &checksum))
+    } else {
+        Ok(rendered)
+    }
+}
+
+/// Render the Collector manifest for a release roll using the same source and
+/// deployment coordinates as `devx observability apply`. The release path
+/// deliberately shares this renderer so a collector fix cannot be present in
+/// one operator lane and absent from the other.
+pub(super) fn render_collector_for_ship(
+    cfg: &ShipConfig,
+    deployment: &super::deployments::Deployment,
+) -> Result<String> {
+    render_manifest(
+        OTEL_COLLECTOR_YAML,
+        &cfg.project_id,
+        &cfg.namespace,
+        &cfg.secret_name,
+        dash0_coordinates(deployment),
+        dash0_sampling_percentage(deployment)?,
+    )
+}
+
+/// Hash only the rendered collector configuration. Changing credentials or
+/// unrelated Deployment metadata must not restart a collector whose pipeline
+/// did not change, while changing a processor or pipeline must restart it.
+fn collector_config_checksum(rendered: &str) -> Result<String> {
+    let config = serde_yaml::Deserializer::from_str(rendered)
+        .map(serde_yaml::Value::deserialize)
+        .filter_map(Result::ok)
+        .find(|document| {
+            document.get("kind").and_then(serde_yaml::Value::as_str) == Some("ConfigMap")
+                && document
+                    .get("metadata")
+                    .and_then(|metadata| metadata.get("name"))
+                    .and_then(serde_yaml::Value::as_str)
+                    == Some("otel-collector-config")
+        })
+        .and_then(|document| {
+            document
+                .get("data")
+                .and_then(|data| data.get("config.yaml"))
+                .and_then(serde_yaml::Value::as_str)
+                .map(str::to_owned)
+        })
+        .context("rendered collector manifest has no otel-collector-config data")?;
+    let mut checksum = String::with_capacity(64);
+    for byte in Sha256::digest(config.as_bytes()) {
+        write!(&mut checksum, "{byte:02x}")
+            .map_err(|_| anyhow::anyhow!("format rendered collector checksum"))?;
+    }
+    Ok(checksum)
+}
+
+fn validate_sampling_percentage(value: &str) -> Result<()> {
+    let parsed = value
+        .trim()
+        .parse::<f64>()
+        .with_context(|| format!("{DASH0_TRACE_SAMPLING_PERCENTAGE_KEY} must be a number"))?;
+    if !parsed.is_finite() || !(0.0..=100.0).contains(&parsed) {
+        bail!("{DASH0_TRACE_SAMPLING_PERCENTAGE_KEY} must be between 0 and 100 inclusive");
+    }
+    Ok(())
+}
+
+fn dash0_sampling_percentage(deployment: &super::deployments::Deployment) -> Result<&str> {
+    let value = deployment
+        .coordinates
+        .get(DASH0_TRACE_SAMPLING_PERCENTAGE_KEY)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(DEFAULT_DASH0_TRACE_SAMPLING_PERCENTAGE);
+    validate_sampling_percentage(value)?;
+    Ok(value.trim())
+}
+
+/// Read the optional Dash0 coordinates from the selected deployment row.
+///
+/// The token itself never enters this process: the encrypted key-name set only
+/// proves that the existing Secret projection has a `DASH0_TOKEN` entry. All
+/// three values must be configured before the renderer enables the exporter.
+fn dash0_coordinates(deployment: &super::deployments::Deployment) -> Option<(&str, &str)> {
+    let endpoint = deployment
+        .coordinates
+        .get(DASH0_ENDPOINT_KEY)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())?;
+    let dataset = deployment
+        .coordinates
+        .get(DASH0_DATASET_KEY)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())?;
+    deployment
+        .encrypted_keys
+        .contains(DASH0_TOKEN_KEY)
+        .then_some((endpoint, dataset))
+}
+
+/// Build the strategic-merge patch that rewrites a single container's
+/// `envFrom` to carry the `OTel` `ConfigMap` first, then the existing Secret.
+/// `envFrom` has no strategic-merge key, so the whole list is replaced —
+/// hence both entries are restated. Pure + deterministic so it is
+/// unit-testable.
+#[must_use]
+pub fn envfrom_patch(container: &str, secret_name: &str) -> String {
+    format!(
+        concat!(
+            r#"{{"spec":{{"template":{{"spec":{{"containers":[{{"#,
+            r#""name":"{container}","envFrom":["#,
+            r#"{{"configMapRef":{{"name":"{cm}"}}}},"#,
+            r#"{{"secretRef":{{"name":"{secret}"}}}}"#,
+            r#"]}}]}}}}}}}}"#,
+        ),
+        container = container,
+        cm = OTEL_ENV_CONFIGMAP,
+        secret = secret_name,
+    )
+}
+
+/// Run a command, or — under `--dry-run` — print it instead.
+fn exec(dry_run: bool, cmd: &mut Command) -> Result<()> {
+    if dry_run {
+        let mut line = cmd.get_program().to_string_lossy().into_owned();
+        for arg in cmd.get_args() {
+            line.push(' ');
+            line.push_str(&arg.to_string_lossy());
+        }
+        eprintln!("DRY-RUN $ {line}");
+        Ok(())
+    } else {
+        run(cmd)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_config() -> ShipConfig {
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/deployment-tree");
+        let deployment = super::super::deployments::Deployment::load(&root, "example-deployment")
+            .expect("synthetic deployment fixture loads");
+        ShipConfig::from_deployment(&deployment).expect("synthetic deployment config resolves")
+    }
+
+    /// The tail-sampling policies a collector keeps, by name and type, in
+    /// order, with the sampled-rest percentage dropped (it legitimately differs
+    /// between the Google Cloud lane and the environment-driven Dash0 lane).
+    fn keep_policies(processor: &serde_yaml::Value) -> Vec<(String, String, serde_yaml::Value)> {
+        processor["policies"]
+            .as_sequence()
+            .expect("tail sampler lists policies")
+            .iter()
+            .map(|policy| {
+                let name = policy["name"].as_str().expect("policy name").to_owned();
+                let kind = policy["type"].as_str().expect("policy type").to_owned();
+                let body = if kind == "probabilistic" {
+                    serde_yaml::Value::Null
+                } else {
+                    policy[kind.as_str()].clone()
+                };
+                (name, kind, body)
+            })
+            .collect()
+    }
+
+    /// `navigator.keep` is read by the sampler *after* the fail-closed
+    /// redaction processor, so the three places that spell the keep policies
+    /// (both collector lanes and the Dash0 block the CLI splices in) must
+    /// agree, and the attribute must be on the redaction allow-list.
+    #[test]
+    fn the_navigator_keep_policy_is_in_step_across_all_three_copies() {
+        let config = serde_yaml::Deserializer::from_str(OTEL_COLLECTOR_YAML)
+            .map(serde_yaml::Value::deserialize)
+            .filter_map(Result::ok)
+            .find_map(|document| {
+                document
+                    .get("data")
+                    .and_then(|data| data.get("config.yaml"))
+                    .and_then(serde_yaml::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .expect("collector manifest carries config.yaml");
+        let config: serde_yaml::Value = serde_yaml::from_str(&config).expect("config parses");
+        let processors = &config["processors"];
+        let google = keep_policies(&processors["tail_sampling/googlecloud"]);
+        let dash0 = keep_policies(&processors["tail_sampling/dash0"]);
+        let embedded: serde_yaml::Value =
+            serde_yaml::from_str(DASH0_TAIL_SAMPLING_BLOCK).expect("embedded Dash0 block parses");
+        let embedded = keep_policies(&embedded["tail_sampling/dash0"]);
+
+        assert_eq!(
+            google, dash0,
+            "the two collector lanes keep different traces"
+        );
+        assert_eq!(
+            dash0, embedded,
+            "the embedded Dash0 block drifted from the manifest"
+        );
+
+        let keep = google
+            .iter()
+            .find(|(name, _, _)| name == "keep-navigator")
+            .expect("keep-navigator policy is missing");
+        assert_eq!(keep.1, "boolean_attribute");
+        assert_eq!(keep.2["key"].as_str(), Some("navigator.keep"));
+        assert_eq!(keep.2["value"].as_bool(), Some(true));
+
+        let allowed = processors["redaction"]["allowed_keys"]
+            .as_sequence()
+            .expect("redaction allow-list");
+        assert!(
+            allowed
+                .iter()
+                .any(|key| key.as_str() == Some("navigator.keep")),
+            "redaction runs before tail sampling and would delete navigator.keep"
+        );
+    }
+
+    fn unconditional_policy(role: &str, member: &str) -> Value {
+        serde_json::json!({
+            "bindings": [{ "role": role, "members": [member] }],
+        })
+    }
+
+    /// A converged deployment must reach its manifest work without asking for
+    /// an IAM write. The binding closures are command fixtures: any write is
+    /// an immediate failure, while the final sentinel stands for the next
+    /// orchestration stage (`apply_manifests`).
+    #[test]
+    fn converged_iam_policies_reach_manifest_application_without_writes() {
+        use std::cell::Cell;
+
+        let cfg = fixture_config();
+        let gsa = gsa_email(&cfg.project_id);
+        let project_member = format!("serviceAccount:{gsa}");
+        let project_policy = serde_json::json!({
+            "bindings": OTEL_ROLES.iter().map(|role| serde_json::json!({
+                "role": role,
+                "members": [project_member],
+            })).collect::<Vec<_>>(),
+        });
+        let workload_member = format!(
+            "serviceAccount:{}.svc.id.goog[{}/{OTEL_KSA}]",
+            cfg.project_id, cfg.namespace
+        );
+        let service_account_policy =
+            unconditional_policy("roles/iam.workloadIdentityUser", &workload_member);
+        let manifests_applied = Cell::new(false);
+
+        ensure_gsa_iam_with(
+            GsaIam {
+                gsa: &gsa,
+                workload_identity_member: &workload_member,
+            },
+            || Ok(project_policy),
+            || Ok(true),
+            || panic!("a converged GSA must not be created"),
+            || Ok(service_account_policy),
+            |_| panic!("a converged project policy must not be written"),
+            || panic!("a converged service-account policy must not be written"),
+        )
+        .expect("converged IAM policies succeed");
+        manifests_applied.set(true);
+
+        assert!(
+            manifests_applied.get(),
+            "a converged IAM stage must allow manifest application to follow"
+        );
+    }
+
+    #[test]
+    fn missing_iam_bindings_emit_only_the_required_gcloud_commands() {
+        use std::cell::RefCell;
+
+        let cfg = fixture_config();
+        let gsa = gsa_email(&cfg.project_id);
+        let workload_member = format!(
+            "serviceAccount:{}.svc.id.goog[{}/{OTEL_KSA}]",
+            cfg.project_id, cfg.namespace
+        );
+        let commands = RefCell::new(Vec::new());
+
+        ensure_gsa_iam_with(
+            GsaIam {
+                gsa: &gsa,
+                workload_identity_member: &workload_member,
+            },
+            || Ok(serde_json::json!({ "bindings": [] })),
+            || Ok(true),
+            || panic!("the fixture GSA exists"),
+            || Ok(serde_json::json!({ "bindings": [] })),
+            |role| {
+                commands
+                    .borrow_mut()
+                    .push(render_command(&project_binding_command(&cfg, &gsa, role)));
+                Ok(())
+            },
+            || {
+                commands
+                    .borrow_mut()
+                    .push(render_command(&workload_identity_binding_command(
+                        &cfg, &gsa,
+                    )));
+                Ok(())
+            },
+        )
+        .expect("missing bindings are added");
+        let commands = commands.into_inner();
+
+        assert_eq!(commands.len(), OTEL_ROLES.len() + 1, "{commands:?}");
+        for role in OTEL_ROLES {
+            assert!(
+                commands.iter().any(|command| command.contains(&format!(
+                    "projects add-iam-policy-binding {} --member=serviceAccount:{gsa} --role={role} --condition None",
+                    cfg.project_id,
+                ))),
+                "missing {role} binding must invoke gcloud: {commands:?}",
+            );
+        }
+        assert!(
+            commands.iter().any(|command| command.contains(&format!(
+                "service-accounts add-iam-policy-binding {gsa} --project={} --role roles/iam.workloadIdentityUser",
+                cfg.project_id,
+            ))),
+            "missing Workload Identity binding must invoke gcloud: {commands:?}",
+        );
+    }
+
+    #[test]
+    fn a_missing_gsa_is_created_before_its_policy_is_read() {
+        use std::cell::RefCell;
+
+        let cfg = fixture_config();
+        let gsa = gsa_email(&cfg.project_id);
+        let workload_member = format!(
+            "serviceAccount:{}.svc.id.goog[{}/{OTEL_KSA}]",
+            cfg.project_id, cfg.namespace
+        );
+        let project_member = format!("serviceAccount:{gsa}");
+        let events = RefCell::new(Vec::new());
+        let project_policy = serde_json::json!({
+            "bindings": OTEL_ROLES.iter().map(|role| serde_json::json!({
+                "role": role,
+                "members": [project_member],
+            })).collect::<Vec<_>>(),
+        });
+        let service_account_policy =
+            unconditional_policy("roles/iam.workloadIdentityUser", &workload_member);
+
+        ensure_gsa_iam_with(
+            GsaIam {
+                gsa: &gsa,
+                workload_identity_member: &workload_member,
+            },
+            || {
+                events.borrow_mut().push("read project policy");
+                Ok(project_policy)
+            },
+            || {
+                events.borrow_mut().push("check GSA");
+                Ok(false)
+            },
+            || {
+                events.borrow_mut().push("create GSA");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("read service-account policy");
+                Ok(service_account_policy)
+            },
+            |_| panic!("the fixture policies already satisfy project bindings"),
+            || panic!("the fixture policy already satisfies Workload Identity"),
+        )
+        .expect("a missing GSA is created and its policy is then checked");
+
+        assert_eq!(
+            events.into_inner(),
+            [
+                "read project policy",
+                "check GSA",
+                "create GSA",
+                "read service-account policy",
+            ],
+        );
+    }
+
+    #[test]
+    fn an_iam_policy_read_failure_is_not_treated_as_convergence() {
+        let cfg = fixture_config();
+        let gsa = gsa_email(&cfg.project_id);
+        let workload_member = format!(
+            "serviceAccount:{}.svc.id.goog[{}/{OTEL_KSA}]",
+            cfg.project_id, cfg.namespace
+        );
+        let error = ensure_gsa_iam_with(
+            GsaIam {
+                gsa: &gsa,
+                workload_identity_member: &workload_member,
+            },
+            || {
+                Err(anyhow::anyhow!(
+                    "permission denied reading project IAM policy"
+                ))
+            },
+            || panic!("the failed project-policy read stops before other calls"),
+            || panic!("a policy read failure must not create a GSA"),
+            || panic!("a policy read failure must not read the service-account policy"),
+            |_| panic!("a policy read failure must not write a project binding"),
+            || panic!("a policy read failure must not write a service-account binding"),
+        )
+        .expect_err("an unreadable IAM policy remains a failure");
+
+        assert!(
+            error.to_string().contains("permission denied"),
+            "the underlying policy-read error must remain visible: {error}",
+        );
+    }
+
+    #[test]
+    fn render_substitutes_every_project_placeholder() {
+        let rendered = render_manifest(
+            OTEL_COLLECTOR_YAML,
+            "my-org-prod",
+            "example-a",
+            "sample-web-secrets",
+            Some(("https://ingest.dash0.example", "staging")),
+            DEFAULT_DASH0_TRACE_SAMPLING_PERCENTAGE,
+        )
+        .expect("collector manifest renders");
+        // The bundled collector manifest carries the placeholder exactly
+        // twice (WI GSA annotation + googlecloud exporter project); both
+        // must be substituted and none left behind.
+        assert!(!rendered.contains(PROJECT_PLACEHOLDER));
+        assert!(!rendered.contains(NAMESPACE_PLACEHOLDER));
+        assert!(rendered.contains("navigator-otel@my-org-prod.iam.gserviceaccount.com"));
+        assert!(rendered.contains("project: my-org-prod"));
+        assert!(rendered.contains("namespace: example-a"));
+        assert!(rendered.contains(
+            "OTEL_EXPORTER_OTLP_ENDPOINT: \"http://otel-collector.example-a.svc.cluster.local:4317\""
+        ));
+        assert!(!rendered.contains(DASH0_ENDPOINT_PLACEHOLDER));
+        assert!(!rendered.contains(DASH0_DATASET_PLACEHOLDER));
+        assert!(!rendered.contains(WEB_SECRET_NAME_PLACEHOLDER));
+        assert!(!rendered.contains("navigator-web-secrets"));
+        assert!(rendered.contains("value: https://ingest.dash0.example"));
+        assert!(rendered.contains("value: staging"));
+        assert!(rendered.contains("name: DASH0_TRACE_SAMPLING_PERCENTAGE"));
+        assert!(rendered.contains("value: \"20\""));
+        assert!(rendered.contains("endpoint: ${env:DASH0_ENDPOINT}"));
+        assert!(rendered.contains("Dash0-Dataset: \"${env:DASH0_DATASET}\""));
+        for signal in ["metrics", "logs"] {
+            let marker = format!("        {signal}:\n");
+            let start = rendered
+                .find(&marker)
+                .unwrap_or_else(|| panic!("collector is missing the {signal} pipeline"));
+            let pipeline = &rendered[start..];
+            assert!(
+                pipeline.contains("exporters: [googlecloud, otlp/dash0]"),
+                "{signal} includes the configured Dash0 exporter"
+            );
+        }
+        assert!(rendered.contains("secretKeyRef:"));
+        assert!(rendered.contains("name: DASH0_TOKEN"));
+        assert!(rendered.contains("key: DASH0_TOKEN"));
+
+        let deployment = serde_yaml::Deserializer::from_str(&rendered)
+            .map(|document| serde_yaml::Value::deserialize(document).expect("rendered YAML parses"))
+            .find(|document| {
+                document.get("kind").and_then(serde_yaml::Value::as_str) == Some("Deployment")
+            })
+            .expect("rendered collector Deployment is present");
+        let token_secret_name = deployment
+            .get("spec")
+            .and_then(|spec| spec.get("template"))
+            .and_then(|template| template.get("spec"))
+            .and_then(|spec| spec.get("containers"))
+            .and_then(serde_yaml::Value::as_sequence)
+            .and_then(|containers| {
+                containers.iter().find(|container| {
+                    container.get("name").and_then(serde_yaml::Value::as_str)
+                        == Some("otel-collector")
+                })
+            })
+            .and_then(|container| container.get("env"))
+            .and_then(serde_yaml::Value::as_sequence)
+            .and_then(|env| {
+                env.iter().find(|variable| {
+                    variable.get("name").and_then(serde_yaml::Value::as_str)
+                        == Some(DASH0_TOKEN_KEY)
+                })
+            })
+            .and_then(|variable| variable.get("valueFrom"))
+            .and_then(|value_from| value_from.get("secretKeyRef"))
+            .and_then(|secret| secret.get("name"))
+            .and_then(serde_yaml::Value::as_str);
+        assert_eq!(token_secret_name, Some("sample-web-secrets"));
+    }
+
+    /// The Dash0 trace lane drops successful operational noise; the Google
+    /// Cloud lane keeps the traffic it always kept.
+    #[test]
+    fn the_dash0_trace_lane_filters_noise_and_leaves_google_cloud_alone() {
+        let rendered = render_manifest(
+            OTEL_COLLECTOR_YAML,
+            "my-org-prod",
+            "example-a",
+            "sample-web-secrets",
+            Some(("https://ingest.dash0.example", "staging")),
+            DEFAULT_DASH0_TRACE_SAMPLING_PERCENTAGE,
+        )
+        .expect("collector manifest renders");
+
+        let traces_start = rendered
+            .find("        traces:\n          receivers:")
+            .expect("collector is missing the Google Cloud trace pipeline");
+        let traces_end = rendered
+            .find("        traces/dash0:\n")
+            .expect("collector is missing the Dash0 trace pipeline");
+        let google_traces = &rendered[traces_start..traces_end];
+        assert!(google_traces.contains("tail_sampling/googlecloud"));
+        assert!(google_traces.contains("exporters: [googlecloud]"));
+        assert!(!google_traces.contains("filter/dash0_noise"));
+
+        let filter_start = rendered
+            .find("      filter/dash0_noise:\n")
+            .expect("collector is missing the Dash0 noise filter");
+        let filter_end = rendered[filter_start..]
+            .find("      # Tail sampling")
+            .map(|offset| filter_start + offset)
+            .expect("collector is missing the tail-sampling processors");
+        let dash0_filter = &rendered[filter_start..filter_end];
+        assert!(dash0_filter.contains("attributes[\"http.route\"] == \"/health\""));
+        assert!(
+            dash0_filter.contains("attributes[\"http.response.status_code\"] < 400"),
+            "the noise filter must keep 4xx and 5xx responses"
+        );
+
+        let dash0_traces_end = rendered
+            .find("        metrics:\n")
+            .expect("collector is missing the metrics pipeline");
+        let dash0_traces = &rendered[traces_end..dash0_traces_end];
+        assert!(dash0_traces.contains("tail_sampling/dash0"));
+        assert!(dash0_traces.contains("exporters: [otlp/dash0]"));
+    }
+
+    /// `EnvVar.value` is a string in the Kubernetes API. An unquoted numeric
+    /// rate renders as a YAML integer and the apiserver rejects the whole
+    /// `Deployment` ("cannot unmarshal number into Go struct field
+    /// EnvVar.value of type string"). No render-only assertion would notice,
+    /// because applying the manifest is a separate deploy step.
+    #[test]
+    fn every_rendered_env_var_value_is_a_string() {
+        let rendered = render_manifest(
+            OTEL_COLLECTOR_YAML,
+            "my-org-prod",
+            "example-a",
+            "sample-web-secrets",
+            Some(("https://ingest.dash0.example", "staging")),
+            "5.5",
+        )
+        .expect("collector manifest renders");
+
+        let deployment = serde_yaml::Deserializer::from_str(&rendered)
+            .map(|document| serde_yaml::Value::deserialize(document).expect("rendered YAML parses"))
+            .find(|document| {
+                document.get("kind").and_then(serde_yaml::Value::as_str) == Some("Deployment")
+            })
+            .expect("rendered collector Deployment is present");
+        let env = deployment
+            .get("spec")
+            .and_then(|spec| spec.get("template"))
+            .and_then(|template| template.get("spec"))
+            .and_then(|spec| spec.get("containers"))
+            .and_then(serde_yaml::Value::as_sequence)
+            .and_then(|containers| {
+                containers.iter().find(|container| {
+                    container.get("name").and_then(serde_yaml::Value::as_str)
+                        == Some("otel-collector")
+                })
+            })
+            .and_then(|container| container.get("env"))
+            .and_then(serde_yaml::Value::as_sequence)
+            .expect("the collector container declares env vars");
+
+        for variable in env {
+            let name = variable
+                .get("name")
+                .and_then(serde_yaml::Value::as_str)
+                .expect("every env var is named");
+            if let Some(value) = variable.get("value") {
+                assert!(
+                    value.is_string(),
+                    "{name} renders as {value:?}; EnvVar.value must be a YAML string"
+                );
+            }
+        }
+        assert!(env.iter().any(|variable| {
+            variable.get("name").and_then(serde_yaml::Value::as_str)
+                == Some(DASH0_TRACE_SAMPLING_PERCENTAGE_KEY)
+        }));
+    }
+
+    /// Every processor a pipeline names must be declared, and every declared
+    /// processor must be named by some pipeline.
+    ///
+    /// Both directions matter. The forward one is what the collector itself
+    /// refuses to start on. The reverse is what a render that strips the
+    /// Dash0 lane gets wrong: dropping the pipeline but leaving
+    /// `filter/dash0_noise` and `tail_sampling/dash0` behind ships a
+    /// `ConfigMap` carrying processors nothing uses — one of them still
+    /// interpolating a `DASH0_*` env var the same render just removed.
+    fn assert_pipelines_match_declared_processors(rendered: &str) {
+        let collector: serde_yaml::Value = serde_yaml::Deserializer::from_str(rendered)
+            .map(|document| serde_yaml::Value::deserialize(document).expect("rendered YAML parses"))
+            .find(|document| {
+                document.get("kind").and_then(serde_yaml::Value::as_str) == Some("ConfigMap")
+                    && document
+                        .get("metadata")
+                        .and_then(|metadata| metadata.get("name"))
+                        .and_then(serde_yaml::Value::as_str)
+                        == Some("otel-collector-config")
+            })
+            .and_then(|document| {
+                document
+                    .get("data")
+                    .and_then(|data| data.get("config.yaml"))
+                    .and_then(serde_yaml::Value::as_str)
+                    .map(|config| {
+                        serde_yaml::from_str(config).expect("the collector config parses")
+                    })
+            })
+            .expect("the rendered collector ConfigMap carries a parseable config");
+
+        let declared: std::collections::BTreeSet<String> = collector
+            .get("processors")
+            .and_then(serde_yaml::Value::as_mapping)
+            .expect("the collector declares processors")
+            .keys()
+            .filter_map(serde_yaml::Value::as_str)
+            .map(str::to_string)
+            .collect();
+
+        let mut referenced = std::collections::BTreeSet::new();
+        for (name, pipeline) in collector
+            .get("service")
+            .and_then(|service| service.get("pipelines"))
+            .and_then(serde_yaml::Value::as_mapping)
+            .expect("the collector declares pipelines")
+        {
+            let name = name.as_str().unwrap_or_default();
+            for processor in pipeline
+                .get("processors")
+                .and_then(serde_yaml::Value::as_sequence)
+                .unwrap_or(&Vec::new())
+                .iter()
+                .filter_map(serde_yaml::Value::as_str)
+            {
+                assert!(
+                    declared.contains(processor),
+                    "pipeline {name} references undeclared processor {processor}"
+                );
+                referenced.insert(processor.to_string());
+            }
+        }
+
+        let orphaned: Vec<&String> = declared.difference(&referenced).collect();
+        assert!(
+            orphaned.is_empty(),
+            "these processors are declared but no pipeline uses them: {orphaned:?}"
+        );
+    }
+
+    #[test]
+    fn render_omits_dash0_from_every_pipeline_when_coordinates_are_absent() {
+        let rendered = render_manifest(
+            OTEL_COLLECTOR_YAML,
+            "my-org-prod",
+            "example-a",
+            "sample-web-secrets",
+            None,
+            DEFAULT_DASH0_TRACE_SAMPLING_PERCENTAGE,
+        )
+        .expect("collector manifest renders");
+
+        assert!(!rendered.contains("otlp/dash0"));
+        assert!(!rendered.contains("traces/dash0:"));
+        assert!(!rendered.contains("filter/dash0_noise"));
+        assert!(!rendered.contains("tail_sampling/dash0"));
+        assert!(!rendered.contains(DASH0_TRACE_SAMPLING_PERCENTAGE_KEY));
+        assert!(!rendered.contains(DASH0_TRACE_SAMPLING_PERCENTAGE_PLACEHOLDER));
+        assert!(!rendered.contains(DASH0_ENDPOINT_PLACEHOLDER));
+        assert!(!rendered.contains(DASH0_DATASET_PLACEHOLDER));
+        for signal in ["traces", "metrics", "logs"] {
+            let marker = if signal == "traces" {
+                "        traces:\n          receivers:".to_string()
+            } else {
+                format!("        {signal}:\n")
+            };
+            let start = rendered
+                .find(&marker)
+                .unwrap_or_else(|| panic!("collector is missing the {signal} pipeline"));
+            let pipeline = &rendered[start..];
+            assert!(
+                pipeline.contains("exporters: [googlecloud]"),
+                "{signal} keeps the Google Cloud exporter when Dash0 is absent"
+            );
+        }
+        assert!(rendered.contains("project: my-org-prod"));
+        assert_pipelines_match_declared_processors(&rendered);
+    }
+
+    #[test]
+    fn dash0_sampling_percentage_is_environment_configurable_and_validated() {
+        let rendered = render_manifest(
+            OTEL_COLLECTOR_YAML,
+            "my-org-prod",
+            "example-a",
+            "sample-web-secrets",
+            Some(("https://ingest.dash0.example", "staging")),
+            "5.5",
+        )
+        .expect("a valid environment-specific rate renders");
+        assert!(rendered.contains("value: \"5.5\""));
+        assert!(rendered.contains("sampling_percentage: ${env:DASH0_TRACE_SAMPLING_PERCENTAGE}"));
+
+        let error = render_manifest(
+            OTEL_COLLECTOR_YAML,
+            "my-org-prod",
+            "example-a",
+            "sample-web-secrets",
+            Some(("https://ingest.dash0.example", "staging")),
+            "100.1",
+        )
+        .expect_err("a rate above 100 must be rejected");
+        assert!(error
+            .to_string()
+            .contains(DASH0_TRACE_SAMPLING_PERCENTAGE_KEY));
+    }
+
+    #[test]
+    fn render_rejects_a_missing_web_secret_name() {
+        let error = render_manifest(
+            OTEL_COLLECTOR_YAML,
+            "sample-project",
+            "sample-namespace",
+            " ",
+            None,
+            DEFAULT_DASH0_TRACE_SAMPLING_PERCENTAGE,
+        )
+        .expect_err("a missing web Secret name must stop rendering");
+        assert!(error.to_string().contains("NAVIGATOR_WEB_SECRET_NAME"));
+    }
+
+    #[test]
+    fn deployment_coordinates_enable_dash0_only_with_the_secret_key() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let deployment = |endpoint: Option<&str>, dataset: Option<&str>, token: bool| {
+            super::super::deployments::Deployment {
+                name: "sample".into(),
+                kms_key: "projects/sample/locations/global/keyRings/sample/cryptoKeys/sample"
+                    .into(),
+                provisioned: true,
+                coordinates: [
+                    endpoint.map(|value| (DASH0_ENDPOINT_KEY.to_string(), value.to_string())),
+                    dataset.map(|value| (DASH0_DATASET_KEY.to_string(), value.to_string())),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<BTreeMap<_, _>>(),
+                encrypted_keys: if token {
+                    BTreeSet::from([DASH0_TOKEN_KEY.to_string()])
+                } else {
+                    BTreeSet::new()
+                },
+                postgres_encrypted_keys: BTreeSet::new(),
+                forgejo_encrypted_keys: BTreeSet::new(),
+            }
+        };
+
+        assert_eq!(
+            dash0_coordinates(&deployment(
+                Some("https://ingest.dash0.example"),
+                Some("staging"),
+                true,
+            )),
+            Some(("https://ingest.dash0.example", "staging"))
+        );
+        assert!(dash0_coordinates(&deployment(Some("endpoint"), Some("dataset"), false)).is_none());
+        assert!(dash0_coordinates(&deployment(Some(" "), Some("dataset"), true)).is_none());
+    }
+
+    #[test]
+    fn deployment_sampling_percentage_defaults_and_accepts_an_environment_override() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let deployment = |rate: Option<&str>| super::super::deployments::Deployment {
+            name: "sample".into(),
+            kms_key: "projects/sample/locations/global/keyRings/sample/cryptoKeys/sample".into(),
+            provisioned: true,
+            coordinates: rate
+                .map(|value| {
+                    BTreeMap::from([(
+                        DASH0_TRACE_SAMPLING_PERCENTAGE_KEY.to_string(),
+                        value.to_string(),
+                    )])
+                })
+                .unwrap_or_default(),
+            encrypted_keys: BTreeSet::new(),
+            postgres_encrypted_keys: BTreeSet::new(),
+            forgejo_encrypted_keys: BTreeSet::new(),
+        };
+
+        assert_eq!(
+            dash0_sampling_percentage(&deployment(None)).expect("default is valid"),
+            DEFAULT_DASH0_TRACE_SAMPLING_PERCENTAGE
+        );
+        assert_eq!(
+            dash0_sampling_percentage(&deployment(Some("5"))).expect("override is valid"),
+            "5"
+        );
+        assert!(dash0_sampling_percentage(&deployment(Some("-1"))).is_err());
+    }
+
+    /// Every `secretKeyRef` the bundled manifests carry is `optional: true`.
+    ///
+    /// [`docs/cronjobs.md`] states the rule for the deployment Secret: a key
+    /// a deployment has not adopted must never stop a pod from starting. It
+    /// binds hardest here, because this Deployment is the only path to Cloud
+    /// Trace, Cloud Monitoring, and Cloud Logging — a mandatory reference to
+    /// one optional backend's token would trade all telemetry for it the
+    /// moment `devx observability apply` ran.
+    #[test]
+    fn every_bundled_secret_reference_is_optional() {
+        for (name, manifest) in [
+            ("otel-collector.yaml", OTEL_COLLECTOR_YAML),
+            ("collector-monitoring.yaml", COLLECTOR_MONITORING_YAML),
+        ] {
+            assert!(
+                !manifest.contains("optional: false"),
+                "{name} makes a secret reference mandatory"
+            );
+            let lines: Vec<&str> = manifest.lines().collect();
+            for (index, _) in lines
+                .iter()
+                .enumerate()
+                .filter(|(_, line)| line.trim() == "secretKeyRef:")
+            {
+                assert!(
+                    lines[index..]
+                        .iter()
+                        .take(4)
+                        .any(|line| line.trim() == "optional: true"),
+                    "{name} has a secretKeyRef that never declares `optional: true`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn render_substitutes_namespace_in_self_monitoring_manifest() {
+        let rendered = render_manifest(
+            COLLECTOR_MONITORING_YAML,
+            "my-org-prod",
+            "example-b",
+            "sample-web-secrets",
+            None,
+            DEFAULT_DASH0_TRACE_SAMPLING_PERCENTAGE,
+        )
+        .expect("monitoring manifest renders");
+        assert!(!rendered.contains(NAMESPACE_PLACEHOLDER));
+        assert!(rendered.contains("namespace: example-b"));
+    }
+
+    #[test]
+    fn gsa_email_follows_the_iam_convention() {
+        assert_eq!(
+            gsa_email("my-org-prod"),
+            "navigator-otel@my-org-prod.iam.gserviceaccount.com"
+        );
+    }
+
+    #[test]
+    fn envfrom_patch_lists_configmap_then_secret_for_the_named_container() {
+        let patch = envfrom_patch("web", "example-a-web-secrets");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&patch).expect("envFrom patch must be valid JSON");
+        let containers = &parsed["spec"]["template"]["spec"]["containers"];
+        assert_eq!(containers[0]["name"], "web");
+        let env_from = &containers[0]["envFrom"];
+        // `ConfigMap` first (collector endpoint), Secret second (preserved).
+        assert_eq!(env_from[0]["configMapRef"]["name"], OTEL_ENV_CONFIGMAP);
+        assert_eq!(env_from[1]["secretRef"]["name"], "example-a-web-secrets");
+    }
+
+    #[test]
+    fn envfrom_patch_targets_the_worker_container_for_workflows_service() {
+        let patch = envfrom_patch("worker", "example-b-web-secrets");
+        let parsed: serde_json::Value = serde_json::from_str(&patch).unwrap();
+        assert_eq!(
+            parsed["spec"]["template"]["spec"]["containers"][0]["name"],
+            "worker"
+        );
+        assert_eq!(
+            parsed["spec"]["template"]["spec"]["containers"][0]["envFrom"][1]["secretRef"]["name"],
+            "example-b-web-secrets"
+        );
+    }
+
+    #[test]
+    fn gmp_operator_readiness_requires_a_ready_endpoint_address() {
+        use k8s_openapi::api::core::v1::{EndpointAddress, EndpointSubset};
+
+        assert!(!gmp_operator_is_ready(None));
+        assert!(!gmp_operator_is_ready(Some(&Endpoints::default())));
+
+        let not_ready = Endpoints {
+            subsets: Some(vec![EndpointSubset {
+                not_ready_addresses: Some(vec![EndpointAddress {
+                    ip: "10.0.0.1".into(),
+                    ..EndpointAddress::default()
+                }]),
+                ..EndpointSubset::default()
+            }]),
+            ..Endpoints::default()
+        };
+        assert!(!gmp_operator_is_ready(Some(&not_ready)));
+
+        let ready = Endpoints {
+            subsets: Some(vec![EndpointSubset {
+                addresses: Some(vec![EndpointAddress {
+                    ip: "10.0.0.1".into(),
+                    ..EndpointAddress::default()
+                }]),
+                ..EndpointSubset::default()
+            }]),
+            ..Endpoints::default()
+        };
+        assert!(gmp_operator_is_ready(Some(&ready)));
+    }
+
+    /// A cluster CA the way the Container API hands it over: base64 of PEM
+    /// *text*, not base64 of a certificate. The distinction is the whole
+    /// bug — a fixture that skipped the PEM armor let a client that cannot
+    /// parse PEM pass its test and then fail every real handshake with
+    /// rustls's `invalid peer certificate: BadEncoding`.
+    fn base64_pem(bodies: &[&[u8]]) -> String {
+        use std::fmt::Write as _;
+        let mut pem = String::new();
+        for body in bodies {
+            let _ = writeln!(
+                pem,
+                "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----",
+                BASE64_STANDARD.encode(body)
+            );
+        }
+        BASE64_STANDARD.encode(pem)
+    }
+
+    #[test]
+    fn gke_connection_uses_the_container_api_endpoint_and_ca() {
+        let connection = parse_gke_cluster_connection(&format!(
+            r#"{{
+                "endpoint":"10.0.0.1",
+                "status":"RUNNING",
+                "masterAuth":{{"clusterCaCertificate":"{}"}}
+            }}"#,
+            base64_pem(&[b"ca-bytes"])
+        ))
+        .expect("running cluster connection must parse");
+        assert_eq!(connection.endpoint, "10.0.0.1");
+        assert_eq!(connection.ca_certificate, vec![b"ca-bytes".to_vec()]);
+    }
+
+    #[test]
+    fn a_ca_chain_keeps_every_certificate() {
+        // Dropping every block but the first would fail only for the
+        // clusters whose CA is issued under a chain — the worst shape of
+        // bug to carry into one deployment out of several.
+        let der = pem_certificates_to_der(
+            &BASE64_STANDARD
+                .decode(base64_pem(&[b"leaf", b"intermediate"]))
+                .expect("fixture decodes"),
+        )
+        .expect("a chain parses");
+        assert_eq!(der, vec![b"leaf".to_vec(), b"intermediate".to_vec()]);
+    }
+
+    #[test]
+    fn a_ca_with_no_pem_block_is_refused() {
+        // What the old fixture actually encoded. It must not be mistaken
+        // for a certificate: failing here names the encoding, while
+        // passing it through blames the cluster's certificate instead.
+        let error = pem_certificates_to_der(b"ca-bytes")
+            .expect_err("a payload with no PEM armor is not a certificate");
+        assert!(
+            error.to_string().contains("no PEM certificate block"),
+            "the abort must name the missing armor: {error}"
+        );
+    }
+
+    #[test]
+    fn a_truncated_pem_block_is_refused() {
+        let error = pem_certificates_to_der(b"-----BEGIN CERTIFICATE-----\nY2E=\n")
+            .expect_err("a block with no END marker is malformed");
+        assert!(error.to_string().contains("no END marker"), "{error}");
+    }
+}

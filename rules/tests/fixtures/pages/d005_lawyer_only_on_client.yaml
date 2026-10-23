@@ -1,0 +1,7 @@
+pages:
+  - slug: engagement
+    kind: engagement_billing_records
+    title: Engagement and billing
+    lenses:
+      lawyer: [engagement_letter, invoice, boundary_note, provenance_statement]
+      client: [invoice, prebill_review, boundary_note, provenance_statement]

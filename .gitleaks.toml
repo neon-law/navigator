@@ -1,0 +1,28 @@
+title = "Navigator secret scanning"
+
+[extend]
+useDefault = true
+
+# Synthetic test credentials are assembled at runtime where possible. The one
+# fake bootstrap fixture stays in its dedicated local-only overlay file.
+
+[[allowlists]]
+description = "The local Rauthy overlay must carry its fake bootstrap credentials."
+paths = ['''k8s/overlays/kind/rauthy/local-fixture\.yaml$''']
+
+[[allowlists]]
+description = "Public OAuth client IDs and an installation placeholder are identifiers, not credentials."
+condition = "AND"
+regexTarget = "line"
+paths = [
+  '''deployments/neon-law-prod/config\.toml$''',
+  '''deployments/neon-law-stg/config\.toml$''',
+]
+regexes = ['''OAUTH_MICROSOFT_CLIENT_ID = "[0-9a-f-]{36}"''']
+
+[[allowlists]]
+description = "An installation example names the secret-backed value without supplying a credential."
+condition = "AND"
+regexTarget = "line"
+paths = ['''docs/oss-install\.md$''']
+regexes = ['''NAVIGATOR_SURREAL_PASSWORD=<secret-backed password>''']

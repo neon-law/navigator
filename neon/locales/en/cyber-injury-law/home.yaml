@@ -1,0 +1,153 @@
+head_title: "{site_name} | We use AI to put more money in your pocket"
+meta_description: >-
+  Car accidents, negligence, medical malpractice, data theft, and cybercrime.
+  We use AI to put more money in your pocket. Attorney advertisement.
+heading: We use AI to put more money in your pocket
+lead: >-
+  Cyber Injury Law reviews car accidents, negligence, medical malpractice,
+  data theft, cybercrime, and online abuse. Tell us what happened. A lawyer
+  reviews the facts before any engagement.
+contact_label: Ask about your situation
+cyber_injury:
+  skip_label: "Skip to content"
+  utility_lines: ["COAST TO COAST WITH TECH TO BOAST.", "INJURY AND CYBERCRIME CLAIMS."]
+  home_label: "CyberInjuryLaw.com home"
+  header_wordmark: ["Cyber", "Injury", "Law.com"]
+  tagline: "WE USE AI TO PUT MORE MONEY IN YOUR POCKET."
+  navigation_label: "Main navigation"
+  advantage_label: "Matters we review"
+  testimonials_label: "Testimonials"
+  assessment_label: "Incident check"
+  booking_label: "Contact Cyber Injury Law"
+  booking_qr_alt: "Scan to book: https://www.cyberinjurylaw.com/consultation"
+  booking_lines: ["TALK WITH A", "LAWYER ↗", "Scan or tap to contact us"]
+  portrait_alt: >-
+    Nick Shook, Esq. in chrome armor with a Ferris Rust crab chest emblem
+    and Cancer zodiac symbols on both sleeves
+  portrait_name: "NICK SHOOK, ESQ."
+  portrait_caption: "AI-ENHANCED PORTRAIT"
+  hero_highlights: ["", "MORE", "MONEY IN", "YOUR POCKET."]
+  hero_summary: "Car accidents · Negligence · Cybercrime"
+  ticker_lines: ["CAR ACCIDENTS.", "PERSONAL INJURY.", "CYBERCRIME."]
+  discovery_eyebrow: "MATTERS WE REVIEW"
+  assessment_eyebrow: "TELL US WHAT HAPPENED"
+  privacy_lines: ["The checklist asks for no name or email.", "Its answers stay in this browser tab."]
+  closing_eyebrow: "CAR ACCIDENTS. PERSONAL INJURY. CYBERCRIME."
+  closing_label: "Talk with a lawyer"
+  connect_heading: "Connect with us"
+  phone_label: "1.510.800.2090"
+  phone_href: "tel:+15108002090"
+  email: "support@cyberinjurylaw.com"
+  qr_labels: ["Android", "iPhone", "Call us", "Testimonials"]
+  qr_descriptions: ["App download", "App download", "Scan or tap to call", "Read client reviews"]
+  qr_alts:
+    - Scan to download the Android app
+    - Scan to download the iPhone app
+    - Scan to call CyberInjuryLaw
+    - Scan to read client testimonials
+  qr_save_label: "Save QR code"
+  footer_wordmark: ["CYBER", "INJURY", "LAW"]
+  advertising_label: "Attorney Advertising"
+  ad_label: "Subway ad ↗"
+  form_title: "A FIRST LOOK AT YOUR INCIDENT"
+  form_duration: "ANSWERS STAY IN THIS BROWSER TAB"
+  incident_label: "What happened?"
+  incident_placeholder: "Select an incident"
+  incident_options:
+    - Car accident or other collision
+    - Medical care or other negligence
+    - Data theft or cybercrime
+    - Digital stalking or online abuse
+  timing_label: "When did it happen?"
+  timing_placeholder: "Select a time frame"
+  timing_options: ["Within the last 30 days", "1–12 months ago", "More than a year ago", "I’m not sure"]
+  care_label: "Have you saved relevant records, messages, or notices?"
+  care_options: ["Yes", "Not yet"]
+  submit_label: "See general next steps"
+  validation_error: "Please answer all three questions."
+  result_eyebrow: "YOUR NEXT STEP"
+  deadline_heading: "MAKE A DEADLINE CHECK YOUR NEXT MOVE."
+  recent_heading: "YOUR STORY DESERVES A CLOSER LOOK."
+  consultation_label: "Free consultation"
+  eyebrow: Injury and cybercrime claims
+  hero_lines: ["WE USE AI TO", "PUT MORE", "MONEY IN", "YOUR POCKET."]
+  hero_note: Attorney advertisement. A lawyer must review the facts before an engagement.
+  discovery_heading: [INJURY AND, CYBERCRIME.]
+  discovery_body: >-
+    We review vehicle collisions, negligence, medical malpractice, data theft,
+    cybercrime, and digital stalking. Each situation depends on its facts and
+    the applicable law.
+  discovery_cards:
+    - - VEHICLE COLLISIONS
+      - >-
+        Car, truck, motorcycle, and pedestrian claims. A lawyer can review
+        what happened and what records exist.
+      - CAR AND OTHER COLLISIONS
+    - - NEGLIGENCE AND LIABILITY
+      - >-
+        Injuries from someone else's carelessness, such as unsafe products,
+        dog bites, or workplace conditions.
+      - CARELESSNESS
+    - - MEDICAL NEGLIGENCE
+      - >-
+        Injuries involving medical care. We review the circumstances and
+        available records with you.
+      - MEDICAL CARE
+    - - DATA THEFT AND CYBERCRIME
+      - >-
+        Stolen personal information, compromised accounts, online fraud, or
+        other cybercrime. A lawyer can review what happened.
+      - STOLEN DATA OR ACCOUNTS
+    - - DIGITAL STALKING AND ONLINE ABUSE
+      - >-
+        Repeated unwanted contact, monitoring, or harassment using digital
+        tools. We can discuss the circumstances with you.
+      - DIGITAL CONDUCT
+    - - SLIP AND FALL INJURIES
+      - >-
+        Falls on wet floors, icy walkways, or poorly kept property. A lawyer
+        can review what happened and who was responsible for the space.
+      - UNSAFE PROPERTY
+  discovery_note: >-
+    Descriptions are general. A lawyer must review the facts and applicable
+    law to determine whether the firm can help.
+  assessment_heading: ["HURT?", "TELL US.", "WE'LL LOOK."]
+  assessment_body: >-
+    Answer a few questions for general information about preserving records
+    and asking a lawyer to review your situation.
+  assessment_note: >-
+    This browser-based checklist gives general information, not legal advice
+    or an assessment of a claim. It does not accept your case or create an
+    attorney-client relationship. Deadlines may apply. Your answers stay in
+    this browser tab.
+  recent_result: >-
+    A lawyer can review the circumstances and discuss whether the firm may be
+    able to help. This checklist cannot determine whether you have a claim.
+  deadline_result: >-
+    Ask a lawyer to review any deadlines that may apply. This checklist
+    cannot determine which deadlines apply or whether time remains.
+  evidence_tips:
+    - Keep the crash report, scene photos, and medical records from the collision.
+    - Keep medical records, bills, and a dated timeline of the care.
+    - Keep account notices, messages, and records that show what data was affected.
+    - Keep dated messages and a timeline of unwanted digital contact.
+  record_tips:
+    - Keep copies of relevant records and messages with their dates.
+    - Consider saving relevant records and messages before they are lost.
+  deadline_tip: >-
+    A lawyer can review whether any notice or filing deadlines may apply.
+  result_note: >-
+    Only a lawyer who reviews the facts can assess legal options or deadlines.
+  closing_lines: [WE USE AI TO PUT, MORE MONEY IN YOUR POCKET.]
+  footer_note: >-
+    Attorney advertisement. Submitting an inquiry does not create an
+    attorney-client relationship. Any engagement requires a written agreement.
+  sibling_practices:
+    - brand: delete-your-data
+      eyebrow: "BEFORE THE NEXT LEAK"
+      heading: "MAKE YOUR DATA HARDER TO FIND."
+      body: >-
+        DeleteYourData.com is a non-legal service that helps you ask companies to
+        delete the personal data they hold about you, for $29/mo or $290/year prepaid. Basic form filings, such as forming an LLC, are included. Government fees are separate. Data removal
+        does not guarantee that a company will comply or prevent a future leak.
+      cta_label: Visit DeleteYourData.com

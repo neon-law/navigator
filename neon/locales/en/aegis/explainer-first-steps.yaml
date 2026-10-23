@@ -1,0 +1,53 @@
+head_title: "{site_name} | Before an investigation interview"
+meta_description: >-
+  Before an investigation interview. A plain-language explainer from {site_name}. General information;
+  individual advice requires an engagement.
+title: "Before an investigation interview"
+tagline: Plain-language explainers
+hero_lines:
+  - text: "Before an investigation interview"
+    accent_words: 0
+hero_lead: >-
+  An investigation raises questions before there is a court date. Start by identifying who contacted you, what
+  they requested, and when they expect a response.
+hero_cta:
+  href: "https://calendar.notion.so/meet/nick-shook/or15n4yy7"
+  label: Request a conversation
+skin: practice
+bands:
+  - kind: steps
+    anchor: guide
+    overline: Getting oriented
+    heading: Read the guide
+    items:
+      - title: "Identify the request"
+        body:
+          - - text: >-
+                Write down the agency, the name of the person who contacted you, and whether the request arrived by
+                phone, letter, subpoena, or another document. Keep the original communication.
+      - title: "Prepare a short chronology"
+        body:
+          - - text: >-
+                List the dates of the contact and any scheduled interview or appearance. For an initial contact
+                request, share the agency and timing rather than an account of the events being investigated.
+      - title: "Ask about the proposed engagement"
+        body:
+          - - text: >-
+                Ask who would represent you, which jurisdiction is involved, and what work the engagement would
+                cover. A conversation about availability does not itself establish representation.
+  - kind: cards
+    overline: Continue reading
+    heading: More explainers
+    items:
+      - title: "How a criminal case moves"
+        href: /explainers/process
+        href_label: Read the explainer
+      - title: "Reviewing a criminal record"
+        href: /explainers/documents
+        href_label: Read the explainer
+  - kind: statement
+    heading: About this guide
+    body:
+      - - text: >-
+            General information, not advice about your matter. We confirm jurisdiction, conflicts, scope, and
+            fees before accepting work. Attorney advertisement.

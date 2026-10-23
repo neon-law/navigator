@@ -1,0 +1,301 @@
+/* Harvard-outline narration stage, and the notation document below it.
+ *
+ * Depth-1 units (Roman I / motion 1) share one teal fill when current;
+ * lettered subsections share a related fill. Tokens only — no literal hex. */
+
+.harvard-stage {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 4rem;
+}
+
+.harvard-stage__chrome {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.75rem 0 1rem;
+  background: var(--nav-color-bg);
+  border-bottom: 1px solid var(--nav-color-border);
+  margin-bottom: 1.5rem;
+}
+
+.harvard-stage__title {
+  font-size: 1.25rem;
+  font-weight: 650;
+  margin: 0 0 0.25rem;
+}
+
+.harvard-stage__counter {
+  margin: 0;
+  color: var(--nav-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.harvard-stage__hint {
+  margin: 0.35rem 0 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.9rem;
+}
+
+.harvard-doc {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.harvard-unit {
+  position: relative;
+  padding: 0.75rem 1rem 0.75rem 3rem;
+  border-radius: var(--nav-radius);
+  border: 1px solid transparent;
+  scroll-margin-top: 7rem;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.harvard-unit:focus {
+  outline: var(--nav-focus-ring) solid var(--nav-color-focus);
+  outline-offset: var(--nav-focus-offset);
+}
+
+.harvard-unit.is-current {
+  border-color: var(--nav-color-primary);
+  background: var(--nav-color-surface-subtle);
+}
+
+.harvard-unit--depth-2.is-current,
+.harvard-unit--depth-3.is-current,
+.harvard-unit--depth-4.is-current {
+  background: color-mix(in srgb, var(--nav-color-primary) 12%, var(--nav-color-bg));
+}
+
+.harvard-unit__marker {
+  position: absolute;
+  left: 0.75rem;
+  top: 0.85rem;
+  min-width: 1.5rem;
+  color: var(--nav-color-primary);
+  font-weight: 650;
+}
+
+.harvard-unit h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.harvard-unit p {
+  margin: 0 0 0.5rem;
+}
+
+.harvard-unit p:last-child {
+  margin-bottom: 0;
+}
+
+.harvard-unit--heading {
+  padding-top: 1rem;
+}
+
+.harvard-standalone {
+  margin: 0;
+  background: var(--nav-color-bg);
+  color: var(--nav-color-text);
+  font-family: var(--nav-font-family);
+}
+
+.harvard-standalone.nav-theme {
+  min-height: 100vh;
+}
+
+.harvard-doc-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  max-width: 46rem;
+  margin: 0 auto 1rem;
+  padding: 0 1.25rem;
+}
+
+.harvard-doc-switcher .nav-link.is-current {
+  font-weight: 650;
+  color: var(--nav-color-primary);
+}
+
+.harvard-stage-intro {
+  max-width: 46rem;
+  margin: 1rem auto 0.75rem;
+  padding: 0 1.25rem;
+}
+
+body.harvard-stage-recording .lawyer-nav,
+body.harvard-stage-recording .harvard-stage__hint,
+body.harvard-stage-recording .harvard-doc-switcher,
+body.harvard-stage-recording .harvard-stage-intro {
+  display: none;
+}
+
+/* Notation document: one notation as one <details> disclosure around its
+ * outline (`webapp::components::NotationDocument`). Tokens only. */
+
+.notation-document {
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-lg);
+  background: var(--nav-color-surface);
+  color: var(--nav-color-text);
+  max-width: var(--nav-measure-lg);
+}
+
+.notation-document + .notation-document {
+  margin-top: var(--nav-space-4);
+}
+
+.notation-document__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--nav-space-2) var(--nav-space-3);
+  padding: var(--nav-space-3) var(--nav-space-4);
+  cursor: pointer;
+  border-radius: var(--nav-radius-lg);
+}
+
+.notation-document__summary:focus-visible {
+  outline: var(--nav-focus-ring) solid var(--nav-color-focus);
+  outline-offset: var(--nav-focus-offset);
+}
+
+.notation-document__title {
+  font-weight: 650;
+  font-size: 1.1rem;
+}
+
+.notation-document__badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--nav-space-2);
+}
+
+.notation-document__body {
+  display: grid;
+  gap: var(--nav-space-3);
+  padding: var(--nav-space-2) var(--nav-space-4) var(--nav-space-4);
+  border-top: 1px solid var(--nav-color-border);
+}
+
+.notation-document__after {
+  margin-top: var(--nav-space-2);
+  padding-top: var(--nav-space-3);
+  border-top: 1px solid var(--nav-color-border);
+}
+
+.notation-unit {
+  display: grid;
+  gap: var(--nav-space-2);
+  scroll-margin-top: var(--nav-space-16);
+}
+
+.notation-unit--depth-2,
+.notation-unit--depth-3,
+.notation-unit--depth-4 {
+  margin-left: var(--nav-space-4);
+}
+
+.notation-unit__heading {
+  margin: var(--nav-space-2) 0 0;
+  font-size: 1.05rem;
+  line-height: 1.35;
+}
+
+h4.notation-unit__heading {
+  font-size: 1rem;
+}
+
+.notation-unit__marker {
+  color: var(--nav-color-primary);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.notation-unit__quote {
+  display: grid;
+  gap: var(--nav-space-2);
+  margin: 0;
+  padding: var(--nav-space-1) 0 var(--nav-space-1) var(--nav-space-4);
+  border-left: 3px solid var(--nav-color-border);
+}
+
+.notation-unit__lead,
+.notation-block {
+  margin: 0;
+  line-height: 1.6;
+  scroll-margin-top: var(--nav-space-16);
+}
+
+.notation-block--hold {
+  padding: var(--nav-space-2) var(--nav-space-3);
+  border: 1px solid var(--nav-color-warning-border);
+  border-left-width: 4px;
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-warning-subtle);
+  color: var(--nav-color-on-warning-subtle);
+}
+
+.notation-block__flag {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.8rem;
+}
+
+.notation-block--quotation {
+  margin: 0;
+  padding-left: var(--nav-space-4);
+  border-left: 3px solid var(--nav-color-primary);
+  font-style: italic;
+}
+
+.notation-block--quotation p {
+  margin: 0;
+}
+
+.notation-open-term {
+  padding: 0 var(--nav-space-1);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-notice-subtle);
+  color: var(--nav-color-on-notice-subtle);
+  font-family: var(--nav-font-mono);
+  font-size: 0.9em;
+}
+
+/* A linked term keeps the term's colours rather than the link's, so the
+ * notice band holds its contrast; the underline marks it as a link. */
+.notation-document a.notation-open-term {
+  color: var(--nav-color-on-notice-subtle);
+  text-decoration: underline;
+}
+
+a.notation-open-term mark {
+  background: transparent;
+  color: inherit;
+}
+
+.notation-anchor {
+  color: var(--nav-color-text-muted);
+  text-decoration: underline;
+  font-weight: 400;
+  padding: 0 var(--nav-space-1);
+  border-radius: var(--nav-radius-sm);
+}
+
+.notation-anchor:hover {
+  color: var(--nav-color-link-hover);
+  text-decoration: underline;
+}
+
+.notation-anchor:focus-visible {
+  outline: var(--nav-focus-ring) solid var(--nav-color-focus);
+  outline-offset: var(--nav-focus-offset);
+}
+
+.notation-unit:target > .notation-unit__heading,
+.notation-unit:target > .notation-unit__quote > .notation-unit__lead,
+.notation-block:target {
+  background: var(--nav-color-selection);
+  color: var(--nav-color-on-selection);
+}

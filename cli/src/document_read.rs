@@ -1,0 +1,1066 @@
+//! `navigator site document log`, `get`, and `diff` — the offline-checkout read
+//! verbs for a matter document's revision chain (#485).
+//!
+//! All three take a pointer path below `documents/` (the committed `.yaml`,
+//! or the staged binary it names) and resolve the Project and the document
+//! slug from the checkout itself: `navigator.yaml` at `.` names the Project,
+//! and the path relative to `documents/` — the same rule
+//! `navigator project sync` derives a slug from — names the document. A lawyer
+//! at a checkout therefore names a file, never an id.
+//!
+//! Reads go through the existing Project-scoped surfaces under the caller's
+//! own lens: `GET /app/api/projects/{id}/documents/revisions` for the chain
+//! (added alongside this command; see `portal::api`), and the existing
+//! `GET /app/projects/{code}/documents/{id}/download` route — the same one
+//! the browser's Download link uses — for bytes.
+
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use anyhow::{anyhow, Context, Result};
+use comfy_table::{presets::UTF8_FULL, Cell, ContentArrangement, Table};
+use store::document_pointers::DocumentPointer;
+
+use crate::document_sync::{read_manifest, read_pointer, slash_path};
+use crate::remote::{DocumentClient, RevisionSummary, RevisionsResponse};
+
+/// [`crate::remote::exit_code_for`] distinguishes a CI mint refusal (exit
+/// `3`) from every other failure (the ordinary gate-failure exit `2`).
+async fn run<F>(fut: F) -> ExitCode
+where
+    F: std::future::Future<Output = Result<()>>,
+{
+    match fut.await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("navigator: {error:#}");
+            crate::remote::exit_code_for(&error)
+        }
+    }
+}
+
+/// The document slug a path names — the path below `blobs/` with its
+/// pointer extension stripped, or the path below `documents/` of the bytes it
+/// points at — the same rule `navigator project sync` derives a slug from, so
+/// either the committed Blob or the pulled-down copy names the same document.
+pub(crate) fn slug_from_pointer(root: &Path, pointer: &Path) -> Result<String> {
+    let absolute = if pointer.is_absolute() {
+        pointer.to_path_buf()
+    } else {
+        root.join(pointer)
+    };
+    let blobs_dir = root.join(crate::document_sync::POINTER_DIRECTORY);
+    if let Ok(relative) = absolute.strip_prefix(&blobs_dir) {
+        let slashed = slash_path(relative)?;
+        return crate::document_sync::strip_pointer_extension(&slashed)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("{} names no `.yaml` pointer", pointer.display()));
+    }
+    let documents_dir = root.join(crate::document_sync::DOCUMENT_DIRECTORY);
+    let relative = absolute.strip_prefix(&documents_dir).map_err(|_| {
+        anyhow!(
+            "{} is not below {} or {}",
+            pointer.display(),
+            blobs_dir.display(),
+            documents_dir.display()
+        )
+    })?;
+    // A pointer left there by the legacy layout names its document by the
+    // path without `.yaml`; read as bytes it would name a document that does
+    // not exist, so it is refused with the fix instead.
+    if crate::document_sync::is_pointer_path(&absolute)
+        && matches!(read_pointer(&absolute), Ok(Some(_)))
+    {
+        return Err(anyhow!(
+            "{} is a pointer left under {}/; run `navigator project gate` to move it to {}/",
+            pointer.display(),
+            crate::document_sync::DOCUMENT_DIRECTORY,
+            crate::document_sync::POINTER_DIRECTORY
+        ));
+    }
+    // A matter folder is where the bytes live, not part of the slug (LAW-189).
+    slash_path(&crate::document_layout::slug_of_bytes(relative).0)
+}
+
+/// The committed Blob for the document `pointer` names — whichever spelling
+/// is on disk under `blobs/`, else the written `.yaml` path.
+fn pointer_yaml_path(root: &Path, pointer: &Path) -> Result<PathBuf> {
+    let slug = slug_from_pointer(root, pointer)?;
+    let written = crate::document_sync::pointer_path_for_slug(root, Path::new(&slug));
+    Ok(crate::document_sync::POINTER_READ_EXTENSIONS
+        .iter()
+        .map(|extension| written.with_extension(extension))
+        .find(|candidate| candidate.exists())
+        .unwrap_or(written))
+}
+
+/// Resolve `(Project code, login host)` from `<root>/navigator.yaml`.
+fn manifest_at(root: &Path) -> Result<(String, Option<String>)> {
+    read_manifest(root)
+}
+
+/// The check `log` and `get` reuse — one implementation for the drift those
+/// reads report:
+///
+/// 1. The committed pointer's `current_version.asset_id` must still be a row
+///    in the live chain. A pointer surviving a governed expunge of exactly
+///    that revision, or hand-edited to name a foreign id, is drift.
+/// 2. That row's `sha256` and `size_bytes` must match the pointer's — a
+///    disagreement means the object storage bytes are not what the checked-in
+///    index claims.
+/// 3. That row must be the chain's own operative (newest) revision — a
+///    pointer left pointing at a superseded revision, because a browser
+///    upload landed a newer one without a re-sync, is drift too.
+///
+/// Named explicitly rather than silently falling back to whatever the live
+/// chain's own newest row is.
+pub(crate) fn check_pointer_drift(
+    local: Option<&DocumentPointer>,
+    live: &[RevisionSummary],
+) -> Result<()> {
+    let Some(pointer) = local else {
+        return Ok(());
+    };
+    let found = live
+        .iter()
+        .find(|revision| revision.asset_id == pointer.current_version.asset_id);
+    let Some(found) = found else {
+        let live_ids: Vec<String> = live.iter().map(|r| r.asset_id.to_string()).collect();
+        return Err(anyhow!(
+            "drift: the committed pointer names current revision {} (version {}), which is not \
+             in the live chain (live revisions: {})",
+            pointer.current_version.asset_id,
+            pointer.current_version.version,
+            if live_ids.is_empty() {
+                "none".to_string()
+            } else {
+                live_ids.join(", ")
+            }
+        ));
+    };
+    if found.sha256 != pointer.current_version.sha256 {
+        return Err(anyhow!(
+            "drift: sha256 mismatch on revision {}: the pointer says {}, the live record says {}",
+            pointer.current_version.asset_id,
+            pointer.current_version.sha256,
+            found.sha256
+        ));
+    }
+    if found.size_bytes != pointer.current_version.size_bytes {
+        return Err(anyhow!(
+            "drift: size mismatch on revision {}: the pointer says {} bytes, the live record says {} bytes",
+            pointer.current_version.asset_id,
+            pointer.current_version.size_bytes,
+            found.size_bytes
+        ));
+    }
+    let operative = live
+        .iter()
+        .find(|revision| revision.operative)
+        .ok_or_else(|| anyhow!("drift: the live chain names no operative revision"))?;
+    if operative.asset_id != pointer.current_version.asset_id {
+        return Err(anyhow!(
+            "drift: the pointer's current revision {} is not the chain's operative revision \
+             {} — a newer upload landed without a re-sync",
+            pointer.current_version.asset_id,
+            operative.asset_id
+        ));
+    }
+    Ok(())
+}
+
+/// Fetch the live chain and check it against the local pointer, if one is
+/// committed. Shared by `log` and `get` so both fail identically on drift.
+async fn revisions_for(
+    root: &Path,
+    pointer: &Path,
+) -> Result<(String, RevisionsResponse, Option<DocumentPointer>)> {
+    let (project_code, host) = manifest_at(root)?;
+    let slug = slug_from_pointer(root, pointer)?;
+    let client = DocumentClient::connect(host.as_deref(), &project_code).await?;
+    let live = client.list_revisions(&slug).await?;
+    let local = read_pointer(&pointer_yaml_path(root, pointer)?)?;
+    check_pointer_drift(local.as_ref(), &live.revisions)?;
+    Ok((slug, live, local))
+}
+
+/// `navigator site document log <pointer>`.
+pub(crate) async fn log(pointer: &Path) -> ExitCode {
+    run(async {
+        let root = Path::new(".");
+        let (slug, live, _local) = revisions_for(root, pointer).await?;
+        if live.revisions.is_empty() {
+            println!("no revision of `{slug}` is visible under your lens");
+            return Ok(());
+        }
+        let mut table = Table::new();
+        table.load_style(UTF8_FULL);
+        table
+            .set_content_arrangement(ContentArrangement::Dynamic)
+            .set_header(vec![
+                "Version",
+                "Operative",
+                "Filename",
+                "Created",
+                "Size",
+                "SHA-256",
+                "Asset id",
+            ]);
+        for revision in &live.revisions {
+            table.add_row(vec![
+                Cell::new(revision.version),
+                Cell::new(if revision.operative { "*" } else { "" }),
+                Cell::new(&revision.filename),
+                Cell::new(&revision.created_at),
+                Cell::new(revision.size_bytes),
+                Cell::new(&revision.sha256),
+                Cell::new(revision.asset_id),
+            ]);
+        }
+        println!("{slug} ({})", live.kind);
+        println!("{table}");
+        Ok(())
+    })
+    .await
+}
+
+/// Whichever revision `--version` names, or the operative one when it is
+/// absent. `Err` names the available range.
+fn select_version(live: &RevisionsResponse, version: Option<usize>) -> Result<&RevisionSummary> {
+    match version {
+        Some(wanted) => live
+            .revisions
+            .iter()
+            .find(|revision| revision.version == wanted)
+            .ok_or_else(|| {
+                let available = live.revisions.iter().map(|r| r.version);
+                let (min, max) = available
+                    .clone()
+                    .fold((usize::MAX, 0), |(lo, hi), v| (lo.min(v), hi.max(v)));
+                anyhow!(
+                    "version {wanted} is not visible under your lens (available: {min}..={max})"
+                )
+            }),
+        None => live
+            .revisions
+            .iter()
+            .find(|revision| revision.operative)
+            .ok_or_else(|| anyhow!("no revision is visible under your lens")),
+    }
+}
+
+/// A path lexically resolved against `root` without touching the filesystem
+/// (the destination need not exist yet), so `.` and `..` collapse the same
+/// way a canonicalized path would.
+pub(crate) fn lexical(root: &Path, path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    let mut out = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Refuse a `get` destination inside this checkout's `blobs/` tree, and inside
+/// its `documents/` tree except the one file `project sync` itself manages for
+/// `pointer`: its own raw copy (`documents/<slug>` for `blobs/<slug>.yaml`),
+/// and only while Git ignores it. Fetched
+/// bytes can then refresh that copy but never land where a commit would stage
+/// them or overwrite a different document.
+fn refuse_destination_in_documents(root: &Path, pointer: &Path, out: &Path) -> Result<()> {
+    let documents_dir = lexical(root, Path::new(crate::document_sync::DOCUMENT_DIRECTORY));
+    let blobs_dir = lexical(root, Path::new(crate::document_sync::POINTER_DIRECTORY));
+    let target = lexical(root, out);
+    if target.starts_with(&blobs_dir) {
+        return Err(anyhow!(
+            "refusing to write into {} — it holds only committed pointers, never fetched bytes",
+            blobs_dir.display()
+        ));
+    }
+    if !target.starts_with(&documents_dir) {
+        return Ok(());
+    }
+    let managed_copy = slug_from_pointer(root, &lexical(root, pointer))
+        .ok()
+        .map(|slug| documents_dir.join(slug));
+    if managed_copy.as_deref() != Some(target.as_path()) {
+        return Err(anyhow!(
+            "refusing to write into {} — fetched bytes must never enter a Project repository \
+             except the pointer's own sync-managed copy; `--out {}` refreshes that, or run \
+             `navigator project sync` to refresh every managed copy",
+            documents_dir.display(),
+            managed_copy.map_or_else(
+                || "documents/<name>".to_string(),
+                |path| path.display().to_string()
+            )
+        ));
+    }
+    crate::document_sync::ensure_managed_copy_target(root, &target)
+}
+
+/// `navigator site document get <pointer> [--version N] --out <path>`.
+pub(crate) async fn get(pointer: &Path, version: Option<usize>, out: &Path) -> ExitCode {
+    run(async {
+        let root = Path::new(".");
+        refuse_destination_in_documents(root, pointer, out)?;
+        let (_slug, live, local) = revisions_for(root, pointer).await?;
+        let target = select_version(&live, version)?.clone();
+
+        if lexical(root, out).starts_with(lexical(root, Path::new("documents")))
+            && local
+                .as_ref()
+                .is_none_or(|pointer| pointer.current_version.asset_id != target.asset_id)
+        {
+            return Err(anyhow!(
+                "the sync-managed copy holds the pointer's current revision; revision {} is not it — write it outside documents/",
+                target.version
+            ));
+        }
+
+        let (project_code, host) = manifest_at(root)?;
+        let client = DocumentClient::connect(host.as_deref(), &project_code).await?;
+        let bytes = client.download_revision(target.asset_id).await?;
+
+        // The pointer's own `sha256` is the one guarantee that does not depend
+        // on the deployment's own claim about the bytes — use it whenever the
+        // fetched revision is the pointer's committed current version. Any
+        // other revision has no locally trusted hash, so the metadata
+        // endpoint's own claim is the best available check (it still catches
+        // a truncated or corrupted download).
+        let expected_sha = local
+            .as_ref()
+            .filter(|pointer| pointer.current_version.asset_id == target.asset_id)
+            .map_or_else(
+                || target.sha256.clone(),
+                |pointer| pointer.current_version.sha256.clone(),
+            );
+        let actual_sha = store::documents::sha256_hex(&bytes);
+        if actual_sha != expected_sha {
+            return Err(anyhow!(
+                "sha256 mismatch on revision {}: expected {expected_sha}, got {actual_sha}",
+                target.asset_id
+            ));
+        }
+        let actual_size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+        if actual_size != target.size_bytes {
+            return Err(anyhow!(
+                "size mismatch on revision {}: expected {} bytes, got {actual_size}",
+                target.asset_id,
+                target.size_bytes
+            ));
+        }
+
+        std::fs::write(out, &bytes).with_context(|| format!("write {}", out.display()))?;
+        println!(
+            "wrote revision {} ({} bytes, sha256 {actual_sha}) to {}",
+            target.version,
+            bytes.len(),
+            out.display()
+        );
+        Ok(())
+    })
+    .await
+}
+
+/// Extensions `diff` can extract readable text from directly (UTF-8 plain
+/// text). A PDF is handled separately, via `pdf-extract`; Word packages go
+/// through the loss-aware managed Open XML boundary.
+const PLAIN_TEXT_EXTENSIONS: &[&str] = &["txt", "md", "markdown", "yml", "yaml", "json", "csv"];
+
+/// Extract readable text from one revision's bytes, or say why not.
+async fn extract_text(filename: &str, bytes: &[u8]) -> Result<String> {
+    let extension = Path::new(filename)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_lowercase);
+    match extension.as_deref() {
+        Some("pdf") => pdf_extract::extract_text_from_mem(bytes).map_err(|error| {
+            anyhow!("`{filename}` is a PDF `diff` could not read text from: {error}")
+        }),
+        Some("docx") => word::parse(filename, bytes)
+            .await
+            .map(|document| document.accepted_view_text())
+            .map_err(|error| anyhow!("Word package rejected: {error}")),
+        Some(ext) if PLAIN_TEXT_EXTENSIONS.contains(&ext) => String::from_utf8(bytes.to_vec())
+            .with_context(|| format!("`{filename}` is not valid UTF-8")),
+        Some(ext) => Err(anyhow!(
+            "`.{ext}` is unsupported for `diff` — only PDF and plain text are readable as a redline"
+        )),
+        None => Err(anyhow!(
+            "`{filename}` has no extension `diff` can classify as PDF or plain text"
+        )),
+    }
+}
+
+/// Most lines either side of a redline may carry before `diff` refuses rather
+/// than building an O(lines²) comparison table. Legal documents run to a few
+/// thousand lines even at PDF-extracted granularity; this is headroom above
+/// that, not a tuned ceiling.
+const MAX_DIFF_LINES: usize = 20_000;
+
+/// A minimal unified-style line diff (`-`/`+`/` ` prefix), via a textbook LCS
+/// table. No workspace crate already does line diffing, and this task blessed
+/// exactly one new dependency (`pdf-extract`), so the comparison itself stays
+/// hand-written rather than reaching for a second.
+fn line_diff(left: &str, right: &str) -> Result<String> {
+    let left_lines: Vec<&str> = left.lines().collect();
+    let right_lines: Vec<&str> = right.lines().collect();
+    if left_lines.len() > MAX_DIFF_LINES || right_lines.len() > MAX_DIFF_LINES {
+        return Err(anyhow!(
+            "one side has more than {MAX_DIFF_LINES} lines; `diff` refuses rather than building \
+             an oversized comparison table"
+        ));
+    }
+    let (left_len, right_len) = (left_lines.len(), right_lines.len());
+    let mut lcs = vec![vec![0usize; right_len + 1]; left_len + 1];
+    for left_idx in (0..left_len).rev() {
+        for right_idx in (0..right_len).rev() {
+            lcs[left_idx][right_idx] = if left_lines[left_idx] == right_lines[right_idx] {
+                lcs[left_idx + 1][right_idx + 1] + 1
+            } else {
+                lcs[left_idx + 1][right_idx].max(lcs[left_idx][right_idx + 1])
+            };
+        }
+    }
+    let mut out = String::new();
+    let (mut left_idx, mut right_idx) = (0, 0);
+    while left_idx < left_len && right_idx < right_len {
+        if left_lines[left_idx] == right_lines[right_idx] {
+            out.push_str("  ");
+            out.push_str(left_lines[left_idx]);
+            out.push('\n');
+            left_idx += 1;
+            right_idx += 1;
+        } else if lcs[left_idx + 1][right_idx] >= lcs[left_idx][right_idx + 1] {
+            out.push_str("- ");
+            out.push_str(left_lines[left_idx]);
+            out.push('\n');
+            left_idx += 1;
+        } else {
+            out.push_str("+ ");
+            out.push_str(right_lines[right_idx]);
+            out.push('\n');
+            right_idx += 1;
+        }
+    }
+    for line in &left_lines[left_idx..] {
+        out.push_str("- ");
+        out.push_str(line);
+        out.push('\n');
+    }
+    for line in &right_lines[right_idx..] {
+        out.push_str("+ ");
+        out.push_str(line);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// `navigator site document diff <pointer> <a> <b>` — a redline between two
+/// revision numbers.
+pub(crate) async fn diff(pointer: &Path, a: usize, b: usize) -> ExitCode {
+    run(async {
+        let root = Path::new(".");
+        let (_slug, live, _local) = revisions_for(root, pointer).await?;
+        let rev_a = select_version(&live, Some(a))?.clone();
+        let rev_b = select_version(&live, Some(b))?.clone();
+
+        let (project_code, host) = manifest_at(root)?;
+        let client = DocumentClient::connect(host.as_deref(), &project_code).await?;
+        let bytes_a = client.download_revision(rev_a.asset_id).await?;
+        let bytes_b = client.download_revision(rev_b.asset_id).await?;
+        let text_a = extract_text(&rev_a.filename, &bytes_a).await?;
+        let text_b = extract_text(&rev_b.filename, &bytes_b).await?;
+
+        println!("--- version {} ({})", rev_a.version, rev_a.filename);
+        println!("+++ version {} ({})", rev_b.version, rev_b.filename);
+        print!("{}", line_diff(&text_a, &text_b)?);
+        Ok(())
+    })
+    .await
+}
+
+/// Every committed Blob (`*.yaml`, plus retired `*.yml`) below
+/// `<root>/blobs/`, as paths relative to `root`, sorted for a stable report
+/// order. `root` carrying no `blobs/` at all yields an empty list rather than
+/// an error — the common case for every repository that has not adopted the
+/// asset lane.
+pub(crate) fn discover_pointers(root: &Path) -> Result<Vec<PathBuf>> {
+    let blobs = root.join(crate::document_sync::POINTER_DIRECTORY);
+    if !blobs.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut pointers = Vec::new();
+    for entry in walkdir::WalkDir::new(&blobs).follow_links(false) {
+        let entry = entry.with_context(|| format!("walk {}", blobs.display()))?;
+        if entry.file_type().is_file() && crate::document_sync::is_pointer_path(entry.path()) {
+            let relative = entry
+                .path()
+                .strip_prefix(root)
+                .unwrap_or(entry.path())
+                .to_path_buf();
+            pointers.push(relative);
+        }
+    }
+    pointers.sort();
+    Ok(pointers)
+}
+
+/// The read-only local `validate` lane. Offline pointer checks have already
+/// run; a valid session for the manifest's exact host enables live reads.
+pub(crate) async fn validate_live_pointers(root: &Path) -> Result<()> {
+    let pointers = discover_pointers(root)?;
+    if pointers.is_empty() {
+        return Ok(());
+    }
+    let (project, host) = read_manifest(root)?;
+    let Some(host) = host.filter(|host| !host.trim().is_empty()) else {
+        println!(
+            "Live document verification skipped for {} pointer(s): navigator.yaml names no host",
+            pointers.len()
+        );
+        return Ok(());
+    };
+    let (base, token) = match crate::remote::matching_stored_session(&host)? {
+        crate::remote::MatchingSession::Absent => {
+            println!("Live document verification skipped for {} pointer(s): no stored session for the manifest host", pointers.len());
+            return Ok(());
+        }
+        crate::remote::MatchingSession::Expired => {
+            println!("Live document verification skipped for {} pointer(s): stored session for the manifest host has expired", pointers.len());
+            return Ok(());
+        }
+        crate::remote::MatchingSession::Valid(base, token) => (base, token),
+    };
+    let client = match DocumentClient::for_validation(base, token, &project).await {
+        Ok(client) => client,
+        Err(error) => {
+            for relative in &pointers {
+                eprintln!(
+                    "{}: live document verification failed: {error:#}",
+                    root.join(relative).display()
+                );
+            }
+            return Err(anyhow!(
+                "live document verification could not read the Project: {error:#}"
+            ));
+        }
+    };
+    let mut checked = 0usize;
+    let mut failures = 0usize;
+    for relative in &pointers {
+        let path = root.join(relative);
+        let Some(pointer) = read_pointer(&path)? else {
+            continue;
+        };
+        let result = if let Some(authority_id) = pointer.authority_id {
+            match client.download_authority_archive(authority_id).await {
+                Ok(bytes) => {
+                    let sha = store::documents::sha256_hex(&bytes);
+                    let size = i64::try_from(bytes.len()).context("archive size overflow")?;
+                    if sha == pointer.current_version.sha256
+                        && size == pointer.current_version.size_bytes
+                    {
+                        Ok(())
+                    } else {
+                        Err(anyhow!(
+                            "drift: Authority archive sha256 or size differs from pointer"
+                        ))
+                    }
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            let slug = slug_from_pointer(root, relative)?;
+            client
+                .list_revisions(&slug)
+                .await
+                .and_then(|live| check_pointer_drift(Some(&pointer), &live.revisions))
+        };
+        checked += 1;
+        if let Err(error) = result {
+            failures += 1;
+            eprintln!(
+                "{}: live document verification failed: {error:#}",
+                path.display()
+            );
+        }
+    }
+    println!("Verified {checked} document pointer(s) live, found {failures} error(s)");
+    if failures > 0 {
+        return Err(anyhow!("{failures} live document pointer check(s) failed"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        check_pointer_drift, discover_pointers, extract_text, lexical, line_diff, manifest_at,
+        pointer_yaml_path, refuse_destination_in_documents, select_version, slug_from_pointer,
+    };
+    use crate::remote::{RevisionSummary, RevisionsResponse};
+    use std::path::{Path, PathBuf};
+    use uuid::Uuid;
+
+    fn revision(version: usize, asset_id: Uuid, operative: bool) -> RevisionSummary {
+        let hex = asset_id.simple().to_string();
+        RevisionSummary {
+            version,
+            asset_id,
+            created_at: "2026-09-06T00:00:00Z".to_string(),
+            sha256: format!("{hex}{hex}"),
+            size_bytes: 10,
+            filename: "notice.pdf".to_string(),
+            visibility: "internal".to_string(),
+            operative,
+            signing: None,
+            notarization: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn slug_derives_from_the_path_below_blobs_or_documents_and_strips_yml() {
+        let root = Path::new("/repo");
+        assert_eq!(
+            slug_from_pointer(root, Path::new("blobs/pleadings/motion.pdf.yml")).unwrap(),
+            "pleadings/motion.pdf"
+        );
+        assert_eq!(
+            slug_from_pointer(root, Path::new("documents/pleadings/motion.pdf")).unwrap(),
+            "pleadings/motion.pdf"
+        );
+    }
+
+    #[test]
+    fn slug_refuses_a_legacy_pointer_left_under_documents_but_reads_a_yaml_document() {
+        let root = tempfile::tempdir().unwrap();
+        let documents = root.path().join("documents");
+        std::fs::create_dir_all(&documents).unwrap();
+        let pointer = store::document_pointers::DocumentPointer {
+            kind: "memo".into(),
+            visibility: "internal".into(),
+            folder: None,
+            current_version: store::document_pointers::PointerVersion {
+                version: 1,
+                asset_id: Uuid::now_v7(),
+                created_at: "2026-09-05T12:00:00Z".into(),
+                sha256: "0".repeat(64),
+                size_bytes: 1,
+                canonical_url: None,
+                checked_on: None,
+            },
+            previous_version: None,
+            authority_id: None,
+            docusign_envelope_id: None,
+            xero_invoice_id: None,
+            signing: None,
+            notarization: Vec::new(),
+            service: Vec::new(),
+        };
+        std::fs::write(documents.join("memo.md.yaml"), pointer.to_yaml().unwrap()).unwrap();
+        std::fs::write(documents.join("config.yaml"), "name: client\n").unwrap();
+
+        let error =
+            slug_from_pointer(root.path(), Path::new("documents/memo.md.yaml")).unwrap_err();
+        assert!(
+            error.to_string().contains("navigator project gate"),
+            "{error}"
+        );
+        assert_eq!(
+            slug_from_pointer(root.path(), Path::new("documents/config.yaml")).unwrap(),
+            "config.yaml"
+        );
+    }
+
+    #[test]
+    fn slug_refuses_a_path_outside_documents() {
+        let root = Path::new("/repo");
+        assert!(slug_from_pointer(root, Path::new("templates/foo.md")).is_err());
+    }
+
+    #[test]
+    fn manifest_at_resolves_project_and_host_from_a_v2_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("navigator.yaml"),
+            "version: \"1.0.0\"\nproject:\n  host: staging.neonlaw.com\n  name: acme\n",
+        )
+        .unwrap();
+
+        let (project, host) = manifest_at(dir.path()).unwrap();
+
+        assert_eq!(project, "acme");
+        assert_eq!(host, Some("staging.neonlaw.com".to_string()));
+    }
+
+    #[test]
+    fn pointer_yaml_path_appends_the_written_extension_once() {
+        // A bare document name with nothing on disk resolves to the spelling
+        // Navigator writes today.
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            pointer_yaml_path(root.path(), Path::new("documents/motion.pdf")).unwrap(),
+            root.path().join("blobs/motion.pdf.yaml")
+        );
+        assert_eq!(
+            pointer_yaml_path(root.path(), Path::new("blobs/motion.pdf.yaml")).unwrap(),
+            root.path().join("blobs/motion.pdf.yaml"),
+            "a path that already names a pointer resolves to itself"
+        );
+    }
+
+    /// A bare name resolves to whichever pointer the checkout actually
+    /// carries, so the retired spelling stays reachable without the caller
+    /// having to know which rename state the repository is in.
+    #[test]
+    fn pointer_yaml_path_prefers_the_pointer_that_exists_on_disk() {
+        let root = tempfile::tempdir().unwrap();
+        let blobs = root.path().join("blobs");
+        std::fs::create_dir_all(&blobs).unwrap();
+        let retired = blobs.join("motion.pdf.yml");
+        std::fs::write(&retired, "").unwrap();
+
+        assert_eq!(
+            pointer_yaml_path(root.path(), Path::new("documents/motion.pdf")).unwrap(),
+            retired,
+            "an existing .yml pointer must be found rather than a .yaml that is not there"
+        );
+    }
+
+    #[test]
+    fn select_version_finds_the_named_version() {
+        let live = RevisionsResponse {
+            kind: "agreement".to_string(),
+            revisions: vec![
+                revision(2, Uuid::nil(), true),
+                revision(1, Uuid::max(), false),
+            ],
+        };
+        assert_eq!(select_version(&live, Some(1)).unwrap().version, 1);
+        assert_eq!(select_version(&live, None).unwrap().version, 2);
+    }
+
+    #[test]
+    fn select_version_names_the_available_range_when_absent() {
+        let live = RevisionsResponse {
+            kind: "agreement".to_string(),
+            revisions: vec![
+                revision(2, Uuid::nil(), true),
+                revision(1, Uuid::max(), false),
+            ],
+        };
+        let error = select_version(&live, Some(5)).unwrap_err();
+        assert!(error.to_string().contains("1..=2"), "{error}");
+    }
+
+    #[test]
+    fn drift_is_silent_when_no_local_pointer_exists() {
+        assert!(check_pointer_drift(None, &[]).is_ok());
+    }
+
+    #[test]
+    fn drift_names_the_missing_asset_when_the_pointer_is_stale() {
+        let pointer = store::document_pointers::DocumentPointer {
+            kind: "agreement".to_string(),
+            visibility: "internal".to_string(),
+            folder: None,
+            current_version: store::document_pointers::PointerVersion {
+                version: 1,
+                asset_id: Uuid::nil(),
+                created_at: "2026-09-06T00:00:00Z".to_string(),
+                sha256: "a".repeat(64),
+                size_bytes: 1,
+                canonical_url: None,
+                checked_on: None,
+            },
+            previous_version: None,
+            authority_id: None,
+            docusign_envelope_id: None,
+            xero_invoice_id: None,
+            signing: None,
+            notarization: Vec::new(),
+            service: Vec::new(),
+        };
+        let live = [revision(1, Uuid::max(), true)];
+        let error = check_pointer_drift(Some(&pointer), &live).unwrap_err();
+        assert!(error.to_string().contains("drift"), "{error}");
+        assert!(
+            error.to_string().contains(&Uuid::nil().to_string()),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn drift_passes_when_the_pointers_asset_is_still_live() {
+        let live_revision = revision(1, Uuid::max(), true);
+        let pointer = store::document_pointers::DocumentPointer {
+            kind: "agreement".to_string(),
+            visibility: "internal".to_string(),
+            folder: None,
+            current_version: store::document_pointers::PointerVersion {
+                version: 1,
+                asset_id: Uuid::max(),
+                created_at: "2026-09-06T00:00:00Z".to_string(),
+                sha256: live_revision.sha256.clone(),
+                size_bytes: live_revision.size_bytes,
+                canonical_url: None,
+                checked_on: None,
+            },
+            previous_version: None,
+            authority_id: None,
+            docusign_envelope_id: None,
+            xero_invoice_id: None,
+            signing: None,
+            notarization: Vec::new(),
+            service: Vec::new(),
+        };
+        let live = [live_revision];
+        assert!(check_pointer_drift(Some(&pointer), &live).is_ok());
+    }
+
+    #[test]
+    fn drift_names_both_hashes_on_a_sha256_mismatch() {
+        let live_revision = revision(1, Uuid::max(), true);
+        let pointer = store::document_pointers::DocumentPointer {
+            kind: "agreement".to_string(),
+            visibility: "internal".to_string(),
+            folder: None,
+            current_version: store::document_pointers::PointerVersion {
+                version: 1,
+                asset_id: Uuid::max(),
+                created_at: "2026-09-06T00:00:00Z".to_string(),
+                sha256: "0".repeat(64),
+                size_bytes: live_revision.size_bytes,
+                canonical_url: None,
+                checked_on: None,
+            },
+            previous_version: None,
+            authority_id: None,
+            docusign_envelope_id: None,
+            xero_invoice_id: None,
+            signing: None,
+            notarization: Vec::new(),
+            service: Vec::new(),
+        };
+        let live = [live_revision.clone()];
+        let error = check_pointer_drift(Some(&pointer), &live).unwrap_err();
+        assert!(error.to_string().contains("sha256 mismatch"), "{error}");
+        assert!(error.to_string().contains(&"0".repeat(64)), "{error}");
+        assert!(error.to_string().contains(&live_revision.sha256), "{error}");
+    }
+
+    #[test]
+    fn drift_flags_a_size_mismatch() {
+        let live_revision = revision(1, Uuid::max(), true);
+        let pointer = store::document_pointers::DocumentPointer {
+            kind: "agreement".to_string(),
+            visibility: "internal".to_string(),
+            folder: None,
+            current_version: store::document_pointers::PointerVersion {
+                version: 1,
+                asset_id: Uuid::max(),
+                created_at: "2026-09-06T00:00:00Z".to_string(),
+                sha256: live_revision.sha256.clone(),
+                size_bytes: live_revision.size_bytes + 1,
+                canonical_url: None,
+                checked_on: None,
+            },
+            previous_version: None,
+            authority_id: None,
+            docusign_envelope_id: None,
+            xero_invoice_id: None,
+            signing: None,
+            notarization: Vec::new(),
+            service: Vec::new(),
+        };
+        let live = [live_revision];
+        let error = check_pointer_drift(Some(&pointer), &live).unwrap_err();
+        assert!(error.to_string().contains("size mismatch"), "{error}");
+    }
+
+    #[test]
+    fn drift_flags_a_pointer_that_is_no_longer_the_operative_revision() {
+        let stale = revision(1, Uuid::max(), false);
+        let pointer = store::document_pointers::DocumentPointer {
+            kind: "agreement".to_string(),
+            visibility: "internal".to_string(),
+            folder: None,
+            current_version: store::document_pointers::PointerVersion {
+                version: 1,
+                asset_id: Uuid::max(),
+                created_at: "2026-09-06T00:00:00Z".to_string(),
+                sha256: stale.sha256.clone(),
+                size_bytes: stale.size_bytes,
+                canonical_url: None,
+                checked_on: None,
+            },
+            previous_version: None,
+            authority_id: None,
+            docusign_envelope_id: None,
+            xero_invoice_id: None,
+            signing: None,
+            notarization: Vec::new(),
+            service: Vec::new(),
+        };
+        // A newer revision landed (e.g. a browser upload) without a re-sync.
+        let live = [revision(2, Uuid::nil(), true), stale];
+        let error = check_pointer_drift(Some(&pointer), &live).unwrap_err();
+        assert!(
+            error.to_string().contains("not the chain's operative"),
+            "{error}"
+        );
+    }
+
+    /// A checkout whose root `.gitignore` is the canonical one, so the raw copy
+    /// under test is genuinely ignored.
+    fn checkout() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(root.path())
+                .status()
+                .unwrap()
+                .success());
+        };
+        git(&["init", "--quiet"]);
+        std::fs::create_dir_all(root.path().join("documents/pleadings")).unwrap();
+        std::fs::create_dir_all(root.path().join("blobs/pleadings")).unwrap();
+        std::fs::write(
+            root.path().join(".gitignore"),
+            crate::projects::repository::ROOT_GITIGNORE,
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn destination_inside_documents_is_refused_unless_it_is_the_pointers_own_copy() {
+        let root = checkout();
+        let pointer = Path::new("blobs/pleadings/motion.pdf.yaml");
+
+        let other = refuse_destination_in_documents(
+            root.path(),
+            pointer,
+            Path::new("documents/pleadings/other.pdf"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(other.contains("navigator project sync"), "{other}");
+
+        // The pointer itself is committed, not a managed copy.
+        assert!(refuse_destination_in_documents(root.path(), pointer, pointer).is_err());
+    }
+
+    #[test]
+    fn the_pointers_own_gitignored_copy_may_be_refreshed() {
+        let root = checkout();
+        let copy = root.path().join("documents/pleadings/motion.pdf");
+        std::fs::write(&copy, b"stale").unwrap();
+        for pointer in [
+            "blobs/pleadings/motion.pdf.yaml",
+            "documents/pleadings/motion.pdf",
+        ] {
+            refuse_destination_in_documents(
+                root.path(),
+                Path::new(pointer),
+                Path::new("documents/pleadings/motion.pdf"),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn a_copy_git_does_not_ignore_is_refused() {
+        let root = checkout();
+        std::fs::write(root.path().join(".gitignore"), b"").unwrap();
+        let error = refuse_destination_in_documents(
+            root.path(),
+            Path::new("blobs/pleadings/motion.pdf.yaml"),
+            Path::new("documents/pleadings/motion.pdf"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("does not ignore"), "{error}");
+    }
+
+    #[test]
+    fn destination_outside_documents_is_accepted() {
+        let root = Path::new("/repo");
+        assert!(refuse_destination_in_documents(
+            root,
+            Path::new("blobs/a.pdf.yaml"),
+            Path::new("/tmp/redline.pdf")
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn lexical_resolves_dot_and_dot_dot_without_touching_the_filesystem() {
+        let root = Path::new("/repo");
+        assert_eq!(
+            lexical(root, Path::new("documents/../documents/motion.pdf")),
+            Path::new("/repo/documents/motion.pdf")
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_text_extracts_verbatim() {
+        assert_eq!(extract_text("notice.txt", b"hello").await.unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn docx_uses_the_word_boundary_instead_of_a_binary_diff() {
+        let error = extract_text("synthetic.docx", b"PK\x03\x04")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("corrupt"), "{error}");
+    }
+
+    #[test]
+    fn line_diff_marks_additions_removals_and_unchanged_lines() {
+        let out = line_diff("a\nb\nc\n", "a\nx\nc\n").unwrap();
+        assert!(out.contains("  a\n"));
+        assert!(out.contains("- b\n"));
+        assert!(out.contains("+ x\n"));
+        assert!(out.contains("  c\n"));
+    }
+
+    #[test]
+    fn discover_pointers_is_empty_without_a_blobs_directory() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(discover_pointers(root.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn discover_pointers_finds_every_yml_below_blobs_sorted() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("blobs/pleadings")).unwrap();
+        std::fs::create_dir_all(root.path().join("documents")).unwrap();
+        std::fs::create_dir_all(root.path().join("blobs")).unwrap();
+        std::fs::write(root.path().join("blobs/pleadings/b.pdf.yml"), "").unwrap();
+        std::fs::write(root.path().join("blobs/a.pdf.yml"), "").unwrap();
+        // A staged binary is not a pointer and must not be reported as one.
+        std::fs::write(root.path().join("documents/a.pdf"), "").unwrap();
+
+        let found = discover_pointers(root.path()).unwrap();
+        assert_eq!(
+            found,
+            vec![
+                PathBuf::from("blobs/a.pdf.yml"),
+                PathBuf::from("blobs/pleadings/b.pdf.yml"),
+            ]
+        );
+    }
+}

@@ -1,0 +1,30 @@
+# KIND sizing for the Forgejo server, and its synthetic instance signing key:
+# the `navigator-forgejo-signing` SSH key pair `navigator dev forgejo up`
+# generates once. The server mounts it here; the `identity` init container
+# mounts it through the kustomization's JSON patch, which keeps the init
+# containers in order. Forgejo reads the public key while it loads settings.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: navigator-forgejo
+spec:
+  template:
+    spec:
+      containers:
+        - name: forgejo
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: signing
+              mountPath: /etc/forgejo-signing
+              readOnly: true
+      volumes:
+        - name: signing
+          secret:
+            secretName: navigator-forgejo-signing
+            defaultMode: 0440

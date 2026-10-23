@@ -1,0 +1,159 @@
+head_title: "{site_name} | A legacy beyond your lifetime"
+meta_description: >-
+  A spiritual approach to estate planning, shaped around your life, wishes,
+  and legacy. Basic estate plans from $1,111 for one person. Nevada asset
+  protection planning when it fits your circumstances and applicable law.
+  Attorney advertisement.
+heading: Your life is part of a larger story.
+lead: >-
+  A spiritual approach to estate planning. Explore the themes of your life,
+  the people in your orbit, and the legacy you want to leave.
+  Together, we put your wishes for property, care, and the people you love
+  into an estate plan that reaches beyond your lifetime.
+contact_label: Book a meet & greet
+estate:
+  eyebrow: Vesta Estate Planning
+  process_link: Explore your estate plan
+  plan_label: Your estate plan
+  price: From $1,111
+  plan_description: For a basic estate plan for one person, shaped around your life.
+  features:
+    - A get-to-know-you session with an optional astrology reading
+    - A will and financial power of attorney
+    - A health-care directive and health-care power of attorney
+    - A planning meeting and attorney preparation and review
+    - One round of revisions before signing
+    - Guidance on signing your documents
+  fee_note: >-
+    Fees increase with the scope of work. We confirm the included services,
+    applicable law, and signing arrangements in writing before you engage us.
+    Living trusts, advanced asset protection or tax planning, property transfers,
+    probate, trust administration, and later updates require a separate quote.
+  nevada_label: Nevada asset protection trusts
+  nevada_heading: Could a Nevada trust fit your plan?
+  nevada_body: >-
+    Nevada law permits certain irrevocable trusts that may benefit the person
+    who creates them. We assess whether that structure fits your goals and
+    the laws that may apply to you.
+  nevada_points:
+    - [Your circumstances, "We review your assets, existing obligations, residence, and tax questions before proposing a trust."]
+    - [A real Nevada connection, "A trust for its creator's benefit needs a qualified Nevada trustee and administration in Nevada."]
+    - [Clear limits, "Creditor claims and transfers require individual analysis. No trust guarantees protection from every claim."]
+  nevada_note: >-
+    Nevada trust planning has a scope set in writing. We may involve counsel
+    licensed in other states and tax advisers when the matter calls for it.
+  nevada_details_label: Explore Nevada trust planning
+  administration_label: Trust administration
+  administration_heading: Support for those carrying out your wishes.
+  administration_body: >-
+    We can discuss help administering an estate or trust after death, or
+    guiding a trustee during incapacity or while a trust continues. An
+    individual trustee appointment requires separate review and written terms.
+  administration_services:
+    - [Understand your role, "Review the trust, confirm the trustee's authority, and identify the work ahead."]
+    - [Put the details in order, "Get guidance on property records, notices, beneficiary communications, and accountings."]
+    - [Carry out the trust, "Plan for distributions and ongoing duties, with tax professionals involved where needed."]
+  administration_fee_label: Custom engagement
+  administration_fee_note: >-
+    We review the role, applicable law, conflicts, and fees before agreeing
+    on work in writing.
+  administration_contact_label: Contact us about trust administration
+  administration_details_label: Explore trust administration
+  video_updates_label: Video updates
+  video_updates_body: Swipe or scroll sideways through our latest five videos, newest first.
+  video_updates_blog_label: All blog posts
+  testimonials_label: Testimonials
+  video_label: Meet Vesta
+  video_src: img/vesta-home/vesta-explainer.mp4
+  astrology_label: Astrology & your legacy
+  astrology_heading: The cosmos invites a question. You give it meaning.
+  astrology_body: >-
+    What gives your life direction? Who belongs in your circle? What do you
+    hope carries forward? Astrology offers a language for exploring these
+    questions together. Your North Node, composite charts, and astrocartography
+    can open conversations about purpose, relationships, and belonging.
+    Bring your spiritual beliefs, your curiosity, or simply your wishes.
+    Readings are optional personal reflection; your choices guide the legal plan.
+  cosmos_label: A moment in the cosmos
+  cosmos_note: An imagined sky. Explore the symbols below to begin your reflection.
+  cosmos_themes:
+    - - "☊"
+      - North Node
+      - What calls you forward?
+      - >-
+        Use the North Node as a prompt to reflect on direction and possibility.
+        What do you still hope to nurture, and what would you like to carry
+        forward through the people and causes you care about?
+    - - "♀"
+      - Venus
+      - Who is in your orbit?
+      - >-
+        Begin with love, connection, and the people who make your life yours.
+        Composite charts offer a shared focus for reflecting on relationships.
+        Tell us whom you want your plan to care for.
+    - - "♂"
+      - Mars
+      - What will you stand for?
+      - >-
+        Reflect on courage, action, and the choices that feel true to you.
+        Who would you trust to speak for your care or manage your finances
+        if you could not? Your wishes give that conversation direction.
+    - - "♃"
+      - Jupiter
+      - What do you want to grow?
+      - >-
+        Consider generosity, learning, and what you hope to pass on.
+        Your legacy can include the people, communities, and causes you support,
+        alongside the property you leave behind.
+    - - "♄"
+      - Saturn
+      - What will carry on?
+      - >-
+        Reflect on time, responsibility, and belonging. Astrocartography can
+        invite a conversation about places that matter to you. An ephemeris
+        records celestial positions; your life gives those reflections meaning.
+        We bring the conversation back to your wishes and the documents that hold them.
+  probate_label: Probate
+  probate_heading: Help after a loss.
+  probate_body: >-
+    Probate is the legal process for handling an estate after death,
+    including addressing debts and transferring property. Probate is not
+    needed for every estate; the property and applicable law determine
+    whether court proceedings are required. You can engage us separately
+    for probate help, with a separate scope and fees agreed in writing.
+  probate_details_label: Explore probate and next steps
+  process_label: The estate planning process
+  process_heading: From meaning to wishes in writing.
+  steps:
+    - [Get to know each other, "Begin with an optional astrology reading, then talk about your life and wishes. Get to know us and discuss the planning process and next steps before deciding to engage us."]
+    - [Choose to engage, "When you are ready, we review conflicts and agree on your services and fees in writing. You choose whether to engage us."]
+    - [Plan together, "At your planning meeting, discuss the people you love, your property, your care, and what you would like to happen after you pass."]
+    - [Prepare your estate plan, "We prepare and review the documents that put your wishes in writing. If you want trust administration support, we discuss it under separate written terms."]
+    - [Meet again to sign, "We meet again to review and finish your documents, arranging required witnesses and notarization for the documents and law that apply."]
+  record_label: Optional blockchain record
+  record_unit: For one signed version
+  record_status: Available by request
+  record_heading: A lasting record of one version.
+  record_body: >-
+    On request, we can record evidence of one signed version of your plan
+    on Solana. A later edit calls for a new record.
+  record_note: >-
+    Blockchain attestations do not replace the signatures your documents
+    require.
+  closing_heading: What will your story leave in motion?
+  closing_body: >-
+    Tell us where you live, whom you want to plan for, and your concerns.
+    We will discuss your plan and whether Nevada trust planning fits.
+    Work begins after a conflict check and a written agreement.
+  sibling_practices:
+    - brand: delete-your-data
+      eyebrow: Your privacy, now and after
+      heading: Pair your plan with DeleteYourData.com.
+      body: >-
+        DeleteYourData.com is a non-legal service that helps you ask companies to
+        delete the personal data they hold about you, for $29/mo or $290/year prepaid. Basic form filings, such as forming an LLC, are included. Government fees are separate. The subscription
+        is also called Neon Law Nautilus. When we write your estate plan, we
+        set its triggers together. While your subscription is active, an
+        optional death check sets those triggers in motion on your behalf, such
+        as starting a life insurance claim.
+      cta_label: Visit DeleteYourData.com

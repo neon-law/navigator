@@ -1,0 +1,816 @@
+//! Anonymous lead capture for the firm's public pages.
+//!
+//! The route is deliberately narrow: it stores an inquiry, never creates a
+//! [`person`](store::persons), and answers accepted and rejected submissions
+//! with the same neutral redirect. The form's CSRF token is minted by the
+//! public Dioxus page middleware, while the write is rate-limited here at the
+//! route boundary.
+
+use axum::{
+    extract::{DefaultBodyLimit, Extension, Form, Request, State},
+    http::StatusCode,
+    middleware::{from_fn_with_state, Next},
+    response::{IntoResponse, Redirect, Response},
+    routing::post,
+    Router,
+};
+use chrono::Utc;
+use serde::Deserialize;
+use tower_cookies::Cookies;
+use views::brand::BrandKey;
+
+use crate::{password_reset, rate_limit::RateLimit, AppState, SessionStore};
+
+/// The dedicated double-submit cookie used by every public lead form.
+pub const LEAD_CSRF_COOKIE_NAME: &str = "navigator_lead_csrf";
+
+/// The maximum encoded form body. The fields are all short, and a bounded
+/// body keeps malformed submissions from becoming an allocation surface.
+pub const MAX_BODY_BYTES: usize = 8 * 1024;
+
+#[derive(Debug, Deserialize)]
+struct LeadForm {
+    #[serde(default)]
+    email: String,
+    #[serde(default)]
+    phone: String,
+    #[serde(default)]
+    sms_consent: Option<String>,
+    #[serde(default)]
+    website: String,
+    #[serde(default, alias = "_csrf")]
+    csrf_token: String,
+    #[serde(default)]
+    source_path: String,
+    #[serde(default)]
+    consent_version: String,
+    #[serde(default, rename = "h-captcha-response")]
+    hcaptcha_response: String,
+}
+
+/// Build the anonymous lead write route with its own rate-limit boundary and
+/// bounded request body.
+pub fn routes(rate_limit: RateLimit) -> Router<AppState> {
+    Router::new()
+        .route("/leads", post(submit))
+        .merge(crate::lead_confirm::routes())
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .route_layer(from_fn_with_state(rate_limit, crate::rate_limit::enforce))
+}
+
+/// Mint the page's double-submit token and carry the token plus source path
+/// into the server function that renders the form.
+pub async fn inject_page_context(
+    State((sessions, secure_cookies)): State<(SessionStore, bool)>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    let Some(cookies) = req.extensions().get::<Cookies>().cloned() else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            webapp::error_pages::server_error(),
+        )
+            .into_response();
+    };
+    let csrf_token =
+        password_reset::mint_csrf_with(&sessions, secure_cookies, &cookies, LEAD_CSRF_COOKIE_NAME);
+    let source_path = req.uri().path().to_string();
+    req.extensions_mut()
+        .insert(webapp::lead_capture::LeadCaptureContext {
+            csrf_token,
+            source_path,
+            hcaptcha_sitekey: crate::hcaptcha::CONFIGURED
+                .as_ref()
+                .map(|keys| keys.sitekey().to_string()),
+        });
+    next.run(req).await
+}
+
+async fn submit(
+    State(state): State<AppState>,
+    Extension(brand): Extension<BrandKey>,
+    cookies: Cookies,
+    headers: axum::http::HeaderMap,
+    form: Result<Form<LeadForm>, axum::extract::rejection::FormRejection>,
+) -> Response {
+    let Ok(Form(form)) = form else {
+        audit(brand, "/leads", "none", "rejected_form");
+        return neutral_redirect();
+    };
+
+    let source_path = safe_source_path(&form.source_path);
+    if !password_reset::verify_csrf_with(
+        &state.sessions,
+        &cookies,
+        &form.csrf_token,
+        LEAD_CSRF_COOKIE_NAME,
+    ) {
+        audit(brand, &source_path, "none", "rejected_csrf");
+        return neutral_redirect();
+    }
+    if !form.website.trim().is_empty() {
+        audit(brand, &source_path, "none", "rejected_honeypot");
+        return neutral_redirect();
+    }
+    if !captcha_passes(&state, &headers, &form.hcaptcha_response).await {
+        audit(brand, &source_path, "none", "rejected_captcha");
+        return neutral_redirect();
+    }
+
+    cookies.add(password_reset::csrf_cookie_with_ttl(
+        LEAD_CSRF_COOKIE_NAME,
+        String::new(),
+        secure_cookies(&state),
+        0,
+    ));
+
+    let email = form.email.trim();
+    let phone = form.phone.trim();
+    let sms_requested = form.sms_consent.as_deref() == Some("on");
+    if !valid_email(email)
+        || !valid_phone(phone)
+        || form.consent_version.trim().is_empty()
+        || source_path == "/leads"
+    {
+        audit(brand, &source_path, "none", "rejected_validation");
+        return neutral_redirect();
+    }
+
+    let phone = (!phone.is_empty()).then(|| phone.to_string());
+    let sms_opt_in = sms_requested && phone.is_some();
+    let event_time = Utc::now();
+    let new_lead = store::leads::NewLead {
+        email: email.to_string(),
+        phone: phone.clone(),
+        brand_key: brand.as_str().to_string(),
+        source_path: source_path.clone(),
+        consent_version: form.consent_version,
+        consented_at: event_time,
+    };
+    let consent_event = store::leads::NewConsentEvent {
+        consented_at: event_time,
+        phone,
+        source_path: source_path.clone(),
+        sms_consent_version: webapp::lead_capture::server_sms_consent_version(
+            views::brand::FIRM_BRAND.site_name,
+        ),
+        sms_policy_version: webapp::lead_capture::SMS_POLICY_VERSION.to_string(),
+        sms_opt_in,
+    };
+    match store::leads::record_consent_event(&state.surreal, &new_lead, &consent_event).await {
+        Ok(lead) => {
+            let lead_id = lead.id.to_string();
+            audit(brand, &source_path, &lead_id, "accepted");
+            crate::lead_confirm::spawn_send(state.clone(), lead.id, lead.email.clone());
+            telemetry::record_funnel_event(telemetry::FunnelEvent::LeadCaptured {
+                lead_id: &lead_id,
+                brand: brand.as_str(),
+                source_path: &source_path,
+                sms_consent: sms_opt_in,
+            });
+            state
+                .plausible_conversions
+                .record(
+                    brand,
+                    crate::plausible::ConversionGoal::ContactSubmitted,
+                    &source_path,
+                    crate::rate_limit::client_ip_from_headers(&headers),
+                    headers
+                        .get(axum::http::header::USER_AGENT)
+                        .and_then(|value| value.to_str().ok()),
+                )
+                .await;
+        }
+        Err(error) => {
+            tracing::error!(error = %error, brand = brand.as_str(), source_path = %source_path, "lead submission failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+    if source_path == "/nautilus" {
+        return Redirect::to("/auth/login?return_to=%2Fnautilus%23enrollment").into_response();
+    }
+    neutral_redirect()
+}
+
+/// Whether the submission passes hCaptcha. Always true when the deployment
+/// has not configured it.
+async fn captcha_passes(state: &AppState, headers: &axum::http::HeaderMap, token: &str) -> bool {
+    match state.hcaptcha.as_deref() {
+        Some(hcaptcha) => {
+            let client_ip = crate::rate_limit::client_ip_from_headers(headers);
+            hcaptcha.verify(token, Some(client_ip)).await
+        }
+        None => true,
+    }
+}
+
+fn neutral_redirect() -> Response {
+    Redirect::to("/contact/sent").into_response()
+}
+
+fn secure_cookies(state: &AppState) -> bool {
+    crate::secure_cookies(state)
+}
+
+fn valid_email(email: &str) -> bool {
+    email.len() <= 254 && email.contains('@')
+}
+
+fn valid_phone(phone: &str) -> bool {
+    phone.chars().count() <= 32
+        && phone
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '+' | ' ' | '-' | '(' | ')'))
+}
+
+fn safe_source_path(path: &str) -> String {
+    let path = path.trim();
+    if matches!(
+        path,
+        "/" | "/contact" | "/navigator" | "/services" | "/nautilus"
+    ) {
+        path.to_string()
+    } else {
+        "/leads".to_string()
+    }
+}
+
+fn audit(brand: BrandKey, source_path: &str, lead_id: &str, outcome: &str) {
+    tracing::info!(
+        target: "audit",
+        lead_id,
+        brand = brand.as_str(),
+        source_path,
+        outcome,
+        "lead submission"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use axum::{body::Body, http::Request as HttpRequest, Router};
+    use std::time::Duration;
+    use tower::ServiceExt;
+    use tower_cookies::CookieManagerLayer;
+
+    const CONSENT: &str = "By sending this, you agree that Neon Law may email you about this inquiry. Sending it does not make you a client, and nothing on this page is legal advice. See our Privacy Policy.";
+    fn encoded(fields: &[(&str, &str)]) -> String {
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        serializer.extend_pairs(fields.iter().copied());
+        serializer.finish()
+    }
+
+    fn csrf_cookie(sessions: &SessionStore, token: &str) -> String {
+        sessions.encode_signed_bytes(token.as_bytes())
+    }
+
+    async fn test_app(
+        db: store::surreal::SurrealDb,
+        rate_limit: RateLimit,
+    ) -> (Router, SessionStore) {
+        test_app_with_state(crate::test_support::app_state(db).await, rate_limit)
+    }
+
+    /// Like [`test_app`], but the caller supplies (and can therefore
+    /// override, e.g. `plausible_conversions`) the full [`AppState`].
+    fn test_app_with_state(state: AppState, rate_limit: RateLimit) -> (Router, SessionStore) {
+        let sessions = state.sessions.clone();
+        let router = Router::new()
+            .merge(routes(rate_limit))
+            .layer(axum::middleware::from_fn(
+                |mut req: Request, next: Next| async move {
+                    req.extensions_mut().insert(BrandKey::Neon);
+                    next.run(req).await
+                },
+            ))
+            .layer(CookieManagerLayer::new())
+            .with_state(state);
+        (router, sessions)
+    }
+
+    fn request(body: String, cookie: Option<String>) -> HttpRequest<Body> {
+        let mut builder = HttpRequest::builder()
+            .method("POST")
+            .uri("/leads")
+            .header("content-type", "application/x-www-form-urlencoded");
+        if let Some(cookie) = cookie {
+            builder = builder.header("cookie", format!("{LEAD_CSRF_COOKIE_NAME}={cookie}"));
+        }
+        builder.body(Body::from(body)).unwrap()
+    }
+
+    fn body(token: &str, email: &str, phone: &str, sms: bool) -> String {
+        let mut fields = vec![
+            ("email", email),
+            ("phone", phone),
+            ("website", ""),
+            ("csrf_token", token),
+            ("source_path", "/services"),
+            ("consent_version", CONSENT),
+        ];
+        if sms {
+            fields.push(("sms_consent", "on"));
+        }
+        encoded(&fields)
+    }
+
+    #[test]
+    fn source_path_accepts_only_routes_that_mount_the_lead_form() {
+        for path in ["/", "/contact", "/navigator", "/services", "/nautilus"] {
+            assert_eq!(safe_source_path(path), path);
+        }
+
+        for path in [
+            "/client-name",
+            "/services?utm_source=campaign",
+            "/services/client@example.com",
+        ] {
+            assert_eq!(
+                safe_source_path(path),
+                "/leads",
+                "browser-selected source path must not enter a lead or telemetry record: {path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn accepts_a_lead_without_creating_a_person() {
+        let db = store::test_support::mem_surreal().await;
+        let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
+        let token = "lead-csrf";
+        let response = app
+            .oneshot(request(
+                body(token, "visitor@example.com", "", false),
+                Some(csrf_cookie(&sessions, token)),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers()["location"], "/contact/sent");
+        let leads = store::leads::list(&db).await.unwrap();
+        assert_eq!(leads.len(), 1);
+        assert_eq!(leads[0].email_lower, "visitor@example.com");
+        assert!(store::persons::find_by_email_ci(&db, "visitor@example.com")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn nautilus_records_contact_before_redirecting_to_sign_in() {
+        let db = store::test_support::mem_surreal().await;
+        let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
+        let token = "nautilus-csrf";
+        let payload = body(token, "visitor@example.com", "", false)
+            .replace("source_path=%2Fservices", "source_path=%2Fnautilus");
+        let response = app
+            .oneshot(request(payload, Some(csrf_cookie(&sessions, token))))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers()["location"],
+            "/auth/login?return_to=%2Fnautilus%23enrollment"
+        );
+        let leads = store::leads::list(&db).await.unwrap();
+        assert_eq!(leads.len(), 1);
+        assert_eq!(leads[0].source_path, "/nautilus");
+        assert!(store::persons::find_by_email_ci(&db, "visitor@example.com")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn a_configured_hcaptcha_stores_only_leads_whose_token_it_redeems() {
+        use wiremock::matchers::{body_string_contains, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let siteverify = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("response=solved"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": true})),
+            )
+            .mount(&siteverify)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"success": false})),
+            )
+            .mount(&siteverify)
+            .await;
+
+        let db = store::test_support::mem_surreal().await;
+        let mut state = crate::test_support::app_state(db.clone()).await;
+        state.hcaptcha = Some(std::sync::Arc::new(crate::hcaptcha::HCaptcha::new(
+            "site",
+            "secret",
+            siteverify.uri(),
+        )));
+        let (app, sessions) = test_app_with_state(state, RateLimit::disabled());
+        let token = "lead-csrf";
+
+        for (email, captcha) in [
+            ("bot@example.com", None),
+            ("forged@example.com", Some("forged")),
+        ] {
+            let mut fields = body(token, email, "", false);
+            if let Some(captcha) = captcha {
+                fields = format!("{fields}&h-captcha-response={captcha}");
+            }
+            let response = app
+                .clone()
+                .oneshot(request(fields, Some(csrf_cookie(&sessions, token))))
+                .await
+                .unwrap();
+            assert_eq!(response.headers()["location"], "/contact/sent", "{email}");
+        }
+        assert!(store::leads::list(&db).await.unwrap().is_empty());
+
+        let solved = format!(
+            "{}&h-captcha-response=solved",
+            body(token, "visitor@example.com", "", false)
+        );
+        let response = app
+            .oneshot(request(solved, Some(csrf_cookie(&sessions, token))))
+            .await
+            .unwrap();
+        assert_eq!(response.headers()["location"], "/contact/sent");
+        let leads = store::leads::list(&db).await.unwrap();
+        assert_eq!(leads.len(), 1);
+        assert_eq!(leads[0].email_lower, "visitor@example.com");
+    }
+
+    #[tokio::test]
+    async fn an_accepted_lead_is_emailed_its_confirmation_link() {
+        let db = store::test_support::mem_surreal().await;
+        let email = std::sync::Arc::new(crate::email::CapturingEmail::new());
+        let mut state = crate::test_support::app_state(db.clone()).await;
+        state.email = email.clone();
+        let (app, sessions) = test_app_with_state(state, RateLimit::disabled());
+        let token = "lead-csrf";
+        app.oneshot(request(
+            body(token, "visitor@example.com", "", false),
+            Some(csrf_cookie(&sessions, token)),
+        ))
+        .await
+        .unwrap();
+        let mut sent = Vec::new();
+        for _ in 0..50 {
+            sent = email.captured();
+            if !sent.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].to, "visitor@example.com");
+        assert_eq!(sent[0].template_slug.as_deref(), Some("lead_confirm"));
+        assert!(
+            sent[0].body.contains("/leads/confirm?token="),
+            "{}",
+            sent[0].body
+        );
+    }
+
+    #[tokio::test]
+    async fn records_sms_consent_only_when_a_phone_is_present() {
+        let db = store::test_support::mem_surreal().await;
+        let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
+        let token = "sms-csrf";
+        let response = app
+            .oneshot(request(
+                body(token, "sms@example.com", "+ ()", true),
+                Some(csrf_cookie(&sessions, token)),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let lead = store::leads::list(&db).await.unwrap().remove(0);
+        let events = store::leads::consent_history(&db, lead.id).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(events[0].sms_opt_in);
+        assert_eq!(
+            events[0].sms_consent_version,
+            webapp::lead_capture::server_sms_consent_version("Neon Law")
+        );
+        assert_eq!(
+            events[0].sms_policy_version,
+            webapp::lead_capture::SMS_POLICY_VERSION
+        );
+
+        let db = store::test_support::mem_surreal().await;
+        let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
+        let response = app
+            .oneshot(request(
+                body(token, "email@example.com", "+ ()", false),
+                Some(csrf_cookie(&sessions, token)),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let lead = store::leads::list(&db).await.unwrap().remove(0);
+        let events = store::leads::consent_history(&db, lead.id).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].sms_opt_in);
+        assert_eq!(events[0].phone.as_deref(), Some("+ ()"));
+    }
+
+    #[tokio::test]
+    async fn derives_sms_evidence_server_side_and_ignores_tampered_fields() {
+        let db = store::test_support::mem_surreal().await;
+        let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
+        let token = "tampered-sms-csrf";
+        let body = format!(
+            "{}&sms_consent_version=attacker-wording&sms_policy_version=attacker-policy",
+            body(token, "sms@example.com", "+1 555 010 0100", true)
+        );
+        let response = app
+            .oneshot(request(body, Some(csrf_cookie(&sessions, token))))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let lead = store::leads::list(&db).await.unwrap().remove(0);
+        let event = store::leads::consent_history(&db, lead.id)
+            .await
+            .unwrap()
+            .remove(0);
+        let rendered = webapp::lead_capture::LeadCaptureCopy {
+            consent_sentence: CONSENT.to_string(),
+            phone_helper: "Optional. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Our Privacy Policy and texting terms explain how we text and what we keep.".to_string(),
+            sms_label: "Yes, Neon Law may send me text messages about this inquiry at this number, including automated texts. Texting is not a condition of hiring the firm.".to_string(),
+        };
+        assert_eq!(event.sms_consent_version, rendered.sms_consent_version());
+        assert_eq!(event.sms_policy_version, "2026-09-18");
+        assert_ne!(event.sms_consent_version, "attacker-wording");
+        assert_ne!(event.sms_policy_version, "attacker-policy");
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_submissions_with_the_same_redirect_and_no_row() {
+        for (email, phone, honeypot, token_ok) in [
+            ("no-at.example.com", "", "", true),
+            ("too-long@example.com", "!", "", true),
+            ("honeypot@example.com", "", "filled", true),
+            ("csrf@example.com", "", "", false),
+        ] {
+            let db = store::test_support::mem_surreal().await;
+            let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
+            let token = "invalid-csrf";
+            let form = encoded(&[
+                ("email", email),
+                ("phone", phone),
+                ("website", honeypot),
+                ("csrf_token", token),
+                ("source_path", "/contact"),
+                ("consent_version", CONSENT),
+            ]);
+            let response = app
+                .oneshot(request(
+                    form,
+                    token_ok.then(|| csrf_cookie(&sessions, token)),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+            assert!(store::leads::list(&db).await.unwrap().is_empty());
+            assert!(store::persons::find_by_email_ci(&db, email)
+                .await
+                .unwrap()
+                .is_none());
+        }
+
+        let db = store::test_support::mem_surreal().await;
+        let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
+        let token = "oversized-csrf";
+        let oversized_email = "x".repeat(MAX_BODY_BYTES);
+        let form = encoded(&[
+            ("email", oversized_email.as_str()),
+            ("csrf_token", token),
+            ("source_path", "/contact"),
+            ("consent_version", CONSENT),
+        ]);
+        let response = app
+            .oneshot(request(form, Some(csrf_cookie(&sessions, token))))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert!(store::leads::list(&db).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn rate_limits_a_burst() {
+        let db = store::test_support::mem_surreal().await;
+        let (app, sessions) = test_app(db, RateLimit::new(1, Duration::from_mins(1))).await;
+        let token = "rate-csrf";
+        let cookie = csrf_cookie(&sessions, token);
+        let first = app
+            .clone()
+            .oneshot(request(
+                body(token, "first@example.com", "", false),
+                Some(cookie.clone()),
+            ))
+            .await
+            .unwrap();
+        let second = app
+            .oneshot(request(
+                body(token, "second@example.com", "", false),
+                Some(cookie),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::SEE_OTHER);
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn audit_contains_the_lead_id_and_source_but_not_the_email() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::fmt::MakeWriter;
+
+        #[derive(Clone)]
+        struct Buffer(Arc<Mutex<Vec<u8>>>);
+        impl Write for Buffer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> MakeWriter<'a> for Buffer {
+            type Writer = Buffer;
+            fn make_writer(&'a self) -> Buffer {
+                self.clone()
+            }
+        }
+
+        crate::test_tracing::ensure_callsite_interest();
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(Buffer(output.clone()))
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let db = store::test_support::mem_surreal().await;
+        let (app, sessions) = test_app(db, RateLimit::disabled()).await;
+        let token = "audit-csrf";
+        let email = "audit@example.com";
+        let response = app
+            .oneshot(request(
+                body(token, email, "", false),
+                Some(csrf_cookie(&sessions, token)),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(
+            output.contains("source_path=\"/services\""),
+            "audit: {output}"
+        );
+        assert!(output.contains("lead_id="), "audit: {output}");
+        assert!(!output.contains(email), "email leaked into audit: {output}");
+        assert!(output.contains("funnel.lead_captured"), "funnel: {output}");
+        assert!(output.contains("brand=\"neon\""), "funnel: {output}");
+        assert!(
+            output.contains("source_path=\"/services\""),
+            "funnel: {output}"
+        );
+        assert!(output.contains("sms_consent=false"), "funnel: {output}");
+        assert!(!output.contains("email="), "email field leaked: {output}");
+        assert!(!output.contains("phone="), "phone field leaked: {output}");
+        assert!(!output.contains("name="), "name field leaked: {output}");
+        assert!(
+            !output.contains("address="),
+            "address field leaked: {output}"
+        );
+        assert!(
+            !output.contains("project_code="),
+            "Project code field leaked: {output}"
+        );
+    }
+
+    async fn conversion_test_app(
+        db: store::surreal::SurrealDb,
+        origin: String,
+    ) -> (Router, SessionStore) {
+        let mut state = crate::test_support::app_state(db).await;
+        state.plausible_conversions = crate::plausible::ConversionReporter::new(origin, true);
+        test_app_with_state(state, RateLimit::disabled())
+    }
+
+    #[tokio::test]
+    async fn a_successful_submission_fires_exactly_one_conversion_with_no_personal_data() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/event"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let db = store::test_support::mem_surreal().await;
+        let (app, sessions) = conversion_test_app(db, server.uri()).await;
+        let token = "conversion-csrf";
+        let response = app
+            .oneshot(request(
+                body(token, "convert@example.com", "", false),
+                Some(csrf_cookie(&sessions, token)),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let requests = server
+            .received_requests()
+            .await
+            .expect("request recording is on by default");
+        assert_eq!(requests.len(), 1, "exactly one conversion beacon");
+        let sent: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(sent["name"], "Contact: Submitted");
+        assert_eq!(sent["domain"], "neonlaw.com");
+        assert_eq!(sent["url"], "https://neonlaw.com/services");
+        assert!(
+            !sent.to_string().contains("convert@example.com"),
+            "email leaked into the conversion payload: {sent}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_submissions_fire_no_conversion() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/event"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        for (email, phone, honeypot, token_ok) in [
+            ("no-at.example.com", "", "", true),
+            ("honeypot@example.com", "", "filled", true),
+            ("csrf@example.com", "", "", false),
+        ] {
+            let db = store::test_support::mem_surreal().await;
+            let (app, sessions) = conversion_test_app(db, server.uri()).await;
+            let token = "invalid-csrf";
+            let form = encoded(&[
+                ("email", email),
+                ("phone", phone),
+                ("website", honeypot),
+                ("csrf_token", token),
+                ("source_path", "/contact"),
+                ("consent_version", CONSENT),
+            ]);
+            let response = app
+                .oneshot(request(
+                    form,
+                    token_ok.then(|| csrf_cookie(&sessions, token)),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_storage_failure_fires_no_conversion() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/event"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        // A handle with no engine behind it: every store call errors,
+        // exercising the same `Err(error)` branch a real outage would.
+        let db = store::surreal::SurrealDb::uninitialized();
+        let (app, sessions) = conversion_test_app(db, server.uri()).await;
+        let token = "storage-failure-csrf";
+        let response = app
+            .oneshot(request(
+                body(token, "storage-failure@example.com", "", false),
+                Some(csrf_cookie(&sessions, token)),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}

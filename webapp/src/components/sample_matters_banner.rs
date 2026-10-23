@@ -1,0 +1,194 @@
+//! The site-wide banner a deployment holding sample matters publishes.
+//!
+//! One deployment carries invented clients: the persistent staging row at
+//! `staging.neonlaw.com`, whose whole purpose is to be a link somebody can be
+//! shown. Everything in it — every case, client, document, and roster — is
+//! made up, and a visitor looking at a matter detail page has no way to know
+//! that from the page itself. It looks exactly like the real thing, because it
+//! *is* the real application; only the data plane is synthetic.
+//!
+//! So the deployment says so, on every page. This is not a debug affordance or
+//! a developer convenience: it is the one thing standing between a
+//! demonstration and somebody believing they were shown a client's file.
+//!
+//! ## Why it renders through the response rather than through each page
+//!
+//! It is injected once into every HTML response by
+//! `portal::dioxus_app::dioxus_document_head`, which already rewrites the
+//! rendered document to stamp `<html lang>` and the font faces. That is the
+//! only seam that reaches *every* page — including the error pages, which are
+//! exactly where a reader is most likely to be confused about what they are
+//! looking at, and which no shell wraps.
+//!
+//! The alternative was a component every page's shell renders, which would
+//! have meant threading a flag through thirty server functions and leaving the
+//! banner absent from whichever page was added next without it. A banner with
+//! holes in it is worse than no banner, because the pages that have it teach a
+//! reader to trust its absence.
+//!
+//! It still lives here, as a real component, so it is written in tokens and
+//! covered by the same tests and the same colour guard as every other
+//! component. `portal` renders it to a string once at startup.
+
+use dioxus::prelude::*;
+
+/// The banner's DOM id, and the hook the browser walkthrough asserts on.
+pub const SAMPLE_MATTERS_BANNER_ID: &str = "sample-matters-banner";
+
+/// The site-wide notice that this deployment's matters are invented.
+///
+/// Deliberately not a landmark and not a live region. `role="status"` would
+/// make an assistive technology announce it on every navigation, which is
+/// nagging rather than informing; a `<aside>` would add a second complementary
+/// landmark to every page and compete with the real ones. It is the first
+/// content in the document instead, so it is the first thing read, once.
+///
+/// The copy names no hostname. A deployment that carries sample matters is
+/// identified by its configuration, not by its address, and hardcoding
+/// `staging.neonlaw.com` here would make the sentence false the moment a
+/// second such deployment existed.
+#[component]
+pub fn SampleMattersBanner() -> Element {
+    rsx! {
+        div { id: SAMPLE_MATTERS_BANNER_ID, class: "sample-matters-banner",
+            strong { class: "sample-matters-banner__label", "Sample matters" }
+            span { class: "sample-matters-banner__body",
+                "Every client, case, and document on this deployment is invented for
+                 demonstration. This is purposefully a demo environment."
+            }
+        }
+    }
+}
+
+/// Render the banner to a standalone HTML string.
+///
+/// `portal` injects this into every HTML response rather than composing the
+/// component into a page tree, so it needs the markup as bytes. Server-only:
+/// `dioxus-ssr` is not in the wasm client bundle, and nothing in the browser
+/// renders this — the string arrives already in the document.
+///
+/// Cheap to call, but call it once: the markup carries no props and no
+/// brand-dependent copy, so it is the same on every page of both faces.
+#[cfg(feature = "server")]
+#[must_use]
+pub fn render_sample_matters_banner() -> String {
+    fn banner() -> Element {
+        rsx! {
+            SampleMattersBanner {}
+        }
+    }
+    let mut dom = VirtualDom::new(banner);
+    dom.rebuild_in_place();
+    dioxus_ssr::render(&dom)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn html() -> String {
+        fn app() -> Element {
+            rsx! {
+                SampleMattersBanner {}
+            }
+        }
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        dioxus_ssr::render(&dom)
+    }
+
+    /// The banner says the two things a reader needs: that every record on the
+    /// page was invented, and that the deployment carrying them is a demo on
+    /// purpose. The second sentence is the one that matters — "sample" alone is
+    /// jargon a visitor can read past.
+    #[test]
+    fn the_banner_says_the_matters_are_invented_and_the_deployment_is_a_demo() {
+        let out = html();
+        assert!(out.contains("Sample matters"), "{out}");
+        assert!(
+            out.contains("invented for") && out.contains("purposefully a demo environment"),
+            "the banner must say outright that this deployment is a demo: {out}"
+        );
+    }
+
+    /// The id is the hook the browser walkthrough looks for, so it is asserted
+    /// here rather than left to a selector in a test that would fail with a
+    /// less obvious message.
+    #[test]
+    fn the_banner_carries_the_id_the_walkthrough_asserts_on() {
+        assert!(
+            html().contains(&format!("id=\"{SAMPLE_MATTERS_BANNER_ID}\"")),
+            "{}",
+            html()
+        );
+    }
+
+    /// No landmark and no live region. Both would be worse than plain content:
+    /// a live region nags on every navigation, and a landmark competes with
+    /// the page's own.
+    #[test]
+    fn the_banner_is_plain_content_rather_than_a_landmark_or_live_region() {
+        let out = html();
+        for attribute in ["role=", "aria-live", "<aside"] {
+            assert!(
+                !out.contains(attribute),
+                "the banner declares no `{attribute}`: {out}"
+            );
+        }
+    }
+
+    /// A deployment is identified by its configuration, not its address. A
+    /// hostname in this copy would be false the moment a second sample
+    /// deployment existed.
+    #[test]
+    fn the_banner_names_no_hostname() {
+        let out = html();
+        assert!(!out.contains("neonlaw.com"), "{out}");
+    }
+
+    /// Every class the banner emits is styled by the stylesheet that styles it.
+    ///
+    /// This is the one component whose entire job is to be *seen*: it is what
+    /// stands between a demonstration and somebody believing they were shown a
+    /// client's file. Renaming it without renaming its rules left it rendering
+    /// as unstyled text — no amber band, no separation between the label and
+    /// the sentence it qualifies — so the notice was on the page and invisible
+    /// as a notice. Nothing caught that, because nothing tied the class the
+    /// component emits to the rule that paints it.
+    ///
+    /// A markup-only assertion cannot cover this and neither can a rendering
+    /// one: the class is in the HTML either way, and no test in this crate
+    /// loads a stylesheet. So this reads the file across the seam by path,
+    /// which is the seam that broke.
+    #[test]
+    fn every_class_the_banner_emits_is_styled_by_the_theme() {
+        let theme =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../server/public/css/theme.css");
+        let css = std::fs::read_to_string(&theme)
+            .unwrap_or_else(|e| panic!("the theme stylesheet must be readable: {e}"));
+
+        let out = html();
+        let mut classes = Vec::new();
+        let mut rest = out.as_str();
+        while let Some(at) = rest.find("class=\"") {
+            rest = &rest[at + 7..];
+            let Some(end) = rest.find('"') else { break };
+            classes.extend(rest[..end].split_whitespace().map(str::to_string));
+            rest = &rest[end..];
+        }
+        assert!(
+            !classes.is_empty(),
+            "the banner emits classes, so this test must find some: {out}"
+        );
+
+        for class in classes {
+            assert!(
+                css.contains(&format!(".{class}")),
+                "`{class}` is emitted by the banner but has no rule in \
+                 server/public/css/theme.css — renaming the component without \
+                 renaming its rules publishes an unstyled notice, which is the \
+                 one thing this banner may not be"
+            );
+        }
+    }
+}

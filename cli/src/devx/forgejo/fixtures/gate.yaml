@@ -1,0 +1,18 @@
+# Synthetic required gate for `navigator dev forgejo smoke`. Forgejo posts its
+# commit status as `gate / gate (pull_request)`. A head branch named `red-*`
+# fails; every other head passes. The pause keeps the check pending while the
+# smoke schedules auto-merge.
+name: gate
+on: [pull_request]
+jobs:
+  gate:
+    runs-on: self-hosted
+    steps:
+      - env:
+          HEAD_REF: ${{ forgejo.head_ref }}
+        run: |
+          sleep 10
+          case "$HEAD_REF" in
+            red-*) echo "synthetic red gate"; exit 1 ;;
+          esac
+          echo "synthetic green gate"

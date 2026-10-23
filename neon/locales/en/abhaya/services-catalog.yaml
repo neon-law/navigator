@@ -1,0 +1,511 @@
+# Abhaya Immigration's flat fees for common filings, as structured records.
+#
+# The same typed catalog Neon publishes (`views::locales::services`), so the
+# `/services` page renders these through the shared services band: one search,
+# one fee card, one "government fees cost extra" badge, and the same gate
+# (Y002) refusing a malformed fee. Fees, item codes, service names, and
+# `includes` scope lines are attorney-set.
+#
+# Fees are set at 90% of the 2026-10 market rate for each filing and rounded to
+# whole dollars. Government filing fees are always separate (`state_fee: true`).
+catalog_version: 2
+
+# Required by the catalog contract. No Abhaya service charges the shared flat
+# fee; every row below publishes its own `amount`.
+flat_fee: "$450"
+
+categories:
+  - value: work_visas
+    label: Work visas
+  - value: green_cards
+    label: Green cards
+  - value: permits_and_travel
+    label: Work permits and travel
+
+services:
+  - id: o1-new
+    item: "2101"
+    name: O-1 extraordinary ability petition
+    blurb: >-
+      A new O-1 petition for a person with extraordinary ability or achievement
+      in science, business, education, arts, or athletics.
+    category: work_visas
+    amount: "$7,200"
+    period: per petition
+    state_fee: true
+    includes:
+      - Review your achievements against the O-1 criteria
+      - Prepare the petition, evidence index, and support letters
+      - A licensed attorney reviews before filing
+    related:
+      - o1-extension
+    keywords:
+      - O-1A
+      - O-1B
+      - I-129
+      - extraordinary ability
+
+  - id: o1-extension
+    item: "2102"
+    name: O-1 extension
+    blurb: >-
+      Extend O-1 status with the same employer or agent.
+    category: work_visas
+    amount: "$2,700"
+    period: per petition
+    state_fee: true
+    includes:
+      - Prepare the extension petition and updated evidence
+      - A licensed attorney reviews before filing
+    related:
+      - o1-new
+    keywords:
+      - I-129
+      - extension
+
+  - id: h1b-registration
+    item: "2111"
+    name: H-1B lottery registration
+    blurb: >-
+      Register an employee for the annual H-1B cap selection.
+    category: work_visas
+    amount: "$450"
+    period: per registration
+    state_fee: true
+    includes:
+      - Confirm the role and degree fit the specialty-occupation rules
+      - Submit the electronic registration
+    related:
+      - h1b-cap
+    keywords:
+      - H-1B cap
+      - lottery
+      - registration
+
+  - id: h1b-cap
+    item: "2112"
+    name: H-1B petition
+    blurb: >-
+      A cap or cap-exempt H-1B petition for a specialty-occupation role.
+    category: work_visas
+    amount: "$3,150"
+    period: per petition
+    state_fee: true
+    includes:
+      - Review the position, wage level, and the worker's qualifications
+      - Prepare the labor condition application and the petition
+      - A licensed attorney reviews before filing
+    related:
+      - h1b-registration
+      - h1b-extension
+    keywords:
+      - I-129
+      - LCA
+      - specialty occupation
+      - cap-exempt
+
+  - id: h1b-extension
+    item: "2113"
+    name: H-1B extension, transfer, or amendment
+    blurb: >-
+      Extend H-1B status, move to a new employer, or amend a petition after a
+      material change.
+    category: work_visas
+    amount: "$2,700"
+    period: per petition
+    state_fee: true
+    includes:
+      - Prepare the labor condition application and the petition
+      - A licensed attorney reviews before filing
+    related:
+      - h1b-cap
+    keywords:
+      - I-129
+      - change of employer
+      - transfer
+      - amendment
+
+  - id: l1-new
+    item: "2121"
+    name: L-1 intracompany transfer
+    blurb: >-
+      A new L-1 petition, including a new U.S. office, for an executive,
+      manager, or specialized-knowledge employee.
+    category: work_visas
+    amount: "$7,200"
+    period: per petition
+    state_fee: true
+    includes:
+      - Review the relationship between the companies and the role
+      - Prepare the petition and supporting evidence
+      - A licensed attorney reviews before filing
+    related:
+      - l1-extension
+    keywords:
+      - L-1A
+      - L-1B
+      - I-129
+      - new office
+
+  - id: l1-extension
+    item: "2122"
+    name: L-1 extension
+    blurb: >-
+      Extend L-1 status with the same company.
+    category: work_visas
+    amount: "$2,700"
+    period: per petition
+    state_fee: true
+    includes:
+      - Prepare the extension petition and updated evidence
+      - A licensed attorney reviews before filing
+    related:
+      - l1-new
+    keywords:
+      - I-129
+      - extension
+
+  - id: tn-new
+    item: "2131"
+    name: TN professional
+    blurb: >-
+      A new TN case for an eligible Canadian or Mexican professional, filed
+      with USCIS or presented at the border or a consulate.
+    category: work_visas
+    amount: "$2,700"
+    period: per case
+    state_fee: true
+    includes:
+      - Confirm the profession qualifies
+      - Prepare the employer letter and supporting documents
+      - A licensed attorney reviews before filing
+    related:
+      - tn-extension
+    keywords:
+      - USMCA
+      - NAFTA
+      - Canada
+      - Mexico
+
+  - id: tn-extension
+    item: "2132"
+    name: TN extension, change of employer, or amendment
+    blurb: >-
+      Extend TN status, move to a new employer, or amend after a change.
+    category: work_visas
+    amount: "$2,250"
+    period: per case
+    state_fee: true
+    includes:
+      - Prepare the employer letter and petition
+      - A licensed attorney reviews before filing
+    related:
+      - tn-new
+    keywords:
+      - USMCA
+      - extension
+
+  - id: e3-new
+    item: "2141"
+    name: E-3 Australian professional
+    blurb: >-
+      A new E-3 case for an eligible Australian citizen, filed with USCIS or
+      at a consulate.
+    category: work_visas
+    amount: "$3,150"
+    period: per case
+    state_fee: true
+    includes:
+      - Review the role and the worker's qualifications
+      - Prepare the labor condition application and supporting documents
+      - A licensed attorney reviews before filing
+    related:
+      - e3-extension
+    keywords:
+      - Australia
+      - specialty occupation
+
+  - id: e3-extension
+    item: "2142"
+    name: E-3 extension, change of employer, or amendment
+    blurb: >-
+      Extend E-3 status, move to a new employer, or amend after a change.
+    category: work_visas
+    amount: "$2,700"
+    period: per case
+    state_fee: true
+    includes:
+      - Prepare the labor condition application and the petition
+      - A licensed attorney reviews before filing
+    related:
+      - e3-new
+    keywords:
+      - Australia
+      - extension
+
+  - id: j1-waiver
+    item: "2151"
+    name: J-1 no-objection waiver
+    blurb: >-
+      Request a waiver of the two-year home-residence requirement through a
+      no-objection statement from your home country.
+    category: work_visas
+    amount: "$6,750"
+    period: per case
+    state_fee: true
+    includes:
+      - Confirm the no-objection route fits your exchange program
+      - Prepare the waiver application and supporting documents
+      - A licensed attorney reviews before filing
+    keywords:
+      - two-year home residence
+      - 212(e)
+      - DS-3035
+
+  - id: eb1
+    item: "2201"
+    name: EB-1 petition
+    blurb: >-
+      An EB-1A extraordinary ability, EB-1B outstanding researcher, or EB-1C
+      multinational manager petition.
+    category: green_cards
+    amount: "$9,000"
+    period: per petition
+    state_fee: true
+    includes:
+      - Review your record against the EB-1 criteria
+      - Prepare the petition, evidence index, and support letters
+      - A licensed attorney reviews before filing
+    related:
+      - eb2-niw
+      - aos-adult
+    keywords:
+      - EB-1A
+      - EB-1B
+      - EB-1C
+      - I-140
+
+  - id: eb2-niw
+    item: "2202"
+    name: EB-2 national interest waiver
+    blurb: >-
+      A self-petition asking USCIS to waive the job offer and labor
+      certification in the national interest.
+    category: green_cards
+    amount: "$9,000"
+    period: per petition
+    state_fee: true
+    includes:
+      - Review your eligibility and proposed endeavor
+      - Prepare the petition, evidence index, and support letters
+      - A licensed attorney reviews before filing
+    related:
+      - eb1
+      - aos-adult
+    keywords:
+      - NIW
+      - I-140
+      - self-petition
+
+  - id: perm
+    item: "2211"
+    name: PERM labor certification
+    blurb: >-
+      The Department of Labor process an employer completes before most EB-2
+      and EB-3 petitions.
+    category: green_cards
+    amount: "$7,200"
+    period: per case
+    state_fee: true
+    includes:
+      - Prevailing wage request and recruitment plan
+      - Prepare and file the labor certification
+      - A licensed attorney reviews before filing
+    related:
+      - i140-perm
+    keywords:
+      - labor certification
+      - ETA-9089
+      - EB-2
+      - EB-3
+
+  - id: i140-perm
+    item: "2212"
+    name: EB-2 or EB-3 petition after PERM
+    blurb: >-
+      The employer's immigrant petition once the labor certification is
+      approved.
+    category: green_cards
+    amount: "$3,600"
+    period: per petition
+    state_fee: true
+    includes:
+      - Prepare the petition with the approved labor certification
+      - A licensed attorney reviews before filing
+    related:
+      - perm
+      - aos-adult
+    keywords:
+      - I-140
+      - EB-2
+      - EB-3
+
+  - id: eb5
+    item: "2221"
+    name: EB-5 investor petition
+    blurb: >-
+      The immigrant investor petition. The fee starts here and depends on the
+      investment structure.
+    category: green_cards
+    amount: "$18,900"
+    period: starting fee
+    state_fee: true
+    includes:
+      - Review the investment and the source of funds
+      - Prepare the petition and supporting evidence
+      - A licensed attorney reviews before filing
+    keywords:
+      - I-526
+      - I-526E
+      - investor
+
+  - id: aos-adult
+    item: "2231"
+    name: Green card application in the U.S.
+    blurb: >-
+      Adjustment of status for an adult, filed with a work permit and travel
+      document application.
+    category: green_cards
+    amount: "$3,150"
+    period: per adult
+    state_fee: true
+    includes:
+      - Prepare the I-485, I-765, and I-131
+      - Prepare you for the interview
+      - A licensed attorney reviews before filing
+    related:
+      - aos-child
+      - consular-green-card
+    keywords:
+      - adjustment of status
+      - I-485
+      - I-765
+      - I-131
+
+  - id: aos-child
+    item: "2232"
+    name: Green card application for a child under 14
+    blurb: >-
+      Adjustment of status for a child under 14, filed with a travel document
+      application and, where needed, a work permit.
+    category: green_cards
+    amount: "$1,800"
+    period: per child
+    state_fee: true
+    includes:
+      - Prepare the I-485 and I-131, and the I-765 where needed
+      - A licensed attorney reviews before filing
+    related:
+      - aos-adult
+    keywords:
+      - adjustment of status
+      - I-485
+      - child
+
+  - id: consular-green-card
+    item: "2241"
+    name: Green card through a consulate
+    blurb: >-
+      Immigrant visa processing through the Department of State for a person
+      outside the United States.
+    category: green_cards
+    amount: "$2,250"
+    period: per applicant
+    state_fee: true
+    includes:
+      - Prepare the DS-260 and civil documents
+      - Prepare you for the consular interview
+      - A licensed attorney reviews before filing
+    related:
+      - aos-adult
+    keywords:
+      - consular processing
+      - DS-260
+      - immigrant visa
+
+  - id: ead-renewal
+    item: "2301"
+    name: Work permit renewal
+    blurb: >-
+      Renew an employment authorization document based on a pending green card
+      application.
+    category: permits_and_travel
+    amount: "$1,350"
+    period: per application
+    state_fee: true
+    includes:
+      - Prepare the I-765
+      - A licensed attorney reviews before filing
+    related:
+      - ap-renewal
+    keywords:
+      - EAD
+      - I-765
+
+  - id: ap-renewal
+    item: "2302"
+    name: Advance parole renewal
+    blurb: >-
+      Renew the travel document that lets you leave and return while a green
+      card application is pending.
+    category: permits_and_travel
+    amount: "$1,350"
+    period: per application
+    state_fee: true
+    includes:
+      - Prepare the I-131
+      - A licensed attorney reviews before filing
+    related:
+      - ead-renewal
+    keywords:
+      - AP
+      - I-131
+      - travel document
+
+  - id: stem-opt
+    item: "2311"
+    name: STEM OPT work permit
+    blurb: >-
+      An initial or extended work permit for an F-1 student on STEM OPT.
+    category: permits_and_travel
+    amount: "$540"
+    period: per application
+    state_fee: true
+    includes:
+      - Prepare the I-765
+      - A licensed attorney reviews before filing
+    keywords:
+      - OPT
+      - F-1
+      - I-765
+      - I-983
+
+  - id: i539-dependent
+    item: "2321"
+    name: Dependent status extension or change
+    blurb: >-
+      Extend or change status for a spouse or child alongside a principal's
+      petition.
+    category: permits_and_travel
+    amount: "$630"
+    period: per dependent
+    state_fee: true
+    includes:
+      - Prepare the I-539
+      - A licensed attorney reviews before filing
+    keywords:
+      - I-539
+      - H-4
+      - L-2
+      - O-3
+      - dependent

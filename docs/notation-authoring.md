@@ -1,0 +1,715 @@
+# Authoring notations
+
+This is the how-to companion to [`notation.md`](notation.md). That doc defines the *vocabulary* (Template, Notation,
+Questionnaire, Question, Answer, Rule); this one is the *procedure* — how you write a notation, what the toolchain
+enforces, what runs after a client finishes intake, and what is still on the roadmap. If a word here is unfamiliar,
+[`notation.md`](notation.md) is the source of truth for what it means.
+
+## What a notation is, in one paragraph
+
+A **Template** is a static blueprint: one markdown file with YAML frontmatter, checked into `templates/`. A **Notation**
+is that Template come to life — one running instance bound to a [Person](glossary/person.md) (the respondent), exactly
+one [Project](glossary/project.md), and optionally an [Entity](glossary/entity.md) — advancing through two state
+machines the Template declares. In client English a Notation-in-a-Project is the **Engagement** (or **Retainer**). The
+Template *declares*; Restate *runs*. Everything below is about writing good Templates and growing what their workflows
+can do.
+
+## Where templates live
+
+Every legal template lives under exactly one of two shelves under `templates/notations/`:
+
+- `templates/notations/forms/` — government form-backed templates. Paths mirror the public assets bucket, so
+  `templates/notations/forms/united_states/nevada/state/nv__llc_formation.md` corresponds to
+  `gs://<assets-bucket>/forms/united_states/nevada/state/nv__llc_formation.pdf`.
+- `templates/notations/neon_law/` — the firm's sample onboarding letter and closing letter.
+
+Every template declares `jurisdiction:` using a seeded jurisdiction code from `store/seeds/Jurisdiction.yaml`. The
+filename stem is the template code everywhere. Form templates are stricter: their filename stem and `form` binding must
+match, and the stem starts with the jurisdiction prefix (`nv__llc_formation`, `us__form_990`, `ca__...`). A mismatched
+legacy `code:` warns through release `26.9.29`; `navigator validate --fix` removes it. Later releases reject any
+remaining `code:` key.
+
+## Anatomy of a template file
+
+> For a plain-English, attorney-facing tour of every frontmatter key — across notation templates, events, blog posts,
+> and workshop pages — see <frontmatter.md>. This section is the authoring-focused version.
+
+Every template has two parts: YAML frontmatter (the contract) and a markdown body (the document, with
+`{{question_code}}` placeholders). Here is the shared retainer frontmatter from
+`templates/notations/neon_law/onboarding__letter.md` (the real file wraps this block in `---` fences, then the prose
+body follows):
+
+```yaml
+title: Onboarding Letter
+respondent_type: person_and_entity
+jurisdiction: NV
+confidential: true
+questionnaire:            # the intake Q&A — what we ask the client
+  BEGIN:                      { _: entity }
+  entity:                     { _: address__principal_office }
+  address__principal_office:  { _: person__client }
+  person__client:             { _: project__engagement }
+  project__engagement:        { _: END }
+  END: {}
+workflow:                 # what happens after intake — render, review, sign
+  BEGIN:                       { intake_submitted: intake_persisted__client }
+  intake_persisted__client:    { retainer_rendered: lawyer_review }
+  lawyer_review:                { approved: generate_pdf__retainer_pdf, changes_requested: reask__client, rejected: END }
+  reask__client:               { intake_resubmitted: lawyer_review }   # re-collect flagged answers, loop back
+  generate_pdf__retainer_pdf: { pdf_persisted: sent_for_signature__pending }
+  sent_for_signature__pending: { signature_received: END, signature_declined: END }
+  END: {}
+```
+
+The body below the frontmatter is plain prose carrying placeholders for declared answers. At render time each is
+replaced with the client's answer — `{{person__client.name}}` becomes the actual name and `{{project__engagement.name}}`
+the matter.
+
+Frontmatter fields:
+
+- `title` — the human document title (N101 requires it non-empty).
+- `respondent_type` — one of `person`, `entity`, `person_and_entity` (N102).
+- `jurisdiction` — a seeded jurisdiction code (`NV`, `CA`, `US`); required even for firm templates.
+- filename stem — the stable, unique identifier (`onboarding__letter`, `nv__llc_formation`) used by every surface.
+- `confidential` — an explicit `true`/`false` decision, never defaulted (N105).
+- `origin_url` — forms only; the HTTPS government page where the blank form can be obtained.
+- `form` — forms only; the bundled form code, matching the filename stem.
+- `questionnaire:` — the intake state machine: `BEGIN → typed_state → … → END`. Each step's `_:` is the "answered"
+  transition — and the **only** condition a questionnaire may use: the block must be one linear `_` chain from `BEGIN`
+  to `END` covering every declared state. `QuestionnaireSpec` rejects anything else at parse time, and `N118` flags it
+  at authoring time. State names are `<type>__<role>`; the prefix before `__` must be a registered Question Type.
+  Authors may write that map, or a linear list. A list item is a state name or a map with `state:`, an inline `prompt:`,
+  and, for a schedule, `columns:`. A `heading:` with `questions:` is a Questionnaire Group: a heading for the reader,
+  not a state. Both forms compile to the same chain. An inline prompt is stored on the role and overrides a `prompts:`
+  entry for that role.
+- `workflow:` — the post-intake state machine: render, lawyer review, signature, filing. Transitions fire on named
+  signals (`approved`, `pdf_persisted`, `signature_received`).
+
+Two machines, one journal: questionnaire and workflow are hosted on a single Restate virtual object keyed by the
+notation's id, so their signals serialize and can never interleave. State is **append-only** — every transition writes a
+`notation_events` row, and the current state is the latest row's `to_state`. Nothing is ever updated in place, so the
+full history of a matter is replayable for audit.
+
+## The typed question grammar
+
+A questionnaire state name is `<type>__<role>` — a **question type** and the **role** it plays in this matter, e.g.
+`person__trustor`, `entity__company`, `address__for_company`. The `<type>` half is a closed set (the
+[`store::question_registry`](https://github.com/neon-law-source-code/navigator/blob/main/store/src/question_registry.rs)
+registry); `N113` rejects a typed state whose `<type>` is not registered. The `<role>` suffix is free naming that keeps
+two answers of one type distinct — `entity__company` and `entity__subsidiary` are two separate entities, not one.
+
+Every type is one of three kinds:
+
+- **Record** — the answer creates or links a `store::entity` row: `person`, `entity`, `address`, `role`, `filing`,
+  `credential`, `disclosure`, `issuance`, `signature`, `notarization`.
+- **Reference** — the answer selects an existing seeded row: `jurisdiction`, `country` (the
+  `jurisdiction_type = 'country'` subset, rendered as a country picker), `entity_type`, `project`.
+- **Custom** — a primitive value living in the answer JSON, no SQL grounding: `custom_text`, `custom_phone`,
+  `custom_yes_no`, `custom_single_choice`, `custom_multiple_choice`, `custom_usd`, `custom_datetime`. A custom state
+  reads `custom_<type>__<prompt_key>` and needs a matching `prompts:` entry (`N104`).
+- **Schedule** — `schedule__<role>` collects repeating rows. Each column has `name`, `label`, and a `type` of `text`,
+  `number`, or `date`. The answer is those rows. It is not a document body, and `N117` still refuses an unlisted
+  `custom_text__*` role, including one that would hold agreement prose.
+
+**Prefer the glossary — both its models *and their fields* — and reach for `custom_*` only when nothing in the glossary
+fits.** The registry exists so a questionnaire is composed of real domain nouns, not free text. Two checks, in order,
+before any `custom_`:
+
+1. **Is the answer a glossary model?** Use the type — a trustee is `person__trustee`, the company `entity__company`, its
+   office `address__for_company`, its members `people__members`, its state of licensure `jurisdiction__licensure`.
+2. **Is the answer a *field* of a glossary model?** Use the model and read the field with a dotted placeholder, never a
+   custom string: a trustee's name is `{{person__trustee.name}}`, the entity's legal name `{{entity__company.name}}`,
+   the office city `{{address__for_company.city}}`, a bar number `{{credential__bar.license_number}}`. Each glossary
+   term's **Schema** link (`store::entity::…`) is the list of fields a type exposes. `custom_text__trustee_name` is the
+   anti-pattern — a name is a field of a Person, not free text.
+
+Only a value that is **neither a glossary model nor a field of one** is custom — a fee status
+(`custom_single_choice__fee_status`), a one-off date (`custom_datetime__filed_on`), a consent flag
+(`custom_yes_no__recording_consent`). This keeps answers queryable, linkable, and glossary-grounded.
+
+`custom_text` has one extra guardrail: `N117` is a strict allowlist. Every `custom_text__<role>` must appear in the
+rules crate's `ALLOWED_CUSTOM_TEXT_ROLES` (each entry carries its rationale in a comment), so a new free-text state
+fails closed until it is either typed or adjudicated onto the allowlist. Roles that name a glossary-backed noun —
+`custom_text__client_name`, `custom_text__client_email`, `custom_text__healthcare_agent`,
+`custom_text__country_of_birth`, `custom_text__daytime_phone`, `custom_text__product_description` — can never be
+allowlisted (a meta-test bars the tokens). Use `person__client`, `person__healthcare_agent`, `country__of_birth`,
+`custom_phone__daytime_phone`, and their dotted fields, or project render context such as the retainer's
+`{{custom_clauses}}` slot. The allowlist exists to keep *client* facts in typed states, so it applies to the legal
+shelves only — the `kind: github` engineering notations under `templates/github/` hold no client facts and are not held
+to `N117`.
+
+**Singular and plural.** Each record/reference type has a singular form (one row) and an explicit aggregate form (an
+array of the singular's shape) collected under one question — `person`→`people`, `entity`→`entities`,
+`address`→`addresses`, and so on. Add a plural only where a matter actually collects several.
+
+**`__for_` children.** A `<type>__for_<role>` state creates a child row that FKs to an earlier role-addressed parent:
+`address__for_trustor` follows `person__trustor` (or `entity__trustor`) and hangs off that answer. `N114` requires the
+parent to precede the child in the questionnaire graph and bars aggregates from `__for_` (their children are inline).
+
+### Signer boxes
+
+A blank the signer completes by hand after printing — the initials box beside each power in a statutory power of
+attorney, a wet-ink date, a share count written at closing — is a [Signer Box](glossary/signer-box.md): a questionnaire
+state declared `completed_by: signer` and referenced by its ordinary placeholder. The source never carries a `____`
+outside a signature block; the blank lives in the render.
+
+```yaml
+questionnaire:
+  - person__principal
+  - state: custom_text__initials_l
+    prompt: Initial to grant (L) retirement benefit transactions.
+    completed_by: signer
+  - state: custom_datetime__signed_on
+    prompt: Date signed.
+    completed_by: signer
+```
+
+```markdown
+- ({{custom_text__initials_l}}) (L) retirement benefit transactions;
+
+Dated: {{custom_datetime__signed_on}}
+```
+
+An answered box prints its answer, bold like any other fact. An unanswered one prints an empty rule in the PDF and the
+Word document, in `--preview` and the final render alike, with no highlight: the questionnaire did not forget it. The
+marker works in either authoring form (`completed_by: signer` beside `_:` in a state map, or on a list item), is
+stripped from the chain, and is lifted onto the document as `signer_boxes:` in chain order, which `rules::signer_boxes`
+reads for every render and rule. Only a `custom_text`, `custom_datetime`, `custom_usd`, or `custom_phone` state may be a
+Signer Box; a record or reference answer is a row, never a line on paper. A `custom_text` Signer Box collects nothing at
+intake, so `N117` does not hold its role to the allowlist. A box still needs its `prompt:`; it is the label the
+questionnaire shows for the state.
+
+**Body placeholders.** Prose uses `{{code}}` for a bare answer, `{{type__role.field}}` for a field off a typed answer,
+and `{{#for x in <aggregate>}} … {{x.field}} … {{/for}}` to walk a plural answer. `N115` resolves every path and
+iterator against the questionnaire's declared states, and `N120` resolves the bare `{{type__role}}` token the same way;
+signature blocks (`{{client.signature}}`) stay `N107`'s specialty, matched against the template's `signers:` list (or
+`[client, firm]` when that key is absent). A token nothing declares is never substituted, so it reaches the rendered
+page verbatim — which is why both rules ground the body against the questionnaire beside it.
+
+## How to create one — the five-step recipe
+
+New legal matters follow a fixed order (see [`agent-workflows.md`](agent-workflows.md) for the long form).
+Feature-first, so the composition is specified before the prose exists:
+
+1. **Write the composition `.feature` first.** Describe the matter as a sequence or branching graph of reusable workflow
+   steps, using only Person / Entity nouns from [`glossary/`](glossary/README.md). The feature is the product-level
+   spec; the template satisfies it by composing already-known steps.
+2. **Write the template + questionnaire.** Create the markdown file under `templates/notations/forms/...` for a
+   government form, or `templates/notations/neon_law/...` for a firm template. Declare the `questionnaire:` walk and the
+   `workflow:` states. Body prose uses `{{question_code}}` placeholders. If a questionnaire state uses a
+   `custom_*__prompt_key` code, add a sibling `prompts:` map with that English prompt key and the exact prompt to ask.
+3. **Seed the questions.** Add each new question `code` to `store/seeds/Question.yaml` (prompt, `question_type`,
+   help text). The questionnaire's state prefixes must resolve to these codes or N104 fails.
+4. **Declare the workflow YAML.** Compose the post-intake flow from the shared step registry (below) — never a one-off
+   handler. Reuse `lawyer_review`, signature, and document steps so the flow stays auditable.
+5. **Wire the durable handlers.** Bind new workflow steps onto the existing `workflows-service` worker. Never stand up a
+   per-workflow pod — one worker hosts every flow.
+
+A template is not legally usable until an attorney has reviewed the body copy. The `lawyer_review` state is mandatory
+(N106) precisely so a licensed human is always in the loop before anything is sent or filed.
+
+Question codes should stay minimal and reusable. A Question is the stable prompt/fact type (`citizenship_status`,
+`passport_expiration_date`, `registered_agent`); an Answer is the respondent's time-bound value for that question. If a
+future workflow needs to know whether an answer is still fresh, add freshness/expiration metadata to the answer side
+rather than minting a new one-off question code. That keeps questionnaires short: reuse a still-valid answer when it can
+lawfully answer the question, and ask again only when the recorded answer has expired or is no longer adequate for the
+matter.
+
+## Trial-preparation cards
+
+A `kind: trial_prep` Notation can supply the ordered cards in a matter page's `stage_list` section. The body is read
+only from the matter's digest-verified, pinned Notation version, and the cards appear on the lawyer lens only. A draft,
+missing body, unverified body, or another Notation Kind supplies no cards. The page does not expose the Notation body to
+a client or clerk.
+
+This table is body content, not a complete template. A `trial_prep` template still needs a valid questionnaire and
+review-gated workflow metadata. The StageList reader consumes a Notation's pinned body; it does not create or advance
+the questionnaire.
+
+Write one Markdown table with these exact columns, in this order:
+
+```markdown
+| Question | Asked by | Difficulty |
+| --- | --- | --- |
+| Question one? | Party A | High |
+```
+
+Keep rows in presentation order. Escape a literal pipe in a cell as `\\|`. Use plain text cells; do not add prose inside
+the table. This is a bounded pipe-table format, not a general Markdown table parser: it accepts optional edge pipes and
+optional alignment colons, the header is case-insensitive, and each separator cell has at least three hyphens with
+colons only at its edges. Every row must have three non-empty cells. A blank line ends the table; prose before or after
+a blank-separated table is ignored. A malformed table fails closed as a whole. Each edited template body is a new pinned
+source version, so existing Notations continue to resolve their original body by digest.
+
+## The validation contract
+
+Three rule families guard every template, enforced identically in your editor, in `cli validate`, and in CI — because
+all three call the same `rules` crate. A template that is clean on your laptop is clean in the merge gate. N-family
+rules are diagnostic-only except N108, whose safe fix removes retired `code:` metadata; the tool does not rewrite legal
+structure. The full code table — every rule, its severity, and whether it autofixes — is the canonical reference at
+[`gate.md`](gate.md); this page only covers what those rules mean for a template's shape and body.
+
+Run it before committing any `.md` change:
+
+```bash
+cargo run -p cli --quiet -- project gate
+```
+
+## Authoring in markdown with the LSP
+
+`navigator-lsp` is a single Rust binary speaking LSP over stdio. It shares the exact rules engine the CLI uses, so the
+editor and CI can never disagree. Supported editors ship copy-paste configs under
+[`lsp/`](https://github.com/neon-law-source-code/navigator/tree/main/lsp) docs: VS Code, Neovim, Helix, Emacs, Zed. The
+authoring loop for a non-engineer legal author:
+
+1. **Type.** Open `templates/notations/neon_law/onboarding__letter.md` in your editor. Write
+   legal prose and frontmatter — no proprietary tool, no markup beyond markdown.
+2. **Live diagnostics.** On every keystroke the LSP lints the buffer and shows squiggles: N101 if `title:` is missing,
+   N104 if the questionnaire/workflow shape is broken or a questionnaire state is not in the canonical question seed
+   list, S101 past 120 chars, M-rules on shape. Hover any squiggle for a plain-English explanation of the rule.
+3. **Fix-all on save.** `source.fixAll` rewrites every mechanical issue — tabs, trailing whitespace, blank-line spacing,
+   heading spacing — automatically. What remains is the *semantic* work only a human can do (an unmade `confidential`
+   decision, a workflow that never reaches `END`).
+4. **Open a PR.** The clean `.md` is committed as a plain-text diff. CI runs the identical engine. An attorney reviews
+   readable prose; the linter has already signed off on structure.
+
+### Why markdown + frontmatter + git, not a proprietary tool
+
+- **Ergonomics.** One free binary attaches to whatever editor the author already knows. Fix-on-save removes the entire
+  class of formatting fiddling; hover tooltips teach the rules in context, lowering the floor for a non-engineer.
+- **Correctness.** A single rules engine is the authority — editor, CLI, and CI cannot diverge. Invariants that matter
+  legally (every workflow has a `lawyer_review` gate, `confidential` is an explicit choice, every workflow code
+  resolves) are machine-enforced *before merge*, not left to reviewer vigilance.
+- **Auditability.** The template is plain text under git: every change is an attributable, reviewable diff, gated by PR.
+  The rules themselves are versioned Rust with snapshot tests. A proprietary document-automation tool hides the document
+  in an opaque format with no line-level diff and no enforceable structural contract.
+
+## What runs after intake — the step registry
+
+Once the questionnaire reaches `END`, the workflow machine takes over. Steps are resolved from a state-name prefix to a
+`StepKind` and an actor class (System / Lawyer / Respondent) in `workflows/src/step.rs`. Honest status of what is wired
+today:
+
+| Step | Status | Notes | Client reads |
+| --- | --- | --- | --- |
+| `email_send__<slug>` | Implemented | Durable SendGrid send; only `welcome` renders. | Sending you an email |
+| `intake_persisted__*` | Implemented | Pass-through wait state recorded on the journal. | Your answers are in |
+| `lawyer_review` | State-only | Mandatory gate; dev auto-approves. | The firm is reviewing |
+| `client_review` | State-only | Respondent approves reviewed drafts on Phase A. | Your turn to review the drafts |
+| `reask__*` | State-only | Re-collects flagged answers; loops back to review. | A few answers need updating |
+| `document_intake__<slug>` | Implemented | Worker files a provided artifact. | Waiting for a document |
+| `extract__*` | Seam | Estate inputs mined from transcript; advanced on completion. | The firm is working on it |
+| `analysis__*` | Seam | Contract review flags playbook deviations; wait state. | The firm is working on it |
+| `document_drafts__*` | Implemented | Web renders drafts into review rows. | Preparing your document |
+| `generate_pdf__retainer_pdf` | Implemented | Worker renders and stores it in `ctx.run`. | Preparing your document |
+| `sent_for_signature__pending` | Implemented | Waits for signature_received. | Awaiting your signature |
+| `notarization` | State-only | Trust/will signing state; human act. | Signing before a notary |
+| `_signature` | State-only | Trust/will signing state; a human act, no worker side effect. | Signatures needed |
+| `firm_signature` | State-only | Firm signs closing letter; human act. | Awaiting the firm's signature |
+| `mailroom_send` | Implemented | Worker records a `filings` row in `ctx.run`. | The firm is mailing it |
+| `certified_mail` | Implemented | Worker submission step; records `filings` post-review. | The firm is mailing it |
+| `e_filing` | Implemented | Worker submission step; records `filings` post-review. | Being filed |
+| `filing__*` | Implemented | Worker submission step; records `filings` post-review. | Being filed |
+| `onchain__*` | Scaffolded | Node attestation; null attestor keeps it pending. | Recording the attestation |
+| `mailroom_receive` | State-only | Inbound notice logged by webhook. | Waiting on a notice from the government office |
+| `witnesses` | State-only | Respondent witnesses sign; resolves to Signature. | Signatures needed |
+
+Durability is Restate's: each side effect is wrapped in `ctx.run`, so a replay reuses the cached result instead of
+re-emailing or double-inserting. In prod the worker dials Restate Cloud; in KIND it dials the in-cluster Operator. The
+"State-only" rows are the contract for steps with no worker side effect yet. The drift-guard test
+`workflows::step::tests::drift_guard_every_step_prefix_is_documented` fails if `step_kind_for` gains a prefix
+(`STEP_PREFIXES`) this table never mentions, so the status here cannot silently rot.
+
+The `onchain__*` row is "Scaffolded": the step kind, the dispatch arm, and the durable `attestations` table are
+implemented and tested, but the on-chain write itself is deferred. The chain is isolated behind the
+`workflows::attest::Attestor` trait exactly as GCS is isolated behind `cloud::StorageService` — selecting Solana (or a
+second chain) is a new `impl Attestor`, never a workflow edit. The default `NullAttestor` records no transaction, so the
+row stays `pending` and no live retainer can claim an on-chain record that does not exist. The step is therefore not yet
+wired into the binding `onboarding__letter` workflow; that one-line YAML edge lands together with `SolanaAttestor`
+(whose open questions — firm key custody, the client wallet, public-chain confidentiality of the hash, and finality —
+are decisions, not code). See `workflows::attest`.
+
+The registry is deliberately small. Template authors should compose these prefixes with discriminators
+(`generate_pdf__articles_pdf`, `mailroom_send__notice_of_representation`) rather than creating per-matter verbs. If a
+workflow needs a genuinely new act, add a reusable `StepKind` first, document it here, cover the mechanics in Rust, and
+then compose it from a feature spec.
+
+### Adding a reusable step — the recipe
+
+A "reusable step" is one `StepKind` that many notations bind to by naming a `<prefix>__<slug>` state — `email_send__*`,
+`generate_pdf__*`, `document_intake__*`. Two reference implementations show the shape; the next one is a single registry
+entry, not a second dispatch match.
+
+- **Signature** is the *seam* reference: `portal::signature::SignatureProvider` is a trait with a stub for KIND/tests
+  and a concrete `DocuSignSignatureProvider` for prod, selected from `AppState`. Reach for a trait when the step calls
+  an external system that has more than one real implementation you swap at runtime.
+- **Document-intake** is the *registry* reference: `document_intake__<slug>` files a provided artifact (a transcript, an
+  executed PDF, an ID scan) into the matter through `store::documents::ingest_bytes`. It has exactly one implementation,
+  so it is a plain dispatch fn behind one `StepKind`, not a trait.
+
+The step layer routes through one registry, `workflows::dispatch_step`, keyed by `StepKind`. Both callers — the
+`workflows-service` worker (`notation_service::workflow_signal`, which wraps the call in `ctx.run`) and the in-process
+dev/BDD runtime (`DispatchingRuntime::maybe_dispatch`, which calls it inline) — share that one arm, so a new step is
+added once, not twice. To add a step kind with a worker side effect:
+
+1. **Name the prefix + kind.** Add a `StepKind` variant and its `(prefix, StepKind)` row to `STEP_PREFIXES` in
+   `workflows/src/step.rs`, plus the actor class in `StepKind::actor`. Document it in the status table above (the
+   drift-guard test enforces this).
+2. **Write the dispatch fn + payload.** Add `<kind>.rs` with a serde payload (internally tagged on `kind`, like
+   `DocumentPayload` / `IntakeArtifact`) and an `async fn dispatch_<kind>(deps…, payload) -> Result<_, _>` that performs
+   the *one* side effect and returns — no `ctx.run`, no journaling; durability is the caller's.
+3. **Register one arm.** Add the `StepKind` to `dispatches_side_effect` and one match arm to `dispatch_step` in
+   `workflows/src/dispatch.rs`, decoding the payload from the signal `value` and calling your dispatch fn with the
+   `StepDeps` providers (`email`, `storage`, optional `db`). The worker and the in-process runtime pick it up for free.
+4. **Thread the payload from the trigger.** The surface that fires the transition into the step (a `web` handler) builds
+   the payload, JSON-serializes it, and passes it as the signal `value`. The artifact for an intake step is
+   phone-friendly: a text paste, a file, or a link — never "scan a PDF".
+
+Keep the `ctx.run` boundary in the worker, never inside `dispatch_step`: a registry that journaled its own side effect
+would reintroduce the duplicate-effect bug on replay.
+
+## Documents, PDFs, and Word
+
+**What we have.** A dedicated `pdf` crate renders a Typst document to PDF bytes in pure Rust (no shell-out), in the firm
+typeface Noto Serif, with a redaction helper. Preview, offline rendering, form-fill, and final document generation share
+one notation evaluator for bare placeholders, dotted fields, and aggregate loops; final signed documents evaluate data
+placeholders first, then expand signature anchors into Typst blocks and the e-signature manifest. The retainer flow
+threads the evaluated Typst source to the **worker** as a `DocumentPayload` on the `approved` signal; the
+`generate_pdf__retainer_pdf` step calls `pdf::render` and persists the bytes through the `cloud::StorageService` seam
+(`FsStorage` in dev, GCS in prod) at `notations/<id>/retainer.pdf`, wrapped in `ctx.run` for replay-idempotent
+durability. `web` reads the PDF back from storage to hand to the signature provider. This is one-directional: template →
+fresh PDF.
+
+**Rendering a template offline — `navigator notation pdf` / `navigator notation word`.** For an ad-hoc artifact outside
+the durable workflow (a demand letter to send by hand, a draft for review), `navigator notation pdf <template.md> --out
+<file.pdf>` or `navigator notation word <template.md> --out <file.docx>` takes any validation-passing notation template
+and compiles it in pure Rust; `--out` must carry the matching extension, and any other extension is refused. PDF
+rendering converts the Markdown body to Typst. Word rendering writes editable OOXML with native heading styles, US
+Letter geometry, and page fields; a notation whose frame is `letter` receives the same firm identity as its PDF plus
+separate first-page and running headers. A `pleading` gets the same court-paper calibration in both formats: under
+`jurisdiction: CA` or `NV`, a 28-line numbered rail on a 24pt line pitch with line 1 an inch down the page, the footer's
+page number and paper title, and the first-page caption described under [Pleading paper](#pleading-paper). Both commands
+validate the file against the same rule set as `navigator project gate`, fill placeholders through the same notation
+evaluator, and produce byte-identical output when the source revision and answers are unchanged.
+
+### Final documents only
+
+Every document a Project produces for a client, a court, a counterparty, or a signer is final: each fact is filled in
+and each choice is made before it leaves Navigator. `rules::final_document` defines what a final document cannot carry:
+an unanswered `{{placeholder}}`, a bracketed drafting marker (`[INSERT FEE]`), a fill-in blank (`____`) outside a
+signature block, a `TODO`, `TK`, or `XX` note, an instruction line led by a label such as `Note to drafter:` or
+`Reviewer note:`, or an incomplete certificate or proof of service. A certificate states service that has happened, so a
+blank or unanswered placeholder under that heading refuses until the date, method, and recipients are recorded.
+Signature, acceptance, notary, and jurat blocks are the only spaces a person completes. Drafting guidance belongs in an
+HTML comment (`<!-- … -->`), which never renders and is not scanned. A bracket that is a link, a footnote, a checkbox,
+`[sic]`, or a citation with a number passes.
+
+`navigator notation pdf` and `navigator notation word` render final unless `--preview` is passed, refusing with each
+unfinished line and, for a placeholder, the questionnaire state that answers it. `--preview` keeps the highlighted draft
+for review. Sending a notation for signature runs the same check on the filled document before the `pdf_persisted`
+transition, so the provider is never called with an unfinished document. Templates are held to the same standard by
+`N131`, apart from placeholders, which are how a template asks for a fact.
+
+The one blank a final document keeps is a [Signer Box](#signer-boxes). The fill prints `<!-- signer-box -->` in place of
+its unanswered placeholder, the renders draw an empty rule there, and the scan passes it because an HTML comment is
+outside the document. A template that types that marker itself, like one that types a `____` into the prose, is refused
+by `N131`: the blank belongs in the render, never the source, so a forgotten blank can never look like an intended one.
+Whether a box placeholder names a declared state is `N120`'s check, reported once.
+
+### Pleading paper
+
+A pleading's court-paper parts come from metadata, not from its body. The PDF and the Word document read them from the
+same place (`word::matter` composes the caption; `word::paper` reads it), so they cannot disagree.
+
+**The matter** is what every filing in one litigation matter shares, declared once under `matter:` in the Project's
+`navigator.yaml`:
+
+```yaml
+matter:
+  court:
+    - SUPERIOR COURT OF THE STATE OF CALIFORNIA
+    - COUNTY OF SAMPLE
+  case_number: 00CV000000
+  judicial_officer: Hon. Sample Q. Jurist
+  department: "12"
+  filed_on: 2026-02-02
+  trial_on: 2027-03-01
+  parties:
+    - name: SAMPLE PLAINTIFF, A LIMITED LIABILITY COMPANY
+      role: Plaintiff
+    - name: EXAMPLE DEFENDANT, A CORPORATION
+      role: Defendant
+  counsel:
+    name: Pat Sample
+    bar_jurisdiction: California
+    bar_number: "000000"
+    firm: SAMPLE LAW GROUP, APC
+    address:
+      - 100 Example Boulevard, Suite 200
+      - Sampleton, California 90000
+    telephone: (000) 555-0100
+    email: pat@example.invalid
+    appears_for: Plaintiff SAMPLE PLAINTIFF
+```
+
+Dates are `YYYY-MM-DD` and print as a court writes them (`February 2, 2026`); `trial_on` is optional and prints "None
+set". The counsel block prints as name and bar number (`SBN` for California, `<jurisdiction> Bar No.` elsewhere), firm,
+address lines, telephone, email, and "Attorneys for …", from line 1 (one inch down) in the left 58% of the page. When no
+lawyer has appeared, set `pro_per: true`: the bar fields are not required and the last line reads "…, in pro per". The
+court prints centred from line 8 (at or below 3⅓ inches), per CRC 2.111; the right of the counsel block stays clear for
+the clerk through line 7. Parties print in the caption's left cell, each role once with `v.` between sides; the right
+cell runs case number, department, judge, the filing's title, any hearing, then the action-filed and trial dates.
+Counsel and caption lines are single-spaced, then padded to whole grid lines so the body after them starts on a numbered
+line. `navigator project gate` refuses an incomplete `matter:` (`Y019`), naming each missing field as `matter.<path>`,
+and `notation pdf` and `notation word` refuse the same way.
+
+**The filing** is what differs per notation, in its frontmatter: `caption_title` (the full title in the right cell) and
+`footer_title` (the short title the footer prints) are required; `hearing_date` (`YYYY-MM-DD`), `hearing_time`, and
+`reservation_id` are optional. A notation declaring any hearing field prints all three lines, a blank fill line for each
+unset one; one declaring none prints no hearing lines. Changing the case number or counsel address in `navigator.yaml`
+changes every pleading on its next render, with no template edit.
+
+**The certificate of service is composed, never typed.** A pleading that is served names the document it is filed as in
+its frontmatter, `served_document: pleadings/motion.pdf` (the slug below `documents/`), and the renderer composes its
+proof of service from the `service:` list on that document's committed pointer, `blobs/pleadings/motion.pdf.yaml` — each
+recipient, the method, the date, and the address, under the declarant's perjury declaration, with the business address
+and place of execution from `matter.counsel.address`. With no record on the pointer, `--preview` omits the certificate
+and a final render refuses, naming the pointer and the records it lacks. A certificate typed into the body with a blank
+date, method, or recipient is refused by the final-document scan.
+
+**The body starts at the document title.** A pleading body with a `caption` block, a "Parties / Case information" table,
+or the retired `{{attorney_block}}`, `{{court_name}}`, `{{party_caption}}`, `{{case_number}}`, or `{{document_title}}`
+placeholders is refused (`N130`): move those facts to `matter:` and the frontmatter above.
+
+**The footer** repeats `footer_title` on every page, below the page number and a printed rule, at 10pt (CRC 2.109 and
+2.110), cut at a word boundary with an ellipsis once it passes 90 characters so the footer stays one line. The body's
+`#` heading stands in when no `footer_title` is given to the renderer directly.
+
+**A group that must stay whole** is wrapped in `<!-- keep -->` and `<!-- /keep -->` on their own lines: a request with
+its response, a verification with its date and signature. The PDF holds the group on one page when it fits on one and
+lets it flow across pages, whole and unclipped, when it is taller than a page. Word marks each paragraph in the group to
+stay with the next. A marker inside a list or block quote is ignored, and an unclosed group closes at the end of the
+body.
+
+Headings in a pleading are the calibration's one type size, set apart by weight, with the same space around them as
+between paragraphs, so the body under them stays on the rail. The 28-line frame is 672pt of 24pt lines starting one inch
+down, which leaves a 48pt bottom margin: the page number, rule, and 10pt title sit in it, below the last numbered line.
+
+### Harvard outline
+
+Motions and contracts are walked paragraph by paragraph on a stage so a lawyer can highlight each unit while recording.
+An agreement uses one scheme for every depth-1 heading: Roman numerals (`## I.`), decimal numbers (`## 1.` or `## 1.1`),
+or `## Section 1.01`. Closing letters and wills stay Roman (`## I.`). Pleadings use Arabic numerals (`## 1.`). Roman
+outlines letter their subsections (`> **A. Label.** …`). Decimal and Section agreements use parenthetical subsections
+(`> **(a) Label.**` or `### (a) Label`), restarting at `(a)` under each section.
+
+A provision the source never captioned is a heading that carries only its marker, with its copy as the body. M026 drops
+the trailing period:
+
+```markdown
+## I
+
+The Parties agree that …
+
+### A
+
+Subject to …
+
+## II. Governing Law
+```
+
+A lone `C`, `D`, `I`, `L`, `M`, `V`, or `X` is the next capital letter when it follows its predecessor at depth 2
+(`III.C` after `III.B`), and a Roman numeral otherwise. A one-word heading counts as a marker only when it is a
+canonical numeral, so a title line such as `## CIVIL` stays preamble.
+
+**`N123` enforces the outline down to depth 2.** A body whose kind is `agreement`, `will`, `pleading`, or `offboarding`
+must carry `##` sections, numbered in its scheme and running in sequence. An agreement may choose Roman, decimal, or
+`Section 1.01`, and then stay with that choice: `## I.` followed by `## 1.1` is two schemes. Roman and pleading
+subsections are lettered `A.`, `B.`, … in sequence, restarting beneath each section. Decimal and Section subsections are
+`(a)`, `(b)`, `(c)` in that same order. **Both depth-2 forms are read**: the `###` heading, and the block quote. A
+`letter`, an `onboarding` letter, and a `filing` are exempt: a demand, notice, or opening engagement is often a single
+page of prose with no sections, and a filing's body is an intake summary beside a government `AcroForm`. `####` and
+below stay the parser's and the renderer's business.
+
+**`N125` reports a subsection that never became one.** A subsection written as a flush-left bold-led paragraph —
+`**Costs.** …` or `**(a) No Present Conflict.** …` — looks like an outline in Markdown and renders as body prose,
+because a block quote is the only construct in the supported subset that indents. `N125` binds the same kinds `N123`
+does and names the drift; it letters nothing, since the sequence stays `N123`'s once the paragraph is quoted. It writes
+no fix: whether a bold lead-in is a subsection or an emphasized clause is the drafter's call.
+
+**A body that renders without chrome must name itself.** `agreement`, `pleading`, and `will` carry exactly one `#`
+document title, and it opens the body above the first numbered section — nothing else supplies one, since a `will`
+renders with no frame at all and the contract and pleading frames print no name. `onboarding` and `offboarding` are the
+opposite case: they go out on firm letterhead and open with a `Re:` line and a salutation, so their name lives in
+frontmatter `title:` and a `#` heading in the body is refused rather than required.
+
+Court paper opens with its formal title line after the caption — `## SUMMONS — CIVIL` above `## 1.` — and that line is a
+caption element rather than the first section. Unnumbered `##` headings **before** the first numbered one are left
+alone, the same preamble `views::harvard_outline` gives depth 0, and so is a `###` beneath them. A body where numbering
+never starts has no outline at all, which is what the rule flags first.
+
+**The execution tail is outside the numbering, by design.** The execution, attestation, and self-proving affidavit
+blocks that follow the testimonium carry no number or letter, but they are peers of the articles in depth, so they sit
+at `##`. The rule reads them as the unbroken run of unnumbered `##` headings from the last numbered section to the end
+of the body; a `###` inside that run is flagged, because the level is the rule's to state rather than the drafter's.
+Between two numbered sections an unnumbered heading is still a section that lost its marker — the tail can only run to
+the end, which is also why a final section keeps its own lettered subsections.
+
+A notation on a matter — the letter given to a client — narrates at `/app/projects/{code}/{notation_id}/outline`; step
+with Arrow keys, `N`/`P`, or Space, and press `H` to hide the hint.
+
+**Canonical Word import.** A DOCX import resolves OOXML numbering definitions and paragraph properties into the shared
+`word::CanonicalDocument` model before it becomes Notation Markdown. `word::MARKER_GROUPS` is the one marker vocabulary
+— `I.`, `A.`, `1.`, `a.`, `(1)`, `(a)`, `(i)` — and both the Typst numbering pattern in `pdf::outline` and the narration
+scheme in `views::harvard_outline` are that array rather than a restatement of it. The model carries the root scheme,
+depth, displayed marker, cumulative path, source anchor, and the full list identity: `numId`, `abstractNumId`, level,
+number format, level text, the abstract level's own start, and any list-instance start override, which are separate
+fields because a list instance overriding a start does not erase the definition it overrides. Numbering that arrives
+through a paragraph style rather than the paragraph is resolved along the `w:basedOn` chain, so a style-linked clause
+imports as an outline unit rather than prose.
+
+**The import fails closed.** A level the definition does not declare, a number format that is not this depth's Harvard
+format, a level text that is not this depth's marker group, a depth reached without its ancestors, a root whose scheme
+cannot be determined or conflicts with an earlier one, a manually typed marker, and an eighth depth each raise a
+diagnostic and leave the paragraph as anchored text. Navigator never displays a marker the source document did not, and
+never writes a cumulative path with a hole in it; the diagnostics are what an attorney resolves.
+
+**The editable Markdown projection** (`word::notation`) keeps prose and structure apart. The visible Markdown is
+ordinary headings, block quotes, and paragraphs an attorney edits; every structural fact travels beside it in a
+`navigator-*` HTML comment, which CommonMark passes through verbatim:
+
+```markdown
+<!-- navigator-document scheme="roman" -->
+<!-- navigator-story kind="main_document" part="/word/document.xml" -->
+<!-- navigator-block kind="outline" anchor="/word/document.xml:paragraph:7A3B" depth="5" marker="(1)"
+     path="I.A.1.a.(1)" num-id="3" abstract-num-id="7" level="4" num-fmt="decimal" lvl-text="(%5)" start="1" -->
+> (1) Each party bears its own fees.
+```
+
+Reading the document back is therefore a lookup, not a guess — which matters because the visible marker alone is
+ambiguous about depth in both directions: `(1)` is the depth-five group under a Roman *and* an Arabic root, and `(i)` is
+a lower letter at depth six and a lower roman at depth seven. `word::notation::from_markdown` parses that surface with
+`pulldown-cmark`, the workspace's one CommonMark grammar; there is no second Markdown parser. Prose that would otherwise
+read as structure — a leading `#`, emphasis, or something comment-shaped — is backslash-escaped on the way out and comes
+back as prose.
+
+Tables, signature-styled paragraphs, section breaks, bookmarks, hyperlinks, fields, revisions, and comment references
+stay typed and ordered. Table cells are emitted as their own anchored blocks carrying a `parent` attribute, and inline
+structure is carried as an ordered typed sequence attached to its block, because the prose is what an editor rewrites
+and the sequence is what has to stay identifiable. Non-main stories — headers, footers, footnotes, endnotes, comments,
+text boxes — each follow their own `navigator-story` comment. Imported Markdown is matter work product: it is returned
+to the caller for governed persistence and is never written into a repository template.
+
+**Output formats — the letterhead seam.** How the document is dressed is an `OutputFormat` (`pdf::format`): `plain`
+(page geometry + firm typeface); `letter` (the firm letterhead — mark, letterspaced wordmark, a rule across the page,
+and a contact line carrying the firm mailbox and website rather than a street address, with every page numbered), plus
+its `LetterBlocks` — date, delivery method, recipient, `Re:`, and salutation above the body, closing/signature and
+`Enclosures:`/`cc:` below it, and a continuation-page header carrying the recipient, date, and page number, every block
+optional and sourced from questionnaire state rather than the template body, vanishing without a trace when unset;
+`contract` (an executed instrument with **no letterhead** — an instrument that gets signed carries none of the drafter's
+branding, so only a small grey line on continuation pages names the firm — denser than the letter in margins, leading,
+and paragraph spacing but with headings sized by level so section boundaries stay findable while scanning, and every
+table held unbreakable so a signature block never splits across a page break; the frame numbers nothing, because `N123`
+already requires the body to carry its own Harvard markers and a second set printed `A. I. Scope` over a section written
+`## I. Scope`; `agreement` is the retired spelling and still parses); or `pleading` (court paper, no firm letterhead at
+all, calibrated instead by the template's `jurisdiction:` through `pdf::pleading`). The frame comes from the template's
+`kind:` (`Kind::default_output` in `rules`): a notation already declares what it is, and that is enough to pick one. An
+optional `output:` frontmatter field is the deliberate override for a kind that legitimately renders two ways (validated
+by rule `N109`), and omitting `output:` is how a template selects `plain` — there is no declarable `plain` value. There
+is no `--format` flag: it chose the frame a second time from outside the document and won over a correct header, so
+`--format letter` passed out of habit put the firm's letterhead on a will with nothing to warn the author. A further
+form — a fax cover, say — is a new `OutputFormat` variant plus its Typst chrome preamble; the conversion, embedded logo,
+and font stack are shared. Fill `{{placeholder}}` tokens with repeated `--answer code=value` flags; unfilled tokens
+render verbatim. The full command, letterhead, and font reference is [`pdf/README.md`](../pdf/README.md) — including how
+the licensed GORP Serif faces reach the renderer without their bytes entering the repository.
+
+**Filling fillable government PDFs — done.** `pdf::fill_acroform(blank_pdf, fields)` opens an existing fillable PDF (a
+Nevada SoS articles form, an IRS Form 990) via `lopdf`, walks its AcroForm `/Fields`, sets each `/V`, and sets
+`/NeedAppearances` so a viewer regenerates the field appearances — a read-modify-write path distinct from the Typst
+`render` path. Blank forms live as templates in the `cloud::StorageService` seam (`forms/<slug>.pdf`); a
+`generate_pdf__<form>` sub-slug dispatches the fill through the same worker step as the retainer PDF (via
+`DocumentPayload::Acroform`). The output is **attorney-review-ready, never auto-filed**: the workflow spec parks it at
+`lawyer_review` before any filing step, enforced by `workflows::lawyer_review_gates_filing` (a spec-graph check + test).
+Two loud-failure guardrails — XFA-based forms (Adobe's XML form layer, unsupported by any Rust crate) are detected and
+rejected rather than silently emitting a blank, and a field name that matches no form field errors rather than being
+silently dropped. Hierarchical (kids / dotted `/T`) field names remain out of scope.
+
+## External integrations
+
+- **Email — implemented.** `email_send__*` → SendGrid via `reqwest`, durable, with the message id captured for the event
+  webhook join. This is the one integration wired end-to-end.
+- **E-signature — implemented (the production dead-end is closed).** The `SignatureProvider` trait now ships a concrete
+  `DocuSignSignatureProvider` (DocuSign eSignature REST via `reqwest`, `.env`-driven; the stub stays for KIND / tests).
+  At send time the provider's `envelopeId` is persisted on `notations.signature_request_id`. The inbound webhook at
+  `/webhook/esignature/:secret` (`portal::esignature_webhook`) **verifies an HMAC-SHA256 signature over the raw body
+  before parsing it** — fail-closed when `DOCUSIGN_HMAC_KEY` is configured (a prod invariant) — then resolves the
+  envelope id back to its notation and signals `signature_received` → END. Only a `completed` event advances state;
+  other events ack with 200. The engagement terms are attorney-reviewed at `lawyer_review` *before* the document is
+  sent, so signature receipt is a ministerial transition with no second human gate. Covered by a `.feature` (happy +
+  forgery) and an end-to-end integration test through the real provider against a mocked endpoint.
+- **Google Drive — ingest only.** Each Project keeps a private Google Drive folder as a Workspace dropbox so people can
+  drop files in. Navigator stores that folder as `projects.drive_folder_id` and copies dropped files into the documents
+  bucket; Drive is never the serve origin and never a CI publish target. Legal files and client material stay out of the
+  Project repository, which holds only templates and Portal source. The Drive folder is created or adopted when the
+  Project opens (`store::project_surfaces`); retaining the folder does not make Drive a second document store.
+
+## Roadmap
+
+Ordered by value, each item independently shippable. Reliability fixes are split out from the features they ride with so
+neither blocks the other.
+
+**Recently shipped.** The full ten-template catalog is now bundled into the canonical seed, so a fresh cluster carries
+every template (LLC, trust, will, annual report, dissolution, three nonprofit forms, NV MBT) without an import pass.
+**The signature loop is closed** — `DocuSignSignatureProvider` plus the HMAC-verified `/webhook/esignature/:secret`
+route advance a signed retainer to END (see External integrations above).
+
+1. ~~**Close the signature loop.**~~ **Shipped.** A real `DocuSignSignatureProvider` plus an inbound webhook that
+   verifies the provider's HMAC signature over the raw body before signaling `signature_received`; the provider
+   request-id is persisted on the notation for correlation. This ended the production dead-end at
+   `sent_for_signature__pending`.
+2. ~~**AcroForm form-filling.**~~ **Shipped.** `pdf::fill_acroform(blank_pdf, fields)` (lopdf) fills a fillable
+   government form; a `generate_pdf__<form>` sub-slug dispatches it through the worker step, with blank forms held in
+   `cloud::StorageService`. Output is **attorney-review-ready, never auto-filed** — the spec-graph guardrail
+   `lawyer_review_gates_filing` proves no fill→file path skips `lawyer_review`. XFA forms and unmatched field names fail
+   loudly rather than emitting a silent blank.
+3. ~~**Promote the planned filing/mail steps to real handlers.**~~ **Shipped.** `mailroom_send`, `certified_mail`,
+   `e_filing`, and `filing__*` are worker-dispatched steps that record a durable `filings` row (the firm's proof of what
+   was filed) in `ctx.run`; compliance flows (e.g. the Nevada annual report) run end-to-end to END instead of parking.
+   `lawyer_review_precedes_submission` proves — on every bundled spec — that no submission side effect fires before the
+   review gate. (`notarization` stays a human act; `mailroom_receive` is inbound.)
+4. ~~**Make language access explicit in intake.**~~ **Dropped.** Navigator is English-only, so intake records no
+   language preference and `notation_session` renders the base question prompt directly. See
+   [`AGENTS.md`](../AGENTS.md).
+5. ~~**Template storage and scoping.**~~ **Shipped.** Template bodies moved from the inline `templates.body` TEXT column
+   to `cloud::StorageService` (`templates.asset_id` references an [Asset](glossary/asset.md) holding the bytes);
+   `templates.project_id` plus two partial unique indexes add project-scoped templates alongside the shared catalog,
+   resolved by `store::templates::resolve` (prefer Project, fall back to shared). The seed + `navigator site seed` paths
+   ingest bodies into Assets; render paths read them back via `store::templates::body`. See
+   [`notation.md`](notation.md).
+
+## Why this matters — access to justice
+
+The whole point of the notation system is to make routine legal work cheap, fast, and repeatable without removing the
+attorney. Each design choice traces back to that mission:
+
+- **One template, many matters.** A lawyer encodes a matter once; every future client walks the same validated
+  questionnaire. The marginal cost of the next LLC, trust, or annual report trends toward zero, which is what lets the
+  firm serve people a billable-hour model prices out.
+- **Faster resolution, lower cost.** A guided questionnaire plus automatic document generation replaces
+  multiple back-and-forth meetings with a single self-serve intake the client finishes in minutes — answered in their
+  own words through Navigator MCP, on whichever surface they already use.
+- **The human stays in the loop.** `lawyer_review` is mandatory by rule, not by convention. Automation does the
+  repetitive assembly; a licensed attorney signs off on the substance. Faster *and* accountable, not faster *instead of*
+  accountable.
+- **Auditable by construction.** Append-only `notation_events` means every matter has a complete, replayable history —
+  the transparency a public-interest practice owes the people it serves, and the record that lets one attorney safely
+  oversee far more matters than a paper process ever could.
+
+Speed here is not a convenience feature; it is the access-to-justice mechanism. Every minute and dollar the notation
+system removes from a routine matter is one that a person who could not otherwise afford a lawyer gets to keep.
+
+## Reusable Clauses
+
+A notation can declare versioned `clauses:` and place `{{> alias}}` in its body. Each Clause binds explicit inputs to
+questionnaire states; composition expands its prose before rendering and persistence. See [Clauses](clauses.md) for the
+authoring syntax, source inventory, and jurisdiction boundaries.

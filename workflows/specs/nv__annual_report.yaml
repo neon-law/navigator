@@ -1,0 +1,22 @@
+questionnaire:
+  BEGIN:
+    _: custom_single_choice__annual_or_amended
+  custom_single_choice__annual_or_amended:
+    _: people__managers
+  people__managers:
+    _: END
+  END: {}
+prompts:
+  annual_or_amended: Is this an original annual application or is it an amendment to a previous application?
+choices:
+  annual_or_amended:
+    original: Original Application
+    amended: Amendment to Previous Application
+workflow:
+  BEGIN:
+    _: lawyer_review
+  lawyer_review:
+    _: mailroom_send
+  mailroom_send:
+    _: END
+  END: {}

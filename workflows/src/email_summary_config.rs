@@ -1,0 +1,486 @@
+//! Typed, opt-in configuration for the inbound email-summary lane.
+//!
+//! The web process and the Restate worker read the same shape. Keeping the
+//! gate here prevents one process from believing summaries are enabled while
+//! the other silently falls back to a stub or an unconfigured provider.
+
+use std::collections::BTreeSet;
+
+use thiserror::Error;
+
+use super::email_summary::{
+    EmailSummaryRequest, EmailSummaryRunConfig, SummaryError, SummaryProvider,
+    SUMMARY_PROMPT_VERSION,
+};
+
+/// Environment keys owned by the summary lane.
+pub const ENABLED_ENV: &str = "NAVIGATOR_SUMMARY_ENABLED";
+pub const RECIPIENTS_ENV: &str = "NAVIGATOR_SUMMARY_ENVELOPE_RECIPIENTS";
+pub const DEPLOYMENT_ENV: &str = "NAVIGATOR_DEPLOYMENT_ID";
+pub const WORKFLOW_INGRESS_ENV: &str = "RESTATE_BROKER_URL";
+pub const CHANNEL_ENV: &str = "NAVIGATOR_SUMMARY_CHANNEL_ID";
+pub const FIRM_ID_ENV: &str = "NAVIGATOR_SUMMARY_FIRM_ID";
+pub const MATTER_PROJECT_ID_ENV: &str = "NAVIGATOR_SUMMARY_MATTER_PROJECT_ID";
+pub const PROVIDER_ACCOUNT_ENV: &str = "NAVIGATOR_SUMMARY_PROVIDER_ACCOUNT";
+pub const INBOUND_PUBLIC_KEY_ENV: &str = "SENDGRID_INBOUND_PUBLIC_KEY";
+pub const GCP_PROJECT_ENV: &str = "NAVIGATOR_GCP_PROJECT_ID";
+pub const GEMINI_MODEL_ENV: &str = "NAVIGATOR_SUMMARY_GEMINI_MODEL";
+pub const GEMINI_LOCATION_ENV: &str = "NAVIGATOR_SUMMARY_GEMINI_LOCATION";
+pub const MAX_INPUT_CHARS_ENV: &str = "NAVIGATOR_SUMMARY_MAX_INPUT_CHARS";
+pub const MAX_OUTPUT_TOKENS_ENV: &str = "NAVIGATOR_SUMMARY_MAX_OUTPUT_TOKENS";
+pub const CI_HARNESS_ENV: &str = "NAVIGATOR_CI_HARNESS";
+
+/// An endpoint override that exists only for the local test harness. Returns
+/// the value when `NAVIGATOR_CI_HARNESS` is `1`, `None` when unset, and an
+/// error naming the variable when a hosted profile sets it.
+pub fn harness_override<F: Fn(&str) -> Option<String>>(
+    get: &F,
+    key: &'static str,
+) -> Result<Option<String>, String> {
+    let Some(value) = non_empty(get(key)) else {
+        return Ok(None);
+    };
+    if non_empty(get(CI_HARNESS_ENV)).as_deref() == Some("1") {
+        Ok(Some(value))
+    } else {
+        Err(format!("{key} is only allowed under {CI_HARNESS_ENV}=1"))
+    }
+}
+
+/// Every key an enabled summary lane must be given, besides [`ENABLED_ENV`].
+///
+/// The single list `from_lookup` refuses on and the deployment-tree gate
+/// (`navigator ops deployments`) measures each row against, so a key
+/// made mandatory here cannot reach a staging roll before a deployment
+/// supplies it. A test pins `from_lookup` to accept exactly these keys.
+pub const REQUIRED_KEYS: &[&str] = &[
+    RECIPIENTS_ENV,
+    INBOUND_PUBLIC_KEY_ENV,
+    DEPLOYMENT_ENV,
+    WORKFLOW_INGRESS_ENV,
+    GCP_PROJECT_ENV,
+    CHANNEL_ENV,
+];
+
+/// The provider account a summary receipt and its sender approvals are keyed
+/// by when [`PROVIDER_ACCOUNT_ENV`] is unset: the lane's one inbound provider
+/// is SendGrid Inbound Parse.
+pub const DEFAULT_PROVIDER_ACCOUNT: &str = "sendgrid";
+
+/// Whether `get` turns the summary lane on. Unset or blank is off; anything
+/// that is not a boolean is an error, as in [`EmailSummaryConfig::from_lookup`].
+pub fn enabled<F: Fn(&str) -> Option<String>>(get: &F) -> Result<bool, EmailSummaryConfigError> {
+    match non_empty(get(ENABLED_ENV)) {
+        None => Ok(false),
+        Some(value) => parse_bool(ENABLED_ENV, &value),
+    }
+}
+
+const DEFAULT_MAX_INPUT_CHARS: usize = 32_000;
+const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 4_096;
+
+/// One deployment's complete summary configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmailSummaryConfig {
+    pub envelope_recipients: Vec<String>,
+    pub inbound_public_key: String,
+    pub deployment: String,
+    pub workflow_ingress: String,
+    pub project_id: String,
+    pub channel_id: String,
+    /// An explicit Firm override. `None` means the web process resolves the
+    /// Firm wearing its own brand, as support intake does.
+    pub firm_id: Option<uuid::Uuid>,
+    pub matter_project_id: Option<uuid::Uuid>,
+    pub provider_account: String,
+    pub gemini_model: String,
+    pub gemini_location: String,
+    pub max_input_chars: usize,
+    pub max_output_tokens: u32,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum EmailSummaryConfigError {
+    #[error("{0} is required when {ENABLED_ENV}=true")]
+    Missing(&'static str),
+    #[error("{0} must be a boolean")]
+    InvalidBoolean(&'static str),
+    #[error("{0} must be a positive integer")]
+    InvalidInteger(&'static str),
+    #[error("{0} must be an HTTPS URL")]
+    InvalidIngress(&'static str),
+    #[error("{0} must be a non-empty token")]
+    InvalidToken(&'static str),
+    #[error("{0} must contain at least one recipient")]
+    InvalidRecipients(&'static str),
+    #[error("{FIRM_ID_ENV} must be a UUID")]
+    InvalidFirmId,
+    #[error("{MATTER_PROJECT_ID_ENV} must be a UUID")]
+    InvalidMatterProjectId,
+}
+
+impl EmailSummaryConfig {
+    /// Build the exact `EmailSummaryRequest` intake submits for one receipt.
+    ///
+    /// The single construction path for both the inbound webhook and an
+    /// operator redrive (`navigator ops email-summary redrive`): each side
+    /// building its own copy of this shape is the bug ENG-889 exists to
+    /// guard against, so a redrive calls this rather than re-deriving the
+    /// run configuration.
+    pub fn request_for(
+        &self,
+        receipt_id: uuid::Uuid,
+        input_digest: &str,
+    ) -> Result<EmailSummaryRequest, SummaryError> {
+        let gemini = EmailSummaryRunConfig::new(
+            SummaryProvider::Gemini,
+            &self.gemini_model,
+            &self.gemini_location,
+            SUMMARY_PROMPT_VERSION,
+            input_digest,
+        )?
+        .with_limits(self.max_input_chars, self.max_output_tokens);
+        Ok(EmailSummaryRequest {
+            receipt_id,
+            matter_project_id: self.matter_project_id,
+            project_id: self.project_id.clone(),
+            channel_id: self.channel_id.clone(),
+            gemini,
+        })
+    }
+
+    /// Resolve the production environment, returning `None` for the explicit
+    /// default-off posture and an error for an enabled-but-incomplete row.
+    pub fn from_env() -> Result<Option<Self>, EmailSummaryConfigError> {
+        Self::from_lookup(|key| std::env::var(key).ok())
+    }
+
+    /// Testable environment seam. HTTP workflow ingress is accepted only for
+    /// the explicit local harness; hosted profiles must use HTTPS.
+    pub fn from_lookup<F: Fn(&str) -> Option<String>>(
+        get: F,
+    ) -> Result<Option<Self>, EmailSummaryConfigError> {
+        if !enabled(&get)? {
+            return Ok(None);
+        }
+
+        let recipients = required(&get, RECIPIENTS_ENV)?;
+        let envelope_recipients = parse_recipients(&recipients)?;
+        let inbound_public_key = required(&get, INBOUND_PUBLIC_KEY_ENV)?;
+        let deployment = required(&get, DEPLOYMENT_ENV)?;
+        let workflow_ingress = required(&get, WORKFLOW_INGRESS_ENV)?;
+        let project_id = required(&get, GCP_PROJECT_ENV)?;
+        let channel_id = required(&get, CHANNEL_ENV)?;
+        let firm_id = non_empty(get(FIRM_ID_ENV))
+            .map(|value| {
+                value
+                    .parse()
+                    .map_err(|_| EmailSummaryConfigError::InvalidFirmId)
+            })
+            .transpose()?;
+        let matter_project_id = non_empty(get(MATTER_PROJECT_ID_ENV))
+            .map(|value| {
+                value
+                    .parse()
+                    .map_err(|_| EmailSummaryConfigError::InvalidMatterProjectId)
+            })
+            .transpose()?;
+        let provider_account = non_empty(get(PROVIDER_ACCOUNT_ENV))
+            .unwrap_or_else(|| DEFAULT_PROVIDER_ACCOUNT.to_string());
+        let gemini_model = non_empty(get(GEMINI_MODEL_ENV))
+            .unwrap_or_else(|| cloud::DEFAULT_GEMINI_SUMMARY_MODEL.to_string());
+        let gemini_location = non_empty(get(GEMINI_LOCATION_ENV))
+            .unwrap_or_else(|| cloud::DEFAULT_GEMINI_SUMMARY_LOCATION.to_string());
+        let max_input_chars = positive_usize(
+            MAX_INPUT_CHARS_ENV,
+            get(MAX_INPUT_CHARS_ENV),
+            DEFAULT_MAX_INPUT_CHARS,
+        )?;
+        let max_output_tokens = positive_u32(
+            MAX_OUTPUT_TOKENS_ENV,
+            get(MAX_OUTPUT_TOKENS_ENV),
+            DEFAULT_MAX_OUTPUT_TOKENS,
+        )?;
+
+        for (key, value) in [
+            (INBOUND_PUBLIC_KEY_ENV, &inbound_public_key),
+            (DEPLOYMENT_ENV, &deployment),
+            (GCP_PROJECT_ENV, &project_id),
+            (CHANNEL_ENV, &channel_id),
+            (PROVIDER_ACCOUNT_ENV, &provider_account),
+            (GEMINI_MODEL_ENV, &gemini_model),
+            (GEMINI_LOCATION_ENV, &gemini_location),
+        ] {
+            if value.chars().any(char::is_whitespace) {
+                return Err(EmailSummaryConfigError::InvalidToken(key));
+            }
+        }
+        if !valid_ingress(&workflow_ingress, non_empty(get(CI_HARNESS_ENV)).as_deref()) {
+            return Err(EmailSummaryConfigError::InvalidIngress(
+                WORKFLOW_INGRESS_ENV,
+            ));
+        }
+
+        Ok(Some(Self {
+            envelope_recipients,
+            inbound_public_key,
+            deployment,
+            workflow_ingress,
+            project_id,
+            channel_id,
+            firm_id,
+            matter_project_id,
+            provider_account,
+            gemini_model,
+            gemini_location,
+            max_input_chars,
+            max_output_tokens,
+        }))
+    }
+}
+
+fn required<F: Fn(&str) -> Option<String>>(
+    get: &F,
+    key: &'static str,
+) -> Result<String, EmailSummaryConfigError> {
+    non_empty(get(key)).ok_or(EmailSummaryConfigError::Missing(key))
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_bool(key: &'static str, value: &str) -> Result<bool, EmailSummaryConfigError> {
+    match value {
+        "1" | "true" => Ok(true),
+        "0" | "false" => Ok(false),
+        _ => Err(EmailSummaryConfigError::InvalidBoolean(key)),
+    }
+}
+
+fn parse_recipients(value: &str) -> Result<Vec<String>, EmailSummaryConfigError> {
+    let mut seen = BTreeSet::new();
+    for recipient in value.split(',') {
+        let recipient = recipient.trim().to_ascii_lowercase();
+        if !recipient.is_empty() {
+            seen.insert(recipient);
+        }
+    }
+    if seen.is_empty() {
+        return Err(EmailSummaryConfigError::InvalidRecipients(RECIPIENTS_ENV));
+    }
+    Ok(seen.into_iter().collect())
+}
+
+fn positive_usize(
+    key: &'static str,
+    value: Option<String>,
+    default: usize,
+) -> Result<usize, EmailSummaryConfigError> {
+    let Some(value) = non_empty(value) else {
+        return Ok(default);
+    };
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or(EmailSummaryConfigError::InvalidInteger(key))
+}
+
+fn positive_u32(
+    key: &'static str,
+    value: Option<String>,
+    default: u32,
+) -> Result<u32, EmailSummaryConfigError> {
+    let Some(value) = non_empty(value) else {
+        return Ok(default);
+    };
+    value
+        .parse::<u32>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or(EmailSummaryConfigError::InvalidInteger(key))
+}
+
+fn valid_ingress(value: &str, harness: Option<&str>) -> bool {
+    value.starts_with("https://")
+        || (harness.is_some_and(|value| value == "1" || value == "true")
+            && value.starts_with("http://"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn lookup(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let values: HashMap<String, String> = pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect();
+        move |key| values.get(key).cloned()
+    }
+
+    fn enabled() -> Vec<(&'static str, &'static str)> {
+        vec![
+            (ENABLED_ENV, "true"),
+            (
+                RECIPIENTS_ENV,
+                " Intake@Parse.example.com, intake@parse.example.com ",
+            ),
+            (INBOUND_PUBLIC_KEY_ENV, "public-key"),
+            (DEPLOYMENT_ENV, "production"),
+            (WORKFLOW_INGRESS_ENV, "https://restate.example.test"),
+            (GCP_PROJECT_ENV, "project"),
+            (CHANNEL_ENV, "C123"),
+            (FIRM_ID_ENV, "00000000-0000-4000-8000-000000000001"),
+            (
+                MATTER_PROJECT_ID_ENV,
+                "00000000-0000-4000-8000-000000000002",
+            ),
+            (PROVIDER_ACCOUNT_ENV, "sendgrid-example"),
+        ]
+    }
+
+    #[test]
+    fn disabled_by_default() {
+        assert_eq!(EmailSummaryConfig::from_lookup(lookup(&[])), Ok(None));
+    }
+
+    #[test]
+    fn enabled_configuration_is_complete_and_deduplicated() {
+        let config = EmailSummaryConfig::from_lookup(lookup(&enabled()))
+            .expect("valid config")
+            .expect("enabled");
+        assert_eq!(config.envelope_recipients, vec!["intake@parse.example.com"]);
+        assert_eq!(config.max_input_chars, DEFAULT_MAX_INPUT_CHARS);
+        assert_eq!(config.max_output_tokens, DEFAULT_MAX_OUTPUT_TOKENS);
+    }
+
+    #[test]
+    fn enabled_configuration_without_an_assigned_project_remains_safe_to_boot() {
+        let mut values = enabled();
+        values.retain(|(key, _)| *key != MATTER_PROJECT_ID_ENV);
+        let config = EmailSummaryConfig::from_lookup(lookup(&values))
+            .expect("configuration is valid without a project assignment")
+            .expect("summary lane is enabled");
+        assert_eq!(config.matter_project_id, None);
+    }
+
+    /// `REQUIRED_KEYS` is what the deployment-tree gate demands of every row,
+    /// so it must be exactly what boot demands: the keys alone boot, and
+    /// dropping any one of them is refused by name.
+    #[test]
+    fn required_keys_are_exactly_what_an_enabled_lane_refuses_without() {
+        let complete: Vec<_> = enabled()
+            .into_iter()
+            .filter(|(key, _)| *key == ENABLED_ENV || REQUIRED_KEYS.contains(key))
+            .collect();
+        assert!(
+            EmailSummaryConfig::from_lookup(lookup(&complete)).is_ok(),
+            "an enabled lane must boot from ENABLED_ENV and REQUIRED_KEYS alone; \
+             a key made mandatory belongs in REQUIRED_KEYS"
+        );
+        for missing in REQUIRED_KEYS {
+            let mut values = complete.clone();
+            values.retain(|(key, _)| key != missing);
+            assert_eq!(
+                EmailSummaryConfig::from_lookup(lookup(&values)),
+                Err(EmailSummaryConfigError::Missing(missing))
+            );
+        }
+    }
+
+    #[test]
+    fn firm_and_provider_account_default_when_unset() {
+        let mut values = enabled();
+        values.retain(|(key, _)| *key != FIRM_ID_ENV && *key != PROVIDER_ACCOUNT_ENV);
+        let config = EmailSummaryConfig::from_lookup(lookup(&values))
+            .expect("configuration is valid without a Firm override")
+            .expect("summary lane is enabled");
+        assert_eq!(config.firm_id, None);
+        assert_eq!(config.provider_account, DEFAULT_PROVIDER_ACCOUNT);
+    }
+
+    #[test]
+    fn a_malformed_firm_override_is_refused() {
+        let mut values = enabled();
+        values.retain(|(key, _)| *key != FIRM_ID_ENV);
+        values.push((FIRM_ID_ENV, "not-a-uuid"));
+        assert_eq!(
+            EmailSummaryConfig::from_lookup(lookup(&values)),
+            Err(EmailSummaryConfigError::InvalidFirmId)
+        );
+    }
+
+    #[test]
+    fn enabled_configuration_reports_the_first_missing_field() {
+        let mut values = enabled();
+        values.retain(|(key, _)| *key != CHANNEL_ENV);
+        assert_eq!(
+            EmailSummaryConfig::from_lookup(lookup(&values)),
+            Err(EmailSummaryConfigError::Missing(CHANNEL_ENV))
+        );
+    }
+
+    #[test]
+    fn hosted_configuration_rejects_http_ingress() {
+        let mut values = enabled();
+        values.retain(|(key, _)| *key != WORKFLOW_INGRESS_ENV);
+        values.push((WORKFLOW_INGRESS_ENV, "http://restate.example.test"));
+        assert_eq!(
+            EmailSummaryConfig::from_lookup(lookup(&values)),
+            Err(EmailSummaryConfigError::InvalidIngress(
+                WORKFLOW_INGRESS_ENV
+            ))
+        );
+    }
+
+    #[test]
+    fn local_harness_may_use_http_ingress() {
+        let mut values = enabled();
+        values.retain(|(key, _)| *key != WORKFLOW_INGRESS_ENV);
+        values.push((WORKFLOW_INGRESS_ENV, "http://127.0.0.1:9080"));
+        values.push((CI_HARNESS_ENV, "1"));
+        assert!(EmailSummaryConfig::from_lookup(lookup(&values)).is_ok());
+    }
+
+    #[test]
+    fn request_for_builds_a_gemini_only_request_with_the_given_digest() {
+        let config = EmailSummaryConfig::from_lookup(lookup(&enabled()))
+            .expect("config parses")
+            .expect("config is enabled");
+        let digest = "a".repeat(64);
+        let receipt_id = uuid::Uuid::now_v7();
+
+        let request = config
+            .request_for(receipt_id, &digest)
+            .expect("a valid 64-hex digest builds a request");
+
+        assert_eq!(request.receipt_id, receipt_id);
+        assert_eq!(request.matter_project_id, config.matter_project_id);
+        assert_eq!(request.project_id, config.project_id);
+        assert_eq!(request.channel_id, config.channel_id);
+        assert_eq!(request.gemini.input_digest, digest);
+        assert_eq!(request.gemini.provider, SummaryProvider::Gemini);
+        assert!(serde_json::to_value(&request)
+            .expect("request serializes")
+            .get("claude")
+            .is_none());
+    }
+
+    #[test]
+    fn request_for_rejects_a_malformed_digest() {
+        let config = EmailSummaryConfig::from_lookup(lookup(&enabled()))
+            .expect("config parses")
+            .expect("config is enabled");
+
+        let error = config
+            .request_for(uuid::Uuid::now_v7(), "not-a-digest")
+            .expect_err("a non-hex, non-64-char digest is invalid");
+        assert!(matches!(error, SummaryError::InvalidRunConfig));
+    }
+}

@@ -1,0 +1,180 @@
+/* Neon Law brand layer — the firm's public identity, as `www.neonlaw.com`
+   presents it, expressed over Navigator's shared `--nav-*` token layer.
+   `theme.css` loads first and keeps owning the chrome; every rule here is
+   additive, so a page that does not hoist this file renders exactly as before.
+
+   This layer owns the full-width opening wash, shared section furniture
+   (eyebrow, heading, card, chip, stat), and decorative motion primitives.
+
+   The palette lives in the token layer. `--firm-brand` aliases
+   `--nav-color-primary`, keeping marketing pages and product chrome aligned.
+
+   Page-specific layout belongs in the page's own stylesheet (`home.css`,
+   `team.css`), which loads after this one. */
+
+:root {
+  --firm-brand: var(--nav-color-primary);
+  --firm-brand-strong: var(--nav-color-primary-hover);
+  /* Text on a brand-filled surface — inverts with the scheme, like the fill. */
+  --firm-on-brand: var(--nav-color-on-brand);
+
+  /* Washes derived from the fill: a tint behind an icon, an edge on a card, a
+     glow behind the hero. `color-mix` keeps them tied to the one brand stop
+     rather than restating it at three opacities. */
+  --firm-brand-tint: color-mix(in oklab, var(--nav-color-primary) 7%, transparent);
+  --firm-brand-edge: color-mix(in oklab, var(--nav-color-primary) 28%, transparent);
+  --firm-brand-glow: color-mix(in oklab, var(--nav-color-primary) 34%, transparent);
+
+  /* Marketing headings follow the resolved brand's display face. Brands
+     with one typeface use that same family for headings and body copy. */
+  --firm-serif: var(--brand-font-display, var(--nav-font-family));
+
+  --neon-card-bg: color-mix(in oklab, var(--nav-color-surface) 88%, transparent);
+  --neon-card-border: var(--firm-brand-edge);
+  --neon-card-radius: 1rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* The fill lightens with the scheme, so the washes drawn from it thin out;
+       these hold them visible against the dark ground. */
+    --firm-brand-tint: color-mix(in oklab, var(--nav-color-primary) 9%, transparent);
+    --firm-brand-edge: color-mix(in oklab, var(--nav-color-primary) 24%, transparent);
+    --firm-brand-glow: color-mix(in oklab, var(--nav-color-primary) 26%, transparent);
+    --neon-card-bg: color-mix(in oklab, var(--nav-color-surface-raised) 70%, transparent);
+  }
+}
+
+/* Paint the opening wash on the device-wide shell rather than clipping it
+   to a hero inside the 72rem content column. */
+body:has(.public-shell) {
+  margin: 0;
+}
+
+.nav-theme.public-shell {
+  background:
+    radial-gradient(
+      ellipse 100% 32rem at 50% 0,
+      var(--firm-brand-glow),
+      transparent 75%
+    ),
+    var(--nav-color-bg);
+}
+
+.public-shell > .site-header {
+  background: var(--nav-color-surface);
+  border-bottom: 0;
+}
+
+/* The shell owns the wash; hero-local glows would double it and expose the
+   edges of their clipped content column. */
+.public-shell .firm-glow {
+  display: none;
+}
+
+.public-shell .fm-hero {
+  background: none;
+}
+
+/* ---- Section furniture ------------------------------------------------- */
+
+/* The small tracked-out label above a heading ("The practice", "The people").
+   It names the section without competing with the heading for the eye. */
+.firm-eyebrow {
+  margin: 0 0 0.5rem;
+  color: var(--firm-brand);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.firm-heading {
+  margin: 0;
+  font-family: var(--firm-serif);
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 600;
+  line-height: 1.05;
+  text-wrap: balance;
+}
+
+/* The glass panel every marketing block sits in. A gradient rather than a flat
+   fill so the card reads as lifted on both colour schemes. */
+.neon-card {
+  box-sizing: border-box;
+  margin: 1.5rem 0 0;
+  padding: clamp(1.5rem, 4vw, 2.5rem);
+  border: 1px solid var(--neon-card-border);
+  border-radius: var(--neon-card-radius);
+  background-image: linear-gradient(
+    to bottom,
+    var(--neon-card-bg),
+    color-mix(in oklab, var(--neon-card-bg) 45%, transparent)
+  );
+}
+
+/* The pill row: practice areas on the home page, credentials on `/team`. */
+.firm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.firm-chip {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--firm-brand-edge);
+  border-radius: 999px;
+  background: var(--firm-brand-tint);
+  color: var(--nav-color-text);
+  font-size: 0.875rem;
+  line-height: 1.3;
+}
+
+/* ---- Motion ------------------------------------------------------------ */
+
+/* The hero glow: two soft radial washes bled behind the statement. Painted on
+   one decorative element so no content node carries a background. */
+.firm-glow {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  z-index: 0;
+  height: 26rem;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      58% 60% at 50% 0%,
+      var(--firm-brand-glow) 0%,
+      transparent 66%
+    ),
+    radial-gradient(
+      36% 44% at 50% 4%,
+      color-mix(in oklab, var(--firm-brand) 26%, transparent) 0%,
+      transparent 62%
+    );
+  animation: firm-glow-breathe 12s ease-in-out infinite;
+}
+
+@keyframes firm-glow-breathe {
+  0%,
+  100% {
+    opacity: 0.7;
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-0.5rem) scale(1.06);
+  }
+}
+
+/* Motion is decoration here, never information: with it suppressed the glow
+   simply settles, so nothing is lost. */
+@media (prefers-reduced-motion: reduce) {
+  .firm-glow {
+    opacity: 0.8;
+    animation: none;
+  }
+}

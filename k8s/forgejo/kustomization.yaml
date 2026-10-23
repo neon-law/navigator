@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: navigator
+resources:
+  - forgejo.yaml
+configMapGenerator:
+  - name: navigator-forgejo-scripts
+    files:
+      - admission.sh
+      - identity.sh
+images:
+  - name: forgejo
+    newName: codeberg.org/forgejo/forgejo
+    digest: sha256:caf1bca332f95cdcf124227a4bfa3b49bbbfbbc8a5e4a97406921cb581165413

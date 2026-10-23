@@ -1,0 +1,668 @@
+//! Admin console "person show/edit" page as a Dioxus component (#641 Phase 3,
+//! admin cluster) — the person edit form plus its per-record actions.
+//!
+//! The successor to the `admin_person_show` → `person_show_response` render
+//! for the `/app/admin/people/{id}` surface. It loads the person by its `{id}` path
+//! parameter (a not-found state when the id resolves to no row) and renders the
+//! shared [`crate::components::FormCard`] prefilled with the person's name,
+//! email, and role — a native `POST` to `/app/admin/people/{id}` (the update route
+//! that wraps the person update command; the form `PATCH`ed the REST
+//! `/app/api/people/{id}` over HTMX). Below the form is the actions panel: the
+//! welcome-email action (a native `<details>` disclosure whose confirm button
+//! `POST`s the send; the surface confirmed through HTMX's `hx-confirm`,
+//! which this no-JS form cannot use under its strict CSP, and the disclosure
+//! stays on the page so unsaved edits are not discarded), and the Xero contact
+//! link.
+//!
+//! The read-only legal-name parts and a locked role select disable rather than
+//! submit. A caller viewing a record that outranks them (`read_only`) gets the
+//! whole form disabled with no Save, since the command layer rejects every
+//! write to it. The bootstrap Owner record is a narrower lock: only its email
+//! and role are pinned (the command layer silently drops a submitted change to
+//! either), so its name and Save stay live even when `read_only` is false.
+
+use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
+
+use crate::components::{Avatar, Choice, Field, FormCard, Heading};
+use crate::people::ViewerRole;
+
+// Server-only: the `#[server]` body loads the person via `find`.
+
+/// The configured `NAVIGATOR_BOOTSTRAP_OWNER_EMAIL`, injected into the request
+/// by the portal `admin_person_show_router` layer — a wasm-safe newtype the
+/// `#[server]` function extracts to resolve the immutable bootstrap-Owner row.
+/// `webapp` cannot see the portal `AppState` where the value lives (it depends
+/// on `store`, not `portal`), so it is injected the same way [`crate::csrf::
+/// CsrfToken`] and [`crate::people::ViewerRole`] are. `None` when unset.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct BootstrapOwnerEmail(pub Option<String>);
+
+/// The prefilled fields of the person being edited.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct PersonFields {
+    pub name: String,
+    pub email: String,
+    /// The role token (`owner` / `admin` / `lawyer` / `clerk` / `client`).
+    pub role: String,
+    pub given_name: String,
+    pub family_name: String,
+    pub middle_name: String,
+    /// The stable Notion workspace user id, if linked. This is an external
+    /// identity address, never an authorization fact.
+    pub notion_user_id: String,
+    /// The public `LinkedIn` profile URL shown on `/team`. Blank when unset.
+    pub linkedin_url: String,
+    /// The admin-only route for the current avatar's preview
+    /// (`/app/admin/people/{id}/avatar`), which redirects public Person
+    /// avatars to their asset URL. `None` until an avatar has been uploaded.
+    pub avatar_url: Option<String>,
+}
+
+/// A flash notice floated on arrival — the welcome-email send outcome (mapped
+/// from `?notice=`) or a rejected update (`?error=`).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct PersonNotice {
+    /// `true` renders the green success confirmation; `false` the red failure.
+    pub success: bool,
+    pub message: String,
+}
+
+/// How far the edit form locks down for the viewed record. Two distinct
+/// causes collapse to one field (rather than two independent bools) because
+/// they are mutually exclusive in practice: [`EditLock::HigherRank`] only
+/// applies when the target outranks the caller, and the bootstrap Owner is
+/// always the highest rank — so a caller who could otherwise reach
+/// [`EditLock::BootstrapOwner`] (equal rank) never also qualifies for
+/// [`EditLock::HigherRank`].
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EditLock {
+    /// No lock: every field, including email and role, edits normally.
+    #[default]
+    None,
+    /// This row is the bootstrap Owner: its email and role are pinned (the
+    /// command layer drops a submitted change to either), but name and the
+    /// legal-name parts stay live and Save is offered.
+    BootstrapOwner,
+    /// The caller cannot edit this row at all: it outranks their own system
+    /// role. Every field disables and no Save is offered.
+    HigherRank,
+}
+
+/// The rendered admin person show/edit page, in a wasm-safe shape.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct PersonShowView {
+    /// The resolved brand's tokens stylesheet href, so the page wears
+    /// its own palette rather than the firm's on a non-default host.
+    #[serde(default)]
+    pub tokens_href: String,
+    /// The person id (for the form and action routes).
+    pub id: String,
+    /// The prefilled fields; `None` when the id resolves to no person (a 404).
+    pub fields: Option<PersonFields>,
+    pub edit_lock: EditLock,
+    /// The Xero contact id when synced (an external link); `None` renders the
+    /// "not synced yet" note.
+    pub xero_contact_id: Option<String>,
+    /// The flash notice, from `?notice=` / `?error=`; `None` on a plain visit.
+    pub notice: Option<PersonNotice>,
+    pub csrf_token: String,
+    pub role: ViewerRole,
+    /// The deploy's firm name, for the document title. Resolved from the
+    /// request-scoped branding rather than written into the copy, so a
+    /// white-label deploy's tab reads its own name.
+    #[serde(default)]
+    pub firm_name: String,
+}
+
+/// The show view's query flags: the welcome-send `?notice=` and the update
+/// `?error=` flash.
+#[cfg(feature = "server")]
+#[derive(Deserialize, Default)]
+struct PersonShowQuery {
+    #[serde(default)]
+    notice: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// The list path Cancel and "back to people" target.
+pub const LIST_PATH: &str = "/app/admin/people";
+/// The detail path base for the form action and the per-record action routes;
+/// the `{id}` and any action suffix are appended.
+pub const DETAIL_PATH: &str = "/app/admin/people";
+
+/// Load the person show/edit page for the `{id}` in the request path: read the
+/// injected CSRF token and the query flags, load the person (`fields: None` +
+/// a committed 404 when the id resolves to no row), and resolve the immutable
+/// bootstrap-Owner branch. The caller runs the admin auth gate and passes the
+/// resolved `role`.
+/// `?error=` (a rejected update) is a red flash; the welcome-send `?notice=`
+/// maps to a green/red toast naming the recipient.
+#[cfg(feature = "server")]
+fn flash_notice(query: &PersonShowQuery, email: &str) -> Option<PersonNotice> {
+    match (query.error.as_deref(), query.notice.as_deref()) {
+        (Some(error), _) if !error.is_empty() => Some(PersonNotice {
+            success: false,
+            message: error.to_string(),
+        }),
+        (_, Some("welcome_sent")) => Some(PersonNotice {
+            success: true,
+            message: format!("Welcome email sent to {email}."),
+        }),
+        (_, Some("welcome_failed")) => Some(PersonNotice {
+            success: false,
+            message: format!("Couldn't send the welcome email to {email}. Check the email log."),
+        }),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "server")]
+async fn load_person_show(role: ViewerRole) -> Result<PersonShowView, ServerFnError> {
+    let axum::extract::Path(id) =
+        dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Path<uuid::Uuid>, _>()
+            .await?;
+    let csrf_token = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::Extension<crate::csrf::CsrfToken>,
+        _,
+    >()
+    .await
+    .map(|axum::Extension(token)| token.0)
+    .unwrap_or_default();
+    let query = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::extract::Query<PersonShowQuery>,
+        _,
+    >()
+    .await
+    .map(|axum::extract::Query(q)| q)
+    .unwrap_or_default();
+
+    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let person = store::persons::find_by_id(&surreal, id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let Some(p) = person else {
+        // A valid UUID that resolves to no row is a missing resource: commit the
+        // same 404 the show handler returned so clients, caches, and
+        // monitoring see the not-found state as not-found.
+        dioxus_fullstack_core::FullstackContext::commit_http_status(
+            axum::http::StatusCode::NOT_FOUND,
+            None,
+        );
+        return Ok(PersonShowView {
+            id: id.to_string(),
+            fields: None,
+            csrf_token,
+            role,
+            ..PersonShowView::default()
+        });
+    };
+
+    // The bootstrap Owner record's email and role are pinned — the command
+    // layer drops a submitted change to either — so only those two fields
+    // lock; name and the legal-name parts stay live like any other person's.
+    // The configured email is injected by the portal router (mirroring the
+    // CSRF token) rather than read from the environment, so a test can set it
+    // on the state without a process-global env var.
+    let notion_user_id = store::external_identities::find_by_person_and_system(
+        &surreal,
+        id,
+        store::external_identities::ExternalSystem::Notion,
+    )
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+    .map(|identity| identity.external_id)
+    .unwrap_or_default();
+
+    let BootstrapOwnerEmail(bootstrap_owner_email) =
+        dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<BootstrapOwnerEmail>, _>()
+            .await
+            .map(|axum::Extension(email)| email)
+            .unwrap_or_default();
+    let is_bootstrap_owner = bootstrap_owner_email
+        .as_deref()
+        .is_some_and(|configured| configured.eq_ignore_ascii_case(&p.email));
+
+    let notice = flash_notice(&query, &p.email);
+
+    // The authority-rank lock takes priority: a caller viewing a
+    // higher-ranked record can't touch it at all, even if that record also
+    // happens to be the bootstrap Owner. Only when ranks are equal (an Owner
+    // viewing the pinned bootstrap-Owner row) does the narrower
+    // email-and-role-only lock apply, leaving name and Save live.
+    let target_rank = p.role.authority_rank();
+    let edit_lock = if target_rank > role.authority_rank() {
+        EditLock::HigherRank
+    } else if is_bootstrap_owner {
+        EditLock::BootstrapOwner
+    } else {
+        EditLock::None
+    };
+
+    Ok(PersonShowView {
+        tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
+        firm_name: crate::app_chrome::firm_name_from_context().await,
+        id: id.to_string(),
+        fields: Some(PersonFields {
+            name: p.name,
+            role: p.role.as_str().to_string(),
+            email: p.email,
+            given_name: p.given_name.unwrap_or_default(),
+            family_name: p.family_name.unwrap_or_default(),
+            middle_name: p.middle_name.unwrap_or_default(),
+            notion_user_id,
+            linkedin_url: p.linkedin_url.unwrap_or_default(),
+            avatar_url: p
+                .profile_image_url
+                .is_some()
+                .then(|| format!("{DETAIL_PATH}/{id}/avatar")),
+        }),
+        edit_lock,
+        xero_contact_id: p.xero_contact_id,
+        notice,
+        csrf_token,
+        role,
+    })
+}
+
+/// Load the person show/edit page (`/app/admin/people/{id}`): refuse non-admin,
+/// then load through [`load_person_show`].
+#[server]
+pub async fn get_admin_person_show() -> Result<PersonShowView, ServerFnError> {
+    let role = crate::admin_listing::require_admin().await?;
+    load_person_show(role).await
+}
+
+/// Build the edit form's fields from the prefilled values, applying the disabled
+/// state for the read-only legal-name parts, a locked role select, the pinned
+/// bootstrap-Owner email, and (for a record the caller cannot touch at all) the
+/// fully immutable form.
+fn edit_fields(fields: &PersonFields, edit_lock: EditLock, viewer_role: ViewerRole) -> Vec<Field> {
+    let mut name = Field::text("Name", "name", fields.name.clone()).required();
+    let mut email = Field::email("Email", "email", fields.email.clone()).required();
+    match edit_lock {
+        EditLock::HigherRank => {
+            // A record outranking the caller locks name + email too, so nothing
+            // on the page invites a rejected write.
+            name = name.disabled();
+            email = email.disabled();
+        }
+        EditLock::BootstrapOwner => {
+            // Only the pinned identity locks: the command layer drops a
+            // submitted email change for this row regardless, but name edits
+            // normally.
+            email = email.disabled();
+        }
+        EditLock::None => {}
+    }
+
+    let mut role_options = Vec::new();
+    if viewer_role == ViewerRole::Owner {
+        role_options.push(Choice::new("owner", "Owner"));
+    }
+    role_options.extend([
+        Choice::new("admin", "Admin"),
+        Choice::new("lawyer", "Lawyer (lawyer)"),
+        Choice::new("clerk", "Clerk (non-lawyer)"),
+        Choice::new("client", "Client"),
+    ]);
+    let selected = if fields.role.is_empty() {
+        "client".to_string()
+    } else {
+        fields.role.clone()
+    };
+    let mut role = Field::select("Role", "role", role_options, Some(selected));
+    role = if edit_lock == EditLock::BootstrapOwner {
+        // The bootstrap Owner's role is pinned to `owner` by the command layer;
+        // disable the select and say where it changes instead.
+        role.disabled().help(
+            "The bootstrap Owner role on this account cannot be changed from the UI. \
+             Edit via NAVIGATOR_BOOTSTRAP_OWNER_EMAIL or a direct DB write.",
+        )
+    } else if edit_lock == EditLock::HigherRank {
+        role.disabled()
+            .help("Only an Owner or Admin can change an eligible person's role.")
+    } else {
+        role.help("The system-wide tier. A change takes effect the next time this person signs in.")
+    };
+
+    // The legal-name parts are filing-only details, read-only on the edit form.
+    let mut given = Field::text("Given name", "given_name", fields.given_name.clone()).help(
+        "Filing-only details: use Name for the everyday display name; enter these only \
+         when a form needs separate legal-name parts.",
+    );
+    let mut family = Field::text("Family name", "family_name", fields.family_name.clone());
+    let mut middle = Field::text("Middle name", "middle_name", fields.middle_name.clone());
+    given = given.disabled();
+    family = family.disabled();
+    middle = middle.disabled();
+
+    let mut notion = Field::text(
+        "Notion user ID",
+        "notion_user_id",
+        fields.notion_user_id.clone(),
+    )
+    .help(
+        "The stable Notion workspace user ID. Navigator uses this ID for Notion person relations; it is not a credential or permission.",
+    );
+    if edit_lock == EditLock::HigherRank {
+        notion = notion.disabled();
+    }
+
+    let mut linkedin_url = Field::input(
+        "LinkedIn",
+        "linkedin_url",
+        fields.linkedin_url.clone(),
+        "url",
+    )
+    .help("The person's LinkedIn profile, for reference on this admin page.");
+    if edit_lock == EditLock::HigherRank {
+        linkedin_url = linkedin_url.disabled();
+    }
+
+    vec![
+        name,
+        email,
+        role,
+        notion,
+        linkedin_url,
+        given,
+        family,
+        middle,
+    ]
+}
+
+/// The person show/edit page (`/app/admin/people/{id}`).
+#[component]
+pub fn AdminPersonShow() -> Element {
+    let resource = use_server_future(get_admin_person_show)?;
+    render_person_show(&resource)
+}
+
+/// The per-record actions panel below the edit form: the welcome-email
+/// confirmation disclosure and the Xero contact link. `welcome_recipient` is
+/// the person's email, named in the confirmation prompt.
+fn person_actions(view: &PersonShowView, welcome_recipient: &str) -> Element {
+    let welcome_action = format!("{DETAIL_PATH}/{}/welcome", view.id);
+    let csrf_token = view.csrf_token.clone();
+    let xero_contact_id = view.xero_contact_id.clone();
+    rsx! {
+        section { id: "person-actions", class: "person-actions",
+            h2 { "Actions" }
+            div { class: "action-row",
+                // Sending the welcome email is an external side effect, so it
+                // takes a confirmation step. The surface used HTMX's
+                // `hx-confirm`; this no-JS form (under a CSP that blocks inline
+                // handlers) confirms with a native `<details>` disclosure
+                // instead. Clicking "Send welcome email" only reveals the confirm
+                // button, so an accidental click cannot fire the send. It also
+                // stays on the page (no navigation), so unsaved edits in the form
+                // above are not discarded while confirming.
+                details { class: "welcome-confirm",
+                    summary { class: "nav-btn nav-btn--secondary", "Send welcome email" }
+                    form { method: "post", action: welcome_action,
+                        "aria-label": "Confirm sending the welcome email",
+                        input { r#type: "hidden", name: "_csrf", value: "{csrf_token}" }
+                        p { "Send welcome email to {welcome_recipient}?" }
+                        button { class: "nav-btn nav-btn--secondary", r#type: "submit", "Confirm and send welcome email" }
+                    }
+                }
+                match xero_contact_id {
+                    Some(contact_id) => rsx! {
+                        a {
+                            class: "nav-link",
+                            href: "https://go.xero.com/Contacts/View/{contact_id}",
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            "View in Xero"
+                        }
+                    },
+                    None => rsx! {
+                        span { class: "nav-muted",
+                            "Not synced to Xero yet — this client has no Xero contact on file."
+                        }
+                    },
+                }
+            }
+        }
+    }
+}
+
+/// The avatar preview and upload form, a sibling `FormCard` to the main edit
+/// form rather than folded into it — the two need different `enctype`s, and
+/// `FormCard` only supports one per `<form>`.
+fn avatar_upload_card(view: &PersonShowView, fields: &PersonFields) -> Element {
+    let action = format!("{DETAIL_PATH}/{}/avatar", view.id);
+    let avatar_is_public = fields.role != "client";
+    let help = if avatar_is_public {
+        "PNG or JPEG, up to 5 MB and 1024 × 1024 pixels. The avatar will be publicly available."
+    } else {
+        "PNG, JPEG, or WebP, up to 5 MB. This avatar stays private."
+    };
+    rsx! {
+        section { id: "person-avatar", class: "person-avatar",
+            h2 { "Avatar" }
+            Avatar {
+                name: fields.name.clone(),
+                image_url: fields.avatar_url.clone(),
+                size: 96,
+                class: "person-avatar__preview".to_string(),
+            }
+            FormCard {
+                title: "Upload avatar".to_string(),
+                action,
+                submit_label: "Upload".to_string(),
+                heading: Heading::H2,
+                multipart: true,
+                csrf_token: Some(view.csrf_token.clone()),
+                fields: vec![
+                    Field::file("Avatar", "file")
+                        .required()
+                        .help(help),
+                ],
+            }
+        }
+    }
+}
+
+/// Render the resolved person show/edit page: the prefilled edit form posting to
+/// the native `POST /app/admin/people/{id}` update route, then the per-record
+/// actions (welcome email and the Xero link).
+fn render_person_show(resource: &Resource<Result<PersonShowView, ServerFnError>>) -> Element {
+    let view = match &*resource.read() {
+        Some(Ok(view)) => view.clone(),
+        Some(Err(_)) => {
+            return rsx! {
+                main { id: "person-show", p { "Failed to load the person." } }
+            }
+        }
+        None => {
+            return rsx! {
+                main { id: "person-show", p { "Loading…" } }
+            }
+        }
+    };
+
+    let page_title = format!("{} | Admin | People | Edit person", view.firm_name);
+    let not_found_title = format!("{} | Admin | People | Not found", view.firm_name);
+
+    rsx! {
+        document::Stylesheet { href: crate::components::THEME_STYLESHEET_HREF }
+        document::Stylesheet { href: "{view.tokens_href}" }
+        nav { class: "lawyer-nav",
+            a { class: "nav-link", href: "/app/projects", "Projects" }
+            a { class: "nav-link", href: "/auth/logout", "Sign out" }
+            crate::components::AppProfileMenu {
+                destinations: vec![
+                    crate::components::AppNavLink::new("Projects", "/app/projects"),
+                    crate::components::AppNavLink::new("Sign out", "/auth/logout"),
+                ],
+            }
+        }
+        main { id: "person-show", class: "nav-theme",
+            match &view.fields {
+                Some(fields) => {
+                    let action = format!("{DETAIL_PATH}/{}", view.id);
+                    let welcome_recipient = fields.email.clone();
+                    let form_fields = edit_fields(fields, view.edit_lock, view.role);
+                    rsx! {
+                        document::Title { "{page_title}" }
+                        if let Some(notice) = view.notice.as_ref() {
+                            div {
+                                class: if notice.success { "nav-flash nav-flash--success" } else { "nav-flash nav-flash--danger" },
+                                role: if notice.success { "status" } else { "alert" },
+                                "{notice.message}"
+                            }
+                        }
+                        if view.edit_lock == EditLock::HigherRank {
+                            div { class: "nav-form-notice", role: "note",
+                                "This is the bootstrap Owner record. It is immutable "
+                                "from the UI — change it via "
+                                code { "NAVIGATOR_BOOTSTRAP_OWNER_EMAIL" }
+                                " or a direct database write."
+                            }
+                        } else if view.edit_lock == EditLock::BootstrapOwner {
+                            div { class: "nav-form-notice", role: "note",
+                                "This is the bootstrap Owner record. Its email and role are "
+                                "pinned to the configured "
+                                code { "NAVIGATOR_BOOTSTRAP_OWNER_EMAIL" }
+                                " and cannot change from the UI — edit either via a direct "
+                                "database write. Other fields, including name, save normally."
+                            }
+                        }
+                        FormCard {
+                            title: "Edit person".to_string(),
+                            action,
+                            submit_label: "Save".to_string(),
+                            csrf_token: Some(view.csrf_token.clone()),
+                            read_only: view.edit_lock == EditLock::HigherRank,
+                            fields: form_fields,
+                        }
+                        p { a { href: "{LIST_PATH}", "← Cancel" } }
+                        if view.edit_lock != EditLock::HigherRank {
+                            {avatar_upload_card(&view, fields)}
+                        }
+                        {person_actions(&view, &welcome_recipient)}
+                    }
+                }
+                None => rsx! {
+                    document::Title { "{not_found_title}" }
+                    h1 { "Person not found" }
+                    p { "No person exists with id " code { "{view.id}" } "." }
+                    p { a { href: "{LIST_PATH}", "← Back to people" } }
+                },
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ssr(app: fn() -> Element) -> String {
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        dioxus_ssr::render(&dom)
+    }
+
+    fn sample_view(avatar_url: Option<String>) -> (PersonShowView, PersonFields) {
+        let fields = PersonFields {
+            name: "Gemini Twin".to_string(),
+            email: "gem@example.com".to_string(),
+            role: "lawyer".to_string(),
+            given_name: String::new(),
+            family_name: String::new(),
+            middle_name: String::new(),
+            notion_user_id: String::new(),
+            linkedin_url: String::new(),
+            avatar_url,
+        };
+        let view = PersonShowView {
+            id: "00000000-0000-7000-8000-000000000000".to_string(),
+            fields: Some(fields.clone()),
+            csrf_token: "csrf-token".to_string(),
+            role: ViewerRole::Admin,
+            ..PersonShowView::default()
+        };
+        (view, fields)
+    }
+
+    fn app_none() -> Element {
+        let (view, fields) = sample_view(None);
+        avatar_upload_card(&view, &fields)
+    }
+
+    fn app_with_image() -> Element {
+        let (view, fields) = sample_view(Some(format!(
+            "{DETAIL_PATH}/00000000-0000-7000-8000-000000000000/avatar"
+        )));
+        avatar_upload_card(&view, &fields)
+    }
+
+    #[test]
+    fn the_avatar_card_is_a_sibling_multipart_form_with_csrf_first() {
+        let (view, _) = sample_view(None);
+        let out = ssr(app_none);
+        assert!(
+            out.contains(r#"enctype="multipart/form-data""#),
+            "the avatar form must be multipart: {out}"
+        );
+        assert!(
+            out.contains(&format!("{DETAIL_PATH}/{}/avatar", view.id)),
+            "posts to the per-person avatar route: {out}"
+        );
+        let csrf_pos = out.find(r#"name="_csrf""#);
+        let file_pos = out.find(r#"type="file""#);
+        assert!(
+            csrf_pos.is_some() && file_pos.is_some() && csrf_pos < file_pos,
+            "CSRF must be the first field, before the file input: {out}"
+        );
+    }
+
+    #[test]
+    fn the_avatar_preview_shows_the_image_or_falls_back_to_initials() {
+        let out = ssr(app_with_image);
+        assert!(
+            out.contains(&format!(
+                r#"src="{DETAIL_PATH}/00000000-0000-7000-8000-000000000000/avatar""#
+            )),
+            "{out}"
+        );
+
+        let out = ssr(app_none);
+        assert!(
+            out.contains("person-avatar__preview--initials"),
+            "no avatar_url falls back to initials: {out}"
+        );
+        assert!(out.contains(">GT<"), "{out}");
+    }
+
+    #[test]
+    fn the_edit_form_carries_a_linkedin_field_prefilled_from_the_person() {
+        fn app_with(form_fields: Vec<Field>) -> Element {
+            rsx! {
+                FormCard {
+                    title: "Edit person".to_string(),
+                    action: "/app/admin/people/x".to_string(),
+                    submit_label: "Save".to_string(),
+                    fields: form_fields,
+                }
+            }
+        }
+        let mut fields = sample_view(None).1;
+        fields.linkedin_url = "https://www.linkedin.com/in/example/".to_string();
+        let form_fields = edit_fields(&fields, EditLock::None, ViewerRole::Admin);
+
+        let mut dom = VirtualDom::new_with_props(app_with, form_fields);
+        dom.rebuild_in_place();
+        let out = dioxus_ssr::render(&dom);
+        assert!(out.contains(r#"name="linkedin_url""#), "{out}");
+        assert!(
+            out.contains(r#"value="https://www.linkedin.com/in/example/""#),
+            "prefilled: {out}"
+        );
+    }
+}

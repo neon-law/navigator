@@ -1,0 +1,344 @@
+# Vanilla Deployment + Service for the workflows-service worker.
+# In KIND this runs as a RestateDeployment CR managed by the
+# Restate Operator. In prod (Restate Cloud) there is no operator
+# in the cluster — the worker is a plain Deployment, and
+# registration with the Restate Cloud tenant happens out-of-band
+# via the Restate CLI.
+#
+# Registration: a registered deployment is a SNAPSHOT of the worker's
+# handler list, not a subscription — rolling a new image does NOT
+# re-register, so a newly added service 404s at the ingress until you
+# re-register. `ship` does this automatically after every worker
+# rollout, targeting https://workflows.<domain>/ derived from
+# mounted brand.primary_domain (or the explicit NAVIGATOR_WORKFLOWS_URL).
+# It WARNS and continues on failure — it does not gate the ship — because
+# the admin :9070 endpoint may be unreachable from the operator's network
+# (see docs/durable-workflows.md "How ship re-registers"). Manual
+# fallbacks when the auto step warns:
+#   restate -y cloud login && restate -y cloud env config --env navigator-prod
+#   restate -y deployment register https://NAVIGATOR_WORKFLOWS_HOST/
+# Or POST the admin API directly (the CLI sometimes can't reach :9070):
+#   curl -X POST "$ADMIN:9070/deployments" -H "Authorization: Bearer $SSO" \
+#     -H "Content-Type: application/json" \   # REQUIRED — omitting it 415s
+#     -d '{"uri":"https://NAVIGATOR_WORKFLOWS_HOST/","force":true}'
+# Full mechanism + the two-tokens/two-ports auth note: docs/durable-workflows.md.
+#
+# Restate Cloud reaches workflows-service over HTTPS via the
+# `NAVIGATOR_WORKFLOWS_HOST` Ingress under `../ingress/`.
+# VPC Connect (Restate Cloud's private-network ingress) is a later
+# hardening step; until then the worker is reachable on the
+# public internet behind the LB's managed certificate.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workflows-service
+  namespace: navigator
+spec:
+  # One replica here; `ops ship` sets the count from the row's profile
+  # (docs/environments.md#replicas): one pod for simulated matters, two for
+  # real matters behind a PodDisruptionBudget. The Restate handlers are
+  # stateless HTTP, and the DBOS executor keys each pod by its pod name and
+  # each schedule by its slot, so a second pod adds no double-fire.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workflows-service
+  # Internal worker on a capacity-constrained Autopilot cluster: replace in
+  # place (maxSurge 0) so a rollout never stands up a surge pod. With two
+  # replicas this rolls one pod at a time while the other keeps serving. A surge pod would force a node scale-up, which hits the
+  # regional SSD_TOTAL_GB quota and stalls (FailedScaleUp). The brief gap
+  # while the pod restarts is acceptable here: the worker takes no public
+  # traffic and Restate journals + retries any in-flight step. NOTE: prod
+  # is applied out-of-band (not from this repo), so mirror this into the
+  # live overlay too. See docs/durable-workflows.md.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: workflows-service
+    spec:
+      serviceAccountName: workflows-service
+      containers:
+        - name: worker
+          image: YOUR_IMAGE_REGISTRY/navigator-workflows-service:YY.M.D
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          ports:
+            - containerPort: 9080
+            # The GitHub webhook receiver's Axum listener. Only the
+            # automation-home deployment actually binds it; declared here so
+            # the port is documented on every deployment's identical manifest.
+            - containerPort: 9082
+            # The unsigned health-probe listener (ENG-551) — see
+            # readinessProbe/livenessProbe below.
+            - containerPort: 9083
+          env:
+            - name: NAVIGATOR_DBOS_EXECUTOR_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: WORKFLOWS_SERVICE_LISTEN
+              # 0.0.0.0 so the kubelet's tcpSocket readinessProbe
+              # (against the pod IP) can reach the port. Envoy
+              # reaches the worker through 127.0.0.1:9080 on the
+              # shared pod network — only the LB-facing leg goes
+              # through 9081, and the Service publishes only 9081,
+              # so nothing outside the pod actually opens 9080.
+              value: "0.0.0.0:9080"
+            - name: RESTATE_IDENTITY_KEY
+              # Restate Cloud signs every request to the worker. This is public
+              # verification material, rendered from the deployment config by
+              # `ops ship`, not a Secret Manager credential.
+              value: YOUR_RESTATE_IDENTITY_KEY
+            - name: WORKFLOWS_WEBHOOK_LISTEN
+              # The GitHub webhook receiver's own listener, separate from the
+              # Restate endpoint above. Envoy routes /webhooks/github/* here over
+              # 127.0.0.1:9082; the Service still publishes only envoy's 9081.
+              # Bound only on the deployment marked for automation-home;
+              # elsewhere the worker runs no receiver and nothing opens 9082.
+              value: "0.0.0.0:9082"
+            - name: WORKFLOWS_SERVICE_HEALTH_LISTEN
+              # Always-on, unsigned `/healthz` (ENG-551) — separate from both
+              # the Restate endpoint above (which 401s any unsigned request,
+              # kubelet's probe included, once RESTATE_IDENTITY_KEY is set)
+              # and Envoy's own static `/restate/health` response (ENG-509,
+              # which proves only that Envoy itself is up). readinessProbe /
+              # livenessProbe below hit this directly on the pod IP.
+              value: "0.0.0.0:9083"
+            - name: NAVIGATOR_EMAIL_BACKEND
+              # Worker dispatches real SendGrid sends in prod via
+              # `email_send__*` steps. KIND keeps this unset so the
+              # `email_config` selector returns `CapturingEmail`.
+              value: sendgrid
+            # These coordinates must match navigator-web. The worker uses
+            # the shared config as its provider gate; web captures model and
+            # limits in the durable request.
+            - name: NAVIGATOR_SUMMARY_ENABLED
+              value: "YOUR_SUMMARY_ENABLED"
+            - name: NAVIGATOR_SUMMARY_ENVELOPE_RECIPIENTS
+              value: "YOUR_SUMMARY_ENVELOPE_RECIPIENTS"
+            - name: NAVIGATOR_DEPLOYMENT_ID
+              value: YOUR_DEPLOYMENT_ID
+            - name: NAVIGATOR_SUMMARY_CHANNEL_ID
+              value: YOUR_SUMMARY_CHANNEL_ID
+            - name: NAVIGATOR_GCP_PROJECT_ID
+              value: YOUR_PROJECT_ID
+            # Object storage. Three lanes share this pod:
+            #  - The Archives snapshot phase writes nightly Parquet to the
+            #    dedicated archive bucket via `cloud::archives_from_env`
+            #    (NAVIGATOR_ARCHIVES_BUCKET). That handle fails closed: with
+            #    the key unset the nightly run errors rather than filling
+            #    the exports bucket with objects nothing reads.
+            #  - The `generate_pdf__*` render lane (the retainer / closing
+            #    letter PDF the worker renders + persists) writes to the
+            #    DOCUMENTS bucket via `cloud::from_env`, which prefers
+            #    NAVIGATOR_DOCUMENTS_BUCKET. This MUST match `web`'s
+            #    documents bucket — `web` reads the rendered PDF back from
+            #    the same key to send it for signature, so a mismatch is an
+            #    `object not found` 500 at send time.
+            #  - Everything else still resolves NAVIGATOR_STORAGE_BUCKET,
+            #    the general exports bucket.
+            - name: NAVIGATOR_STORAGE_BACKEND
+              value: gcs
+            - name: NAVIGATOR_STORAGE_BUCKET
+              value: YOUR_EXPORTS_BUCKET
+            - name: NAVIGATOR_ARCHIVES_BUCKET
+              value: YOUR_ARCHIVES_BUCKET
+            - name: NAVIGATOR_DOCUMENTS_BUCKET
+              value: YOUR_DOCUMENTS_BUCKET
+            # Cost phase: set BILLING_EXPORT_TABLE (and BIGQUERY_PROJECT)
+            # to the GCP billing-export table to enable the nightly
+            # cost-by-service summary in the Slack diagnostic + the
+            # `gcp_cost` Parquet snapshot. Unset → cost phase is a no-op.
+            # The worker GSA then needs roles/bigquery.jobUser +
+            # roles/bigquery.dataViewer on the billing dataset.
+            #
+            # Cloud Billing writes one export table per BILLING ACCOUNT,
+            # each carrying every project on that account. Span several
+            # accounts by listing one table per account, comma-separated:
+            # BillingDigest reports each and totals across them, and the
+            # Archives cost snapshot merges them. The GSA needs
+            # dataViewer on *every* listed dataset.
+            # - name: BILLING_EXPORT_TABLE
+            #   value: YOUR_PROJECT_ID.billing_export.gcp_billing_export_v1_XXXX
+            #   # ...or, for two accounts:
+            #   # value: proj.billing_export.gcp_billing_export_v1_AAAA,proj.billing_export.gcp_billing_export_v1_BBBB
+            # - name: BIGQUERY_PROJECT
+            #   value: YOUR_PROJECT_ID
+            - name: RUST_LOG
+              value: info
+            # Same selector `web` carries: a production-profile deployment
+            # that discloses simulated matters (persistent staging) so
+            # `DriDigest` and `GeneralNag` label Slack as staging and skip
+            # the real-matter-only open-count follow-up. `ops ship` renders
+            # `false` when the deployment's `config.toml` omits the key.
+            - name: NAVIGATOR_SIMULATED_MATTERS
+              value: "YOUR_SIMULATED_MATTERS"
+            - name: NAVIGATOR_STAGING
+              value: "YOUR_STAGING"
+            # `#general`'s channel ID — the stable posting coordinate for
+            # `GeneralNag`. Not a secret; substitute the real ID at render
+            # time. Unset/empty fails that workflow as a terminal error.
+            - name: SLACK_GENERAL_CHANNEL_ID
+              value: YOUR_SLACK_GENERAL_CHANNEL_ID
+            # `#finance`'s channel ID, where AIDA reads out the nightly Xero
+            # and IOLTA mirror (`ReconcileInvoices`). The same Slack app as
+            # `#general` — invite it to the channel; no second token and no
+            # incoming webhook. Not a secret; substitute the real ID at
+            # render time. Unset/empty fails that workflow as a terminal
+            # error rather than reconciling with nowhere to report it.
+            - name: SLACK_FINANCE_CHANNEL_ID
+              value: YOUR_SLACK_FINANCE_CHANNEL_ID
+            # Aggregate outcome for the Nightly Project Update.
+            # The worker selects one ID from NAVIGATOR_SIMULATED_MATTERS.
+            - name: SLACK_MESSAGES_CHANNEL_ID
+              value: YOUR_SLACK_MESSAGES_CHANNEL_ID
+            - name: SLACK_STAGING_MESSAGES_CHANNEL_ID
+              value: YOUR_SLACK_STAGING_MESSAGES_CHANNEL_ID
+            - name: OTEL_SERVICE_NAME
+              value: workflows-service
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: k8s.pod.name=$(POD_NAME),service.instance.id=$(POD_NAME)
+          envFrom:
+            # Collector endpoint (OTEL_EXPORTER_OTLP_ENDPOINT) — the worker
+            # emits the workflow-step traces + the `start_workflow` metric
+            # through the same fail-closed redaction collector as web.
+            - configMapRef:
+                name: navigator-otel-env
+            # The store credentials plus the SendGrid bundle
+            # (`SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`) —
+            # shared with web via the same Secret Manager-synced
+            # Secret. The worker's `email_send__welcome` step
+            # dispatch (`workflows::email::dispatch_state`) reads
+            # these to POST through SendGrid; without them the
+            # `email_config` selector falls back to
+            # `CapturingEmail` and welcomes never leave the pod.
+            - secretRef:
+                name: navigator-web-secrets
+          readinessProbe:
+            # ENG-551: httpGet on the unsigned health listener actually
+            # round-trips a request through live worker code (the same
+            # `jsonwebtoken` verification path Restate signatures use), so a
+            # `CryptoProvider` regression (ENG-550) fails this instead of the
+            # bare tcpSocket check that let it ship invisibly.
+            httpGet:
+              path: /healthz
+              port: 9083
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9083
+            initialDelaySeconds: 30
+            periodSeconds: 10
+        # Envoy sidecar — see envoy-config.yaml. Bridges HTTP/1.1
+        # from the GCE LB to h2c on the worker. The GCE LB's h2
+        # framing is incompatible with hyper's strict h2 server.
+        - name: envoy
+          image: envoyproxy/envoy:v1.32.6
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+          args:
+            - --config-path
+            - /etc/envoy/envoy.yaml
+            - --service-cluster
+            - workflows-service
+          ports:
+            - containerPort: 9081
+              name: http
+            - containerPort: 9901
+              name: admin
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /restate/health
+              port: 9081
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 9081
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: workflows-service-envoy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workflows-service
+  namespace: navigator
+  annotations:
+    # Container-native LB: the GKE Ingress (under `../ingress/`)
+    # routes directly to pod endpoints via a NEG rather than
+    # NodePort hops. Same pattern as the navigator-web Service.
+    cloud.google.com/neg: '{"ingress": true}'
+    # Health check + backend protocol are configured via the
+    # BackendConfig below — keep this Service free of an
+    # `app-protocols` annotation so the LB defaults to HTTP/1.1,
+    # which is what the envoy sidecar listens for.
+    cloud.google.com/backend-config: '{"default":"workflows-service"}'
+spec:
+  selector:
+    app: workflows-service
+  ports:
+    - name: http
+      # The Service publishes envoy's 9081 listener, not the worker's
+      # 9080. Inside the pod, envoy proxies HTTP/1.1 -> h2c onto
+      # localhost:9080. See envoy-config.yaml.
+      port: 9081
+      targetPort: 9081
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: workflows-service
+  namespace: navigator
+spec:
+  # HTTP/1.1 health check against the envoy sidecar's listener.
+  # Envoy answers `/restate/health` itself (see envoy-config.yaml)
+  # rather than proxying to the worker's identity-gated Restate SDK
+  # endpoint, so a 200 here proves envoy — and thus the LB's network
+  # path to the pod — is up. The worker container's own tcpSocket
+  # probes (below) independently gate the worker process itself.
+  healthCheck:
+    type: HTTP
+    port: 9081
+    requestPath: /restate/health
+    checkIntervalSec: 15
+    timeoutSec: 5
+    healthyThreshold: 1
+    unhealthyThreshold: 2
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workflows-service
+  namespace: navigator
+  annotations:
+    # Workload Identity — bind to the same GSA as navigator-web so the
+    # worker reads the same store credentials. A dedicated
+    # `workflows-service@…` GSA exists with
+    # `roles/secretmanager.secretAccessor` for the eventual split; until
+    # the worker has its own store user, the two services share one
+    # identity.
+    iam.gke.io/gcp-service-account: NAVIGATOR_GCP_SERVICE_ACCOUNT_ID@YOUR_PROJECT_ID.iam.gserviceaccount.com

@@ -1,0 +1,11 @@
+# The firm's own entity of record, the only Entity the canonical layer seeds.
+# Provenance: docs/public-contributor-safety.md → Public firm facts.
+lookup_fields:
+  - name
+  - entity_type_id
+records:
+  - name: Shook Law PC
+    entity_type:
+      name: Professional Corporation
+      jurisdiction:
+        name: California

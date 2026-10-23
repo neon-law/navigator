@@ -1,0 +1,13 @@
+# How clients reach this PostgreSQL service. Clients read these values with
+# configMapKeyRef instead of repeating them. `host` must be a name in the
+# server certificate's SAN because every client connects with verify-full; each
+# deployment overlay replaces it with the namespace-qualified Service name.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: navigator-postgres-client
+data:
+  host: navigator-postgres.navigator.svc.cluster.local
+  port: "5432"
+  database: navigator
+  sslmode: verify-full

@@ -1,0 +1,1480 @@
+erDiagram
+    address {
+        string id
+        string city
+        string country
+        uuid entity_id
+        datetime inserted_at
+        string line1
+        string line2
+        uuid person_id
+        string postal_code
+        string region
+        datetime updated_at
+    }
+    answer {
+        string id
+        uuid authored_by_person_id
+        datetime inserted_at
+        uuid notation_id
+        uuid person_id
+        uuid question_id
+        string source
+        string state_name
+        datetime updated_at
+        json value
+    }
+    asset {
+        string id
+        number byte_size
+        string content_type
+        datetime deleted_at
+        uuid deleted_by_person_id
+        string deleted_commit_sha
+        json derived_from
+        string description
+        string filename
+        datetime inserted_at
+        string kind
+        datetime legal_hold_at
+        json metadata
+        json notarization
+        uuid project_id
+        string published_at
+        datetime purge_after
+        datetime purged_at
+        string received_at
+        string secondary_storage_key
+        string sha256_hex
+        json signing
+        string slug
+        string source
+        string source_message_id
+        string source_received_at
+        string source_sender
+        string source_subject
+        string storage_key
+        string transcript_quality
+        datetime updated_at
+        string visibility
+    }
+    attestation {
+        string id
+        string chain
+        string client_wallet
+        string firm_wallet
+        datetime inserted_at
+        uuid notation_id
+        string pda
+        string recorded_at
+        string sha256
+        string status
+        string tx_signature
+        datetime updated_at
+    }
+    authority {
+        string id
+        uuid archived_asset_id
+        string canonical_url
+        string checked_on
+        string citation
+        string class
+        datetime inserted_at
+        string issued_on
+        string publisher
+        string short_cite
+        string title
+        datetime updated_at
+    }
+    authority_use {
+        string id
+        uuid authority_id
+        string disposition
+        datetime inserted_at
+        string position
+        uuid project_id
+        string role
+        datetime updated_at
+    }
+    blog_video {
+        string id
+        string brand_key
+        number height
+        datetime inserted_at
+        string object_key
+        string orientation
+        number width
+    }
+    brand {
+        string id
+        string accent_color
+        string brand_key
+        uuid firm_id
+        string font_family
+        string font_licence
+        string font_object_key
+        string inserted_at
+        boolean is_law_firm
+        string legal_entity
+        string logo_content_type
+        string logo_object_key
+        string name
+        string primary_color
+        string typeface
+        string updated_at
+        string website_url
+    }
+    cap_table_holding {
+        string id
+        uuid holder_id
+        string inserted_at
+        uuid project_id
+        string share_class
+        number shares
+        string updated_at
+        string vesting_note
+    }
+    case {
+        string id
+        string caption
+        string docket_number
+        string forum
+        datetime inserted_at
+        string judge
+        string jurisdiction
+        string posture
+        uuid project_id
+        string status
+        datetime updated_at
+    }
+    case_docket_entry {
+        string id
+        uuid case_id
+        uuid document_asset_id
+        string entry_number
+        string filed_or_served_on
+        datetime inserted_at
+        datetime integrity_checked_at
+        boolean integrity_matched
+        string integrity_source_sha256_hex
+        string kind
+        uuid notation_id
+        string party
+        datetime scheduled_on
+        string stamp_case_number
+        string stamp_entry_number
+        string stamp_filed_on
+        uuid supersedes
+        string title
+        datetime updated_at
+    }
+    citation {
+        string id
+        uuid authority_use_id
+        json draft_pin
+        datetime inserted_at
+        string quote
+        json source_pin
+        datetime updated_at
+        string why
+    }
+    communication {
+        string id
+        json agreements
+        uuid asset_id
+        uuid author_person_id
+        string body
+        json call
+        string channel
+        string counterparty
+        string direction
+        datetime inserted_at
+        string occurred_at
+        uuid project_id
+        string source_ref
+        string subject
+        datetime updated_at
+    }
+    contract_review {
+        string id
+        uuid asset_id
+        json findings
+        datetime inserted_at
+        uuid notation_id
+        uuid playbook_id
+        string risk_summary
+        string status
+        datetime updated_at
+    }
+    credential {
+        string id
+        datetime inserted_at
+        uuid jurisdiction_id
+        string license_number
+        uuid person_id
+        datetime updated_at
+    }
+    deployment_secret_change {
+        string id
+        string actor_id
+        string ciphertext
+        string inserted_at
+        string key
+        string kms_key_version
+        string request_id
+        datetime updated_at
+        string wrapped_key
+    }
+    disclosure {
+        string id
+        uuid entity_id
+        datetime inserted_at
+        string kind
+        uuid project_id
+        string summary
+        datetime updated_at
+    }
+    discovery_item {
+        string id
+        uuid discovery_request_id
+        datetime inserted_at
+        number item_number
+        string objections
+        string request_text
+        string response_text
+        datetime updated_at
+    }
+    discovery_request {
+        string id
+        uuid case_id
+        string device
+        uuid docket_entry_id
+        datetime inserted_at
+        string propounding_party
+        string responding_party
+        string responses_due_on
+        string served_on
+        number set_number
+        string status
+        datetime updated_at
+    }
+    document_comment {
+        string id
+        number anchor_end
+        number anchor_start
+        string body
+        string communication_id
+        datetime inserted_at
+        uuid person_id
+        string quoted_text
+        boolean resolved
+        uuid review_document_id
+        datetime updated_at
+    }
+    draft {
+        string id
+    }
+    efiling_transactions {
+        string id
+        string accepted_on
+        string case_number
+        uuid conformed_document_id
+        string court
+        string efsp
+        string filed_on
+        string inserted_at
+        boolean needs_entered_order
+        string note
+        uuid project_id
+        string status
+        uuid submitted_document_id
+        string transaction_id
+        string updated_at
+    }
+    email_conversation {
+        string id
+        string external_email
+        string external_name
+        uuid firm_id
+        datetime inserted_at
+        uuid notation_id
+        uuid person_id
+        uuid project_id
+        string status
+        string subject
+        string token
+        datetime updated_at
+    }
+    email_conversation_message {
+        string id
+        string body_text
+        string command_payload
+        uuid conversation_id
+        string direction
+        string from_addr
+        string in_reply_to
+        datetime inserted_at
+        string provider_message_id
+        string raw_storage_key
+        string subject
+        string to_addr
+        datetime updated_at
+    }
+    email_delivery {
+        string id
+        string channel_id
+        string current_correlation_id
+        datetime inserted_at
+        string last_error
+        uuid receipt_id
+        datetime reconciled_at
+        string reconciled_by
+        string reconciliation
+        string slack_timestamp
+        string state
+        datetime updated_at
+    }
+    email_delivery_attempt {
+        string id
+        string correlation_id
+        uuid delivery_id
+        string error
+        datetime inserted_at
+        string slack_timestamp
+        string state
+        datetime updated_at
+    }
+    email_receipt {
+        string id
+        string archive_key
+        string delivery_state
+        string deployment
+        uuid firm_id
+        datetime inserted_at
+        uuid letter_id
+        string processing_state
+        string provider_account
+        string raw_digest
+        string receiving_mailbox
+        boolean sender_authenticated
+        string source_message_id
+        datetime updated_at
+    }
+    email_token {
+        string id
+        string email
+        datetime expires_at
+        datetime inserted_at
+        uuid person_id
+        string purpose
+        string token_hash
+        datetime updated_at
+        datetime used_at
+    }
+    entity {
+        string id
+        string avatar_url
+        uuid entity_type_id
+        string firm_anchor_key
+        datetime inserted_at
+        uuid jurisdiction_id
+        string name
+        string phone
+        datetime updated_at
+        string url
+        string xero_id
+    }
+    entity_role {
+        string id
+        datetime inserted_at
+        string role
+        datetime updated_at
+    }
+    entity_type {
+        string id
+        datetime inserted_at
+        string name
+        datetime updated_at
+    }
+    estate_asset {
+        string id
+        string category
+        string description
+        string funding_state
+        string inserted_at
+        string note
+        string passes_by
+        uuid project_id
+        string updated_at
+    }
+    expunge_record {
+        string id
+        uuid authorized_by_person_id
+        string category
+        string head_after
+        string head_before
+        datetime inserted_at
+        string note
+        string path
+        uuid project_id
+        datetime updated_at
+    }
+    expunge_request {
+        string id
+        uuid asset_id
+        uuid expunge_record_id
+        datetime inserted_at
+        string note
+        uuid project_id
+        uuid requested_by_person_id
+        uuid resolved_by_person_id
+        string status
+        datetime updated_at
+    }
+    fiduciary_role {
+        string id
+        uuid fiduciary_id
+        string inserted_at
+        uuid notation_id
+        uuid project_id
+        string role
+        number successor_order
+        string updated_at
+    }
+    filing {
+        string id
+        datetime inserted_at
+        string kind
+        uuid notation_id
+        string office
+        string reference
+        string submitted_at
+        string summary
+        datetime updated_at
+    }
+    finance_aggregate {
+        string id
+        datetime computed_at
+        datetime inserted_at
+        json parameters
+        number parameters.attorney_pct
+        number parameters.lead_pct
+        number parameters.overhead_pct
+        uuid project_id
+        string report_json
+        string run_id
+        datetime updated_at
+    }
+    firm {
+        string id
+        uuid entity_id
+        string inserted_at
+        string name
+        string slug
+        string status
+        string updated_at
+    }
+    firm_anchor {
+        string id
+        uuid entity_id
+    }
+    firm_brand {
+        string id
+        string brand_key
+        uuid firm_id
+        string inserted_at
+        string updated_at
+    }
+    firm_integration_secret {
+        string id
+        uuid actor_id
+        string ciphertext
+        string created_at
+        uuid firm_id
+        string kind
+        string kms_context
+        string kms_key_version
+        string provider
+        string status
+        string updated_at
+        number version
+        string wrapped_dek
+    }
+    git_access_token {
+        string id
+        string expires_at
+        string inserted_at
+        uuid person_id
+        uuid project_id
+        string scope
+        string token_hash
+        string updated_at
+    }
+    git_repository {
+        string id
+        datetime inserted_at
+        string last_commit_sha
+        string remote_hash
+        datetime updated_at
+    }
+    glossary_term {
+        string id
+        string body
+        datetime inserted_at
+        string slug
+        string title
+        datetime updated_at
+    }
+    inbox_assignment {
+        string id
+        uuid actor_person_id
+        uuid conversation_id
+        uuid firm_id
+        uuid from_project_id
+        datetime inserted_at
+        uuid to_project_id
+    }
+    inbox_conversation {
+        string id
+        string brand_key
+        string channel
+        uuid email_conversation_id
+        string external_address
+        string external_name
+        uuid firm_id
+        datetime inserted_at
+        string interaction_type
+        boolean matter_consent
+        uuid project_id
+        boolean promotional_opt_in
+        boolean promotional_opt_out
+        string provider_account
+        string provider_post_id
+        string provider_thread_ref
+        string source_channel
+        string source_page
+        string subject
+        boolean unread
+        datetime updated_at
+    }
+    inbox_delivery_attempt {
+        string id
+        string detail
+        datetime inserted_at
+        uuid message_id
+        string provider_ref
+        string state
+    }
+    inbox_ingress {
+        string id
+        string channel
+        uuid firm_id
+        datetime inserted_at
+        uuid message_id
+        string provider_account
+        string provider_message_id
+    }
+    iolta_account {
+        string id
+        number balance_cents
+        string currency
+        datetime inserted_at
+        uuid jurisdiction_id
+        datetime mirrored_at
+        string name
+        datetime updated_at
+        string xero_account_code
+        string xero_account_id
+    }
+    iolta_allocation {
+        string id
+        number amount_cents
+        datetime inserted_at
+        string invoice_reference
+        datetime occurred_at
+        uuid project_id
+        datetime updated_at
+        string withdrawal_id
+        string xero_invoice_id
+    }
+    iolta_withdrawal {
+        string id
+        string currency
+        datetime inserted_at
+        uuid jurisdiction_id
+        datetime occurred_at
+        number total_cents
+        datetime updated_at
+        string xero_transaction_id
+    }
+    journal_entry {
+        string id
+        string command_key
+        string firm_id
+        string inserted_at
+        string payload
+    }
+    jurisdiction {
+        string id
+        string code
+        datetime inserted_at
+        string jurisdiction_type
+        string name
+        datetime updated_at
+    }
+    lead {
+        string id
+        string brand_key
+        string consent_version
+        datetime consented_at
+        string email
+        string email_lower
+        datetime inserted_at
+        uuid person_id
+        string phone
+        string source_path
+        string status
+        number submissions
+        datetime unsubscribed_at
+        datetime updated_at
+    }
+    lead_consent {
+        string id
+        datetime consented_at
+        uuid lead_id
+        string phone
+        string sms_consent_version
+        boolean sms_opt_in
+        string sms_policy_version
+        string source_path
+    }
+    letter {
+        string id
+        string direction
+        datetime inserted_at
+        uuid mailroom_id
+        uuid project_id
+        string recipient
+        string sender
+        string summary
+        datetime updated_at
+    }
+    mailroom {
+        string id
+        uuid address_id
+        datetime inserted_at
+        string name
+        datetime updated_at
+    }
+    matter_caption {
+        string id
+        string case_number
+        json counsel
+        json counsel.address
+        string counsel.appears_for
+        string counsel.bar_jurisdiction
+        string counsel.bar_number
+        string counsel.email
+        string counsel.firm
+        string counsel.name
+        boolean counsel.pro_per
+        string counsel.telephone
+        json court
+        string department
+        string filed_on
+        string judicial_officer
+        json parties
+        string parties.*.name
+        string parties.*.role
+        uuid project_id
+        string synced_at
+        string trial_on
+    }
+    matter_page {
+        string id
+        string clerk_sections
+        string client_sections
+        string draft
+        string kind
+        string lawyer_sections
+        number position
+        uuid project_id
+        string slug
+        string synced_at
+        string title
+    }
+    message {
+        string id
+        string alert_channel_id
+        string alert_state
+        string alert_timestamp
+        uuid attachment_asset_id
+        uuid author_person_id
+        string body
+        uuid communication_id
+        uuid conversation_id
+        string delivery_state
+        string direction
+        datetime inserted_at
+        string occurred_at
+        uuid parent_message_id
+        string provider_message_id
+        string provider_ref
+        string purpose
+        datetime updated_at
+        string visibility
+    }
+    notarization {
+        string id
+        uuid asset_id
+        datetime inserted_at
+        string notarized_at
+        uuid notary_person_id
+        uuid notation_id
+        string provider
+        string provider_id
+        datetime updated_at
+    }
+    notation {
+        string id
+        string delivery
+        uuid entity_id
+        string git_commit_sha
+        datetime inserted_at
+        uuid package_id
+        uuid person_id
+        uuid project_id
+        json questionnaire_snapshot
+        string state
+        string template_body_sha256
+        uuid template_id
+        string template_source_commit_sha
+        datetime updated_at
+    }
+    notation_clause {
+        string id
+        uuid authored_by_person_id
+        string body_markdown
+        datetime inserted_at
+        uuid notation_id
+        number position
+        datetime updated_at
+    }
+    notation_document {
+        string id
+        uuid current_version_id
+        datetime inserted_at
+        uuid notation_id
+        uuid original_asset_id
+        datetime updated_at
+    }
+    notation_document_comment {
+        string id
+        string anchor
+        string body
+        string decision
+        datetime inserted_at
+        uuid person_id
+        boolean resolved
+        datetime updated_at
+        uuid version_id
+    }
+    notation_document_version {
+        string id
+        uuid anchor_manifest_asset_id
+        uuid authored_by_person_id
+        uuid document_id
+        datetime inserted_at
+        uuid markdown_asset_id
+        uuid parent_version_id
+        string parser_version
+        number schema_version
+        string status
+        datetime updated_at
+    }
+    notation_draft {
+        string id
+        datetime expires_at
+        datetime inserted_at
+        uuid project_id
+        string slug
+        string source
+        string title
+    }
+    notation_event {
+        string id
+        uuid acting_person_id
+        string condition
+        string from_state
+        datetime inserted_at
+        string machine_kind
+        uuid notation_id
+        string payload
+        string recorded_at
+        uuid template_version_id
+        string to_state
+        datetime updated_at
+    }
+    notation_meter_entry {
+        string id
+        string currency
+        datetime inserted_at
+        uuid notation_id
+        uuid package_id
+        uuid project_id
+        number quantity
+        uuid rate_id
+        string state
+        number unit_amount_cents
+        datetime updated_at
+    }
+    notation_package {
+        string id
+        boolean active
+        string code
+        string complexity
+        string currency
+        string description
+        datetime inserted_at
+        number starting_price_cents
+        string title
+        datetime updated_at
+    }
+    notation_package_template {
+        string id
+        datetime inserted_at
+        uuid package_id
+        number position
+        boolean required
+        uuid template_id
+        datetime updated_at
+    }
+    notation_rate {
+        string id
+        boolean active
+        string code
+        string currency
+        datetime inserted_at
+        string label
+        string unit
+        number unit_amount_cents
+        datetime updated_at
+    }
+    notation_source {
+        string id
+        uuid communication_id
+        datetime inserted_at
+        string kind
+        uuid notation_id
+        number position
+        string source_ref
+        datetime updated_at
+    }
+    person {
+        string id
+        string apple_subject
+        string email
+        boolean email_confirmed
+        string email_lower
+        string family_name
+        string given_name
+        datetime inserted_at
+        boolean is_admitted
+        string linkedin_url
+        string microsoft_subject
+        string middle_name
+        string name
+        string oidc_subject
+        string phone
+        string profile_image_url
+        string role
+        string title
+        datetime updated_at
+        string xero_contact_id
+    }
+    person_delegate {
+        string id
+        string basis
+        uuid delegate_person_id
+        string granted_at
+        uuid granted_by_person_id
+        string inserted_at
+        string instrument_reference
+        string revoked_at
+        uuid revoked_by_person_id
+        string subject_notified_at
+        string subject_notified_channel
+        uuid subject_person_id
+        string updated_at
+    }
+    person_external_identity {
+        string id
+        string external_id
+        string handle
+        datetime inserted_at
+        uuid person_id
+        string system
+        datetime updated_at
+    }
+    person_firm_role {
+        string id
+        uuid firm_id
+        string inserted_at
+        boolean is_dri
+        string membership
+        uuid person_id
+        string updated_at
+    }
+    person_mailbox {
+        string id
+        uuid person_id
+    }
+    person_project_role {
+        string id
+        string inserted_at
+        boolean is_client_dri
+        boolean is_lawyer_dri
+        string participation
+        uuid person_id
+        uuid project_id
+        string updated_at
+    }
+    playbook {
+        string id
+        boolean active
+        uuid entity_id
+        datetime inserted_at
+        string name
+        json positions
+        datetime updated_at
+    }
+    post {
+        string id
+        string body_html
+        string body_markdown
+        string brand_key
+        string description
+        string facebook_caption
+        datetime inserted_at
+        string instagram_caption
+        datetime publish_at
+        json selected_social_accounts
+        string slug
+        json social_links
+        string social_links.*.account
+        string social_links.*.permalink
+        string social_links.*.post_id
+        string social_links.*.provider
+        string source_digest
+        string status
+        string threads_caption
+        boolean tiktok_ai_generated
+        string title
+        datetime updated_at
+        boolean vertical_video
+        string video_asset
+        string video_orientation
+        string youtube_caption
+    }
+    project {
+        string id
+        string brand
+        string closed_at
+        string closure_reason
+        string code
+        string description
+        string drive_folder_id
+        uuid entity_id
+        string external_slack_channel_url
+        uuid firm_id
+        string forge_provisioned_at
+        string git_initialized_at
+        string inserted_at
+        string internal_slack_channel_id
+        string internal_slack_channel_url
+        uuid jurisdiction_id
+        string name
+        string private_notion_page_url
+        string repository_url
+        string shared_notion_page_url
+        string status
+        string updated_at
+    }
+    project_deadlines {
+        string id
+        string authority
+        string authority_kind
+        string calendar_role
+        number client_lead_days
+        string due_at
+        string inserted_at
+        number internal_lead_days
+        uuid owner_person_id
+        uuid project_id
+        string replay_key
+        string source
+        uuid source_document_id
+        string status
+        string updated_at
+    }
+    project_module {
+        string id
+        string enabled_at
+        uuid enabled_by_person_id
+        string inserted_at
+        string module
+        uuid project_id
+        string updated_at
+    }
+    project_reference {
+        string id
+        datetime inserted_at
+        string reason
+        datetime updated_at
+    }
+    project_service {
+        string id
+        string address
+        string counsel_for
+        string declarant
+        uuid declarant_person_id
+        uuid document_id
+        string inserted_at
+        uuid letter_id
+        string method
+        uuid project_id
+        string recipient
+        uuid recipient_entity_id
+        uuid recipient_person_id
+        uuid sent_email_id
+        string served_on
+        string updated_at
+    }
+    question {
+        string id
+        string answer_type
+        string audience
+        string code
+        datetime inserted_at
+        string prompt
+        datetime updated_at
+    }
+    relationship {
+        string id
+        number confidence_pct
+        string detail
+        uuid in
+        datetime inserted_at
+        string kind
+        uuid out
+        uuid source_id
+        string source_kind
+        datetime updated_at
+    }
+    relationship_log {
+        string id
+        string action
+        uuid actor_person_id
+        string detail
+        datetime inserted_at
+        uuid project_id
+        uuid subject_id
+        string subject_type
+        datetime updated_at
+    }
+    review_document {
+        string id
+        string body_html
+        datetime inserted_at
+        string kind
+        uuid notation_id
+        string status
+        string title
+        datetime updated_at
+    }
+    schema_version {
+        string id
+        datetime applied_at
+        number version
+    }
+    sent_email {
+        string id
+        string body
+        datetime inserted_at
+        string outcome
+        uuid project_id
+        string recipient
+        string sender
+        datetime sent_at
+        string sg_message_id
+        string subject
+        string template_slug
+        datetime updated_at
+    }
+    signature {
+        string id
+        string completed_signer_roles
+        string field
+        datetime inserted_at
+        uuid notation_id
+        string provider
+        string provider_id
+        string signed_at
+        uuid signer_person_id
+        string state
+        datetime updated_at
+    }
+    social_account {
+        string id
+        string brand_key
+        string ciphertext
+        uuid connected_by_person_id
+        string display_name
+        datetime expires_at
+        uuid firm_id
+        datetime inserted_at
+        string kms_context
+        string kms_key_version
+        string provider
+        string provider_account_id
+        datetime revoked_at
+        uuid revoked_by_person_id
+        json scopes
+        string status
+        datetime updated_at
+        string wrapped_dek
+    }
+    social_account_selection {
+        string id
+        string brand_key
+        uuid firm_id
+        datetime inserted_at
+        string provider
+        string provider_account_id
+        datetime updated_at
+    }
+    social_handle {
+        string id
+        string brand_key
+        string handle
+        datetime inserted_at
+        string provider
+    }
+    social_oauth_attempt {
+        string id
+        uuid actor_person_id
+        string brand_key
+        datetime consumed_at
+        datetime expires_at
+        uuid firm_id
+        datetime inserted_at
+        string instagram_account_id
+        string pkce_verifier
+        string provider
+        string provider_account_id
+        string state_hash
+    }
+    social_publication {
+        string id
+        number attempt_count
+        datetime inserted_at
+        string last_error
+        string permalink
+        uuid post_id
+        string provider
+        string provider_post_id
+        string provider_task_id
+        string state
+        datetime updated_at
+    }
+    statutory_deadline {
+        string id
+        string due_on
+        string inserted_at
+        string kind
+        uuid project_id
+        string source
+        string status
+        string statute
+        string trigger_on
+        string updated_at
+    }
+    summary_sender_approval {
+        string id
+        uuid firm_id
+        uuid person_id
+        uuid project_id
+        string provider_account
+        string sender_email
+        string status
+        datetime updated_at
+    }
+    summary_sender_approval_event {
+        string id
+        string action
+        uuid actor_person_id
+        uuid firm_id
+        datetime inserted_at
+        uuid person_id
+        uuid project_id
+        string provider_account
+        string sender_email
+    }
+    template {
+        string id
+        uuid asset_id
+        string body_sha256
+        string code
+        string current_key
+        string form_code
+        datetime inserted_at
+        boolean is_current
+        string kind
+        uuid project_id
+        string respondent_type
+        string source_commit_sha
+        string title
+        datetime updated_at
+    }
+    testimonial {
+        string id
+        string attribution_label
+        string consented_at
+        number display_order
+        string inserted_at
+        uuid person_id
+        uuid project_id
+        string published_at
+        string quote
+        string updated_at
+    }
+    verification {
+        string id
+        uuid citation_id
+        datetime inserted_at
+        string revision_sha
+        string status_citation
+        string status_proposition
+        string status_quote
+        datetime updated_at
+        uuid verifier_person_id
+    }
+    visitor_route_count {
+        string id
+        datetime bucket_date
+        string country_code
+        datetime inserted_at
+        string locale
+        string route_pattern
+        string source
+        string status_class
+        datetime updated_at
+        number visits
+    }
+    xero_invoice {
+        string id
+        number amount_cents
+        number amount_paid_cents
+        string currency
+        datetime due_at
+        datetime inserted_at
+        datetime issued_at
+        uuid project_id
+        string reference
+        string status
+        datetime updated_at
+        string xero_invoice_id
+    }
+    entity }o--|| address : entity_id
+    person }o--|| address : person_id
+    person }o--|| answer : authored_by_person_id
+    notation }o--|| answer : notation_id
+    person }o--|| answer : person_id
+    question }o--|| answer : question_id
+    person }o--|| asset : deleted_by_person_id
+    project }o--|| asset : project_id
+    notation }o--|| attestation : notation_id
+    asset }o--|| authority : archived_asset_id
+    authority }o--|| authority_use : authority_id
+    project }o--|| authority_use : project_id
+    firm }o--|| brand : firm_id
+    person|entity }o--|| cap_table_holding : holder_id
+    project }o--|| cap_table_holding : project_id
+    project }o--|| case : project_id
+    case }o--|| case_docket_entry : case_id
+    asset }o--|| case_docket_entry : document_asset_id
+    notation }o--|| case_docket_entry : notation_id
+    case_docket_entry }o--|| case_docket_entry : supersedes
+    authority_use }o--|| citation : authority_use_id
+    asset }o--|| communication : asset_id
+    person }o--|| communication : author_person_id
+    project }o--|| communication : project_id
+    asset }o--|| contract_review : asset_id
+    notation }o--|| contract_review : notation_id
+    playbook }o--|| contract_review : playbook_id
+    jurisdiction }o--|| credential : jurisdiction_id
+    person }o--|| credential : person_id
+    entity }o--|| disclosure : entity_id
+    project }o--|| disclosure : project_id
+    discovery_request }o--|| discovery_item : discovery_request_id
+    case }o--|| discovery_request : case_id
+    case_docket_entry }o--|| discovery_request : docket_entry_id
+    person }o--|| document_comment : person_id
+    review_document }o--|| document_comment : review_document_id
+    asset }o--|| efiling_transactions : conformed_document_id
+    project }o--|| efiling_transactions : project_id
+    asset }o--|| efiling_transactions : submitted_document_id
+    firm }o--|| email_conversation : firm_id
+    notation }o--|| email_conversation : notation_id
+    person }o--|| email_conversation : person_id
+    project }o--|| email_conversation : project_id
+    email_conversation }o--|| email_conversation_message : conversation_id
+    email_receipt }o--|| email_delivery : receipt_id
+    email_delivery }o--|| email_delivery_attempt : delivery_id
+    firm }o--|| email_receipt : firm_id
+    letter }o--|| email_receipt : letter_id
+    person }o--|| email_token : person_id
+    entity_type }o--|| entity : entity_type_id
+    jurisdiction }o--|| entity : jurisdiction_id
+    project }o--|| estate_asset : project_id
+    person }o--|| expunge_record : authorized_by_person_id
+    project }o--|| expunge_record : project_id
+    asset }o--|| expunge_request : asset_id
+    expunge_record }o--|| expunge_request : expunge_record_id
+    project }o--|| expunge_request : project_id
+    person }o--|| expunge_request : requested_by_person_id
+    person }o--|| expunge_request : resolved_by_person_id
+    person|entity }o--|| fiduciary_role : fiduciary_id
+    notation }o--|| fiduciary_role : notation_id
+    project }o--|| fiduciary_role : project_id
+    notation }o--|| filing : notation_id
+    project }o--|| finance_aggregate : project_id
+    entity }o--|| firm : entity_id
+    entity }o--|| firm_anchor : entity_id
+    firm }o--|| firm_brand : firm_id
+    person }o--|| firm_integration_secret : actor_id
+    firm }o--|| firm_integration_secret : firm_id
+    person }o--|| git_access_token : person_id
+    project }o--|| git_access_token : project_id
+    person }o--|| inbox_assignment : actor_person_id
+    inbox_conversation }o--|| inbox_assignment : conversation_id
+    firm }o--|| inbox_assignment : firm_id
+    project }o--|| inbox_assignment : from_project_id
+    project }o--|| inbox_assignment : to_project_id
+    email_conversation }o--|| inbox_conversation : email_conversation_id
+    firm }o--|| inbox_conversation : firm_id
+    project }o--|| inbox_conversation : project_id
+    message }o--|| inbox_delivery_attempt : message_id
+    firm }o--|| inbox_ingress : firm_id
+    message }o--|| inbox_ingress : message_id
+    jurisdiction }o--|| iolta_account : jurisdiction_id
+    project }o--|| iolta_allocation : project_id
+    jurisdiction }o--|| iolta_withdrawal : jurisdiction_id
+    person }o--|| lead : person_id
+    lead }o--|| lead_consent : lead_id
+    mailroom }o--|| letter : mailroom_id
+    project }o--|| letter : project_id
+    address }o--|| mailroom : address_id
+    project }o--|| matter_caption : project_id
+    project }o--|| matter_page : project_id
+    asset }o--|| message : attachment_asset_id
+    person }o--|| message : author_person_id
+    communication }o--|| message : communication_id
+    inbox_conversation }o--|| message : conversation_id
+    message }o--|| message : parent_message_id
+    asset }o--|| notarization : asset_id
+    person }o--|| notarization : notary_person_id
+    notation }o--|| notarization : notation_id
+    entity }o--|| notation : entity_id
+    notation_package }o--|| notation : package_id
+    person }o--|| notation : person_id
+    project }o--|| notation : project_id
+    template }o--|| notation : template_id
+    person }o--|| notation_clause : authored_by_person_id
+    notation }o--|| notation_clause : notation_id
+    notation_document_version }o--|| notation_document : current_version_id
+    notation }o--|| notation_document : notation_id
+    asset }o--|| notation_document : original_asset_id
+    person }o--|| notation_document_comment : person_id
+    notation_document_version }o--|| notation_document_comment : version_id
+    asset }o--|| notation_document_version : anchor_manifest_asset_id
+    person }o--|| notation_document_version : authored_by_person_id
+    notation_document }o--|| notation_document_version : document_id
+    asset }o--|| notation_document_version : markdown_asset_id
+    notation_document_version }o--|| notation_document_version : parent_version_id
+    project }o--|| notation_draft : project_id
+    person }o--|| notation_event : acting_person_id
+    notation }o--|| notation_event : notation_id
+    template }o--|| notation_event : template_version_id
+    notation }o--|| notation_meter_entry : notation_id
+    notation_package }o--|| notation_meter_entry : package_id
+    project }o--|| notation_meter_entry : project_id
+    notation_rate }o--|| notation_meter_entry : rate_id
+    notation_package }o--|| notation_package_template : package_id
+    template }o--|| notation_package_template : template_id
+    communication }o--|| notation_source : communication_id
+    notation }o--|| notation_source : notation_id
+    person }o--|| person_delegate : delegate_person_id
+    person }o--|| person_delegate : granted_by_person_id
+    person }o--|| person_delegate : revoked_by_person_id
+    person }o--|| person_delegate : subject_person_id
+    person }o--|| person_external_identity : person_id
+    firm }o--|| person_firm_role : firm_id
+    person }o--|| person_firm_role : person_id
+    person }o--|| person_mailbox : person_id
+    person }o--|| person_project_role : person_id
+    project }o--|| person_project_role : project_id
+    entity }o--|| playbook : entity_id
+    entity }o--|| project : entity_id
+    firm }o--|| project : firm_id
+    jurisdiction }o--|| project : jurisdiction_id
+    person }o--|| project_deadlines : owner_person_id
+    project }o--|| project_deadlines : project_id
+    asset }o--|| project_deadlines : source_document_id
+    person }o--|| project_module : enabled_by_person_id
+    project }o--|| project_module : project_id
+    person }o--|| project_service : declarant_person_id
+    asset }o--|| project_service : document_id
+    letter }o--|| project_service : letter_id
+    project }o--|| project_service : project_id
+    entity }o--|| project_service : recipient_entity_id
+    person }o--|| project_service : recipient_person_id
+    sent_email }o--|| project_service : sent_email_id
+    person|entity }o--|| relationship : in
+    person|entity }o--|| relationship : out
+    relationship_log|disclosure }o--|| relationship : source_id
+    person }o--|| relationship_log : actor_person_id
+    project }o--|| relationship_log : project_id
+    notation }o--|| review_document : notation_id
+    project }o--|| sent_email : project_id
+    notation }o--|| signature : notation_id
+    person }o--|| signature : signer_person_id
+    person }o--|| social_account : connected_by_person_id
+    firm }o--|| social_account : firm_id
+    person }o--|| social_account : revoked_by_person_id
+    firm }o--|| social_account_selection : firm_id
+    person }o--|| social_oauth_attempt : actor_person_id
+    firm }o--|| social_oauth_attempt : firm_id
+    post }o--|| social_publication : post_id
+    project }o--|| statutory_deadline : project_id
+    firm }o--|| summary_sender_approval : firm_id
+    person }o--|| summary_sender_approval : person_id
+    project }o--|| summary_sender_approval : project_id
+    person }o--|| summary_sender_approval_event : actor_person_id
+    firm }o--|| summary_sender_approval_event : firm_id
+    person }o--|| summary_sender_approval_event : person_id
+    project }o--|| summary_sender_approval_event : project_id
+    asset }o--|| template : asset_id
+    project }o--|| template : project_id
+    person }o--|| testimonial : person_id
+    project }o--|| testimonial : project_id
+    citation }o--|| verification : citation_id
+    person }o--|| verification : verifier_person_id
+    project }o--|| xero_invoice : project_id
+    person }o--o{ entity : entity_role
+    project }o--o{ person : project_reference
+    project }o--o{ entity : project_reference
+    person }o--o{ person : relationship
+    person }o--o{ entity : relationship
+    entity }o--o{ person : relationship
+    entity }o--o{ entity : relationship

@@ -1,0 +1,96 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Production overlay — describes the GKE Autopilot cluster state at
+# `YOUR_PROJECT_ID:us-west4:navigator-prod`. The directory is the
+# source of truth for what `kubectl apply -k` should produce; Config
+# Sync is NOT currently reconciling it because the repo isn't
+# pushed to a remote yet.
+#
+# Hardcoded for the `YOUR_PROJECT_ID` GCP project. Re-renaming for
+# another project means search-and-replace; templatizing it is a
+# deferred follow-up.
+#
+# Things deliberately NOT in this overlay:
+# - Config Connector CRs (IAMPolicyMember, LoggingLogSink,
+#   GKEBackupBackupPlan, CertificateManagerCertificate*) — Config
+#   Connector isn't reconciling on this cluster's GKE version. The
+#   IAM bindings are managed by direct `gcloud` commands instead.
+# - Cloud Armor (ComputeSecurityPolicy + GCPBackendPolicy) — removed
+#   to save ~$15/mo. No WAF / rate-limit at the LB today.
+
+resources:
+  # NAVIGATOR_POSTGRES_MIRROR_RESOURCE
+  - ../exports
+  - ../../../../k8s/base
+  - ../../../../k8s/base/web
+  - clamav.yaml
+  - ingress/ingress.yaml
+  - ingress/managed-certificate.yaml
+  # NAVIGATOR_BRAND_CERT_RESOURCES
+  - ingress/frontend-config.yaml
+  - ingress/web-backendconfig.yaml
+  - ingress/workflows-managed-certificate.yaml
+  - ingress/forgejo-managed-certificate.yaml
+  - ingress/forgejo-backendconfig.yaml
+  - workflows-service/envoy-config.yaml
+  - workflows-service/deployment.yaml
+  # `ops ship` renders `disruption-budgets.yaml` here for a two-replica row.
+  # NAVIGATOR_DISRUPTION_BUDGETS_RESOURCE
+  - iap/backendconfig.yaml
+  - iap/navigator-web-mcp-service.yaml
+  - iam.yaml
+  # `ops ship` refuses to reconcile unless every object this class references
+  # resolves to an ENABLED version in the deployment's own project.
+  - secrets/secret-provider-class.yaml
+
+patches:
+  - path: patches/web-service-account.yaml
+    target:
+      kind: Deployment
+      name: navigator-web
+  - path: patches/web-env.yaml
+    target:
+      kind: Deployment
+      name: navigator-web
+  # NAVIGATOR_POSTGRES_WEB_PATCH
+  # NAVIGATOR_DBOS_WEB_PATCH
+  - path: patches/workflows-env.yaml
+    target:
+      kind: Deployment
+      name: workflows-service
+  - path: patches/web-image.yaml
+    target:
+      kind: Deployment
+      name: navigator-web
+  - path: patches/web-resources.yaml
+    target:
+      kind: Deployment
+      name: navigator-web
+  - path: patches/web-service-neg.yaml
+    target:
+      kind: Service
+      name: navigator-web
+  # `ops ship` renders the replica count here from the row's profile: one pod
+  # of `navigator-web` and `workflows-service` for simulated matters, two for
+  # real matters. See docs/environments.md#replicas.
+  # NAVIGATOR_REPLICAS_PATCH
+
+  # The base manifest at `base/web/web.yaml` includes an
+  # `Ingress navigator-web` (nginx-class, for KIND only). It's
+  # inert in GKE because no nginx controller runs here, but we
+  # `$patch: delete` it for clarity so the rendered overlay shows
+  # only the GKE Ingress (`navigator-web-gke` under `ingress/`).
+  #
+  # The env-list scrubbing happens in patches/web-env.yaml via
+  # `$patch: replace` on the env array — see that file for why.
+  - target:
+      kind: Ingress
+      name: navigator-web
+    patch: |
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: navigator-web
+        namespace: navigator

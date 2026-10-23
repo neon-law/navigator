@@ -1,0 +1,190 @@
+# What `navigator pii` may find without failing the build.
+#
+# Each table is a group of `values` that share one `reason`. A synthetic
+# fixture name, a public firm fact, a published case caption, or a copyright
+# attribution belongs here. A real person's contact data never does: replace it
+# with a synthetic one (reserved `.example` / `.test` / `.invalid` domains,
+# 555-0100..0199 phone numbers, a zodiac first name). A single line can opt
+# out with a `pii-scan: allow` comment when the reason fits on that line.
+#
+# Matching is case-insensitive. A name is allowed when it is listed whole under
+# `names`, when every word of it is a `name_tokens` entry, or when any word of
+# it is a `non_name_words` entry (the model calling a font or a product a
+# person). An email is allowed on a listed domain or any subdomain of one.
+
+[[paths]]
+reason = "Vendored third-party code, generated inventories, and the scanner itself."
+values = [
+  "cargo.lock",
+  "server/public/vendor/*",
+  "server/public/swagger-ui/*",
+  "server/tests/assets/axe.min.js",
+  "k8s/vendor/*",
+  "vendor/*",
+  "store/postgres/caller-inventory.json",
+  "store/postgres/source-call-sites.jsonl",
+  ".github/pii/*",
+]
+
+[[paths]]
+reason = "Copyright attributions the licences require."
+values = [
+  "third-party-notices.txt",
+  "*/ofl.txt",
+  "*/license",
+  "*/licence",
+  "notice",
+]
+
+# --- Emails ---------------------------------------------------------------
+
+[[email_domains]]
+reason = "The firm's own domains and its brands' public contact domains."
+values = [
+  "neonlaw.com",
+  "neonlaw.org",
+  "shook.family",
+  "lawyershook.com",
+  "cyberinjurylaw.com",
+  "deleteyourdata.com",
+  "deleteyourdebt.com",
+  "daybridgedivorce.com",
+  "vestaestateplanning.com",
+  "summonsdefense.nyc",
+  "misericordialaw.com",
+  "deathanddivorcelaw.com",
+  "abhayaimmigration.com",
+]
+
+[[email_domains]]
+reason = "Machine identities and Git transport addresses, not people."
+values = [
+  "gserviceaccount.com",
+  "github.com",
+  "gitlab.com",
+  "sms.twilio.com",
+]
+
+[[values]]
+reason = "Negative-test and parser fixtures: placeholder mailboxes no person reads."
+values = [
+  "person@notexample.com",
+  "person@privaterelay.appleid.com",
+  "someone-else@privaterelay.appleid.com",
+  "token@www.notion.so",
+  "secret@www.tiktok.com",
+]
+
+# --- Phones and numbers ---------------------------------------------------
+
+[[phones]]
+reason = "The firm's published voice line."
+values = ["+1 510 800 2090"]
+
+[[phones]]
+reason = "Foreign-format fixtures: Ofcom drama numbers and the negative tests in cli/tests/no_client_data.rs."
+values = ["+44 20 7946 0958", "+447911123456", "+33 (1) 42 68 53 00"]
+
+[[values]]
+reason = "Test card numbers, identifiers, and a negative-test SSN shape."
+values = [
+  "4444-555555555555",
+  "18000000000000002",
+  "11111111-1111-4111",
+  "1769325368603650",
+  "702-55-0134",
+]
+
+# --- Names ----------------------------------------------------------------
+
+[[names]]
+reason = "The firm's principal, by name; public in the bar directories."
+values = ["Nick Shook", "Nicholas Shook", "Nicholas Richard Shook", "Lawyer Shook"]
+
+[[names]]
+reason = "Copyright and credit attributions: photographers, type designers, artists."
+values = [
+  "Karl Solano",
+  "Nikita Nikitin",
+  "Juan Moccagatta",
+  "Karen Rustad Tölva",
+  "Steve Matteson",
+]
+
+[[names]]
+reason = "Attributed quotations in published firm blog posts."
+values = ["Linus Torvalds", "Rich Hickey"]
+
+[[names]]
+reason = "Public speaker attribution for the linked BSides Portland 2022 Delete Your Data recording."
+values = ["Jacob Smith"]
+
+[[names]]
+reason = "Published case captions and firms cited as sources."
+values = [
+  "D.R. Horton",
+  "Jeffrey Burr",
+  "Andreessen Horowitz",
+  "Quinn Emanuel",
+  "Morrison Foerster",
+  "Hogan Lovells",
+  "Davis Polk",
+]
+
+[[name_tokens]]
+reason = "Synthetic fixture names: zodiac personas, placeholder people, and the sample matters."
+values = [
+  # zodiac personas
+  "aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra", "scorpio",
+  "sagittarius", "capricorn", "aquarius", "pisces",
+  # placeholder given names and surnames
+  "pat", "jane", "john", "sam", "alex", "blake", "jordan", "kim", "otto", "zoe",
+  "cleo", "clara", "dana", "fixture", "ada", "q", "a", "t", "doe", "roe", "smith", "sample",
+  "example", "client", "lawyer", "counsel", "clerk", "student", "attorney",
+  "assignor", "phone", "sender", "other", "tenant", "organizer", "ram", "cc",
+  "lumen", "corrin", "hollow", "tidewell", "marlowe", "nakamoto", "jones",
+  "ramirez", "rivera", "santos", "maria",
+  # synthetic finance and portfolio fixtures
+  "samplewood", "fixtureton", "mockford", "testerly", "syntheton", "notreal",
+  "stubbs", "kit", "jules", "finley", "casey", "devon", "blair", "harper",
+  "dummyfield", "ashgrove", "ashworth", "cora", "fenwick", "milo", "halcyon",
+  "perry", "ledgerwood", "nora", "moorcroft", "talia", "okafor", "simone",
+  "windrow", "tomas", "kestrel", "priya", "marisol", "fenn", "quell", "portia",
+  "ledger", "elke", "vantongeren",
+  # sample matters and docket fixtures
+  "cornelius", "montgomery", "dermot", "odile", "cruller", "wendell", "prine",
+  "quentin", "quill", "uma", "upton", "vera", "venue", "fern", "filer", "gus",
+  "gavel", "hana", "hearsay", "walt", "writ", "jon", "sison", "zzz", "person",
+]
+
+[[non_name_words]]
+reason = "Words that mark a font, product, place, or firm, not a person."
+values = [
+  "serif", "condensed", "gyre", "schola", "tinos", "bold", "italic",
+  "ave", "ste", "suite", "way", "county", "recorder", "leone", "tome",
+  "vincent", "lucia", "anne",
+  "law", "pllc", "llc", "holdco", "bakery", "supply", "divorce",
+  "cloud", "logging", "login", "page", "posts", "sms", "api", "token", "sync",
+  "oauth", "navigator", "skill", "box", "entries", "entry", "git", "lfs",
+  "desktop", "code", "sendgrid", "nat", "run", "sandbox", "signer", "matter",
+  "inbox", "firm", "admin", "webhook", "json", "pdf", "typst", "acroform",
+  "rauthy", "prospective", "handoff", "markdown", "ddl", "erd", "ci", "cronjob", "cronjobs", "case",
+  "keychain", "smoke", "blacksmith", "openobserve", "ssr", "dev", "deliverables",
+  "blog", "scheduler", "canary", "batch", "upload", "drive", "practice",
+  "letter", "closing", "participant", "duces", "tecum", "scope", "go-live",
+  "sos", "civ", "slack", "durable", "split", "config", "send", "email",
+  "fileName", "missing", "mounted", "kebab", "megadeth", "nautilus", "rust",
+  "linux", "dioxus", "mermaid", "kubernetes", "instagram", "youtube", "xero",
+  "twilio", "claude", "gmail", "facebook", "linkedin", "forgejo", "neon",
+  "enabling", "solving", "reversible", "direct", "authenticated", "backfill",
+  "complete", "this", "billing", "scopes", "undesignated", "split", "panda",
+  "gorp", "noto", "barlow", "daybridge",
+]
+
+[[names]]
+reason = "Synthetic names used only by the PII scanner's recognizer canary and regression fixtures."
+values = ["John Smith", "Zelda Quillstone", "Fixture Person"]
+
+[[names]]
+reason = "Corporate party in the published Nevada case citation used by the synthetic litigation fixture."
+values = ["D.R. Horton"]

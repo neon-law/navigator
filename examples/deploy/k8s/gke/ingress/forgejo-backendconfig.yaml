@@ -1,0 +1,20 @@
+# Load-balancer settings for the `navigator-forgejo` Service, which the
+# Forgejo overlay annotates as a NEG backend of the shared Ingress.
+#
+# - `healthCheck` probes Forgejo's own `/api/healthz` on its container port,
+#   the path its readiness probe already uses, so the load balancer and
+#   Kubernetes agree on when a pod can take traffic.
+# - `timeoutSec` raises the 30-second default: a smart-HTTP clone or push
+#   streams one response for as long as the pack takes, and the load
+#   balancer would cut a large one off mid-transfer.
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: navigator-forgejo
+  namespace: navigator
+spec:
+  timeoutSec: 600
+  healthCheck:
+    type: HTTP
+    requestPath: /api/healthz
+    port: 3000

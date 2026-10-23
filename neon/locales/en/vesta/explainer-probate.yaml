@@ -1,0 +1,71 @@
+head_title: "{site_name} | Probate and what comes next"
+meta_description: >-
+  Find your next step after someone dies. Discuss probate and estate administration,
+  with services and fees agreed in writing. Attorney advertisement.
+title: Probate
+tagline: After a death
+hero_lines:
+  - text: You do not have to work it all out alone.
+    accent_words: 0
+hero_lead: >-
+  Losing someone can leave you with grief, paperwork, and questions about what happens next.
+  Start with what you know. We can help you understand whether probate is needed and discuss
+  legal guidance for carrying out the estate.
+hero_cta:
+  href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
+  label: Talk about probate
+skin: practice
+bands:
+  - kind: statement
+    heading: Understand the path ahead
+    body:
+      - - text: >-
+            Probate is a legal process for handling an estate after death, including addressing
+            debts and transferring property. Whether court proceedings are needed depends on
+            the property, how it is held, and applicable law. A will does not answer every question.
+  - kind: cards
+    overline: Your first steps
+    heading: Start with what you have
+    items:
+      - title: Gather the key records
+        body:
+          - - text: >-
+                Bring any will or trust, a death certificate if available, and an outline of known
+                property and debts. You do not need a complete inventory to start a conversation.
+      - title: Clarify your role
+        body:
+          - - text: >-
+                Tell us your relationship to the person who died and whether someone has been
+                appointed to handle the estate. We review who has authority and who needs legal guidance.
+      - title: Identify the work ahead
+        body:
+          - - text: >-
+                Discuss court proceedings, notices, records, and distributions that may apply.
+                The estate's circumstances and jurisdiction shape the next steps.
+  - kind: statement
+    heading: Know the scope and fees
+    body:
+      - - text: >-
+            Probate and estate administration have a separate engagement from creating an estate plan.
+            We confirm who we represent, applicable law, conflicts, services, and fees in writing before
+            work begins. Court disputes and an individual fiduciary appointment require their own agreed scope.
+  - kind: cards
+    overline: Related support
+    heading: Carry out their wishes
+    items:
+      - title: Trust administration
+        body:
+          - - text: A trust may need administration alongside the estate. Explore guidance for trustees.
+        href: /services#trust-administration
+        href_label: Explore trust administration
+      - title: Your own estate plan
+        body:
+          - - text: Put your wishes for property and care in writing for the people who matter to you.
+        href: /#your-plan
+        href_label: Explore estate planning
+  - kind: statement
+    heading: Learn about probate
+    body:
+      - - text: Nevada courts explain probate basics and the different paths for administering an estate.
+          href: https://selfhelp.nvcourts.gov/pro/overview
+      - - text: General information. Your circumstances and applicable law determine the advice you need.

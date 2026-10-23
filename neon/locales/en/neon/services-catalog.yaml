@@ -1,0 +1,483 @@
+# The firm's individual services, as structured records.
+#
+# This is the machine-readable twin of the prose cards in `services.yaml`: the
+# same work, carrying the identifiers, item numbers, categories, keywords, and
+# fees a reader can search. `views::locales::services` is the typed check
+# `navigator project gate` runs over it (Y002).
+#
+# Fees, item codes, service names, and `includes` scope lines are attorney-set.
+# Every service publishes one standalone price. The optional `plan_price` field
+# is validated to be at least half off a package's price, but no service sets it.
+catalog_version: 2
+
+# What a `flat_fee` service costs. Both flat-fee kinds resolve to this one
+# figure, so the page cannot print two different "flat fees".
+flat_fee: "$100"
+
+# The closed category vocabulary, and the words a reader sees for each. A
+# service naming anything outside this list is refused.
+categories:
+  - value: company
+    label: Start a business
+  - value: compliance
+    label: Run a business
+  - value: identity
+    label: Names & brands
+  - value: estate
+    label: Wills & family plans
+  - value: contracts
+    label: Contracts & forms
+  - value: urgent
+    label: Disputes & housing
+
+services:
+  - id: llc-file
+    template: nv__llc_formation
+    item: "1101"
+    name: Start a company
+    blurb: >-
+      We help you set up a limited liability company, also called an LLC. A
+      lawyer checks your papers before we file them with the state.
+    category: company
+    flat_fee: form
+    period: per form
+    state_fee: true
+    includes:
+      - Check that your business name is available
+      - Prepare the papers to create your company
+      - Have a lawyer check and file the papers
+    related:
+      - llc-launch
+      - nv-address
+      - annual-report
+    keywords:
+      - LLC
+      - articles of organization
+      - formation
+      - File
+
+  - id: llc-launch
+    item: "1102"
+    name: Business formation paperwork
+    blurb: >-
+      Set up your limited liability company and get the ownership agreement and
+      tax ID a bank will usually ask for.
+    category: company
+    amount: "$100"
+    period: per package
+    state_fee: true
+    package:
+      of:
+        - llc-file
+      extras:
+        - name: An agreement between the owners
+          amount: "$100"
+        - name: A federal tax ID for your business
+          amount: "$100"
+    includes:
+      - Set up your limited liability company
+      - An agreement between the owners
+      - A federal tax ID for your business
+    related:
+      - nv-address
+      - annual-report
+      - nda
+    keywords:
+      - LLC
+      - EIN
+      - operating agreement
+      - formation
+      - Launch
+
+  - id: nonprofit
+    template: nv__nonprofit_501c3_formation
+    item: "1103"
+    name: Start a nonprofit
+    blurb: >-
+      Set up your nonprofit and apply for federal tax exemption. Government fees
+      are separate.
+    category: company
+    flat_fee: form
+    period: per form
+    state_fee: true
+    includes:
+      - Papers to set up the nonprofit and explain how it runs
+      - Rules for handling personal interests in nonprofit decisions
+      - Prepare and file the application for federal tax exemption
+    related:
+      - nv-address
+    keywords:
+      - 501(c)(3)
+      - Form 1023
+      - bylaws
+      - conflict-of-interest policy
+
+  - id: annual-report
+    template: nv__annual_report
+    item: "1201"
+    name: Renew your Nevada business paperwork
+    blurb: >-
+      We file your company's yearly report and renew its state business license.
+    category: compliance
+    flat_fee: form
+    period: per form
+    state_fee: true
+    includes:
+      - Update the state's list of your company's officers or managers
+      - Renew your business license
+      - Have a lawyer check and file the papers
+    related:
+      - nv-address
+    keywords:
+      - annual report
+      - annual list
+      - licence
+      - compliance
+
+  - id: nv-address
+    item: "1202"
+    name: Nevada business address
+    blurb: >-
+      Get a Nevada street address to receive legal notices and mail. We forward
+      them to you.
+    category: compliance
+    amount: "$350"
+    period: per year
+    state_fee: false
+    includes:
+      - A street address for legal notices
+      - Your mail forwarded to you
+    related:
+      - annual-report
+    keywords:
+      - service of process
+
+  - id: trademark
+    item: "1301"
+    name: Apply for a trademark
+    blurb: >-
+      We check for similar names or logos and file your application for one
+      group of goods or services.
+    category: identity
+    flat_fee: trademark
+    period: + government filing fees
+    state_fee: true
+    includes:
+      - Search for similar names or logos
+      - One name or logo in one group of goods or services
+      - Have a lawyer check and file the application
+    keywords:
+      - USPTO
+      - trademark application
+      - clearance search
+      - class
+
+  - id: name-change
+    item: "1302"
+    name: Change your legal name
+    blurb: >-
+      We prepare your request, arrange the required public notice, and attend
+      the hearing. For name changes that no one is challenging.
+    category: identity
+    flat_fee: form
+    period: per form, plus court and publication costs
+    state_fee: true
+    includes:
+      - Your request to the court
+      - The required public notice
+      - A lawyer at your hearing
+    keywords:
+      - uncontested
+      - petition
+      - publication
+
+  - id: will
+    item: "1401"
+    name: Make a will
+    blurb: >-
+      Tell us who you want to leave things to. A lawyer prepares and reviews
+      your will.
+    category: estate
+    amount: "$3,000"
+    period: starting fee
+    state_fee: false
+    includes:
+      - Questions about your wishes
+      - A will prepared and checked by a lawyer
+      - Help signing your will with witnesses
+    related:
+      - estate-package
+      - trust
+    keywords:
+      - simple will
+      - estate
+
+  - id: estate-package
+    item: "1402"
+    name: Estate plan paperwork
+    blurb: >-
+      Make a will and choose who can handle your money and healthcare decisions
+      if you can't.
+    category: estate
+    amount: "$5,000"
+    period: per package
+    state_fee: false
+    package:
+      of:
+        - will
+      extras:
+        - name: A document naming someone to handle your finances
+          amount: "$3,000"
+        - name: Your wishes for medical care and who can make decisions for you
+          amount: "$3,000"
+    includes:
+      - A will
+      - A document naming someone to handle your finances
+      - Your wishes for medical care and who can make decisions for you
+    related:
+      - trust
+    keywords:
+      - estate package
+      - financial power of attorney
+      - healthcare directive
+
+  - id: trust
+    item: "1403"
+    name: Set up a living trust
+    blurb: >-
+      Create a trust you can change during your lifetime, plus a will and the
+      paperwork to put one Nevada property into the trust.
+    category: estate
+    amount: "$3,000"
+    period: starting fee
+    state_fee: false
+    includes:
+      - A living trust you can change
+      - A will that leaves property to the trust
+      - Paperwork to put one Nevada property into the trust
+    related:
+      - will
+    keywords:
+      - revocable living trust
+      - pour-over will
+      - deed
+      - estate
+
+  - id: nda
+    item: "1501"
+    name: Review a confidentiality agreement
+    blurb: >-
+      We will read your contract, suggest changes, and explain them. Covers one
+      agreement where both sides promise to keep information private.
+    category: contracts
+    amount: "$100"
+    period: per contract
+    state_fee: false
+    includes:
+      - Read the whole agreement
+      - Show suggested changes
+      - Explain what changed and why
+    related:
+      - consulting
+      - send-template
+    keywords:
+      - mutual NDA
+      - non-disclosure
+      - confidentiality
+      - redline
+
+  - id: consulting
+    item: "1502"
+    name: Review a freelance or consulting contract
+    blurb: >-
+      We will read your contract and suggest changes to protect your interests.
+    category: contracts
+    amount: "$250"
+    period: per contract
+    state_fee: false
+    includes:
+      - Read the whole contract
+      - Show suggested changes
+      - Check the terms for work as a contractor
+    related:
+      - employment
+      - nda
+    keywords:
+      - consulting agreement
+      - independent-contractor
+      - redline
+
+  - id: employment
+    item: "1503"
+    name: Review a job offer or employment contract
+    blurb: >-
+      We will check your offer, including any company shares you are offered and
+      limits on where you can work next.
+    category: contracts
+    amount: "$350"
+    period: per contract
+    state_fee: false
+    includes:
+      - Review your job offer or employment contract
+      - Check any offer of company shares
+      - Check limits on working for another employer
+    related:
+      - msa
+      - nda
+    keywords:
+      - employment agreement
+      - equity
+      - stock options
+      - non-compete
+
+  - id: msa
+    item: "1504"
+    name: Review a business services contract
+    blurb: >-
+      We review the main contract for ongoing work between your business and a
+      customer or supplier.
+    category: contracts
+    amount: "$500"
+    period: per contract
+    state_fee: false
+    includes:
+      - Read the whole contract
+      - Show suggested changes you can share with the other side
+    related:
+      - consulting
+    keywords:
+      - MSA
+      - master services agreement
+      - redline
+
+  - id: form-review
+    item: "1505"
+    name: Get a legal form
+    blurb: >-
+      Get the form you need. Any work by a lawyer is priced separately.
+    category: contracts
+    flat_fee: form
+    period: per form
+    state_fee: false
+    includes:
+      - The form you need
+      - A separate price for any work by a lawyer
+    related:
+      - send-template
+    keywords:
+      - form review
+
+  - id: send-template
+    item: "1506"
+    name: Send a contract to be signed
+    blurb: >-
+      Send an unchanged contract template for someone to sign online, and see
+      when they have signed.
+    category: contracts
+    amount: "$5"
+    period: per send
+    state_fee: false
+    includes:
+      - Send the unchanged contract template for signature online
+      - See whether it has been signed
+    related:
+      - nda
+    keywords:
+      - template
+      - electronic signature
+
+  - id: demand
+    item: "1601"
+    name: Send a letter from a lawyer
+    blurb: >-
+      We review what you send us, then write and sign one letter asking the
+      other side to take action. Court work is not included.
+    category: urgent
+    amount: "$350"
+    period: for one letter
+    state_fee: false
+    includes:
+      - Review the information you send
+      - One letter signed by the firm
+    keywords:
+      - demand letter
+      - dispute
+
+  - id: eviction
+    item: "1602"
+    name: Get help with an eviction
+    blurb: >-
+      For tenants in Nevada's shorter eviction process. We prepare your response
+      to the court and speak for you at one hearing.
+    category: urgent
+    amount: "$750"
+    period: for one hearing
+    state_fee: false
+    includes:
+      - Your written response to the court
+      - A lawyer to speak for you at one hearing
+    keywords:
+      - tenant eviction defense
+      - summary eviction
+      - answer
+
+start:
+  confirmation: >-
+    Thank you. We have opened a file for you and a lawyer will review it and
+    check for conflicts before any work begins. You are not a client yet, and
+    we are not your lawyers until you receive and sign a written engagement
+    agreement, which will state the fee. Answer the questions below at your
+    own pace; your answers save as you go. Nothing is filed or sent to anyone
+    until a lawyer has reviewed it.
+  disclosure: >-
+    Starting here does not make you a client of Neon Law. A lawyer at the firm
+    will check for conflicts of interest and decide whether we can take your
+    matter. Until we send you a written engagement agreement and you sign it,
+    we are not your lawyers, nothing on this site is legal advice, and no fee
+    has been quoted. What you tell us here is kept confidential even if we
+    cannot take your matter, so please answer only what the questions ask.
+  label: Start
+  microcopy: Opens a short questionnaire. A lawyer reviews before anything is filed.
+  refusal: We cannot start this matter online right now. Please contact our office and we will help you directly.
+
+# What a signed-in Client may buy online. Xero invoices each Purchase and
+# emails it; the Purchase turns on once Xero reports the invoice paid. Prices,
+# names, and account codes are attorney-set. A consultation is free for a
+# Client who signs in with Google using the address they confirmed.
+purchase:
+  title: Consultations and plans
+  intro: >-
+    Buy a consultation or a Delete Your Data plan here. We send the invoice
+    from Xero, and your purchase turns on as soon as it is paid.
+  complimentary: >-
+    You signed in with Google using the address you confirmed, so your
+    consultation is free. Booking one is optional.
+  google_hint: Sign in with Google using this address and your consultation is free.
+  book_label: Book a consultation
+  buy_label: Buy
+  pay_label: View and pay the invoice
+  invoiced: Invoice sent. This turns on when the invoice is paid.
+  active: Active
+  refusal: Online purchases are not available right now. Please contact our office and we will help you directly.
+  offerings:
+    - id: consultation
+      name: Consultation
+      blurb: >-
+        A meeting with a lawyer about your situation. A consultation does not
+        make you a client of the firm.
+      amount: "$100"
+      cadence: once
+      account_code: "200"
+      complimentary_with_google: true
+    - id: delete-your-data-monthly
+      name: Delete Your Data, monthly
+      blurb: Data removal, privacy protection, and basic form filings such as an LLC, billed every month. Government fees are separate.
+      amount: "$29"
+      cadence: month
+      account_code: "200"
+    - id: delete-your-data-annual
+      name: Delete Your Data, prepaid year
+      blurb: Data removal, privacy protection, and basic form filings such as an LLC, prepaid for a full year. Government fees are separate.
+      amount: "$290"
+      cadence: year
+      account_code: "200"

@@ -1,0 +1,103 @@
+name: Forgejo on KIND
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  kind:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      KUBECONFIG: /tmp/forgejo-kind.config
+      NAVIGATOR_KIND_CLUSTER: forgejo-smoke
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5
+        with:
+          version: v1.37.0
+      - name: Render the GKE overlays
+        run: |
+          set -euo pipefail
+          for lane in staging production; do
+            manifest="/tmp/forgejo-$lane.yaml"
+            kubectl kustomize "examples/deploy/k8s/gke/forgejo/$lane" > "$manifest"
+            if [[ "$lane" == staging ]]; then
+              expected_namespace=navigator
+            else
+              expected_namespace=navigator
+            fi
+            grep -q "namespace: $expected_namespace" "$manifest"
+            grep -q 'name: YOUR_FORGEJO_OIDC_NAME' "$manifest"
+            grep -q 'discovery_url: YOUR_FORGEJO_OIDC_DISCOVERY_URL' "$manifest"
+            grep -q 'email_domain_allowlist: YOUR_FORGEJO_ADMISSION_DOMAINS' "$manifest"
+            grep -q 'name: navigator-forgejo-database' "$manifest"
+            if grep -q 'name: navigator-forgejo-runner' "$manifest"; then
+              echo "Forgejo $lane must not deploy an Actions runner" >&2
+              exit 1
+            fi
+          done
+      - name: Install pinned KIND
+        run: |
+          curl -fsSL https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 -o /tmp/kind
+          echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  /tmp/kind' | sha256sum -c -
+          chmod +x /tmp/kind
+          sudo mv /tmp/kind /usr/local/bin/kind
+      - name: Create the task-owned cluster
+        run: |
+          kind create cluster --name forgejo-smoke --config k8s/kind-forgejo-config.yaml --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5 --kubeconfig "$KUBECONFIG" --wait 120s
+          kubectl --context kind-forgejo-smoke create namespace navigator
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: 1.98.0
+      - name: cache the Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: gate-cli
+          save-if: false
+      - name: build navigator CLI
+        run: cargo build -p cli --quiet
+      - name: navigator dev forgejo up
+        run: target/debug/navigator dev forgejo up
+      - name: navigator dev forgejo smoke
+        run: target/debug/navigator dev forgejo smoke
+      - name: Diagnose
+        if: failure()
+        run: |
+          kubectl --context kind-forgejo-smoke -n navigator get pods,jobs,pvc -o wide || true
+          for pod in navigator-forgejo-0 navigator-postgres-0; do
+            kubectl --context kind-forgejo-smoke -n navigator describe pod "$pod" | tail -30 || true
+            kubectl --context kind-forgejo-smoke -n navigator logs "$pod" --all-containers --tail=80 || true
+          done
+          kubectl --context kind-forgejo-smoke -n navigator logs deploy/navigator-forgejo-runner --tail=80 || true
+          kubectl --context kind-forgejo-smoke -n navigator logs deploy/rauthy --tail=40 || true
+      - name: Cleanup task cluster
+        if: always()
+        run: kind delete cluster --name forgejo-smoke
+'on':
+  pull_request:
+    paths:
+      - k8s/forgejo/**
+      - k8s/postgres/**
+      - k8s/overlays/kind/forgejo/**
+      - k8s/overlays/kind/rauthy/**
+      - k8s/overlays/kind-postgres-persistence/**
+      - k8s/kind-forgejo-config.yaml
+      - examples/deploy/k8s/gke/forgejo/**
+      - cli/src/devx/forgejo/**
+      - .github/workflows/forgejo-postgres.yml
+  push:
+    branches: [main]
+    paths:
+      - k8s/forgejo/**
+      - k8s/postgres/**
+      - k8s/overlays/kind/forgejo/**
+      - k8s/overlays/kind/rauthy/**
+      - k8s/overlays/kind-postgres-persistence/**
+      - k8s/kind-forgejo-config.yaml
+      - examples/deploy/k8s/gke/forgejo/**
+      - cli/src/devx/forgejo/**
+      - .github/workflows/forgejo-postgres.yml
+  workflow_dispatch: null

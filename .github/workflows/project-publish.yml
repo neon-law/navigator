@@ -1,0 +1,45 @@
+name: project-publish
+
+# The reusable publication half of a Project repository, called by every
+# Project's `cd.yml` after `project-gate.yml`.
+#
+# Portal publishing is retired. A Project repository commits only source —
+# `navigator.yaml`, Markdown, and YAML — and the matter show page renders its
+# declared Matter Pages directly, so there is no bundle to build or upload and
+# no publisher credential to read. `/app/projects/{code}/portal` redirects to
+# the matter show page.
+#
+# The workflow stays callable so every existing `cd.yml` keeps passing; its one
+# job does nothing. The live document, Project, and seed work a push needs
+# already ran in the `gate` job this one `needs:`.
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: >-
+          Deprecated, ignored: the Project code is read from navigator.yaml's
+          project.name. Kept only so an unmigrated caller's `with:` block does
+          not fail workflow_call's undeclared-input check; remove it from
+          callers and then from here.
+        required: false
+        type: string
+        default: ""
+      host:
+        description: >-
+          Deprecated, ignored: the deployment host is read from
+          navigator.yaml's project.host. Kept only so an unmigrated caller's
+          `with:` block does not fail workflow_call's undeclared-input check;
+          remove it from callers and then from here.
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: nothing to publish
+        run: echo "Portal publishing is retired; the gate job already applied this commit."

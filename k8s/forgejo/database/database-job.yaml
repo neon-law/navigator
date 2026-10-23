@@ -1,0 +1,116 @@
+# Converge Forgejo's login and database from `database.sql`.
+#
+# Like `navigator-postgres-roles`, this Job signs in as the bootstrap
+# superuser; Forgejo itself never does. It reads the superuser password from
+# `navigator-postgres-auth`, the Forgejo login's password from
+# `navigator-forgejo-database`, and verifies the server against the CA in
+# `navigator-forgejo-postgres-ca`. The Job is deleted an hour after it
+# finishes, so re-applying the overlay re-runs it; `database.sql` is
+# idempotent.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: navigator-forgejo-database
+  labels:
+    app: navigator-forgejo-database
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: navigator-forgejo-database
+        navigator.neonlaw.org/postgres-client: "true"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: database
+          image: neon-law-postgres:16.15-age1.6.0-vector0.8.2
+          imagePullPolicy: IfNotPresent
+          command:
+            - psql
+            - --no-psqlrc
+            - --quiet
+            - --file=/etc/navigator/forgejo/sql/database.sql
+          env:
+            - name: PGHOST
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: host
+            - name: PGPORT
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: port
+            - name: PGDATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: database
+            - name: PGSSLMODE
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: sslmode
+            - name: PGSSLROOTCERT
+              value: /etc/navigator/forgejo/ca/ca.crt
+            - name: PGUSER
+              value: postgres
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-postgres-auth
+                  key: password
+            - name: PGAPPNAME
+              value: navigator-forgejo-database
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+              ephemeral-storage: 64Mi
+            limits:
+              memory: 128Mi
+              ephemeral-storage: 64Mi
+          volumeMounts:
+            - name: sql
+              mountPath: /etc/navigator/forgejo/sql
+              readOnly: true
+            - name: database
+              mountPath: /etc/navigator/forgejo/database
+              readOnly: true
+            - name: ca
+              mountPath: /etc/navigator/forgejo/ca
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: sql
+          configMap:
+            name: navigator-forgejo-database
+        - name: database
+          secret:
+            secretName: navigator-forgejo-database
+            defaultMode: 0440
+        - name: ca
+          secret:
+            secretName: navigator-forgejo-postgres-ca
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

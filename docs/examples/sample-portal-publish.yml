@@ -1,0 +1,23 @@
+# Example `cd.yml` for a Project repository, the shape `ops github setup`
+# reconciles a confirmed Project repository's caller to.
+# The shared workflow owns build, validation, and publication, reading the
+# repository's own Project code and deployment host from its `navigator.yaml`
+# — neither job below carries a `with:` block.
+
+name: cd
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  gate:
+    uses: neon-law/navigator/.github/workflows/project-gate.yml@26.10.23
+  publish:
+    needs: gate
+    uses: neon-law/navigator/.github/workflows/project-publish.yml@26.10.23

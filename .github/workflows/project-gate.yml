@@ -1,0 +1,250 @@
+name: project-gate
+
+# Reusable gate for a Project repository. A Project's own `ci.yml` is a thin
+# caller pinned to an exact release tag of this file:
+#
+#     jobs:
+#       ci:
+#         uses: neon-law/navigator/.github/workflows/project-gate.yml@YY.M.D
+#
+# The checkout's `navigator.yaml` supplies the pin, the Project code
+# (`project.name`), and the deployment host (`project.host`). This workflow
+# does not resolve `latest` and does not trust a caller-supplied version.
+# `ops github setup` bumps the caller's pin; it never edits this file.
+# Pull requests run the live read-only document and Project checks plus seed
+# validation dry-runs. Main pushes additionally reconcile seeds and publish.
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: >-
+          Deprecated, ignored: the Project code is read from navigator.yaml's
+          project.name. Kept only so an unmigrated caller's `with:` block does
+          not fail workflow_call's undeclared-input check; remove it from
+          callers and then from here.
+        required: false
+        type: string
+        default: ""
+      host:
+        description: >-
+          Deprecated, ignored: the deployment host is read from
+          navigator.yaml's project.host. Kept only so an unmigrated caller's
+          `with:` block does not fail workflow_call's undeclared-input check;
+          remove it from callers and then from here.
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  read-manifest:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.manifest.outputs.version }}
+      project: ${{ steps.manifest.outputs.project }}
+      host: ${{ steps.manifest.outputs.host }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read navigator.yaml
+        id: manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          values="$(ruby -e 'require "yaml"; m = YAML.safe_load(File.read("navigator.yaml"), aliases: false) || {}; p = m["project"]; p = {} unless p.is_a?(Hash); name = p["name"]; abort("navigator.yaml is missing project.name") unless name.is_a?(String) && !name.strip.empty?; host = p["host"]; abort("navigator.yaml is missing project.host") unless host.is_a?(String) && !host.strip.empty?; v = m["version"]; v = v.strip if v.is_a?(String); v = "" unless v.is_a?(String); puts "version=#{v}"; puts "project=#{name.strip}"; puts "host=#{host.strip}"')"
+          version=""
+          project=""
+          host=""
+          while IFS='=' read -r key value; do
+              case "${key}" in
+                version) version="${value}" ;;
+                project) project="${value}" ;;
+                host) host="${value}" ;;
+              esac
+          done <<< "${values}"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+              echo "::error::version must be an exact release tag, not '${version}'."
+              exit 1
+          fi
+          {
+              echo "version=${version}"
+              echo "project=${project}"
+              echo "host=${host}"
+          } >> "${GITHUB_OUTPUT}"
+
+  # Gates the whole repository.
+  verify:
+    needs: read-manifest
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Installed first because the gate is the CLI.
+      #
+      # Self-referencing composite actions in this file are pinned to an
+      # absolute tag, not to the ref the caller used, so they necessarily lag
+      # by one release: bump this tag in the release that follows any change a
+      # caller needs. ENG-671 introduced `.github/actions/navigator-install`
+      # after 26.9.16, so 26.9.17-rc.1 is the first tag that carries it — while
+      # this pin still read 26.9.16, every caller of project-gate.yml@26.9.17-rc.1
+      # failed to resolve the action at all.
+      - uses: neon-law/navigator/.github/actions/navigator-install@26.10.23
+        with:
+          version: ${{ needs.read-manifest.outputs.version }}
+      # One gate over the whole repository: content rules, YAML, seeds,
+      # locales, and layout. A Project repository commits only source, so
+      # there is nothing to build first. `--ci` writes nothing, so a file the
+      # gate would have fixed fails here rather than being rewritten in a
+      # checkout about to be discarded, and it opens the live-row door on main
+      # or a pull-request merge ref. The host is the one `navigator.yaml`
+      # declares, so there is nothing to pass here.
+      - name: navigator project gate
+        run: navigator project gate --ci
+
+  documents:
+    needs: read-manifest
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # See the matching comment in the `verify` job: this pin lags until a
+      # release publishes the action.
+      - uses: neon-law/navigator/.github/actions/navigator-install@26.10.23
+        with:
+          version: ${{ needs.read-manifest.outputs.version }}
+      # `--check` runs only the live document check (LAW-62): comparing
+      # committed pointers against what the deployment holds. `verify`
+      # already ran the whole offline gate — content rules, YAML, seeds, and
+      # layout — over the same tree, so this job asks only what that offline
+      # pass cannot: whether the live records agree with the checkout. Host and
+      # Project code come from navigator.yaml. `--ci` exchanges GitHub
+      # Actions OIDC and writes nothing: a pointer or gitignore the gate
+      # would fix locally fails this job.
+      - name: navigator project gate --check
+        run: navigator project gate --check --ci
+
+  # Reconciles `seeds/` against the live deployment, or validates them against
+  # the live Project with a server-enforced dry-run on a pull request. `navigator project gate`
+  # already covers the offline shape of every `seeds/*.yaml` document (in
+  # `verify`, above) on every event, including a pull request from a fork —
+  # so this job still validates every seed document offline. The PR token is
+  # scoped to dry-run seed validation only. Only a push or approved dispatch on
+  # `main` exchanges the runner's OIDC token for live reconciliation. Never
+  # `--overwrite`: the natural key makes a re-run a no-op, and a CI job that
+  # can replace a client's recorded field unattended is not one the firm
+  # wants. Its result is included in the required `ci` job so a failed live
+  # check cannot surface only after merge.
+  seeds:
+    needs: read-manifest
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # See the matching comment in the `verify` job: this pin lags until a
+      # release publishes the action.
+      - uses: neon-law/navigator/.github/actions/navigator-install@26.10.23
+        with:
+          version: ${{ needs.read-manifest.outputs.version }}
+      - name: navigator site import
+        env:
+          HOST: ${{ needs.read-manifest.outputs.host }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ ! -d seeds ]; then
+              echo "no seeds — nothing to reconcile"
+              exit 0
+          fi
+          if [ -z "${HOST}" ]; then
+              echo "no host — seeds are checked offline"
+          elif [ "${EVENT_NAME}" = "pull_request" ]; then
+              navigator site import --dry-run --ci --host "${HOST}"
+          elif { [ "${EVENT_NAME}" = "push" ] || [ "${EVENT_NAME}" = "workflow_dispatch" ]; } && [ "${REF}" = "refs/heads/main" ]; then
+              navigator site import --ci --host "${HOST}"
+          else
+              echo "seeds/*.yaml is checked offline by navigator project gate; live validation runs only on main or a pull-request merge ref"
+          fi
+
+  # On a push to `main`, tell the Project's private Slack channel what the
+  # gate decided. The step exchanges this run's OIDC token for the same
+  # document-scoped session `documents` mints, so the deployment binds it to
+  # exactly one live Project, then posts the short SHA, the run, the pusher's
+  # login, and the gate outcome to the Project's own channel. The channel is
+  # resolved server-side from the Project row; nothing here names it. The
+  # publish half runs in `project-publish.yml` after this gate and is not
+  # known yet, so no publish outcome is sent. `continue-on-error` and the
+  # required `ci` job not depending on this one keep a notice failure — a
+  # Slack outage, a deployment without a Restate ingress — from failing `cd`.
+  notify:
+    needs: [read-manifest, verify, documents, seeds]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.read-manifest.result == 'success'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: notify the Project channel of this push
+        env:
+          HOST: ${{ needs.read-manifest.outputs.host }}
+          GATE: ${{ (needs.verify.result == 'success' && needs.documents.result == 'success' && needs.seeds.result == 'success') && 'pass' || 'fail' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          AUTHOR_LOGIN: ${{ github.event.head_commit.author.username || github.actor }}
+        run: |
+          set -euo pipefail
+          base="https://${HOST}"
+          oidc="$(curl -sSf -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${base}" | jq -r '.value')"
+          session="$(curl -sSf -X POST -H 'Content-Type: application/json' \
+            -d "$(jq -cn --arg token "${oidc}" '{token: $token}')" \
+            "${base}/auth/ci/document-token" | jq -r '.token')"
+          project_id="$(curl -sSf -H "Authorization: Bearer ${session}" "${base}/app/api/projects" | jq -r '.[0].id')"
+          body="$(jq -cn \
+            --arg short_sha "${GITHUB_SHA:0:7}" \
+            --arg run_url "${RUN_URL}" \
+            --arg author_login "${AUTHOR_LOGIN}" \
+            --arg gate "${GATE}" \
+            --argjson run_attempt "${RUN_ATTEMPT}" \
+            '{short_sha: $short_sha, run_url: $run_url, author_login: $author_login, gate: $gate, run_attempt: $run_attempt}')"
+          curl -sSf -X POST -H "Authorization: Bearer ${session}" -H 'Content-Type: application/json' \
+            -d "${body}" "${base}/app/api/projects/${project_id}/events/main-push"
+
+  # The one required check. Besides gathering the jobs above, it holds the
+  # tree to `Y024` itself (ENG-1136, ENG-1139): a Project repository commits
+  # only Markdown and YAML plus the canonical files at their release bytes.
+  # The rule lives in the CLI, so this job runs `navigator`, not a script;
+  # each offending path is named in the log. It runs whatever `verify` did,
+  # so a pull request adding `package.json`, `x.py`, or `tests/a.mjs` fails
+  # `ci` by name even while another job is also red.
+  ci:
+    needs: [read-manifest, verify, documents, seeds]
+    if: always()
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.read-manifest.result == 'success'
+      # See the matching comment in the `verify` job: this pin lags until a
+      # release publishes the action.
+      - uses: neon-law/navigator/.github/actions/navigator-install@26.10.23
+        if: needs.read-manifest.result == 'success'
+        with:
+          version: ${{ needs.read-manifest.outputs.version }}
+      - name: navigator project gate --tracked-files
+        if: needs.read-manifest.result == 'success'
+        run: navigator project gate --tracked-files
+      - name: Require every job to have succeeded
+        if: always()
+        run: |
+          test "${{ needs.read-manifest.result }}" = "success"
+          test "${{ needs.verify.result }}" = "success"
+          test "${{ needs.documents.result }}" = "success"
+          test "${{ needs.seeds.result }}" = "success"

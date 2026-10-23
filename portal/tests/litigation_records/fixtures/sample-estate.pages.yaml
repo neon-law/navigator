@@ -1,0 +1,27 @@
+pages:
+  - slug: plan
+    kind: estate_plan_console
+    title: The matter
+    lenses:
+      lawyer: [instrument_set, signing_ceremony, distribution_plan, administration_steps, boundary_note, provenance_statement]
+      client: [instrument_set, signing_ceremony, distribution_plan, administration_steps, boundary_note, provenance_statement]
+  - slug: instruments
+    kind: document_workbench
+    title: Instruments
+    draft: drafts/last_will_and_testament.md
+    lenses:
+      lawyer: [document_body, notation_list, notation_document, notation_checklist, boundary_note, provenance_statement]
+      client: [notation_list, notation_document, notation_checklist, boundary_note, provenance_statement]
+  - slug: research
+    kind: authority_library
+    title: Research
+    lenses:
+      lawyer: [authority_table, boundary_note, provenance_statement]
+      client: [boundary_note, provenance_statement]
+  - slug: engagement
+    kind: engagement_billing_records
+    title: Engagement and billing
+    draft: drafts/sample_estate__engagement.md
+    lenses:
+      lawyer: [engagement_letter, invoice, prebill_review, boundary_note, provenance_statement]
+      client: [engagement_letter, invoice, boundary_note, provenance_statement]

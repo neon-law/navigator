@@ -1,0 +1,103 @@
+head_title: "{site_name} | Agreed divorce services"
+meta_description: >-
+  A brighter way through divorce for couples who agree. Daybridge Divorce Law
+  offers joint representation where permitted after conflict review and informed
+  written consent. A one-time $5,000 fee for a mutual split. Attorney
+  advertisement.
+title: Divorce for couples who agree
+hero_mark: scales
+tagline: A shared plan for separate futures.
+hero_lines:
+  - text: A brighter way
+    accent_words: 2
+  - text: through divorce
+    accent_words: 0
+hero_lead: >-
+  Daybridge represents the couple in an agreed divorce where joint
+  representation is permitted, after conflict review and informed written
+  consent. We help you turn common ground into clear documents and practical
+  next steps. Shook Law PC is the law firm you would retain.
+hero_cta:
+  href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
+  label: Book Consultation
+skin: practice
+bands:
+  - kind: cards
+    anchor: work
+    overline: The work
+    heading: Build on what you agree on
+    description: >-
+      Your written retainer identifies the work we agree to do. A licensed
+      attorney prepares and reviews it with both of you.
+    items:
+      - title: A plan for the divorce
+        body:
+          - - text: >-
+                Review your shared decisions, identify the information still
+                needed, and explain the steps for an agreed divorce.
+      - title: Your agreement in writing
+        body:
+          - - text: >-
+                Prepare the agreed terms about property, debts, support, and
+                parenting where relevant to your case. Both of you should
+                understand the choices and the documents before signing.
+      - title: Papers and filing steps
+        body:
+          - - text: >-
+                Prepare the court papers within your agreed scope and explain
+                the filing process. The court controls its schedule and decides
+                whether to grant the divorce.
+  - kind: cards
+    anchor: together
+    overline: Working with both of you
+    heading: Joint representation starts with clarity
+    description: >-
+      Agreement alone does not make joint representation appropriate in every
+      case. We check the applicable rules and your circumstances before
+      accepting the engagement.
+    items:
+      - title: Informed written consent
+        body:
+          - - text: >-
+                We explain the benefits and risks, how information is shared,
+                and the option of independent counsel. Each of you gives
+                informed written consent before joint representation begins.
+      - title: If agreement changes
+        body:
+          - - text: >-
+                If a conflict prevents us from continuing for both of you, we
+                stop the joint work and explain the need for separate counsel.
+                We do not take one spouse's side against the other in this
+                joint engagement. Contested proceedings are outside its scope.
+  - kind: statement
+    heading: One fee for a mutual split
+    lead: A one-time $5,000 fee.
+    body:
+      - - text: >-
+            Your written retainer defines the work. The fee pays for legal
+            work, not a particular result.
+  - kind: cards
+    anchor: about
+    overline: About
+    heading: Why Daybridge
+    description: ""
+    items:
+      - title: The name
+        body:
+          - - text: >-
+                A bridge from the life you shared to the lives ahead. Daybridge
+                is for couples who want to finish this chapter with care and
+                begin the next with a clear plan.
+      - title: The firm
+        body:
+          - - text: >-
+                Daybridge Divorce Law is a trade name of Shook Law PC, a
+                California professional corporation. Shook Law PC
+                is the law firm you would retain.
+  - kind: cta
+    heading: Start with your common ground
+    body: >-
+      Tell us where you are, what you have agreed on, and whether a case has
+      been filed. We will explain whether joint representation is available
+      and what we need to begin.
+    email: "{firm_email}"

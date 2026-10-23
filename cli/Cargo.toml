@@ -1,0 +1,114 @@
+[package]
+name = "cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "navigator"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+# `notation preview` serves the real `/notations/{slug}` router on a local
+# bind, so the binary owns an axum server of its own.
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+clap.workspace = true
+cloud.workspace = true
+forms.workspace = true
+comfy-table.workspace = true
+dotenvy.workspace = true
+# `navigator lsp` unpacks the `.tar.gz` release archives it downloads for
+# Linux/macOS, paired with `tar` below.
+flate2.workspace = true
+futures.workspace = true
+google-cloud-auth.workspace = true
+google-cloud-token.workspace = true
+# `dev forgejo smoke` computes RFC 6238 TOTP codes for its synthetic user.
+hmac.workspace = true
+image.workspace = true
+import.workspace = true
+include_dir.workspace = true
+k8s-openapi.workspace = true
+kube.workspace = true
+# `project efiling` and `project docket ingest` read saved `.eml` notices.
+mail-parser.workspace = true
+mcp.workspace = true
+owo-colors.workspace = true
+# `dev email-summary-e2e` signs its synthetic inbound webhook requests.
+p256.workspace = true
+pdf.workspace = true
+pdf-extract.workspace = true
+portal.workspace = true
+rand.workspace = true
+ravif.workspace = true
+reqwest.workspace = true
+regex.workspace = true
+rgb.workspace = true
+rules.workspace = true
+solana-attestation-service-client.workspace = true
+# `ops release check` and `ops release version` decide what a release version is
+# and whether it is newer than the last one, and `devx::registry` picks the
+# newest published image tag. All three are semver questions, so all three ask
+# the semver crate rather than a grammar written here.
+semver.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+store = { workspace = true, features = ["test-support"] }
+tar.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+views.workspace = true
+# `notation preview` names `PreviewDoc` to build the page it serves.
+webapp = { workspace = true, features = ["server"] }
+word.workspace = true
+walkdir.workspace = true
+webp.workspace = true
+# `ops notices` parses `Cargo.lock` to enumerate the third-party crates whose
+# licence texts must ship with the downloadable binary. Already a workspace
+# dependency and already linked into this crate's tests; this promotes it to a
+# runtime dependency of the binary itself.
+toml.workspace = true
+# Preserve operator comments when updating public social app coordinates.
+toml_edit = { workspace = true }
+# `assets` uses `workflows::notify::SlackNotifier` to post upload results.
+workflows.workspace = true
+# `assets fonts upload-desktop` packages the licensed GORP Serif OTF family
+# into a ZIP before uploading it to the public assets bucket.
+zip.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7.0"
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+rustix.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+lopdf.workspace = true
+neon.workspace = true
+telemetry.workspace = true
+predicates.workspace = true
+# `tower::ServiceExt::oneshot` drives the preview router in-process, with no
+# bind and no port.
+tower.workspace = true
+regorus.workspace = true
+store = { workspace = true, features = ["test-support"] }
+wiremock.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,59 @@
+head_title: "{site_name} | How a criminal case moves"
+meta_description: >-
+  How a criminal case moves. A plain-language explainer from {site_name}. General information; individual
+  advice requires an engagement.
+title: "How a criminal case moves"
+tagline: Plain-language explainers
+hero_lines:
+  - text: "How a criminal case moves"
+    accent_words: 0
+hero_lead: >-
+  This is an introduction to federal criminal procedure. State proceedings can use different rules and
+  terminology. Your court documents and lawyer determine what applies to your case.
+hero_cta:
+  href: "https://calendar.notion.so/meet/nick-shook/or15n4yy7"
+  label: Request a conversation
+skin: practice
+bands:
+  - kind: steps
+    anchor: guide
+    overline: Getting oriented
+    heading: Read the guide
+    items:
+      - title: "The first court appearances"
+        body:
+          - - text: >-
+                In federal court, an initial appearance addresses rights, counsel, and release or detention. At
+                arraignment, the accused enters a plea to the charges.
+      - title: "Preparation before trial"
+        body:
+          - - text: >-
+                Discovery and pretrial motions help define the evidence and legal questions. Some cases resolve
+                through a plea; others go to trial. A federal criminal conviction at trial requires proof beyond a
+                reasonable doubt.
+      - title: "After a conviction"
+        body:
+          - - text: >-
+                A conviction may be followed by sentencing. The available options depend on the charge, record, and
+                applicable law. This outline cannot predict a result or supply a case-specific deadline.
+  - kind: statement
+    heading: Read the source
+    body:
+      - - text: "U.S. Courts: federal criminal cases"
+          href: "https://www.uscourts.gov/about-federal-courts/types-cases/criminal-cases"
+  - kind: cards
+    overline: Continue reading
+    heading: More explainers
+    items:
+      - title: "Before an investigation interview"
+        href: /explainers/first-steps
+        href_label: Read the explainer
+      - title: "Reviewing a criminal record"
+        href: /explainers/documents
+        href_label: Read the explainer
+  - kind: statement
+    heading: About this guide
+    body:
+      - - text: >-
+            General information, not advice about your matter. We confirm jurisdiction, conflicts, scope, and
+            fees before accepting work. Attorney advertisement.

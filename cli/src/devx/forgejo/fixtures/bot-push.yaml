@@ -1,0 +1,28 @@
+# Synthetic bot push for `navigator dev forgejo smoke`: the job's own Actions
+# token clones the repository, then must fail to push to protected main.
+name: bot-push
+on: [workflow_dispatch]
+jobs:
+  bot-push:
+    runs-on: self-hosted
+    steps:
+      - env:
+          GIT_CONFIG_COUNT: "3"
+          GIT_CONFIG_KEY_0: http.extraHeader
+          GIT_CONFIG_VALUE_0: "Authorization: token ${{ forgejo.token }}"
+          GIT_CONFIG_KEY_1: user.name
+          GIT_CONFIG_VALUE_1: Synthetic Bot
+          GIT_CONFIG_KEY_2: user.email
+          GIT_CONFIG_VALUE_2: bot@example.test
+          REPOSITORY: ${{ forgejo.repository }}
+        run: |
+          work=$(mktemp -d)
+          git clone --quiet "http://navigator-forgejo:3000/$REPOSITORY.git" "$work/repo"
+          cd "$work/repo"
+          git commit --quiet --allow-empty -m "Synthetic bot push"
+          if git push --quiet origin HEAD:main 2>"$work/push.err"; then
+            echo "the Actions token pushed to protected main"
+            exit 1
+          fi
+          cat "$work/push.err"
+          grep -qi "protected" "$work/push.err"

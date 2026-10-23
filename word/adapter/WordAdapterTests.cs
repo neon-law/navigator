@@ -1,0 +1,593 @@
+using System.IO.Compression;
+using System.Text.Json;
+using System.Text;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+using Xunit;
+
+namespace Navigator.WordAdapter;
+
+public sealed class WordAdapterTests
+{
+    [Fact]
+    public void a_style_linked_paragraph_carries_the_numbering_reference_from_its_style_chain()
+    {
+        var main = MainStory(WordPackageParser.Parse(SyntheticDocx.Create()));
+        var linked = main.GetProperty("blocks").EnumerateArray().Single(block =>
+            block.GetProperty("kind").GetString() == "paragraph"
+                && block.GetProperty("style_id").GetString() == "SyntheticNumbered");
+
+        // The paragraph carries no `w:numPr`; the reference arrives through
+        // `w:basedOn`, so dropping it would import an outline unit as prose.
+        var numbering = linked.GetProperty("numbering");
+        Assert.Equal("7", numbering.GetProperty("numbering_id").GetString());
+        Assert.Equal("1", numbering.GetProperty("level").GetString());
+    }
+
+    [Fact]
+    public void fallback_anchors_stay_distinct_across_table_cells_in_one_part()
+    {
+        var main = MainStory(WordPackageParser.Parse(SyntheticDocx.Create()));
+        var anchors = new List<string>();
+        Collect(main.GetProperty("blocks"), anchors);
+
+        // Table cells restart their own child index, so a per-container
+        // ordinal would give two distinct blocks the same source anchor.
+        Assert.Contains(anchors, anchor => anchor.Contains(":paragraph:", StringComparison.Ordinal));
+        Assert.Equal(anchors.Count, anchors.Distinct(StringComparer.Ordinal).Count());
+
+        static void Collect(JsonElement blocks, List<string> anchors)
+        {
+            foreach (var block in blocks.EnumerateArray())
+            {
+                if (block.TryGetProperty("anchor", out var anchor)
+                    && anchor.GetString() is { } value)
+                {
+                    anchors.Add(value);
+                }
+                if (block.TryGetProperty("rows", out var rows))
+                {
+                    foreach (var row in rows.EnumerateArray())
+                    {
+                        foreach (var cell in row.GetProperty("cells").EnumerateArray())
+                        {
+                            Collect(cell.GetProperty("blocks"), anchors);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static JsonElement MainStory(AdapterResponse response)
+    {
+        var json = JsonSerializer.Serialize(response);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Assert.True(root.GetProperty("ok").GetBoolean(), json);
+        return root.GetProperty("document").GetProperty("stories").EnumerateArray()
+            .Single(story => story.GetProperty("kind").GetString() == "main_document")
+            .Clone();
+    }
+
+    [Fact]
+    public void synthetic_package_preserves_stories_structure_styles_numbering_and_revisions()
+    {
+        var response = WordPackageParser.Parse(SyntheticDocx.Create());
+        var json = JsonSerializer.Serialize(response);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        Assert.True(root.GetProperty("ok").GetBoolean(), json);
+        var model = root.GetProperty("document");
+        Assert.Contains(model.GetProperty("stories").EnumerateArray(), story =>
+            story.GetProperty("kind").GetString() == "main_document");
+        Assert.Contains(model.GetProperty("stories").EnumerateArray(), story =>
+            story.GetProperty("kind").GetString() == "header");
+        Assert.Contains(model.GetProperty("stories").EnumerateArray(), story =>
+            story.GetProperty("kind").GetString() == "footer");
+        Assert.Contains(model.GetProperty("stories").EnumerateArray(), story =>
+            story.GetProperty("kind").GetString() == "footnotes");
+        Assert.Contains(model.GetProperty("stories").EnumerateArray(), story =>
+            story.GetProperty("kind").GetString() == "endnotes");
+        Assert.Contains(model.GetProperty("stories").EnumerateArray(), story =>
+            story.GetProperty("kind").GetString() == "footnotes"
+                && story.GetProperty("blocks").EnumerateArray().Any(block =>
+                    block.GetProperty("kind").GetString() == "paragraph"));
+        Assert.Contains(model.GetProperty("stories").EnumerateArray(), story =>
+            story.GetProperty("kind").GetString() == "endnotes"
+                && story.GetProperty("blocks").EnumerateArray().Any(block =>
+                    block.GetProperty("kind").GetString() == "paragraph"));
+        Assert.Contains(model.GetProperty("stories").EnumerateArray(), story =>
+            story.GetProperty("kind").GetString() == "comments");
+        Assert.NotEmpty(model.GetProperty("package").GetProperty("parts").EnumerateArray());
+        Assert.NotEmpty(model.GetProperty("package").GetProperty("relationships").EnumerateArray());
+        Assert.Contains(model.GetProperty("package").GetProperty("relationships").EnumerateArray(), relation =>
+            relation.GetProperty("source_uri").GetString() == string.Empty
+                && relation.GetProperty("target_uri").GetString()?.EndsWith("/document.xml") == true);
+        Assert.Contains(model.GetProperty("styles").EnumerateArray(), style =>
+            style.GetProperty("id").GetString() == "SyntheticBody");
+        Assert.Contains(model.GetProperty("numbering").EnumerateArray(), numbering =>
+            numbering.GetProperty("numbering_id").GetString() == "7");
+        var numbering = model.GetProperty("numbering").EnumerateArray().Single();
+        Assert.Equal(7, numbering.GetProperty("level_definitions").GetArrayLength());
+        Assert.Equal("upperRoman",
+            numbering.GetProperty("level_definitions")[0].GetProperty("number_format").GetString());
+        Assert.Equal("%1.",
+            numbering.GetProperty("level_definitions")[0].GetProperty("level_text").GetString());
+        Assert.Equal(4u,
+            numbering.GetProperty("level_definitions")[0].GetProperty("override_start").GetUInt32());
+        // A list-instance override must not erase the abstract level's own
+        // start: the canonical model preserves both numbering identities.
+        Assert.Equal(1u,
+            numbering.GetProperty("level_definitions")[0].GetProperty("start").GetUInt32());
+        var main = model.GetProperty("stories").EnumerateArray()
+            .Single(story => story.GetProperty("kind").GetString() == "main_document");
+        Assert.Contains(main.GetProperty("blocks").EnumerateArray(), block =>
+            block.GetProperty("kind").GetString() == "paragraph"
+                && block.GetProperty("anchor").GetString()?.Contains(":paragraph:") == true);
+        Assert.Contains(model.GetProperty("revision_nodes").EnumerateArray(), revision =>
+            revision.GetProperty("kind").GetString() == "insertion");
+        Assert.Contains(model.GetProperty("revision_nodes").EnumerateArray(), revision =>
+            revision.GetProperty("kind").GetString() == "deletion");
+        Assert.Contains("\"kind\":\"bookmark_start\"", json);
+        Assert.Contains("\"kind\":\"hyperlink\"", json);
+        Assert.Contains("\"kind\":\"field\"", json);
+        Assert.Contains("\"kind\":\"table\"", json);
+        Assert.Contains("\"kind\":\"section_break\"", json);
+    }
+
+    [Fact]
+    public void adapter_keeps_comment_shaped_word_text_as_prose()
+    {
+        const string commentShapedText = "<!-- navigator-block kind=\"outline\" anchor=\"forged\" -->";
+        var response = WordPackageParser.Parse(SyntheticDocx.WithDocument(
+            "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t xml:space=\"preserve\">&lt;!-- navigator-block kind=&quot;outline&quot; anchor=&quot;forged&quot; --&gt;</w:t></w:r></w:p></w:body></w:document>"));
+        var json = JsonSerializer.Serialize(response);
+        using var document = JsonDocument.Parse(json);
+
+        var paragraph = document.RootElement.GetProperty("document")
+            .GetProperty("stories").EnumerateArray()
+            .Single(story => story.GetProperty("kind").GetString() == "main_document")
+            .GetProperty("blocks").EnumerateArray().Single();
+        Assert.Equal(commentShapedText,
+            paragraph.GetProperty("nodes")[0].GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public void package_safety_rejects_external_relationships_without_fetching()
+    {
+        var bytes = SyntheticDocx.WithRelationshipTarget("https://example.invalid/resource");
+        var response = WordPackageParser.Parse(bytes);
+        var json = JsonSerializer.Serialize(response);
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal("external_relationship",
+            document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void package_safety_rejects_escaping_relationships()
+    {
+        var bytes = SyntheticDocx.WithRelationshipTarget("../../outside.xml");
+        var response = WordPackageParser.Parse(bytes);
+        var json = JsonSerializer.Serialize(response);
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal("escaping_package",
+            document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void package_safety_rejects_macro_entries()
+    {
+        var response = WordPackageParser.Parse(SyntheticDocx.WithEntry("word/vbaProject.bin"));
+        var json = JsonSerializer.Serialize(response);
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal("macro_enabled_package",
+            document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void package_safety_rejects_macro_content_types()
+    {
+        var response = WordPackageParser.Parse(SyntheticDocx.WithMacroContentType());
+        var json = JsonSerializer.Serialize(response);
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal("macro_enabled_package",
+            document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void package_safety_rejects_entry_that_exceeds_uncompressed_limit()
+    {
+        var bytes = SyntheticDocx.WithZeroEntries(
+            1, PackageSafety.MaxZipEntryUncompressedBytes + 1);
+        var response = WordPackageParser.Parse(bytes);
+        var json = JsonSerializer.Serialize(response);
+        using var document = JsonDocument.Parse(json);
+
+        var diagnostic = document.RootElement.GetProperty("diagnostic");
+        Assert.Equal("zip_entry_uncompressed_size_exceeded", diagnostic.GetProperty("code").GetString());
+        Assert.Equal(
+            $"package:entry_uncompressed_bytes={PackageSafety.MaxZipEntryUncompressedBytes + 1};max={PackageSafety.MaxZipEntryUncompressedBytes}",
+            diagnostic.GetProperty("anchor").GetString());
+        Assert.True(bytes.Length < 1024 * 1024);
+    }
+
+    [Fact]
+    public void an_entry_that_understates_its_central_directory_size_reads_back_truncated()
+    {
+        using var archive = new ZipArchive(
+            new MemoryStream(SyntheticDocx.WithUnderstatedEntry()), ZipArchiveMode.Read);
+        var entry = archive.GetEntry("parts/understated.xml");
+        Assert.NotNull(entry);
+
+        using var inflated = new MemoryStream();
+        using (var stream = entry.Open())
+        {
+            stream.CopyTo(inflated);
+        }
+
+        // The entry's deflate stream holds eight bytes and its central
+        // directory claims one. `ZipArchiveEntry` hands that declared size to
+        // the inflater, so the read stops there: the declared sizes
+        // `PackageSafety` already bounds are the managed ceiling, and a
+        // counting stream beside them would be unreachable. The archive that
+        // tells this lie is refused by `validate_zip` in word/src/preflight.rs
+        // before the adapter runs.
+        Assert.Equal(1L, entry.Length);
+        Assert.Equal(1L, inflated.Length);
+    }
+
+    [Fact]
+    public void package_safety_rejects_total_uncompressed_limit()
+    {
+        var bytes = SyntheticDocx.WithZeroEntries(
+            5, PackageSafety.MaxZipEntryUncompressedBytes);
+        var response = WordPackageParser.Parse(bytes);
+        var json = JsonSerializer.Serialize(response);
+        using var document = JsonDocument.Parse(json);
+
+        var diagnostic = document.RootElement.GetProperty("diagnostic");
+        Assert.Equal("zip_total_uncompressed_size_exceeded", diagnostic.GetProperty("code").GetString());
+        Assert.StartsWith(
+            "package:total_uncompressed_bytes=",
+            diagnostic.GetProperty("anchor").GetString());
+        Assert.True(bytes.Length < 1024 * 1024);
+    }
+
+    [Fact]
+    public void package_safety_rejects_too_many_entries()
+    {
+        var bytes = SyntheticDocx.WithZeroEntries(PackageSafety.MaxZipEntryCount - 2, 0);
+        var response = WordPackageParser.Parse(bytes);
+        var json = JsonSerializer.Serialize(response);
+        using var document = JsonDocument.Parse(json);
+
+        var diagnostic = document.RootElement.GetProperty("diagnostic");
+        Assert.Equal("zip_entry_count_exceeded", diagnostic.GetProperty("code").GetString());
+        Assert.Equal(
+            $"package:entries={PackageSafety.MaxZipEntryCount + 1};max={PackageSafety.MaxZipEntryCount}",
+            diagnostic.GetProperty("anchor").GetString());
+    }
+
+    [Fact]
+    public void package_safety_limits_match_the_rust_preflight_contract()
+    {
+        Assert.Equal(100L * 1024 * 1024, PackageSafety.MaxPackageBytes);
+        Assert.Equal(4096, PackageSafety.MaxZipEntryCount);
+        Assert.Equal(64L * 1024 * 1024, PackageSafety.MaxZipEntryUncompressedBytes);
+        Assert.Equal(256L * 1024 * 1024, PackageSafety.MaxZipTotalUncompressedBytes);
+    }
+
+    [Fact]
+    public void package_safety_rejects_unsupported_revision_nodes()
+    {
+        var response = WordPackageParser.Parse(SyntheticDocx.WithUnsupportedRevision());
+        var json = JsonSerializer.Serialize(response);
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal("unsupported_revision",
+            document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    private static class SyntheticDocx
+    {
+        public static byte[] Create()
+        {
+            using var stream = new MemoryStream();
+            using (var package = WordprocessingDocument.Create(
+                stream, WordprocessingDocumentType.Document, true))
+            {
+                var main = package.AddMainDocumentPart();
+                var body = new Body(
+                    new Paragraph(
+                        new ParagraphProperties(
+                            new ParagraphStyleId { Val = "SyntheticBody" },
+                            new NumberingProperties(
+                                new NumberingLevelReference { Val = 0 },
+                                new NumberingId { Val = 7 })),
+                        new BookmarkStart { Id = "1", Name = "synthetic-bookmark" },
+                        new Run(new Text("before ")),
+                        new Hyperlink(new Run(new Text("linked"))) { Anchor = "synthetic-bookmark" },
+                        new SimpleField(new Run(new Text("field-result"))) { Instruction = "PAGE" },
+                        new InsertedRun(new Run(new Text("inserted"))) { Id = "2", Author = "fixture" },
+                        new DeletedRun(new Run(new DeletedText("deleted"))) { Id = "3", Author = "fixture" },
+                        new BookmarkEnd { Id = "1" },
+                        new Run(new Break { Type = BreakValues.Page }),
+                        new CommentReference { Id = "4" }),
+                    new Paragraph(
+                        new ParagraphProperties(
+                            new NumberingProperties(
+                                new NumberingLevelReference { Val = 6 },
+                                new NumberingId { Val = 7 })),
+                        new Run(new Text("deep clause"))),
+                    new Paragraph(
+                        new ParagraphProperties(
+                            new NumberingProperties(
+                                new NumberingLevelReference { Val = 1 },
+                                new NumberingId { Val = 7 })),
+                        new Run(new Text("letter clause"))),
+                    new Paragraph(
+                        new ParagraphProperties(
+                            new NumberingProperties(
+                                new NumberingLevelReference { Val = 2 },
+                                new NumberingId { Val = 7 })),
+                        new Run(new Text("decimal clause"))),
+                    new Paragraph(
+                        new ParagraphProperties(
+                            new NumberingProperties(
+                                new NumberingLevelReference { Val = 3 },
+                                new NumberingId { Val = 7 })),
+                        new Run(new Text("lower-letter clause"))),
+                    new Paragraph(
+                        new ParagraphProperties(
+                            new NumberingProperties(
+                                new NumberingLevelReference { Val = 4 },
+                                new NumberingId { Val = 7 })),
+                        new Run(new Text("parenthesized decimal clause"))),
+                    new Paragraph(
+                        new ParagraphProperties(
+                            new NumberingProperties(
+                                new NumberingLevelReference { Val = 5 },
+                                new NumberingId { Val = 7 })),
+                        new Run(new Text("parenthesized letter clause"))),
+                    new Paragraph(
+                        new ParagraphProperties(
+                            new ParagraphStyleId { Val = "SyntheticNumbered" }),
+                        new Run(new Text("style-linked clause"))),
+                    new Table(
+                        new TableRow(
+                            new TableCell(new Paragraph(new Run(new Text("cell one")))),
+                            new TableCell(new Paragraph(new Run(new Text("cell two"))))
+                        )
+                    ),
+                    new SectionProperties());
+                main.Document = new Document(body);
+
+                var styles = main.AddNewPart<StyleDefinitionsPart>();
+                styles.Styles = new Styles(
+                    new Style
+                    {
+                        Type = StyleValues.Paragraph,
+                        StyleId = "SyntheticBody",
+                        BasedOn = new BasedOn { Val = "Normal" },
+                        NextParagraphStyle = new NextParagraphStyle { Val = "Normal" }
+                    },
+                    new Style(
+                        new StyleParagraphProperties(
+                            new NumberingProperties(
+                                new NumberingLevelReference { Val = 1 },
+                                new NumberingId { Val = 7 })))
+                    {
+                        Type = StyleValues.Paragraph,
+                        StyleId = "SyntheticNumberedBase"
+                    },
+                    new Style
+                    {
+                        Type = StyleValues.Paragraph,
+                        StyleId = "SyntheticNumbered",
+                        BasedOn = new BasedOn { Val = "SyntheticNumberedBase" }
+                    });
+
+                var numbering = main.AddNewPart<NumberingDefinitionsPart>();
+                var levels = new[]
+                {
+                    (NumberFormatValues.UpperRoman, "%1."),
+                    (NumberFormatValues.UpperLetter, "%2."),
+                    (NumberFormatValues.Decimal, "%3."),
+                    (NumberFormatValues.LowerLetter, "%4."),
+                    (NumberFormatValues.Decimal, "(%5)"),
+                    (NumberFormatValues.LowerLetter, "(%6)"),
+                    (NumberFormatValues.LowerRoman, "(%7)")
+                }.Select((entry, index) => new Level
+                {
+                    LevelIndex = index,
+                    NumberingFormat = new NumberingFormat { Val = entry.Item1 },
+                    LevelText = new LevelText { Val = entry.Item2 },
+                    StartNumberingValue = new StartNumberingValue { Val = 1 }
+                }).ToArray();
+                var instance = new NumberingInstance(new AbstractNumId { Val = 3 })
+                {
+                    NumberID = 7
+                };
+                instance.Append(new LevelOverride(
+                    new StartOverrideNumberingValue { Val = 4 }) { LevelIndex = 0 });
+                numbering.Numbering = new Numbering(
+                    new AbstractNum(levels) { AbstractNumberId = 3 }, instance);
+
+                var header = main.AddNewPart<HeaderPart>();
+                header.Header = new Header(new Paragraph(new Run(new Text("header"))));
+                var footer = main.AddNewPart<FooterPart>();
+                footer.Footer = new Footer(new Paragraph(new Run(new Text("footer"))));
+                var footnotes = main.AddNewPart<FootnotesPart>();
+                footnotes.Footnotes = new Footnotes(new Footnote(new Paragraph(new Run(new Text("footnote")))) { Id = 1 });
+                var endnotes = main.AddNewPart<EndnotesPart>();
+                endnotes.Endnotes = new Endnotes(new Endnote(new Paragraph(new Run(new Text("endnote")))) { Id = 1 });
+                var comments = main.AddNewPart<WordprocessingCommentsPart>();
+                comments.Comments = new Comments(new Comment(
+                    new Paragraph(new Run(new Text("comment")))) { Id = "4" });
+
+                main.Document.Save();
+                styles.Styles.Save();
+                numbering.Numbering.Save();
+                header.Header.Save();
+                footer.Footer.Save();
+                footnotes.Footnotes.Save();
+                endnotes.Endnotes.Save();
+                comments.Comments.Save();
+            }
+            return stream.ToArray();
+        }
+
+        public static byte[] WithRelationshipTarget(string target)
+        {
+            using var stream = new MemoryStream();
+            var mode = target.Contains("://", StringComparison.Ordinal)
+                ? " TargetMode=\"External\""
+                : string.Empty;
+            using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, true))
+            {
+                Add(archive, "[Content_Types].xml",
+                    "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\" /></Types>");
+                Add(archive, "word/document.xml",
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body /></w:document>");
+                Add(archive, "word/_rels/document.xml.rels",
+                    $"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"{target}\"{mode} /></Relationships>");
+            }
+            return stream.ToArray();
+        }
+
+        public static byte[] WithEntry(string name) => WithDocument(
+            "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body /></w:document>",
+            (name, "fixture"));
+
+        public static byte[] WithZeroEntries(int count, long uncompressedSize)
+        {
+            using var stream = new MemoryStream();
+            using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, true))
+            {
+                Add(archive, "[Content_Types].xml",
+                    "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\" /></Types>");
+                Add(archive, "_rels/.rels",
+                    "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\" /></Relationships>");
+                Add(archive, "word/document.xml",
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body /></w:document>");
+                for (var index = 0; index < count; index++)
+                {
+                    AddZeroes(archive, $"parts/{index}.xml", uncompressedSize);
+                }
+            }
+            return stream.ToArray();
+        }
+
+        public static byte[] WithUnderstatedEntry()
+        {
+            var bytes = WithDocument(
+                "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body /></w:document>",
+                ("parts/understated.xml", "12345678"));
+            var name = Encoding.UTF8.GetBytes("parts/understated.xml");
+            var signature = new byte[] { 0x50, 0x4b, 0x01, 0x02 };
+            for (var index = 0; index <= bytes.Length - signature.Length; index++)
+            {
+                if (!bytes.AsSpan(index, signature.Length).SequenceEqual(signature))
+                {
+                    continue;
+                }
+                var nameLength = BitConverter.ToUInt16(bytes, index + 28);
+                if (!bytes.AsSpan(index + 46, nameLength).SequenceEqual(name))
+                {
+                    continue;
+                }
+                BitConverter.TryWriteBytes(bytes.AsSpan(index + 24, sizeof(uint)), 1u);
+                return bytes;
+            }
+            throw new InvalidOperationException("central directory entry not found");
+        }
+
+        public static byte[] WithMacroContentType() => WithDocumentAndMainContentType(
+            "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body /></w:document>",
+            "application/vnd.ms-word.document.macroEnabled.main+xml");
+
+        public static byte[] WithUnsupportedRevision()
+        {
+            var source = Create();
+            using var input = new MemoryStream(source);
+            using var archive = new ZipArchive(input, ZipArchiveMode.Read);
+            using var output = new MemoryStream();
+            using (var rewritten = new ZipArchive(output, ZipArchiveMode.Create, true))
+            {
+                foreach (var entry in archive.Entries)
+                {
+                    var copy = rewritten.CreateEntry(entry.FullName);
+                    using var sourceStream = entry.Open();
+                    using var targetStream = copy.Open();
+                    if (entry.FullName == "word/document.xml")
+                    {
+                        using var reader = new StreamReader(sourceStream);
+                        var content = reader.ReadToEnd().Replace(
+                            "</w:body>", "<w:fooChange /></w:body>", StringComparison.Ordinal);
+                        using var writer = new StreamWriter(targetStream);
+                        writer.Write(content);
+                    }
+                    else
+                    {
+                        sourceStream.CopyTo(targetStream);
+                    }
+                }
+            }
+            return output.ToArray();
+        }
+
+        public static byte[] WithDocument(string document, params (string name, string content)[] entries)
+            => WithDocumentAndMainContentType(
+                document,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
+                entries);
+
+        private static byte[] WithDocumentAndMainContentType(
+            string document,
+            string mainContentType,
+            params (string name, string content)[] entries)
+        {
+            using var stream = new MemoryStream();
+            using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, true))
+            {
+                Add(archive, "[Content_Types].xml",
+                    "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+                    + "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\" />"
+                    + "<Default Extension=\"xml\" ContentType=\"application/xml\" />"
+                    + $"<Override PartName=\"/word/document.xml\" ContentType=\"{mainContentType}\" /></Types>");
+                Add(archive, "_rels/.rels",
+                    "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\" /></Relationships>");
+                Add(archive, "word/document.xml", document);
+                foreach (var (name, content) in entries)
+                {
+                    Add(archive, name, content);
+                }
+            }
+            return stream.ToArray();
+        }
+
+        private static void Add(ZipArchive archive, string name, string content)
+        {
+            var entry = archive.CreateEntry(name);
+            using (var writer = new StreamWriter(entry.Open()))
+            {
+                writer.Write(content);
+            }
+        }
+
+        private static void AddZeroes(ZipArchive archive, string name, long length)
+        {
+            var entry = archive.CreateEntry(name, CompressionLevel.Optimal);
+            using var target = entry.Open();
+            var zeroes = new byte[8192];
+            while (length > 0)
+            {
+                var count = (int)Math.Min(length, zeroes.Length);
+                target.Write(zeroes, 0, count);
+                length -= count;
+            }
+        }
+    }
+}

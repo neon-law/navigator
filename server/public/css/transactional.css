@@ -1,0 +1,311 @@
+/* Transactional page (`/transactional`) — accurate, efficient, speedy.
+
+   The brand layer (`brand-firm.css`) owns the palette, the serif, the card,
+   and the hero glow; this file places them and adds the motion that gives the
+   published commitment a little life. The `prefers-reduced-motion` block at
+   the bottom settles everything. */
+
+/* ---- Hero -------------------------------------------------------------- */
+
+.speed-hero {
+  position: relative;
+  /* `.speed-hero__glow` bleeds 25vw past each edge on purpose; without a clip
+     here that bleed becomes real layout width, which is what put a
+     horizontal scrollbar under every phone-width visit to this page. */
+  overflow: hidden;
+  display: grid;
+  gap: clamp(2rem, 6vw, 4rem);
+  align-items: center;
+  padding: clamp(2.5rem, 7vw, 5rem) 0 clamp(2rem, 5vw, 3rem);
+}
+
+@media (min-width: 60rem) {
+  .speed-hero {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  }
+}
+
+.speed-hero__glow {
+  inset-inline: -25vw;
+}
+
+.speed-hero__statement {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1.25rem;
+  max-width: 40rem;
+}
+
+.speed-hero__mark {
+  width: clamp(4.25rem, 9vw, 6.5rem);
+  height: clamp(4.25rem, 9vw, 6.5rem);
+  padding: 1rem;
+  border: 1px solid var(--firm-brand-edge);
+  border-radius: 50%;
+  color: var(--firm-brand);
+  background: var(--firm-brand-tint);
+  box-shadow: 0 1rem 3rem var(--firm-brand-glow);
+}
+
+/* The three words are still one sentence in the markup — each sits in its own
+   `span` for the accent colour, not for motion, so a screen reader and search
+   still read one unbroken string. The heading keeps its single entrance
+   animation rather than staggering per word the way `/disputes` does. */
+.speed-hero__heading {
+  margin: 0;
+  font-family: var(--firm-serif);
+  font-size: clamp(2.25rem, 6.5vw, 4rem);
+  font-weight: 600;
+  line-height: 1.02;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+  animation: speed-heading-in 650ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+/* The word gap is a margin rather than a space in the markup, the same
+   convention `/disputes`'s `.zeal-word` uses: each word is its own
+   inline-block so its colour can be set alone, and an inline-block collapses
+   the whitespace at its own end. */
+.speed-word {
+  display: inline-block;
+  margin-inline-end: 0.28em;
+}
+
+.speed-word--accent {
+  color: var(--firm-brand);
+}
+
+@keyframes speed-heading-in {
+  from {
+    /* Hero copy stays opaque throughout its entrance. Fading normal-size
+       text composites it with the dark ground below the WCAG contrast floor
+       before the animation completes. */
+    transform: translateY(0.4rem);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.speed-hero__lead {
+  margin: 0;
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--nav-color-text-muted);
+  animation: speed-heading-in 650ms cubic-bezier(0.16, 1, 0.3, 1) 120ms backwards;
+}
+
+.nav-theme a.nav-btn--primary.speed-hero__cta,
+.nav-theme a.nav-btn--primary.speed-hero__cta:hover,
+.nav-theme a.nav-btn--primary.speed-hero__cta:focus-visible {
+  border-color: var(--firm-brand);
+  background: var(--firm-brand);
+  color: var(--firm-on-brand);
+}
+
+.nav-theme a.nav-btn--primary.speed-hero__cta:hover,
+.nav-theme a.nav-btn--primary.speed-hero__cta:focus-visible {
+  border-color: var(--firm-brand-strong);
+  background: var(--firm-brand-strong);
+}
+
+/* ---- The day-rate mark -------------------------------------------------- */
+
+/* Fills the hero's second grid column with the base package's published day
+   rate, drawn as a bill glyph rather than only stated in the fee section's
+   blurb sentence. */
+.speed-hero__rate {
+  position: relative;
+  z-index: 1;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  justify-self: center;
+}
+
+@media (min-width: 60rem) {
+  .speed-hero__rate {
+    display: flex;
+  }
+}
+
+.speed-hero__rate-mark {
+  width: clamp(9rem, 16vw, 13rem);
+  height: auto;
+  filter: drop-shadow(0 1rem 2rem var(--firm-brand-glow));
+}
+
+.speed-hero__rate-caption {
+  margin: 0;
+  font-family: var(--firm-serif);
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--firm-brand);
+}
+
+/* ---- Accurate · Efficient · Speedy ------------------------------------- */
+
+.speed-virtues {
+  display: grid;
+  gap: 1rem;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 52rem) {
+  .speed-virtues {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* The cards share a `neon-card` shell but reset its stacking margin, since the
+   grid owns the gap here. */
+.speed-virtue {
+  margin: 0;
+  animation: speed-virtue-in 600ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  animation-delay: calc(220ms + var(--speed-virtue-index, 0) * 110ms);
+  transition: transform 200ms ease-out, border-color 200ms ease-out;
+}
+
+.speed-virtue:hover {
+  transform: translateY(-4px);
+  border-color: var(--firm-brand);
+}
+
+@keyframes speed-virtue-in {
+  from {
+    transform: translateY(1rem);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.speed-virtue__word {
+  margin: 0 0 0.5rem;
+  font-family: var(--firm-serif);
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--firm-brand);
+}
+
+.speed-virtue__body {
+  margin: 0;
+  line-height: 1.6;
+  color: var(--nav-color-text-muted);
+}
+
+/* ---- Shared section furniture ------------------------------------------ */
+
+.speed-heading {
+  margin: 0 0 0.75rem;
+  font-family: var(--firm-serif);
+  font-size: clamp(1.5rem, 3.5vw, 2.25rem);
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.speed-subheading {
+  margin: 0 0 1rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--firm-brand);
+}
+
+.speed-paragraph {
+  margin: 0 0 0.85rem;
+  max-width: 62ch;
+  line-height: 1.65;
+  color: var(--nav-color-text-muted);
+}
+
+.speed-paragraph:last-child {
+  margin-bottom: 0;
+}
+
+/* ---- The fee ----------------------------------------------------------- */
+
+.speed-fee {
+  display: grid;
+  gap: 2rem;
+}
+
+@media (min-width: 60rem) {
+  .speed-fee {
+    gap: 2.5rem;
+  }
+}
+
+.speed-cta {
+  display: grid;
+  gap: 0.75rem;
+  justify-items: center;
+  margin: 3rem auto 1rem;
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+}
+
+.speed-cta__heading {
+  margin: 0;
+  font-family: var(--firm-serif);
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
+  line-height: 1.1;
+}
+
+.speed-cta__body {
+  margin: 0;
+  color: var(--nav-color-text-muted);
+  font-size: 1.05rem;
+}
+
+.speed-cta__link {
+  color: var(--firm-brand);
+  font-weight: 700;
+  text-underline-offset: 0.2em;
+}
+
+/* ---- Scroll-driven reveals --------------------------------------------- */
+
+/* The range ends at `entry 100%` — the moment the card is wholly inside the
+   scrollport — rather than inside `cover`, which needs scroll progress a short
+   document or a tall window may never have. See the same note in
+   `litigation.css`. */
+@supports (animation-timeline: view()) {
+  .speed-virtue {
+    animation: speed-card-in linear both;
+    animation-timeline: view();
+    animation-range: entry 0% entry 100%;
+  }
+
+  @keyframes speed-card-in {
+    from {
+      transform: translateY(1rem);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+}
+
+/* Motion is decoration here, never information. */
+@media (prefers-reduced-motion: reduce) {
+  .speed-hero__heading,
+  .speed-hero__lead,
+  .speed-virtue {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+
+
+  .speed-virtue:hover {
+    transform: none;
+  }
+}

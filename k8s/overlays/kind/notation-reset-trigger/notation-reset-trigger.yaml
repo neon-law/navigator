@@ -1,0 +1,35 @@
+# Daily trigger for the `NotationReset` workflow, hosted by workflows-service.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: notation-reset-trigger
+  namespace: navigator
+  labels:
+    app: notation-reset-trigger
+spec:
+  schedule: "20 4 * * *"
+  timeZone: Etc/UTC # 04:20 UTC daily; the UTC date is the idempotency key.
+  suspend: true # KIND captures Slack calls, so exercise this trigger manually.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            app: notation-reset-trigger
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: notation-reset-trigger
+              image: navigator-notation-reset-trigger:dev
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: RESTATE_INGRESS_URL
+                  value: http://restate.restate.svc.cluster.local:8080
+                - name: RUST_LOG
+                  value: info

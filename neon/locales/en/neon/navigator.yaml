@@ -1,0 +1,210 @@
+head_title: "{site_name} | Navigator"
+meta_description: >-
+  Neon Law Navigator is an open-source, MIT OR Apache-2.0 agentic lawyering engine
+  built for token efficiency. Run it locally with Homebrew, or contact us to
+  set it up for your firm.
+title: Neon Law Navigator
+hero_mark: helm
+tagline: >-
+  A general-purpose agentic lawyering engine, built so your agent spends tokens
+  on the legal work.
+skin: marketing
+bands:
+  - kind: project_network
+    anchor: connected-project
+    overline: One connected Project
+    heading: Navigator is the center of the work.
+    center_detail: Web API MCP CLI
+    description: >-
+      A Project can include one or more cases, companies, filings, and more so
+      long as it's related to the best interest of our clients.
+    left:
+      - label: Internal Slack
+        detail: Firm-only Project conversation.
+      - label: Internal Notion
+        detail: Firm working notes and knowledge.
+      - label: Project repository
+        detail: The matter's Git history of pages, Drafts, and document pointers.
+      - label: Matter Pages
+        detail: Lawyer and client dashboards declared in navigator.yaml.
+    right:
+      - label: Shared Slack
+        detail: Client collaboration when the Project uses it.
+      - label: Per-Project Inbox
+        detail: Project email intake and conversation.
+      - label: Google Drive folder
+        detail: Large document intake
+      - label: Shared Notion
+        detail: Client collaboration when the Project uses it.
+    mcp_tools:
+      - Court Listener
+      - Descrybe
+      - Exa
+      - Midpage
+      - Perplexity
+    agentic_coding_tools:
+      - Antigravity
+      - Claude Code
+      - Codex
+      - Cursor
+    saas_tools:
+      - Descript
+      - DocuSign
+      - Google Workspace
+      - Linear
+      - Mercury
+      - Restate
+      - SurrealDB
+      - Twilio
+      - Xero
+  - kind: steps
+    anchor: declare
+    overline: Declarative matters
+    heading: Declare the matter. Git keeps the history.
+    description: >-
+      Each Project is its own repository of YAML and Markdown. No application
+      code: you declare what the matter shows, and every change is a reviewed
+      commit.
+    items:
+      - title: Declare the pages
+        body:
+          - - text: "A page in "
+            - text: navigator.yaml
+              code: true
+            - text: " names its kind and the Sections each lens shows. Navigator renders it from the matter's records."
+        image:
+          asset_key: img/navigator-matter-pages/timeline-lawyer.jpg
+          alt: >-
+            The Cruller v. Prine timeline page in the lawyer lens: case caption,
+            filing counts, key dates, and the case timeline.
+      - title: One page, two lenses
+        body:
+          - - text: >-
+                The client lens lists fewer Sections. What the client sees is a
+                line in a pull request, reviewed before it merges.
+        image:
+          asset_key: img/navigator-matter-pages/timeline-client.jpg
+          alt: >-
+            The same timeline page in the client lens, without the firm-only
+            Sections.
+      - title: Gate, then merge
+        body:
+          - - text: navigator project gate
+              code: true
+            - text: " checks every declaration in CI, and merging publishes. A new gate rule reaches every matter with the next release."
+        image:
+          asset_key: img/navigator-matter-pages/discovery-lawyer.jpg
+          alt: >-
+            The Cruller v. Prine discovery page: each interrogatory with the
+            objection, the sworn answer, and a firm-only note.
+      - title: Convene the councils
+        body:
+          - - text: >-
+                Every Project repository ships the same Agent Skills: the
+                engineering council for structure, the client council for how
+                a client reads it, and the legal council for the substance.
+                Each reads the glossary first and answers tersely.
+  - kind: statement
+    heading: Token efficiency
+    lead: Spend tokens on the legal work, not on context.
+    body:
+      - - text: >-
+            An agent that has to rediscover your terms, your matter, and your
+            forms spends tokens getting oriented before it does any legal work.
+            Navigator writes that context down once, where the agent can read it
+            in one call.
+      - - text: "The glossary is the ontology: "
+        - text: navigator glossary show
+          code: true
+        - text: " returns one term's definition, so the agent uses the defined term instead of a synonym."
+      - - text: "Each Project's "
+        - text: navigator.yaml
+          code: true
+        - text: " pins its Project Skills, the jurisdiction and practice-area playbooks the agent reads first."
+      - - text: >-
+            Drafts and pages are text in Git, so each revision costs the
+            change, not a redraft.
+      - - text: >-
+            The CLI and MCP server give Claude Code, Codex, and Cursor the same
+            commands a lawyer runs.
+  - kind: cards
+    anchor: pricing
+    overline: Hosted Navigator
+    heading: Navigator as a service
+    description: >-
+      Monthly pricing is per user. Google Cloud Vertex AI token charges are
+      passed through at cost.
+    pricing_style: true
+    items:
+      - title: Law firms
+        chips: ["$50"]
+        cadence: / user / month
+        body:
+          - - text: Hosted Navigator access for your firm.
+        href: /contact
+        href_label: Contact us for a demo
+      - title: Legal aid organizations
+        chips: ["$5"]
+        cadence: / user / month
+        body:
+          - - text: Hosted Navigator access for your organization.
+        href: /contact
+        href_label: Contact us for a demo
+  - kind: statement
+    heading: See Navigator in production
+    lead: Privacy comes first.
+    body:
+      - - text: >-
+            We invite law firms to see our production account. The statistics
+            we use are anonymized and aggregated. We take privacy seriously.
+      - - text: >-
+            Our experience includes managing a 30-petabyte data warehouse for
+            Apple Finance.
+  - kind: video
+    anchor: video
+    overline: Video
+    heading: Presentation
+    label: Neon Law presentation
+    asset_key: img/neon-home/neon-home-presentation.mp4
+  - kind: downloads
+    anchor: download
+    overline: Download
+    heading: Run Navigator yourself
+    description: >-
+      Navigator is open source under MIT OR Apache-2.0. It is built for Macs and for
+      containers in the cloud: download it for Apple silicon macOS or x86_64 Linux.
+      Each release is mirrored to the public Homebrew repository.
+    archive_label: every release
+    package:
+      heading: Install with Homebrew
+      body:
+        - - text: "The formula lives in our own tap, "
+          - text: neon-law-source-code/homebrew-navigator
+            href: https://github.com/neon-law-source-code/homebrew-navigator
+          - text: ", which is updated by every release."
+        - - text: "Install with the command below, then run "
+          - text: navigator quickstart
+            code: true
+          - text: >-
+              . With Docker running, it brings up the full stack in KIND with a
+              seeded sample firm and three sample matters, each cloned from
+              its own Project repository: Cruller v. Prine, Widget Works, and
+              the Estate of Cornelius Montgomery.
+  - kind: statement
+    heading: Skin Navigator for your firm
+    lead: Make Navigator your firm's own.
+    body:
+      - - text: >-
+            Contact Neon Law any time to put your firm's name, colors, and
+            websites on Navigator. We help you write token-efficient prompts
+            for your practice.
+      - - text: Contact us
+          href: /contact
+        - text: " to start."
+  - kind: cta
+    heading: Free use for those who co-counsel with us.
+    body: >-
+      We believe practicing law is better together and we'd prefer to do our
+      current cases with great attorneys like you. Anyone who co-counsels a case
+      with us gets the software free for life for their own practices.
+    email: "{firm_email}"

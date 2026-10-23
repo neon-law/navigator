@@ -1,0 +1,83 @@
+Feature: /app/projects/:code — the client's invoice card reads the Xero mirror
+
+  The per-project invoice card the client sees is rendered from the
+  local `xero_invoices` mirror, never from Xero live: the Dioxus
+  `webapp::portal_project_detail` loader reads the mirror and the card
+  shows the amount, the status, and a Paid/Due badge. The nightly
+  `ReconcileInvoices`
+  workflow folds Xero's payment state onto the mirror; this feature
+  grounds the read side — what the client actually sees before and
+  after that fold. The reconcile arithmetic lives in
+  billing-workflows reconcile.rs.
+
+  Background:
+    Given the Neon Law Navigator app is running
+
+  Scenario: A freshly raised invoice shows the matter total as Due
+    Given a seeded person "capricorn@example.com" with role "client"
+    And a project "Capricorn Estate" with "capricorn@example.com" as a participant
+    And an AUTHORISED invoice of 333300 cents is mirrored for "Capricorn Estate"
+    When "capricorn@example.com" opens the detail page for "Capricorn Estate"
+    Then the response status is 200
+    And the response body contains "Invoice"
+    And the response body contains "Status: AUTHORISED"
+    And the invoice card shows the "Due" badge
+
+  Scenario: Once reconcile sees it paid in full, the card flips to Paid
+    Given a seeded person "capricorn@example.com" with role "client"
+    And a project "Capricorn Estate" with "capricorn@example.com" as a participant
+    And an AUTHORISED invoice of 333300 cents is mirrored for "Capricorn Estate"
+    And the invoice for "Capricorn Estate" is reconciled as paid in full
+    When "capricorn@example.com" opens the detail page for "Capricorn Estate"
+    Then the response status is 200
+    And the response body contains "Status: PAID"
+    And the invoice card shows the "Paid" badge
+
+  Scenario: A matter with no invoice shows no invoice card
+    Given a seeded person "leo@example.com" with role "client"
+    And a project "Leo Matter" with "leo@example.com" as a participant
+    When "leo@example.com" opens the detail page for "Leo Matter"
+    Then the response status is 200
+    And the page shows no invoice card
+
+  Scenario: A matter carries more than one invoice over time
+    Given a seeded person "virgo@example.com" with role "client"
+    And a project "Virgo Matter" with "virgo@example.com" as a participant
+    And an AUTHORISED invoice of 100000 cents is mirrored for "Virgo Matter"
+    And a second AUTHORISED invoice of 200000 cents is mirrored for "Virgo Matter"
+    When "virgo@example.com" opens the detail page for "Virgo Matter"
+    Then the response status is 200
+    And the invoice card lists 2 invoices
+
+  Scenario: A partially paid invoice still shows Due, not Paid
+    Given a seeded person "sagittarius@example.com" with role "client"
+    And a project "Sagittarius Matter" with "sagittarius@example.com" as a participant
+    And an AUTHORISED invoice of 400000 cents is mirrored for "Sagittarius Matter"
+    And the invoice for "Sagittarius Matter" is partially reconciled at 150000 cents
+    When "sagittarius@example.com" opens the detail page for "Sagittarius Matter"
+    Then the response status is 200
+    And the response body contains "Status: AUTHORISED"
+    And the invoice card shows the "Due" badge
+
+  Scenario: An overdue invoice still renders its status and Due badge
+    Given a seeded person "aries2@example.com" with role "client"
+    And a project "Aries Second Matter" with "aries2@example.com" as a participant
+    And an overdue AUTHORISED invoice of 250000 cents due on "2026-01-01" is mirrored for "Aries Second Matter"
+    When "aries2@example.com" opens the detail page for "Aries Second Matter"
+    Then the response status is 200
+    And the response body contains "Status: AUTHORISED"
+    And the invoice card shows the "Due" badge
+
+  Scenario: A matter's USD and EUR invoices both render on its invoice list
+    Given a seeded person "aquarius@example.com" with role "client"
+    And a project "Aquarius Matter" with "aquarius@example.com" as a participant
+    And an AUTHORISED invoice of 100000 cents is mirrored for "Aquarius Matter"
+    And an AUTHORISED EUR invoice of 90000 cents is mirrored for "Aquarius Matter"
+    When "aquarius@example.com" opens the detail page for "Aquarius Matter"
+    Then the response status is 200
+    And the invoice card lists 2 invoices
+
+  Scenario: The shared portfolio invoice matrix keeps currencies and states scoped
+    Given the versioned synthetic portfolio is applied twice
+    When shared acceptance scenario "client.invoices-currencies" is requested
+    Then shared acceptance scenario "client.invoices-currencies" passes

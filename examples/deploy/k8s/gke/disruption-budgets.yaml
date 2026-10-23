@@ -1,0 +1,29 @@
+# PodDisruptionBudgets for a two-replica row.
+#
+# `ops ship` lists this file in `kustomization.yaml` only when the row runs two
+# pods of each tier (`NAVIGATOR_SIMULATED_MATTERS = "false"`; see
+# docs/environments.md#replicas). A node drain, a GKE upgrade, or Autopilot
+# consolidation then evicts one pod at a time and keeps the other serving. A
+# one-replica row renders no budget, because `minAvailable: 1` over a single
+# pod would block every voluntary eviction.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: navigator-web
+  namespace: navigator
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: navigator-web
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: workflows-service
+  namespace: navigator
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: workflows-service

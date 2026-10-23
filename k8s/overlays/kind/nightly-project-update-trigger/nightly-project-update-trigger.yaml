@@ -1,0 +1,35 @@
+# Daily trigger for the `NightlyProjectUpdate` parent DAG, hosted by workflows-service.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nightly-project-update-trigger
+  namespace: navigator
+  labels:
+    app: nightly-project-update-trigger
+spec:
+  schedule: "55 5 * * *"
+  timeZone: Etc/UTC # 05:55 UTC daily; the UTC date is the idempotency key.
+  suspend: true # KIND captures Slack calls, so exercise this trigger manually.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            app: nightly-project-update-trigger
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: nightly-project-update-trigger
+              image: navigator-nightly-project-update-trigger:dev
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: RESTATE_INGRESS_URL
+                  value: http://restate.restate.svc.cluster.local:8080
+                - name: RUST_LOG
+                  value: info

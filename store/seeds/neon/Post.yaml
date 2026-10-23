@@ -1,0 +1,596 @@
+# The Posts Neon Law has published. Applied by `store::seed` on every boot, but a
+# Post already in the database is never overwritten: the `post` table is the
+# authority, and these rows are its initial data.
+#
+# `social:` is optional per provider and nullable. A provider named here must
+# already have a handle in `SocialHandle.yaml`; its `post_id` and `permalink`
+# stay null until the provider post exists and are encoded after the fact.
+records:
+  - brand: neon
+    slug: thanks-apple
+    title: "Thanks, Apple"
+    description: "A farewell to my Apple teammates, and the north star that's taking me to Neon Law."
+    status: published
+    publish_at: "2026-06-19T00:00:00Z"
+    body_markdown: |
+      _Nick is a lawyer at Neon Law._
+
+      ![If fruit falls, it's fair game](img/thanks-apple/collage-6.jpg)
+
+      Friends,
+
+      My favorite part of our leadership palette is Know People, and my favorite part about Apple is you. I feel so lucky to
+      have learned from so many of you over these past five years.
+
+      Thank you to Prateek for taking a chance on me nearly five years ago, and to Koushik and Manjeet for being such
+      wonderful managers. On the UCA team, I learned how to manage a data lake the size of more than eight Libraries of
+      Congress — and I learned that when you do hard work alongside stellar teammates and with a smile, anything is possible.
+
+      Thank you to Owen, my big bro, for taking me under his wing and teaching me what it means to be a technical trainer. I
+      had the time of my life traveling the world and getting to visit you in places like Hyderabad, Bangalore, Austin,
+      London, Singapore, and beyond. And thank you to Agam, Antoine, Lorena, Sai, and Madan for being the kind of teammates
+      everyone hopes to have.
+
+      I'm grateful for the data engineering community, and for Melissa, Sundar, Yan, Himadri, and Shyju. Working across the
+      company, we discovered we were all doing different flavors of the same thing — and I learned so much from those
+      conferences these past two years. Hosting the data engineering meetups was one of my favorite parts of being here.
+
+      A big thank you to Kartthik and Alejandro, my roommates for a bit, who took me in after my divorce. It wasn't the
+      easiest chapter of my life, but it's one where I found brothers.
+
+      I was on personal leave this past month, and during that time I realized my professional north star is doing everything
+      I can to advance access to justice. I'll be building my law firm, Neon Law, toward exactly that.
+
+      Thank you all, from the bottom of my heart.
+
+      See you around,
+
+      Nick
+
+      <div class="row g-2 blog-collage"><div class="col-6 col-md-4">
+
+      ![Seattle dinner club](img/thanks-apple/ethiopian-dinner.jpg)
+
+      </div><div class="col-6 col-md-4">
+
+      ![Last lunch with my Cupertino team](img/thanks-apple/team-lunch.jpg)
+
+      </div><div class="col-6 col-md-4">
+
+      ![My big bro Owen](img/thanks-apple/london-tower-bridge.jpg)
+
+      </div><div class="col-6 col-md-4">
+
+      ![Go Knights Go!](img/thanks-apple/sharks-game.jpg)
+
+      </div><div class="col-6 col-md-4">
+
+      ![Stay Curious!](img/thanks-apple/collage-3.jpg)
+
+      </div><div class="col-6 col-md-4">
+
+      ![Data Engineering Friends](img/thanks-apple/collage-4.jpg)
+
+      </div><div class="col-6 col-md-4">
+
+      ![Hockey with Paaruul and Daniel](img/thanks-apple/collage-5.jpg)
+
+      </div><div class="col-6 col-md-4">
+
+      ![Brothers for life](img/thanks-apple/collage-8.jpg)
+
+      </div><div class="col-6 col-md-4">
+
+      ![Product Marketing summer party](img/thanks-apple/farewell-crew.jpg)
+
+      </div><div class="col-6 col-md-4">
+
+      ![London dinner before Hamilton](img/thanks-apple/curry-night.jpg)
+
+      </div><div class="col-6 col-md-4">
+
+      ![My wonderful Apple Park teammates](img/thanks-apple/apple-park-team.jpg)
+
+      </div><div class="col-6 col-md-12 blog-collage-wide">
+
+      ![Sunrise at Apple Park](img/thanks-apple/apple-park-sunset.jpg)
+
+      </div></div>
+  - brand: neon
+    slug: going-all-in-on-rust
+    title: "Going All-In on Rust"
+    description: "Why a general practice firm builds its own tools in one language for litigation and transactional work."
+    status: published
+    publish_at: "2026-06-25T00:00:00Z"
+    body_markdown: |
+      **License:** Navigator's first-party source is Apache-2.0; see [current licensing](/glossary/neon-law-navigator)
+      and the repository LICENSE.
+
+      ![Ferris trains at sunrise on stone steps.](img/going-all-in-on-rust/ferris-training-hero.png)
+
+      _Nick is a lawyer at Neon Law._
+
+      Most of our work arrives the way yours probably does: on a Tuesday, from someone who did not plan their week around it.
+      A founder forwards a contract at eleven at night because the customer wants it signed by Thursday. A client gets served
+      and reads the caption four times before calling anyone. That is the job. We are a general practice firm — we litigate,
+      and we do transactional work quickly — and both halves live or die on how fast a careful person can turn something
+      around.
+
+      So we build our own tools. Not because we are trying to be a software company, but because the alternative is waiting on
+      someone else's roadmap to fix the thing that is slowing down a client's Thursday.
+
+      For Neon Law Navigator, the tool we build, the language is Rust.
+
+      The reason is simple: Rust can work almost anywhere. The same language can power a Windows laptop, a Linux server, a
+      Mac, a cloud container, a local dev box, a command-line validator, a web service, and whatever comes next. We are a
+      small firm. One stack means fewer handoffs and fewer ways for a small team to lose the thread — which matters more than
+      fashion when the person waiting on you is a client.
+
+      Rust also gives us a governance story we trust. The language is stewarded by an independent nonprofit, not by one vendor
+      whose incentives may change later. Its community made the boring, generous choice early: permissive open-source
+      licensing, independent stewardship, and a culture that treats the ecosystem as bigger than any one company. When you are
+      going to build the tools your practice depends on, who controls the foundation underneath them is a real question, and
+      we would rather answer it once.
+
+      Navigator's first-party code and original templates are licensed under MIT OR Apache-2.0. Read it, build it, fork
+      it, redistribute it, and use it commercially under either license. Contributors retain copyright; third-party
+      material keeps
+      its separate terms and notices. The standard license includes warranty disclaimers and limitations of liability.
+
+      Navigator ships as a command-line tool, an editor plugin, and a web service. That is deliberate. You should be able to
+      try the whole system locally without a cloud subscription. You should be able to draft legal documents in an editor,
+      with the same diagnostics, squiggly lines, and fixable errors a developer gets. A legal workflow should be something a
+      person can run, inspect, and improve without needing five runtimes or a perfect Internet connection.
+
+      Here is the part that shows up on the client's side. Our transactional practice commits to returning a standard master
+      services agreement — the one contract that sets payment, liability, IP ownership, and confidentiality between you and a
+      customer once, so the next ten deals are short order forms instead of fresh negotiations — within four business hours of
+      a complete intake. That is a commitment about our own turnaround. It is not a promise about how fast your counterparty
+      moves, and it is not a promise about whether the deal closes. We can make it because the drafting, the validation, and
+      the attorney review all run in one system we control, and because a compiler catches a whole category of mistakes before
+      a person has to.
+
+      Rust can be tough to learn and tough to write. It fights us regularly, and we do not think that is a reason to avoid it,
+      especially in a world where agents can write more of the first draft. The better question is what the human should
+      review. We would rather review types, data structures, tests, and compiler errors than sift through a pile of code that
+      only works because the happy path happened to run once. On a document that becomes binding, "it ran once" is not a
+      standard.
+
+      Linus Torvalds put the data point sharply in a [2006 Git mailing-list post mirrored by
+      LWN](https://lwn.net/Articles/193245/): "Bad programmers worry about the code. Good programmers worry about data
+      structures and their relationships." Rich Hickey, the creator of Clojure, makes the complementary point in Clojure's
+      official essay on [values, identity, and state](https://clojure.org/about/state): an identity is a stable logical thing
+      associated with different values over time. A matter is exactly that — the same file, different facts, month over month.
+
+      Start with the data. Understand how it changes over time. Write the behavior down as tests first, in plain English
+      before anything else. Then let Rust carry those steps into the system that drafts documents, validates them, routes them
+      through attorney review, and produces something a person can actually use.
+
+      That is the bet. Divorce, caregiving, debt, a contract dispute, forming the company, being sued over it: people reach
+      for a lawyer when life is already heavy. The software should open quickly, explain itself, and keep working close to the
+      machine in front of them — because the person on the other end of it is having a worse week than we are.
+
+      We feel great about Rust because we feel great about the ecosystem around Rust. We talk about this work at the Rust NYC
+      meetup, and about a larger hope: that lawyers who understand software can build and maintain more of their own tools.
+      Not because software engineers do not matter, but because the Rust ecosystem now carries enough of the serious machinery
+      that the old split between "lawyer" and "software developer" can get a little less rigid.
+
+      Anyone can vibe code these days. Going all-in on Rust is how we make that power inspectable, local-first, and durable
+      enough for legal work — and how a small firm keeps its promises about turnaround.
+  - brand: neon
+    slug: license
+    title: "Navigator Is MIT OR Apache-2.0"
+    description: "Navigator uses MIT OR Apache-2.0, with warranty disclaimers and separate third-party terms."
+    status: published
+    publish_at: "2026-09-02T00:00:00Z"
+    body_markdown: |
+      _Nick is a lawyer at Neon Law._
+
+      Navigator's first-party code and original templates are licensed under MIT OR Apache-2.0. You may build, fork,
+      modify, redistribute, and use them commercially under either license. There is no delayed license conversion or
+      separate production
+      license requirement.
+
+      The standard license supplies warranty disclaimers and limitations of liability, subject to applicable law and written
+      agreements. Contributions use the same license without a separate CLA, and contributors retain copyright. AI-assisted
+      work is welcome; a merge is not a promise of human review or correctness.
+
+      Third-party code, fonts, assets, and government material keep their own terms and notices. See [current
+      licensing](/glossary/neon-law-navigator) and the repository LICENSE for the grant.
+  - brand: neon
+    slug: leaving-delaware-for-nevada
+    title: "Andreessen Horowitz left Delaware for Nevada, and you should consider too"
+    description: "Why a16z reincorporated in Nevada, and how Fractional GC members can follow for plan cost plus filing fees."
+    status: published
+    publish_at: "2026-09-08T00:00:00Z"
+    body_markdown: |
+      _Nick is a lawyer at Neon Law._
+
+      [On July 9, 2025, Andreessen Horowitz reincorporated its management company, AH Capital Management, from Delaware to
+      Nevada](https://a16z.com/were-leaving-delaware-and-we-think-you-should-consider-leaving-too/) and published its reasons.
+      They believe that Delaware's Court of Chancery "injected an unprecedented level of subjectivity into judicial
+      decisions." It points to rulings that second-guessed director independence on founder compensation, expanded the "entire
+      fairness" exception until it swallowed the business judgment rule, and, in one case later reversed, refused to let a
+      company reincorporate elsewhere at all. The result, in a16z's view, is a forum that "can at times appear biased against
+      technology startup founders" and imposes litigation costs a startup cannot carry. Nevada answers each point by statute
+      rather than by judicial discretion: the business judgment rule is codified, directors and officers face monetary
+      liability only for "intentional misconduct, fraud or a knowing violation of law," books-and-records demands are limited
+      to holders of fifteen percent or more, and the legislature has authorized jury-trial waivers and a dedicated business
+      court. Dropbox, TripAdvisor, and Tesla made the same move; a16z's point in going public is that the market penalty
+      investors once feared for a non-Delaware charter "may be overblown."
+
+      Whether that reasoning fits your company is a judgment call, and we will make it with you. If you are a member of our
+      Fractional General Counsel plan, we will handle a Nevada incorporation or redomestication for the cost of your plan plus
+      the government filing fees. There is no separate legal fee. We prepare the articles, plan of conversion or merger, board
+      and stockholder consents, and the Delaware exit filings, and we file them. This notice is attorney advertising and not
+      legal advice; the right domicile depends on your capitalization table, your investors' expectations, and your exposure
+      to controlling-stockholder litigation, and we will tell you if Delaware remains the better answer.
+  - brand: vesta
+    slug: the-hardest-part-is-getting-started
+    title: "The hardest part is getting started"
+    description: "Our first video update from Vesta Estate Planning."
+    status: published
+    publish_at: "2026-10-12T12:00:00-04:00"
+    video_asset: img/vesta-updates/2026-10-12.mp4
+    body_markdown: |
+      The hardest part is getting started. Here is our first video update from Vesta Estate Planning.
+
+      [Watch on Facebook](https://www.facebook.com/reel/2195122481402105/),
+      [watch on Instagram](https://www.instagram.com/reel/DeZJg2cAuc4/),
+      or [watch on TikTok](https://www.tiktok.com/@vesta.estate.planning/video/7695751419533511966).
+    social:
+      facebook:
+        post_id: "2195122481402105"
+        permalink: "https://www.facebook.com/reel/2195122481402105/"
+      instagram:
+        post_id: "DeZJg2cAuc4"
+        permalink: "https://www.instagram.com/reel/DeZJg2cAuc4/"
+      tiktok:
+        post_id: "7695751419533511966"
+        permalink: "https://www.tiktok.com/@vesta.estate.planning/video/7695751419533511966"
+
+  - brand: vesta
+    slug: astrology-forecast-2026-10-13
+    title: "October 13, 2026 astrology forecast"
+    description: "A mini astrology forecast from Vesta Estate Planning for October 13, 2026."
+    status: published
+    publish_at: "2026-10-13T09:00:00-04:00"
+    video_asset: img/vesta-updates/2026-10-13.mp4
+    body_markdown: |
+      Today's mini astrology forecast from Vesta Estate Planning, recorded for October 13, 2026.
+
+      [Watch on Facebook](https://www.facebook.com/reel/1118972794002056/),
+      [watch on Instagram](https://www.instagram.com/reel/Deb_KdiGhUB/),
+      or [watch on TikTok](https://www.tiktok.com/@vesta.estate.planning/video/7696153820715404575).
+
+      Astrology readings are for personal reflection, not legal advice.
+    social:
+      facebook:
+        post_id: "1118972794002056"
+        permalink: "https://www.facebook.com/reel/1118972794002056/"
+      instagram:
+        post_id: "Deb_KdiGhUB"
+        permalink: "https://www.instagram.com/reel/Deb_KdiGhUB/"
+      tiktok:
+        post_id: "7696153820715404575"
+        permalink: "https://www.tiktok.com/@vesta.estate.planning/video/7696153820715404575"
+
+  - brand: vesta
+    slug: video-update-2026-10-14
+    title: "October 14, 2026 video update"
+    description: "A video update from Vesta Estate Planning for October 14, 2026."
+    status: published
+    publish_at: "2026-10-14T09:00:00-04:00"
+    video_asset: img/vesta-updates/2026-10-14.mp4
+    body_markdown: |
+      Watch the October 14, 2026 video update from Vesta Estate Planning.
+
+      [Watch on Facebook](https://www.facebook.com/reel/1131450459324154/),
+      [watch on Instagram](https://www.instagram.com/reel/DefOBW-Cdoa/),
+      or [watch on TikTok](https://www.tiktok.com/@vesta.estate.planning/video/7696619421736946974).
+    social:
+      facebook:
+        post_id: "1131450459324154"
+        permalink: "https://www.facebook.com/reel/1131450459324154/"
+      instagram:
+        post_id: "DefOBW-Cdoa"
+        permalink: "https://www.instagram.com/reel/DefOBW-Cdoa/"
+      tiktok:
+        post_id: "7696619421736946974"
+        permalink: "https://www.tiktok.com/@vesta.estate.planning/video/7696619421736946974"
+
+  - brand: vesta
+    slug: video-update-2026-10-15
+    title: "October 15, 2026 video update"
+    description: "A reminder from Vesta Estate Planning to lead with kindness."
+    status: published
+    publish_at: "2026-10-15T09:00:00-04:00"
+    video_asset: img/vesta-updates/2026-10-15.mp4
+    body_markdown: |
+      We're all going to die, so be nice! A reminder from Vesta Estate Planning for October 15, 2026.
+
+      [Watch on Facebook](https://www.facebook.com/reel/1911925693303788/),
+      [watch on Instagram](https://www.instagram.com/reel/Deg9PxMDWHR/),
+      or [watch on TikTok](https://www.tiktok.com/@vesta.estate.planning/video/7696870023805111583).
+    social:
+      facebook:
+        post_id: "1911925693303788"
+        permalink: "https://www.facebook.com/reel/1911925693303788/"
+      instagram:
+        post_id: "Deg9PxMDWHR"
+        permalink: "https://www.instagram.com/reel/Deg9PxMDWHR/"
+      tiktok:
+        post_id: "7696870023805111583"
+        permalink: "https://www.tiktok.com/@vesta.estate.planning/video/7696870023805111583"
+
+  - brand: vesta
+    slug: video-update-2026-10-16
+    title: "Why we named our practice Vesta"
+    description: "The story behind the name Vesta Estate Planning."
+    status: published
+    publish_at: "2026-10-16T09:00:00-04:00"
+    video_asset: img/vesta-updates/2026-10-16.mp4
+    body_markdown: |
+      The story behind the name Vesta Estate Planning, recorded on October 16, 2026.
+
+      [Watch on Facebook](https://www.facebook.com/reel/2154861625235509/),
+      [watch on Instagram](https://www.instagram.com/reel/DekVP1ymNhw/),
+      or [watch on TikTok](https://www.tiktok.com/@vesta.estate.planning/video/7697356541673901342).
+    social:
+      facebook:
+        post_id: "2154861625235509"
+        permalink: "https://www.facebook.com/reel/2154861625235509/"
+      instagram:
+        post_id: "DekVP1ymNhw"
+        permalink: "https://www.instagram.com/reel/DekVP1ymNhw/"
+      tiktok:
+        post_id: "7697356541673901342"
+        permalink: "https://www.tiktok.com/@vesta.estate.planning/video/7697356541673901342"
+
+  - brand: vesta
+    slug: video-update-2026-10-17
+    title: "October 17, 2026 video update"
+    description: "Our October 17, 2026 video update from Vesta Estate Planning."
+    status: published
+    publish_at: "2026-10-17T12:00:00-04:00"
+    video_asset: img/vesta-updates/2026-10-17.mp4
+    body_markdown: |
+      Watch the October 17, 2026 video update from Vesta Estate Planning.
+
+      [Watch on Facebook](https://www.facebook.com/reel/1808960330420301/),
+      [watch on Instagram](https://www.instagram.com/reel/DemoZl9D2JA/),
+      or [watch on TikTok](https://www.tiktok.com/@vesta.estate.planning/video/7697687829224230174).
+    social:
+      facebook:
+        post_id: "1808960330420301"
+        permalink: "https://www.facebook.com/reel/1808960330420301/"
+      instagram:
+        post_id: "DemoZl9D2JA"
+        permalink: "https://www.instagram.com/reel/DemoZl9D2JA/"
+      tiktok:
+        post_id: "7697687829224230174"
+        permalink: "https://www.tiktok.com/@vesta.estate.planning/video/7697687829224230174"
+
+  - brand: vesta
+    slug: video-update-2026-10-18
+    title: "October 18, 2026 video update"
+    description: "Graveyards are an incredible place to read stories of families. What's yours? Plan your legacy with us at VestaEstatePlanning.com #EstatePlanning #LifeAfterDeath"
+    status: published
+    publish_at: "2026-10-18T07:11:00-04:00"
+    video_asset: img/vesta-updates/2026-10-18.mp4
+    body_markdown: |
+      Graveyards are an incredible place to read stories of families. What's yours? Plan your legacy with us at
+      VestaEstatePlanning.com #EstatePlanning #LifeAfterDeath
+
+      [Watch on Facebook](https://www.facebook.com/reel/1816245906065223/),
+      [watch on Instagram](https://www.instagram.com/reel/Deop3jQiD1h/),
+      or [watch on TikTok](https://www.tiktok.com/@vesta.estate.planning/video/7697979551372086558).
+    social:
+      facebook:
+        post_id: "1816245906065223"
+        permalink: "https://www.facebook.com/reel/1816245906065223/"
+      instagram:
+        post_id: "Deop3jQiD1h"
+        permalink: "https://www.instagram.com/reel/Deop3jQiD1h/"
+      tiktok:
+        post_id: "7697979551372086558"
+        permalink: "https://www.tiktok.com/@vesta.estate.planning/video/7697979551372086558"
+
+  - brand: vesta
+    slug: video-update-2026-10-19
+    title: "Meaningful conversations with our clients"
+    description: "Happy Monday, another day, another opportunity to have meaningful conversations with our clients. #EstatePlanning"
+    status: published
+    publish_at: "2026-10-19T13:00:00Z"
+    video_asset: img/vesta/video-update-20261019.mp4
+    body_markdown: |
+      Happy Monday, another day, another opportunity to have meaningful conversations with our clients. #EstatePlanning
+
+  - brand: vesta
+    slug: where-should-you-go-in-life-20261020
+    title: "Where should you go in life?"
+    description: "Where should you go in life? #EstatePlanning #YOLO"
+    status: published
+    publish_at: "2026-10-20T13:00:00Z"
+    video_asset: img/vesta/where-should-you-go-in-life-20261020.mp4
+    body_markdown: |
+      Where should you go in life? #EstatePlanning #YOLO
+
+  - brand: neon
+    slug: one-message-several-views
+    title: "One message, several views"
+    description: "How rows, documents, and relationships help us prepare legal work in Navigator."
+    status: draft
+    publish_at: "2026-10-13T00:00:00Z"
+    body_markdown: |
+      One of the most profound things I learned in my career is that the same data deserves more than one view.
+
+      Sometimes you need a spreadsheet: rows, columns, and precise questions. Sometimes you need the original document: the
+      email, attachment, or transcript in its full context. Sometimes you need a graph: the people, organizations, and
+      relationships connecting them.
+
+      An email can be all three. That idea shapes how we're building Navigator.
+
+      The design starts with every message arriving in the omnichannel Inbox. We save the person, email, and conflict
+      relationships before looking for its Project. A matched message feeds a summary and a governed Project repository
+      update; an unmatched message stays in the Inbox. Either path creates a notification to the attorney.
+
+      ```mermaid
+      flowchart TD
+          A[Message arrives to Omnichannel inbox] --> S
+          subgraph S[Save to database]
+              direction LR
+              P[1. Save person table] ~~~ E[2. Save email] ~~~ C[3. Save conflicts]
+          end
+          S --> D{Project found?}
+          D -->|Yes| R[Assign to Project]
+          R --> U[Summarize and update per-project repo]
+          D -->|No| K[Keep in Inbox]
+          U --> N[Create notification to attorney]
+          K --> N
+      ```
+
+      This diagram describes the intended flow. Person matching preserves uncertain identities; conflict saves retain
+      source-linked relationships for review. Summarization uses the existing approval gates, and repository updates contain
+      approved source-safe changes. Automatic enrichment, routing, repository updates, and the timing of attorney
+      notifications across both branches remain implementation work. Durable inbound Slack notifications already exist; this
+      flow adds the completion ordering and branch coverage described above.
+
+      ## The row: what arrived, and where it belongs
+
+      When an email enters Navigator's Firm Inbox, the intake code records the sender address, subject, body, and provider
+      identity. A Conversation stays in that Inbox whether or not someone assigns it to a Project. A Project is our container
+      for a matter.
+
+      An unassigned message keeps its saved body and metadata at the Firm intake boundary. It has no Project Communication
+      link until assignment. That distinction matters. The same person can be buying a home and making an estate plan. Knowing
+      who wrote the email doesn't tell you which matter it belongs to.
+
+      Once assigned, messages enter the Project's Communication log. Here is an excerpt from the actual schema:
+
+      ```surql
+      DEFINE FIELD OVERWRITE project_id ON communication TYPE record<project>;
+      DEFINE FIELD OVERWRITE channel ON communication TYPE string
+          ASSERT $value IN ['document_comment', 'email_inbound', 'email_outbound',
+                            'portal_message', 'sms_inbound', 'sms_outbound',
+                            'facebook_inbound', 'facebook_outbound',
+                            'instagram_inbound', 'instagram_outbound',
+                            'threads_inbound', 'threads_outbound',
+                            'youtube_inbound', 'youtube_outbound', 'call'];
+      DEFINE FIELD OVERWRITE direction ON communication TYPE string
+          ASSERT $value IN ['inbound', 'outbound', 'internal'];
+      DEFINE FIELD OVERWRITE author_person_id ON communication TYPE option<record<person>>;
+      DEFINE FIELD OVERWRITE counterparty ON communication TYPE option<string>;
+      DEFINE FIELD OVERWRITE subject ON communication TYPE option<string>;
+      DEFINE FIELD OVERWRITE body ON communication TYPE string;
+      DEFINE FIELD OVERWRITE source_ref ON communication TYPE option<string>;
+      DEFINE FIELD OVERWRITE asset_id ON communication TYPE option<record<asset>>;
+      ```
+
+      Those are typed records and links: the relational view of the message. This communication lane currently runs on
+      SurrealDB. The useful idea is the shape of the data, independent of the database brand.
+
+      The schema also gives each message a source reference so ingestion can recognize a repeated delivery. Channel and
+      Project indexes answer different questions: where did this arrive, and which matter does it belong to?
+
+      ## The document: preserve the source
+
+      A summary helps you get oriented. The original tells you what the sender actually wrote.
+
+      Navigator's email-summary intake archives the source bytes, and the Communication shape can link to an Asset holding a
+      raw payload. Documents and attachments have their own storage and metadata lane. This is the document view: preserve
+      context, then give it enough structure to retrieve and use it.
+
+      Saving the body also gives us a source for approved analysis and writing-style examples. A style corpus needs explicit
+      selection and attribution; a received email describes its sender's voice, not automatically mine. That selection
+      pipeline is work ahead. I'd like us to search message bodies two ways: full-text search for the words someone used, and
+      vector search for passages with a similar meaning. Those searches are work ahead; storing a body is only the foundation.
+
+      ## The graph: who is connected to whom
+
+      The third view is relationships. A person can own a company, represent another party, or be connected to someone the
+      firm already serves. A contact list gets much more useful when you can follow those connections.
+
+      Navigator already has a Conflict-Check Graph. This is its supplemental relationship table, straight from the schema:
+
+      ```surql
+      DEFINE TABLE IF NOT EXISTS relationship TYPE RELATION FROM person|entity TO person|entity SCHEMAFULL PERMISSIONS NONE;
+      ```
+
+      The conflict checker walks recorded relationships between people and organizations. Edges carry their kind, confidence,
+      and provenance so a lawyer can assess why a connection appears.
+
+      That is the foundation I want for a CRM as well: contact history connected to the work and relationships that give it
+      meaning. Automatically extracting those relationships from every message is still work ahead. An email address alone
+      doesn't establish a person's identity, and a model's guess needs evidence and review.
+
+      ### Where Apache AGE fits
+
+      [Apache AGE](https://age.apache.org/) adds graph nodes, edges, and traversal queries to PostgreSQL. That gives us a
+      place to ask relationship questions alongside ordinary relational tables: who owns this organization, who represents
+      that party, and how are they connected to people we already know?
+
+      Navigator's PostgreSQL image already includes AGE, and compatibility tests exercise graph traversal and recovery. The
+      application conflict checker currently uses SurrealDB relationships. Porting those relationships and keeping the graph
+      consistent with relational records is still work ahead. AGE is the planned graph layer; it does not currently receive
+      every incoming email.
+
+      In the target design, the saved email record anchors the source. Person and Entity nodes describe known identities;
+      reviewed Relationship Edges describe connections. Project assignment is a separate link. A message can contribute to
+      contact history without belonging to a matter, and recording a person grants them no access.
+
+      ## AI as mise en place
+
+      In a kitchen, mise en place means getting the ingredients ready before you cook. That's how I think about AI preparing a
+      matter: assemble the requests, stated dates, missing information, and sources so the lawyer can choose the next step.
+
+      Navigator already has a durable email-summary workflow using Gemini through Vertex. Its result has a deliberately small
+      shape. This is the Rust type from the implementation:
+
+      ```rust
+      pub struct EmailSummary {
+          pub summary: String,
+          pub requested_actions: Vec<String>,
+          pub sender_stated_dates: Vec<String>,
+          pub missing_information: Vec<String>,
+      }
+      ```
+
+      The workflow checks that the message belongs to a Project and that its authenticated sender identity is explicitly
+      approved before sending content to the model. Feature configuration also controls whether inference is enabled. The
+      code's existence is separate from activation on a particular installation.
+
+      A sender-stated date stays a sender-stated date. A requested action stays a request. The next step I want is to turn
+      that preparation into source-linked proposals a lawyer can review, then make governed updates to the Project's source
+      repository where appropriate. Message bodies and privileged matter content stay in Navigator-managed storage.
+
+      I also want privilege-review labels to help surface messages that need a lawyer's attention. Today, the Communication
+      lane uses Project access boundaries and internal-message visibility. A label would support review; it would carry no
+      promise that a model has decided legal privilege.
+
+      ## Beyond the mailbox
+
+      One day, I want Gmail to become one transport into this system, with Navigator as the place we do the work. Email and
+      SMS already have Inbox adapters. Social-channel support is developing, and call notes already have a structured home as
+      Communications. Consented call transcripts belong in this direction too; automatic transcript intake needs its own
+      verified path.
+
+      Whatever the channel, I want the same questions answered: who is speaking, what did they say, which Project needs it,
+      and what should we prepare next?
+
+      One message. Several useful views. A better-prepared next step.
+
+      ## Implementation notes
+
+      The code above is copied from Navigator at commit `8d63111b`, with comments omitted from the schema excerpt. The
+      structured Communication and Inbox foundations correspond to completed issues ENG-160 and ENG-935; the Project
+      relationship work to ENG-822; durable summaries to ENG-797 and ENG-944; and structured call notes to LAW-140. These are
+      implementation references, not a claim that every integration is activated.
+
+      Sources:
+
+      - [communication schema](https://github.com/neon-law/navigator/blob/8d63111b/store/src/schema/navigator.surql#L2393)
+      - [Inbox intake](https://github.com/neon-law/navigator/blob/8d63111b/portal/src/inbox.rs#L55)
+      - [conflict checker](https://github.com/neon-law/navigator/blob/8d63111b/store/src/conflicts.rs#L56)
+      - [summary contract](https://github.com/neon-law/navigator/blob/8d63111b/workflows/src/email_summary.rs#L112)
+      - [sender gate](https://github.com/neon-law/navigator/blob/8d63111b/workflows-service/src/email_summary.rs#L81)

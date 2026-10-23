@@ -1,0 +1,172 @@
+# Social account onboarding evidence: a synthetic example, not evidence.
+#
+# Every value is synthetic. It shows the shape of the record described in
+# docs/social-account-onboarding.md. A filled record carries production
+# account ids and lives in Navigator-managed storage, never in this repository.
+records:
+  - brand_key: vesta
+    platform: facebook
+    status: verified
+    owner: owner@example.com
+    connected_by: admin@example.com
+    provider_account_id: synthetic-page-0001
+    scopes_verified: "yes"
+    callback_verified: "yes"
+    expires_at: "2000-01-01"
+    reconnect_checked: "yes"
+    reviewed_by: reviewer@example.com
+    notes: ""
+  - brand_key: vesta
+    platform: instagram
+    status: pending
+    owner: owner@example.com
+  - brand_key: vesta
+    platform: threads
+    status: pending
+    owner: owner@example.com
+  - brand_key: vesta
+    platform: tiktok
+    status: blocked
+    owner: owner@example.com
+    connected_by: n/a
+    scopes_verified: n/a
+    callback_verified: n/a
+    expires_at: n/a
+    reconnect_checked: n/a
+    notes: Profile ownership not yet confirmed
+  - brand_key: cyber-injury-law
+    platform: facebook
+    status: pending
+    owner: owner@example.com
+  - brand_key: cyber-injury-law
+    platform: instagram
+    status: pending
+    owner: owner@example.com
+  - brand_key: cyber-injury-law
+    platform: threads
+    status: pending
+    owner: owner@example.com
+  - brand_key: cyber-injury-law
+    platform: tiktok
+    status: pending
+    owner: owner@example.com
+  - brand_key: vesta
+    platform: linkedin
+    status: pending
+    owner: ""
+    connected_by: ""
+    provider_account_id: ""
+    scopes_verified: ""
+    callback_verified: ""
+    expires_at: ""
+    reconnect_checked: ""
+    reviewed_by: ""
+    notes: ""
+  - brand_key: cyber-injury-law
+    platform: linkedin
+    status: pending
+    owner: ""
+    connected_by: ""
+    provider_account_id: ""
+    scopes_verified: ""
+    callback_verified: ""
+    expires_at: ""
+    reconnect_checked: ""
+    reviewed_by: ""
+    notes: ""
+  - brand_key: vesta
+    platform: x
+    status: pending
+    owner: ""
+    connected_by: ""
+    provider_account_id: ""
+    scopes_verified: ""
+    callback_verified: ""
+    expires_at: ""
+    reconnect_checked: ""
+    reviewed_by: ""
+    notes: ""
+  - brand_key: cyber-injury-law
+    platform: x
+    status: pending
+    owner: ""
+    connected_by: ""
+    provider_account_id: ""
+    scopes_verified: ""
+    callback_verified: ""
+    expires_at: ""
+    reconnect_checked: ""
+    reviewed_by: ""
+    notes: ""
+  - brand_key: neon
+    platform: facebook
+    status: pending
+    owner: ""
+    connected_by: ""
+    provider_account_id: ""
+    scopes_verified: ""
+    callback_verified: ""
+    expires_at: ""
+    reconnect_checked: ""
+    reviewed_by: ""
+    notes: ""
+  - brand_key: neon
+    platform: instagram
+    status: pending
+    owner: ""
+    connected_by: ""
+    provider_account_id: ""
+    scopes_verified: ""
+    callback_verified: ""
+    expires_at: ""
+    reconnect_checked: ""
+    reviewed_by: ""
+    notes: ""
+  - brand_key: neon
+    platform: threads
+    status: pending
+    owner: ""
+    connected_by: ""
+    provider_account_id: ""
+    scopes_verified: ""
+    callback_verified: ""
+    expires_at: ""
+    reconnect_checked: ""
+    reviewed_by: ""
+    notes: ""
+  - brand_key: neon
+    platform: linkedin
+    status: pending
+    owner: ""
+    connected_by: ""
+    provider_account_id: ""
+    scopes_verified: ""
+    callback_verified: ""
+    expires_at: ""
+    reconnect_checked: ""
+    reviewed_by: ""
+    notes: ""
+  - brand_key: neon
+    platform: tiktok
+    status: pending
+    owner: ""
+    connected_by: ""
+    provider_account_id: ""
+    scopes_verified: ""
+    callback_verified: ""
+    expires_at: ""
+    reconnect_checked: ""
+    reviewed_by: ""
+    notes: ""
+  - brand_key: neon
+    platform: x
+    status: pending
+    owner: ""
+    connected_by: ""
+    provider_account_id: ""
+    scopes_verified: ""
+    callback_verified: ""
+    expires_at: ""
+    reconnect_checked: ""
+    reviewed_by: ""
+    notes: ""

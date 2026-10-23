@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: navigator
+resources:
+  - ../../../../../../k8s/postgres
+  - ../../../../../../k8s/postgres/access
+  - ../../../../../../k8s/postgres/backup
+  - storage.yaml
+patches:
+  - target:
+      kind: StatefulSet
+      name: navigator-postgres
+    patch: |-
+      - op: add
+        path: /spec/volumeClaimTemplates/0/spec/storageClassName
+        value: navigator-postgres-retain
+  - target:
+      kind: ConfigMap
+      name: navigator-postgres-client
+    patch: |-
+      - op: replace
+        path: /data/host
+        value: navigator-postgres.navigator.svc.cluster.local

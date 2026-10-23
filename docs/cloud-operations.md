@@ -1,0 +1,328 @@
+# Cloud operations
+
+This page describes the common cloud operating model. Public docs are the shared surface every LLM and human maintainer
+should read first.
+
+Neon Law Navigator is GCP-wired and provider-agnostic. The production path uses GKE Autopilot, a hosted SurrealDB, GCS,
+Secret Manager, OpenObserve for direct OTLP telemetry, BigQuery billing export, and Restate Cloud. The application code
+keeps the cloud boundary behind traits, protocols, and env vars: `cloud::StorageService`, SurrealDB, OIDC, embedded
+Rego, Restate, SendGrid, Kubernetes, and `portal::agent_router::AgentRouter`.
+
+## Coverage
+
+- **KIND local dev** — source of truth: [`kind-local-dev`](../.agents/skills/kind-local-dev/SKILL.md) and
+  [`test-database.md`](test-database.md).
+- **GCP REST setup** — source of truth: [`oss-install.md`](oss-install.md), this page, and `cli/src/devx/gcp/` module
+  docs.
+- **GKE production** — source of truth: [`gke-prod.md`](gke-prod.md) and [`gitops.md`](gitops.md). **Ship** — source of
+  truth: [`gke-prod.md`](gke-prod.md#manifest-delivery); [`deploy/gke-ship-example.md`](deploy/gke-ship-example.md) is a
+  short worked example.
+- **GCP spend** — source of truth: this page. **Prod DB access** — source of truth: this page.
+  **Observability/OpenObserve** — source of truth: [`observability.md`](observability.md) and
+  [`durable-workflows.md`](durable-workflows.md).
+- **OIDC/embedded Rego/Rauthy** — source of truth: [`oidc.md`](oidc.md), [`access-model.md`](access-model.md), and
+  [`open-admin-server`](../.agents/skills/open-admin-server/SKILL.md).
+
+The collapse rule is simple: durable policy, invariants, architecture, and operator recipes live in `docs/`.
+
+## Deployment profiles and operator boundary
+
+Exact `NAVIGATOR_ENVIRONMENT=dev` selects the one disposable development profile, which local KIND uses. All three
+persistent hosted rows, `neon-law-stg` included, use exact `production`, because staging is a release-order role rather
+than a reduced runtime. Empty or unset also selects production; `staging`, `test`, mixed case, surrounding whitespace,
+and every other nonempty value fail parsing. Production keeps hosted-persistence requirements: real GCS and no emulator
+endpoint. A normal dev deployment uses real non-production SendGrid and DocuSign demo credentials stamped
+`NAVIGATOR_CREDENTIAL_ENVIRONMENT=dev`; only `NAVIGATOR_CI_HARNESS=1` may use fakes.
+
+The **deployment operator** who supplies Kubernetes, cloud accounts, secrets, domains, and environment values is not a
+Navigator application **admin**. `persons.role = 'admin'` is an application authorization tier and grants no cloud or
+cluster authority.
+
+## Local development
+
+`navigator dev staging` requires exact `NAVIGATOR_ENVIRONMENT=dev`, an explicit non-production context,
+Navigator-managed labels, and an immutable environment ID before reset or deletion.
+
+The standard local loop is KIND through the `navigator` CLI:
+
+```bash
+cargo run --release -p cli -- dev up   # once; reuses an existing cluster on re-run
+set -a; source .devx/env; set +a
+cargo run -p neon                                  # Ctrl-C and re-run to iterate
+cargo run --release -p cli -- dev down                # full teardown — only for a clean rebuild, not routine cleanup
+```
+
+`dev up` brings up SurrealDB, Rauthy, SeaweedFS, Restate, `workflows-service`, and OpenObserve in KIND. It writes
+`.devx/env` for the host-side `web` process. The cluster is a **persistent dev fixture**: leave it up between sessions
+and re-run `dev up` to restore port-forwards after a sleep or reboot (it reuses the existing cluster). See
+[`kind-local-dev`](../.agents/skills/kind-local-dev/SKILL.md).
+
+Scratch artifacts go under `/tmp`, never the repo. Screenshots normally go under `/tmp/navigator-screenshots/`.
+
+The KIND **dependency tier** is the exception to "local stacks are task resources": it is a reusable dev fixture, so
+leave the cluster up between sessions. Everything else an agent spins up — rebuilt dev images, browser drivers, the
+host-side `web` process — is a per-task resource to stop at handoff. So before handing off a created or updated PR, stop
+`web` and task-created browser drivers, remove task-created standalone containers/images, and prune task-created Docker
+build cache — but do **not** `down`/`kind delete` the dependency cluster as routine cleanup, and do not prune Docker
+volumes unless the user approves the data loss. Full teardown is for a deliberate clean rebuild only.
+
+## GCP setup
+
+`navigator ops gcp setup` is the persistent, production-shaped environment provisioner. It runs once per runtime project
+and creates the cloud substrate a hostable deployment needs: APIs, a custom VPC and subnet, a regional Cloud Router and
+Cloud NAT, five private GCS lanes, runtime identities and IAM, registry access, an Autopilot cluster, the Gateway static
+IP, workload-identity and Fleet integrations, and the deployment KMS key. Every deployment's `config.toml` selects the
+`production` runtime and credential profile. Navigator's rows omit `NAVIGATOR_CONFIG_SYNC_REPO`; `navigator ops ship` is
+their sole manifest owner.
+
+The remaining hosting work is deliberately adjacent, not a missing setup stage:
+
+| Need | Owner and boundary |
+| --- | --- |
+| DNS | `navigator ops dns setup`; the DNS provider may sit outside GCP, so setup only reserves the stable Gateway IP. |
+| TLS and Gateway manifests | `navigator ops ship`; it renders and applies Gateway, certificate, and route manifests. |
+| Restate | The Restate operator and its manifests provision the broker; `ops ship` re-registers the worker. |
+| Secret values | `navigator ops secrets apply`; decrypts and writes Secret Manager plus the Kubernetes Secret. |
+
+### The image hub
+
+`navigator ops gcp hub setup --project-id <hub>` and `navigator ops gcp setup --images-project-id <hub>` still exist and
+still run: the hub provisions a GAR repository, the `navigator-ci-pusher` service account, and a GitHub Workload
+Identity pool, and an environment can still take cross-project `roles/artifactregistry.reader` on it. None of that
+governs what this repository actually publishes or pulls. CI pushes every image to
+`us-west4-docker.pkg.dev/example-project/navigator` through Workload Identity as `navigator-publisher`, and `navigator
+ops ship` renders that path into every `image:` line — the `ghcr` hub project sits unused on that path. Treat the hub
+machinery as live-but-unused legacy tooling rather than a second lane to reconcile: it survives because
+`artifact_registry.rs` also hosts WIF helpers that `kms.rs` and `secret_manager.rs` genuinely use, not because a release
+depends on it. See [`gitops.md`](gitops.md#keyless-pushes-to-artifact-registry) for the full accounting.
+
+`NAVIGATOR_IMAGE_REGISTRY` overrides the `us-west4-docker.pkg.dev/example-project/navigator` default that `navigator ops
+ship` resolves image references against, and `NAVIGATOR_GCP_PROJECT_ID` keeps naming the project that holds the GKE
+cluster and buckets. The images live in the example registry project, not the deployment's, so the two are independent
+and neither can be mistaken for the other.
+
+A tenant guard refuses either command aimed at the other's project before the first GCP call: the hub never receives
+buckets or GKE, and an environment never hosts the shared registry. An unrecorded project ID is always allowed, so a
+fork provisions its own projects unimpeded.
+
+A service account from another organization is a foreign identity to the firm-owned registry, so every `setIamPolicy`
+against the hub repository — including a routine provisioner re-run — is evaluated against
+`constraints/iam.allowedPolicyMemberDomains`. A refusal surfaces as a named error identifying that constraint and the
+refused principal, not a bare 403. Clear the constraint on the registry's organization, or scope an exception on the hub
+project, then re-run.
+
+The GCP pipelines call REST APIs directly where a stable GCP REST surface exists and use the CLI's recorded `gcloud`
+shell seam for the compact GKE and IAM commands. There is no broad Google SDK wrapper. That keeps dry-run interception
+and wiremock coverage at one narrow seam.
+
+When touching `cli/src/devx/gcp/`, keep four things correct:
+
+- `GcpService::default_base_url()` in `cli/src/devx/gcp/client.rs`. Each per-step endpoint path in `services.rs`,
+  `network.rs`, `buckets.rs`, and `gke.rs`. The JSON request body shape. The long-running-operation polling path passed
+  to `lro::wait`. Compute operation names are bare IDs and must be polled below the matching project/global or
+  project/region collection, and report `status: DONE`, while Google long-running operations report `done: true`.
+
+Every step follows the same conventions:
+
+- POST the create/enable operation and treat `409 Conflict` as success. Wait for LROs on 2xx responses that return an
+  operation name; skip the wait on 409. Let `GcpClient` handle dry-run recording. Do not add a `gcloud` fallback or move
+  base URLs into env vars.
+
+Live environment setup prints eleven numbered, secret-free stages. Long-running REST writes additionally print their
+service, operation ID, scoped polling path, and completion. These lines may name projects, regions, buckets, networks,
+service accounts, and clusters; they must never include database URLs, passwords, tokens, credentials, or any decrypted
+secret value.
+
+All four deployment buckets stay private. The deployment Google service account receives `roles/storage.objectAdmin` on
+each bucket, and Workload Identity maps both `navigator-web` and `workflows-service` to that principal. Marketing assets
+become anonymous only when `web` reads them from the dedicated assets bucket through the cacheable same-origin
+`/assets/*` route. No bucket receives `allUsers`, and setup never changes organization policy. The application does not
+expose corresponding routes for the documents, exports, or logs buckets.
+
+When an endpoint drifts, update the module's wiremock test to match Google's current docs first, then update the
+implementation and run the dry-run command from [`oss-install.md`](oss-install.md).
+
+## Production deploy
+
+Code reaches production through PRs and dated images:
+
+1. Merge through the normal PR flow in [`gitops.md`](gitops.md).
+2. After the version PR merges, an operator tags that merged `main` commit with `YY.M.D` or
+   `YY.M.D-hotfix.N`, which starts `deploy.yml`. The workflow fetches `origin/main` and rejects a tag on an unmerged
+   side branch before it publishes anything.
+3. The deploy workflow builds and publishes the service images to Artifact Registry: the brand server image,
+   `navigator-workflows-service`.
+4. Before running `ops ship` on a row, confirm that row's public asset inventory — gallery variants, brand media keys,
+   and licensed fonts — is already published (`navigator ops assets verify --base-url <row's origin>`). `ops ship`'s
+   preflight reads the same inventory from the bucket and refuses the roll when an object is missing, so this is a
+   check, not a one-time publish: run `ops assets build`/`ops assets upload`/`ops assets fonts upload`/`site asset
+   upload` first if the check names anything missing. See [`assets.md`](assets.md#the-four-commands) for the commands
+   and [`assets.md#verify-after-shipping`](assets.md#verify-after-shipping) for the inventory itself.
+5. The same run proves those images in KIND and pushes them to Artifact Registry. Once every image and CLI archive is
+   published it dispatches `release-deploy.yml`, which ships staging, checks it, and then ships production; a prerelease
+   tag stays on staging. See [`release-automation.md`](release-automation.md). A hand roll follows
+   [`manual-roll.md`](manual-roll.md).
+
+`navigator ops ship --deployment <name> --tag YY.M.D` is the self-contained reconcile: every coordinate comes from
+`deployments/<name>/config.toml`, so a stale shell cannot select the wrong deployment. `--dry-run` builds an offline
+plan: it checks required local settings, validates the supplied tag, parses the rendered manifests, and lists intended
+operations. It does not authenticate or contact cloud services, the cluster, image registries, Secret Manager, Restate,
+or public endpoints; live drift and readiness remain unverified. A real ship performs authenticated context, IAM, image,
+asset, Secret, and service-object preflights before writing, then reconciles the CLI-embedded GKE manifest tree
+unconditionally. Merged manifest changes reach the cluster, and both Navigator Deployments use one release tag. For
+rendering, see [`gke-prod.md`](gke-prod.md#manifest-delivery); [`manual-roll.md`](manual-roll.md) lists live checks
+before a hand roll.
+
+The tag is a substitution token in the manifests, resolved at render time — the apply itself lands the real image. It is
+deliberately **not** a placeholder that a follow-up `kubectl set image` corrects: `workflows-service` (`maxSurge: 0`)
+deletes the running pod before the replacement is ready, so an apply carrying an unpullable tag takes that tier down for
+the whole gap. One write, one `ReplicaSet`.
+
+The preflight ordering is load-bearing, not incidental. `web` enforces its boot invariants at startup and crash-loops
+when a required key is missing, so `ship` diffs the requirements against the production Secret plus each web-binary
+Deployment's env **before** the reconcile touches the cluster. An unsatisfied requirement therefore aborts a ship that
+has changed nothing. It reads the env from the rendered manifests rather than the live Deployments for two reasons: the
+manifests are the state about to be applied (the live env is what the apply overwrites), and on a first-ever ship no
+Deployment exists to read.
+
+`ship` never patches the Secret for you — it prints the exact `kubectl patch` naming every missing key, and stops. Fill
+in the values with `navigator ops secrets apply --deployment <name>` (or the printed patch) and re-run. Keys that the
+manifests supply as Deployment env belong in the manifest tree, not the Secret; the preflight counts either as
+satisfying a requirement.
+
+If the image tag is unchanged and only a Secret changed, `--restart-only` rollout-restarts the service deployments so
+pods re-read `envFrom`.
+
+The roll asserts that the web service account holds `roles/iam.serviceAccountTokenCreator` on itself before anything
+rolls, because a pod without it 500s every document download — under Workload Identity the pod holds no private key and
+signs each download URL through IAM Credentials `signBlob`. That assertion is a read (`getIamPolicy`) and runs in every
+mode, `--dry-run` included. On a row `ops gcp setup` has provisioned the binding is already there and nothing is
+written. When it is absent the roll grants it, which needs `setIamPolicy`; `--assert-signing-iam` withdraws that
+authority, so the roll instead stops and prints the `gcloud` command for someone who holds the permission. Use it when
+the operator holding the release tag is under a no-IAM-changes rule: the invariant is still proved, only the grant
+moves.
+
+Run production cluster commands under the production secret context. Never paste real secret values into chat, docs,
+commits, or PR bodies.
+
+## Production database
+
+Production is a hosted SurrealDB. Ad-hoc access goes through the deployment's own `NAVIGATOR_SURREAL_*` credentials,
+read from its encrypted secrets rather than pasted from anywhere else.
+
+Read-only `SELECT`s are allowed when the user asks for inspection. Before any `CREATE`, `UPDATE`, `DELETE`, or `DEFINE`:
+
+- Write the exact SurrealQL to a timestamped file under `/tmp/navigator-prod-sql/`. Show the user the path and contents.
+  Wait for explicit approval for that exact statement. Scope the write with a guard on the old value. Verify it
+  afterwards.
+
+The canonical seed is idempotent: it inserts missing rows and does not update existing production rows.
+`store::schema::apply()` may perform a narrow, idempotent, guarded backfill when the missing value has an unambiguous
+write-time default and the operation is cheap enough for every boot and test. It currently materializes the historical
+defaults for `person.email_confirmed`, `person.is_admitted`, and `project.brand`, and it points a Project whose
+`firm_id` is empty at the anchor Firm when one exists. A live data fix that is expensive, destructive, or requires human
+judgment about the old value remains an operator-approved one-shot job or an explicit application seam.
+
+`person.email_confirmed`, `person.is_admitted`, `project.brand`, and an empty `project.firm_id` therefore do not need a
+separate production-SQL approval step for their automatic path: `apply()` owns that guarded repair. The approval
+procedure above still governs manual fixes, including any update whose value cannot be inferred safely from the old row.
+Never fold a judgment-dependent fix into the canonical seed.
+
+## Spend reporting
+
+Report GCP spend from the BigQuery Cloud Billing export, not console guesses or rate-card math. Always show:
+
+- gross cost, credits, which are negative, net cost, which is `gross + credits`, currency, and whether the current day
+  is partial because billing export data lags by roughly 24 hours.
+
+Discover the project from env and the billing table from BigQuery. Do not hard-code billing account generated table
+names into docs or code.
+
+## Observability
+
+Every service binary emits through `telemetry::init("navigator-<name>")`. With no `OTEL_EXPORTER_OTLP_ENDPOINT`, logs
+stay human-readable on stdout. With the endpoint set, logs become JSON and traces/metrics export through OTLP.
+
+The load-bearing rule is:
+
+> Identifiers and counts, never content.
+
+Safe telemetry fields include ids, service names, outcomes, durations, status codes, and counts. Unsafe fields include
+client names, email addresses, answer bodies, document bodies, privileged facts, and full request or tool arguments.
+This rule applies in local and Cloud OpenObserve, Cloud Logging, BigQuery, and any future sink.
+
+Use `navigator ops doctor`, OpenObserve, the Restate console, and the six-hourly Heartbeat Slack line to debug missing
+periodic jobs or durable workflow failures. The architecture details live in [`observability.md`](observability.md) and
+[`durable-workflows.md`](durable-workflows.md).
+
+## Retention: logs and backups
+
+Logs and backups are kept for different reasons, so they have separate windows. Changing one never moves the other.
+
+- A **log** records what happened, so an operator can investigate later. Logs are kept for **180 days**.
+- A **backup** is a copy of state, so it can be restored. Each backup's window is set by the restore it supports.
+
+### Logs — 180 days
+
+| Store | Holds | Retention |
+| --- | --- | --- |
+| Cloud Logging `_Default` | Container stdout | 180 days, set by `ops gcp setup` stage 17 |
+| `<project>-logs` bucket | Log sink export, ship transcripts | 180 days, set by `ops gcp setup` stage 17 |
+| Cloud Logging `_Required` | GCP admin audit logs | 400 days, locked by Google |
+| Cloud OpenObserve | Searchable logs, traces, metrics | Set by the operator; match 180 days |
+
+The window lives in one constant, `LOG_RETENTION_DAYS` in `cli/src/devx/gcp/logging.rs`. Rerun setup after changing it.
+To check a project without rerunning setup:
+
+```bash
+gcloud logging buckets list --location=global --project="$NAVIGATOR_GCP_PROJECT_ID"
+```
+
+### Backups — set per restore
+
+| Backup | Retention | Set by |
+| --- | --- | --- |
+| PostgreSQL base backups + WAL | 30 days | `POSTGRES_BACKUPS_RETENTION_DAYS` in `cli/src/devx/gcp/buckets.rs` |
+| Backup for GKE (`navigator-daily`) | 30 days | The backup plan; see [`gke-prod.md`](gke-prod.md) |
+| Surreal archives | Kept indefinitely | No lifecycle rule; see [`surreal-archives.md`](surreal-archives.md) |
+
+Thirty days of PostgreSQL backups always keeps two or more base backups and all the WAL after the oldest.
+
+Telemetry Parquet in `<deployment>-telemetry` is neither: it is a 90-day landing zone the nightly lane promotes into the
+archive.
+
+### Staging: confirm a store credential is dead
+
+The store password lives at the SurrealDB provider. Setup creates no Cloud SQL instance, and `ops secrets apply` writes
+no `DATABASE_URL`. Confirm on `neon-law-stg` that those objects are absent; an empty result is the rotation.
+
+Pin `gcloud` to staging and confirm, without printing payloads:
+
+```bash
+gcloud config set project neon-law-stg
+gcloud sql instances list
+gcloud secrets list --filter='name~DATABASE_URL'
+```
+
+An empty instance list and no `DATABASE_URL` secret is the whole rotation: the credential is dead. If the secret still
+exists, destroy it (`gcloud secrets delete DATABASE_URL`) rather than minting a replacement. Do not reuse the value.
+
+Cloud Logging holds stdout. Search by metadata only (`insertId`, timestamp, `logName`), never `textPayload` or
+`jsonPayload` in the output format, then delete matching entries if the bucket allows it. If retention is locked, record
+the `retentionDays` from `gcloud logging buckets describe _Default --location=global` as the expiry. The same check
+applies to objects in `gs://example-bucket`: list names and timestamps, do not `cat` them.
+
+Production remains propose-only. Run the same confirmation there yourself.
+
+## Website publication
+
+The website publishes one doc: the glossary. Each term in `docs/glossary/` renders on the one page at `/glossary`
+through `portal::glossary`, which bakes the terms into the binary, renders them under the firm brand, and turns links
+between terms into in-page anchors. Every other file in `docs/` is contributor documentation read in the repository, and
+the retired `/docs` routes redirect to the glossary.
+
+Good next steps for the website:
+
+- Keep top-level docs concise and push long command transcripts into examples such as
+  [`deploy/gke-ship-example.md`](deploy/gke-ship-example.md).
+- Keep public docs as the source of truth. If an invariant matters, lift it into `docs/`.

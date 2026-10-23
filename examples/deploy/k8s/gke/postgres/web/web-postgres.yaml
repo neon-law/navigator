@@ -1,0 +1,56 @@
+# Opt-in PostgreSQL connection for `web`.
+#
+# `ops ship` adds this patch only for a deployment whose `config.toml` sets
+# `NAVIGATOR_POSTGRES_ENABLED = "true"`; every other deployment renders
+# without it and boots exactly as before. It must follow `web-env.yaml`,
+# whose `$patch: replace` rebuilds the env list.
+#
+# `web` connects as the `navigator_app` runtime login with verify-full TLS.
+# The password and the CA bundle come from the `navigator-postgres-app`
+# Secret, which `navigator ops secrets apply --service postgres`
+# projects; neither enters the `envFrom` deployment Secret. The pod label is
+# what the PostgreSQL NetworkPolicy admits.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navigator-web
+  namespace: navigator
+spec:
+  template:
+    metadata:
+      labels:
+        navigator.neonlaw.org/postgres-client: "true"
+    spec:
+      containers:
+        - name: web
+          env:
+            # NAVIGATOR_POSTGRES_MIRROR_ENV
+            - name: NAVIGATOR_POSTGRES_HOST
+              value: navigator-postgres.navigator.svc.cluster.local
+            - name: NAVIGATOR_POSTGRES_PORT
+              value: "5432"
+            - name: NAVIGATOR_POSTGRES_DATABASE
+              value: navigator
+            - name: NAVIGATOR_POSTGRES_SSLMODE
+              value: verify-full
+            - name: NAVIGATOR_POSTGRES_ROOT_CERT
+              value: /etc/navigator/postgres/ca.crt
+            - name: NAVIGATOR_POSTGRES_USER
+              value: navigator_app
+            - name: NAVIGATOR_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-postgres-app
+                  key: password
+          volumeMounts:
+            - name: postgres-ca
+              mountPath: /etc/navigator/postgres
+              readOnly: true
+      volumes:
+        - name: postgres-ca
+          secret:
+            secretName: navigator-postgres-app
+            items:
+              - key: ca.crt
+                path: ca.crt
+            defaultMode: 0444

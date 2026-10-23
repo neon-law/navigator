@@ -1,0 +1,304 @@
+governing_law@1:
+  kind: agreement
+  inputs:
+    jurisdiction:
+      types:
+      - jurisdiction
+      prompt: Which jurisdiction’s law governs this agreement?
+    forum:
+      types:
+      - custom_text
+      prompt: Which courts have jurisdiction, subject to mandatory law?
+  body: 'Governing law: {{jurisdiction}}. Courts: {{forum}}.'
+nda_administration@1:
+  kind: agreement
+  body: |-
+    This agreement is the entire agreement on its subject. Changes and waivers must be in writing signed by both parties.
+    Delay in enforcement is not a waiver. An unenforceable provision is severed only to the extent necessary. Neither party
+    may assign without consent, except to a successor in a merger or sale of substantially all relevant assets that assumes
+    these obligations. Electronic signatures and counterparts are effective.
+advisor_administration@1:
+  kind: agreement
+  body: |-
+    This agreement and signed equity documents state the entire arrangement. Amendments
+    must be signed by both parties. Neither party may assign without the other’s consent, except Company to a successor
+    assuming its obligations. Invalid provisions are severed to the necessary extent. Counterparts and electronic signatures
+    are effective.
+msa_administration@1:
+  kind: agreement
+  body: |-
+    Neither party is liable for delay beyond reasonable control, except payment
+    obligations, if it promptly notifies and mitigates. Neither may assign without consent, except to a successor assuming
+    its obligations in a merger or sale. The signed documents are the entire agreement; amendments and waivers require
+    writing. Invalid provisions are severed to the minimum extent. Counterparts and electronic signatures are effective.
+baa_administration@1:
+  kind: agreement
+  body: |-
+    The parties will amend this addendum as necessary to comply with applicable HIPAA requirements. No provision creates
+    third-party contractual rights. Governing law, notices, and other service terms remain in the underlying agreement,
+    subject to this addendum and mandatory law. Liability terms cannot excuse either party’s regulatory duties. Counterparts
+    and electronic signatures are effective.
+dpa_administration@1:
+  kind: agreement
+  body: |-
+    This addendum controls conflicts about personal data. Mandatory transfer instruments control inconsistent contract
+    terms. Service-agreement liability provisions apply only to the extent compatible with mandatory data-protection rights
+    and obligations. Changes require writing. Electronic signatures and counterparts are effective.
+employee_offer_terms@1:
+  kind: letter
+  inputs:
+    law:
+      types:
+      - jurisdiction
+      prompt: Which jurisdiction’s law governs this letter?
+    contacts:
+      types:
+      - people
+      prompt: Who receives questions and notices about this offer?
+  body: |-
+    This letter and the documents expressly identified in it state the offer. The law of {{law}}
+    governs, subject to controlling federal law. No term limits rights that cannot lawfully be waived. Questions and notices
+    should go to
+    {{#for c in contacts}} {{c.name}} ({{c.title}}): {{c.email}}; {{c.street}}, {{c.city}}, {{c.state}}
+    {{c.zip}}, {{c.country}}. {{/for}}
+nda_signatures@1:
+  kind: agreement
+  inputs:
+    first_party:
+      types:
+      - entity
+      prompt: Which entity is the first party to this agreement?
+    second_party:
+      types:
+      - entity
+      prompt: Which entity is the second party to this agreement?
+  body: |-
+    | Party | Authorized signature | Name and title | Date |
+    | --- | --- | --- | --- |
+    | {{first_party.name}} | ____________________ | ____________________ | ____________________ |
+    | {{second_party.name}} | ____________________ | ____________________ | ____________________ |
+provider_customer_signatures@1:
+  kind: agreement
+  body: |-
+    Provider: ____________________  Name and title: ____________________  Date: ____________________
+
+    Customer: ____________________  Name and title: ____________________  Date: ____________________
+advisor_signatures@1:
+  kind: agreement
+  body: |-
+    Company: ____________________  Name and title: ____________________  Date: ____________________
+
+    Advisor: ____________________  Date: ____________________
+baa_signatures@1:
+  kind: agreement
+  body: |-
+    Business Associate: ____________________  Name and title: ____________________  Date: ____________________
+
+    Customer: ____________________  Name and title: ____________________  Date: ____________________
+employee_acceptance@1:
+  kind: letter
+  body: |-
+    Company representative: ____________________  Title: ____________________  Date: ____________________
+
+    I accept this offer on the terms stated above.
+
+    Employee: ____________________  Date: ____________________
+
+engagement_arbitration@1:
+  kind: onboarding
+  inputs:
+    seat:
+      types:
+      - jurisdiction
+      - custom_single_choice
+      prompt: Where is the arbitration seated?
+    law:
+      types:
+      - jurisdiction
+      - custom_single_choice
+      prompt: Which jurisdiction’s law governs this letter?
+  body: |-
+    The law of {{law}} governs this letter.
+
+    Except for a fee dispute you elect to arbitrate under a statutory fee-arbitration right that cannot be waived, any
+    controversy or claim arising out of or relating to this engagement or its breach, including any claim of professional
+    negligence, malpractice, or breach of fiduciary duty, shall be settled by final and binding arbitration administered by
+    the American Arbitration Association under its Commercial Arbitration Rules, before a single arbitrator, seated in
+    {{seat}}, and conducted confidentially. The AAA's rules and fee schedule govern
+    administrative fees and arbitrator compensation, and judgment on the award may be entered in any court of competent
+    jurisdiction.
+
+    The arbitrator applies the same law and may award the same remedies a court would. This clause picks the forum for a
+    dispute; it does not limit, cap, or waive our responsibility for our own work, and it does not override a right the law
+    makes non-waivable.
+
+    By signing, you and we each give up the right to a jury trial and to have a covered dispute decided in court, including
+    a claim that we did our work negligently. Because this section governs how a future dispute between you and your lawyers
+    is handled, you may consult independent counsel before agreeing to it.
+nevada_engagement_arbitration@1:
+  kind: letter
+  inputs:
+    law:
+      types:
+      - custom_single_choice
+      - jurisdiction
+      prompt: Which jurisdiction’s law governs this engagement?
+  body: |-
+    This letter is governed by the law of {{law}}. If a dispute arises out of or relates to
+    this engagement or this letter, you and the Firm agree to resolve it by final and binding arbitration before a single
+    arbitrator administered by JAMS under its Comprehensive Arbitration Rules and Procedures, conducted confidentially and
+    decided under the law of {{law}}. The arbitrator applies the same law and may award the
+    same remedies a court could; this paragraph selects the forum for a dispute and does __not__ limit, cap, or waive the
+    Firm's responsibility for its own work.
+
+    __Your fee-arbitration rights are preserved.__ Nothing above waives or overrides any non-waivable statutory right you
+    have to arbitration of a fee dispute, including the fee-dispute program of the State Bar of Nevada.
+
+    Because this is an agreement about how future disputes are handled, you have the right to consult independent counsel of
+    your own choosing before you agree to it.
+nevada_engagement_arbitration@2:
+  kind: letter
+  inputs:
+    law:
+      types:
+      - custom_single_choice
+      - jurisdiction
+      prompt: Which jurisdiction’s law governs this engagement?
+  body: |-
+    This letter is governed by the law of {{law}}. If a dispute arises out of or relates to
+    this engagement or this letter, you and the Firm agree to resolve it by final and binding arbitration before a single
+    arbitrator administered by the American Arbitration Association under its Commercial Arbitration Rules, conducted confidentially and
+    decided under the law of {{law}}. The arbitrator applies the same law and may award the
+    same remedies a court could; this paragraph selects the forum for a dispute and does __not__ limit, cap, or waive the
+    Firm's responsibility for its own work.
+
+    __Your fee-arbitration rights are preserved.__ Nothing above waives or overrides any non-waivable statutory right you
+    have to arbitration of a fee dispute, including the fee-dispute program of the State Bar of Nevada.
+
+    Because this is an agreement about how future disputes are handled, you have the right to consult independent counsel of
+    your own choosing before you agree to it.
+dispute_resolution@1:
+  kind: agreement
+  inputs:
+    law:
+      types:
+      - jurisdiction
+      prompt: Which jurisdiction’s law governs this agreement?
+    seat:
+      types:
+      - jurisdiction
+      prompt: Where is the arbitration seated?
+  body: |-
+    The law of {{law}} governs this agreement, without regard to its conflict-of-laws rules.
+
+    Except for a claim within a small-claims court's jurisdiction and a claim that law does not permit to be arbitrated,
+    any dispute arising out of or relating to this agreement, including its formation, interpretation, breach, or
+    termination, will be resolved by final and binding arbitration administered by the American Arbitration Association
+    under its Commercial Arbitration Rules, before a single arbitrator, seated in {{seat}}, and conducted confidentially.
+    The arbitrator applies the same law and may award the same remedies a court could. Either party may ask a court of
+    competent jurisdiction for temporary or provisional relief in aid of arbitration, and judgment on the award may be
+    entered in any court of competent jurisdiction. Nothing in this paragraph waives a right that applicable law makes
+    nonwaivable.
+employment_arbitration@1:
+  kind: letter
+  inputs:
+    seat:
+      types:
+      - jurisdiction
+      prompt: Where is the arbitration seated?
+  body: |-
+    ## Resolving disputes
+
+    Except as stated below, any dispute arising out of or relating to your employment or this letter will be resolved by
+    final and binding arbitration administered by the American Arbitration Association under its Employment Arbitration
+    Rules, before a single arbitrator, seated in {{seat}}. The Company pays the arbitrator's compensation and the
+    administrator's fees beyond the amount you would pay to file a court action. The arbitrator applies the same law and
+    may award the same remedies a court could.
+
+    This paragraph does not apply to a claim that law prohibits from being subject to predispute arbitration, including a
+    sexual harassment or sexual assault dispute you choose to bring in court, a workers' compensation or unemployment
+    claim, or a charge before a government agency, and it does not prevent you from filing one. Either side may ask a court
+    for provisional relief in aid of arbitration. Judgment on the award may be entered in any court of competent
+    jurisdiction. You may consult independent counsel of your choosing before you agree to this paragraph.
+privacy_us_states@1:
+  kind: agreement
+  inputs:
+    applies:
+      types:
+      - custom_yes_no
+      prompt: Do U.S. state privacy laws apply to these practices?
+    disclosures:
+      types:
+      - custom_text
+      prompt: >-
+        Complete applicable state disclosures, including California collection, sale, and sharing information for the
+        required period and financial incentives, if any.
+  body: |-
+    {{#if applies}}
+    ## Supplement: U.S. state disclosures
+
+    {{disclosures}}
+
+    The state schedule must describe applicable rights and request methods, the relevant collection and disclosure
+    periods, categories sold or shared, sensitive-information uses, financial incentives if any, and the company’s actual
+    practices. Mandatory rights apply even where this notice does not enumerate them.
+    {{/if}}
+privacy_gdpr@1:
+  kind: agreement
+  inputs:
+    applies:
+      types:
+      - custom_yes_no
+      prompt: Does the GDPR, UK GDPR, or Swiss data-protection law apply to these practices?
+    bases:
+      types:
+      - custom_text
+      prompt: >-
+        Map each processing purpose to its lawful basis, identifying legitimate interests and consent withdrawal
+        methods.
+    transfers:
+      types:
+      - custom_text
+      prompt: >-
+        Identify actual destinations, adequacy decisions or executed safeguards, and how people can obtain a copy.
+    representatives:
+      types:
+      - custom_text
+      prompt: >-
+        Give applicable DPO, EU/UK representative, and competent supervisory-authority details; explain any role that
+        does not apply.
+  body: |-
+    {{#if applies}}
+    ## Supplement: European, UK, and Swiss information
+
+    Our lawful basis for each purpose, including any specific legitimate interest, is {{bases}}. Where we rely on consent,
+    you may withdraw it at any time without affecting prior lawful processing. Where applicable, you may object to
+    legitimate-interest processing and direct marketing, ask us to restrict processing, and request portability. Any
+    solely automated decisions with legal or similarly significant effects, their logic and consequences, and available
+    safeguards are described in the purposes schedule; do not infer consent from use of the service.
+
+    International destinations, transfer mechanisms, and how to obtain safeguard information are {{transfers}}. Our
+    applicable data-protection officer, EU or UK representative, and relevant supervisory-authority contact details are
+    {{representatives}}. You may complain to the competent supervisory authority, including where you live, work, or
+    believe an infringement occurred. Our request process does not limit that right.
+    {{/if}}
+california_employment@1:
+  kind: letter
+  body: |-
+    ## California supplement
+
+    This section applies because California is the work state. It supplements, and does not limit, the rest of this
+    letter.
+
+    Your exempt classification is confirmed against the current California and applicable local salary threshold and
+    the duties tests, including any occupation-specific rules, as well as your actual duties. A title or this letter
+    does not establish exempt status, and this letter does not waive wages, overtime, meal and rest breaks, or other
+    protections to which you are entitled.
+
+    Company will follow the California fair-chance requirements for any criminal-history review, including the timing
+    and sequence of any inquiry, individualized assessment, and notices. Company will provide each separate notice
+    California law requires, including notices about pay and any background screening, as separate documents.
+
+    Any confidentiality and invention-assignment agreement will preserve California employee-invention exclusions,
+    protected disclosures, wage discussions, and other nonwaivable rights. No term of this letter limits a right that
+    California law does not allow to be waived.

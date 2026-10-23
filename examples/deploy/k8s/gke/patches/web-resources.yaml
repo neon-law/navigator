@@ -1,0 +1,43 @@
+# Minimal resource requests for the `web` container. Tuned for the
+# cheapest deployment that still works: GKE Autopilot will silently
+# floor whatever's below its enforced minimum, but declaring the
+# smallest legal values up front means we get exactly Autopilot's
+# floor and no more.
+#
+# Bump these when CPU / memory utilization shows headroom is gone —
+# Autopilot bills per requested resource, so over-asking is the easy
+# way to overspend.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navigator-web
+  namespace: navigator
+spec:
+  # One replica here; `ops ship` sets the count from the row's profile
+  # (docs/environments.md#replicas): a row with simulated matters runs one
+  # pod, a production row runs two behind a PodDisruptionBudget. The
+  # repository directory is per-pod scratch (see `k8s/base/web/web.yaml`), so
+  # nothing pins the pod to one disk. A roll stands the new pod up before the
+  # old one leaves (`maxSurge: 1`, `maxUnavailable: 0`), so a one-replica row
+  # also rolls without a load-balancer gap.
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      annotations:
+        # Autopilot's autoscaler evicted this pod to consolidate nodes every
+        # one to two hours (2026-10-19), and with one replica each eviction
+        # was a 502 outage. This keeps scale-down from choosing its node;
+        # rollouts and GKE node upgrades still move it.
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+    spec:
+      containers:
+        - name: web
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi

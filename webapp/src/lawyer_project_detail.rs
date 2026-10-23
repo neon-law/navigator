@@ -1,0 +1,1931 @@
+//! The lawyer matter-detail workbench (`/app/projects/{code}`) as a Dioxus
+//! component (#641 Phase 3, projects cluster) — the firm-side single-matter view.
+//!
+//! The successor to the `admin::projects_detail_lawyer` render. Reached only
+//! through `store::access::matter_viewer` — a participation row is required of
+//! every tier, Owner and Admin included (ENG-81); a lawyer not on the matter,
+//! and a non-lawyer caller, both get `404` (the matter does not exist for
+//! them). An Owner/Admin who holds no row instead renders
+//! [`crate::admin_unassigned_project_detail::AdminUnassignedProjectDetail`], a
+//! narrower sibling page — see [`crate::matter_surface`]. The page gathers,
+//! server-side of the render: the header (name / code / status / entity / the
+//! two DRIs), the missing-onboarding notice, the forge
+//! repository link, the calendar, the participation ledger
+//! ([`ParticipationTable`], with admin add/edit/remove), the documents table +
+//! uploader, and the close-matter control. The write forms render markup that
+//! posts to the existing native `/app/projects/{code}/...` handlers; only the
+//! rendering moves.
+//!
+//! The calendar is [`crate::project_calendar`] scoped to this matter. It is
+//! the matter timeline: every docket entry on the matter's cases joined with
+//! every open deadline, in date order ([`crate::project_timeline`]).
+//!
+//! One seam `webapp` cannot cross itself, injected by the portal router the same
+//! wasm-safe way as [`ViewerRole`] / [`crate::csrf::CsrfToken`]:
+//! [`ProjectRepositoryPointer`] (this matter's one deployment-configured
+//! repository URL).
+
+use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
+
+use crate::components::{Field, FormCard, Heading};
+use crate::csrf::CsrfToken;
+use crate::people::ViewerRole;
+
+/// This matter's one source repository, as a resolved browser URL.
+///
+/// A Project has exactly one repository, named for its Project code, holding
+/// that Project's notation templates and its Portal. The web app's router
+/// builds this from the active deployment's configured organization and forge
+/// host plus `projects.code`. `None` leaves the pointer out of the lawyer-only
+/// section: the coordinate is *derived*, so a deployment with no configured
+/// forge coordinate has no repository to point at, and that is a legitimate
+/// outcome rather than a degraded one.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ProjectRepositoryPointer(pub Option<String>);
+
+/// The document-upload form's `?error=` flash query.
+#[derive(Deserialize, Default)]
+pub struct DocumentsQuery {
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// One revision in a grouped lawyer document history.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct LawyerDocRevision {
+    pub id: String,
+    pub filename: String,
+    /// This revision's own stored visibility, as the plain word rendered on
+    /// the page (`"internal"` or `"shared"`) — never an icon or a colour
+    /// alone. A chain's revisions may disagree (an internal draft beside a
+    /// shared executed copy under one slug); that is normal, so each
+    /// revision carries its own value rather than inheriting the row's.
+    pub visibility: String,
+}
+
+/// One document row (the operative filename + id and its revision history).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct LawyerDocRow {
+    pub id: String,
+    pub filename: String,
+    /// The operative revision's visibility, as the plain word rendered in
+    /// the table's Visibility column. See [`LawyerDocRevision::visibility`].
+    pub visibility: String,
+    /// Newest-first revisions for a slugged document. Empty for one-off assets.
+    pub revisions: Vec<LawyerDocRevision>,
+    /// The Service recorded on any revision of this document, one
+    /// display-ready line each, earliest served first.
+    #[serde(default)]
+    pub service: Vec<String>,
+}
+
+/// One run or never-started template in a Project's workflow board.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct ProjectNotationRow {
+    pub template_code: String,
+    pub notation_id: Option<String>,
+    pub current_state: Option<String>,
+    pub workflow_states: Vec<String>,
+    pub state_entered_at: std::collections::BTreeMap<String, String>,
+    pub respondent_email: Option<String>,
+    pub signature_request_id: Option<String>,
+    pub last_transition_at: Option<String>,
+}
+
+/// Assemble the private Project notation board from its current templates,
+/// runs, transition journal, respondents, and signature records.
+#[cfg(feature = "server")]
+pub async fn project_notation_board(
+    surreal: &store::surreal::SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
+    project_id: uuid::Uuid,
+) -> Result<Vec<ProjectNotationRow>, String> {
+    let templates = store::templates::list_for_project(surreal, project_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let notations = store::notations::list_by_project(surreal, project_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut rows = Vec::with_capacity(templates.len() + notations.len());
+    let mut started = std::collections::BTreeSet::new();
+
+    for notation in notations {
+        let template = store::templates::find_by_id(surreal, notation.template_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let Some(template) = template else { continue };
+        let workflow_states = match store::templates::body(surreal, storage, &template).await {
+            Ok(markdown) => workflow_state_order(&markdown),
+            // Template registrations can exist before their source body is
+            // attached. Keep the matter board readable while the workflow
+            // definition is incomplete; other storage and integrity errors
+            // still fail the read.
+            Err(store::templates::TemplateBodyError::MissingBody(_)) => Vec::new(),
+            Err(error) => return Err(error.to_string()),
+        };
+        let events = store::notation_events::for_notation(surreal, notation.id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut state_entered_at = std::collections::BTreeMap::new();
+        for event in events
+            .iter()
+            .filter(|event| event.machine_kind == store::notation_events::MACHINE_WORKFLOW)
+        {
+            state_entered_at.insert(event.to_state.clone(), event.recorded_at.clone());
+        }
+        if notation.state == "BEGIN" {
+            state_entered_at
+                .entry("BEGIN".to_string())
+                .or_insert_with(|| notation.inserted_at.to_rfc3339());
+        }
+        let respondent = store::persons::find_by_id(surreal, notation.person_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let signature_request_id = store::signatures::request_id_for_notation(surreal, notation.id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let last_transition_at = state_entered_at
+            .get(&notation.state)
+            .cloned()
+            .or_else(|| Some(notation.updated_at.to_rfc3339()));
+        started.insert(notation.template_id);
+        rows.push(ProjectNotationRow {
+            template_code: template.code,
+            notation_id: Some(notation.id.to_string()),
+            current_state: Some(notation.state),
+            workflow_states,
+            state_entered_at,
+            respondent_email: respondent.map(|person| person.email),
+            signature_request_id,
+            last_transition_at,
+        });
+    }
+
+    for template in templates {
+        if started.contains(&template.id) {
+            continue;
+        }
+        let workflow_states = match store::templates::body(surreal, storage, &template).await {
+            Ok(markdown) => workflow_state_order(&markdown),
+            Err(store::templates::TemplateBodyError::MissingBody(_)) => Vec::new(),
+            Err(error) => return Err(error.to_string()),
+        };
+        rows.push(ProjectNotationRow {
+            template_code: template.code,
+            workflow_states,
+            ..ProjectNotationRow::default()
+        });
+    }
+    rows.sort_by(|a, b| {
+        a.template_code
+            .cmp(&b.template_code)
+            .then(a.notation_id.cmp(&b.notation_id))
+    });
+    Ok(rows)
+}
+
+#[cfg(feature = "server")]
+fn workflow_state_order(markdown: &str) -> Vec<String> {
+    let Some(frontmatter) = markdown
+        .strip_prefix("---")
+        .and_then(|text| text.split_once("---").map(|(yaml, _)| yaml))
+    else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) else {
+        return Vec::new();
+    };
+    value
+        .get("workflow")
+        .and_then(serde_yaml::Value::as_mapping)
+        .map(|workflow| {
+            workflow
+                .keys()
+                .filter_map(serde_yaml::Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// One participation-ledger row: who is assigned, their system tier, the
+/// participation derived from it, and the row id for the edit/remove actions.
+/// Both columns render because the tier is what *explains* the participation —
+/// and a legacy row where the two disagree is worth seeing.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ParticipationRow {
+    pub id: String,
+    pub person_name: String,
+    pub person_email: String,
+    pub person_role: String,
+    pub participation: String,
+    /// The accountability markers this row carries. Each side is a set, so any
+    /// number of rows may hold one — the lawyer markers name everyone who
+    /// answers for the matter, and any of them may close it.
+    pub is_lawyer_dri: bool,
+    pub is_client_dri: bool,
+    /// A same-origin avatar route when the person has an image; the stored
+    /// object key never crosses the server/client view boundary.
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct AdminTestimonialView {
+    pub quote: String,
+    pub attribution: String,
+    pub public_requested: bool,
+    /// Approved for the public site: the row has both consent and a publish
+    /// time, the same condition the public reads require.
+    pub published: bool,
+}
+
+/// The rendered lawyer workbench — every field wasm-safe (plain scalars; no
+/// `store`/`SeaORM`/`cloud`/`repos` type crosses to the client build).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct LawyerDetailView {
+    /// The matter's page strip from its synced `pages:`, lawyer lens.
+    pub page_tabs: Vec<crate::sections::page::PageTab>,
+    pub id: String,
+    pub code: String,
+    pub name: String,
+    pub status: String,
+    /// Which house brand's storefront this matter was opened through
+    /// (`store::projects::Project::brand`) — `"neon"` or
+    /// `"delete-your-data"` today.
+    pub brand: String,
+    pub entity_id: Option<String>,
+    pub entity_name: Option<String>,
+    /// Everyone accountable on each side, by name. Empty on the lawyer side is
+    /// the unassigned matter the oversight lens exists to flag.
+    pub lawyer_dris: Vec<String>,
+    pub client_dris: Vec<String>,
+    /// `true` when the reader is one of this matter's lawyer DRIs, which is what
+    /// entitles them to govern the lawyer side from this page. The server
+    /// resolves it; the render never infers accountability from the tier.
+    pub viewer_is_lawyer_dri: bool,
+    /// The matter's six collaboration resources, already filtered to what this
+    /// reader may see. The two Slack columns and the Notion pages are not
+    /// carried loose on this view: a firm-only URL must not be serialised into
+    /// a page whose reader may not see it, and one filtered list is the only
+    /// place that decision is made.
+    pub resources: crate::project_resources::ProjectResourcesView,
+    pub xero_invoice_url: Option<String>,
+    /// This matter's client-trust position — the same client-safe numbers
+    /// the client sees on their own page, for the lawyers on this matter.
+    /// A Firm-wide view of the pooled account is a different surface and
+    /// never renders here.
+    #[serde(default)]
+    pub trust: crate::portal_project_detail::TrustView,
+    pub repository_url: Option<String>,
+    pub participations: Vec<ParticipationRow>,
+    #[serde(default)]
+    pub testimonial: Option<AdminTestimonialView>,
+    pub documents: Vec<LawyerDocRow>,
+    #[serde(default)]
+    pub notations: Vec<ProjectNotationRow>,
+    /// The document-upload form's `?error=` flash, set when a re-upload's
+    /// kind conflicts with the chain it would join.
+    #[serde(default)]
+    pub error: Option<String>,
+    /// The upload form's Kind select, as `(value, label)` pairs — every
+    /// `rules::kind::Kind::valid_for(Lane::Asset)` value, computed
+    /// server-side so the wasm client never needs the `rules` crate.
+    pub asset_kind_choices: Vec<(String, String)>,
+    pub csrf_token: String,
+    /// The matter calendar's active sort, read from `?sort=`/`?dir=` and
+    /// normalised to the advertised columns.
+    pub calendar_sort: String,
+    pub calendar_dir: String,
+    /// The matter timeline: docket entries and open deadlines, in date order.
+    #[serde(default)]
+    pub calendar_events: Vec<crate::project_calendar::CalendarEvent>,
+    /// Every open deadline on this matter, soonest first, overdue marked.
+    #[serde(default)]
+    pub deadlines: Vec<crate::project_deadlines::DeadlineRow>,
+    /// Completed and cancelled deadlines, collapsed in the Deadlines panel.
+    #[serde(default)]
+    pub past_deadlines: Vec<crate::project_deadlines::DeadlineRow>,
+    pub role: ViewerRole,
+    /// The deploy's brand mark for the navbar. `None` when the mounted brand
+    /// configures none.
+    #[serde(default)]
+    pub logo: Option<crate::components::AppLogo>,
+    /// The resolved brand's tokens stylesheet href, so the page wears
+    /// its own palette rather than the firm's on a non-default host.
+    #[serde(default)]
+    pub tokens_href: String,
+}
+
+/// Resolve a side's DRI names from the designated ids, alphabetical.
+///
+/// A designated person who is no longer on file drops out rather than blanking
+/// the whole side: the other names are still the answer to "who is accountable".
+#[cfg(feature = "server")]
+async fn dri_names(
+    surreal: &store::surreal::SurrealDb,
+    person_ids: &[uuid::Uuid],
+) -> Result<Vec<String>, ServerFnError> {
+    if person_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut names: Vec<String> = store::persons::find_by_ids(surreal, person_ids)
+        .await
+        .map_err(server_error)?
+        .into_iter()
+        .map(|person| person.name)
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
+/// The Visibility column's plain word — never an icon or a colour alone, so a
+/// lawyer scanning for what the client can see never has to learn a legend.
+/// Each document revision's Service, as the row prints it: the method, the
+/// date, the recipient and the party they appear for, and the docket entry
+/// that links the served revision where one does.
+#[cfg(feature = "server")]
+async fn service_lines(
+    surreal: &store::surreal::SurrealDb,
+    project_id: uuid::Uuid,
+) -> Result<std::collections::HashMap<uuid::Uuid, Vec<String>>, String> {
+    let rows = store::project_service::list(surreal, project_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut entries: std::collections::HashMap<uuid::Uuid, String> =
+        std::collections::HashMap::new();
+    if !rows.is_empty() {
+        for entry in store::cases::docket_for_project(surreal, project_id)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            if let Some(document) = entry.document_asset_id {
+                entries
+                    .entry(document)
+                    .or_insert_with(|| format!("D.I. {}", entry.entry_number));
+            }
+        }
+    }
+    let mut lines: std::collections::HashMap<uuid::Uuid, Vec<String>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        let method = store::project_service::ServiceMethod::parse(&row.method)
+            .map_or(row.method.clone(), |method| {
+                method.certificate_phrase().to_string()
+            });
+        let counsel = row
+            .counsel_for
+            .as_deref()
+            .map(|party| format!(", counsel for {party}"))
+            .unwrap_or_default();
+        let reference = entries
+            .get(&row.document_id)
+            .map(|entry| format!(" ({entry})"))
+            .unwrap_or_default();
+        lines.entry(row.document_id).or_default().push(format!(
+            "Served {method} on {} on {}{counsel}{reference}",
+            row.served_on, row.recipient
+        ));
+    }
+    Ok(lines)
+}
+
+/// `"shared"` for `store::documents::visibility::CLIENT`; `"internal"` for
+/// anything else, which is both the stored default and the safe reading of an
+/// unrecognized value.
+#[cfg(feature = "server")]
+fn visibility_word(stored: &str) -> String {
+    if stored == store::documents::visibility::CLIENT {
+        "shared".to_string()
+    } else {
+        "internal".to_string()
+    }
+}
+
+/// The document-upload Kind select's options, as `(value, label)` — every
+/// `Kind` valid in the asset lane, in [`rules::kind::Kind::ALL`] order. Computed
+/// here rather than duplicated as literal strings, so a new asset-lane kind
+/// reaches the upload form for free.
+#[cfg(feature = "server")]
+fn asset_kind_choices() -> Vec<(String, String)> {
+    rules::kind::Kind::ALL
+        .iter()
+        .filter(|k| k.valid_for(rules::kind::Lane::Asset))
+        .map(|k| {
+            (
+                k.as_str().to_string(),
+                format!("{} ({})", k.describe(), k.as_str()),
+            )
+        })
+        .collect()
+}
+
+/// Fetch the lawyer-lens workbench for one matter. Refuses a non-lawyer caller and
+/// a lawyer not on the matter with `404`; a query failure is a `500`.
+#[server]
+#[cfg_attr(feature = "server", allow(clippy::too_many_lines))]
+pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnError> {
+    let axum::extract::Path(code) =
+        dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Path<String>, _>()
+            .await?;
+    // The calendar's sort. Lenient like the workbench's — an unrecognised
+    // column falls back to the leftmost rather than refusing the matter, which
+    // is why this route carries no bad-sort pre-handler.
+    let calendar_query = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::extract::Query<crate::project_calendar::CalendarQuery>,
+        _,
+    >()
+    .await
+    .map_or_else(
+        |_| crate::project_calendar::CalendarQuery::default(),
+        |axum::extract::Query(q)| q,
+    );
+    let calendar_sort = crate::project_calendar::sort_field(
+        calendar_query.sort.as_deref(),
+        crate::project_calendar::MATTER_COLUMNS,
+    );
+    let calendar_dir = crate::project_calendar::sort_dir(calendar_query.dir.as_deref());
+    // The document-upload form's `?error=` flash — set when the upload
+    // handler's redirect-on-refusal carries a message (a kind-changed
+    // revision refusal today).
+    let error = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::extract::Query<DocumentsQuery>,
+        _,
+    >()
+    .await
+    .map_or_else(|_| DocumentsQuery::default(), |axum::extract::Query(q)| q)
+    .error;
+    let role = dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<ViewerRole>, _>()
+        .await
+        .map(|axum::Extension(role)| role)
+        .unwrap_or_default();
+    // The navbar renders on the 404 body too, so the mark is resolved before the
+    // first early return rather than only on the happy path.
+    let logo = crate::app_chrome::app_logo_from_context().await;
+    let tokens_href = crate::app_chrome::app_tokens_href_from_context().await;
+    // A non-lawyer caller gets the handler's 404 — the workbench is hidden,
+    // not merely refused.
+    if !role.is_lawyer_tier() {
+        return Ok(not_found(uuid::Uuid::nil(), role, logo, String::new()));
+    }
+    let csrf_token =
+        dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<CsrfToken>, _>()
+            .await
+            .map(|axum::Extension(token)| token.0)
+            .unwrap_or_default();
+    let ProjectRepositoryPointer(repository_url) =
+        dioxus_fullstack_core::FullstackContext::extract::<
+            axum::Extension<ProjectRepositoryPointer>,
+            _,
+        >()
+        .await
+        .map(|axum::Extension(pointer)| pointer)
+        .unwrap_or_default();
+    let person_id = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::Extension<crate::portal_project_list::PersonId>,
+        _,
+    >()
+    .await
+    .ok()
+    .and_then(|axum::Extension(pid)| pid.0)
+    .and_then(|raw| raw.parse::<uuid::Uuid>().ok());
+
+    let store_role = match role {
+        ViewerRole::Owner => store::persons::Role::Owner,
+        ViewerRole::Admin => store::persons::Role::Admin,
+        ViewerRole::Lawyer => store::persons::Role::Lawyer,
+        ViewerRole::Clerk => store::persons::Role::Clerk,
+        ViewerRole::Client => store::persons::Role::Client,
+    };
+
+    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let storage = consume_context::<std::sync::Arc<dyn cloud::StorageService>>();
+    let Some(project) = store::projects::find_by_code(&surreal, &code)
+        .await
+        .map_err(server_error)?
+    else {
+        return Ok(not_found(uuid::Uuid::nil(), role, logo, String::new()));
+    };
+    let id = project.id;
+
+    // Anyone not on the matter gets a 404, not a peek — Owner and Admin
+    // included. This goes through `store::access`, which is the layer that
+    // requires the participation row of every tier; the raw
+    // `store::projects` predicate still carries the privileged short-circuit
+    // its own remaining callers depend on, and reaching for it here is what
+    // silently handed the workbench to an unassigned Owner.
+    let viewer = store::access::matter_viewer(&surreal, person_id, store_role, id)
+        .await
+        .map_err(server_error)?;
+    let visible = viewer.is_some();
+    if !visible {
+        return Ok(not_found(id, role, logo, csrf_token));
+    }
+    let entity = store::entities::find_by_id(&surreal, project.entity_id)
+        .await
+        .map_err(server_error)?;
+    let entity_id = entity.as_ref().map(|entity| entity.id.to_string());
+    let entity_name = entity.map(|entity| entity.name);
+
+    // The matter's most recently raised Xero invoice — a matter may carry
+    // several over time, and `for_projects` orders newest first. Absent
+    // until an invoice raised in Xero is mirrored here.
+    // Same fold, same matter scope as the client page: a lawyer reading a
+    // matter sees that matter's trust position, not the pooled balance.
+    let position = store::trust::position_for_project(&surreal, id)
+        .await
+        .map_err(server_error)?;
+    let trust = crate::portal_project_detail::trust_view(
+        &position,
+        &store::iolta_withdrawals::for_project(&surreal, id)
+            .await
+            .map_err(server_error)?,
+    );
+
+    let xero_invoice_url = store::xero_invoices::for_projects(&surreal, &[id])
+        .await
+        .map_err(server_error)?
+        .into_iter()
+        .next()
+        .map(|invoice| {
+            format!(
+                "https://go.xero.com/AccountsReceivable/View.aspx?InvoiceID={}",
+                invoice.xero_invoice_id
+            )
+        });
+
+    // The two DRIs — a read failure is a 500, never a silently-blank DRI on an
+    // accountability surface.
+    let participation_rows = store::projects::participations_for_project(&surreal, id)
+        .await
+        .map_err(server_error)?;
+    let lawyer_dri_ids: Vec<uuid::Uuid> = participation_rows
+        .iter()
+        .filter(|row| row.is_lawyer_dri)
+        .map(|row| row.person_id)
+        .collect();
+    let client_dri_ids: Vec<uuid::Uuid> = participation_rows
+        .iter()
+        .filter(|row| row.is_client_dri)
+        .map(|row| row.person_id)
+        .collect();
+    // Whether *this* reader is accountable, resolved from the ledger rather
+    // than from their tier: a lawyer who is not a DRI on this matter does not
+    // govern its lawyer side.
+    let viewer_is_lawyer_dri = person_id.is_some_and(|me| lawyer_dri_ids.contains(&me));
+    let lawyer_dris = dri_names(&surreal, &lawyer_dri_ids).await?;
+    let client_dris = dri_names(&surreal, &client_dri_ids).await?;
+    let testimonial = if role.is_admin_tier() {
+        match client_dri_ids.first().copied() {
+            Some(client_id) => store::testimonials::for_person_project(&surreal, client_id, id)
+                .await
+                .map_err(server_error)?
+                .map(|testimonial| AdminTestimonialView {
+                    quote: testimonial.quote,
+                    attribution: testimonial.attribution_label.unwrap_or_default(),
+                    public_requested: testimonial.consented_at.is_some(),
+                    published: testimonial.consented_at.is_some()
+                        && testimonial.published_at.is_some(),
+                }),
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    let service_lines = service_lines(&surreal, id).await.map_err(server_error)?;
+    let documents = store::assets::grouped_for_project(&surreal, id)
+        .await
+        .map_err(server_error)?
+        .into_iter()
+        .map(|group| {
+            let service = std::iter::once(group.current.id)
+                .chain(group.revisions.iter().map(|revision| revision.id))
+                .filter_map(|asset| service_lines.get(&asset))
+                .flatten()
+                .cloned()
+                .collect();
+            LawyerDocRow {
+                id: group.current.id.to_string(),
+                filename: group.current.filename.unwrap_or_default(),
+                visibility: visibility_word(&group.current.visibility),
+                revisions: group
+                    .revisions
+                    .into_iter()
+                    .map(|revision| LawyerDocRevision {
+                        id: revision.id.to_string(),
+                        filename: revision.filename.unwrap_or_default(),
+                        visibility: visibility_word(&revision.visibility),
+                    })
+                    .collect(),
+                service,
+            }
+        })
+        .collect();
+    let notations = project_notation_board(&surreal, &storage, id)
+        .await
+        .map_err(server_error)?;
+
+    // The participation ledger: the rows, plus the linked people in one batched
+    // query so the system tier is visible without conflating it with
+    // participation.
+    let people = store::persons::find_by_ids(
+        &surreal,
+        &participation_rows
+            .iter()
+            .map(|r| r.person_id)
+            .collect::<Vec<_>>(),
+    )
+    .await
+    .map_err(server_error)?;
+    let participations = to_participation_rows(&participation_rows, &people);
+
+    // The matter timeline: every docket entry joined with every open
+    // deadline, in date order, through the calendar the page already carries.
+    let stored_deadlines = store::project_deadlines::list(&surreal, id)
+        .await
+        .map_err(server_error)?;
+    let docket = store::cases::docket_for_project(&surreal, id)
+        .await
+        .map_err(server_error)?;
+    let calendar_events = crate::project_timeline::timeline_events(
+        &docket,
+        &stored_deadlines,
+        &project.name,
+        entity_name.as_deref().unwrap_or_default(),
+    );
+
+    let deadline_groups =
+        crate::project_deadlines::deadline_groups(&stored_deadlines, chrono::Utc::now(), false);
+
+    let code_for_resources = project.code.clone();
+    let page_tabs = crate::sections::page::stored_page_tabs(
+        &surreal,
+        id,
+        &project.code,
+        crate::sections::PageLens::Lawyer,
+    )
+    .await;
+    Ok(LawyerDetailView {
+        page_tabs,
+        id: project.id.to_string(),
+        code: project.code,
+        name: project.name,
+        status: project.status,
+        brand: project.brand,
+        entity_id,
+        entity_name,
+        lawyer_dris,
+        client_dris,
+        viewer_is_lawyer_dri,
+        resources: crate::project_resources::ProjectResourcesView {
+            resources: crate::project_resources::visible_resources(
+                &crate::project_resources::ProjectResourceLinks {
+                    private_slack_channel_url: project.internal_slack_channel_url,
+                    private_notion_page_url: project.private_notion_page_url,
+                    drive_folder_id: project.drive_folder_id,
+                    shared_slack_channel_url: project.external_slack_channel_url,
+                    shared_notion_page_url: project.shared_notion_page_url,
+                },
+                role,
+            ),
+            can_configure: role.is_lawyer_tier(),
+            project_code: code_for_resources,
+        },
+        xero_invoice_url,
+        trust,
+        repository_url,
+        participations,
+        testimonial,
+        documents,
+        notations,
+        error,
+        asset_kind_choices: asset_kind_choices(),
+        csrf_token,
+        calendar_sort,
+        calendar_dir,
+        calendar_events,
+        deadlines: deadline_groups.open,
+        past_deadlines: deadline_groups.past,
+        role,
+        logo,
+        tokens_href,
+    })
+}
+
+/// Commit a `500` and wrap a query error — an unavailable workbench is a server
+/// error, not a `200` with an error body.
+#[cfg(feature = "server")]
+pub(crate) fn server_error(e: impl std::fmt::Display) -> ServerFnError {
+    dioxus_fullstack_core::FullstackContext::commit_http_status(
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        None,
+    );
+    ServerFnError::new(e.to_string())
+}
+
+/// Project a matter's raw participation rows and their linked people into the
+/// rendered ledger shape. Pure (no I/O) so a caller that already holds both
+/// batches — [`get_lawyer_project_detail`] fetches them for the DRI names
+/// anyway — pays no second query to build the table too.
+#[cfg(feature = "server")]
+fn to_participation_rows(
+    participation_rows: &[store::projects::PersonProjectRole],
+    people: &[store::persons::Person],
+) -> Vec<ParticipationRow> {
+    let people_by_id: std::collections::HashMap<_, _> = people.iter().map(|p| (p.id, p)).collect();
+    participation_rows
+        .iter()
+        .filter_map(|row| {
+            people_by_id.get(&row.person_id).map(|p| ParticipationRow {
+                id: row.id.to_string(),
+                person_name: p.name.clone(),
+                person_email: p.email.clone(),
+                person_role: p.role.as_str().to_string(),
+                participation: row.participation.clone(),
+                is_lawyer_dri: row.is_lawyer_dri,
+                is_client_dri: row.is_client_dri,
+                avatar_url: p
+                    .profile_image_url
+                    .as_ref()
+                    .map(|_| format!("/app/people/{}/avatar", p.id)),
+            })
+        })
+        .collect()
+}
+
+/// The participation ledger for one matter, in the same shape the lawyer
+/// workbench renders — the rows plus the linked people in one batched query,
+/// so the system tier is visible without conflating it with participation.
+///
+/// Shared with [`crate::admin_unassigned_project_detail`], which renders the
+/// same ledger for an Owner/Admin who has no row on the matter: the ledger
+/// itself carries no confidential matter content, so both callers may read it
+/// once each resolves that its own caller may.
+#[cfg(feature = "server")]
+pub(crate) async fn participation_rows_for(
+    surreal: &store::surreal::SurrealDb,
+    project_id: uuid::Uuid,
+) -> Result<Vec<ParticipationRow>, ServerFnError> {
+    let participation_rows = store::projects::participations_for_project(surreal, project_id)
+        .await
+        .map_err(server_error)?;
+    let people = store::persons::find_by_ids(
+        surreal,
+        &participation_rows
+            .iter()
+            .map(|r| r.person_id)
+            .collect::<Vec<_>>(),
+    )
+    .await
+    .map_err(server_error)?;
+    Ok(to_participation_rows(&participation_rows, &people))
+}
+
+/// Commit the `404` the handler returned for a matter the caller cannot see
+/// and return an empty (nameless) view.
+#[cfg(feature = "server")]
+fn not_found(
+    id: uuid::Uuid,
+    role: ViewerRole,
+    logo: Option<crate::components::AppLogo>,
+    csrf_token: String,
+) -> LawyerDetailView {
+    dioxus_fullstack_core::FullstackContext::commit_http_status(
+        axum::http::StatusCode::NOT_FOUND,
+        None,
+    );
+    LawyerDetailView {
+        id: id.to_string(),
+        role,
+        logo,
+        csrf_token,
+        ..LawyerDetailView::default()
+    }
+}
+
+/// The documents table: any `?error=` flash, then either the empty notice or
+/// the grouped table with its Visibility column — the operative revision's
+/// value in the row, each revision's own value in the expanded history.
+fn documents_table(view: &LawyerDetailView) -> Element {
+    rsx! {
+        if let Some(error) = view.error.as_ref() {
+            p { class: "nav-form-error", role: "alert", "{error}" }
+        }
+        if view.documents.is_empty() {
+            p { class: "projects-empty", "No documents yet." }
+        } else {
+            div { class: "nav-table-wrap",
+                table { class: "nav-table",
+                    thead {
+                        tr {
+                            th { scope: "col", "Filename" }
+                            th { scope: "col", "Visibility" }
+                            th { scope: "col", "Revisions" }
+                            th { scope: "col", "Download" }
+                        }
+                    }
+                    tbody {
+                        for doc in view.documents.iter() {
+                            tr {
+                                td {
+                                    if doc.revisions.is_empty() {
+                                        a { class: "nav-link", href: "/app/projects/{view.code}/documents/{doc.id}", "{doc.filename}" }
+                                    } else {
+                                        details {
+                                            summary {
+                                                a { class: "nav-link", href: "/app/projects/{view.code}/documents/{doc.id}", "{doc.filename}" }
+                                            }
+                                            ul {
+                                                for revision in doc.revisions.iter() {
+                                                    li {
+                                                        a { class: "nav-link", href: "/app/projects/{view.code}/documents/{revision.id}", "{revision.filename}" }
+                                                        " ({revision.visibility}) "
+                                                        a { class: "nav-link", href: "/app/projects/{view.code}/documents/{revision.id}/download", "Download" }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                td {
+                                    "{doc.visibility}"
+                                    if !doc.service.is_empty() {
+                                        ul { class: "project-documents__service",
+                                            for line in doc.service.iter() {
+                                                li { "{line}" }
+                                            }
+                                        }
+                                    }
+                                }
+                                td {
+                                    if doc.revisions.is_empty() {
+                                        "—"
+                                    } else if doc.revisions.len() == 1 {
+                                        "1 revision"
+                                    } else {
+                                        "{doc.revisions.len()} revisions"
+                                    }
+                                }
+                                td { a { class: "nav-link", href: "/app/projects/{view.code}/documents/{doc.id}/download", "Download" } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The admin-only testimonial entry card. Its copy makes the attribution
+/// boundary explicit: the words belong to the client DRI, while the admin is
+/// recording them for a client who will not sign in to the portal.
+fn admin_testimonial_card(
+    code: &str,
+    csrf: &str,
+    testimonial: Option<&AdminTestimonialView>,
+) -> Element {
+    let testimonial = testimonial.cloned().unwrap_or_default();
+    let publication = if testimonial.public_requested {
+        "public"
+    } else {
+        "private"
+    };
+    let has_testimonial = !testimonial.quote.is_empty();
+    let status = if testimonial.published {
+        "Published"
+    } else if testimonial.public_requested {
+        "Awaiting approval"
+    } else {
+        "Private"
+    };
+    let publication_action = if testimonial.published {
+        Some(("unpublish", "Unpublish"))
+    } else if testimonial.public_requested {
+        Some(("publish", "Publish"))
+    } else {
+        None
+    };
+    rsx! {
+        section { class: "lawyer-detail__section project-testimonial",
+            h2 { "Client testimonial" }
+            if has_testimonial {
+                p { class: "nav-muted", "Status: {status}" }
+                if let Some((verb, label)) = publication_action {
+                    form {
+                        method: "post",
+                        action: format!("/app/admin/projects/{code}/testimonial/{verb}"),
+                        input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
+                        button { r#type: "submit", class: "nav-btn nav-btn--secondary", "{label}" }
+                    }
+                }
+            }
+            FormCard {
+                title: "Enter client testimonial".to_string(),
+                action: format!("/app/admin/projects/{code}/testimonial"),
+                submit_label: "Save testimonial".to_string(),
+                heading: Heading::Hidden,
+                csrf_token: Some(csrf.to_string()),
+                intro: rsx! {
+                    p { class: "nav-muted",
+                        "As an admin, you attest that the client supplied this text and agreed to its use."
+                    }
+                },
+                fields: vec![
+                    Field::textarea("Testimonial", "quote", testimonial.quote, 5)
+                        .required()
+                        .help("Enter the client's words exactly as supplied."),
+                    Field::text("Attribution", "attribution", testimonial.attribution)
+                        .help("Optional. Use only an attribution the client supplied."),
+                    Field::radio(
+                        "Publication",
+                        "publication",
+                        vec![
+                            crate::components::Choice::new("private", "Keep private"),
+                            crate::components::Choice::new("public", "Request public use"),
+                        ],
+                        Some(publication.to_string()),
+                    )
+                    .required()
+                    .help("Public use is a request and still needs the normal publication approval."),
+                ],
+            }
+        }
+    }
+}
+
+fn notation_columns(rows: &[ProjectNotationRow]) -> Vec<String> {
+    let mut columns = Vec::new();
+    for row in rows {
+        for state in &row.workflow_states {
+            if !columns.contains(state) {
+                columns.push(state.clone());
+            }
+        }
+    }
+    columns
+}
+
+fn notation_state_cell(row: &ProjectNotationRow, state: &str) -> String {
+    if row.notation_id.is_none() {
+        return if row.workflow_states.iter().any(|item| item == state) {
+            "·".to_string()
+        } else {
+            "—".to_string()
+        };
+    }
+    if !row.workflow_states.iter().any(|item| item == state) {
+        return "—".to_string();
+    }
+    let entered = row.state_entered_at.get(state);
+    let mark = if row.current_state.as_deref() == Some(state) {
+        "●"
+    } else if entered.is_some() {
+        if state.contains("declined") || state.contains("failed") {
+            "✗"
+        } else {
+            "✓"
+        }
+    } else {
+        "·"
+    };
+    match entered {
+        Some(time) => format!("{mark} {time}"),
+        None => mark.to_string(),
+    }
+}
+
+/// The Project's workflow board: current runs beside templates not yet opened.
+#[component]
+pub fn ProjectNotationBoard(rows: Vec<ProjectNotationRow>) -> Element {
+    let columns = notation_columns(&rows);
+    rsx! {
+        section { class: "lawyer-detail__section project-notations",
+            h2 { "Notation workflows" }
+            if rows.is_empty() {
+                p { class: "projects-empty", "No notation templates are registered on this project." }
+            } else {
+                p { class: "nav-muted", "Every project template appears here, including ones never started." }
+                div { class: "nav-table-wrap",
+                    table { class: "nav-table",
+                        thead { tr {
+                            for state in columns.iter() { th { scope: "col", "{state}" } }
+                            th { scope: "col", "Template" }
+                            th { scope: "col", "Notation UUID" }
+                            th { scope: "col", "Client email" }
+                            th { scope: "col", "Signature request" }
+                            th { scope: "col", "Last transition" }
+                        } }
+                        tbody {
+                            for row in rows.iter() {
+                                tr {
+                                    for state in columns.iter() {
+                                        td { "{notation_state_cell(row, state)}" }
+                                    }
+                                    th { scope: "row", "{row.template_code}" }
+                                    td { "{row.notation_id.as_deref().unwrap_or(\"never started\")}" }
+                                    td { "{row.respondent_email.as_deref().unwrap_or(\"—\")}" }
+                                    td { "{row.signature_request_id.as_deref().unwrap_or(\"—\")}" }
+                                    td { "{row.last_transition_at.as_deref().unwrap_or(\"—\")}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The lawyer matter-detail workbench, server-side rendered.
+#[component]
+pub fn LawyerProjectDetail() -> Element {
+    let resource = use_server_future(get_lawyer_project_detail)?;
+
+    let view = match &*resource.read() {
+        Some(Ok(view)) if !view.name.is_empty() => view.clone(),
+        Some(Ok(_)) => {
+            return rsx! {
+                main { id: "lawyer-project", p { "That project was not found." } }
+            }
+        }
+        Some(Err(_)) => {
+            return rsx! {
+                main { id: "lawyer-project", p { "Failed to load this project." } }
+            }
+        }
+        None => {
+            return rsx! {
+                main { id: "lawyer-project", p { "Loading…" } }
+            }
+        }
+    };
+
+    let is_admin = view.role.is_admin_tier();
+    let csrf = view.csrf_token.clone();
+    // Precompute the header's optional fields — a dash for the absent ones —
+    // rather than interpolate method chains inside an rsx format string.
+    let dash = |v: &Option<String>| v.clone().unwrap_or_else(|| "—".to_string());
+    let entity_disp = dash(&view.entity_name);
+    // Each side reads as one line whatever its size, so a matter with two
+    // accountable lawyers says so in the place a reader already looks.
+    let names = |v: &[String]| {
+        if v.is_empty() {
+            "—".to_string()
+        } else {
+            v.join(", ")
+        }
+    };
+    let lawyer_dri_disp = names(&view.lawyer_dris);
+    let client_dri_disp = names(&view.client_dris);
+    // Who may govern each side, mirroring `store::participation::authorize` so
+    // the page renders exactly the controls the command would honour. An empty
+    // lawyer set is the bootstrap case: a lawyer already on this workbench may
+    // name the first DRI, because there is no current holder to admit them.
+    let may_govern_lawyer_side = may_govern_lawyer_dri(
+        is_admin,
+        view.viewer_is_lawyer_dri,
+        view.lawyer_dris.is_empty() && view.role.is_lawyer_tier(),
+    );
+    let may_govern_client_side = view.role.is_lawyer_tier();
+    let brand_disp = crate::brand_website::BrandWebsite::from_key(&view.brand).attached_line();
+
+    rsx! {
+        document::Title { "Project | {view.name}" }
+        document::Stylesheet { href: crate::components::THEME_STYLESHEET_HREF }
+        document::Stylesheet { href: "{view.tokens_href}" }
+        crate::components::AppNavbar {
+            destinations: crate::app_chrome::app_destinations(view.role),
+            logo: view.logo.clone(),
+        }
+        main { id: "lawyer-project", class: "nav-theme lawyer-detail",
+            header { class: "page-header",
+                h1 { "{view.name}" }
+                crate::sections::page::CaseNav {
+                    tabs: view.page_tabs.clone(),
+                    current: format!("/app/projects/{}", view.code),
+                }
+                p { class: "nav-muted",
+                    "Code: " code { "{view.code}" }
+                    " · Status: {view.status}"
+                    " · Brand: {brand_disp}"
+                    " · Entity: {entity_disp}"
+                    if let Some(entity_id) = view.entity_id.as_ref() {
+                        " · "
+                        a { class: "nav-link", href: "/app/admin/entities/{entity_id}/edit", "Edit entity" }
+                    }
+                    " · Lawyer DRI: {lawyer_dri_disp}"
+                    " · Client DRI: {client_dri_disp}"
+                    " · "
+                    a { class: "nav-link", href: "/app/projects/{view.code}/edit", "Edit project" }
+                    " · "
+                    a { class: "nav-link", href: "/app/projects/{view.code}/notations/new", "New notation" }
+                }
+                form {
+                    class: "lawyer-detail__inline-form",
+                    method: "post",
+                    action: "/app/projects/{view.code}/view-as-client",
+                    input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
+                    button { class: "nav-btn nav-btn--secondary", r#type: "submit", "View as Client" }
+                }
+            }
+
+            crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
+
+            crate::project_deadlines::ProjectDeadlinesPanel {
+                section_class: "lawyer-detail__section".to_string(),
+                rows: view.deadlines.clone(),
+                past: view.past_deadlines.clone(),
+            }
+
+            if is_admin && !view.client_dris.is_empty() {
+                {admin_testimonial_card(&view.code, &csrf, view.testimonial.as_ref())}
+            }
+
+            if view.trust.any {
+                section { class: "lawyer-detail__section",
+                    h2 { "Client trust" }
+                    p { class: "nav-muted",
+                        "Held for this Project in the firm's pooled client trust account, \
+                         mirrored from Xero. Xero is the books."
+                    }
+                    ul {
+                        li { "Held: {view.trust.held}" }
+                        li { "Paid in: {view.trust.deposited}" }
+                        li { "Earned and drawn: {view.trust.drawn}" }
+                        li { "Refunded: {view.trust.refunded}" }
+                    }
+                    if !view.trust.allocations.is_empty() {
+                        p { class: "nav-muted",
+                            "Drawn against this Project's invoices. The pooled transfer \
+                             these lines were part of is not a Project-level fact."
+                        }
+                        ul {
+                            for line in view.trust.allocations.iter() {
+                                li {
+                                    "{line.amount} to {line.invoice_reference} on {line.occurred_on}"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if view.xero_invoice_url.is_some() || view.repository_url.is_some() {
+                section { class: "lawyer-detail__section project-integrations",
+                    h2 { "Integrations" }
+                    p { class: "lawyer-detail__integration-links",
+                        if let Some(url) = view.xero_invoice_url.as_ref() {
+                            a {
+                                class: "nav-btn nav-btn--secondary",
+                                href: "{url}",
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                                "Xero"
+                            }
+                        }
+                        if let Some(url) = view.repository_url.as_ref() {
+                            a {
+                                class: "nav-btn nav-btn--secondary",
+                                href: "{url}",
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                                "Source repository"
+                            }
+                        }
+                    }
+                }
+            }
+
+            // The matter timeline: every docket entry on this matter's cases
+            // joined with every open deadline, in date order. Documents,
+            // participations, and notations stay out of it.
+            crate::project_calendar::ProjectCalendar {
+                section_class: "lawyer-detail__section project-calendar".to_string(),
+                heading: "Calendar".to_string(),
+                empty_message: "No calendar events scheduled for this project.".to_string(),
+                columns: crate::project_calendar::MATTER_COLUMNS.to_vec(),
+                path: format!("/app/projects/{}", view.code),
+                query_prefix: String::new(),
+                sort: view.calendar_sort.clone(),
+                dir: view.calendar_dir.clone(),
+                events: view.calendar_events.clone(),
+            }
+
+            ProjectNotationBoard { rows: view.notations.clone() }
+
+            ParticipationTable {
+                code: view.code.clone(),
+                csrf: csrf.clone(),
+                participations: view.participations.clone(),
+                is_admin,
+                may_govern_lawyer_side,
+                may_govern_client_side,
+            }
+
+            section { class: "lawyer-detail__section project-documents",
+                h2 { "Documents" }
+                {documents_table(&view)}
+                // Real-time upload progress: `upload-progress.js` finds the
+                // form via this field's id and replays the native submit as
+                // an XHR so it can render `upload.loaded` / `upload.total`
+                // as they arrive — a plain `Field::file(...)` id defaults to
+                // its `name` ("file"), so this needs its own id to stay
+                // unique against any other file field on the page.
+                document::Script { src: "/public/js/upload-progress.js", defer: true }
+                FormCard {
+                    title: "Upload documents".to_string(),
+                    action: "/app/projects/{view.code}/documents/upload",
+                    submit_label: "Upload".to_string(),
+                    heading: Heading::H2,
+                    multipart: true,
+                    csrf_token: Some(csrf.clone()),
+                    fields: vec![
+                        Field::file("Files", "file").id("document-upload-file").required().multiple()
+                            .help("Select one file or several — each is filed as its own document."),
+                        Field::select(
+                            "Kind",
+                            "kind",
+                            view.asset_kind_choices
+                                .iter()
+                                .map(|(value, label)| crate::components::Choice::new(value.clone(), label.clone()))
+                                .collect(),
+                            Some("unclassified".to_string()),
+                        )
+                        .required()
+                        .help(
+                            "Required. The stored enum is in parentheses. Applies to every file in this batch.",
+                        ),
+                        Field::text("Description", "description", "")
+                            .placeholder("Letter from Acme Bank dated 2026-05-23")
+                            .help("Optional. Applies to every file in this batch."),
+                        Field::select("Visibility", "visibility",
+                            vec![
+                                crate::components::Choice::new("internal", "Internal (lawyer only)"),
+                                crate::components::Choice::new("client", "Client-visible"),
+                            ],
+                            Some("internal".to_string()))
+                            .help("Applies to every file in this batch. Internal work product — memos, drafts — stays internal."),
+                    ],
+                }
+            }
+
+            // Closing a matter is bespoke: it is asked for by email and opened
+            // by the lawyer DRI, never fired from a button here. Every firm
+            // participant reads where to ask — the accountability marker
+            // decides who acts on the request, not who may raise it.
+            if view.status == "open" {
+                section { class: "lawyer-detail__section project-close",
+                    p { class: "nav-muted",
+                        "To close this project, email the lawyer DRI"
+                        if !view.lawyer_dris.is_empty() {
+                            " ({lawyer_dri_disp})"
+                        }
+                        " or "
+                        "support@neonlaw.com"
+                        "."
+                    }
+                    // A matter always has at least one lawyer DRI — they are who
+                    // close it. An empty set is therefore a gap to fill, not a
+                    // neutral blank, so the workbench says so. Admin can add a
+                    // person and mark them; a lawyer already on the matter uses
+                    // Make DRI on a firm-side row in the ledger below.
+                    if view.lawyer_dris.is_empty() && view.role.is_lawyer_tier() {
+                        p { class: "nav-form-error", role: "alert",
+                            "This project has no lawyer DRI. "
+                            if is_admin {
+                                a { class: "nav-link", href: "/app/projects/{view.code}/people/new", "Designate the accountable lawyer" }
+                            } else {
+                                "Use Make DRI on a lawyer already assigned to this project"
+                            }
+                            "."
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Whether the workbench should offer lawyer-side DRI controls.
+///
+/// Mirrors `store::participation::authorize` for a viewer already on this
+/// matter. `may_bootstrap` is the empty-set case: a lawyer-tier participant
+/// already on the matter may name the first DRI because there is no current
+/// holder to admit the designation.
+fn may_govern_lawyer_dri(is_admin: bool, viewer_is_lawyer_dri: bool, may_bootstrap: bool) -> bool {
+    is_admin || viewer_is_lawyer_dri || may_bootstrap
+}
+
+/// The matter's "Matter people" ledger table: everyone assigned, their system
+/// tier, the derived participation, and the accountability controls — with
+/// admin add/edit/remove.
+///
+/// Shared by [`LawyerProjectDetail`] (a participant's own workbench) and
+/// [`crate::admin_unassigned_project_detail::AdminUnassignedProjectDetail`]
+/// (an Owner/Admin who holds no row on this matter, and so may still manage
+/// who does). `is_admin` is always `true` for the second caller — only
+/// Owner/Admin reach that page — and `may_govern_lawyer_side` /
+/// `may_govern_client_side` are always `true` there too, mirroring
+/// `store::participation::authorize`'s unconditional Owner/Admin pass.
+#[component]
+pub fn ParticipationTable(
+    code: String,
+    csrf: String,
+    participations: Vec<ParticipationRow>,
+    is_admin: bool,
+    may_govern_lawyer_side: bool,
+    may_govern_client_side: bool,
+) -> Element {
+    rsx! {
+        section { class: "lawyer-detail__section project-participations",
+            div { class: "lawyer-detail__section-head",
+                h2 { "Project people" }
+                if is_admin {
+                    a { class: "nav-btn nav-btn--primary", href: "/app/projects/{code}/people/new", "Add person" }
+                }
+            }
+            p { class: "nav-muted", "Participation records who is assigned to this project and follows each person's system tier. Adding or removing someone here does not change that tier." }
+            if participations.is_empty() {
+                p { class: "projects-empty", "No people are assigned to this project yet." }
+            } else {
+                div { class: "nav-table-wrap",
+                    table { class: "nav-table",
+                        thead {
+                            tr {
+                                th { scope: "col", "Person" }
+                                th { scope: "col", "System tier" }
+                                th { scope: "col", "Participation" }
+                                th { scope: "col", "Accountability" }
+                                if is_admin {
+                                    th { scope: "col", class: "nav-table__end", "" }
+                                }
+                            }
+                        }
+                        tbody {
+                            for row in participations.iter() {
+                                tr {
+                                    td {
+                                        strong { "{row.person_name}" }
+                                        " "
+                                        span { class: "nav-muted", "<" "{row.person_email}" ">" }
+                                    }
+                                    td { span { class: "status-chip", "{row.person_role}" } }
+                                    td { code { "{row.participation}" } }
+                                    // The accountability marker rides the
+                                    // participation row, so the ledger is
+                                    // where it belongs on the page — and so
+                                    // is the control that moves it. Each
+                                    // side is a set, so the control adds and
+                                    // removes rather than reassigning.
+                                    td { class: "matter-dri-cell",
+                                        if row.is_lawyer_dri {
+                                            span { class: "status-chip", "Lawyer DRI" }
+                                        } else if row.is_client_dri {
+                                            span { class: "status-chip", "Client DRI" }
+                                        } else {
+                                            span { class: "nav-muted", "—" }
+                                        }
+                                        {
+                                            // A firm-side row answers to the
+                                            // lawyer rule, a client-side row
+                                            // to the client rule; the tier on
+                                            // the row is what decides which.
+                                            let firm_side = !row.participation.eq("client");
+                                            let may = if firm_side { may_govern_lawyer_side } else { may_govern_client_side };
+                                            let holds = row.is_lawyer_dri || row.is_client_dri;
+                                            rsx! {
+                                                if may {
+                                                    " "
+                                                    form {
+                                                        class: "lawyer-detail__inline-form",
+                                                        method: "post",
+                                                        action: if holds {
+                                                            format!("/app/projects/{code}/people/{}/dri/remove", row.id)
+                                                        } else {
+                                                            format!("/app/projects/{code}/people/{}/dri", row.id)
+                                                        },
+                                                        input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
+                                                        button {
+                                                            class: "nav-btn nav-btn--secondary matter-dri-toggle",
+                                                            r#type: "submit",
+                                                            if holds { "Remove DRI" } else { "Make DRI" }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if is_admin {
+                                        td { class: "nav-table__end",
+                                            a {
+                                                class: "nav-btn nav-btn--secondary",
+                                                href: "/app/projects/{code}/people/{row.id}/edit",
+                                                "Edit"
+                                            }
+                                            " "
+                                            form {
+                                                class: "lawyer-detail__inline-form",
+                                                method: "post",
+                                                action: "/app/projects/{code}/people/{row.id}/delete",
+                                                input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
+                                                button { class: "nav-btn nav-btn--danger", r#type: "submit", "Remove" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        admin_testimonial_card, documents_table, may_govern_lawyer_dri, notation_state_cell,
+        to_participation_rows, workflow_state_order, AdminTestimonialView, LawyerDetailView,
+        LawyerDocRevision, LawyerDocRow, ParticipationRow, ParticipationTable,
+        ProjectNotationBoard, ProjectNotationRow,
+    };
+    use dioxus::prelude::*;
+
+    fn row(id: &str, lawyer_dri: bool) -> ParticipationRow {
+        ParticipationRow {
+            id: id.to_string(),
+            person_name: "Aries Attorney".to_string(),
+            person_email: "aries@neonlaw.com".to_string(),
+            person_role: "lawyer".to_string(),
+            participation: "lawyer".to_string(),
+            is_lawyer_dri: lawyer_dri,
+            is_client_dri: false,
+            avatar_url: None,
+        }
+    }
+
+    fn render(
+        participations: Vec<ParticipationRow>,
+        may_govern_lawyer_side: bool,
+        is_admin: bool,
+    ) -> String {
+        render_for_code(
+            "sample-litigation",
+            participations,
+            may_govern_lawyer_side,
+            is_admin,
+        )
+    }
+
+    fn render_for_code(
+        code: &str,
+        participations: Vec<ParticipationRow>,
+        may_govern_lawyer_side: bool,
+        is_admin: bool,
+    ) -> String {
+        dioxus_ssr::render_element(rsx! {
+            ParticipationTable {
+                code: code.to_string(),
+                csrf: "TOK".to_string(),
+                participations,
+                is_admin,
+                may_govern_lawyer_side,
+                may_govern_client_side: true,
+            }
+        })
+    }
+
+    #[test]
+    fn a_governable_row_posts_make_dri_with_the_session_csrf() {
+        let html = render(
+            vec![row("00000000-0000-0000-0000-0000000000aa", false)],
+            true,
+            false,
+        );
+        assert!(html.contains("Make DRI"), "{html}");
+        assert!(
+            html.contains(
+                r#"action="/app/projects/sample-litigation/people/00000000-0000-0000-0000-0000000000aa/dri""#
+            ),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"name="_csrf" value="TOK""#),
+            "the workbench control must echo the session token: {html}"
+        );
+    }
+
+    #[test]
+    fn a_held_row_posts_remove_dri() {
+        let html = render(
+            vec![row("00000000-0000-0000-0000-0000000000aa", true)],
+            true,
+            false,
+        );
+        assert!(html.contains("Remove DRI"), "{html}");
+        assert!(
+            html.contains(
+                r#"action="/app/projects/sample-litigation/people/00000000-0000-0000-0000-0000000000aa/dri/remove""#
+            ),
+            "{html}"
+        );
+        assert!(html.contains(">Lawyer DRI<"), "{html}");
+    }
+
+    #[test]
+    fn a_viewer_who_cannot_govern_sees_the_label_and_no_control() {
+        let html = render(
+            vec![row("00000000-0000-0000-0000-0000000000aa", true)],
+            false,
+            false,
+        );
+        assert!(html.contains(">Lawyer DRI<"), "{html}");
+        assert!(!html.contains("Make DRI"), "{html}");
+        assert!(!html.contains("Remove DRI"), "{html}");
+    }
+
+    #[test]
+    #[cfg(feature = "server")]
+    fn participation_projection_joins_people_and_omits_unresolved_rows() {
+        let person_id = uuid::Uuid::now_v7();
+        let project_id = uuid::Uuid::now_v7();
+        let person = store::persons::Person {
+            id: person_id,
+            name: "Aries Attorney".to_string(),
+            given_name: None,
+            family_name: None,
+            middle_name: None,
+            email: "aries@example.test".to_string(),
+            oidc_subject: None,
+            microsoft_subject: None,
+            apple_subject: None,
+            role: store::persons::Role::Lawyer,
+            title: None,
+            phone: None,
+            xero_contact_id: None,
+            profile_image_url: Some("https://example.test/avatar.png".to_string()),
+            linkedin_url: None,
+            email_confirmed: false,
+            inserted_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let participation = |person_id| store::projects::PersonProjectRole {
+            id: uuid::Uuid::now_v7(),
+            person_id,
+            project_id,
+            participation: "lawyer".to_string(),
+            is_lawyer_dri: true,
+            is_client_dri: false,
+            inserted_at: "2026-09-25T00:00:00Z".to_string(),
+            updated_at: "2026-09-25T00:00:00Z".to_string(),
+        };
+        let rows = to_participation_rows(
+            &[
+                participation(person_id),
+                participation(uuid::Uuid::now_v7()),
+            ],
+            &[person],
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].person_name, "Aries Attorney");
+        assert_eq!(rows[0].person_email, "aries@example.test");
+        assert_eq!(rows[0].person_role, "lawyer");
+        assert_eq!(rows[0].participation, "lawyer");
+        assert!(rows[0].is_lawyer_dri);
+        assert!(!rows[0].is_client_dri);
+        assert_eq!(
+            rows[0].avatar_url.as_deref(),
+            Some(format!("/app/people/{person_id}/avatar").as_str())
+        );
+    }
+
+    #[test]
+    fn an_empty_lawyer_set_lets_a_lawyer_on_the_matter_govern() {
+        assert!(may_govern_lawyer_dri(false, false, true));
+        assert!(!may_govern_lawyer_dri(false, false, false));
+        assert!(may_govern_lawyer_dri(true, false, true));
+        assert!(may_govern_lawyer_dri(false, true, false));
+    }
+
+    #[test]
+    fn admin_testimonial_form_preserves_client_words_and_attribution_boundary() {
+        let html = dioxus_ssr::render_element(admin_testimonial_card(
+            "project",
+            "TOK",
+            Some(&AdminTestimonialView {
+                quote: "Exact words from the client.".to_string(),
+                attribution: "Client supplied attribution".to_string(),
+                public_requested: true,
+                published: false,
+            }),
+        ));
+        assert!(
+            html.contains(
+                "As an admin, you attest that the client supplied this text and agreed to its use."
+            ),
+            "{html}"
+        );
+        assert!(html.contains("Exact words from the client."), "{html}");
+        assert!(html.contains("Client supplied attribution"), "{html}");
+        assert!(
+            html.contains(r#"action="/app/admin/projects/project/testimonial""#),
+            "{html}"
+        );
+        assert!(html.contains(r#"value="public" checked"#), "{html}");
+    }
+
+    fn testimonial_card_html(public_requested: bool, published: bool) -> String {
+        dioxus_ssr::render_element(admin_testimonial_card(
+            "project",
+            "TOK",
+            Some(&AdminTestimonialView {
+                quote: "Exact words from the client.".to_string(),
+                attribution: String::new(),
+                public_requested,
+                published,
+            }),
+        ))
+    }
+
+    #[test]
+    fn a_testimonial_without_consent_is_private_and_offers_no_publication_button() {
+        let html = testimonial_card_html(false, false);
+        assert!(html.contains("Status: Private"), "{html}");
+        assert!(!html.contains("/testimonial/publish"), "{html}");
+        assert!(!html.contains("/testimonial/unpublish"), "{html}");
+    }
+
+    #[test]
+    fn a_consented_unpublished_testimonial_awaits_approval_and_offers_publish_only() {
+        let html = testimonial_card_html(true, false);
+        assert!(html.contains("Status: Awaiting approval"), "{html}");
+        assert!(
+            html.contains(r#"action="/app/admin/projects/project/testimonial/publish""#),
+            "{html}"
+        );
+        assert!(html.contains(">Publish<"), "{html}");
+        assert!(!html.contains("/testimonial/unpublish"), "{html}");
+        assert!(html.contains(r#"name="_csrf" value="TOK""#), "{html}");
+    }
+
+    #[test]
+    fn a_published_testimonial_offers_unpublish_only() {
+        let html = testimonial_card_html(true, true);
+        assert!(html.contains("Status: Published"), "{html}");
+        assert!(
+            html.contains(r#"action="/app/admin/projects/project/testimonial/unpublish""#),
+            "{html}"
+        );
+        assert!(html.contains(">Unpublish<"), "{html}");
+        assert!(!html.contains("/testimonial/publish"), "{html}");
+        assert!(html.contains(r#"name="_csrf" value="TOK""#), "{html}");
+    }
+
+    #[test]
+    fn no_testimonial_yet_shows_no_status_or_publication_buttons() {
+        let html = dioxus_ssr::render_element(admin_testimonial_card("project", "TOK", None));
+        assert!(!html.contains("Status:"), "{html}");
+        assert!(!html.contains("/testimonial/publish"), "{html}");
+    }
+
+    fn view_with_documents(documents: Vec<LawyerDocRow>) -> LawyerDetailView {
+        LawyerDetailView {
+            code: "sample-litigation".to_string(),
+            documents,
+            ..LawyerDetailView::default()
+        }
+    }
+
+    fn render_documents(documents: Vec<LawyerDocRow>) -> String {
+        dioxus_ssr::render_element(documents_table(&view_with_documents(documents)))
+    }
+
+    #[test]
+    fn an_empty_document_table_shows_the_empty_state_and_error_flash() {
+        let view = LawyerDetailView {
+            error: Some("The document could not be updated.".to_string()),
+            ..LawyerDetailView::default()
+        };
+        let html = dioxus_ssr::render_element(documents_table(&view));
+        assert!(html.contains("No documents yet."), "{html}");
+        assert!(
+            html.contains("The document could not be updated."),
+            "{html}"
+        );
+        assert!(html.contains(r#"role="alert""#), "{html}");
+    }
+
+    #[test]
+    fn a_document_with_an_internal_operative_revision_reads_as_internal() {
+        let html = render_documents(vec![LawyerDocRow {
+            id: "00000000-0000-0000-0000-0000000000aa".to_string(),
+            filename: "memo.pdf".to_string(),
+            visibility: "internal".to_string(),
+            revisions: Vec::new(),
+            service: Vec::new(),
+        }]);
+        assert!(html.contains("<td>internal</td>"), "{html}");
+    }
+
+    #[test]
+    fn a_document_with_a_client_visible_operative_revision_reads_as_shared() {
+        let html = render_documents(vec![LawyerDocRow {
+            id: "00000000-0000-0000-0000-0000000000aa".to_string(),
+            filename: "retainer.pdf".to_string(),
+            visibility: "shared".to_string(),
+            revisions: Vec::new(),
+            service: Vec::new(),
+        }]);
+        assert!(html.contains("<td>shared</td>"), "{html}");
+    }
+
+    /// LAW-124: a document's Service lines print beside its visibility,
+    /// one per record, and a document with none prints no list.
+    #[test]
+    fn a_served_document_lists_each_service_beside_its_visibility() {
+        let html = render_documents(vec![LawyerDocRow {
+            id: "a".into(),
+            filename: "motion.pdf".into(),
+            visibility: "internal".into(),
+            revisions: Vec::new(),
+            service: vec![
+                "Served by mail on 2026-03-05 on Example Counsel, counsel for Defendant (D.I. 12)"
+                    .into(),
+                "Served by electronic service on 2026-03-06 on Other Counsel (D.I. 12)".into(),
+            ],
+        }]);
+        assert_eq!(html.matches("<li>Served ").count(), 2, "{html}");
+        assert!(html.contains("project-documents__service"), "{html}");
+        assert!(html.contains("counsel for Defendant (D.I. 12)"), "{html}");
+        let none = render_documents(vec![LawyerDocRow {
+            id: "b".into(),
+            filename: "letter.pdf".into(),
+            visibility: "internal".into(),
+            revisions: Vec::new(),
+            service: Vec::new(),
+        }]);
+        assert!(!none.contains("project-documents__service"), "{none}");
+    }
+
+    #[test]
+    fn a_slugless_one_off_asset_still_shows_the_visibility_column() {
+        // Empty `revisions` is exactly the one-off-asset shape (#511's
+        // `NULL`-slug rows never enter a chain), and the column still renders.
+        let html = render_documents(vec![LawyerDocRow {
+            id: "00000000-0000-0000-0000-0000000000aa".to_string(),
+            filename: "inbound-attachment.pdf".to_string(),
+            visibility: "internal".to_string(),
+            revisions: Vec::new(),
+            service: Vec::new(),
+        }]);
+        assert!(html.contains("Visibility"), "{html}");
+        assert!(html.contains("<td>internal</td>"), "{html}");
+    }
+
+    #[test]
+    #[cfg(feature = "server")]
+    fn workflow_state_columns_follow_the_template_frontmatter() {
+        let states = workflow_state_order(
+            "---\nworkflow:\n  BEGIN:\n    label: Started\n  lawyer_review:\n    label: Review\n  reask__client:\n    label: Client\n---\n# Template\n",
+        );
+        assert_eq!(states, ["BEGIN", "lawyer_review", "reask__client"]);
+    }
+
+    #[test]
+    #[cfg(feature = "server")]
+    fn malformed_or_missing_workflow_frontmatter_has_no_state_columns() {
+        assert!(workflow_state_order("# No frontmatter\n").is_empty());
+        assert!(workflow_state_order("---\nworkflow: [\n---\n").is_empty());
+        assert!(workflow_state_order("---\nworkflow: not-a-map\n---\n").is_empty());
+        assert!(workflow_state_order("---\ntitle: Plain template\n---\n").is_empty());
+    }
+
+    #[test]
+    fn a_new_admin_testimonial_defaults_to_private_with_empty_fields() {
+        let html = dioxus_ssr::render_element(admin_testimonial_card("project", "TOK", None));
+        assert!(html.contains(r#"value="private" checked"#), "{html}");
+        assert!(html.contains(r#"name="quote""#), "{html}");
+        assert!(html.contains(r#"name="attribution""#), "{html}");
+        assert!(!html.contains(r#"value="public" checked"#), "{html}");
+    }
+
+    #[test]
+    fn notation_board_shows_never_started_templates_and_live_run_metadata() {
+        let live = ProjectNotationRow {
+            template_code: "engagement".to_string(),
+            notation_id: Some("notation-uuid".to_string()),
+            current_state: Some("lawyer_review".to_string()),
+            workflow_states: vec!["BEGIN".to_string(), "lawyer_review".to_string()],
+            state_entered_at: [(
+                "lawyer_review".to_string(),
+                "2026-09-25T14:03:00Z".to_string(),
+            )]
+            .into(),
+            respondent_email: Some("client@example.test".to_string()),
+            signature_request_id: Some("signature-uuid".to_string()),
+            last_transition_at: Some("2026-09-25T14:03:00Z".to_string()),
+        };
+        let waiting = ProjectNotationRow {
+            template_code: "will".to_string(),
+            workflow_states: vec!["BEGIN".to_string(), "lawyer_review".to_string()],
+            ..ProjectNotationRow::default()
+        };
+        let html = dioxus_ssr::render_element(rsx! {
+            ProjectNotationBoard { rows: vec![live, waiting] }
+        });
+        assert!(html.contains("engagement"), "{html}");
+        assert!(html.contains("notation-uuid"), "{html}");
+        assert!(html.contains("client@example.test"), "{html}");
+        assert!(html.contains("signature-uuid"), "{html}");
+        assert!(html.contains("never started"), "{html}");
+        assert!(html.contains("2026-09-25T14:03:00Z"), "{html}");
+    }
+
+    #[test]
+    fn an_empty_notation_board_explains_that_no_templates_are_registered() {
+        let html = dioxus_ssr::render_element(rsx! { ProjectNotationBoard { rows: vec![] } });
+        assert!(
+            html.contains("No notation templates are registered on this project."),
+            "{html}"
+        );
+        assert!(!html.contains("Notation UUID"), "{html}");
+    }
+
+    #[test]
+    fn notation_state_cells_distinguish_current_completed_and_unvisited_states() {
+        let row = ProjectNotationRow {
+            notation_id: Some("notation-uuid".to_string()),
+            current_state: Some("lawyer_review".to_string()),
+            workflow_states: vec![
+                "BEGIN".to_string(),
+                "lawyer_review".to_string(),
+                "filed".to_string(),
+            ],
+            state_entered_at: [("BEGIN".to_string(), "2026-09-24T09:00:00Z".to_string())].into(),
+            ..ProjectNotationRow::default()
+        };
+        assert!(notation_state_cell(&row, "BEGIN").starts_with("✓"));
+        assert!(notation_state_cell(&row, "lawyer_review").starts_with("●"));
+        assert_eq!(notation_state_cell(&row, "filed"), "·");
+        assert_eq!(notation_state_cell(&row, "not_in_workflow"), "—");
+    }
+
+    #[test]
+    fn notation_state_cells_mark_never_started_and_unsuccessful_runs() {
+        let waiting = ProjectNotationRow {
+            workflow_states: vec!["BEGIN".to_string(), "filed".to_string()],
+            ..ProjectNotationRow::default()
+        };
+        assert_eq!(notation_state_cell(&waiting, "BEGIN"), "·");
+        assert_eq!(notation_state_cell(&waiting, "other"), "—");
+
+        let completed = ProjectNotationRow {
+            notation_id: Some("notation-uuid".to_string()),
+            workflow_states: vec!["declined".to_string(), "failed".to_string()],
+            state_entered_at: [
+                ("declined".to_string(), "2026-09-25T15:00:00Z".to_string()),
+                ("failed".to_string(), "2026-09-25T16:00:00Z".to_string()),
+            ]
+            .into(),
+            ..ProjectNotationRow::default()
+        };
+        assert_eq!(
+            notation_state_cell(&completed, "declined"),
+            "✗ 2026-09-25T15:00:00Z"
+        );
+        assert_eq!(
+            notation_state_cell(&completed, "failed"),
+            "✗ 2026-09-25T16:00:00Z"
+        );
+    }
+
+    #[test]
+    fn a_chain_whose_revisions_disagree_shows_the_operative_value_and_each_revisions_own() {
+        let html = render_documents(vec![LawyerDocRow {
+            id: "00000000-0000-0000-0000-0000000000aa".to_string(),
+            filename: "agreement.pdf".to_string(),
+            // The operative (newest) revision is shared…
+            visibility: "shared".to_string(),
+            revisions: vec![
+                LawyerDocRevision {
+                    id: "00000000-0000-0000-0000-0000000000ab".to_string(),
+                    filename: "agreement.pdf".to_string(),
+                    visibility: "shared".to_string(),
+                },
+                // …while an earlier draft under the same slug stayed internal.
+                LawyerDocRevision {
+                    id: "00000000-0000-0000-0000-0000000000ac".to_string(),
+                    filename: "agreement.pdf".to_string(),
+                    visibility: "internal".to_string(),
+                },
+            ],
+            service: Vec::new(),
+        }]);
+        assert!(html.contains("<td>shared</td>"), "{html}");
+        assert!(html.contains("(shared)"), "{html}");
+        assert!(html.contains("(internal)"), "{html}");
+    }
+}

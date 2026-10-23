@@ -1,0 +1,55 @@
+head_title: "{site_name} | Reading a lease before signing"
+meta_description: >-
+  Reading a lease before signing. A plain-language explainer from {site_name}. General information; individual
+  advice requires an engagement.
+title: "Reading a lease before signing"
+tagline: Plain-language explainers
+hero_lines:
+  - text: "Reading a lease before signing"
+    accent_words: 0
+hero_lead: >-
+  A lease sets out a continuing relationship. Read the complete document, its attachments, and any proposed
+  changes together before deciding what to ask a lawyer to review.
+hero_cta:
+  href: "https://calendar.notion.so/meet/nick-shook/or15n4yy7"
+  label: Request a conversation
+skin: practice
+bands:
+  - kind: steps
+    anchor: guide
+    overline: Getting oriented
+    heading: Read the guide
+    items:
+      - title: "Understand the cost over time"
+        body:
+          - - text: >-
+                Locate the rent, increases, deposits, additional charges, and payment dates. Note who pays for
+                utilities, repairs, insurance, and maintenance. Commercial and residential leases may allocate these
+                costs differently.
+      - title: "Read the use and exit terms"
+        body:
+          - - text: >-
+                Identify permitted uses, alterations, renewal language, assignment, subletting, and termination
+                provisions. Write down the outcome you need, such as a particular use or flexibility to move.
+      - title: "Check the notice provisions"
+        body:
+          - - text: >-
+                Find how the lease says notices must be delivered and where they go. Applicable law may affect the
+                enforceability of a provision. A lease review needs the property location and the complete
+                agreement; this guide does not establish a notice deadline.
+  - kind: cards
+    overline: Continue reading
+    heading: More explainers
+    items:
+      - title: "Before buying or selling property"
+        href: /explainers/first-steps
+        href_label: Read the explainer
+      - title: "Preparing for a property dispute"
+        href: /explainers/documents
+        href_label: Read the explainer
+  - kind: statement
+    heading: About this guide
+    body:
+      - - text: >-
+            General information, not advice about your matter. We confirm jurisdiction, conflicts, scope, and
+            fees before accepting work. Attorney advertisement.

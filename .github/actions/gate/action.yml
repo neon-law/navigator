@@ -1,0 +1,158 @@
+name: navigator project gate
+description: >-
+  Run the Neon Law Navigator gate over a content repository, using a published
+  release binary.
+
+# The one-line gate for repositories that hold content, including a Project
+# repository. `deploy.yml` already attaches `navigator-<TAG>-<platform>` archives
+# to every immutable release (`YY.M.D`, legacy `YY.M.D.H`, or
+# `YY.M.D-hotfix.N`); this action downloads the one that matches
+# the runner and runs `navigator project gate` at the root of the checked-out tree.
+#
+# Consuming repository, in full:
+#
+#     - uses: actions/checkout@<sha>  # v7
+#     - uses: neon-law/navigator/.github/actions/gate@YY.M.D
+#       with:
+#         version: "YY.M.D"
+#
+# A Project repository's `navigator.yaml` makes the gate also run layout, mount,
+# and origin. There is no separate input for that half. The gate runs on the
+# whole repository from its root, so there is no directory input either.
+#
+# `version` is required and must be an exact tag. That is the house rule from
+# docs/gitops.md ("Pin every consumed image, binary, and action"): publishing
+# `latest` is allowed, consuming it is not — a rolling pointer also round-trips
+# a release API that has 500'd and killed a job.
+
+inputs:
+  version:
+    description: >-
+      Exact immutable release tag to download, shaped `YY.M.D` or
+      `YY.M.D-hotfix.N`. Required and never `latest` — consumed binaries are
+      pinned.
+    required: true
+  token:
+    description: >-
+      Token used to download the release asset from the public distribution
+      host. The default `github.token` is enough — that host stays public
+      regardless of the source repository's own visibility — so this exists
+      for a caller that wants to pass its own token rather than the run's.
+    required: false
+    default: ${{ github.token }}
+  question_codes_from_store:
+    description: >-
+      Set to "true" to load the stored question registry so N104 rejects
+      question codes outside it. The registry lives in SurrealDB, so the job
+      must also set NAVIGATOR_SURREAL_ENDPOINT, NAVIGATOR_SURREAL_NAMESPACE,
+      and NAVIGATOR_SURREAL_DATABASE. An unreachable store warns and falls
+      back to the canonical codes; without this input that one check is
+      skipped and everything else still runs.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # ENG-931: this used to default to `github.action_repository` — the
+    # repository this action file itself was resolved from — so a fork that
+    # cut its own tags and attached its own archives was served by its own
+    # releases without editing this file. That coupling assumed the action's
+    # code and the release binaries always lived in the same place, which
+    # stops being true once the source repository goes private: this file may
+    # keep moving (it is expected to relocate to a public action repository,
+    # see ENG-931's Project CI/CD step), but the archives it downloads live on
+    # the public distribution host regardless of where THIS file is checked
+    # out from. The two are pinned separately on purpose.
+    - name: download and install the navigator CLI
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${VERSION}" ]; then
+            echo "::error::'version' is required — pass the exact immutable release tag."
+            exit 1
+        fi
+        # Rolling pointers are rejected rather than resolved: a job that cannot
+        # name the binary it ran cannot be reproduced.
+        case "${VERSION}" in
+            latest|main|HEAD)
+                echo "::error::'version' must be an exact release tag, not '${VERSION}'."
+                exit 1
+                ;;
+        esac
+
+        case "${RUNNER_OS}" in
+            Linux)  platform=linux  ;;
+            macOS)  platform=macos  ;;
+            *)
+                # Navigator ships for macOS and Linux only.
+                echo "::error::unsupported runner OS '${RUNNER_OS}' — use a Linux or macOS runner."
+                exit 1
+                ;;
+        esac
+
+        # The public distribution host, not the source tree. See the note on
+        # this step's name above.
+        repo="neon-law-source-code/homebrew-navigator"
+        asset="navigator-${VERSION}-${platform}.tar.gz"
+        tmp="$(mktemp -d)"
+
+        echo "Downloading ${asset} from ${repo}@${VERSION}"
+        if ! gh release download "${VERSION}" \
+            --repo "${repo}" \
+            --pattern "${asset}" \
+            --dir "${tmp}" \
+            --clobber; then
+            echo "::error::could not download ${asset} from ${repo} — this is the public distribution host and the release for ${VERSION} should carry it; check that the tag is exact and that the release actually attached this platform's archive."
+            exit 1
+        fi
+
+        # Unpack only the executable; the archive also carries LICENSE.
+        tar -xzf "${tmp}/${asset}" -C "${tmp}" navigator
+        install -d "${RUNNER_TEMP}/navigator-bin"
+        install -m 0755 "${tmp}/navigator" "${RUNNER_TEMP}/navigator-bin/navigator"
+        echo "${RUNNER_TEMP}/navigator-bin" >> "${GITHUB_PATH}"
+
+    # `deploy.yml` bakes NAVIGATOR_RELEASE_TAG into the release build, so the
+    # binary self-reports the tag it shipped from. Checking it here closes the
+    # "a stale navigator on PATH shadowed the download" gap before any linting
+    # happens, and is the same guard the production roll uses.
+    - name: verify the installed CLI reports the pinned tag
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        reported="$(navigator --version)"
+        echo "navigator --version → ${reported}"
+        case "${reported}" in
+            *"${VERSION}"*) ;;
+            *)
+                echo "::error::expected navigator ${VERSION}, got '${reported}'."
+                exit 1
+                ;;
+        esac
+
+    # One walk: Markdown, YAML, seeds, locales, and — when `navigator.yaml`
+    # declares a Project — layout, mount, and origin. `--ci` writes nothing, so
+    # a file the gate would have fixed fails the job instead of being rewritten
+    # in a checkout that is about to be thrown away.
+    - name: navigator project gate
+      shell: bash
+      env:
+        QUESTION_CODES_FROM_STORE: ${{ inputs.question_codes_from_store }}
+      run: |
+        set -euo pipefail
+        case "${QUESTION_CODES_FROM_STORE}" in
+            true|false)
+                navigator project gate --ci
+                ;;
+            *)
+                echo "::error::'question_codes_from_store' must be 'true' or 'false'."
+                exit 1
+                ;;
+        esac

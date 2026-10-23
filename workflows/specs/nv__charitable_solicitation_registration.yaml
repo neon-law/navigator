@@ -1,0 +1,23 @@
+questionnaire:
+  BEGIN:
+    _: custom_single_choice__annual_or_amended
+  custom_single_choice__annual_or_amended:
+    _: custom_text__fundraising_activities
+  custom_text__fundraising_activities:
+    _: END
+  END: {}
+prompts:
+  annual_or_amended: Is this an original annual application or is it an amendment to a previous application?
+  fundraising_activities: What are the fundraising activities?
+choices:
+  annual_or_amended:
+    original: Original Application
+    amended: Amendment to Previous Application
+workflow:
+  BEGIN:
+    _: lawyer_review
+  lawyer_review:
+    _: mailroom_send
+  mailroom_send:
+    _: END
+  END: {}

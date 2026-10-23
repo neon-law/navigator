@@ -1,0 +1,414 @@
+# GKE production deployment
+
+This page describes what one environment is made of. Which environments exist, which GCP project each one is, and how a
+single image serves the brand is mapped in [`environments`](environments.md).
+
+The Neon Law Navigator production deployment runs on **GKE Autopilot** with every supporting service managed by Google
+or Restate. The daily operator workload is reviewing dependency PRs and glancing at dashboards; no node patching, no DB
+failover drills, no Helm chart babysitting.
+
+## Architecture at a glance
+
+```text
+internet
+   │
+   ▼
+┌───────────────────────────────────┐
+│  Global External App LB (Gateway) │ ← Cloud Armor (DDoS + WAF)
+│  ← Certificate Manager (TLS)      │ ← Identity-Aware Proxy (admin)
+└───────────────────────────────────┘
+   │
+   ▼
+┌───────────────────────────────────┐
+│  GKE Autopilot                    │ ← Workload Identity for GCP
+│  ┌─────────────────────────────┐  │
+│  │ navigator-web (embedded Rego)│──┼──→ SurrealDB (PSC)
+│  │ workflows-service           │──┼──→  Restate Cloud
+│  └─────────────────────────────┘  │──→  GCS (object storage)
+└───────────────────────────────────┘   ↑
+   ▲                                    │
+   │   ┌────────────────────────────────┘
+   │   │ Secrets via Secret Manager CSI driver
+   │   ▼
+   │ Secret Manager
+   │
+   └── navigator ops ship renders + applies this deployment's manifests
+```
+
+Deployment decisions are summarized here and in [`cloud-operations.md`](cloud-operations.md).
+
+## What lives where
+
+| Concern | Managed by | Manifest |
+| --- | --- | --- |
+| Compute | GKE Autopilot | (cluster, no manifest) |
+| Edge LB | Global External ALB (legacy GKE Ingress) | `examples/deploy/k8s/gke/ingress/ingress.yaml` |
+| TLS | Google-managed certificates, one per hostname family | `examples/deploy/k8s/gke/ingress/` |
+| Store | Hosted SurrealDB | (out-of-cluster; PSC endpoint) |
+| Object storage | GCS | (out-of-cluster; `-assets`, `-documents`, `-exports`, `-logs` buckets per deployment) |
+| OIDC | Identity Platform | (out-of-cluster; issuer URL) |
+| Workflows | Restate Cloud | (out-of-cluster; bearer-token auth) |
+| Per-Project git repos | Per-pod `emptyDir` scratch | `k8s/base/web/web.yaml` |
+| Secrets | Secret Manager + CSI | `examples/deploy/k8s/gke/secrets/` |
+| Image registry | Artifact Registry (`neon-law-registry`) | `examples/deploy/k8s/gke/patches/web-image.yaml` |
+| Delivery | `ship` renders + applies the embedded tree | [Manifest delivery](#manifest-delivery) |
+| Logs / metrics / traces | Cloud Logging + GMP + Cloud Trace | (auto, no manifest) |
+| Long-term log archive | Cloud Logging sink → GCS | (gcloud-provisioned; see below) |
+
+## Bootstrap
+
+A fresh cluster requires GCP commands that can't run from CI—they need a human under `gcloud auth login`. Export the
+deployment's coordinates from its `config.toml`, preview the exact deployment-specific sequence, then execute it:
+
+```bash
+set -a; eval "$(grep ' = "' deployments/<deployment>/config.toml | sed 's/ = /=/')"; set +a
+navigator ops gcp setup --dry-run
+navigator ops gcp setup
+```
+
+After the cluster is up, run `navigator ops ship --deployment <name>`. It renders every placeholder from that
+deployment's `config.toml`, diffs, and applies the embedded manifest tree. Do not edit the shared examples in place for
+one deployment. The four Navigator stacks deliberately leave `NAVIGATOR_CONFIG_SYNC_REPO` unset, so no `RootSync`
+competes with this rendered apply. A fork may use the optional Config Sync seam only with its own fully rendered source
+and with `ops ship` removed as a competing manifest owner.
+
+## Pointing a hostname at a deployment
+
+A `ManagedCertificate` is authorized **by the load balancer**, not by DNS: Google issues it only after the hostname
+already resolves to the ingress address. That ordering is forced and it costs a TLS gap — while the certificate
+validates, the host answers `308` on port 80 and returns an empty TLS handshake on 443, so it is neither the old site
+nor the new one. A Google-managed certificate also reissues as a whole when `spec.domains` changes, so each hostname
+family (`NAVIGATOR_PUBLIC_HOST`, every other registered brand — launched or not, per the release inventory
+`views::brand::release_brand_hosts` names, and [`docs/dns.md`'s Grounding TLS in the release
+inventory](dns.md#grounding-tls-in-the-release-inventory) explains — and the workflows host) has its own
+`ManagedCertificate` on the shared Ingress. Adding a name to one family does not retire another family's certificate. A
+held-out brand's certificate and Ingress rule exist the same as a launched one's; only the request router's host
+admission still gates whether that host serves the brand's page or a `404`. The apex of a brand zone is not one of those
+families: it stays a DNS `URL` record that 301s to `www`, and it must not appear on a `ManagedCertificate` while that
+record stands — the name never resolves to the load balancer, so the certificate never leaves `Provisioning`. `navigator
+ops brand-readiness --deployment <name>` (see `docs/dns.md`) is the bounded, non-mutating check that every one of these
+certificates is actually `Active` and serving the right host — never take a rendered manifest or a successful `apply`
+alone as proof.
+
+Plan the cutover as a short outage rather than a swap:
+
+1. Point the `A` records at `NAVIGATOR_GATEWAY_IP` (`navigator ops dns setup --domain <zone> --gateway-ip <ip>` — with
+   no `--host`, it covers `www` and `workflows`). Dry-run first; the command never deletes a record.
+2. Watch `gcloud compute ssl-certificates list --project <project>` until the domain reports `ACTIVE`. A status of
+   `FAILED_NOT_VISIBLE` is normal beforehand — it records validation attempts made while DNS still pointed elsewhere,
+   and it clears itself once DNS is right.
+3. Allow a few more minutes after `ACTIVE` for Google's edge to serve the certificate. A zero-byte handshake (`no peer
+   certificate available`) in that window means propagation, not misconfiguration — check the target proxy really
+   carries the certificate before changing anything.
+
+A Certificate Manager DNS authorization can cut a hostname over with **no** TLS gap. That option is not available here:
+the GKE ingress owns its certificates, so plan for the window above rather than expecting a seamless switch.
+
+Verified on the production cutover of 2026-08-05: `<deployment>` moved off the marketing site, and the host was
+unreachable over HTTPS for roughly half an hour between the DNS change and the edge serving the certificate.
+
+## Data and access boundary
+
+The public edge reaches three service Deployments:
+
+- `navigator-web` serves the portal, Navigator MCP/API routes, and client-facing matter views.
+- `workflows-service` hosts the Restate durable worker behind the public `workflows` host, which Restate Cloud dials
+  into to invoke a registered service; `www` remains behind the tailnet perimeter.
+
+The storage buckets sit behind those services. `NAVIGATOR_ASSETS_BUCKET` is the only public bucket.
+`NAVIGATOR_DOCUMENTS_BUCKET` is private and holds content-addressed client documents through `cloud::StorageService`;
+clients never receive bucket IAM, object keys, or raw GCS URLs. A client sees a file only when `web` resolves their
+session to a `persons` row and finds a matching `person_project_roles` row for the Project. `NAVIGATOR_EXPORTS_BUCKET`
+is the private nightly Parquet/Iceberg lane consumed as `NAVIGATOR_STORAGE_BUCKET` by `workflows-service`;
+`NAVIGATOR_LOGS_BUCKET` is the Nearline audit-log archive.
+
+The `navigator-web` backend attaches a GKE `BackendConfig` that injects `X-Navigator-Client-Region:{client_region}`
+before requests reach the pod. The web app uses that bounded, edge-derived geography bucket for visitor analytics.
+Analytics do not store raw IP addresses and do not trust the left-most `X-Forwarded-For` value as a geography source.
+
+## Deploy flow
+
+CI/CD is three workflows (see [`gitops.md`](gitops.md#cicd-workflows)): a lean PR flow (`ci.yml`); a publish flow
+(`deploy.yml`) that integration-tests the workspace and publishes images and CLI archives; and a rollout flow
+(`release-deploy.yml`) that `deploy.yml` dispatches once every artifact is published. The rollout ships staging, runs
+its health checks, and only then ships production; a prerelease tag stops at staging. See
+[`release-automation.md`](release-automation.md).
+
+```text
+PR merged to main
+  └─→ .github/workflows/ci.yml runs fmt + clippy + cargo test --workspace
+      (no images built — the PR flow is lean by design)
+
+A person bumps the version and lands it — the merge is the publish
+  └─→ navigator ops release version --tag <version>   (Cargo.toml + Cargo.lock, commits)
+  └─→ PR, merge. Nothing else is required: no tag is pushed by hand
+  └─→ .github/workflows/deploy.yml runs, holding no cloud credential
+                  ├─ ops release check: is this version newer than every release tag?
+                  │    (equal → the run ends here, which is almost every merge)
+                  ├─ KIND integration suite (e2e + interop + browser)
+                  ├─ create the immutable YY.M.D tag at the merged commit
+                  ├─ build + push service images to Artifact Registry tagged YY.M.D + latest
+                  ├─ attach the macOS + Linux CLI archives to the tag's GitHub Release
+                  ├─ dispatch the tag to the homebrew-navigator tap, which
+                  │    digests those archives and bumps its own formula
+                  ├─ post the release reports to the engineering Slack channel
+                  └─ dispatch release-deploy.yml with the tag
+                        ├─ ops ship <deployment>, then its health checks
+                        └─ ops ship <deployment>, then its health checks
+                             (skipped for a prerelease tag, which stays on staging)
+
+A Deployment Operator rolls by hand (recovery, re-roll, rollback) — see manual-roll.md
+  └─→ gcloud auth application-default login
+  └─→ navigator ops ship --deployment <name> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D
+        (use --dry-run for an offline local plan; authenticated preflights remain part of the live ship)
+        (an older tag rolls back — ops ship does not care which way it moves)
+
+Prove a change to deploy.yml itself, without releasing
+  └─→ push a kind-ci/<topic> branch
+        └─→ runs ONLY the KIND integration job: no images, no ship, no Slack
+
+Re-roll an already-published tag (no build, no publish)
+  └─→ navigator ops ship --deployment <name> --tag YY.M.D
+        (use --dry-run for an offline local plan; authenticated preflights remain part of the live ship)
+```
+
+`release-deploy.yml` performs the routine roll. Operator-driven `ship` performs every other one — a first release, a
+re-roll, a rehearsal, or a rollback — following [`manual-roll.md`](manual-roll.md).
+
+`navigator ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag <version>` pins the
+`workflows-service` to the published tag. It sets the pod count of `web` and `workflows-service` from the row's
+`NAVIGATOR_SIMULATED_MATTERS`: one pod each on a row with simulated matters, two each behind a PodDisruptionBudget on a
+production row (see [Replicas](environments.md#replicas)). `NAVIGATOR_GIT_REPO_ROOT` points the repository store at
+`/var/lib/navigator/repos`, a per-pod `emptyDir`. Nothing in `web` commits there now that Project repositories live on
+the forge, so the directory pins `web` to no disk, and `/app/readyz` keeps the storage check enabled. `web` rolls with a
+surge pod (`maxSurge: 1`, `maxUnavailable: 0`), so a roll no longer takes the load balancer down. The pod template
+carries `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, because Autopilot's scale-down had been evicting the
+pod every one to two hours to consolidate nodes. A release roll or a GKE node upgrade still moves the pod. The 2Gi
+`navigator-web-repos` claim that used to back the directory is no longer rendered, and `kubectl apply` never prunes, so
+an operator deletes the leftover claim once by hand.
+
+The published images live in a **private Artifact Registry repository**, at `<deployment>` —
+`cli::devx::registry::DEFAULT_REGISTRY`, which a fork overrides with `NAVIGATOR_IMAGE_REGISTRY`. `ops ship` renders that
+one value into the `YOUR_IMAGE_REGISTRY` token every `image:` line in the embedded manifests carries, so what a node
+pulls is whatever that variable says and nothing else can disagree with it.
+
+The node identity needs `roles/artifactregistry.reader` on that repository, and an operator running `ops ship` needs the
+same on their own account. **Every image is deleted 7 days after push**, so a tag older than a week cannot be pulled and
+`ops ship` refuses it; a restart or reschedule of a pod running an older tag will hit `ImagePullBackOff`. Republish from
+source to roll to, or back to, an older release. See [GitOps](gitops.md#keyless-pushes-to-artifact-registry).
+
+A release version is whatever `semver` parses, and `YY.M.D` — optionally with a prerelease such as `-hotfix.N` — is the
+convention. The one rule `deploy.yml` enforces is ORDERING: `ops release check` refuses a version that is not newer than
+every release tag already published. Nothing checks the calendar, because a bump is authored days before it merges; and
+nothing checks provenance, because a push to `main` is the only thing that publishes. The legacy four-component
+`YY.M.D.H` form is retired: Cargo cannot parse it as a version, so no release has been able to carry it since the tag
+started coming from `[workspace.package].version`. See [GitOps](gitops.md#one-workflow-owns-publishing--deployyml).
+Rolling a published version onto the cluster is always `ops ship`, above, run by a person. To exercise the pipeline
+without publishing, push a `kind-ci/**` branch.
+
+## Manifest delivery
+
+`examples/deploy/k8s/gke/` is white-labeled **by design** — it is the rebrandable reference (the `navigator ops rebrand`
+seam), so it ships placeholders like `YOUR_PROJECT_ID`, `NAVIGATOR_PUBLIC_HOST`, and `YOUR_OAUTH_CLIENT_ID_*`. Running a
+plain `kubectl apply -k` of it against a real cluster would rewrite the ManagedCertificate domains, the OAuth client
+ids, and every domain-derived env back to those placeholders. The substitutions the base needs are pure values — the GCP
+project, per-deployment bucket/SQL/GSA names, public and workflow hosts (ManagedCertificate + Ingress hosts,
+`OAUTH_REDIRECT_URI`, `NAV_BASE_URL`, `GOOGLE_OAUTH_REQUIRED_HD`), the required browser OAuth client ID, and the
+post-registration Gemini client ID — not structure.
+
+`navigator ops ship` supplies those values itself. The whole manifest tree (`examples/deploy/k8s/gke` + the shared
+`k8s/base` it references) is **embedded in the CLI** with `include_dir!`; every ship renders it — the placeholders
+substituted from the selected deployment's `deployments/<name>/config.toml` — into a **throwaway temp dir**, then
+`kubectl diff -k` (surface drift) and `kubectl apply -k` (reconcile). The apply is **unconditional**: any structural
+change on `main` (a renamed container, a new sidecar, a volume, an env-list edit) reaches the cluster on the next ship
+rather than silently rotting. There is no persistent overlay folder and no image-only fall-through — the CLI generates
+from the checked-in coordinates the manifests a deployer would otherwise hand-keep. The manifests are embedded; only the
+`deployments/` tree of the repository checkout is read at ship time.
+
+The substitution values live in the selected deployment's `config.toml` — plaintext, reviewable coordinates in this
+repo:
+
+| placeholder token | `NAVIGATOR_*` var |
+| --- | --- |
+| `YOUR_PROJECT_ID` | `NAVIGATOR_GCP_PROJECT_ID` |
+| `YOUR_GCP_REGION` | `NAVIGATOR_GCP_LOCATION` |
+| `NAVIGATOR_WEB_IMAGE` | `NAVIGATOR_WEB_IMAGE` |
+| `NAVIGATOR_PUBLIC_HOST` | `NAVIGATOR_PUBLIC_HOST` |
+| `NAVIGATOR_WORKFLOWS_HOST` | `NAVIGATOR_WORKFLOWS_HOST` |
+| `NAVIGATOR_ASSETS_BUCKET` | `NAVIGATOR_ASSETS_BUCKET` |
+| `NAVIGATOR_DOCUMENTS_BUCKET` | `NAVIGATOR_DOCUMENTS_BUCKET` |
+| `NAVIGATOR_GATEWAY_IP_NAME` | `NAVIGATOR_GATEWAY_IP_NAME` |
+| `NAVIGATOR_GCP_SERVICE_ACCOUNT_ID` | `NAVIGATOR_GCP_SERVICE_ACCOUNT_ID` |
+| `navigator-web-secrets` | `NAVIGATOR_WEB_SECRET_NAME` |
+| `GOOGLE_OAUTH_REQUIRED_HD` | `GOOGLE_OAUTH_REQUIRED_HD` |
+| `namespace: navigator` | `NAVIGATOR_K8S_NAMESPACE` |
+| `YOUR_OAUTH_CLIENT_ID_BROWSER` | `NAVIGATOR_OAUTH_CLIENT_ID_BROWSER` |
+
+A missing or blank required var bails **by name** before anything is written — a half-substituted manifest never reaches
+the cluster. Firm-specific values that are *secrets or operator toggles* (SendGrid, DocuSign, the inbound-email host,
+DKIM enforcement) stay in the `navigator-web-secrets` K8s Secret and arrive via `envFrom`. The base's inline-env
+`$patch: replace` does not touch that Secret reference, so a full apply preserves them.
+
+A key that Secret projects must reach a pod **from the Secret**, never as an inline `value`. The scheduled triggers
+under `examples/deploy/k8s/exports/` mount no CSI volume, so each reads `RESTATE_INGRESS_URL` and `RESTATE_AUTH_TOKEN`
+through an explicit `valueFrom.secretKeyRef`, marked `optional` because a deployment that does not project the key must
+get a trigger that exits naming it rather than pods stuck in `CreateContainerConfigError`. Writing either inline breaks
+far more than the trigger: a container's `env` list merges by entry name, so a literal in the rendered tree merges with
+the cluster's `valueFrom` into one entry carrying both, the API server rejects the whole object, and `kubectl diff -k`
+aborts before comparing anything — blocking **every** manifest change to that deployment, not just the trigger's. That
+is what made version rolls image-only for two releases. `triggers_source_every_projected_key_from_the_deployment_secret`
+in `cli/src/devx/ship.rs` fails the build on the next one, and the render's own `YOUR_*` sweep fails on a placeholder no
+substitution resolves.
+
+A healthy cluster's `kubectl diff -k` against the freshly rendered tree is a **near no-op** — that is the acceptance bar
+for source == cluster. `--dry-run` validates the local row and parses the rendered manifest source without contacting
+cloud services or the cluster. It provides an intended-operation summary, not a live diff or proof of drift:
+
+```bash
+# Review the local plan without cloud tools, credentials, or cluster access:
+navigator ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag <YY.M.D> --dry-run
+```
+
+The reconcile runs against the deployment `--deployment` names (production remains propose-only — run it yourself; never
+let an agent ship to prod, and beware the shared kubeconfig defaulting to the prod GKE context):
+
+```bash
+navigator ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag <YY.M.D>
+```
+
+## What lives outside this repo
+
+These are operator-managed resources you maintain via gcloud / console, not via this repo's manifests:
+
+1. **GCS buckets and runtime identity** — setup creates the explicitly named assets, documents, exports, and logs
+   buckets plus the deployment GSA and its Workload Identity bindings. Only the assets bucket receives a public binding.
+2. **SurrealDB instance** — provisioned at the store provider, not by this repo. Its endpoint is a plaintext coordinate
+   in `deployments/<name>/config.toml`, and its root credentials go into that deployment's `secrets.enc.yaml`, which
+   `ops secrets apply` writes into that deployment's Secret Manager.
+3. **Identity Platform tenant** — configured via the console. OAuth client secret goes into Secret Manager as
+   `navigator-oauth-client-secret`.
+4. **Restate Cloud tenant** — register at <https://cloud.restate.dev>. The tenant URL and bearer token go into Secret
+   Manager as `navigator-restate-broker-url` (consumed as `RESTATE_BROKER_URL`) and `navigator-restate-auth-token`
+   (consumed as `RESTATE_AUTH_TOKEN`). Store the public request-signing key as `RESTATE_IDENTITY_KEY` in
+   `deployments/<name>/config.toml`; `ops ship` renders it inline into both workloads. It is verification material, not
+   a Secret.
+5. **DNS A records** for `www.<navigator-domain>` and `workflows.<navigator-domain>` → the static IP reserved as
+   `navigator-gateway-ip`. GitHub posts its webhooks to the `workflows` host at `/webhooks/github/{secret}`, the same
+   host Restate Cloud uses.
+6. **Cloud Logging → GCS sink** — a log router sink that archives `web` container logs to `gs://YOUR_PROJECT_ID-logs`
+   for long-horizon audit. Provisioned via `gcloud` (see "Long-term log archive" below), not Config Sync.
+
+Kubernetes manifests flow through the deployment-rendered `navigator ops ship` path. Managed services remain owned by
+the GCP provisioner or the named operator procedure above.
+
+## Long-term log archive
+
+GKE forwards every container's stdout to Cloud Logging automatically, but that alone is not the deployment's durable
+archive. A **log router sink** copies Navigator service logs into the private NEARLINE bucket named by
+`NAVIGATOR_LOGS_BUCKET`, which `navigator ops gcp setup` already creates. The setup command does not create the sink.
+
+The original design routed these via a Config Connector `LoggingLogSink` CR. That path is shelved: Config Connector does
+not reliably reconcile on this cluster's GKE version, so the sink is **provisioned directly with `gcloud`** and lives
+outside the repo's manifests on purpose — there is nothing under `examples/deploy/k8s/gke/` to keep it in sync with, and
+putting it there would falsely imply Config Sync owns it.
+
+Run this once per deployment after its cluster exists, with that deployment's coordinates exported from its
+`config.toml` (the coordinate-export line under [Bootstrap](#bootstrap)):
+
+```bash
+# Route only this deployment namespace to its own bucket.
+SINK_NAME="${NAVIGATOR_K8S_NAMESPACE}-to-gcs"
+gcloud logging sinks create "$SINK_NAME" \
+  "storage.googleapis.com/${NAVIGATOR_LOGS_BUCKET}" \
+  --log-filter='resource.type="k8s_container"
+                resource.labels.namespace_name="'"$NAVIGATOR_K8S_NAMESPACE"'"
+                AND (resource.labels.container_name="web"
+                     OR resource.labels.container_name="worker")' \
+  --project="$NAVIGATOR_GCP_PROJECT_ID"
+
+# Grant the sink's auto-created writer identity permission to write the bucket.
+WRITER=$(gcloud logging sinks describe "$SINK_NAME" \
+  --project="$NAVIGATOR_GCP_PROJECT_ID" --format='value(writerIdentity)')
+gcloud storage buckets add-iam-policy-binding \
+  "gs://${NAVIGATOR_LOGS_BUCKET}" \
+  --member="$WRITER" \
+  --role=roles/storage.objectCreator
+```
+
+Verify the sink is writing (objects appear under `logs/...` prefixes within ~1 hour of the next matching log line):
+
+```bash
+gcloud logging sinks describe "$SINK_NAME" --project="$NAVIGATOR_GCP_PROJECT_ID"
+gcloud storage ls "gs://${NAVIGATOR_LOGS_BUCKET}/**"
+```
+
+This is operator-managed state, like the SurrealDB instance and Identity Platform tenant above — it is **not** rebuilt
+by `kubectl apply -k`. The provisioner guarantees the bucket's region, private uniform access, NEARLINE storage class,
+and a 180-day expiry; see [retention](cloud-operations.md#retention-logs-and-backups). If you later get Config Connector
+reconciling, the `LoggingLogSink` CR can replace these commands; until then this section is the source of truth for the
+sink's existence.
+
+## Verifying a deploy
+
+```bash
+# Pod rollout
+kubectl --namespace navigator rollout status deployment/navigator-web
+kubectl --namespace navigator rollout status deployment/workflows-service
+
+# Image actually in use
+kubectl --namespace navigator get deployment/navigator-web \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="web")].image}'
+```
+
+## Trust boundary
+
+`deploy.yml` publishes immutable images and holds no cluster credential. `release-deploy.yml` runs `navigator ops ship`
+under a per-environment `navigator-release-ship` identity, reachable only from the `staging-deploy` and
+`production-deploy` GitHub Environments; an authorized operator runs the same command by hand. Either way, `ops ship`
+pins the expected kube context, diffs, applies, and waits. Workload Identity binds each Kubernetes ServiceAccount to a
+GCP service account, so pods talk to GCP without JSON keys. The stacks have no `RootSync`, preventing a second
+controller from reverting the rendered deployment.
+
+### What the operator credential must carry
+
+"Authorized" is two grants, not one. On the cluster, the reconcile needs whatever `kubectl diff`/`apply` and the rollout
+waits require — `roles/container.developer` covers it. Separately, the roll's preflight asserts that the web service
+account can sign GCS URLs for itself, because a pod under Workload Identity holds no private key and mints every
+document-download URL through IAM Credentials `signBlob`. So the operator also needs, on the *web service account's own
+resource* (`<service-account-id>@<deployment>.iam.gserviceaccount.com` for staging):
+
+| Permission | When it is needed | Role that carries it |
+| --- | --- | --- |
+| `iam.serviceAccounts.getIamPolicy` | Every roll — this is the steady state | `roles/iam.serviceAccountAdmin` |
+| `iam.serviceAccounts.setIamPolicy` | Only when the binding is genuinely absent | `roles/iam.serviceAccountAdmin` |
+
+`roles/container.developer` carries no `iam.serviceAccounts.*` permission at all, so a cluster-only grant is not enough
+even for the read. The preflight reads the policy first and writes only on a real absence, which is why the common case
+needs the read alone: `ops gcp setup` already wrote that binding when it provisioned the row, so a provisioned
+deployment rolls without any IAM write.
+
+`ops ship --dry-run` does not query IAM or the cluster. A live `ops ship` verifies the binding before any rollout and
+refuses when it is absent under `--assert-signing-iam`; without that option it may grant the binding only when the
+authenticated operator is authorized. The offline plan cannot prove either condition, so complete the appropriate
+authenticated IAM check before a real roll.
+
+There is no flag to skip the check. A missing binding is not cosmetic — every `/…/documents/:doc_id/download` would 500
+on `iam.serviceAccounts.signBlob` — so an operator who cannot verify or cannot write hands the binding off to someone
+holding `roles/iam.serviceAccountAdmin` rather than rolling past it. The preflight runs before anything mutates and
+names which of the two it hit.
+
+## Restore from backup
+
+Backup for GKE snapshots run daily at 05:00 UTC; retention is 30 days. Restore is a single CLI:
+
+```bash
+gcloud container backup-restore backups list \
+    --location=<deployment> --backup-plan=navigator-daily
+
+gcloud container backup-restore restores create my-restore \
+    --location=<deployment> \
+    --restore-plan=<plan> \
+    --backup=<backup-id>
+```
+
+Practice the restore quarterly against a scratch cluster. Untested backups are theatre.

@@ -1,0 +1,7 @@
+pages:
+  - slug: timeline
+    kind: docket_deadline_board
+    title: Case timeline
+    lenses:
+      lawyer: [deadline_board, boundary_note, provenance_statement]
+      client: [key_dates_strip, provenance_statement]

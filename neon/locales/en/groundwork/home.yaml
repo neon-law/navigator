@@ -1,0 +1,37 @@
+head_title: "{site_name} | Home"
+meta_description: >-
+  Groundwork Real Estate Law, a practice of Shook Law PC.
+  Clear counsel for your next property move. Attorney advertisement.
+heading: "Before you sign, know where you stand."
+lead: >-
+  Groundwork Real Estate Law is a practice of Shook Law PC.
+  Clear counsel for your next property move.
+  We review the matter and jurisdiction before accepting work.
+  The written engagement identifies the lawyers, scope, and fees.
+contact_label: Request a conversation
+service:
+  heading: Start with the next decision
+  body:
+    - - text: >-
+          Tell us whether you are buying, selling, leasing, or dealing with a dispute. Include any upcoming signing or response date.
+    - - text: >-
+          A contact request does not create an attorney-client relationship
+          or confirm that we can meet a deadline. We confirm representation
+          in a written engagement before work begins.
+practices_heading: What to talk with us about
+practices:
+  - mark: scales
+    heading: Buying and selling
+    body: >-
+      Ask about legal review of a purchase or sale, including the agreement and the questions you want answered before closing.
+    href: /explainers/first-steps
+  - mark: scales
+    heading: Leases and property agreements
+    body: >-
+      Request review of a residential or commercial lease or another property agreement. The engagement identifies whose interests the lawyer represents.
+    href: /explainers/process
+  - mark: scales
+    heading: Property disputes
+    body: >-
+      Tell us about a disagreement involving property, an agreement, or use of land. A lawyer reviews the facts and jurisdiction before accepting the work.
+    href: /explainers/documents

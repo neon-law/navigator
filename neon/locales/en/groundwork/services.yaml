@@ -1,0 +1,56 @@
+head_title: "{site_name} | Services"
+meta_description: >-
+  Groundwork Real Estate Law. Clear counsel for your next property move.
+  A practice of Shook Law PC. Scope and fees are confirmed in writing.
+title: Groundwork Real Estate Law services
+hero_mark: scales
+tagline: Clear counsel for your next property move.
+hero_lines:
+  - text: "Before you sign, know where you stand."
+    accent_words: 0
+hero_lead: >-
+  Groundwork Real Estate Law is a practice of Shook Law PC.
+  Tell us what needs attention. A lawyer reviews the matter and jurisdiction
+  before an engagement. The written agreement identifies the lawyers,
+  scope, and fees. Attorney advertisement.
+hero_cta:
+  href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
+  label: Request a conversation
+skin: practice
+bands:
+  - kind: cards
+    anchor: work
+    overline: The work
+    heading: What to talk with us about
+    description: We confirm the work we can accept after reviewing the facts and jurisdiction.
+    items:
+      - title: Buying and selling
+        body:
+          - - text: >-
+                Ask about legal review of a purchase or sale, including the agreement and the questions you want answered before closing.
+      - title: Leases and property agreements
+        body:
+          - - text: >-
+                Request review of a residential or commercial lease or another property agreement. The engagement identifies whose interests the lawyer represents.
+      - title: Property disputes
+        body:
+          - - text: >-
+                Tell us about a disagreement involving property, an agreement, or use of land. A lawyer reviews the facts and jurisdiction before accepting the work.
+  - kind: cards
+    anchor: process
+    overline: Getting started
+    heading: Make the next step clear
+    items:
+      - title: Tell us where things stand
+        body:
+          - - text: Share the type of matter and any upcoming date. Keep sensitive details out of the first message.
+      - title: Confirm the engagement
+        body:
+          - - text: We review the facts, jurisdiction, and conflicts before agreeing to representation.
+      - title: Put the work in writing
+        body:
+          - - text: The engagement identifies the lawyers, scope, and fees before work begins.
+  - kind: cta
+    heading: Start with a conversation
+    body: A contact request does not create an attorney-client relationship or confirm availability for a deadline.
+    email: "{firm_email}"

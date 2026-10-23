@@ -1,0 +1,33 @@
+head_title: "{site_name} | Home"
+meta_description: >-
+  Shook Law PC is an American law firm. We build brands that put the
+  customer not the lawyer first.
+heading: Shook Law PC
+lead: ""
+contact_label: ""
+practices_heading: Our practices
+practices:
+  - mark: technology
+    heading: Neon Law
+    body: Flat-fee counsel for emerging technology companies.
+    href: https://www.neonlaw.com
+  - mark: gavel
+    heading: Vesta Estate Planning
+    body: Estate planning and Nevada asset protection trusts.
+    href: https://www.vestaestateplanning.com
+  - mark: scales
+    heading: Misericordia Injury Law
+    body: Injury claims from collisions, wrongful death, elder abuse, and medical negligence.
+    href: https://www.misericordialaw.com
+  - mark: technology
+    heading: Cyber Injury Law
+    body: Injury and cybercrime claims, with AI working for your recovery.
+    href: https://www.cyberinjurylaw.com
+  - mark: gavel
+    heading: Aegis Criminal Defense
+    body: Criminal defense.
+    href: https://www.aegiscriminaldefense.com
+  - mark: scales
+    heading: Groundwork Real Estate Law
+    body: Real estate transactions and property disputes.
+    href: https://www.groundworkrealestatelaw.com

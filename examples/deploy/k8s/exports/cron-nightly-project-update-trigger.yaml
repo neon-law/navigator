@@ -1,0 +1,58 @@
+# Daily trigger for the `NightlyProjectUpdate` parent DAG, hosted by workflows-service.
+# The parent walks every Project and runs the tagged child DAGs (membership, repository): it syncs authorized
+# participants and recorded internal Lawyer and Clerk identities into each configured internal Project channel,
+# creates or adopts each open Project's repository, then posts aggregate counts to #messages or
+# #staging-messages according to the deployment's simulated-matters setting.
+# Schedule is 05:55 UTC daily (21:55 fixed PST, UTC-8); the UTC date is the idempotency key.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nightly-project-update-trigger
+  namespace: navigator
+  labels:
+    app: nightly-project-update-trigger
+spec:
+  schedule: "55 5 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            app: nightly-project-update-trigger
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: nightly-project-update-trigger
+              image: YOUR_IMAGE_REGISTRY/navigator-nightly-project-update-trigger:YY.M.D
+              imagePullPolicy: Always
+              env:
+                - name: RESTATE_INGRESS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: RESTATE_INGRESS_URL
+                      optional: true
+                - name: RESTATE_AUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: RESTATE_AUTH_TOKEN
+                      optional: true
+                - name: RUST_LOG
+                  value: info
+              envFrom:
+                - configMapRef:
+                    name: navigator-otel-env
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 64Mi
+                limits:
+                  memory: 128Mi

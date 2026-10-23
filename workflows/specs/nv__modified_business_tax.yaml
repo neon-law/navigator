@@ -1,0 +1,21 @@
+questionnaire:
+  BEGIN:
+    _: custom_datetime__tax_year
+  custom_datetime__tax_year:
+    _: custom_usd__gross_revenue
+  custom_usd__gross_revenue:
+    _: END
+  END: {}
+prompts:
+  tax_year: What tax year does this return cover?
+  gross_revenue: "What is the {{for_label}}?"
+workflow:
+  BEGIN:
+    _: member_signatures
+  member_signatures:
+    _: lawyer_review
+  lawyer_review:
+    _: mailroom_send
+  mailroom_send:
+    _: END
+  END: {}

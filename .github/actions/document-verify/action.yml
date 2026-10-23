@@ -1,0 +1,126 @@
+name: navigator project gate --check
+description: >-
+  Run `navigator project gate --check --ci` at the repository root. The host
+  and Project code come from navigator.yaml. The job exchanges this GitHub
+  Actions OIDC identity for a project-scoped session and compares committed
+  pointers with the live record. `--ci` writes nothing.
+
+# A Project repository's reusable project-gate workflow runs this on every
+# event. The job must have `id-token: write`. The host is `navigator.yaml`'s
+# `project.host`; the `host` input is ignored so an older caller can keep
+# passing it. The minted Navigator session never appears in argv, logs, or
+# repository secrets — GitHub's OIDC token is requested from the runner
+# environment and exchanged at `POST /auth/ci/document-token`.
+#
+# Consuming repository:
+#
+#     permissions:
+#       contents: read
+#       id-token: write
+#     steps:
+#       - uses: neon-law/navigator/.github/actions/document-verify@YY.M.D
+#         with:
+#           version: "YY.M.D"
+#
+# `version` is required and must be an exact tag. A repository with no
+# `blobs/` directory still runs the check, so a live document with no
+# pointer is reported.
+
+inputs:
+  version:
+    description: >-
+      Exact immutable release tag to download, shaped `YY.M.D` or
+      `YY.M.D-hotfix.N`. Required and never `latest`.
+    required: true
+  host:
+    description: >-
+      Ignored. The deployment host is `project.host` in navigator.yaml.
+      Kept so an older caller can keep passing it.
+    required: false
+    default: ""
+  dir:
+    description: >-
+      Ignored. The gate runs at the repository root, which it finds from
+      the README and .git beside it.
+    required: false
+    default: "."
+  token:
+    description: >-
+      Token used to download the release asset. The default `github.token` is
+      enough when the Navigator repository is public or the caller lives in the
+      same organization.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: download and install the navigator CLI
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ inputs.token }}
+        ACTION_REPO: ${{ github.action_repository }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${VERSION}" ]; then
+            echo "::error::'version' is required — pass the exact immutable release tag."
+            exit 1
+        fi
+        case "${VERSION}" in
+            latest|main|HEAD)
+                echo "::error::'version' must be an exact release tag, not '${VERSION}'."
+                exit 1
+                ;;
+        esac
+
+        case "${RUNNER_OS}" in
+            Linux)  platform=linux  ;;
+            macOS)  platform=macos  ;;
+            *)
+                echo "::error::unsupported runner OS '${RUNNER_OS}' — use a Linux or macOS runner."
+                exit 1
+                ;;
+        esac
+
+        repo="${ACTION_REPO:-neon-law/navigator}"
+        asset="navigator-${VERSION}-${platform}.tar.gz"
+        tmp="$(mktemp -d)"
+
+        echo "Downloading ${asset} from ${repo}@${VERSION}"
+        if ! gh release download "${VERSION}" \
+            --repo "${repo}" \
+            --pattern "${asset}" \
+            --dir "${tmp}" \
+            --clobber; then
+            echo "::error::could not download ${asset} from ${repo}. If ${repo} is private and this workflow lives in another organization, pass a PAT with contents:read as the 'token' input."
+            exit 1
+        fi
+
+        tar -xzf "${tmp}/${asset}" -C "${tmp}" navigator
+        install -d "${RUNNER_TEMP}/navigator-bin"
+        install -m 0755 "${tmp}/navigator" "${RUNNER_TEMP}/navigator-bin/navigator"
+        echo "${RUNNER_TEMP}/navigator-bin" >> "${GITHUB_PATH}"
+
+    - name: verify the installed CLI reports the pinned tag
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        reported="$(navigator --version)"
+        echo "navigator --version → ${reported}"
+        case "${reported}" in
+            *"${VERSION}"*) ;;
+            *)
+                echo "::error::expected navigator ${VERSION}, got '${reported}'."
+                exit 1
+                ;;
+        esac
+
+    - name: navigator project gate --check
+      shell: bash
+      run: |
+        set -euo pipefail
+        navigator project gate --check --ci

@@ -1,0 +1,327 @@
+# Observability
+
+How Neon Law Navigator emits telemetry, where it lands for analysis, and how an operator debugs a durable-execution
+failure fast. Born from an incident: a trigger Job sat in `ImagePullBackOff` for days while a `CronJob`'s
+`concurrencyPolicy: Forbid` silently skipped every run, and *nothing emitted a queryable signal* — the only telemetry
+was the nightly email, which was the thing that broke. This page exists so that never repeats.
+
+> **The one rule for anyone adding a span, metric, or log field — identifiers and counts, never content.** A
+  `notation_id`, a `service` name, an `outcome`, a duration, a status code: yes. A client name, an answer body, an email
+  address, a document body: never. Telemetry crosses the firm's trust boundary; client content does not. This is a
+  standing engineering- and legal-council order, not a style preference.
+
+## One seam: `telemetry::init`
+
+Every binary calls [`telemetry::init`](../telemetry/src/lib.rs) once in `main` and holds the returned guard until exit.
+There is no per-binary subscriber wiring anymore — web, the `workflows-service` worker, and all seven `*-trigger` jobs
+share the one crate. The endpoint and OpenObserve variables select one of three process contracts:
+
+| | Unset (stdout-only) | Plain collector contract | Complete OpenObserve contract |
+| --- | --- | --- | --- |
+| stdout | human-readable `fmt` | **structured JSON** and OTLP | **structured JSON** and OTLP |
+| traces | — | OTLP/gRPC → collector | OTLP/gRPC → OpenObserve |
+| metrics | — | OTLP/gRPC → collector | OTLP/gRPC → OpenObserve |
+| logs | — | OTLP/gRPC → collector and stdout JSON | OTLP/gRPC → OpenObserve and stdout JSON |
+| credentials | — | none in the process | Basic auth, organization, and stream |
+
+`OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_SERVICE_NAME` name the exporter and service. The four `NAVIGATOR_OPENOBSERVE_*`
+values supply Basic authentication, organization, and stream routing for the direct OpenObserve contract. When none of
+those four values is set, an endpoint is a plain collector contract with no authentication metadata. When one to three
+are set, the process rejects the partial OpenObserve contract and remains stdout-only. The guard's drop flushes batched
+spans/metrics — important for the short-lived trigger jobs, which would otherwise exit before the periodic exporter
+fires.
+
+Nothing about the plain collector contract replaces the OpenTelemetry environment variables.
+`OTEL_EXPORTER_OTLP_HEADERS` and its per-signal variants still apply in every exporting mode — the OpenObserve metadata
+is merged with them rather than substituted for them — so pointing the collector contract at a backend that needs its
+own header is a deployment change, not a Rust change.
+
+## What is instrumented
+
+Every workflow trigger funnels through `workflows::start_workflow`, instrumented once there so every trigger inherits
+it:
+
+- a span `workflow.trigger` with `service` / `key` / `handler` — never the request body; the metric
+  **`navigator.workflow.trigger.fired`**, dimensioned by `service` and `outcome` ∈ {`accepted`, `rejected`,
+  `transport_error`}. A flat line for a service that should fire on a schedule is the signal a trigger has silently
+  stopped — the exact failure that hid for days;
+- a structured event on each outcome (`status`, `service`) so a 401 / 404 / timeout is one log line, not a guess.
+
+The worker and web emit their own spans through the same subscriber, so new handlers inherit tracing for free. Every
+`web` request span additionally carries the HTTP semconv trio through the outermost `TraceLayer` in `portal/src/lib.rs`:
+`http.request.method`, `http.route` (the matched route *template* from axum's `MatchedPath` — never the resolved path,
+so a Project code or person id in the URL never rides a span attribute), and `http.response.status_code` (recorded once
+the handler answers). All three are on the collector's allow-list already, so a Dash0 span query grouped by
+`http.response.status_code` works without a collector change.
+
+The HTTP request span extracts W3C `traceparent` and `tracestate` headers. Missing or invalid context starts a fresh
+trace. The notation runtime injects the current context on starts, signals, and bodyless reads; the worker attaches its
+handler span to that parent. `workflows::start_workflow` uses the same propagation helpers for scheduled and
+event-driven workflow submissions. No baggage, request body, or resolved URL is propagated as trace metadata.
+
+Propagation connects the application spans; collector sampling still governs which spans reach each backend. The example
+collector has two replicas with independent tail samplers. Complete cross-service sampling requires every span of a
+trace to reach the same sampler, using trace-ID routing or another consistent sampling design. See the [OpenTelemetry
+collector deployment guidance](https://opentelemetry.io/docs/collector/deploy/other/agent-to-gateway/).
+
+`store::surreal::ping` — the readiness probe's one query — runs on its own `tokio::spawn`ed task rather than inline
+(ENG-709). `readyz`'s caller is a kubelet HTTP probe with a short timeout; when it fires before the query answers,
+kubelet drops the connection and axum drops the handler future that was awaiting `ping`. Awaited inline, that drop would
+drop the receiver half of the remote WS engine's internal response channel while the query was still in flight, and the
+`surrealdb` client's own router task would log `Failed to send query results to channel: SendError(..)` at ERROR when it
+tried to deliver a response nobody was waiting for — this was roughly 85% of staging's log volume. Spawning decouples
+the two lifetimes: the caller giving up only stops it from *waiting*, not the query from *running*, so the engine always
+finds its receiver.
+
+Web also records first-party public website visits as aggregate analytics. The durable table and OTel counter
+(`navigator.web.visit.count`) use bounded dimensions only: UTC day, Axum matched route pattern, trusted edge
+country/region code, route-derived locale, coarse status class, and a source bucket derived from approved UTM/ref query
+parameters or referrer host classification. Do not add raw IP addresses, user agents, session or person identifiers, raw
+URL paths, arbitrary query parameters, full query strings, or full `Referer` URLs to visitor analytics. Unknown or
+sensitive query parameters are ignored, invalid allowed values collapse to `invalid`, missing referrers collapse to
+`direct`, same-site referrers to `internal`, and unrecognized external hosts to `other`. The operational view is
+admin-only at `/app/admin/analytics`. The exported counter dimensions are `http.route`, `country`, `source`, `locale`,
+and `status_class`; `http.route` is the matched template, never the resolved path.
+
+Public lead capture stores the submitted inquiry in the `lead` table through `POST /leads`; its audit event carries only
+the lead id, brand, source path, and outcome, never an email address, phone number, or form content. Conversion writes
+the Person directory (`store::persons::create`) and points `lead.person_id` at that row.
+
+## Neon Law funnel
+
+The Neon Law funnel uses one identifier-only structured event family with the `funnel` target. Each event carries its
+event name in the bounded `step` field. The five steps and their fields are:
+
+| Event | Fields |
+| --- | --- |
+| `funnel.lead_captured` | `lead_id`, `brand`, `source_path`, `sms_consent` |
+| `funnel.started` | `person_id`, `project_id`, `notation_id`, `service_id`, `brand` |
+| `funnel.intake_complete` | `notation_id`, `project_id` |
+| `funnel.review_entered` | `notation_id`, `project_id` |
+| `funnel.sent` | `notation_id`, `project_id`, `channel` (`email` or `signature`) |
+
+The matching `navigator.funnel.step` counter carries only the `step` attribute, so Dash0 can chart conversion and
+drop-off without querying event logs. The workflow-service events are emitted from journaled Restate side effects, so a
+replay reuses the recorded side effect instead of incrementing the counter or writing a duplicate event. The signature
+send path uses its existing idempotent request record and emits only after the provider succeeds.
+
+## Browser sign-in
+
+Browser OAuth callbacks emit one `auth.signed_in` event after a session is created, with `person_id`, `provider`
+(`google`, `microsoft`, or `apple`), `brand`, and `first_link`. A callback that cannot resolve an admitted Person, or
+whose token fails verification, emits `auth.sign_in_refused` with `provider`, `brand`, and one of
+`no_subject_match_no_email`, `email_unmatched`, `not_admitted`, `token_invalid`, `tenant_not_allowed` (a verified
+Microsoft token whose signing tenant is refused: not on `OAUTH_MICROSOFT_ALLOWED_TENANTS` while
+`OAUTH_MICROSOFT_ALLOW_ANY_TENANT` is off, or the personal-account tenant in any configuration), or `address_in_use` (a
+foreign-tenant Microsoft sign-in asserting an address that already belongs to a Person). The matching
+`navigator.auth.sign_in` counter carries only `provider` and `outcome` (`signed_in`, `refused`, or `failed`). A store
+failure during Person resolution remains an HTTP 500 and emits `auth.sign_in_failed` with `provider`, `brand`, and the
+bounded `error_class=store`. These events and logs carry identifiers and bounded values only: no email, name, address,
+provider subject, or raw store error.
+
+A sign-in that converges a Person row written before sign-in identifiers were split per provider also emits
+`auth.legacy_subject_relinked` with `provider` and nothing else. It is a migration signal, not a sign-in outcome, so it
+increments no counter and the sign-in that triggered it emits its own `auth.signed_in`. Each affected row can produce it
+at most once — see ["Legacy convergence"](oidc.md#legacy-convergence) — so the event falling silent everywhere is the
+condition ENG-783 waits on before removing the branch that emits it.
+
+The GET and form-post callbacks share one completion path. The pre-auth cookie is consumed before token processing, and
+the event is emitted once at the session-creation or refusal boundary. `first_link` is true when the sign-in creates a
+Person or links the presenting provider to an existing Person, and false on a repeat login through that provider.
+
+The key set emitted by every visit, funnel, sign-in, and nightly recorder is pinned to the collector's fail-closed
+allow-list by `cli/tests/audit_fields_exported.rs`.
+
+## Nightly Project Update
+
+The Nightly Project Update fails loud instead of reporting "complete" over failed children. When any (Project, tag)
+child fails, the `#messages` update opens with `Nightly Project Update DEGRADED`, the failure and Project counts, and
+one line per cause: the tag, a count, a bounded cause code, and the first message seen. Twenty-one Projects failing for
+one reason read as one line, not twenty-one.
+
+Each child failure logs at `error` with `project_id`, `tag`, and `reason`. A degraded run also logs one `Nightly Project
+Update degraded` summary at `error` with the failure, failed-Project, and Project counts.
+
+Two counters are recorded once per run, in a journaled step so a replay does not double count:
+
+- `navigator.nightly_project_update.run`, with `outcome` set to `clean` or `degraded`. The worker starts both series at
+  zero on boot so the first run after a restart is a visible increase.
+- `navigator.nightly_project_update.child_failed`, with `stage` set to the tag and `error.type` set to the cause code:
+  `slack_name_taken`, `slack_missing_scope`, `slack_channel_not_found`, `slack_rate_limited`, `slack_canvas_failed`,
+  `slack_other`, or `other`.
+
+[`dash0-check-rules.yaml`](../examples/deploy/k8s/observability/dash0-check-rules.yaml) alerts on both: any child
+failure in the last day, which is critical at five or more for one tag, and no finished run in 26 hours. Dash0 is
+staging-only today, so production relies on the Slack headline until a production row declares `DASH0_ENDPOINT`.
+
+## Where it lands: direct OpenObserve
+
+Traces, metrics, and logs speak OTLP/gRPC directly to the OpenObserve organization and stream named in their
+environment. There is no collector hop and therefore no shared collector credential or backend fan-out to operate. The
+telemetry contract is deliberately fail-closed at the source: the shared subscriber rejects a log event before either
+the stdout formatter or the direct OTLP log bridge sees it when a value is an email address, phone number, government
+identifier, document/body-like string, or an explicitly content-bearing field. Approved opaque identifiers and bounded
+enum/status fields remain unchanged. This control applies to audit and non-audit events alike; OpenObserve's stream
+retention and access policy is a separate deployment control, not the privacy boundary.
+
+## Where it lands: collector fan-out
+
+The `examples/deploy` process path uses the plain collector contract: binaries send OTLP/gRPC to the in-cluster
+collector Service without OpenObserve credentials. The collector runs the existing `memory_limiter`, resource detection,
+fail-closed `redaction`, and `batch` processors before the exporters. Google Cloud keeps its existing sampled trace
+lane. Dash0 receives a separate trace lane that drops successful health, readiness, version, crawler, and static-asset
+request spans before tail sampling. The filter keeps every 4xx/5xx response, and keeps a span whose status attribute is
+absent because an ordering comparison against nil is false, so the drop condition never matches. Dash0's tail-sampling
+percentage is read from `DASH0_TRACE_SAMPLING_PERCENTAGE`, with a default of 20; the selected deployment can set a
+different value for staging or production. The filter and Dash0 sampler never change the Google Cloud trace lane. A
+processor belongs to exactly one pipeline, so per-backend filtering costs a second trace lane: both lanes receive from
+the same `otlp` receiver, resource detection and redaction therefore run once per lane, and each lane holds its own
+`num_traces` tail-sampling buffer. That is collector CPU and memory spent to reduce Dash0 ingest, and it scales with
+span volume. Metrics and logs remain shared fan-out pipelines because trace sampling cannot reduce their billable
+records.
+
+Both tail samplers keep three kinds of trace regardless of the sampled percentage: any trace with an error span, any
+trace carrying `audit = true`, and any trace carrying `navigator.keep = true`. The two flags mean different things.
+`audit` marks the security and authorization trail (see `cli/tests/audit_fields_exported.rs`) and is never set on
+routine work. `navigator.keep` marks a workflow root span whose run must always be visible: `finance_aggregate.run`,
+`email_summary.run`, `notation.handler`, `project_slack.client_project_view`, and `project_slack.main_push`. It is a
+boolean flag carrying no identifier, so a new workflow root span opts in by setting it. The collector's redaction
+processor runs before tail sampling and deletes any key not on its allow-list, so `navigator.keep` is on that list;
+`keep-navigator` is declared in `tail_sampling/googlecloud`, in `tail_sampling/dash0`, and in the Dash0 block the CLI
+renders into a deployment, and a test in `cli/src/devx/observability.rs` keeps the three in step. The change takes
+effect on the next roll of the collector and the worker; the sampled percentage is unchanged and still governs every
+other trace.
+
+Dash0 is an optional per-deployment integration declared by a nonblank `DASH0_ENDPOINT` in the selected deployment row's
+`[env]` coordinates. A row without that endpoint need not carry `DASH0_DATASET` or `DASH0_TOKEN`; the deployment plan
+reports the token as `integration not declared by this deployment` and `ops ship` removes it from that row's
+`SecretProviderClass`. When the endpoint is present, `DASH0_DATASET` must also be a nonblank coordinate and
+`DASH0_TOKEN` must be present in the encrypted Secret Manager input. The deployment, Secret Manager, and ship gates
+refuse a missing value by name, so a half-configured row cannot be silently rendered as a Google-only pipeline. With all
+three values present, the renderer substitutes the endpoint and dataset and enables the separate Dash0 trace lane plus
+the shared metrics/logs fan-out. The token remains a `secretKeyRef` and never enters application arguments or committed
+plaintext.
+
+The collector's own metrics (`otelcol_exporter_sent_*`, `otelcol_exporter_send_failed_*`, `otelcol_processor_dropped_*`,
+…) reach the same fan-out as every other signal: a `prometheus/self` receiver scrapes the collector's own `:8888`
+`telemetry.metrics` endpoint into the `metrics` pipeline, so exporter health redacts, batches, and exports to
+`googlecloud` and `otlp/dash0` exactly like application metrics, instead of reaching Cloud Monitoring (via Google
+Managed Prometheus's separate external scrape of the same port) only. `exporter` is on the allow-list for this reason —
+it names a collector component (e.g. `otlp/dash0`), never client data.
+
+The collector exporter uses OTLP/gRPC with `Authorization: Bearer …` and a `Dash0-Dataset` header, following the [Dash0
+exporter contract](https://www.dash0.com/guides/otlp-grpc-exporter). Select the account's regional endpoint and
+deployment-specific dataset and token before rollout. Verify the collector's running configuration and backend receipt
+after applying changes; application image rollout alone does not apply the collector manifest. Direct OpenObserve
+remains a separate supported export contract.
+
+The Iceberg archive ([iceberg-archive guide](iceberg-archive.md)) remains distinct. Its nightly `Archives` workflow
+snapshots SurrealDB tables to Parquet on GCS for BigQuery external-table analysis; it is not an operational telemetry
+sink. Any decision to retain application logs in BigQuery is a separate deployment-operator decision, recorded with that
+deployment rather than implied by the exporter.
+
+## Seeing telemetry locally: OpenObserve
+
+`navigator dev up` creates an OpenObserve Deployment and Service in KIND, waits for its rollout, and port-forwards the
+UI and direct OTLP/gRPC endpoints. It writes this complete development-only contract to `.devx/env`:
+
+```text
+NAVIGATOR_OPENOBSERVE_URL=http://localhost:5080
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:5081
+NAVIGATOR_OPENOBSERVE_USERNAME=root@example.com
+NAVIGATOR_OPENOBSERVE_PASSWORD=…
+NAVIGATOR_OPENOBSERVE_ORGANIZATION=default
+NAVIGATOR_OPENOBSERVE_STREAM=default
+```
+
+Use `NAVIGATOR_KIND_OPENOBSERVE_PORT` and `NAVIGATOR_KIND_OPENOBSERVE_OTLP_PORT` to select different host ports. KIND
+storage is `emptyDir`, so recreating the pod removes local telemetry. Host `web` started after sourcing `.devx/env`
+exports directly; in-cluster `web` and `workflows-service` receive the same complete contract from
+`navigator-openobserve`.
+
+Open `NAVIGATOR_OPENOBSERVE_URL`, sign in with the generated development credentials, and use Explorer to select the
+`default` organization and the stream for traces, logs, or metrics. Search by `service_name = neon-server` for the host
+loop, `navigator-web` for the in-cluster web process, or `workflows-service` for the worker. A Restate-triggered
+workflow should retain its W3C trace id across the boundary. Use `RUST_LOG=info` for that verification so the caller
+span is enabled. Set an empty `OTEL_EXPORTER_OTLP_ENDPOINT` to intentionally run stdout-only.
+
+## Debugging "the workflow didn't run"
+
+Work down the chain (full version in the [durable-workflows guide](durable-workflows.md)); each rung now has telemetry:
+
+1. **Did the trigger fire — and is a job wedged?** Run **`navigator ops doctor`**. It reads the cluster and names, in
+   plain language, any trigger Job stuck in `ImagePullBackOff` / `CrashLoopBackOff` or Active too long (which, under
+   `Forbid`, skips every subsequent run) and any unready workload. It prints the exact `kubectl` command that fixes each
+   finding. First stop for a missing nightly/periodic job.
+2. **Did the ingress accept it?** Query OpenObserve for `navigator.workflow.trigger.fired` by `service` and `outcome`,
+   or read the trigger-outcome log events: `rejected` with `status=401` is a stale `RESTATE_AUTH_TOKEN`; `status=404` is
+   the registration gotcha; `transport_error` is an unreachable/hung ingress (now capped by a 30s client timeout +
+   `activeDeadlineSeconds`).
+3. **Did the worker run it?** The Restate Cloud console → Invocations shows the journal; a failing step retries and
+   surfaces there. Open it for this deployment's environment; the `Archives` notice names the invocation but do not link
+   to it.
+4. **Is durable execution alive at all?** The six-hourly `Heartbeat` Slack line, posted by the DBOS executor in `web`,
+   is the liveness signal; its *absence* is the alert.
+
+## Tracing across the Restate boundary
+
+A workflow kicked off from `web` continues the caller's trace into the durable handler, so a single trace spans "button
+click → ingress POST → snapshot/dispatch steps." `workflows::trigger` injects the current span's W3C `traceparent` into
+the outbound ingress POST (`telemetry::current_trace_context_headers`); instrumented handlers extract it from
+`ctx.headers()` and parent their span on the result (`telemetry::set_span_parent`, used by `Archives::run` and every
+`Notation` handler). Only opaque trace context crosses — never a client field (LEGAL #2). When OTLP is unconfigured the
+inject/extract pair is a no-op, so an explicitly stdout-only environment stays zero-cost.
+
+The Rust contract — inject produces a well-formed `traceparent`, extract recovers the same trace id — is covered by
+`telemetry`'s round-trip test and `workflows`' `trace_propagation` integration test. The **one** thing only a live
+cluster confirms is that Restate forwards the ingress `traceparent` onto the handler invocation headers; verify once in
+KIND/prod by checking a `web`-initiated workflow and its steps share a trace id in OpenObserve. If a future Restate
+version stops forwarding it, the fallback is to carry a `trace_id` in the request body and link (rather than parent) the
+handler span — no other code changes.
+
+## The hardening that came with this
+
+- **HTTP timeout** in `start_workflow` (30s) so a hung ingress can't keep a trigger pod running forever.
+  **`activeDeadlineSeconds: 120` + `startingDeadlineSeconds`** on the trigger `CronJob`s, so a stuck trigger
+  self-terminates instead of holding the `Forbid` lock and skipping every run — the precise failure mode that stopped
+  the nightly archives email for days.
+- **`navigator ops doctor`** so the next operator sees the wedge in one command instead of `kubectl` archaeology.
+
+## See also
+
+- The [durable-workflows guide](durable-workflows.md) — the durable-execution model and the registration gotcha. The
+  [Iceberg archive guide](iceberg-archive.md) — the nightly store → Parquet → BigQuery table archive.
+  [`cloud-operations.md`](cloud-operations.md) — the deployment and operator boundary.
+
+## Email pipeline
+
+Authenticated summary intake and the worker emit `email pipeline stage completed` with `receipt_id`, `stage`, `outcome`,
+and `duration_seconds`. Filter by one receipt ID to follow receipt admission, archive, trigger, sender gate, summary,
+and Slack delivery. `email_summary.run` continues the trigger's W3C trace context and includes the invocation ID.
+Collector redaction retains these fields; metric aggregation retains stage and outcome while excluding receipt IDs.
+Worker events run inside named journaled closures: successful replay does not emit another stage completion. Stage
+counters count attempts, including webhook retries and failed journal-step retries, rather than unique emails.
+
+`navigator.email.stage.completed` counts stage outcomes; `navigator.email.stage.duration` records seconds by stage and
+outcome. `navigator.email.delivery.latency` measures receipt creation to fresh Slack confirmation in seconds. Receipt
+and invocation IDs appear only in events/spans, never metric labels. Provider failure text, sender details, message
+bodies, and Slack channel coordinates are excluded from these events. Unknown senders produce a skipped summary; a
+provider retry produces a `summary` / `retry` event. Confirmation proves Slack accepted the summary, including a summary
+reporting a provider failure; it does not prove Gemini succeeded or the courtesy thread reply landed.
+
+Run the read-only check against the target deployment's database environment:
+
+```bash
+navigator ops email-summary health
+```
+
+It exits nonzero for receipts older than five minutes without confirmed delivery, or any failed/unknown delivery. It
+prints only receipt IDs and bounded status words. Run it from the deployment's monitoring scheduler and alert on nonzero
+exit; the command itself creates no schedule or cloud alert policy. It catches partial archives and missed triggers even
+when no completion log exists. It cannot detect a provider callback that never reached intake; monitor that boundary
+through the provider's delivery diagnostics. An empty database passes, so pair this with a periodic synthetic email when
+ingress liveness is required.
+
+The `email_delivery.state` record is authoritative. Receipt lookup functions resolve `delivery_state` from that record
+when present; the receipt's stored initial value is a fallback before any delivery exists. Database health checks
+consult the delivery record directly, so an older receipt requires no backfill to report confirmation.

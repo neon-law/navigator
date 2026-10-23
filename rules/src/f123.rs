@@ -1,0 +1,1612 @@
+//! `N123` — an instrument the firm drafts must carry a Harvard outline.
+//!
+//! An agreement, a pleading, and the two engagement letters that open and
+//! close a matter are outline documents: a reader cites a provision by its
+//! path (`I.A`, `2.B`), a narrator steps them unit by unit on the notation's
+//! own outline stage, and `pdf::outline` numbers the rendered document from
+//! the same shape. A body whose sections are unnumbered prose has no path to
+//! cite and nothing to step, and the defect is invisible until someone
+//! needs the citation.
+//!
+//! The scheme is the document's, not an ad hoc mix:
+//!
+//! - **Agreement** — one consistent scheme for the whole body. Roman
+//!   (`## I.`, `## II.`) keeps lettered subsections (`A.`). Decimal
+//!   (`## 1.`, `## 2.`, or `## 1.1`, `## 1.2`, `## 2.1`) and
+//!   `## Section 1.01` use parenthetical subsections (`(a)`, `(b)`, `(c)`),
+//!   written as `> **(a) Label.**` or `### (a) Label`.
+//! - **Roman** (`## I.`, `## II.`) for `offboarding` and `will`.
+//!   `onboarding` is a letter at the render path and is exempt, the same
+//!   as `letter`: a scaffolded stub cannot pass the gate if it must invent
+//!   a fake outline to declare the kind it is.
+//! - **Arabic** (`## 1.`, `## 2.`) for `pleading` — motion practice, which
+//!   numbers its sections the way a court reads them.
+//!
+//! **A preamble is allowed.** Court paper opens with its formal title line
+//! after the caption — `## ANSWER TO COUNTERCLAIM FOR BREACH OF CONTRACT`,
+//! `## SUMMONS — CIVIL` — and that line is a caption element, not the first
+//! section of the argument. Unnumbered `## ` headings before the first
+//! numbered one are therefore left alone, the same preamble
+//! `views::harvard_outline` gives depth 0. Once numbering starts it must
+//! not stop: an unnumbered heading *after* the first numbered section is
+//! a section that lost its marker, and is flagged. A body where numbering
+//! never starts has no outline at all, which is the first thing flagged.
+//!
+//! Every other `kind` is exempt. A `letter` is a demand or notice the firm
+//! sends on a client's behalf, often a single page of prose with no sections
+//! to number. `onboarding` renders through the same letter frame and is
+//! exempt for the same reason: the opening engagement is a letter, not a
+//! contract outline. A `filing` fills a government `AcroForm` and its body is
+//! an intake summary rather than the document. None of those has an outline
+//! to hold, so none is asked for one.
+//!
+//! **What this rule does not restate.** The seven-depth marker table
+//! (`I. A. 1. a. (1) (a) (i)`) lives in `word::MARKER_GROUPS` and is read
+//! from there by `pdf::outline` and `views::harvard_outline`. This rule
+//! never reproduces it: it reads depth-1 headings only, where the whole
+//! vocabulary is "a Roman numeral or a decimal", and leaves every deeper
+//! level to the parser and the renderer that already own it. That is why
+//! the lint crate does not depend on `word` — doing so would put `zip`,
+//! `flate2`, and `sha2` inside `navigator-lsp` to borrow a two-variant
+//! enum.
+
+use crate::{frontmatter, line_byte_range, Rule, SourceFile, Violation};
+
+/// How a kind numbers its depth-1 sections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scheme {
+    Roman,
+    Arabic,
+}
+
+impl Scheme {
+    /// The marker a first section carries, for the message that asks for it.
+    const fn first_marker(self) -> &'static str {
+        match self {
+            Self::Roman => "I.",
+            Self::Arabic => "1.",
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Roman => "Roman numerals",
+            Self::Arabic => "Arabic numerals",
+        }
+    }
+}
+
+/// Whether the body must carry its own `# ` document title.
+///
+/// This follows the render frame, not preference. An engagement letter goes
+/// out on firm letterhead and opens the way a letter opens — a `Re:` line and
+/// a salutation — so its name lives in frontmatter and a `# ` heading would
+/// print a title block above "Dear …". An instrument carries no such chrome:
+/// `Kind::Will` renders with none at all, and the contract and pleading frames
+/// print no name of their own, so if the body does not title the document
+/// nothing does. That is the drift LAW-16 reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Title {
+    /// The body opens with exactly one `# `, above the first numbered section.
+    Required,
+    /// The frame supplies the opening; the body has no title heading.
+    FromFrame,
+}
+
+/// The kinds that must carry an outline, the scheme each one uses, and
+/// whether the body titles itself.
+///
+/// `inbound_contract` is deliberately absent though it is contract-shaped:
+/// it names a contract the *client* uploaded for review, an asset-lane
+/// classification that is never a template's own declared kind, so the firm
+/// did not draft it and cannot be held to its shape.
+const OUTLINED_KINDS: &[(&str, Scheme, Title)] = &[
+    ("agreement", Scheme::Roman, Title::Required),
+    ("offboarding", Scheme::Roman, Title::FromFrame),
+    ("pleading", Scheme::Arabic, Title::Required),
+    // LAW-16: a will drifted out of its outline with zero errors because the
+    // rule never bound it. It is an instrument the firm drafts and a reader
+    // cites its articles by path, so it belongs here; it renders with no
+    // chrome, so it must name itself.
+    ("will", Scheme::Roman, Title::Required),
+];
+
+/// Whether `kind` is one of the kinds [`OUTLINED_KINDS`] binds.
+///
+/// `N125` scopes itself to the same set: a subsection rule that bound a
+/// different list of kinds than the outline rule it serves would flag a
+/// subsection in a document with no outline to hold it.
+pub(crate) fn is_outlined(kind: &str) -> bool {
+    OUTLINED_KINDS.iter().any(|(name, _, _)| *name == kind)
+}
+
+/// A one-sentence, human-readable statement of the `N123` requirement
+/// [`OUTLINED_KINDS`] binds `kind` to, for a reader who is not parsing lint
+/// output — the `/notations` kind catalog's "Rules" column
+/// ([`crate::kind::Kind::structural_rules`]). `None` for a kind this rule
+/// does not bind, so that surface never invents a requirement `OUTLINED_KINDS`
+/// does not actually enforce.
+pub(crate) fn outline_requirement_note(kind: &str) -> Option<String> {
+    if kind == "agreement" {
+        return Some(
+            "Depth-1 sections use one consistent scheme: Roman numerals (`I.`, `II.`), \
+             decimal numbers (`1.`, `1.1`), or `Section 1.01`. Roman outlines use lettered \
+             subsections (`A.`); decimal and Section outlines use `(a)`, `(b)`, `(c)`. \
+             The body must open with its own `# ` title."
+                .to_string(),
+        );
+    }
+    OUTLINED_KINDS
+        .iter()
+        .find(|(name, _, _)| *name == kind)
+        .map(|(_, scheme, title)| {
+            let scheme_clause = format!(
+                "Depth-1 sections must be numbered with {} (`{}`, `{}`, …)",
+                scheme.name(),
+                scheme.first_marker(),
+                match scheme {
+                    Scheme::Roman => "II.",
+                    Scheme::Arabic => "2.",
+                }
+            );
+            match title {
+                Title::Required => {
+                    format!("{scheme_clause}, and the body must open with its own `# ` title.")
+                }
+                Title::FromFrame => format!("{scheme_clause}."),
+            }
+        })
+}
+
+pub struct F123HarvardOutlineRequired;
+
+impl F123HarvardOutlineRequired {
+    pub const CODE: &'static str = "N123";
+}
+
+/// The value of a Roman numeral written in the ASCII capitals a section
+/// heading uses. `None` for anything that is not one.
+fn roman_value(token: &str) -> Option<u32> {
+    if token.is_empty() {
+        return None;
+    }
+    let mut total = 0_u32;
+    let mut prev = 0_u32;
+    for ch in token.chars().rev() {
+        let value = match ch {
+            'I' => 1,
+            'V' => 5,
+            'X' => 10,
+            'L' => 50,
+            'C' => 100,
+            'D' => 500,
+            'M' => 1000,
+            _ => return None,
+        };
+        if value < prev {
+            total -= value;
+        } else {
+            total += value;
+            prev = value;
+        }
+    }
+    Some(total)
+}
+
+/// The marker of a heading that carries nothing else: one alphanumeric
+/// token, with or without its period. `None` for a captioned heading.
+fn bare_marker(heading_text: &str) -> Option<&str> {
+    let text = heading_text.trim();
+    let marker = text.strip_suffix('.').unwrap_or(text);
+    (!marker.is_empty() && marker.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        .then_some(marker)
+}
+
+/// [`roman_value`], restricted to the spelling [`roman_or_arabic`] would
+/// write for that value, so a word that happens to use only roman digits
+/// (`CIVIL`, `DID`) is not a numeral.
+fn canonical_roman_value(token: &str) -> Option<u32> {
+    let value = roman_value(token)?;
+    (roman_or_arabic(Scheme::Roman, value).trim_end_matches('.') == token).then_some(value)
+}
+
+/// The heading a message suggests: `## I. Title`, or `## I` for an
+/// uncaptioned unit, which carries no trailing period (M026).
+fn suggested(marker: &str, title: &str) -> String {
+    if title.is_empty() {
+        marker.trim_end_matches('.').to_string()
+    } else {
+        format!("{marker} {title}")
+    }
+}
+
+/// The depth-1 marker a `## ` heading carries, as `(scheme, value, title)`.
+///
+/// A heading reads `## I. Client and scope` or `## 1. Client and scope`:
+/// the marker is the token before the first `.`, and `title` is the text
+/// after it. The title comes back so a message can suggest the corrected
+/// heading without re-appending the marker it is replacing.
+///
+/// An uncaptioned unit carries its marker alone — `## I`, `## 1`, or `## II.`
+/// — because a transcribed contract numbers provisions it never captions, and
+/// M026 drops the trailing period. A lone word is read as a marker only when
+/// it is a canonical numeral, so a one-word title line such as `## CIVIL`
+/// stays preamble.
+pub(crate) fn depth_one_marker(heading_text: &str) -> Option<(Scheme, u32, &str)> {
+    if let Some(marker) = bare_marker(heading_text) {
+        if let Ok(value) = marker.parse::<u32>() {
+            return Some((Scheme::Arabic, value, ""));
+        }
+        return canonical_roman_value(marker).map(|value| (Scheme::Roman, value, ""));
+    }
+    let (marker, rest) = heading_text.split_once('.')?;
+    // A bare `## Scope` has no marker; a `## 1.2 Scope` is not one either,
+    // because the text after the dot must be the title, not more number.
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let title = rest.trim();
+    let marker = marker.trim();
+    if let Ok(value) = marker.parse::<u32>() {
+        return Some((Scheme::Arabic, value, title));
+    }
+    roman_value(marker).map(|value| (Scheme::Roman, value, title))
+}
+
+/// The depth-2 marker a `### ` heading carries, as `(value, title)`.
+///
+/// Depth 2 is lettered in every scheme. `word::MARKER_GROUPS` reads
+/// `I. A. 1. a. (1) (a) (i)`, and only its depth-1 root varies — upper roman
+/// for contracts and instruments, decimal for motion practice — so a
+/// subsection is `A.`, `B.`, … whether it sits under `## I.` or under `## 1.`.
+/// That is why this takes no [`Scheme`].
+fn depth_two_marker(heading_text: &str) -> Option<(u32, &str)> {
+    let (marker, rest) = match bare_marker(heading_text) {
+        Some(marker) => (marker, ""),
+        None => heading_text.split_once('.')?,
+    };
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut letters = marker.trim().chars();
+    let letter = letters.next()?;
+    if letters.next().is_some() || !letter.is_ascii_uppercase() {
+        return None;
+    }
+    Some((u32::from(letter as u8 - b'A') + 1, rest.trim()))
+}
+
+/// `n` as a depth-2 letter marker (`1` → `A.`).
+///
+/// Twenty-six subsections in one section is already past anything the firm
+/// drafts, so beyond `Z.` the suggestion stops advising a letter rather than
+/// inventing a second-round spelling the renderer does not use.
+fn letter_marker(n: u32) -> String {
+    u8::try_from(n)
+        .ok()
+        .filter(|n| (1..=26).contains(n))
+        .map_or_else(
+            || format!("{n}."),
+            |n| format!("{}.", char::from(b'A' + n - 1)),
+        )
+}
+
+/// The letter a `> **A. Label.**` block-quote subsection carries, as
+/// `(value, label)`.
+///
+/// This is the depth-2 form the engagement letters actually use — the one
+/// [`docs/notation-authoring.md`] documents and `views::harvard_outline`
+/// parses through its own `parse_bold_letter_lead` — so the rule reads it
+/// beside `### A.` rather than seeing only the heading form and letting an
+/// out-of-sequence letter through. A quoted line that does not lead with a
+/// bold single-letter marker is a pull quote, not a subsection.
+///
+/// [`docs/notation-authoring.md`]: https://github.com/neon-law-source-code/navigator/blob/main/docs/notation-authoring.md
+fn quoted_subsection_marker(line: &str) -> Option<(u32, &str)> {
+    let rest = line.trim_start().strip_prefix('>')?.trim_start();
+    let rest = rest.strip_prefix("**")?;
+    let close = rest.find("**")?;
+    let (marker, label) = rest[..close].split_once('.')?;
+    let mut chars = marker.trim().chars();
+    let letter = chars.next()?;
+    if chars.next().is_some() || !letter.is_ascii_uppercase() {
+        return None;
+    }
+    Some((u32::from(letter as u8 - b'A') + 1, label.trim()))
+}
+
+/// The lettered block-quote subsections, in sequence beneath the `## `
+/// section each one sits under.
+///
+/// A separate pass from [`outline_violations`], because a block quote is not
+/// a heading: it never enters the heading list, it cannot be mistaken for a
+/// section that lost its marker, and the execution tail — which is about the
+/// *level* a heading states — has nothing to say about it.
+fn quoted_subsection_violations(file: &SourceFile) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    let mut expected = 1_u32;
+    for (line, text) in frontmatter::body_lines(&file.contents) {
+        // Lettering restarts beneath each section, the same way the `### `
+        // counter does.
+        if text.starts_with("## ") {
+            expected = 1;
+            continue;
+        }
+        let Some((value, label)) = quoted_subsection_marker(text) else {
+            continue;
+        };
+        if value != expected {
+            violations.push(violation(
+                file,
+                line,
+                format!(
+                    "`> **{} {label}**` is subsection {}; depth-2 subsections run in sequence \
+                     under their section and restart at `A.` beneath each one, so this one is {} \
+                     (expected `> **{} {label}**`)",
+                    letter_marker(value),
+                    letter_marker(value),
+                    letter_marker(expected),
+                    letter_marker(expected),
+                ),
+            ));
+        }
+        expected += 1;
+    }
+    violations
+}
+
+fn violation(file: &SourceFile, line: usize, message: String) -> Violation {
+    Violation {
+        code: F123HarvardOutlineRequired::CODE,
+        path: file.path.clone(),
+        line,
+        range: line_byte_range(&file.contents, line),
+        message,
+    }
+}
+
+fn headings(contents: &str) -> Vec<(usize, usize, &str)> {
+    // Every heading the outline can speak about, in document order.
+    // `### ` is tested before `## ` so a deeper heading is never read as a
+    // shallower one. Depth 4 and below are left to the parser and the
+    // renderer that already own the seven-marker table.
+    frontmatter::body_lines(contents)
+        .into_iter()
+        .filter_map(|(line, text)| {
+            [(3_usize, "### "), (2, "## "), (1, "# ")]
+                .into_iter()
+                .find_map(|(depth, prefix)| {
+                    text.strip_prefix(prefix)
+                        .map(|rest| (line, depth, rest.trim()))
+                })
+        })
+        .collect()
+}
+
+fn title_violations(
+    file: &SourceFile,
+    kind: &str,
+    title_rule: Title,
+    headings: &[(usize, usize, &str)],
+    first_marked: usize,
+) -> Vec<Violation> {
+    let titles: Vec<usize> = headings
+        .iter()
+        .enumerate()
+        .filter_map(|(index, heading)| (heading.1 == 1).then_some(index))
+        .collect();
+    let mut violations = Vec::new();
+
+    match title_rule {
+        Title::Required => match titles.as_slice() {
+            [] => violations.push(violation(
+                file,
+                headings[first_marked].0,
+                format!(
+                    "`kind: {kind}` renders without a title of its own, so the body must open \
+                     with one `# ` document title above the first numbered section"
+                ),
+            )),
+            [first, extra @ ..] => {
+                if *first > first_marked {
+                    violations.push(violation(
+                        file,
+                        headings[*first].0,
+                        format!(
+                            "`# {}` sits below the outline; the `# ` document title opens the \
+                             body, above the first numbered section",
+                            headings[*first].2
+                        ),
+                    ));
+                }
+                for index in extra {
+                    violations.push(violation(
+                        file,
+                        headings[*index].0,
+                        format!(
+                            "`# {}` is a second `# ` heading; a document has exactly one title \
+                             and its outline sections are `## `",
+                            headings[*index].2
+                        ),
+                    ));
+                }
+            }
+        },
+        Title::FromFrame => {
+            for index in &titles {
+                violations.push(violation(
+                    file,
+                    headings[*index].0,
+                    format!(
+                        "`# {}` titles the body, but `kind: {kind}` renders on letterhead and \
+                         opens with its own salutation; the document name belongs in \
+                         frontmatter `title:`",
+                        headings[*index].2
+                    ),
+                ));
+            }
+        }
+    }
+
+    violations
+}
+
+fn outline_violations(
+    file: &SourceFile,
+    kind: &str,
+    scheme: Scheme,
+    headings: &[(usize, usize, &str)],
+    first_marked: usize,
+    last_marked: usize,
+) -> Vec<Violation> {
+    // LAW-16: the execution, attestation, and self-proving affidavit
+    // blocks that follow the testimonium carry no number and are peers of
+    // the articles in depth. They open at the first unnumbered `## ` after
+    // the last numbered section and run to the end of the body. Before
+    // that point an unnumbered `## ` is still a section that lost its
+    // marker, and a subsection of the final numbered section is still a
+    // subsection — which is why this is anchored to the last marker rather
+    // than to whatever heading happens to come last.
+    let tail = (last_marked + 1..headings.len()).find(|index| {
+        let (_, depth, text) = headings[*index];
+        depth == 2 && depth_one_marker(text).is_none()
+    });
+    let in_tail = |index: usize| tail.is_some_and(|start| index >= start);
+
+    let mut violations = Vec::new();
+    let mut expected = 1_u32;
+    let mut expected_sub = 1_u32;
+    for (index, &(line, depth, text)) in headings.iter().enumerate().skip(first_marked) {
+        match depth {
+            2 => {
+                expected_sub = 1;
+                let Some((found, value, title)) = depth_one_marker(text) else {
+                    if !in_tail(index) {
+                        violations.push(violation(
+                            file,
+                            line,
+                            format!(
+                                "`## {text}` carries no outline marker; `kind: {kind}` numbers \
+                                 depth-1 sections with {} (expected `## {} {text}`)",
+                                scheme.name(),
+                                roman_or_arabic(scheme, expected),
+                            ),
+                        ));
+                        expected += 1;
+                    }
+                    continue;
+                };
+                if found != scheme {
+                    violations.push(violation(
+                        file,
+                        line,
+                        format!(
+                            "`## {text}` numbers with {}; `kind: {kind}` numbers depth-1 \
+                             sections with {} (expected `## {}`)",
+                            found.name(),
+                            scheme.name(),
+                            suggested(&roman_or_arabic(scheme, expected), title),
+                        ),
+                    ));
+                } else if value != expected {
+                    violations.push(violation(
+                        file,
+                        line,
+                        format!(
+                            "`## {text}` is section {value}; depth-1 sections run in sequence, \
+                             so this one is {expected} (expected `## {}`)",
+                            suggested(&roman_or_arabic(scheme, expected), title),
+                        ),
+                    ));
+                }
+                expected += 1;
+            }
+            3 => {
+                // A heading outside the numbering is a peer of the
+                // articles, so it belongs at `## ` — LAW-16 asks for the
+                // level to be stated rather than left to the drafter.
+                if in_tail(index) {
+                    violations.push(violation(
+                        file,
+                        line,
+                        format!(
+                            "`### {text}` follows the outline but sits below it; an execution, \
+                             attestation, or affidavit block is a peer of the numbered \
+                             sections (expected `## {text}`)"
+                        ),
+                    ));
+                    continue;
+                }
+                let Some((value, title)) = depth_two_marker(text) else {
+                    violations.push(violation(
+                        file,
+                        line,
+                        format!(
+                            "`### {text}` carries no outline marker; depth-2 subsections are \
+                             lettered (expected `### {} {text}`)",
+                            letter_marker(expected_sub),
+                        ),
+                    ));
+                    expected_sub += 1;
+                    continue;
+                };
+                if value != expected_sub {
+                    violations.push(violation(
+                        file,
+                        line,
+                        format!(
+                            "`### {text}` is subsection {}; depth-2 subsections run in sequence \
+                             under their section and restart at `A.` beneath each one, so this \
+                             one is {} (expected `### {}`)",
+                            letter_marker(value),
+                            letter_marker(expected_sub),
+                            suggested(&letter_marker(expected_sub), title),
+                        ),
+                    ));
+                }
+                expected_sub += 1;
+            }
+            _ => {}
+        }
+    }
+
+    violations
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AgreementScheme {
+    Roman,
+    Article,
+    Decimal,
+    Section,
+}
+
+impl AgreementScheme {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Roman => "Roman numerals",
+            Self::Article => "whole decimal numbers",
+            Self::Decimal => "decimal clause numbers",
+            Self::Section => "Section numbers",
+        }
+    }
+
+    const fn parenthetical(self) -> bool {
+        !matches!(self, Self::Roman)
+    }
+}
+
+/// A depth-1 agreement heading: Roman, `1.`, `1.1`, or `Section 1.01`.
+fn agreement_marker(text: &str) -> Option<(AgreementScheme, u32, Option<u32>, &str)> {
+    let text = text.trim();
+    if let Some(rest) = text.strip_prefix("Section ") {
+        let (token, title) = split_heading_token(rest)?;
+        let (major, minor) = decimal_pair(token)?;
+        return Some((AgreementScheme::Section, major, Some(minor), title));
+    }
+    if let Some((scheme, value, title)) = depth_one_marker(text) {
+        return Some(match scheme {
+            Scheme::Roman => (AgreementScheme::Roman, value, None, title),
+            Scheme::Arabic => (AgreementScheme::Article, value, None, title),
+        });
+    }
+    let (token, title) = split_heading_token(text)?;
+    let (major, minor) = decimal_pair(token)?;
+    Some((AgreementScheme::Decimal, major, Some(minor), title))
+}
+
+fn split_heading_token(text: &str) -> Option<(&str, &str)> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(match text.split_once(char::is_whitespace) {
+        Some((token, title)) => (token, title.trim()),
+        None => (text, ""),
+    })
+}
+
+fn decimal_pair(token: &str) -> Option<(u32, u32)> {
+    let (major, minor) = token.split_once('.')?;
+    if major.is_empty()
+        || minor.is_empty()
+        || minor.contains('.')
+        || !major.bytes().all(|byte| byte.is_ascii_digit())
+        || !minor.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((major.parse().ok()?, minor.parse().ok()?))
+}
+
+fn heading_is_numbered(kind: &str, heading: &(usize, usize, &str)) -> bool {
+    let (_, depth, text) = *heading;
+    if depth != 2 {
+        return false;
+    }
+    if kind == "agreement" {
+        agreement_marker(text).is_some()
+    } else {
+        depth_one_marker(text).is_some()
+    }
+}
+
+fn parenthetical_marker(text: &str) -> Option<(u32, &str)> {
+    let rest = text.trim().strip_prefix('(')?;
+    let (letter, after) = rest.split_once(')')?;
+    let mut chars = letter.trim().chars();
+    let letter = chars.next()?;
+    if chars.next().is_some() || !letter.is_ascii_lowercase() {
+        return None;
+    }
+    Some((
+        u32::from(letter as u8 - b'a') + 1,
+        after.trim().trim_start_matches('.').trim(),
+    ))
+}
+
+fn paren_marker(n: u32) -> String {
+    u8::try_from(n)
+        .ok()
+        .filter(|n| (1..=26).contains(n))
+        .map_or_else(
+            || format!("({n})"),
+            |n| format!("({})", char::from(b'a' + n - 1)),
+        )
+}
+
+fn decimal_in_sequence(previous: Option<(u32, u32)>, major: u32, minor: u32) -> bool {
+    match previous {
+        None => major == 1 && minor == 1,
+        Some((prev_major, prev_minor)) => {
+            (major == prev_major && minor == prev_minor + 1)
+                || (major == prev_major + 1 && minor == 1)
+        }
+    }
+}
+
+fn push_agreement_section(
+    file: &SourceFile,
+    violations: &mut Vec<Violation>,
+    scheme: AgreementScheme,
+    line: usize,
+    text: &str,
+    expected_article: &mut u32,
+    previous_decimal: &mut Option<(u32, u32)>,
+) {
+    let Some((found, major, minor, title)) = agreement_marker(text) else {
+        violations.push(violation(
+            file,
+            line,
+            format!(
+                "`## {text}` carries no outline marker; this agreement numbers depth-1 sections \
+                 with {}",
+                scheme.name()
+            ),
+        ));
+        *expected_article += 1;
+        return;
+    };
+    if found != scheme {
+        violations.push(violation(
+            file,
+            line,
+            format!(
+                "`## {text}` uses {}; this agreement already numbers depth-1 sections with {}",
+                found.name(),
+                scheme.name(),
+            ),
+        ));
+        return;
+    }
+    match scheme {
+        AgreementScheme::Roman | AgreementScheme::Article => {
+            if major != *expected_article {
+                let marker = roman_or_arabic(
+                    if scheme == AgreementScheme::Roman {
+                        Scheme::Roman
+                    } else {
+                        Scheme::Arabic
+                    },
+                    *expected_article,
+                );
+                violations.push(violation(
+                    file,
+                    line,
+                    format!(
+                        "`## {text}` is section {major}; depth-1 sections run in sequence, so \
+                         this one is {expected_article} (expected `## {}`)",
+                        suggested(&marker, title)
+                    ),
+                ));
+            }
+            *expected_article += 1;
+        }
+        AgreementScheme::Decimal | AgreementScheme::Section => {
+            let minor = minor.unwrap_or(0);
+            if !decimal_in_sequence(*previous_decimal, major, minor) {
+                violations.push(violation(
+                    file,
+                    line,
+                    format!(
+                        "`## {text}` is out of sequence; {} continue in order from 1.1, either \
+                         the next clause of the same article or the next article at .1",
+                        scheme.name()
+                    ),
+                ));
+            }
+            *previous_decimal = Some((major, minor));
+        }
+    }
+}
+
+fn push_parenthetical_subsection(
+    file: &SourceFile,
+    violations: &mut Vec<Violation>,
+    line: usize,
+    text: &str,
+    expected_sub: &mut u32,
+) {
+    if let Some((value, label)) = parenthetical_marker(text) {
+        if value != *expected_sub {
+            violations.push(violation(
+                file,
+                line,
+                format!(
+                    "`### {text}` is subsection {}; `(a)` subsections run in sequence under \
+                     their section and restart at `(a)`, so this one is {} \
+                     (expected `### {} {label}`)",
+                    paren_marker(value),
+                    paren_marker(*expected_sub),
+                    paren_marker(*expected_sub),
+                ),
+            ));
+        }
+    } else {
+        violations.push(violation(
+            file,
+            line,
+            format!(
+                "`### {text}` carries no `(a)` subsection marker (expected `### {} {text}`)",
+                paren_marker(*expected_sub),
+            ),
+        ));
+    }
+    *expected_sub += 1;
+}
+
+fn agreement_outline_violations(
+    file: &SourceFile,
+    headings: &[(usize, usize, &str)],
+    first_marked: usize,
+    last_marked: usize,
+    scheme: AgreementScheme,
+) -> Vec<Violation> {
+    let tail = (last_marked + 1..headings.len()).find(|index| {
+        let (_, depth, text) = headings[*index];
+        depth == 2 && agreement_marker(text).is_none()
+    });
+    let in_tail = |index: usize| tail.is_some_and(|start| index >= start);
+    let mut violations = Vec::new();
+    let mut expected_article = 1_u32;
+    let mut previous_decimal: Option<(u32, u32)> = None;
+    let mut expected_sub = 1_u32;
+    for (index, &(line, depth, text)) in headings.iter().enumerate().skip(first_marked) {
+        match depth {
+            2 => {
+                expected_sub = 1;
+                if in_tail(index) {
+                    continue;
+                }
+                push_agreement_section(
+                    file,
+                    &mut violations,
+                    scheme,
+                    line,
+                    text,
+                    &mut expected_article,
+                    &mut previous_decimal,
+                );
+            }
+            3 if in_tail(index) => violations.push(violation(
+                file,
+                line,
+                format!(
+                    "`### {text}` follows the outline but sits below it; an execution, \
+                     attestation, or affidavit block is a peer of the numbered sections \
+                     (expected `## {text}`)"
+                ),
+            )),
+            3 if scheme.parenthetical() => {
+                push_parenthetical_subsection(file, &mut violations, line, text, &mut expected_sub);
+            }
+            _ => {}
+        }
+    }
+    violations
+}
+
+fn quoted_parenthetical_marker(line: &str) -> Option<(u32, &str)> {
+    let rest = line.trim_start().strip_prefix('>')?.trim_start();
+    let rest = rest.strip_prefix("**")?;
+    let close = rest.find("**")?;
+    parenthetical_marker(rest[..close].trim())
+}
+
+fn quoted_parenthetical_violations(file: &SourceFile) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    let mut expected = 1_u32;
+    for (line, text) in frontmatter::body_lines(&file.contents) {
+        if text.starts_with("## ") {
+            expected = 1;
+            continue;
+        }
+        if quoted_subsection_marker(text).is_some() {
+            violations.push(violation(
+                file,
+                line,
+                format!(
+                    "`{text}` uses a lettered subsection; decimal and Section outlines use \
+                     `(a)`, `(b)`, `(c)` (expected `> **{}**`)",
+                    paren_marker(expected)
+                ),
+            ));
+            continue;
+        }
+        let Some((value, label)) = quoted_parenthetical_marker(text) else {
+            continue;
+        };
+        if value != expected {
+            violations.push(violation(
+                file,
+                line,
+                format!(
+                    "`> **{} {label}**` is subsection {}; `(a)` subsections run in sequence \
+                     under their section and restart at `(a)`, so this one is {} \
+                     (expected `> **{} {label}**`)",
+                    paren_marker(value),
+                    paren_marker(value),
+                    paren_marker(expected),
+                    paren_marker(expected),
+                ),
+            ));
+        }
+        expected += 1;
+    }
+    violations
+}
+
+impl Rule for F123HarvardOutlineRequired {
+    fn code(&self) -> &'static str {
+        Self::CODE
+    }
+
+    fn description(&self) -> &'static str {
+        "Agreement, will, pleading, and engagement-letter bodies must carry a Harvard \
+         outline, titled to match the frame they render in"
+    }
+
+    fn lint(&self, file: &SourceFile) -> Vec<Violation> {
+        let Some(fm) = frontmatter::extract(&file.contents) else {
+            return Vec::new();
+        };
+        let Some(kind) = frontmatter::field(fm, "kind") else {
+            return Vec::new();
+        };
+        let Some(&(_, scheme, title_rule)) =
+            OUTLINED_KINDS.iter().find(|(name, _, _)| *name == kind)
+        else {
+            return Vec::new();
+        };
+
+        let headings = headings(&file.contents);
+        let numbered = |heading: &(usize, usize, &str)| heading_is_numbered(&kind, heading);
+        // The caption's own title line is a preamble, not section one, so
+        // the outline starts at the first heading that carries a marker.
+        let Some(first_marked) = headings.iter().position(numbered) else {
+            let expected = if kind == "agreement" {
+                "`## I.`, `## 1.`, `## 1.1`, or `## Section 1.01`".to_string()
+            } else {
+                format!("`## {}`", scheme.first_marker())
+            };
+            return vec![violation(
+                file,
+                1,
+                format!(
+                    "`kind: {kind}` must carry a Harvard outline; the body declares no numbered \
+                     `## ` section (expected {expected} …)"
+                ),
+            )];
+        };
+        let last_marked = headings.iter().rposition(numbered).unwrap_or(first_marked);
+
+        let mut violations = title_violations(file, &kind, title_rule, &headings, first_marked);
+        let agreement_scheme = (kind == "agreement")
+            .then(|| agreement_marker(headings[first_marked].2).map(|(scheme, ..)| scheme))
+            .flatten();
+        if let Some(agreement_scheme) = agreement_scheme.filter(|scheme| scheme.parenthetical()) {
+            violations.extend(agreement_outline_violations(
+                file,
+                &headings,
+                first_marked,
+                last_marked,
+                agreement_scheme,
+            ));
+            violations.extend(quoted_parenthetical_violations(file));
+        } else {
+            violations.extend(outline_violations(
+                file,
+                &kind,
+                scheme,
+                &headings,
+                first_marked,
+                last_marked,
+            ));
+            violations.extend(quoted_subsection_violations(file));
+        }
+        violations
+    }
+}
+
+/// `n` written in `scheme`, for the marker a message asks the author to use.
+fn roman_or_arabic(scheme: Scheme, n: u32) -> String {
+    match scheme {
+        Scheme::Arabic => format!("{n}."),
+        Scheme::Roman => {
+            const PAIRS: [(u32, &str); 13] = [
+                (1000, "M"),
+                (900, "CM"),
+                (500, "D"),
+                (400, "CD"),
+                (100, "C"),
+                (90, "XC"),
+                (50, "L"),
+                (40, "XL"),
+                (10, "X"),
+                (9, "IX"),
+                (5, "V"),
+                (4, "IV"),
+                (1, "I"),
+            ];
+            let mut left = n;
+            let mut out = String::new();
+            for (value, numeral) in PAIRS {
+                while left >= value {
+                    out.push_str(numeral);
+                    left -= value;
+                }
+            }
+            out.push('.');
+            out
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::F123HarvardOutlineRequired;
+    use crate::{Rule, SourceFile};
+    use std::path::PathBuf;
+
+    fn file(contents: &str) -> SourceFile {
+        SourceFile {
+            path: PathBuf::from("test.md"),
+            contents: contents.to_string(),
+        }
+    }
+
+    fn tmpl(kind: &str, body: &str) -> String {
+        format!("---\ntitle: T\nkind: {kind}\n---\n\n{body}\n")
+    }
+
+    fn lint(kind: &str, body: &str) -> Vec<crate::Violation> {
+        F123HarvardOutlineRequired.lint(&file(&tmpl(kind, body)))
+    }
+
+    #[test]
+    fn outline_requirement_note_describes_every_bound_kind() {
+        use super::outline_requirement_note;
+        let agreement = outline_requirement_note("agreement").expect("agreement is bound");
+        assert!(agreement.contains("Roman numerals"), "{agreement}");
+        assert!(agreement.contains("must open with its own"), "{agreement}");
+
+        let offboarding = outline_requirement_note("offboarding").expect("offboarding is bound");
+        assert!(offboarding.contains("Roman numerals"), "{offboarding}");
+        assert!(
+            !offboarding.contains("must open with its own"),
+            "the frame supplies offboarding's title: {offboarding}"
+        );
+
+        let pleading = outline_requirement_note("pleading").expect("pleading is bound");
+        assert!(pleading.contains("Arabic numerals"), "{pleading}");
+
+        let will = outline_requirement_note("will").expect("will is bound");
+        assert!(will.contains("Roman numerals"), "{will}");
+    }
+
+    #[test]
+    fn outline_requirement_note_is_none_for_an_unbound_kind() {
+        use super::outline_requirement_note;
+        assert_eq!(outline_requirement_note("letter"), None);
+        assert_eq!(outline_requirement_note("filing"), None);
+        assert_eq!(outline_requirement_note("trust"), None);
+        assert_eq!(outline_requirement_note("directive"), None);
+    }
+
+    /// A body for a kind that renders without chrome and so must name
+    /// itself. Every `agreement`/`pleading`/`will` fixture opens with this
+    /// unless it is exercising the title rule itself.
+    fn titled(body: &str) -> String {
+        format!("# THE INSTRUMENT\n\n{body}")
+    }
+
+    #[test]
+    fn a_lettered_block_quote_subsection_runs_in_sequence() {
+        // An engagement letter writes depth 2 as `> **A. Label.**`, not
+        // `### A.` — the form `docs/notation-authoring.md` documents and
+        // `views::harvard_outline` parses. Read only as headings, an
+        // out-of-sequence letter here passes unseen.
+        let body = "## I. Fees\n\n> **A. Costs.** Text.\n\n> **C. Invoices.** Text.\n";
+        let found = lint("offboarding", body);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].message.contains("is subsection C.")
+                && found[0].message.contains("expected `> **B. Invoices.**`"),
+            "{:?}",
+            found[0].message
+        );
+    }
+
+    #[test]
+    fn lettered_block_quote_subsections_restart_beneath_each_section() {
+        let body = "## I. Fees\n\n> **A. Costs.** Text.\n\n> **B. Invoices.** Text.\n\n\
+                    ## II. Contacts\n\n> **A. Ours.** Text.\n\n> **B. Yours.** Text.\n";
+        assert!(
+            lint("offboarding", body).is_empty(),
+            "{:?}",
+            lint("offboarding", body)
+        );
+    }
+
+    #[test]
+    fn ordinary_quoted_prose_is_not_a_subsection() {
+        // A block quote that does not lead with a bold letter marker is a
+        // pull quote, not a lettered subsection, and carries no sequence.
+        let body = "## I. Fees\n\n> Plain quoted prose.\n\n> **Bold but unlettered.** Text.\n";
+        assert!(
+            lint("offboarding", body).is_empty(),
+            "{:?}",
+            lint("offboarding", body)
+        );
+    }
+
+    #[test]
+    fn a_roman_agreement_outline_passes() {
+        let body = titled("## I. Scope\n\nText.\n\n## II. Fees\n\nText.\n");
+        assert!(
+            lint("agreement", &body).is_empty(),
+            "{:?}",
+            lint("agreement", &body)
+        );
+    }
+
+    #[test]
+    fn an_agreement_may_number_sections_with_decimals_and_parentheticals() {
+        let body = titled(
+            "## 1.1 Grant\n\nText.\n\n> **(a) Scope.** The license covers the software.\n\n\
+             > **(b) Limits.** The license is non-transferable.\n\n\
+             ## 1.2 Payment\n\nText.\n\n> **(a) Amount.** The fee is stated above.\n\n\
+             ## 2.1 Term\n\nText.\n",
+        );
+        assert!(
+            lint("agreement", &body).is_empty(),
+            "{:?}",
+            lint("agreement", &body)
+        );
+    }
+
+    #[test]
+    fn an_agreement_may_use_whole_numbers_with_parenthetical_subsections() {
+        let body = titled(
+            "## 1. Grant\n\n> **(a) Scope.** Text.\n\n> **(b) Limits.** Text.\n\n\
+             ## 2. Payment\n\n### (a) Amount\n\nText.\n",
+        );
+        assert!(
+            lint("agreement", &body).is_empty(),
+            "{:?}",
+            lint("agreement", &body)
+        );
+    }
+
+    #[test]
+    fn an_agreement_may_use_section_numbering() {
+        let body = titled(
+            "## Section 1.01 Grant\n\n> **(a) Scope.** Text.\n\n\
+             ## Section 1.02 Payment\n\n> **(a) Amount.** Text.\n\n\
+             ## Section 2.01 Term\n\nText.\n",
+        );
+        assert!(
+            lint("agreement", &body).is_empty(),
+            "{:?}",
+            lint("agreement", &body)
+        );
+    }
+
+    #[test]
+    fn a_marker_only_heading_is_an_uncaptioned_unit() {
+        // A contract that numbers provisions without captioning them: the
+        // heading carries only its marker (M026 drops the trailing period).
+        let body = titled(
+            "## I\n\nThe Parties agree.\n\n### A\n\nSubject to the above.\n\n### B.\n\nText.\n\n\
+             ## II.\n\nThe Parties will.\n\n## III\n\nText.\n\n## IV. Governing Law\n\nText.\n",
+        );
+        assert!(
+            lint("agreement", &body).is_empty(),
+            "{:?}",
+            lint("agreement", &body)
+        );
+        let pleading = titled("## 1\n\nText.\n\n## 2. Argument\n\nText.\n");
+        assert!(
+            lint("pleading", &pleading).is_empty(),
+            "{:?}",
+            lint("pleading", &pleading)
+        );
+    }
+
+    #[test]
+    fn a_marker_only_heading_still_runs_in_sequence() {
+        let body = titled("## I\n\nText.\n\n## III\n\nText.\n");
+        let violations = lint("agreement", &body);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.code == "N123" && v.message.contains("expected `## II`")),
+            "{violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_one_word_preamble_heading_is_not_a_roman_marker() {
+        // `CIVIL` spells only roman digits but is no canonical numeral, so a
+        // court-paper title line stays preamble rather than becoming a section.
+        let body = titled("## CIVIL\n\nText.\n\n## 1. Introduction\n\nText.\n");
+        assert!(
+            lint("pleading", &body).is_empty(),
+            "{:?}",
+            lint("pleading", &body)
+        );
+    }
+
+    #[test]
+    fn an_agreement_must_keep_one_numbering_scheme() {
+        let body = titled("## I. Grant\n\nText.\n\n## 1.1 Payment\n\nText.\n");
+        let violations = lint("agreement", &body);
+        assert!(
+            violations.iter().any(|v| v.code == "N123"),
+            "mixed schemes must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_decimal_clause_paragraph_is_not_rewritten_by_the_outline_rule() {
+        let body = titled("## 1. Grant\n\n2.4 Consideration. The buyer pays.\n");
+        assert!(
+            lint("agreement", &body).is_empty(),
+            "{:?}",
+            lint("agreement", &body)
+        );
+    }
+
+    #[test]
+    fn an_arabic_pleading_outline_passes() {
+        let body = titled("## 1. Introduction\n\nText.\n\n## 2. Argument\n\nText.\n");
+        assert!(
+            lint("pleading", &body).is_empty(),
+            "{:?}",
+            lint("pleading", &body)
+        );
+    }
+
+    #[test]
+    fn a_contract_numbered_like_motion_practice_is_flagged() {
+        // The live drift this rule exists to catch: a closing letter
+        // numbered `## 1.` when its kind numbers with Roman numerals.
+        let violations = lint("offboarding", "## 1. Client and scope\n\nText.\n");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.code == "N123" && v.message.contains("Roman numerals")),
+            "an Arabic contract must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn the_suggested_heading_replaces_the_wrong_marker_rather_than_keeping_it() {
+        // The message proposes a corrected heading. Building it from the
+        // raw heading text would suggest `## I. 1. Client and scope` — the
+        // marker being replaced, pasted back in front of its replacement.
+        let violations = lint("offboarding", "## 1. Client and scope\n\nText.\n");
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(
+            violations[0]
+                .message
+                .contains("expected `## I. Client and scope`"),
+            "{}",
+            violations[0].message
+        );
+    }
+
+    #[test]
+    fn the_out_of_sequence_suggestion_also_drops_the_wrong_marker() {
+        let body = titled("## I. Scope\n\nText.\n\n## III. Fees\n\nText.\n");
+        let violations = lint("agreement", &body);
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(
+            violations[0].message.contains("expected `## II. Fees`"),
+            "{}",
+            violations[0].message
+        );
+    }
+
+    #[test]
+    fn a_pleading_numbered_like_a_contract_is_flagged() {
+        let violations = lint("pleading", "## I. Introduction\n\nText.\n");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.code == "N123" && v.message.contains("Arabic numerals")),
+            "a Roman pleading must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_body_with_no_sections_is_flagged() {
+        let violations = lint("agreement", "Just prose, no sections at all.\n");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.code == "N123" && v.message.contains("no numbered `## ` section")),
+            "an outline-less agreement must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_body_whose_numbering_never_starts_is_flagged() {
+        // Every heading unnumbered is not a preamble — it is a document
+        // with no outline, which is the shape the rule exists to catch.
+        let violations = lint("agreement", "## Scope\n\n## Fees\n\nText.\n");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.code == "N123" && v.message.contains("no numbered `## ` section")),
+            "an unnumbered body must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_caption_title_before_the_outline_is_a_preamble() {
+        // Court paper opens with its formal title line after the caption.
+        // That line is not section one, and the corpus really looks like
+        // this: `## SUMMONS — CIVIL` sits above `## 1.`.
+        let body = titled(
+            "## SUMMONS — CIVIL\n\nText.\n\n## 1. You must respond\n\nText.\n\n\
+             ## 2. What happens next\n\nText.\n",
+        );
+        assert!(
+            lint("pleading", &body).is_empty(),
+            "{:?}",
+            lint("pleading", &body)
+        );
+    }
+
+    #[test]
+    fn an_unnumbered_heading_after_the_outline_starts_is_flagged() {
+        // Between two numbered sections, numbering must not stop: this is a
+        // section that lost its marker, not a preamble and not the execution
+        // tail, which can only run to the end of the body.
+        let body = titled("## I. Scope\n\nText.\n\n## Notes\n\nText.\n\n## II. Fees\n\nText.\n");
+        let violations = lint("agreement", &body);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.code == "N123" && v.message.contains("carries no outline marker")),
+            "a dropped marker must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_skipped_section_number_is_flagged() {
+        let body = "## I. Scope\n\nText.\n\n## III. Fees\n\nText.\n";
+        let violations = lint("agreement", body);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.code == "N123" && v.message.contains("run in sequence")),
+            "a skipped numeral must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn the_flagged_line_is_the_heading_not_the_file() {
+        let body = titled("## I. Scope\n\nText.\n\n## III. Fees\n\nText.\n");
+        let violations = lint("agreement", &body);
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        // Frontmatter is 4 lines, blank, then the body starts at line 6 with
+        // the title and its blank line, so `## I. Scope` is line 8.
+        assert_eq!(violations[0].line, 12, "{violations:?}");
+    }
+
+    #[test]
+    fn a_letter_is_exempt() {
+        // A demand or notice letter is prose the firm sends, not an
+        // outline document; it must not be asked for sections it has none of.
+        assert!(lint("letter", "Dear Ms. Cruller,\n\nText.\n").is_empty());
+    }
+
+    #[test]
+    fn a_filing_is_exempt() {
+        assert!(lint("filing", "Intake summary prose.\n").is_empty());
+    }
+
+    #[test]
+    fn an_inbound_contract_is_exempt() {
+        // Contract-shaped, but the client uploaded it and the firm did not
+        // draft it — an asset classification, never a template's own kind.
+        assert!(lint("inbound_contract", "Whatever the client sent.\n").is_empty());
+    }
+
+    #[test]
+    fn a_file_with_no_frontmatter_is_exempt() {
+        assert!(F123HarvardOutlineRequired
+            .lint(&file("Plain prose with a ## heading.\n"))
+            .is_empty());
+    }
+
+    #[test]
+    fn a_deeper_heading_is_left_to_the_parser() {
+        // `####` and below are the parser's and the renderer's business.
+        // Depth 2 stopped being theirs with LAW-16, so a correctly lettered
+        // `### A.` passes here and a deeper level is still untouched.
+        let body = titled("## I. Scope\n\n### A. Detail\n\n#### (1) Deeper\n\nText.\n");
+        assert!(
+            lint("agreement", &body).is_empty(),
+            "{:?}",
+            lint("agreement", &body)
+        );
+    }
+
+    #[test]
+    fn a_heading_inside_a_fence_is_not_a_section() {
+        let body = titled("## I. Scope\n\n```\n## 2. not a section\n```\n\nText.\n");
+        assert!(
+            lint("agreement", &body).is_empty(),
+            "{:?}",
+            lint("agreement", &body)
+        );
+    }
+
+    #[test]
+    fn roman_numerals_read_subtractive_pairs() {
+        assert_eq!(super::roman_value("IV"), Some(4));
+        assert_eq!(super::roman_value("IX"), Some(9));
+        assert_eq!(super::roman_value("XIV"), Some(14));
+        assert_eq!(super::roman_value("MCMXCIV"), Some(1994));
+        assert_eq!(super::roman_value("Scope"), None);
+    }
+
+    #[test]
+    fn roman_rendering_round_trips_through_the_reader() {
+        for n in 1_u32..=40 {
+            let rendered = super::roman_or_arabic(super::Scheme::Roman, n);
+            let numeral = rendered.trim_end_matches('.');
+            assert_eq!(super::roman_value(numeral), Some(n), "{rendered}");
+        }
+    }
+
+    // ---- LAW-16: the outline below depth 1, the title, and the tail ----
+
+    #[test]
+    fn a_will_is_bound_by_the_outline_at_all() {
+        // The kind LAW-16 reported. It was absent from OUTLINED_KINDS, so a
+        // forty-heading will drifted with zero errors reported.
+        let violations = lint("will", "Some prose with no sections at all.\n");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.code == "N123" && v.message.contains("no numbered `## ` section")),
+            "an unoutlined will must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_will_numbered_and_lettered_in_the_harvard_scheme_passes() {
+        let body = titled(
+            "## I. Revocation\n\nText.\n\n### A. Prior wills\n\nText.\n\n\
+             ### B. Codicils\n\nText.\n\n## II. Residuary estate\n\nText.\n\n\
+             ### A. Distribution\n\nText.\n",
+        );
+        assert!(lint("will", &body).is_empty(), "{:?}", lint("will", &body));
+    }
+
+    #[test]
+    fn a_subsection_out_of_sequence_is_flagged() {
+        let body = titled("## I. Revocation\n\n### A. One\n\n### C. Three\n\nText.\n");
+        let violations = lint("will", &body);
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(
+            violations[0].message.contains("expected `### B. Three`"),
+            "{}",
+            violations[0].message
+        );
+    }
+
+    #[test]
+    fn a_subsection_carrying_no_letter_is_flagged() {
+        let body = titled("## I. Revocation\n\n### Prior wills\n\nText.\n");
+        let violations = lint("will", &body);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.message.contains("expected `### A. Prior wills`")),
+            "an unlettered subsection must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn subsection_lettering_restarts_beneath_each_section() {
+        // `B.` under section II would be a gap if the counter ran on from
+        // section I, which is the drift the report described as "lettered
+        // subsections split between levels".
+        let body = titled(
+            "## I. One\n\n### A. First\n\n### B. Second\n\n## II. Two\n\n### A. First\n\nText.\n",
+        );
+        assert!(lint("will", &body).is_empty(), "{:?}", lint("will", &body));
+    }
+
+    #[test]
+    fn a_subsection_above_the_first_numbered_section_is_preamble() {
+        // The shipped summons: `### To the defendant named above` sits under
+        // the caption's own title line, before section 1 begins. A caption
+        // element is not part of the outline and carries no letter.
+        let body = titled(
+            "## SUMMONS — CIVIL\n\n### To the defendant named above\n\nText.\n\n\
+             ## 1. You must respond\n\nText.\n",
+        );
+        assert!(
+            lint("pleading", &body).is_empty(),
+            "{:?}",
+            lint("pleading", &body)
+        );
+    }
+
+    #[test]
+    fn the_execution_blocks_after_the_last_section_carry_no_number() {
+        // The testimonium and what follows it: peers of the articles in
+        // depth, outside the numbering by design.
+        let body = titled(
+            "## I. Revocation\n\nText.\n\n## II. Residuary estate\n\nText.\n\n\
+             ## Execution\n\nText.\n\n## Attestation\n\nText.\n\n\
+             ## Self-proving affidavit\n\nText.\n",
+        );
+        assert!(lint("will", &body).is_empty(), "{:?}", lint("will", &body));
+    }
+
+    #[test]
+    fn a_subsection_of_the_last_numbered_section_is_still_a_subsection() {
+        // The tail opens at the first unnumbered `## `, not at the last
+        // numbered one — otherwise a final section's own subsections would
+        // fall outside the outline and stop being checked.
+        let body = titled("## I. Revocation\n\n### B. Wrong\n\nText.\n\n## Execution\n\nText.\n");
+        let violations = lint("will", &body);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.message.contains("expected `### A. Wrong`")),
+            "a subsection before the tail must still be checked; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_heading_in_the_execution_tail_must_sit_at_depth_one() {
+        let body = titled("## I. Revocation\n\nText.\n\n## Execution\n\n### Notary\n\nText.\n");
+        let violations = lint("will", &body);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.message.contains("expected `## Notary`")),
+            "a tail heading below depth 1 must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn an_instrument_without_a_title_is_flagged() {
+        let violations = lint("will", "## I. Revocation\n\nText.\n");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.message.contains("must open with one `# ` document title")),
+            "an untitled instrument must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_second_title_heading_is_flagged() {
+        let body = titled("## I. Revocation\n\nText.\n\n# SECOND TITLE\n\nText.\n");
+        let violations = lint("will", &body);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.message.contains("is a second `# ` heading")),
+            "a second title must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_title_below_the_outline_is_flagged() {
+        let body = "## I. Revocation\n\nText.\n\n# LATE TITLE\n\nText.\n";
+        let violations = lint("will", body);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.message.contains("sits below the outline")),
+            "a late title must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_letterhead_kind_keeps_its_name_in_frontmatter() {
+        // An engagement letter opens with `Re:` and a salutation on firm
+        // letterhead. A `# ` heading there would print a title block above
+        // "Dear …", so the rule refuses one rather than requiring it — which
+        // is why the two shipped engagement letters carry no title line.
+        let body = "# CLOSING LETTER\n\n## I. Client and scope\n\nText.\n";
+        let violations = lint("offboarding", body);
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.message.contains("frontmatter `title:`")),
+            "a titled letterhead body must fail N123; got {violations:?}"
+        );
+    }
+
+    #[test]
+    fn an_untitled_letterhead_kind_passes() {
+        let body = "## I. Client and scope\n\nText.\n\n## II. Fees\n\nText.\n";
+        assert!(
+            lint("offboarding", body).is_empty(),
+            "{:?}",
+            lint("offboarding", body)
+        );
+    }
+
+    #[test]
+    fn an_onboarding_letter_without_an_outline_passes() {
+        // Onboarding renders as a letter. N123 must not force a scaffolded
+        // stub — or any opening engagement — into a fake Harvard outline.
+        let violations = lint(
+            "onboarding",
+            "Replace this placeholder with the notation.\n",
+        );
+        assert!(violations.is_empty(), "{violations:?}");
+    }
+}

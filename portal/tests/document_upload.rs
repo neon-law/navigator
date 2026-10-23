@@ -1,0 +1,315 @@
+//! REST document-upload size boundary tests.
+
+use axum::body::Body;
+use axum::http::{header, Request};
+use axum::Router;
+use base64::Engine as _;
+use portal::api::ApiState;
+use serde_json::{json, Value};
+use store::persons::{NewPerson, Role};
+use store::test_support::mem_surreal;
+use tower::ServiceExt;
+
+// These tests exercise the route in-process, so no external matter data is used.
+
+struct Fixture {
+    app: Router,
+    project_id: uuid::Uuid,
+    session: portal::SessionData,
+    surreal: store::surreal::SurrealDb,
+    storage: std::sync::Arc<dyn cloud::StorageService>,
+}
+
+async fn fixture(code: &str) -> Fixture {
+    let db = mem_surreal().await;
+    let project_id = store::test_support::seed_project_surreal(&db, code).await;
+    let lawyer = store::test_support::ensure_person(
+        &db,
+        &NewPerson {
+            name: "Synthetic Lawyer".into(),
+            email: "synthetic-lawyer@example.com".into(),
+            role: Role::Lawyer,
+            ..Default::default()
+        },
+    )
+    .await;
+    store::projects::designate_dri_in_surreal(
+        &db,
+        project_id,
+        lawyer.id,
+        store::projects::DriSide::Lawyer,
+    )
+    .await
+    .expect("seed the synthetic lawyer's participation row");
+
+    let state = portal::test_support::app_state(db).await;
+    let api_state = ApiState {
+        surreal: state.surreal.clone(),
+        email: state.email.clone(),
+        bootstrap_owner_email: state.bootstrap_owner_email.clone(),
+        bootstrap_company: "Synthetic Firm".into(),
+        questionnaire_runtime: state.questionnaire_runtime.clone(),
+        storage: state.storage.clone(),
+        workflow_runtime: state.workflow_runtime.clone(),
+        assets_storage: state.assets_storage.clone(),
+        forms_registry: state.forms_registry.clone(),
+        signature_provider: state.signature_provider.clone(),
+        contract_reviewer: state.contract_reviewer.clone(),
+        integration_providers: state.integration_providers.clone(),
+    };
+    let session = portal::SessionData {
+        person_id: Some(lawyer.id),
+        ..portal::SessionData::fresh("synthetic-lawyer-sub", Role::Lawyer)
+    };
+
+    Fixture {
+        app: portal::api::routes().with_state(api_state),
+        project_id,
+        session,
+        surreal: state.surreal.clone(),
+        storage: state.storage.clone(),
+    }
+}
+
+async fn post_transcript(
+    fixture: &Fixture,
+    source_id: uuid::Uuid,
+    source_sha: &str,
+    bytes: &[u8],
+    quality: Option<&str>,
+    link: bool,
+) {
+    let mut body = json!({
+        "filename": "order.transcript.md",
+        "content_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
+        "content_type": "text/markdown",
+        "kind": "transcript",
+        "slug": "transcripts/order.transcript.md",
+        "visibility": "internal",
+    });
+    if let Some(quality) = quality {
+        body["transcript_quality"] = json!(quality);
+    }
+    if link {
+        body["derived_from"] = json!({
+            "document_id": source_id,
+            "version": 1,
+            "sha256": source_sha,
+        });
+    }
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/app/api/projects/{}/documents",
+                    fixture.project_id
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .extension(fixture.session.clone())
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+}
+
+#[tokio::test]
+async fn transcript_upload_records_source_link_and_proofread_revision_inherits_it() {
+    let fixture = fixture("transcript-provenance").await;
+    let source_slug = "pleadings/order.pdf";
+    let source_bytes = b"synthetic source PDF bytes";
+    let source_args = store::documents::IngestArgs {
+        project_id: fixture.project_id,
+        source: store::documents::source::UPLOAD,
+        filename: "order.pdf",
+        kind: "filing",
+        content_type: "application/pdf",
+        description: None,
+        secondary_storage_key: None,
+        visibility: store::documents::visibility::INTERNAL,
+    };
+    let source = store::assets::file_revision(
+        &fixture.surreal,
+        &fixture.storage,
+        &source_args,
+        &store::documents::DocumentIdentity {
+            slug: Some(source_slug),
+            ..Default::default()
+        },
+        source_bytes,
+    )
+    .await
+    .expect("file synthetic source revision");
+    let source_id = match source {
+        store::assets::Filed::Revision(asset) => asset.asset_id,
+        store::assets::Filed::Unchanged { asset_id } => asset_id,
+    };
+    let source_sha = store::assets::sha256_hex(source_bytes);
+
+    post_transcript(
+        &fixture,
+        source_id,
+        &source_sha,
+        b"machine text",
+        Some("machine"),
+        true,
+    )
+    .await;
+    post_transcript(
+        &fixture,
+        source_id,
+        &source_sha,
+        b"proofread text",
+        Some("proofread"),
+        false,
+    )
+    .await;
+    let revisions = store::assets::revisions(
+        &fixture.surreal,
+        fixture.project_id,
+        "transcripts/order.transcript.md",
+    )
+    .await
+    .expect("read transcript revisions");
+    assert_eq!(revisions.len(), 2);
+    assert_eq!(
+        revisions[0].transcript_quality.as_deref(),
+        Some("proofread")
+    );
+    assert_eq!(revisions[1].transcript_quality.as_deref(), Some("machine"));
+    assert_eq!(
+        revisions[0]
+            .derived_from
+            .as_ref()
+            .and_then(|value| value["document_id"].as_str()),
+        Some(source_id.to_string().as_str())
+    );
+    assert_eq!(
+        revisions[0]
+            .derived_from
+            .as_ref()
+            .and_then(|value| value["sha256"].as_str()),
+        Some(source_sha.as_str())
+    );
+}
+
+fn request_body(bytes: &[u8]) -> Vec<u8> {
+    request_body_with_slug(bytes, None)
+}
+
+fn request_body_with_slug(bytes: &[u8], slug: Option<&str>) -> Vec<u8> {
+    let mut body = serde_json::json!({
+        "filename": "synthetic-document.bin",
+        "content_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
+        "content_type": "application/octet-stream",
+        "kind": "unclassified",
+        "visibility": "internal"
+    });
+    if let Some(slug) = slug {
+        body["slug"] = json!(slug);
+    }
+    serde_json::to_vec(&body).expect("serialize synthetic upload")
+}
+
+async fn upload_with_slug(fixture: &Fixture, bytes: &[u8], slug: &str) -> Value {
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/app/api/projects/{}/documents",
+                    fixture.project_id
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .extension(fixture.session.clone())
+                .body(Body::from(request_body_with_slug(bytes, Some(slug))))
+                .expect("build upload"),
+        )
+        .await
+        .expect("run upload");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read upload response");
+    let json: Value = serde_json::from_slice(&body).expect("upload response is JSON");
+    json!({ "status": status.as_u16(), "body": json })
+}
+
+async fn upload(fixture: &Fixture, bytes: &[u8], content_length: Option<&str>) -> Value {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/app/api/projects/{}/documents",
+            fixture.project_id
+        ))
+        .header(header::CONTENT_TYPE, "application/json")
+        .extension(fixture.session.clone());
+    if let Some(content_length) = content_length {
+        builder = builder.header(header::CONTENT_LENGTH, content_length);
+    }
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(
+            builder
+                .body(Body::from(request_body(bytes)))
+                .expect("build upload"),
+        )
+        .await
+        .expect("run upload");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read upload response");
+    let json: Value = serde_json::from_slice(&body).expect("upload response is JSON");
+    json!({ "status": status.as_u16(), "body": json })
+}
+
+#[tokio::test]
+async fn accepts_a_document_well_over_the_framework_default() {
+    let fixture = fixture("upload-limit-accepted").await;
+    let bytes = vec![b'x'; 2 * 1024 * 1024];
+    let result = upload(&fixture, &bytes, None).await;
+
+    assert_eq!(result["status"], 201);
+    assert_eq!(result["body"]["current_version"]["size_bytes"], bytes.len());
+}
+
+#[tokio::test]
+async fn refuses_a_document_over_the_limit_with_both_sizes_for_lied_and_missing_lengths() {
+    let fixture = fixture("upload-limit-refused").await;
+    let actual = store::documents::MAX_DOCUMENT_UPLOAD_BYTES + 1;
+    let bytes = vec![b'x'; actual];
+    for result in [
+        upload(&fixture, &bytes, Some("1")).await,
+        upload(&fixture, &bytes, None).await,
+    ] {
+        let message = result["body"]["message"].as_str().expect("size message");
+
+        assert_eq!(result["status"], 400);
+        assert_eq!(result["body"]["error"], "document_too_large");
+        assert!(message.contains(&store::documents::MAX_DOCUMENT_UPLOAD_BYTES.to_string()));
+        assert!(message.contains(&actual.to_string()));
+        assert!(!message.contains("compress"));
+        assert!(!message.contains("re-render"));
+    }
+}
+
+#[tokio::test]
+async fn refuses_a_slug_that_cannot_be_represented_by_a_pointer_path() {
+    let fixture = fixture("slug-pointer-shape").await;
+    let result = upload_with_slug(&fixture, b"synthetic document", "dkt-001-complaint").await;
+
+    assert_eq!(result["status"], 400);
+    assert_eq!(result["body"]["error"], "invalid_slug");
+    assert!(result["body"]["message"]
+        .as_str()
+        .expect("slug message")
+        .contains("synthetic-document.bin"));
+}

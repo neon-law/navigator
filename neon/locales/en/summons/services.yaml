@@ -1,0 +1,46 @@
+head_title: "{site_name} | NYC summons defense"
+meta_description: >-
+  NYC OATH hearing representation with local counsel. $100 per telephone hearing or a one-time $500 in-person
+  appearance fee. A private law firm, not affiliated with the City of New York or OATH.
+title: NYC summons defense
+hero_mark: scales
+tagline: A private law firm, not affiliated with the City of New York or OATH
+hero_lines:
+  - text: Local counsel at your hearing
+    accent_words: 2
+hero_lead: >-
+  One intake with an assistant or AI-enabled assistant. A lawyer reviews your matter and appears at the agreed
+  OATH hearing. We are not affiliated with the City of New York or OATH.
+  Representation begins after written acceptance. Attorney advertisement.
+hero_cta:
+  href: /#intake
+  label: Start your intake
+skin: practice
+bands:
+  - kind: cards
+    anchor: fees
+    overline: Hearing fees
+    heading: Know the fee before we appear.
+    description: >-
+      City fines and penalties are separate. We confirm the covered hearing and any additional work in writing.
+      Your lawyer will tell you if your testimony or participation is needed.
+    items:
+      - title: Telephone hearing — $100 per hearing
+        body:
+          - - text: Local counsel appears on your behalf at the agreed telephone hearing.
+      - title: In-person hearing — $500 one time
+        body:
+          - - text: >-
+                One-time attorney appearance fee for the agreed hearing. In-person hearings require advance
+                scheduling and OATH approval.
+      - title: Additional work
+        body:
+          - - text: >-
+                Any additional preparation, repeat appearance, appeal, correction filing, or other work is
+                confirmed separately in writing. No result is guaranteed.
+  - kind: cta
+    heading: Get your summons in order.
+    body: >-
+      Start with the intake request on our home page. Gather your summons, hearing notices, and relevant documents
+      for your assistant-led intake. Our home page also links to official NYC guides, free help, and case examples.
+    email: "{firm_email}"

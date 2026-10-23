@@ -1,0 +1,24 @@
+questionnaire:
+  BEGIN:
+    _: entity
+  entity:
+    _: person__client
+  person__client:
+    _: project
+  project:
+    _: END
+  END: {}
+prompts:
+  client_name: Who is the Client's directly responsible individual, the one person the Firm writes to?
+  project: What is the project being closed?
+workflow:
+  BEGIN:
+    close_requested: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__closing_letter
+    rejected: END
+  generate_pdf__closing_letter:
+    pdf_persisted: firm_signature__closing_letter
+  firm_signature__closing_letter:
+    signed: END
+  END: {}

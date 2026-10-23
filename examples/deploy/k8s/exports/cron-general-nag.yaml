@@ -1,0 +1,80 @@
+# general-nag nightly trigger — starts one `GeneralNag` Restate workflow
+# invocation per day. The workflow itself is hosted by the `workflows-service`
+# worker (../gke/workflows-service/) — all workflows live there, so there is
+# no separate nag worker. This CronJob is a thin trigger that POSTs to the
+# Restate Cloud ingress and exits in seconds. Restate owns the retry schedule.
+#
+# `GeneralNag` posts the daily jab to `#general`. Persistent staging is
+# marked by the Slack adapter's final `from Staging` line; a real
+# deployment follows with how many neon-brand matters are open and how many
+# of those are still pitches.
+#
+# Schedule `11 1 * * *` UTC = 01:11 UTC — the same minute as
+# dri-digest-trigger. Both are thin, sub-second calls to the Restate
+# ingress for different workflows, so the shared minute is harmless. The
+# trigger keys each invocation on the UTC date, so a same-day double-fire
+# is a no-op.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: general-nag
+  namespace: navigator
+  labels:
+    app: general-nag
+spec:
+  schedule: "11 1 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 4
+  failedJobsHistoryLimit: 4
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            app: general-nag
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: general-nag
+              image: YOUR_IMAGE_REGISTRY/navigator-general-nag:YY.M.D
+              imagePullPolicy: Always
+              env:
+                # Restate Cloud ingress endpoint. Sourced from the Secret rather
+                # than written inline — see the `RESTATE_INGRESS_URL` note in
+                # kustomization.yaml for why a literal here blocks every manifest
+                # change. The trigger POSTs
+                # `${RESTATE_INGRESS_URL}/GeneralNag/<run-date>/run`.
+                - name: RESTATE_INGRESS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: RESTATE_INGRESS_URL
+                      optional: true
+                # Restate Cloud authenticates every ingress call with the
+                # tenant bearer. Sourced from the same `navigator-web-secrets`
+                # Secret the web Deployment mounts. `optional` so KIND — where
+                # this manifest isn't applied — never blocks on a missing key.
+                - name: RESTATE_AUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: RESTATE_AUTH_TOKEN
+                      optional: true
+                - name: RUST_LOG
+                  value: info
+              envFrom:
+                # Collector endpoint (OTEL_EXPORTER_OTLP_ENDPOINT) — the trigger
+                # emits the `navigator.workflow.trigger.fired` metric (flushed on
+                # exit) through the fail-closed redaction collector. Shared with
+                # web + workflows-service via one ConfigMap.
+                - configMapRef:
+                    name: navigator-otel-env
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 64Mi
+                limits:
+                  memory: 128Mi

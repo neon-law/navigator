@@ -1,0 +1,171 @@
+name: PostgreSQL compatibility
+on:
+  pull_request:
+    paths:
+      - 'images/postgres/**'
+      - 'k8s/overlays/postgres-spike/**'
+      - 'k8s/overlays/kind-postgres-spike/**'
+      - 'store/postgres/**'
+      - 'store/src/postgres_schema.rs'
+      - 'store/src/schema/navigator.surql'
+      - 'store/src/lib.rs'
+      - 'store/examples/postgres_schema.rs'
+      - 'store/examples/postgres_callers.rs'
+      - 'store/examples/postgres_callers/**'
+      - 'store/src/postgres_mirror/**'
+      - 'store/tests/firm_journal.rs'
+      - 'store/tests/journal_startup_migration.rs'
+      - 'store/src/postgres.rs'
+      - 'store/tests/postgres_tooling.rs'
+      - 'store/Cargo.toml'
+      - 'k8s/kind-postgres-config.yaml'
+      - '.github/workflows/postgres-compatibility.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'images/postgres/**'
+      - 'k8s/overlays/postgres-spike/**'
+      - 'k8s/overlays/kind-postgres-spike/**'
+      - 'store/postgres/**'
+      - 'store/src/postgres_schema.rs'
+      - 'store/src/schema/navigator.surql'
+      - 'store/src/lib.rs'
+      - 'store/examples/postgres_schema.rs'
+      - 'store/examples/postgres_callers.rs'
+      - 'store/examples/postgres_callers/**'
+      - 'store/src/postgres_mirror/**'
+      - 'store/tests/firm_journal.rs'
+      - 'store/tests/journal_startup_migration.rs'
+      - 'store/src/postgres.rs'
+      - 'store/tests/postgres_tooling.rs'
+      - 'store/Cargo.toml'
+      - 'k8s/kind-postgres-config.yaml'
+      - '.github/workflows/postgres-compatibility.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: neon-law-source-code/neon-law-postgres
+          ref: 155a38bbec5d0cfcec0035c65b0c5c79012ab223
+          path: .postgres-smoke
+      - name: Keep the test application outside Navigator's Cargo workspace
+        run: mv .postgres-smoke "$RUNNER_TEMP/postgres-smoke"
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: '1.98.0'
+      - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5
+        with:
+          version: v1.37.0
+      - name: Read the same image pin as KIND
+        run: |
+          kubectl kustomize k8s/overlays/postgres-spike > /tmp/postgres-spike.yaml
+          image=$(awk '/^[[:space:]]*image:/ {print $2}' /tmp/postgres-spike.yaml)
+          [[ "$image" =~ ^ghcr.io/neon-law-source-code/neon-law-postgres@sha256:[a-f0-9]{64}$ ]]
+          echo "POSTGRES_IMAGE=$image" >> "$GITHUB_ENV"
+          echo "$image" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build and test the included recipe
+        run: |
+          for file in Containerfile LICENSE NOTICE; do
+            cmp "images/postgres/$file" "$RUNNER_TEMP/postgres-smoke/$file"
+          done
+          docker build -f images/postgres/Containerfile -t neon-law-postgres:local images/postgres
+          cd "$RUNNER_TEMP/postgres-smoke"
+          bash tests/run.sh neon-law-postgres:local 2>&1 | tee navigator-recipe-smoke.log
+      - name: Anonymous pull and pinned SDK recovery smoke
+        working-directory: ${{ runner.temp }}/postgres-smoke
+        run: |
+          mkdir -p /tmp/postgres-anonymous-docker
+          export DOCKER_CONFIG=/tmp/postgres-anonymous-docker
+          docker pull "$POSTGRES_IMAGE"
+          bash tests/run.sh "$POSTGRES_IMAGE" 2>&1 | tee navigator-smoke.log
+      - name: Install pinned KIND
+        run: |
+          curl -fsSL https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 -o /tmp/kind
+          echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  /tmp/kind' | sha256sum -c -
+          chmod +x /tmp/kind
+          sudo mv /tmp/kind /usr/local/bin/kind
+      - name: Run the local StatefulSet in KIND
+        run: |
+          kind create cluster --name postgres-compatibility --config k8s/kind-postgres-config.yaml \
+            --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5 \
+            --kubeconfig /tmp/postgres-kind.config --wait 120s
+          export KUBECONFIG=/tmp/postgres-kind.config
+          kubectl create namespace navigator
+          kubectl apply -k k8s/overlays/postgres-spike
+          kubectl -n navigator rollout status statefulset/postgres-spike --timeout=180s
+          actual=$(kubectl -n navigator get pod postgres-spike-0 -o jsonpath='{.spec.containers[0].image}')
+          [[ "$actual" == "$POSTGRES_IMAGE" ]]
+          kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
+            < "$RUNNER_TEMP/postgres-smoke/tests/extensions.sql" 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/kind-extensions.log"
+          cargo test -p store postgres_schema::tests --lib
+          cargo run -p store --example postgres_schema -- source-erd
+          cargo run -p store --example postgres_schema -- erd
+          cargo run -p store --example postgres_schema -- manifest
+          cargo run -p store --example postgres_callers -- check
+          cargo test -p store --example postgres_callers
+          git diff --exit-code -- store/postgres/surreal-source-erd.mmd store/postgres/postgres-erd.mmd store/postgres/parity-manifest.json
+          kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
+            < store/postgres/schema.sql | tee "$RUNNER_TEMP/postgres-smoke/kind-schema.log"
+          kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
+            < store/postgres/tests/synthetic_core_seed.sql | tee "$RUNNER_TEMP/postgres-smoke/kind-synthetic-seed.log"
+          before=$(kubectl -n navigator get pod postgres-spike-0 -o jsonpath='{.metadata.uid}')
+          kubectl -n navigator rollout restart statefulset/postgres-spike
+          kubectl -n navigator rollout status statefulset/postgres-spike --timeout=180s
+          after=$(kubectl -n navigator get pod postgres-spike-0 -o jsonpath='{.metadata.uid}')
+          [[ "$before" != "$after" ]]
+          kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
+            < "$RUNNER_TEMP/postgres-smoke/tests/persistence.sql" 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/kind-persistence.log"
+      - name: Journal commands and startup migration against PostgreSQL
+        env:
+          KUBECONFIG: /tmp/postgres-kind.config
+          NAVIGATOR_TEST_POSTGRES_PORT: '25432'
+          NAV_REQUIRE_POSTGRES: '1'
+        run: |
+          kubectl -n navigator port-forward service/postgres-spike 25432:5432 > /tmp/journal-port-forward.log 2>&1 &
+          forward_pid=$!
+          trap 'kill "$forward_pid" || true' EXIT
+          for attempt in $(seq 1 30); do
+            if bash -c 'echo > /dev/tcp/127.0.0.1/25432' 2>/dev/null; then break; fi
+            sleep 1
+          done
+          cargo test -p store --test firm_journal --test journal_startup_migration --test postgres_tooling
+      - name: Application and DBOS state survive image replacement and dump restore
+        env:
+          KUBECONFIG: /tmp/postgres-kind.config
+        run: |
+          cargo build --manifest-path "$RUNNER_TEMP/postgres-smoke/tests/dbos/Cargo.toml" --locked
+          bash store/postgres/tests/integrated_recovery.sh kind-postgres-compatibility \
+            "$RUNNER_TEMP/postgres-smoke/tests/dbos/target/debug/dbos-image-smoke" 25433 \
+            2>&1 | tee "$RUNNER_TEMP/postgres-smoke/integrated-recovery.log"
+      - name: Capture Kubernetes evidence
+        if: always()
+        run: |
+          if [[ -f /tmp/postgres-kind.config ]]; then
+            export KUBECONFIG=/tmp/postgres-kind.config
+            kubectl -n navigator get pods,pvc,statefulset -o wide > "$RUNNER_TEMP/postgres-smoke/kind-resources.log" 2>&1 || true
+            kubectl -n navigator describe pod postgres-spike-0 > "$RUNNER_TEMP/postgres-smoke/kind-pod.log" 2>&1 || true
+            kubectl -n navigator logs postgres-spike-0 > "$RUNNER_TEMP/postgres-smoke/kind-postgres.log" 2>&1 || true
+          fi
+      - name: Remove the CI-owned cluster
+        if: always()
+        run: kind delete cluster --name postgres-compatibility
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: postgres-compatibility
+          include-hidden-files: true
+          if-no-files-found: error
+          path: ${{ runner.temp }}/postgres-smoke/*.log

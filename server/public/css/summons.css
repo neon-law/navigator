@@ -1,0 +1,126 @@
+/* Summons Defense: an accessible, paper-and-ink field guide. */
+.summons-page { --sd-ink: #263d51; --sd-muted: #526575; --sd-paper: #faf9f5; --sd-line: #d3dcdF; font-family: 'Libre Franklin', Arial, sans-serif; background: var(--sd-paper); color: var(--sd-ink); line-height: 1.65; }
+.summons-page * { box-sizing: border-box; }
+.summons-page a { color: inherit; text-underline-offset: 4px; }
+.summons-page a:focus-visible, .summons-page summary:focus-visible { outline: 3px solid #ad571e; outline-offset: 5px; }
+.summons-page h1, .summons-page h2, .summons-page h3, .summons-page p { margin: 0; }
+.summons-wrap { max-width: 1264px; padding-inline: 48px; margin-inline: auto; }
+.summons-skip { position: absolute; top: -100px; left: 16px; padding: 12px; background: white; z-index: 20; }
+.summons-skip:focus { top: 12px; }
+.summons-notice { background: var(--sd-ink); color: white; text-align: center; padding: 9px 20px; font-size: 11px; letter-spacing: .04em; }
+.summons-header { min-height: 112px; display: flex; align-items: center; gap: 35px; border-bottom: 1px solid var(--sd-line); }
+.summons-wordmark { display: flex; gap: 12px; align-items: center; text-decoration: none; font-size: 15px; line-height: 1.35; letter-spacing: .13em; }
+.summons-wordmark strong { display: block; font-size: 15px; }
+.summons-header nav { margin-left: auto; display: flex; gap: 24px; }
+.summons-header nav a { font-size: 12px; font-weight: 600; text-decoration: none; }
+.summons-header nav a:hover { text-decoration: underline; }
+.summons-page .summons-button { background: var(--sd-ink); color: white; min-height: 54px; padding: 14px 22px; display: inline-flex; gap: 35px; align-items: center; justify-content: space-between; text-decoration: none; font-size: 14px; font-weight: 600; border: 1px solid var(--sd-ink); }
+.summons-page .summons-button:hover { background: #38556c; }
+.summons-page .summons-button--small { min-height: 44px; font-size: 12px; padding: 10px 15px; gap: 20px; }
+.summons-hero { display: grid; grid-template-columns: 1.35fr 1fr; gap: 88px; padding-block: 76px 82px; }
+.summons-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: .13em; line-height: 1.6; }
+.summons-dot { display: inline-block; width: 7px; height: 7px; margin-right: 10px; border-radius: 50%; background: #537d6b; }
+.summons-page h1 { font-size: clamp(44px, 5.1vw, 68px); font-weight: 500; line-height: 1.07; letter-spacing: -.055em; max-width: 620px; margin-block: 25px; }
+.summons-page .summons-lead { color: var(--sd-muted); font-size: 17px; line-height: 1.8; max-width: 510px; margin-bottom: 29px; }
+.summons-page .summons-small { color: var(--sd-muted); font-size: 11px; line-height: 1.8; }
+.summons-hero-copy > .summons-small { margin-top: 16px; max-width: 390px; }
+.summons-fees { background: var(--sd-ink); color: white; padding: 27px 32px; position: relative; align-self: start; box-shadow: 10px 10px 0 #e2e7e7; }
+.summons-fee-top { display: flex; justify-content: space-between; padding-bottom: 17px; border-bottom: 1px solid #627585; }
+.summons-fee-top > span { font-size: 22px; line-height: 1; }
+.summons-fee { padding-block: 20px; }
+.summons-fee + .summons-fee { border-top: 1px solid #627585; }
+.summons-fee-label { font-size: 13px; font-weight: 600; }
+.summons-page .summons-price { font-size: 55px; letter-spacing: -.05em; font-weight: 500; line-height: 1.35; margin-top: 4px; }
+.summons-price > span { display: inline-block; font-size: 11px; letter-spacing: 0; font-weight: 400; margin-left: 12px; }
+.summons-fee > p:last-child { color: #d3dfe6; font-size: 12px; line-height: 1.7; }
+.summons-page .summons-fee-note { font-size: 10px; color: #d3dfe6; border-top: 1px solid #627585; padding-top: 18px; }
+.summons-process { background: #eaf0ed; border-block: 1px solid var(--sd-line); padding-block: 45px 50px; }
+.summons-page h2 { font-size: clamp(28px, 3.2vw, 39px); letter-spacing: -.04em; line-height: 1.2; font-weight: 500; }
+.summons-section-heading > h2 { margin-top: 14px; }
+.summons-section-heading > p:last-child:not(:first-child) { color: var(--sd-muted); max-width: 720px; font-size: 14px; margin-top: 17px; }
+.summons-process ol { list-style: none; padding: 0; margin: 34px 0 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 44px; }
+.summons-process li { border-top: 1px solid #adbbb3; padding-top: 16px; }
+.summons-page h3 { font-size: 17px; font-weight: 600; line-height: 1.4; letter-spacing: -.02em; }
+.summons-process li p { font-size: 13px; color: var(--sd-muted); margin-top: 10px; }
+.summons-section { padding-block: 65px; }
+.summons-guides { margin-top: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 0 32px; align-items: start; }
+.summons-guide { border-top: 1px solid var(--sd-line); }
+.summons-guide summary { cursor: pointer; display: flex; align-items: center; gap: 18px; padding-block: 24px; list-style: none; }
+.summons-guide summary::-webkit-details-marker { display: none; }
+.summons-agency { display: inline-flex; align-items: center; justify-content: center; width: 56px; height: 48px; flex-shrink: 0; background: #e9edef; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+.summons-guide summary strong { display: block; font-size: 16px; font-weight: 600; }
+.summons-guide summary small { display: block; color: var(--sd-muted); font-size: 11px; }
+.summons-plus { margin-left: auto; font-size: 22px; }
+.summons-guide[open] .summons-plus { transform: rotate(45deg); }
+.summons-guide-body { padding: 0 10px 24px 74px; font-size: 13px; }
+.summons-guide-body ul { padding-left: 15px; margin-top: 0; }
+.summons-guide-body li { margin-bottom: 10px; }
+.summons-cases-band { background: #edf0f2; }
+.summons-cases { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 32px; }
+.summons-cases article { display: flex; flex-direction: column; padding: 26px; background: var(--sd-paper); border: 1px solid #d9e0e4; }
+.summons-cases h3 { margin-block: 20px 12px; }
+.summons-cases article > p:not(.summons-eyebrow) { font-size: 13px; color: var(--sd-muted); margin-bottom: 26px; }
+.summons-cases a { font-size: 12px; font-weight: 600; margin-top: auto; }
+.summons-intake { display: grid; grid-template-columns: 1fr 1fr; gap: 80px; }
+.summons-intake h2 { margin-block: 16px 22px; }
+.summons-intake > div > p:not(.summons-eyebrow) { font-size: 14px; color: var(--sd-muted); }
+.summons-intake ul { padding-left: 20px; font-size: 13px; }
+.summons-intake li { margin-top: 12px; }
+.summons-intake-form { border: 1px solid var(--sd-line); padding: 28px; background: white; }
+.summons-intake-form .nav-theme { background: white; }
+.summons-intake-form .nav-card { border: 0; box-shadow: none; padding: 0; }
+.summons-intake-form > a { font-size: 12px; display: inline-block; margin-top: 16px; }
+.summons-intake-form .summons-small { margin-top: 18px; font-size: 11px; }
+.summons-resources { display: grid; grid-template-columns: .8fr 1.2fr; gap: 64px; border-top: 1px solid var(--sd-line); }
+.summons-resources h2 { margin-block: 15px; }
+.summons-resources ul { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
+.summons-resources a { display: flex; gap: 10px; justify-content: space-between; font-size: 12px; padding-block: 13px; border-bottom: 1px solid var(--sd-line); text-decoration: none; }
+.summons-resources a:hover { text-decoration: underline; }
+.summons-faq { display: grid; grid-template-columns: .8fr 1.2fr; gap: 64px; border-top: 1px solid var(--sd-line); }
+.summons-faq details { border-bottom: 1px solid var(--sd-line); }
+.summons-faq summary { cursor: pointer; padding-block: 18px; font-size: 14px; font-weight: 600; }
+.summons-faq details p { padding-bottom: 20px; font-size: 13px; color: var(--sd-muted); }
+.summons-closing { display: flex; align-items: center; justify-content: space-between; gap: 48px; padding-block: 30px 65px; }
+.summons-closing p { max-width: 660px; font-size: 11px; color: var(--sd-muted); }
+.summons-closing .summons-button { flex-shrink: 0; }
+.summons-page section, .summons-page aside { scroll-margin-top: 25px; }
+@media (max-width: 1000px) {
+  .summons-wrap { padding-inline: 28px; }
+  .summons-header { gap: 20px; }
+  .summons-header nav { gap: 16px; }
+  .summons-header nav a:nth-child(2), .summons-header nav a:nth-child(4) { display: none; }
+  .summons-hero { gap: 40px; }
+  .summons-intake, .summons-resources, .summons-faq { gap: 35px; }
+}
+@media (max-width: 680px) {
+  .summons-wrap { padding-inline: 22px; }
+  .summons-notice { font-size: 9px; }
+  .summons-header { min-height: 92px; flex-wrap: wrap; gap: 16px; padding-block: 18px; }
+  .summons-header nav { order: 3; width: 100%; margin: 0; justify-content: space-between; }
+  .summons-header nav a:nth-child(2), .summons-header nav a:nth-child(4) { display: block; }
+  .summons-header nav a { font-size: 10px; }
+  .summons-header > .summons-button { margin-left: auto; gap: 14px; font-size: 10px; padding-inline: 12px; }
+  .summons-wordmark, .summons-wordmark strong { font-size: 11px; }
+  .summons-wordmark img { width: 30px; height: 30px; }
+  .summons-hero { grid-template-columns: 1fr; gap: 35px; padding-block: 40px 48px; }
+  .summons-page h1 { font-size: 49px; }
+  .summons-page .summons-lead { font-size: 15px; }
+  .summons-fees { padding: 24px; margin-right: 8px; }
+  .summons-process ol, .summons-guides, .summons-cases, .summons-intake, .summons-resources, .summons-faq { grid-template-columns: 1fr; }
+  .summons-process ol { gap: 25px; }
+  .summons-section { padding-block: 45px; }
+  .summons-guide summary { gap: 13px; }
+  .summons-guide summary strong { font-size: 14px; }
+  .summons-guide-body { padding-left: 12px; }
+  .summons-cases { gap: 18px; }
+  .summons-intake-form { padding: 20px; }
+  .summons-resources ul { grid-template-columns: 1fr; }
+  .summons-closing { flex-direction: column; align-items: flex-start; gap: 24px; }
+}
+body:has(.summons-page) { margin: 0; }
+.summons-page h1 { text-wrap: balance; }
+.summons-intake-form .nav-field--check { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 8px; }
+.summons-intake-form .nav-field--check .nav-field__help { grid-column: 2; }
+.summons-intake-form .nav-label { font-size: 13px; }
+.summons-intake-form .nav-field__help { font-size: 11px; line-height: 1.7; }
+.summons-intake-form .nav-checkbox { margin-top: 4px; }

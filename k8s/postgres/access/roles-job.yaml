@@ -1,0 +1,135 @@
+# Converge the least-privilege login roles in `roles.sql`.
+#
+# The only workload that connects as the bootstrap superuser. It reads that
+# password from `navigator-postgres-auth` and each managed role's password
+# from its own Secret, all projected by
+# `navigator ops secrets apply --service postgres`. The Job
+# is deleted an hour after it finishes, so re-applying the overlay re-runs it;
+# `roles.sql` is idempotent. Re-applying after a password Secret update is the
+# rotation step.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: navigator-postgres-roles
+  labels:
+    app: navigator-postgres-roles
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: navigator-postgres-roles
+        navigator.neonlaw.org/postgres-client: "true"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        # The 0440 Secret files are group-readable through this group only.
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: roles
+          image: neon-law-postgres:16.15-age1.6.0-vector0.8.2
+          imagePullPolicy: IfNotPresent
+          command:
+            - psql
+            - --no-psqlrc
+            - --quiet
+            - --file=/etc/navigator/postgres/sql/roles.sql
+          env:
+            - name: PGHOST
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: host
+            - name: PGPORT
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: port
+            - name: PGDATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: database
+            - name: PGSSLMODE
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: sslmode
+            - name: PGSSLROOTCERT
+              value: /etc/navigator/postgres/app/ca.crt
+            - name: PGUSER
+              value: postgres
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-postgres-auth
+                  key: password
+            - name: PGAPPNAME
+              value: navigator-postgres-roles
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+              ephemeral-storage: 64Mi
+            limits:
+              memory: 128Mi
+              ephemeral-storage: 64Mi
+          volumeMounts:
+            - name: sql
+              mountPath: /etc/navigator/postgres/sql
+              readOnly: true
+            - name: app
+              mountPath: /etc/navigator/postgres/app
+              readOnly: true
+            - name: migrator
+              mountPath: /etc/navigator/postgres/migrator
+              readOnly: true
+            - name: backup
+              mountPath: /etc/navigator/postgres/backup
+              readOnly: true
+            - name: dbos
+              mountPath: /etc/navigator/postgres/dbos
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: sql
+          configMap:
+            name: navigator-postgres-roles
+        - name: app
+          secret:
+            secretName: navigator-postgres-app
+            defaultMode: 0440
+        - name: migrator
+          secret:
+            secretName: navigator-postgres-migrator
+            defaultMode: 0440
+        - name: backup
+          secret:
+            secretName: navigator-postgres-backup
+            defaultMode: 0440
+        # The DBOS login's password. Optional: until the operator adds
+        # `NAVIGATOR_POSTGRES_DBOS_PASSWORD`, the Secret is absent and
+        # `roles.sql` skips that login.
+        - name: dbos
+          secret:
+            secretName: navigator-postgres-dbos
+            defaultMode: 0440
+            optional: true
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

@@ -1,0 +1,6 @@
+# Paths `navigator ops public-snapshot` leaves out of the public root commit.
+# One repository-relative path per line; an entry excludes that file or every
+# path under that directory. See docs/public-snapshot.md.
+#
+# No entries: per-deployment rows live outside the repository, and every
+# tracked path passes the public snapshot audit (rule P001).

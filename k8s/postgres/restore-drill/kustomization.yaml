@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: navigator
+resources:
+  - restore-drill-job.yaml
+configMapGenerator:
+  - name: navigator-postgres-restore-drill
+    files:
+      - scripts/fetch-backup.sh
+      - scripts/restore.sh
+      - verify.sql
+    options:
+      disableNameSuffixHash: true
+images:
+  - name: neon-law-postgres
+    newName: ghcr.io/neon-law-source-code/neon-law-postgres
+    digest: sha256:4cc70fee3aa9e53455bd1612d0a5be1f06962f5bcdcda4c6bff47e2b46db969e
+  - name: google-cloud-cli
+    newName: gcr.io/google.com/cloudsdktool/google-cloud-cli
+    digest: sha256:3c896827b5c09da0f9e4adfd0211f4493e53c622ac04bdf37fd38fbb583f5fc1

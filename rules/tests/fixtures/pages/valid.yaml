@@ -1,0 +1,18 @@
+version: 26.10.6
+project:
+  host: sample.example.com
+  name: sample-litigation
+pages:
+  - slug: timeline
+    kind: docket_deadline_board
+    title: Case timeline
+    lenses:
+      lawyer: [deadline_board, key_dates_strip, boundary_note, provenance_statement]
+      client: [key_dates_strip, boundary_note, provenance_statement]
+  - slug: engagement
+    kind: engagement_billing_records
+    title: Engagement and billing
+    draft: drafts/engagement.md
+    lenses:
+      lawyer: [engagement_letter, invoice, prebill_review, boundary_note, provenance_statement]
+      client: [engagement_letter, invoice, boundary_note, provenance_statement]

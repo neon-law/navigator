@@ -1,0 +1,5608 @@
+/* Navigator's reusable shared-component layer. The token module is imported
+ * first so a downstream stylesheet can override the documented `--nav-*`
+ * custom properties without changing page markup. */
+@import url("/public/css/tokens.css");
+
+/* A reusable rail for portrait media on every house site. The rail scrolls,
+ * while the page itself keeps its normal vertical flow. */
+.nav-video-rail {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: clamp(15rem, 28vw, 22rem);
+  gap: clamp(1rem, 2vw, 2rem);
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: 1rem;
+  padding: .25rem .25rem 1rem;
+}
+
+.nav-video-rail > * {
+  scroll-snap-align: start;
+  min-width: 0;
+}
+
+.nav-video-rail:focus-visible {
+  outline: 2px solid var(--nav-color-primary);
+  outline-offset: 4px;
+}
+
+.nav-video-rail video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  object-fit: contain;
+  background: var(--nav-color-text);
+}
+
+@media (max-width: 600px) {
+  .nav-video-rail { grid-auto-columns: min(80vw, 20rem); }
+}
+
+/* Size every box by its border edge. Without this a `width: 100%` control
+ * with horizontal padding — a pricing card's CTA, a questionnaire's
+ * `.nav-btn--block` — renders wider than its container and spills past the
+ * card's edge. Bootstrap's reboot used to supply this; the theme now states
+ * it itself. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Brand typography for the whole document. The page chrome a migrated page
+ * renders — the `.lawyer-nav` bar, flash banners, the `<h1>` — is a sibling of
+ * `<main class="nav-theme">`, not a descendant, so the family is declared on
+ * the root and inherited. Anything left undeclared here takes the browser's
+ * own default serif, which is not the firm's. */
+html {
+  background: var(--nav-color-bg);
+  color: var(--nav-color-text);
+  font-family: var(--nav-font-family);
+}
+
+body {
+  background: var(--nav-color-bg);
+  color: var(--nav-color-text);
+  font-family: var(--nav-font-family);
+  line-height: 1.5;
+}
+
+/* Form controls take the UA font, not the inherited one, so a `<button>` or
+ * `<select>` renders in the platform sans unless told otherwise. Inheriting
+ * `font` wholesale keeps size and family together; the component rules below
+ * re-declare only the weight they need. */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+/* Base element styling for the Dioxus app shell. */
+.nav-theme {
+  --nav-public-wash:
+    radial-gradient(
+      55rem 24rem at 12% -4rem,
+      color-mix(in oklab, var(--nav-color-primary) 13%, transparent),
+      transparent 72%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--nav-color-surface-raised) 88%, transparent),
+      var(--nav-color-surface)
+    );
+  --nav-public-hairline: linear-gradient(
+    90deg,
+    transparent,
+    var(--nav-color-primary),
+    transparent
+  );
+  background: var(--nav-color-bg);
+  color: var(--nav-color-text);
+  font-family: var(--nav-font-family);
+  line-height: 1.5;
+}
+
+.nav-theme a {
+  color: var(--nav-color-link);
+  text-decoration: none;
+}
+
+.nav-theme a:hover {
+  color: var(--nav-color-link-hover);
+  text-decoration: underline;
+}
+
+/* An anchor styled as a button is a button, not a link. `.nav-theme a` above
+   is more specific than the `.nav-btn--*` variants, so without these an
+   `<a class="nav-btn nav-btn--primary">` renders cyan-on-cyan — the link color
+   over the filled background, which fails contrast outright. The variants set
+   their own foreground; these re-assert it at matching specificity. */
+.nav-theme a.nav-btn--primary,
+.nav-theme a.nav-btn--primary:hover {
+  color: var(--nav-color-on-primary);
+}
+
+.nav-theme a.nav-btn--secondary,
+.nav-theme a.nav-btn--secondary:hover {
+  color: var(--nav-color-text);
+}
+
+.nav-theme a.nav-btn--danger,
+.nav-theme a.nav-btn--danger:hover {
+  color: #ffffff;
+}
+
+/* The footer's contact-channel tiles are cards whose whole surface is the
+   anchor, so `.nav-theme a:hover` above would recolour and underline the tile
+   itself — the icon and the address read as a wall of link text. These match
+   that rule's specificity to keep the tile a tile; the card's own border and
+   swell are the affordance that says it is clickable. Same reasoning, and the
+   same shape of fix, as `.nav-theme a.home-practice:hover` in `home.css`. */
+.nav-theme a.site-footer__channel-link {
+  color: var(--nav-color-text);
+  text-decoration: none;
+}
+
+/* The one line of text a channel tile carries is its heading, so it takes the
+   brand colour under a pointer exactly as `.home-practice__heading` does —
+   still no underline, because the tile's border and lift are already saying it
+   is clickable. `--nav-color-primary-hover` is the token `--firm-brand-strong`
+   aliases. */
+.nav-theme a.site-footer__channel-link:hover,
+.nav-theme a.site-footer__channel-link:focus-visible {
+  color: var(--nav-color-primary-hover);
+  text-decoration: none;
+}
+
+/* Authenticated Navigator chrome. The route adapter supplies the visible
+ * destinations plus host-specific footer content; these classes only provide
+ * the global application frame and stay independent of roles and routes. */
+.navigator-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.navigator-chrome__header {
+  background: var(--nav-color-surface);
+  border-bottom: 1px solid var(--nav-color-border);
+}
+
+.navigator-navbar {
+  width: min(100%, 72rem);
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 0.75rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.navigator-navbar__brand {
+  color: var(--nav-color-text) !important;
+  font-size: 1.125rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.navigator-navbar__destinations {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.navigator-navbar__link,
+.navigator-navbar__sign-out {
+  display: inline-block;
+  padding: 0.375rem 0.625rem;
+  border-radius: var(--nav-radius-sm);
+  font-weight: 600;
+}
+
+.navigator-navbar__link--active {
+  background: var(--nav-color-surface-subtle);
+  color: var(--nav-color-text) !important;
+}
+
+.navigator-navbar__sign-out {
+  margin-left: auto;
+  border: 1px solid var(--nav-color-border);
+}
+
+.navigator-shell__main {
+  width: min(100%, 72rem);
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+.navigator-footer {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 1rem;
+  align-items: center;
+  width: min(100%, 72rem);
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 1rem;
+  color: var(--nav-color-text-muted);
+  border-top: 1px solid var(--nav-color-border);
+  font-size: 0.875rem;
+}
+
+.navigator-footer__legal,
+.navigator-footer__release {
+  margin: 0;
+}
+
+.navigator-footer__links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+/* The footer every `/app` page carries — one centered copyright line naming
+   the resolved Firm's legal entity, no navigation. Distinct from
+   `.navigator-footer`, which lays out a legal attribution, a link row, and a
+   release stamp for the not yet widely adopted `NavigatorShell`. */
+.app-footer {
+  padding: 1.5rem 1rem;
+  text-align: center;
+  color: var(--nav-color-text-muted);
+  border-top: 1px solid var(--nav-color-border);
+  font-size: 0.875rem;
+}
+
+.app-footer__copyright {
+  margin: 0;
+}
+
+.navigator-chrome-showcase {
+  overflow: hidden;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  box-shadow: var(--nav-shadow);
+}
+
+.navigator-chrome-showcase .navigator-shell {
+  min-height: 0;
+}
+
+.navigator-chrome-showcase .navigator-shell__main {
+  padding-block: 1rem;
+}
+
+.navigator-chrome-showcase__content h3 {
+  margin-top: 0;
+}
+
+@media (max-width: 48rem) {
+  .navigator-navbar {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .navigator-navbar__destinations {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .navigator-navbar__sign-out {
+    margin-left: auto;
+  }
+
+  .navigator-footer {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  .navigator-footer__links {
+    justify-content: flex-start;
+  }
+}
+
+/* Card — the design system's shared surface. */
+.nav-card {
+  background: var(--nav-color-surface);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  box-shadow: var(--nav-shadow);
+  overflow: hidden;
+}
+
+.nav-card__header {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--nav-color-border);
+  background: var(--nav-color-surface-raised);
+  font-weight: 600;
+}
+
+.nav-card__body {
+  padding: 1rem;
+}
+
+.nav-card__body--center {
+  text-align: center;
+}
+
+.nav-card__footer {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--nav-color-border);
+  background: var(--nav-color-surface-raised);
+}
+
+/* A card footer can carry a sentence-sized action. Keep that link visibly
+   distinct from the surrounding copy without relying on its colour. */
+.nav-theme .nav-card__footer > a {
+  text-decoration: underline;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.14em;
+}
+
+/* The brand anchor treatment — a "this one" card. The header band, when
+   present, is painted with the brand colour over `--nav-color-on-primary`,
+   the ink the token layer inverts with the scheme so the pairing clears AA
+   in both (5.79:1 light, 7.69:1 dark). */
+.nav-card--highlighted {
+  border-color: var(--nav-color-primary);
+}
+
+.nav-card--highlighted .nav-card__header {
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+}
+
+/* The sign-in / password-recovery card renders its heading, form, and
+   provider buttons directly in `.nav-card` rather than through
+   `.nav-card__body`, so it needs its own padding. */
+.auth-card {
+  max-width: 26rem;
+  margin-inline: auto;
+  padding: 2rem;
+}
+
+/* The credential form: email and password through the shared `Field`, a
+   full-width submit, then an "or" rule above the identity-provider buttons —
+   the shadcn login-card shape. */
+.auth-form {
+  display: grid;
+  gap: 1rem;
+  margin-block: 1.5rem;
+}
+
+.auth-form .nav-field {
+  margin-bottom: 0;
+}
+
+.auth-form__submit,
+.auth-providers .nav-btn {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-block: 1.25rem;
+  color: var(--nav-color-text-muted);
+  font-size: 0.875rem;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--nav-color-border);
+}
+
+.auth-providers {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+/* Accordion — a native `<details>` disclosure, styled as a bordered surface
+   so a stack of them reads as distinct sections rather than a bare list of
+   headings. `::-webkit-details-marker` is hidden the same way
+   `.workshop-sections__toggle` hides it, and a plain `::after` triangle
+   replaces it so every engine shows the same affordance. */
+.nav-accordion {
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+
+.nav-accordion__toggle {
+  padding: 0.75rem 1rem;
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.nav-accordion__toggle::-webkit-details-marker {
+  display: none;
+}
+
+.nav-accordion__toggle::after {
+  content: " ▾";
+}
+
+.nav-accordion[open] > .nav-accordion__toggle::after {
+  content: " ▴";
+}
+
+.nav-accordion__toggle:focus-visible {
+  outline: 2px solid var(--nav-color-primary);
+  outline-offset: -2px;
+}
+
+.nav-accordion__body {
+  padding: 1rem;
+}
+
+/* Toast — the same four tones the `Toast` carries. */
+.nav-toast {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--nav-radius-sm);
+  border-left: 4px solid var(--nav-toast-accent, var(--nav-color-primary));
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+}
+
+.nav-toast--primary { --nav-toast-accent: var(--nav-color-primary); }
+.nav-toast--success { --nav-toast-accent: var(--nav-color-success); }
+.nav-toast--danger  { --nav-toast-accent: var(--nav-color-danger); }
+.nav-toast--warning { --nav-toast-accent: var(--nav-color-warning); }
+
+.nav-toast__body {
+  flex: 1 1 auto;
+}
+
+/* Inline-SVG icon — sized at 1em, inheriting text color like the old font. */
+.nav-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+  fill: currentColor;
+}
+
+/* Data table — the URL-contract reference surface. `.nav-table-wrap` scrolls
+   horizontally on narrow viewports so the page body never does. */
+.nav-table-wrap {
+  overflow-x: auto;
+}
+
+.nav-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.nav-table th,
+.nav-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--nav-color-border);
+  vertical-align: middle;
+}
+
+.nav-table thead th {
+  border-bottom: 2px solid var(--nav-color-border);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Zebra striping for scan-ability. */
+.nav-table tbody tr:nth-child(even) {
+  background: var(--nav-color-surface-raised);
+}
+
+.nav-table th a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.nav-table th a:hover {
+  color: var(--nav-color-link);
+  text-decoration: underline;
+}
+
+.nav-sort-arrow {
+  color: var(--nav-color-primary);
+}
+
+/* Prev / next pagination strip. */
+.nav-pagination__list {
+  display: flex;
+  gap: 0.25rem;
+  justify-content: center;
+  align-items: center;
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+}
+
+.nav-pagination__link {
+  display: inline-block;
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  color: var(--nav-color-link);
+  text-decoration: none;
+}
+
+a.nav-pagination__link:hover {
+  background: var(--nav-color-surface-raised);
+}
+
+.nav-pagination__item--disabled .nav-pagination__link {
+  color: var(--nav-color-text-muted);
+  background: transparent;
+}
+
+/* Muted secondary text — the theme's counterpart to Bootstrap's
+   `.text-body-secondary`. */
+.nav-text-muted {
+  color: var(--nav-color-text-muted);
+}
+
+/* Button — the solid brand-cyan call to action. AA-safe dark ink on the
+   bright cyan fill (white on cyan-500 is only 2.43:1). */
+.nav-btn {
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-radius: var(--nav-radius-sm);
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.nav-btn--primary {
+  background: var(--nav-color-primary);
+  border-color: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+}
+
+.nav-btn--primary:hover {
+  background: var(--nav-color-primary-hover);
+  border-color: var(--nav-color-primary-hover);
+  color: var(--nav-color-on-primary);
+  text-decoration: none;
+}
+
+.nav-btn--secondary {
+  background: var(--nav-color-secondary);
+  border-color: var(--nav-color-secondary);
+  color: var(--nav-color-on-secondary);
+}
+
+.nav-btn--secondary:hover {
+  background: var(--nav-color-secondary-hover);
+  border-color: var(--nav-color-secondary-hover);
+  color: var(--nav-color-on-secondary);
+  text-decoration: none;
+}
+
+/* An identity-provider button carries its brand mark beside the label. */
+.nav-btn--oauth {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.nav-oauth-icon {
+  flex-shrink: 0;
+}
+
+/* Alert — the disclaimer's warning surface. */
+.nav-alert {
+  border: 1px solid var(--nav-color-border);
+  border-left: 4px solid var(--nav-color-warning);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface-raised);
+  padding: 1rem 1.25rem;
+}
+
+.nav-alert__title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+
+.nav-alert__body {
+  margin: 0;
+}
+
+.service-open-letter {
+  max-width: 65ch;
+  margin: 0 auto;
+}
+
+/* The glossary: one page, every term, with a side index of in-page links.
+ * Wide viewports pin the index beside the terms so a reader can jump
+ * anywhere without scrolling back up; narrow viewports stack it above the
+ * terms as a scrollable panel. `scroll-margin-top` keeps an anchored term's
+ * heading clear of the sticky site header. */
+.glossary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2rem;
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: clamp(1.5rem, 4vw, 3rem) 1rem;
+}
+
+.glossary__index {
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 1rem;
+  border: 1px solid color-mix(in oklab, var(--nav-color-primary) 24%, transparent);
+  border-radius: var(--nav-radius-sm, 0.5rem);
+  background: var(--nav-color-surface);
+  font-size: 0.9rem;
+}
+
+.glossary__index-group + .glossary__index-group {
+  margin-top: 0.75rem;
+}
+
+.glossary__index-letter {
+  margin: 0 0 0.25rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  color: var(--nav-color-primary);
+}
+
+.glossary__index-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.glossary__index-list li + li {
+  margin-top: 0.15rem;
+}
+
+.nav-theme a.glossary__index-link {
+  color: var(--nav-color-text);
+  text-decoration: none;
+}
+
+.nav-theme a.glossary__index-link:hover,
+.nav-theme a.glossary__index-link:focus-visible {
+  color: var(--nav-color-primary-hover);
+  text-decoration: underline;
+}
+
+.glossary__terms {
+  min-width: 0;
+  max-width: 72ch;
+}
+
+.glossary__terms h1 {
+  margin: 0 0 1rem;
+  font-size: clamp(2.25rem, 6vw, 3.5rem);
+  line-height: 1;
+}
+
+.glossary__term {
+  padding-top: 1.5rem;
+  margin-top: 1.5rem;
+  border-top: 1px solid color-mix(in oklab, var(--nav-color-text) 12%, transparent);
+  scroll-margin-top: 5rem;
+}
+
+.glossary__term-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
+}
+
+.nav-theme a.glossary__anchor {
+  color: inherit;
+  text-decoration: none;
+}
+
+.nav-theme a.glossary__anchor:hover,
+.nav-theme a.glossary__anchor:focus-visible {
+  color: var(--nav-color-primary-hover);
+}
+
+.glossary__term:target .glossary__term-title {
+  color: var(--nav-color-primary);
+}
+
+.glossary__definition pre {
+  overflow-x: auto;
+}
+
+@media (min-width: 60rem) {
+  .glossary {
+    grid-template-columns: 15rem minmax(0, 1fr);
+  }
+
+  .glossary__index {
+    position: sticky;
+    top: 5rem;
+    align-self: start;
+    max-height: calc(100vh - 6rem);
+  }
+}
+
+/* Reading links must be recognizable without color alone (WCAG 1.4.1). The
+ * global anchor reset keeps navigation compact, but prose is where a visitor
+ * needs an always-visible cue that a word leaves the page.
+ *
+ * Stated as a rule about inline links rather than an allow-list of page
+ * containers. The allow-list this replaces named four containers, and the
+ * browser accessibility gate found more prose surfaces it had never been
+ * extended to — the legal pages (`article.policy`) and the 403
+ * (`section.error-page`) — each carrying a support address a color-blind
+ * reader could not tell from the sentence around it. An allow-list has to be
+ * remembered into on every new page; this does not.
+ *
+ * The discriminator is the class attribute: an inline prose link is a bare
+ * `<a href>`, written by hand or emitted by the Markdown renderer, while every
+ * link that is really a control — a button, a card, a call to action, a nav
+ * destination — carries the class that styles it and brings its own
+ * affordance.
+ *
+ * Not scoped to a `main` descendant: pages set `.nav-theme` in both positions,
+ * on an ancestor of `main` (the public shell) and on `main` itself (the
+ * back-office pages), so `.nav-theme main` silently misses half the surface.
+ * The chrome opts back out below instead. */
+.nav-theme :is(p, li) > a:not([class]) {
+  text-decoration: underline;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.14em;
+}
+
+/* The chrome keeps its compact treatment: a header, footer, or navigation list
+   is a set of destinations, not a sentence with a word that leaves the page. */
+.nav-theme :is(header, footer, nav) :is(p, li) > a:not([class]) {
+  text-decoration: none;
+}
+
+/* `link-secondary` is the muted verification link — a trademark registration
+   number, a bar licence number — and it is always spoken mid-sentence in fine
+   print ("… is a registered trademark of X, U.S. Reg. No. 6,325,650"). The cue
+   travels with the class rather than with the pages that use it, because the
+   class *is* the "quiet link inside a sentence" case: the chrome opt-out above
+   deliberately cannot reach it, since these footers really are prose. */
+.nav-theme a.link-secondary {
+  text-decoration: underline;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.14em;
+}
+
+/* Blog index — the `/blog` listing: newest post first, each a title link over
+   a muted date and one-line description. */
+.blog-index__posts {
+  list-style: none;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 1.5rem;
+}
+
+.blog-index__post {
+  border-bottom: 1px solid var(--nav-color-border);
+  padding-bottom: 1.5rem;
+}
+
+.blog-index__brand,
+.blog-post__brand {
+  color: var(--nav-color-text-muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  margin: 0 0 0.5rem;
+  text-transform: uppercase;
+}
+
+.blog-index__title {
+  font-size: 1.25rem;
+  margin: 0 0 0.25rem;
+}
+
+.blog-index__date {
+  color: var(--nav-color-text-muted);
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+
+.blog-index__description {
+  margin: 0;
+}
+
+/* Blog post — a picture inside the body. Markdown emits a bare `<img>`, which
+   lays out at the file's intrinsic pixel width and so overruns the article's
+   65ch measure, leaving the photo wider than the prose it sits between. Cap it
+   at the measure and let the height follow so it stays aligned to the same
+   left edge as the paragraphs, at every viewport. */
+.blog-post img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1.5rem 0;
+}
+
+/* `/team` is a short index; the profile carries the person's introduction. */
+.team-index,
+.team-profile {
+  max-width: 48rem;
+  margin: 0 auto;
+  padding-block: clamp(3rem, 8vw, 5rem);
+}
+
+.team-index h1,
+.team-profile h1 {
+  margin-bottom: 1.5rem;
+}
+
+.team-index__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--nav-color-border);
+}
+
+.team-index__item {
+  border-bottom: 1px solid var(--nav-color-border);
+}
+
+.team-index__link {
+  display: block;
+  padding: 1rem 0;
+  font-size: 1.2rem;
+  text-decoration: none;
+}
+
+.team-index__link:hover,
+.team-index__link:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.team-profile__biography {
+  max-width: 62ch;
+  margin: 0 0 1.5rem;
+  font-size: 1.15rem;
+  line-height: 1.7;
+}
+
+.team-profile__link {
+  margin: 0;
+}
+
+/* Public page shell — the skeleton every migrated public page wraps its
+   content in: header, a centered main content column, and the footer strip.
+   The single column is `minmax(0, 1fr)` rather than left implicit, because an
+   implicit auto column's automatic minimum size is the min-content size of
+   whatever it contains — and unbreakable content deep inside (a `<pre>` shell
+   command with no wrap points, a wide decorative row) then grows the column,
+   and with it the header and footer, past the viewport. `minmax(0, ...)` lets
+   the column shrink to the shell's own width and pushes overflow handling back
+   onto the content, which is where each band already deals with it. */
+.public-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.public-shell__main {
+  width: min(100%, 72rem);
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+/* 404 / 403 / 500. The shell already centres and pads the column; this adds the
+   vertical breathing room an error page wants so the message is not jammed
+   under the header, and centres the short copy that would otherwise sit as a
+   ragged left-aligned line across 72rem. */
+.error-page {
+  padding-block: 3rem;
+  text-align: center;
+}
+
+.error-page h1 {
+  margin-bottom: 0.5rem;
+}
+
+.error-page p {
+  margin-bottom: 1.5rem;
+}
+
+/* The service Start door. One decision on one page, so the column is
+   narrowed to a comfortable measure rather than running the shell's full
+   72rem: the disclosure is the thing the visitor has to actually read before
+   choosing, and a 72rem line length is not read. */
+.start-door {
+  max-width: 44rem;
+  padding-block: 1.5rem;
+}
+
+.start-door h1 {
+  margin-bottom: 1rem;
+}
+
+/* The pre-Start disclosure: what "starting" does and does not mean. It is the
+   page's substance, not fine print, so it keeps full body colour and size and
+   takes only the rule that separates it from the button below. */
+.start-door__disclosure {
+  margin: 0 0 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--nav-color-border);
+  color: var(--nav-color-text);
+  line-height: 1.6;
+}
+
+/* Shown instead of the form when the deployment cannot open this matter
+   online. It replaces an action, so it is marked as a notice rather than
+   left looking like another paragraph of the disclosure. */
+.start-door__refusal {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-warning-surface);
+  border: 1px solid var(--nav-color-warning);
+  color: var(--nav-color-on-warning);
+}
+
+/* The `/design` preview frames the shell so its full-bleed chrome reads as a
+   contained sample rather than taking over the gallery page. */
+.public-shell-showcase {
+  overflow: hidden;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  box-shadow: var(--nav-shadow);
+}
+
+.public-shell-showcase .public-shell {
+  min-height: 0;
+}
+
+.public-shell-showcase .public-shell__main {
+  padding-block: 1.5rem;
+}
+
+/* Site header — the public marketing chrome: the brand mark and the primary
+   nav. Below 48rem the rows collapse behind a burger; see the media query at
+   the end of this block. The disclosure is a hidden checkbox rather than a
+   script, because these pages ship no hydration bundle. */
+.site-header {
+  border-bottom: 1px solid var(--nav-color-border);
+  background: var(--nav-color-surface);
+}
+
+.site-header__nav {
+  width: min(100%, 72rem);
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.site-header__brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--nav-color-text) !important;
+  font-size: 1.125rem;
+  white-space: nowrap;
+}
+
+.site-header__logo {
+  display: block;
+}
+
+.site-header__links,
+.site-header__utility {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-header__links {
+  margin-left: auto;
+}
+
+.site-header__link {
+  display: inline-block;
+  padding: 0.375rem 0.625rem;
+  border-radius: var(--nav-radius-sm);
+  font-weight: 600;
+}
+
+.site-header__link--active {
+  background: var(--nav-color-surface-subtle);
+  color: var(--nav-color-text) !important;
+}
+
+/* The disclosure's state. Off-screen rather than `display: none`, so it stays
+   focusable and reachable by keyboard: a menu you cannot tab to is not a menu.
+   Above the breakpoint nothing reads `:checked`, so its value is inert. */
+.site-header__toggle {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The burger itself: three bars, sized to a comfortable touch target. Hidden
+   above the breakpoint, where the link rows render on their own. */
+.site-header__burger {
+  display: none;
+  margin-left: auto;
+  padding: 0.5rem;
+  border-radius: var(--nav-radius-sm);
+  cursor: pointer;
+}
+
+.site-header__burger-bar {
+  display: block;
+  width: 1.375rem;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--nav-color-text);
+}
+
+.site-header__burger-bar + .site-header__burger-bar {
+  margin-top: 0.25rem;
+}
+
+/* The focus ring belongs on the burger, because the input that owns the focus
+   is off-screen. */
+.site-header__toggle:focus-visible + .site-header__burger {
+  outline: 2px solid var(--nav-color-primary);
+  outline-offset: 2px;
+}
+
+@media (max-width: 48rem) {
+  .site-header__burger {
+    display: block;
+  }
+
+  /* Collapsed by default. Each row claims the full width when it opens, so the
+     links stack under the brand rather than crowding beside it. */
+  .site-header__links,
+  .site-header__utility {
+    display: none;
+    flex-basis: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.125rem;
+    margin-left: 0;
+  }
+
+  .site-header__toggle:checked ~ .site-header__links,
+  .site-header__toggle:checked ~ .site-header__utility {
+    display: flex;
+  }
+
+  /* An open menu is a list of rows, so each link fills its own. */
+  .site-header__link {
+    display: block;
+    width: 100%;
+    padding: 0.5rem 0.625rem;
+  }
+
+  /* The utility group (Sign in, or Portal/Lawyer/Sign out) reads as a second
+     group rather than more destinations. */
+  .site-header__toggle:checked ~ .site-header__utility {
+    margin-top: 0.375rem;
+    padding-top: 0.375rem;
+    border-top: 1px solid var(--nav-color-border);
+  }
+}
+
+/* Site footer — the contact band (CTA, voice line, offices) above the
+   brand-driven legal strip (regulated entity, bar admissions, per-attorney bar
+   licenses, disclaimer, joint copyright) every public page carries.
+
+   The rule is full-bleed and the content is width-capped, mirroring the header
+   exactly: `.site-header` owns the border, `.site-header__nav` owns the 72rem
+   column. That is what lines the footer up with the navbar above it instead of
+   letting it run to the viewport edge. */
+.site-footer {
+  position: relative;
+  overflow: clip;
+  border-top: 0;
+  margin-top: clamp(3rem, 8vw, 7rem);
+  background: var(--nav-public-wash);
+  box-shadow: inset 0 1px var(--nav-color-border);
+}
+
+.site-footer::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto auto 50%;
+  width: min(72rem, calc(100% - 2rem));
+  height: 1px;
+  transform: translateX(-50%);
+  background: var(--nav-public-hairline);
+  opacity: 0.7;
+}
+
+.site-footer__inner {
+  /* The contact band's geometry, declared once because two rows are laid out
+     on it: the band's own tile grid, and the masthead above it whose link
+     columns line up with those tiles. */
+  --footer-band-inset: clamp(1.25rem, 3vw, 2rem);
+  --footer-band-gap: 0.75rem;
+  /* One spacing value for every line of the legal strip, and for the gap
+     under the last of them. The strip is one block of fine print, so nothing
+     in it is spaced differently from anything else in it. */
+  --footer-strip-gap: 0.75rem;
+  width: min(100%, 72rem);
+  box-sizing: border-box;
+  margin: 0 auto;
+  /* No deep trailing gap: the strip's last line is the release stamp, and a
+     footer is the end of the page rather than a section that needs air under
+     it. Enough to keep the text off the edge, and no more. */
+  padding: clamp(2rem, 5vw, 4rem) 1rem var(--footer-strip-gap);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+}
+
+/* The masthead sits on the contact band's three tracks, so the first link
+   column starts at the first address tile and the second at the tile beside
+   it — the row and the band read as one grid rather than two that happen to
+   be stacked. The band insets its tiles by its padding AND its 1px border, so
+   this clears both or every column lands a pixel to the left. */
+.site-footer__masthead {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: var(--footer-band-gap);
+  row-gap: 1.25rem;
+  align-items: center;
+  padding-inline: calc(var(--footer-band-inset) + 1px);
+}
+
+/* The footer reuses the header's self-contained brand mark. Its SVG stays
+   transparent, so the brand color is the mark alone rather than a tile. The
+   wordmark sits beside it: the mark alone opened the footer on an unlabelled
+   glyph.
+
+   It is an anchor home now, because the header's mark is off screen by the time
+   a reader reaches the bottom of a long page, so this is the copy they click. */
+.site-footer__brand {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin: 0;
+}
+
+/* Same fix as the button variants and the contact tiles above: `.nav-theme a`
+   is more specific than `.site-footer__brand`, so without re-asserting at
+   matching specificity the wordmark renders in the link color instead of the
+   footer's own text color — the mark is the site's identity and reads as one
+   object, not as a phrase in a sentence. The hover half is here for the
+   underline `.nav-theme a:hover` would otherwise draw under it. */
+.nav-theme a.site-footer__brand,
+.nav-theme a.site-footer__brand:hover {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Hover and keyboard focus brighten the tile behind the glyph, which says the
+   whole mark is clickable without restyling the wordmark as a link. The
+   browser's own focus ring still marks it for a keyboard reader; this only
+   matches the pointer treatment so the two states agree. */
+.site-footer__brand:hover .site-footer__logo,
+.site-footer__brand:focus-visible .site-footer__logo {
+  border-color: color-mix(in oklab, var(--nav-color-primary) 60%, transparent);
+  background: color-mix(in oklab, var(--nav-color-primary) 16%, transparent);
+}
+
+.site-footer__logo {
+  display: block;
+  width: 3.4rem;
+  height: 3.4rem;
+  padding: 0.45rem;
+  border: 1px solid color-mix(in oklab, var(--nav-color-primary) 35%, transparent);
+  border-radius: 0.9rem;
+  background: color-mix(in oklab, var(--nav-color-primary) 8%, transparent);
+}
+
+.site-footer__wordmark {
+  font-size: 1.2rem;
+  letter-spacing: -0.015em;
+  white-space: nowrap;
+}
+
+/* The Brand's profiles and shared channel sit beneath its wordmark.
+   The marks take the host's primary, not X, LinkedIn, or YouTube's own
+   colours: the footer wears one palette. The names stay visible, because the
+   X mark alone is not a name a reader can rely on. */
+.site-footer__identity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.site-footer__social {
+  margin: 0;
+  padding: 0;
+}
+
+.site-footer__social-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-footer__social-item {
+  margin: 0;
+}
+
+.site-footer__social-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.75rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 999px;
+  color: var(--nav-color-text-muted);
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.nav-theme a.site-footer__social-link {
+  color: var(--nav-color-text-muted);
+  text-decoration: none;
+}
+
+.nav-theme a.site-footer__social-link:hover,
+.nav-theme a.site-footer__social-link:focus-visible {
+  background: var(--nav-color-surface-subtle);
+  color: var(--nav-color-text);
+  text-decoration: none;
+}
+
+.site-footer__social-link > .nav-icon:first-child {
+  flex: none;
+  font-size: 1.05rem;
+  color: var(--nav-color-primary);
+}
+
+/* The pages the header does not carry. A list at the top of the footer,
+   because a reader who scrolled to the bottom looking for one of them should
+   meet it before the contact detail. */
+.site-footer__nav {
+  grid-column: 2 / -1;
+  margin: 0;
+  padding: 0;
+}
+
+/* Four columns of three on a wide viewport. The rows are fixed at three and
+   the flow runs down them before moving across, so the list reads
+   top-to-bottom inside each column rather than snaking across the row. One
+   `<ul>` does this at every width — the narrow layout below simply stops
+   columnizing it, which is why the markup needs no second list. */
+.site-footer__nav-list {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-rows: repeat(3, auto);
+  column-gap: var(--footer-band-gap);
+  row-gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-footer__nav-item {
+  margin: 0;
+}
+
+/* Plain text links: no pill, no border, no fill, and nothing that moves on
+   hover. The row is a directory of the site's remaining pages, so it reads as
+   a list of names in the footer's own muted type. Underlining on hover is the
+   whole affordance, and `:focus-visible` keeps the browser's own ring for a
+   keyboard reader. */
+.site-footer__nav-link {
+  color: var(--nav-color-text-muted);
+  font-size: 0.9375rem;
+  text-decoration: none;
+}
+
+.site-footer__nav-link:hover {
+  color: var(--nav-color-text);
+}
+
+/* The affiliations row: the firm's family on the left, its association
+   memberships on the right, between the contact band and the legal strip.
+   Inset to the band's tiles like the masthead above, so the family's first
+   chip starts where the first address tile does. Every colour here is a
+   `--nav-*` token, so on a house brand's own host the chips and the
+   membership underline take that brand's primary and face — the row is the
+   same markup on every host and wears whichever palette the host resolved. */
+.site-footer__affiliations {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem 2rem;
+  padding-inline: calc(var(--footer-band-inset) + 1px);
+}
+
+/* "Our Family": a small uppercase heading and a row of chips, one per house
+   brand. The heading is the landmark's accessible name too, so it stays a
+   real heading rather than a styled span. */
+.site-footer__family {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+  margin: 0;
+  padding: 0;
+}
+
+.site-footer__family-heading {
+  margin: 0;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--nav-color-text-muted);
+}
+
+.site-footer__family-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-footer__family-item {
+  margin: 0;
+}
+
+/*
+ * Every multi-brand row becomes a two-column block on desktop, one brand per
+ * line. One column on narrow screens keeps each entry readable.
+ */
+.site-footer__family-list--two-column {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.35rem 2rem;
+}
+
+@media (min-width: 40rem) {
+  .site-footer__family-list--two-column {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* In the block form the entry is a line of text, not a chip. */
+.site-footer__family-list--two-column .site-footer__family-link,
+.site-footer__family-list--two-column .site-footer__family-current {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+/*
+ * Supporting text, so quieter than the name it follows - but it still has to
+ * clear AA, so it reads --nav-color-text-muted rather than an opacity, which
+ * would silently drop contrast below the floor the palette guarantees.
+ */
+.site-footer__family-byline {
+  font-size: 0.8125rem;
+  color: var(--nav-color-text-muted);
+}
+
+/*
+ * "A practice of Shook Law PC". A regulatory line, not decoration: on a
+ * brand host it is what discloses which licensed entity is behind the trade
+ * name, so it sits above the legal strip where a reader looking for that
+ * answer will find it, and it is not dimmed to muted text.
+ */
+.site-footer__attribution {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+  color: var(--nav-color-text);
+}
+
+/* A chip per brand, grounded like the contact band's tiles. The 2rem minimum
+   height keeps each a comfortable target for a finger or a pointer. */
+.site-footer__family-link,
+.site-footer__family-current {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0.25rem 0.85rem;
+  border: 1px solid color-mix(in oklab, var(--nav-color-border) 78%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--nav-color-surface) 74%, transparent);
+  color: var(--nav-color-text);
+  font-size: 0.875rem;
+  line-height: 1.2;
+  text-decoration: none;
+  transition:
+    border-color 240ms ease,
+    background-color 240ms ease,
+    transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.site-footer__family-logo {
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 2rem;
+  object-fit: contain;
+}
+
+/* `.nav-theme a` is more specific than the chip class, so the link colour and
+   hover underline are re-asserted away at matching specificity: a chip is a
+   tile, and answers a pointer the way the contact tiles do — brand border,
+   brand wash, a lift — rather than as a phrase in a sentence. Focus gets the
+   same treatment as hover so the two states agree; the browser's own ring
+   still marks it for a keyboard reader. */
+.nav-theme a.site-footer__family-link {
+  color: var(--nav-color-text);
+  text-decoration: none;
+}
+
+.nav-theme a.site-footer__family-link:hover,
+.nav-theme a.site-footer__family-link:focus-visible {
+  border-color: var(--nav-color-primary);
+  background: color-mix(in oklab, var(--nav-color-primary) 12%, transparent);
+  color: var(--nav-color-text);
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+/* The brand a reader is already on: filled in the host's primary, bold, and
+   not a link — `aria-current` says so to a screen reader. */
+.site-footer__family-current {
+  border-color: color-mix(in oklab, var(--nav-color-primary) 60%, transparent);
+  background: color-mix(in oklab, var(--nav-color-primary) 14%, transparent);
+  font-weight: 600;
+}
+
+/* The association standing line: one quiet line per affiliation, right-aligned against
+   the family. The award glyph takes the host's primary; the sentence is the
+   footer's muted fine print with the link underlined in the same primary, so
+   a reader sees it is a link without it shouting. */
+.site-footer__memberships {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  justify-self: end;
+}
+
+.site-footer__membership {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.875rem;
+}
+
+.site-footer__membership > .nav-icon {
+  flex: none;
+  font-size: 1.1em;
+  color: var(--nav-color-primary);
+}
+
+/* The association's own mark, on a dark tile in both schemes. The image is
+   decorative and sized by height, so a wide mark stays legible without
+   dominating the line beside it. */
+.site-footer__membership-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid color-mix(in oklab, var(--nav-color-border) 78%, transparent);
+  border-radius: 0.6rem;
+  background: #0b1220;
+}
+
+.site-footer__membership-logo {
+  display: block;
+  height: 1.5rem;
+  width: auto;
+}
+
+.nav-theme a.site-footer__membership-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--nav-color-primary) 55%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.nav-theme a.site-footer__membership-link:hover,
+.nav-theme a.site-footer__membership-link:focus-visible {
+  color: var(--nav-color-text);
+  text-decoration-color: var(--nav-color-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .site-footer__family-link {
+    transition: none;
+  }
+
+  .nav-theme a.site-footer__family-link:hover,
+  .nav-theme a.site-footer__family-link:focus-visible {
+    transform: none;
+  }
+}
+
+/* The contact band: one bordered surface wrapping the tile grid (the email
+   and phone channels, then every office) at a consistent tile size. */
+.site-footer__contact {
+  grid-column: 1 / -1;
+  padding: var(--footer-band-inset);
+  border: 1px solid var(--nav-color-border);
+  border-radius: 1.25rem;
+  background: color-mix(in oklab, var(--nav-color-surface-raised) 84%, transparent);
+  box-shadow: 0 1.25rem 3.5rem color-mix(in oklab, var(--nav-color-text) 8%, transparent);
+}
+
+/* A grid rather than a wrapping flex row: each office needs a column of its
+   own with a known edge, because the state watermark behind it is anchored to
+   that edge. Content-width flex items put one office's outline over the next
+   office's text.
+
+   Three columns. The email and phone channel tiles are pinned into column 1
+   (rows 1 and 2 — see the `:has()` rules below), stacking them vertically;
+   the offices are unpositioned, so grid auto-placement fills every cell
+   *around* that reserved column — column 2/3 of row 1, then column 2/3 of
+   row 2, and so on — without either side needing to know how many offices
+   the other renders. */
+.site-footer__offices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--footer-band-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.85rem;
+  color: var(--nav-color-text-muted);
+}
+
+.site-footer__offices > li:has(> .site-footer__channel-link[href^="mailto:"]) {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.site-footer__offices > li:has(> .site-footer__channel-link[href^="tel:"]) {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+/* Each office is its own positioning context and its own clip, so the state
+   watermark sits behind that office and can never spill into the next column.
+   `min-height` reserves the room the outline needs so a short entry does not
+   crop it. */
+.site-footer__office {
+  position: relative;
+  overflow: hidden;
+  min-height: 5.5rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid color-mix(in oklab, var(--nav-color-border) 78%, transparent);
+  border-radius: 0.9rem;
+  background: color-mix(in oklab, var(--nav-color-surface) 74%, transparent);
+}
+
+/* The two actionable contact channels (email, phone) are tiles in the same
+   grid as the offices, sized and grounded identically by
+   `.site-footer__office`, and they answer a pointer the way the practice cards
+   on `/` do: the border takes the brand colour, the tile lifts, and a wash
+   swells across it. Motion rather than a fill is what marks them as the
+   actionable pair — a brand-filled pill read as two buttons shouting over the
+   addresses beside them.
+
+   `isolation` is what lets the wash sit under the tile's own text: a
+   negative-`z-index` pseudo-element paints behind its parent's background
+   unless the parent is a stacking context, which would hide the wash entirely.
+   The `overflow: hidden` it needs is already on `.site-footer__office`.
+
+   The values here are `home.css`'s deliberately — same 240ms border and lift,
+   same 720ms swell — because a reader who met that card on the way down the
+   page should meet the same one at the bottom of it. `--nav-color-primary` is
+   the token `--firm-brand` aliases, named directly because `brand-firm.css` is
+   hoisted by the marketing pages while this footer ships on every page. */
+.site-footer__office--channel {
+  display: flex;
+  isolation: isolate;
+  transition:
+    border-color 240ms ease,
+    transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* The tile hears about its own link's state: the anchor is the hit area, and
+   the tile around it is what the reader sees respond. */
+.site-footer__office--channel:has(> .site-footer__channel-link:hover),
+.site-footer__office--channel:has(> .site-footer__channel-link:focus-visible) {
+  border-color: var(--nav-color-primary);
+  transform: translateY(-2px);
+}
+
+/* The wave, as `.home-practice::after` draws it: a circle anchored off the
+   bottom-left corner, scaled from nothing to past the top-right, so the wash
+   crosses the tile on the diagonal rather than fading in flat. */
+.site-footer__office--channel::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset-inline-start: -25%;
+  inset-block-end: -55%;
+  inline-size: 150%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 30% 70%,
+    var(--nav-color-primary) 0%,
+    color-mix(in srgb, var(--nav-color-primary) 45%, transparent) 45%,
+    transparent 72%
+  );
+  opacity: 0;
+  transform: scale(0.2);
+  transform-origin: 0% 100%;
+  transition:
+    transform 720ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 320ms ease;
+}
+
+.site-footer__office--channel:has(> .site-footer__channel-link:hover)::after,
+.site-footer__office--channel:has(
+    > .site-footer__channel-link:focus-visible
+  )::after {
+  opacity: 0.22;
+  transform: scale(1.5);
+}
+
+/* The wave is decoration. Suppressed, the border still answers the pointer, so
+   the tile never stops responding — it just stops swelling and lifting. */
+@media (prefers-reduced-motion: reduce) {
+  .site-footer__office--channel,
+  .site-footer__office--channel::after {
+    transition-duration: 1ms;
+  }
+
+  .site-footer__office--channel:has(> .site-footer__channel-link:hover),
+  .site-footer__office--channel:has(
+      > .site-footer__channel-link:focus-visible
+    ) {
+    transform: none;
+  }
+
+  .site-footer__office--channel:has(> .site-footer__channel-link:hover)::after,
+  .site-footer__office--channel:has(
+      > .site-footer__channel-link:focus-visible
+    )::after {
+    transform: scale(1.5);
+  }
+}
+
+.site-footer__channel-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  width: 100%;
+  color: var(--nav-color-text);
+  font-size: 1.05rem;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+}
+
+.site-footer__channel-link .nav-icon {
+  flex-shrink: 0;
+  font-size: 1.3rem;
+}
+
+/* The state outline, drawn behind its own address. Decoration, so it is set at
+   a low opacity in the brand colour, sits under the text in the stacking order,
+   and takes no pointer events. The opacity is what keeps the body copy over it
+   at its usual contrast; raising it would put a tinted wash under small muted
+   text, which is the one thing this must not do. */
+.site-footer__office-map {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-end: 0.35rem;
+  z-index: 0;
+  width: 5rem;
+  height: 5rem;
+  transform: translateY(-50%);
+  color: var(--nav-color-primary);
+  opacity: 0.11;
+  pointer-events: none;
+}
+
+/* The text rides above the watermark. */
+.site-footer__office-label,
+.site-footer__office-address,
+.site-footer__office-note {
+  position: relative;
+  z-index: 1;
+}
+
+/* A reader who has asked the platform for more contrast gets none of this. */
+@media (prefers-contrast: more) {
+  .site-footer__office-map {
+    display: none;
+  }
+}
+
+/* The label above an address: the state, on the firm footer. Named for the
+   role rather than the value, so a future brand's footer can reuse it with
+   its own label without a class rename. */
+.site-footer__office-label {
+  display: block;
+  margin-bottom: 0.2rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--nav-color-text);
+}
+
+/* `<address>` defaults to italic; these are postal addresses, not asides. */
+.site-footer__office-address {
+  font-style: normal;
+  max-width: 16rem;
+  line-height: 1.45;
+}
+
+/* Street, unit, then city — the lines an envelope carries, so the suite has its
+   own line and the city a reader is looking for starts one rather than landing
+   wherever the column wrapped. A long line still wraps within itself. */
+.site-footer__office-line {
+  display: block;
+}
+
+/* A qualification on the office above it — today, an admission that has not
+   issued. Italic and set apart so it reads as a caveat on that address rather
+   than as a second line of it, but not shrunk: it is regulated copy, and the
+   surrounding footer text is already the page's smallest. */
+.site-footer__office-note {
+  display: block;
+  margin-top: 0.25rem;
+  max-width: 16rem;
+  font-style: italic;
+}
+
+/* The legal strip. Muted and small so it reads as terminal fine print, and
+   ruled off from the contact band above it. */
+.site-footer__legal {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--footer-strip-gap);
+  border-top: 1px solid var(--nav-color-border);
+  padding-top: var(--footer-strip-gap);
+  color: var(--nav-color-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+/* Every group in the strip is the strip's own grid again, so a line inside a
+   group sits exactly as far from its neighbour as the groups do from each
+   other. The groups exist to say what belongs together, not to be spaced
+   apart: the whole strip reads as one block of fine print. */
+.site-footer__legal > div {
+  display: grid;
+  gap: var(--footer-strip-gap);
+}
+
+/* The grid's gap is the only thing that spaces this strip, so nothing in it
+   carries a margin of its own to add to it. */
+.site-footer__legal p,
+.site-footer__legal ul,
+.site-footer__legal address {
+  margin: 0;
+}
+
+/* With no contact band above it the legal strip is the footer's first child,
+   and the header-matching rule on `.site-footer` is already the only one it
+   needs — a second rule immediately below the first would read as a seam. */
+.site-footer__legal:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+
+.site-footer__legal a {
+  color: inherit;
+}
+
+/* The registered-mark symbol in the trademark notice. A bare `<sup>` is set
+   `vertical-align: super` at `smaller`, which grows the line box it sits in and
+   opens a gap above one line of the fine print but not the others. Zeroing its
+   line height takes it out of that calculation, so the notice sets on the same
+   rhythm as the copyright line above it. */
+.site-footer__trademark-mark {
+  font-size: 0.7em;
+  line-height: 0;
+}
+
+/* The platform line: "Powered by", the repository, its stars, and the running
+   release on one row. A flex row because the parts are separate elements — the
+   gap spaces them, so none has to carry a literal space — and it wraps on a
+   narrow viewport rather than overflowing the strip. */
+.site-footer__powered {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+@media (max-width: 54rem) {
+  /* Keep the trademark and platform attribution visually adjacent in the
+     narrow legal strip; the groups still space their own internal lines. */
+  .site-footer__legal {
+    row-gap: 0;
+  }
+
+  /* The band collapses to one tile per row here, so there are no tracks left
+     to line up with: the masthead stacks and drops the band's inset. */
+  .site-footer__masthead {
+    grid-template-columns: minmax(0, 1fr);
+    padding-inline: 0;
+  }
+
+  .site-footer__nav {
+    grid-column: 1;
+  }
+
+  /* One list of footer pages. The same `<ul>` stops columnizing and runs straight
+     down the page, so a narrow viewport shows the row as the single list it
+     is in the markup. */
+  .site-footer__nav-list {
+    grid-auto-flow: row;
+    grid-template-rows: none;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .site-footer__brand,
+  .site-footer__identity {
+    justify-self: start;
+  }
+
+  .site-footer__contact {
+    grid-column: 1;
+  }
+
+  /* Family over membership, both from the left edge, once there is no band
+     inset to line up with. */
+  .site-footer__affiliations {
+    grid-template-columns: minmax(0, 1fr);
+    padding-inline: 0;
+  }
+
+  .site-footer__memberships {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 34rem) {
+  .site-footer__offices {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* A little air between the link and the number it belongs to, so "1,234" reads
+   as a count of the repository beside it rather than as part of its name. */
+.github-stars {
+  gap: 0.5rem;
+}
+
+/* The repository reads as an address, so it is set in the same mono stack
+   `.font-monospace` gives every other identifier on the site. */
+.github-stars__repo {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* The per-attorney bar licenses: one line per attorney, each jurisdiction
+   linked to that bar's own public record. */
+.site-footer__licenses {
+  padding: 0;
+  list-style: none;
+}
+
+/* One attorney per line; a licensee whose licences wrap must still read as one
+   entry, so the rows are spaced further apart than the wrapped lines within a
+   row. */
+.site-footer__licensee + .site-footer__licensee {
+  margin-top: 0.35rem;
+}
+
+.site-footer__licensee-name {
+  font-weight: 600;
+}
+
+/* Pricing cards — an equal-height responsive grid; every card wears the cyan
+   band and a solid CTA. */
+.pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+}
+
+@media (min-width: 62rem) {
+  .pricing-grid {
+    /* Cap each card's width and centre the row, so a two-card row does not
+       stretch each card across half the page. */
+    grid-template-columns: repeat(var(--pricing-cols, 3), minmax(0, 24rem));
+    justify-content: center;
+  }
+}
+
+.pricing-card {
+  display: flex;
+  flex-direction: column;
+  border-color: var(--nav-color-primary);
+}
+
+.pricing-card__band {
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+  text-align: center;
+}
+
+.pricing-card__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: 0.75rem;
+}
+
+/* The body's `gap` owns the rhythm; the UA's heading and paragraph margins
+   would stack on top of it and float the title, price, and blurb apart. */
+.pricing-card__body > * {
+  margin-block: 0;
+}
+
+.pricing-card__title {
+  font-size: 1.375rem;
+}
+
+.pricing-card__amount {
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+/* The day-rate badge: a small bill glyph beside a bold "$N a day" caption, so
+   the flat fee's day rate reads at a glance instead of only in the blurb
+   sentence beneath it. */
+.pricing-card__day-rate {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--nav-radius-lg);
+  background: var(--nav-color-surface-subtle);
+}
+
+.pricing-card__day-rate-mark {
+  width: 3.5rem;
+  height: auto;
+  flex-shrink: 0;
+}
+
+.pricing-card__day-rate-label {
+  font-size: 1.05rem;
+  font-weight: 700;
+  /* `--nav-color-primary` (teal-500) on `--nav-color-surface-subtle`
+     (teal-subtle) is 4.41:1 — under the 4.5:1 AA floor, because the 500
+     stop's 4.90:1 headroom (tokens.css) was measured against
+     `--nav-color-bg`, not this tinted surface. Per tokens.css's own guidance,
+     a surface that needs more steps down to 600 rather than lightening 500. */
+  color: var(--nav-color-primary-hover);
+}
+
+.pricing-card__features {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 1rem;
+}
+
+.pricing-card__features li {
+  margin-bottom: 0.25rem;
+}
+
+.pricing-card__check {
+  color: var(--nav-color-primary);
+  margin-right: 0.5rem;
+}
+
+.pricing-card__cta {
+  margin-top: auto;
+  width: 100%;
+}
+
+/* Testimonials — a two-column grid of quote cards. */
+.testimonial-section__head {
+  margin-bottom: 1.5rem;
+}
+
+.testimonial-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1rem;
+}
+
+.testimonial-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.testimonial-card__label {
+  text-transform: uppercase;
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--nav-color-primary);
+  margin: 0;
+}
+
+.testimonial-card__quote {
+  font-size: 1.15rem;
+  margin: 0;
+}
+
+.testimonial-card__by {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: auto;
+}
+
+.testimonial-card__avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
+.testimonial-card__avatar--initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--nav-color-surface-subtle);
+  color: var(--nav-color-primary-active);
+  font-weight: 700;
+}
+
+.testimonial-card__name {
+  font-weight: 600;
+  margin: 0;
+}
+
+/* Breadcrumb — the muted "back to parent" link at the top of detail pages. */
+.nav-breadcrumb {
+  margin-bottom: 1rem;
+}
+
+.nav-breadcrumb__link {
+  color: var(--nav-color-text-muted);
+  text-decoration: none;
+}
+
+.nav-breadcrumb__link:hover {
+  color: var(--nav-color-link);
+  text-decoration: underline;
+}
+
+/* Brand settings keep each provider's connection controls together. */
+.brand-social-accounts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+  gap: 1.5rem;
+}
+
+#brands-edit > section {
+  margin-block: 1.5rem;
+}
+
+/* Form — a constrained create/edit card with labeled fields. */
+.nav-form-card {
+  max-width: 32rem;
+}
+
+.nav-form-card__title {
+  margin-top: 0;
+}
+
+/* Framing prose between a form card's title and its first field. */
+.nav-form-card__intro {
+  margin-bottom: 1.5rem;
+}
+
+.nav-field {
+  margin-bottom: 1rem;
+}
+
+.nav-label {
+  display: block;
+  margin-bottom: 0.375rem;
+  font-weight: 500;
+  /* A label used as a flex item (`.nav-field--check`, `.nav-radio`) defaults
+     to `min-width: auto`, which floors it at its longest unbreakable run —
+     an email or URL question option pushes the row, and the page, wider
+     than the viewport (ENG-853). `min-width: 0` lets it shrink;
+     `overflow-wrap` then breaks that run instead of letting it paint past
+     the edge. A no-op outside a flex/grid context. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.nav-required {
+  color: var(--nav-color-danger);
+}
+
+.nav-input,
+.nav-select {
+  display: block;
+  width: 100%;
+  /* `width: 100%` plus horizontal padding overflows the container under the
+     default `content-box`. Bootstrap's `*,::after,::before{box-sizing:border-box}`
+     is currently supplying this for free, so the theme looks correct only
+     because a framework it is replacing is still loaded. Stated here so the
+     controls survive Bootstrap's removal (#877). */
+  box-sizing: border-box;
+  /* shadcn's input: a 40px control with a hairline border, a faint lift, and
+     a soft ring on focus in place of a hard outline. */
+  min-height: 2.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  color: var(--nav-color-text);
+  font: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.5rem;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.nav-input::placeholder {
+  color: var(--nav-color-text-muted);
+  opacity: 1;
+}
+
+.nav-input:hover:not(:disabled, :focus),
+.nav-select:hover:not(:disabled, :focus) {
+  border-color: color-mix(in oklab, var(--nav-color-text-muted) 45%, var(--nav-color-border));
+}
+
+/* The ring is a box-shadow; the transparent outline keeps a visible focus
+   indicator in forced-colors mode, which drops shadows. */
+.nav-input:focus,
+.nav-select:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  border-color: var(--nav-color-primary);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--nav-color-primary) 30%, transparent);
+}
+
+.nav-input:disabled,
+.nav-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* A label with a link set opposite it — "Forgot your password?". */
+.nav-field__label-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+  margin-bottom: 0.375rem;
+}
+
+.nav-field__label-row .nav-label {
+  margin-bottom: 0;
+}
+
+.nav-field__label-link {
+  font-size: 0.875rem;
+}
+
+/* A Person foreign-key picker keeps the submitted UUID in its native select;
+   this input only narrows the list by name or email after hydration. */
+.person-picker__search-label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--nav-color-text-muted);
+}
+
+.person-picker__matches {
+  margin: 0.25rem 0;
+  font-size: 0.875rem;
+  color: var(--nav-color-text-muted);
+}
+
+/* Input with a leading add-on (e.g. a "$" prefix). */
+.nav-input-group {
+  display: flex;
+}
+
+.nav-input-group__addon {
+  display: flex;
+  align-items: center;
+  padding: 0 0.75rem;
+  border: 1px solid var(--nav-color-border);
+  border-right: 0;
+  border-radius: var(--nav-radius-sm) 0 0 var(--nav-radius-sm);
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text-muted);
+}
+
+.nav-input-group .nav-input {
+  border-radius: 0 var(--nav-radius-sm) var(--nav-radius-sm) 0;
+}
+
+/* Checkbox row: the box precedes an inline label. The row wraps so a help
+   line or error drops below the box and label, full width, instead of
+   squeezing in as a third column beside them — the lead form's notice reads
+   after the texting consent, not next to it. */
+.nav-field--check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.nav-field--check .nav-label {
+  flex: 1 1 0;
+  margin-bottom: 0;
+  font-weight: 400;
+}
+
+.nav-field--check > .nav-field__help,
+.nav-field--check > .nav-field__error {
+  flex-basis: 100%;
+}
+
+.nav-checkbox {
+  accent-color: var(--nav-color-primary);
+  flex: 0 0 auto;
+}
+
+/* A `<p>`, so the shared inline-prose underline reaches a link inside the help
+   line without naming this container. Its block margins are ours, not the
+   browser's 1em default. */
+.nav-field__help {
+  margin: 0.25rem 0 0;
+  font-size: 0.875rem;
+  color: var(--nav-color-text-muted);
+  /* Long unbroken help text (an example email or URL) wraps instead of
+     widening the field, and the page (ENG-853). */
+  overflow-wrap: anywhere;
+}
+
+/* Radio group — one fieldset over mutually exclusive choices. The border is the
+   browser default's job; ours is the same bare stack every other field uses. */
+.nav-field--radio {
+  border: 0;
+  padding: 0;
+  margin: 0 0 1rem;
+}
+
+.nav-radio {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.nav-radio .nav-label {
+  margin-bottom: 0;
+  font-weight: 400;
+}
+
+/* A choice already spoken for: greyed out because taking it needs the
+   deliberate reassign step, not a stray click. The input is also `disabled`, so
+   this is the visual half of a refusal the write door enforces on its own. */
+.nav-radio--locked {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.nav-radio--locked .nav-label {
+  color: var(--nav-color-text-muted);
+}
+
+/* The reassign toggle sits below the form it feeds, reading as the deliberate
+   exit from the greyed-out state rather than another field. */
+.participation-reassign {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--nav-color-border);
+}
+
+/* Per-field validation message — Rails' `field_with_errors`. The reason sits
+   with the control that caused it, not only in the banner at the top of the
+   form. Same size as the hint but in the danger tone, so the two read as one
+   description stack. */
+.nav-field__error {
+  margin-top: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--nav-color-danger);
+  overflow-wrap: anywhere;
+}
+
+/* The invalid state is carried on the control's border as well as the message,
+   because colour alone is not a sufficient cue — the message text and the
+   `aria-invalid` state are what actually convey it. */
+/* `.nav-input` covers the textarea too — it renders with that class. */
+.nav-field--invalid .nav-input,
+.nav-field--invalid .nav-select {
+  border-color: var(--nav-color-danger);
+}
+
+.nav-field--invalid .nav-input:focus,
+.nav-field--invalid .nav-select:focus {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--nav-color-danger) 25%, transparent);
+}
+
+/* People-list — bounded person-row groups inside a form. */
+.nav-fieldset {
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.nav-fieldset__legend {
+  padding: 0 0.5rem;
+  font-weight: 600;
+  width: auto;
+}
+
+/* Server-highlighted code block — syntect emits an inline-styled <pre>.
+   The copy button sits on the block, not in the scrolling source, so a long
+   line scrolls under it and the control stays put. `min-width: 0` lets the
+   block shrink inside a grid column instead of forcing the page wider. */
+.nav-code {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.nav-code__copy {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 1;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface);
+  color: var(--nav-color-text);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.nav-code__copy:hover {
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+}
+
+.nav-code__copy[data-copied="true"] {
+  background: var(--nav-color-primary);
+  border-color: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+}
+
+.nav-code__copy:focus-visible {
+  outline: 2px solid var(--nav-color-primary);
+  outline-offset: 2px;
+}
+
+.nav-code pre {
+  margin: 0;
+  padding: 0.75rem 5rem 0.75rem 1rem;
+  overflow-x: auto;
+  border-radius: var(--nav-radius-sm);
+  border: 1px solid var(--nav-color-border);
+}
+
+/* Secondary button — the outlined variant (e.g. a Cancel action). */
+.nav-btn--secondary {
+  background: transparent;
+  border-color: var(--nav-color-border);
+  color: var(--nav-color-text);
+}
+
+.nav-btn--secondary:hover {
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+}
+
+/* Small status pill — review decisions. */
+.nav-badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--nav-color-surface-subtle);
+  color: var(--nav-color-primary-active);
+  font-size: 0.85em;
+  font-weight: 600;
+}
+
+/* ============================================================================
+ * #641 Phase 3 — migrated admin/portal page chrome
+ *
+ * The Dioxus page successors to the admin/portal pages carry their own
+ * nav bar, list tables, row actions, flash banners, and dashboard cards. The
+ * component classes (.nav-btn, .nav-card, .nav-table, …) are styled above;
+ * these are the page-level chrome those pages add. Same `--nav-*` tokens.
+ * ==========================================================================*/
+
+/* Page container: the lawyer/admin/portal pages render a single <main>. Give it
+ * the same comfortable measure and padding the PageLayout provided. */
+main.nav-theme,
+main#admin-people,
+main#admin-listing,
+main#person-show,
+main#people-new,
+main#portal-projects,
+main#entities,
+main#entity-edit,
+main#entity-new,
+main#lawyer-entity-types,
+main#expunge-queue,
+main#letter-detail {
+  display: block;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 3rem;
+  color: var(--nav-color-text);
+}
+
+/* Client-DRI-view banner. Sits above the nav on every page a firm member sees
+ * while viewing a matter as its client DRI, so "you are viewing as someone
+ * else, read-only" is never off-screen. Amber rather than the danger red:
+ * this is a persistent state, not an error, and it must stay legible for the
+ * whole session without reading as a failure. */
+.dri-view-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 1.25rem;
+  border-bottom: 1px solid #d97706;
+  background: #fef3c7;
+  color: #78350f;
+}
+
+.dri-view-banner__email {
+  color: #92400e;
+}
+
+.dri-view-banner__readonly {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.75rem;
+}
+
+/* Pushes the stop control to the trailing edge, so the way out is always in
+ * the same place regardless of how long the name and email are. */
+.dri-view-banner__stop {
+  margin-left: auto;
+  margin-bottom: 0;
+}
+
+/* Top navigation bar (every migrated page). Horizontal, spaced, with a divider
+ * — the run-together default links are the most visible regression. */
+.lawyer-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.75rem 1.25rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--nav-color-border);
+  background: var(--nav-color-surface-raised);
+  font-size: 0.95rem;
+}
+
+/* The signed-in viewer's avatar owns the application destinations. Native
+ * `details` keeps the menu usable before hydration and without a script. */
+.lawyer-nav__profile {
+  position: relative;
+  order: 2;
+  margin-left: auto;
+}
+
+.lawyer-nav__profile-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.lawyer-nav__profile-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.lawyer-nav__avatar {
+  display: block;
+  width: 36px;
+  height: 36px;
+  border: 2px solid var(--nav-color-border);
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.lawyer-nav__profile-chevron {
+  color: var(--nav-color-link);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.lawyer-nav__profile-menu {
+  position: absolute;
+  right: 0;
+  z-index: 10;
+  display: grid;
+  min-width: 10rem;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  margin-top: 0.5rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface-raised);
+  box-shadow: 0 0.5rem 1.25rem rgb(15 23 42 / 15%);
+}
+
+.lawyer-nav__profile-menu .nav-link {
+  display: block;
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--nav-radius-sm);
+  white-space: nowrap;
+}
+
+.lawyer-nav__profile-menu .nav-link:hover {
+  background: var(--nav-color-surface);
+}
+
+/* The deploy's brand mark, at the navbar's trailing edge. `margin-left: auto`
+ * is what puts it on the right — it is the last child, so the free space
+ * collects before it however many destinations the viewer's role earned. */
+.lawyer-nav__brand {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+}
+
+.lawyer-nav__logo {
+  display: block;
+  width: 28px;
+  height: 28px;
+}
+
+.lawyer-nav .nav-link,
+a.nav-link {
+  color: var(--nav-color-link);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.lawyer-nav .nav-link:hover,
+a.nav-link:hover {
+  color: var(--nav-color-link-hover);
+  text-decoration: underline;
+}
+
+/* Sortable column-header links inside a list table. */
+.nav-table thead a,
+.sort-name,
+.sort-email {
+  color: var(--nav-color-link);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.nav-table thead a:hover,
+.sort-name:hover,
+.sort-email:hover {
+  text-decoration: underline;
+}
+
+/* Per-row action clusters (people/entity/expunge lists + the person show page).
+ * Lay the Edit link and the Delete/Impersonate forms out in a row. */
+.row-actions,
+.person-actions .action-row,
+.action-row,
+.entity-actions,
+.expunge-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.row-action,
+.action-row form {
+  display: inline;
+  margin: 0;
+}
+
+/* The per-record actions panel on the person show page. */
+.person-actions {
+  margin: 1.5rem 0;
+}
+
+.person-actions h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+}
+
+/* The welcome-email confirmation disclosure. */
+.welcome-confirm summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.welcome-confirm[open] summary {
+  margin-bottom: 0.5rem;
+}
+
+/* Flash banners: the ?notice= / ?error= toned messages above a page. */
+.nav-flash {
+  padding: 0.75rem 1rem;
+  border-radius: var(--nav-radius-sm);
+  border: 1px solid var(--nav-color-border);
+  margin: 0 0 1rem;
+}
+
+.nav-flash--success {
+  background: #ecfdf5;
+  border-color: #6ee7b7;
+  color: #065f46;
+}
+
+.nav-flash--danger {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #991b1b;
+}
+
+/* Inline form error + immutable-record notice. */
+.nav-form-error {
+  color: #991b1b;
+  font-weight: 600;
+  margin: 0 0 1rem;
+}
+
+/* The one-time confirmation a visitor reads on the matter they just opened:
+   they are not a client yet and nothing is filed. Styled as a standing notice
+   rather than an error — it is the disclosure, not a failure — and it reads
+   before the first question. */
+.nav-intake-confirmation {
+  padding: 0.75rem 1rem;
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface-subtle);
+  border-inline-start: 3px solid var(--nav-color-primary);
+  color: var(--nav-color-text);
+  margin: 0 0 1.25rem;
+  max-width: 46rem;
+}
+
+.nav-form-notice {
+  padding: 0.75rem 1rem;
+  border-radius: var(--nav-radius-sm);
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  color: #92400e;
+  margin: 0 0 1rem;
+}
+
+/* Real-time document-upload progress (upload-progress.js). Hidden until the
+   script shows it; the bar and label both update on every XHR `progress`
+   event, so the fill width and the byte count move together in real time. */
+.upload-progress {
+  margin: 0.75rem 0 1rem;
+}
+
+.upload-progress__track {
+  overflow: hidden;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--nav-color-surface-raised);
+}
+
+.upload-progress__fill {
+  height: 100%;
+  background: var(--nav-color-primary);
+  transition: width 0.15s ease-out;
+}
+
+.upload-progress__label {
+  margin-top: 0.35rem;
+  font-size: 0.9rem;
+  color: var(--nav-color-text-muted);
+}
+
+/* Muted secondary text + empty-state rows. */
+.nav-muted,
+.muted,
+.nav-text-muted {
+  color: var(--nav-color-text-muted);
+}
+
+.people-empty,
+.entities-empty,
+.playbooks-empty,
+.entity-types-empty,
+.expunge-empty,
+.portal-empty,
+.admin-listing-empty {
+  color: var(--nav-color-text-muted);
+  padding: 1rem 0;
+}
+
+/* Web app projects dashboard (`/app/projects`): KPI tiles + project cards. */
+.portal-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 2rem;
+}
+
+.portal-kpi {
+  padding: 1rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+  box-shadow: var(--nav-shadow);
+}
+
+.portal-kpi__value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.portal-kpi__label {
+  font-weight: 600;
+  margin-top: 0.25rem;
+}
+
+.portal-kpi__hint {
+  color: var(--nav-color-text-muted);
+  font-size: 0.85rem;
+}
+
+.portal-projects {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1rem;
+}
+
+.portal-project-card {
+  display: block;
+  padding: 1.25rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+  color: inherit;
+  text-decoration: none;
+  box-shadow: var(--nav-shadow);
+}
+
+.portal-project-card:hover {
+  border-color: var(--nav-color-primary);
+}
+
+.portal-project-card__name {
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+
+.portal-project-card__status {
+  color: var(--nav-color-text-muted);
+  font-size: 0.9rem;
+  margin-top: 0.25rem;
+}
+
+.portal-project-card__brand {
+  color: var(--nav-color-text-muted);
+  font-size: 0.9rem;
+}
+
+.portal-project-card__service {
+  margin-top: 0.5rem;
+}
+
+.portal-project-card__price {
+  color: var(--nav-color-text-muted);
+}
+
+/* Danger button variant used by the per-row Delete forms. */
+.nav-btn--danger {
+  background: #dc2626;
+  color: #ffffff;
+  border-color: #dc2626;
+}
+
+.nav-btn--danger:hover {
+  background: #b91c1c;
+  border-color: #b91c1c;
+}
+
+/* Page header: an <h1> with an action button to its right (entities/projects
+ * lists). Wraps on narrow viewports. */
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.page-header h1 {
+  margin: 0;
+}
+
+.page-header p {
+  margin: 0;
+}
+
+/* Firm inbox: a full-width, Gmail-style table. One dense row per
+ * conversation; unread rows are bold with a dot, and the subject link is
+ * stretched over the whole row so the entire row opens the thread. */
+#inbox {
+  max-width: none;
+  width: 100%;
+  padding-inline: clamp(0.75rem, 2vw, 1.5rem);
+  box-sizing: border-box;
+}
+
+.inbox-table__scroll {
+  overflow-x: auto;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 0.5rem;
+  background: var(--nav-color-surface);
+}
+
+.inbox-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.inbox-table th {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--nav-color-border);
+  background: var(--nav-color-surface-subtle);
+  color: var(--nav-color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.inbox-table td {
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--nav-color-border);
+  color: var(--nav-color-text-muted);
+  max-width: 24rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-table__row {
+  position: relative;
+}
+
+.inbox-table__row:hover,
+.inbox-table__row:focus-within {
+  background: var(--nav-color-surface-raised);
+}
+
+.inbox-table__row--unread td {
+  color: var(--nav-color-text);
+  font-weight: 700;
+}
+
+.inbox-table__state {
+  width: 1.5rem;
+  padding-right: 0;
+}
+
+.inbox-table__dot {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.inbox-table__row--unread .inbox-table__dot {
+  background: var(--nav-color-primary);
+}
+
+.inbox-table__sender {
+  width: 14rem;
+}
+
+.inbox-table__subject {
+  width: 100%;
+  min-width: 12rem;
+}
+
+.inbox-table__subject a {
+  color: inherit;
+}
+
+.inbox-table__subject a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.inbox-table__date {
+  text-align: right;
+}
+
+.inbox-table__delivery {
+  font-weight: 400;
+}
+
+/* Matter-lifecycle warning badge on the lawyer projects list (no retainer / no
+ * offboarding letter) and the matter directory's "Unassigned" DRI flag. One
+ * amber pill shape shared by two unrelated concepts — a missing document and
+ * an unassigned accountable lawyer — which is deliberate: neither is the
+ * three-state lifecycle indicator below (`.matter-lifecycle`), so sharing
+ * this class does not collide with it. */
+.matter-flag {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--nav-radius-sm);
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  color: #92400e;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* The matter row's yellow/green/red lifecycle indicator
+ * (`store::projects::MatterLifecycle`). A neutral, theme-aware surface with
+ * a colour-coded left border plus a visible text label — never colour alone,
+ * so the state still reads under the most common form of colour blindness
+ * and to a screen reader. Reuses the shared `--nav-color-warning` /
+ * `-success` / `-danger` tokens (defined for both light and dark in
+ * `tokens.css`) rather than literal hex, so contrast holds in either theme
+ * without a separate audit here. */
+.matter-lifecycle {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--nav-radius-sm);
+  border-left: 3px solid;
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.matter-lifecycle--yellow {
+  border-left-color: var(--nav-color-warning);
+}
+
+.matter-lifecycle--green {
+  border-left-color: var(--nav-color-success);
+}
+
+.matter-lifecycle--red {
+  border-left-color: var(--nav-color-danger);
+}
+
+.projects-empty {
+  color: var(--nav-color-text-muted);
+  padding: 1rem 0;
+}
+
+/* Client matter-detail page (/app/projects/{id}). Section rhythm, cards for
+ * the service/invoice summaries, status pills, and the agreement lists. Built on the same --nav-* tokens as the rest of the page chrome. */
+.portal-detail__back {
+  margin-bottom: 0.75rem;
+}
+
+.portal-detail__section {
+  margin-top: 1.5rem;
+}
+
+.portal-detail__section h2 {
+  font-size: 1.05rem;
+  margin: 0 0 0.75rem;
+}
+
+.portal-detail__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+/* A summary card (service, invoice). --split lays the label block and the
+ * trailing price/badge on opposite ends. */
+.portal-card {
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface-raised);
+  padding: 1rem;
+}
+
+.portal-card--split {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+/* The client-trust position card. Same split layout as an invoice card,
+ * under its own name so a test that counts invoice cards stays exact. */
+.portal-card--trust {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.portal-card__title {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.portal-card__meta {
+  color: var(--nav-color-text-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+}
+
+.portal-card__price {
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Status pill (matter status, notation status, review kind/status). --paid and
+ * --due colour the invoice badge. */
+.status-chip {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface-subtle);
+  border: 1px solid var(--nav-color-border);
+  color: var(--nav-color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.status-chip--paid {
+  background: #ecfdf5;
+  border-color: #6ee7b7;
+  color: #065f46;
+}
+
+.status-chip--due {
+  background: #fffbeb;
+  border-color: #fcd34d;
+  color: #92400e;
+}
+
+.project-deadlines__row--overdue {
+  background: color-mix(in oklab, var(--nav-color-danger-subtle) 55%, transparent);
+  box-shadow: inset 3px 0 var(--nav-color-danger);
+}
+
+.project-deadlines__state--overdue {
+  border-color: var(--nav-color-danger-border);
+  color: var(--nav-color-danger);
+}
+
+.project-deadlines__chip {
+  margin: 0 0.25rem 0.2rem 0;
+}
+
+.project-deadlines__authority {
+  max-width: 24rem;
+  margin-top: 0.25rem;
+}
+
+.project-deadlines__authority summary {
+  max-width: 24rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.project-deadlines__authority p {
+  max-width: 42rem;
+  white-space: normal;
+}
+
+.project-deadlines__past {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--nav-color-border);
+  padding-top: 0.75rem;
+}
+
+.project-deadlines__past > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/* Agreement lists: a stack of bordered rows, each with a label on the left and
+ * its download links (or published date) on the right. */
+.portal-agreements {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  overflow: hidden;
+}
+
+.portal-agreement {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--nav-color-border);
+}
+
+.portal-agreement:first-child {
+  border-top: none;
+}
+
+.portal-agreement--link {
+  text-decoration: none;
+  color: inherit;
+}
+
+.portal-agreement--link:hover {
+  background: var(--nav-color-surface-subtle);
+}
+
+.portal-agreement__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.nav-table__end {
+  text-align: right;
+}
+
+/* Lawyer matter-detail workbench (/lawyer/projects/{id}). Section rhythm and the
+ * per-section head row (heading + an action button, e.g. "Add person"). Built on
+ * the same --nav-* tokens as the rest of the page chrome; the tables, cards,
+ * status chips, alerts, and buttons reuse the shared classes. */
+.lawyer-detail__section {
+  margin-top: 1.75rem;
+}
+
+.lawyer-detail__section > h2 {
+  font-size: 1.05rem;
+  margin: 0 0 0.5rem;
+}
+
+.lawyer-detail__section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.lawyer-detail__section-head h2 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+/* An inline single-button form (the per-row "Remove" in the participation
+ * ledger) that must sit next to the Edit link without stacking. */
+.lawyer-detail__inline-form {
+  display: inline;
+}
+
+/* The Integrations section's buttons — Slack, Xero, and one per registered
+ * application — wrap onto their own line with breathing room rather than
+ * running together edge to edge. */
+.lawyer-detail__integration-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* The matter's collaboration-resource panel — the six places work on a
+ * Project happens (Slack, Notion, Drive, portal). One row per resource, each
+ * opening on its vendor mark so a reader tells them apart by shape before
+ * reading a word. A plain list rather than a button row: the labels are long
+ * enough ("Private Slack channel") that buttons would wrap mid-phrase. */
+.project-resources__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  /* Two columns where there is room, one on a narrow viewport. The firm's
+   * three resources fill the first column and the shared three the second,
+   * which is the reading order the panel renders in. */
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.5rem;
+}
+
+.project-resources__link {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface);
+  color: var(--nav-color-text);
+  text-decoration: none;
+}
+
+.project-resources__link:hover,
+.project-resources__link:focus-visible {
+  background: var(--nav-color-surface-subtle);
+  color: var(--nav-color-link-hover);
+}
+
+/* A fixed box so the four marks — drawn on three different viewBoxes — line
+ * up down the column instead of each sizing to its own artwork. */
+.project-resources__mark {
+  flex: 0 0 auto;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.project-resources__label {
+  min-width: 0;
+}
+
+.project-resources__configure {
+  margin: 0.75rem 0 0;
+}
+
+.project-deadlines__alert {
+  margin: 0 0 0.75rem;
+  font-weight: 600;
+  color: var(--nav-color-danger);
+}
+
+.project-deadlines__row--overdue td {
+  font-weight: 600;
+  color: var(--nav-color-danger);
+}
+
+/* Matter conversation page (/app/projects/{id}/conversation). The
+ * lens-scoped message thread and the plain-textarea composer. Built on the
+ * same --nav-* tokens as the rest of the page chrome. */
+.conversation-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.conversation-msg {
+  border: 1px solid var(--nav-color-border);
+  border-left: 4px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface-raised);
+  padding: 0.75rem 1rem;
+}
+
+/* A client message flows inbound; a firm reply outbound; an internal note stands
+ * apart so lawyer never mistake one for a client-visible message. */
+.conversation-msg--inbound {
+  border-left-color: var(--nav-color-primary);
+}
+
+.conversation-msg--outbound {
+  border-left-color: var(--nav-color-success);
+}
+
+.conversation-msg--internal {
+  border-left-color: var(--nav-color-warning);
+  background: var(--nav-color-surface-subtle);
+}
+
+.conversation-msg__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.conversation-msg__subject {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.conversation-msg__body--plain {
+  white-space: pre-wrap;
+}
+
+/* The composer: the message textarea and the internal note toggle stacked above
+ * the Send button. */
+.conversation-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.conversation-composer textarea {
+  width: 100%;
+}
+
+.conversation-internal {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--nav-color-text-muted);
+  font-size: 0.9rem;
+}
+
+/* Client document-review page (/app/projects/{id}/review/{doc_id}). The
+ * document/sidebar two-column layout and the comment-range highlight — the
+ * `document-review` custom element upgrades the markup in the browser. */
+.document-review-page document-review {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 20rem;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.document-review-page .nr-document {
+  line-height: 1.7;
+}
+
+.document-review-page .nr-sidebar {
+  position: sticky;
+  top: 1rem;
+}
+
+.document-review-page .nr-document ::selection {
+  background: #fde68a;
+}
+
+::highlight(nr-comment) {
+  background-color: #fde68a;
+}
+
+@media (max-width: 48rem) {
+  .document-review-page document-review {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Destructive-action confirmation card (confirm_delete). A constrained card
+ * with the prompt and a Confirm/Cancel action row; the destructive Confirm
+ * wears the danger button so it is unmistakable. */
+.confirm-delete {
+  max-width: 32rem;
+}
+
+.confirm-delete__title {
+  font-size: 1.15rem;
+  margin: 0 0 0.5rem;
+}
+
+.confirm-delete__message {
+  margin: 0 0 1rem;
+}
+
+.confirm-delete__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.confirm-delete__form {
+  display: inline;
+}
+
+/* The `/design` gallery's own page chrome. Layout only: every colour here
+ * resolves through a `--nav-*` token, and the swatch chip paints whatever its
+ * own token resolves to, so the gallery shows the running deploy's brand rather
+ * than a ramp pinned into the page. */
+.design-gallery {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+.design-gallery > section {
+  margin-block: 2.5rem;
+}
+
+.design-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.design-swatch {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.design-swatch__chip {
+  display: inline-block;
+  width: 6rem;
+  height: 3rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  background: var(--design-swatch-value);
+}
+
+.design-icons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.design-icon {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 1rem;
+}
+
+.design-icon__glyph {
+  font-size: 1.75rem;
+}
+
+.design-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+}
+
+.design-toasts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 24rem;
+}
+
+/* ============================================================================
+ * #956 Phase 4 — the migrated admin expunge + contract-review surfaces
+ *
+ * `/lawyer/documents/{doc_id}/expunge` (the governed-expunge confirmation and
+ * its audit-row result) and `/lawyer/contract-reviews/{id}` (the attorney
+ * review screen). Both are Dioxus pages built on the same `--nav-*` tokens.
+ * ==========================================================================*/
+
+/* Verbatim machine values — a repo path, a storage key, an audit-row id. Read
+ * as data, not prose, so they get the monospace face. */
+.font-monospace {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.95em;
+  word-break: break-all;
+}
+
+/* The irreversibility warning above the expunge form: the alert surface, toned
+ * red rather than the default amber — this act cannot be undone. */
+.expunge-warning {
+  border-left-color: #dc2626;
+  margin-bottom: 1.25rem;
+}
+
+/* Label/value description lists: the document + storage-key pairs on both
+ * expunge states, and a filed document's provenance and storage blocks. */
+.expunge-detail,
+.detail-dl {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0 0 1.5rem;
+}
+
+.expunge-detail dt,
+.detail-dl dt {
+  font-weight: 600;
+  color: var(--nav-color-text-muted);
+}
+
+.expunge-detail dd,
+.detail-dl dd {
+  margin: 0;
+}
+
+.expunge-cancel,
+.participation-cancel,
+.project-form-cancel {
+  margin-top: 1rem;
+}
+
+/* ===========================================================================
+ * Matter document + project forms (#956 Phase 4)
+ * ==========================================================================*/
+
+/* ENG-477: the Slack and Notion cards on the matter edit form. Each is a
+ * bounded `.nav-fieldset` carrying a private field, a "share with the client"
+ * toggle, and the shared field the toggle reveals. The reveal is pure CSS —
+ * `:has()` on the toggle's own `.nav-field--check` wrapper — so it works
+ * before hydration and needs no script, matching the form's own native-POST,
+ * no-JavaScript save path. `.nav-field--check` and `.project-edit__reveal`
+ * are siblings inside the same fieldset, which is what the sibling
+ * combinator below depends on. */
+.project-edit__reveal {
+  display: none;
+}
+
+.project-edit__resource-card .nav-field--check:has(.nav-checkbox:checked)
+  ~ .project-edit__reveal {
+  display: block;
+}
+
+.project-edit__resource-card-mark {
+  width: 1.25rem;
+  height: 1.25rem;
+  vertical-align: text-bottom;
+  margin-right: 0.375rem;
+}
+
+/* The Download row above a filed document's provenance. */
+.document-actions {
+  margin: 1.25rem 0;
+}
+
+/* A filed PDF drawn in place by PDF.js: one canvas per page, stacked and
+ * scaled to the column. */
+.document-viewer {
+  margin: 1.25rem 0 2rem;
+}
+
+.pdf-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 1rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface-raised);
+}
+
+.pdf-viewer__page {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+}
+
+.pdf-viewer__status {
+  margin: 0;
+}
+
+.document-viewer h2,
+.document-provenance h2,
+.document-storage h2 {
+  font-size: 1.15rem;
+  margin: 0 0 0.5rem;
+}
+
+/* The sentence naming which matter a participation edit applies to. */
+.participation-intro {
+  color: var(--nav-color-text-muted);
+  margin: 0 0 1rem;
+}
+
+/* Inline record creation on the matter-open form. The two HTMX-swapped
+ * Bootstrap modals became native <details> disclosures with their own POST
+ * forms, so the page needs no JavaScript at all. */
+.inline-create-group {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--nav-color-border);
+}
+
+.inline-create {
+  margin: 0.75rem 0;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface);
+}
+
+.inline-create__summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.75rem 1rem;
+}
+
+.inline-create__summary:focus-visible {
+  outline: 2px solid var(--nav-color-primary);
+  outline-offset: 2px;
+}
+
+.inline-create[open] .inline-create__summary {
+  border-bottom: 1px solid var(--nav-color-border);
+}
+
+/* The disclosure already frames its contents, so the nested form card drops
+ * its own border and sits flush inside. */
+.inline-create .nav-form-card {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.inline-create > .nav-form-error {
+  margin: 0.75rem 1rem 0;
+}
+
+/* Status pill tones, shared by the review status and the per-finding decision
+ * badges. Built on .nav-badge. */
+.nav-status--success {
+  background: #ecfdf5;
+  color: #065f46;
+}
+
+.nav-status--warning {
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.nav-status--muted {
+  background: var(--nav-color-surface-subtle);
+  color: var(--nav-color-text-muted);
+}
+
+.nav-status--neutral {
+  background: var(--nav-color-surface-subtle);
+  color: var(--nav-color-text);
+}
+
+.contract-review-status,
+.contract-review-decision {
+  text-transform: capitalize;
+}
+
+/* The read-only risk-summary card (an editable review renders a FormCard). */
+.contract-review-summary {
+  margin-bottom: 1rem;
+}
+
+.contract-review-summary__title {
+  font-size: 1.1rem;
+  margin: 0 0 0.5rem;
+}
+
+.contract-review-summary__text {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.contract-review-findings__title {
+  margin-top: 2rem;
+}
+
+/* One finding: the clause heading and its decision pill on one row, the
+ * deviation below, then the per-finding edit form. */
+.contract-review-finding {
+  margin-bottom: 1rem;
+}
+
+.contract-review-finding__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.contract-review-finding__clause {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.contract-review-finding__deviation,
+.contract-review-finding__redline,
+.contract-review-finding__note {
+  margin: 0.5rem 0 0;
+}
+
+.contract-review-finding__form {
+  margin-top: 0.75rem;
+}
+
+.contract-review-finding__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.contract-review-empty {
+  color: var(--nav-color-text-muted);
+  padding: 1rem 0;
+}
+
+/* The approve / reject decision bar and the gate note under it. */
+.contract-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 1.5rem;
+}
+
+.contract-review-actions form {
+  display: inline;
+  margin: 0;
+}
+
+.contract-review-gate {
+  margin-top: 0.5rem;
+}
+
+.contract-review-locked {
+  margin-bottom: 1rem;
+}
+
+/* ============================================================================
+ * #956 Phase 4 — the supervised Clerk surface (/clerk, /clerk/projects/{id})
+ *
+ * A read-only coordination lens: matter cards that name the supervising lawyer,
+ * the firm brand-asset download, and a two-column fact list on the detail page.
+ * The cards reuse .portal-projects / .portal-project-card; these are the pieces
+ * the Clerk lens adds, on the same --nav-* tokens.
+ * ==========================================================================*/
+
+/* The supervisor disclosure on a matter card. Every visible matter names a
+ * licensed lawyer, so this line is never absent. */
+.clerk-supervisor {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+}
+
+/* The detail page's matter facts: label/value pairs in two columns, collapsing
+ * to stacked rows on a narrow viewport. */
+.clerk-facts {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) 1fr;
+  gap: 0.5rem 1rem;
+  margin: 0 0 1.5rem;
+}
+
+.clerk-facts dt {
+  font-weight: 600;
+  margin: 0;
+}
+
+.clerk-facts dd {
+  margin: 0;
+}
+
+@media (max-width: 40rem) {
+  .clerk-facts {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+
+  .clerk-facts dd {
+    margin-bottom: 0.5rem;
+  }
+}
+
+/* The `/admin` console hub (#956 Phase 4): a responsive tile grid of the
+ * admin-only surfaces. The hub laid these out with Bootstrap's
+ * `row`/`col-md-6`, which the Dioxus pages do not load, so the two-up-then-
+ * stacked behaviour is expressed directly here. `auto-fit` means adding a
+ * third surface needs no column-class churn. */
+.admin-hub {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+}
+
+/* The cards stretch to a common height so a shorter blurb does not leave its
+ * call to action floating mid-tile — the `full_height()` the card set. */
+.admin-hub > .nav-card {
+  height: 100%;
+}
+
+/* The template gallery (#956 Phase 4). The pages used Bootstrap's
+ * `row row-cols-md-2 g-4` grid and `badge bg-*` colours; Dioxus pages load
+ * neither, so the grid and the jurisdiction weights live here. `auto-fit` means
+ * the gallery reflows without column-class churn as templates are curated in. */
+.template-gallery {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  margin-top: 1.5rem;
+}
+
+.template-gallery > .nav-card {
+  height: 100%;
+}
+
+.template-card__title {
+  font-size: 1.1rem;
+  margin: 0.5rem 0;
+}
+
+/* A state-specific filing must not read as nationwide, so its badge carries a
+ * caution weight against the neutral federal default. */
+.nav-badge--caution {
+  background: var(--nav-color-warning);
+  color: #212529;
+}
+
+.template-notation,
+.template-start-matter {
+  margin-top: 2rem;
+}
+
+.template-notation .nav-code pre {
+  background: var(--nav-color-surface-raised);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  overflow-x: auto;
+  padding: 1rem 5rem 1rem 1rem;
+}
+
+/* Lawyer workbench (`/lawyer`) — the project KPI overview, the calendar
+   placeholder, and the administrative directory. */
+.project-kpi-overview {
+  display: grid;
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+@media (min-width: 62rem) {
+  .project-kpi-overview {
+    grid-template-columns: 5fr 7fr;
+  }
+}
+
+.project-kpi-chart {
+  /* The pie uses the same three lifecycle colours as the matter-row pills:
+     yellow pitch, green active, red closed. Archived matters sit outside
+     the chart. Yellow is the shared warning token the pitch pill already
+     uses; green and red keep the firm-logo triad companions. */
+  --project-status-yellow: var(--nav-color-warning);
+  --project-status-green: rgb(35, 216, 0);
+  --project-status-red: rgb(216, 0, 35);
+}
+
+.project-kpi-chart__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+@media (min-width: 36rem) {
+  .project-kpi-chart__body {
+    flex-direction: row;
+    text-align: left;
+  }
+}
+
+.project-status-pie {
+  width: min(12rem, 58vw);
+  aspect-ratio: 1;
+  flex: 0 0 auto;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--project-status-yellow) 0 var(--project-pitch-end),
+    var(--project-status-green) var(--project-pitch-end) var(--project-active-end),
+    var(--project-status-red) var(--project-active-end) 100%
+  );
+}
+
+.project-status-pie-empty {
+  background: var(--nav-color-surface-subtle);
+}
+
+.project-kpi-total {
+  font-size: 2.5rem;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.project-status-legend {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+}
+
+.project-status-legend li + li {
+  margin-top: 0.5rem;
+}
+
+.project-status-key {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-right: 0.5rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 50%;
+}
+
+.project-status-key-pitch {
+  background: var(--project-status-yellow);
+}
+
+.project-status-key-active {
+  background: var(--project-status-green);
+}
+
+.project-status-key-closed {
+  background: var(--project-status-red);
+}
+
+/* ENG-591: the Firm show page's trailing-30-day invoice graphs. Bar colour
+   comes from the brand's own primary-colour token rather than a literal, so
+   the chart wears whichever brand the request resolved to; "paid" reuses
+   the same colour at reduced opacity rather than a second literal. */
+.firm-invoice-chart {
+  margin-top: 1rem;
+}
+
+.firm-invoice-bar-label {
+  font-size: 0.8rem;
+  fill: var(--nav-color-text);
+}
+
+.firm-invoice-bar {
+  fill: var(--nav-color-primary);
+}
+
+.firm-invoice-bar--paid {
+  fill-opacity: 0.55;
+}
+
+.firm-invoice-currency__code {
+  color: var(--nav-color-text-muted);
+}
+
+.project-kpi-empty {
+  margin: 0;
+}
+
+.nav-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.nav-tab {
+  padding: 0.35rem 0.85rem;
+  border-radius: 0.35rem;
+  color: var(--nav-color-link);
+  text-decoration: none;
+}
+
+.nav-tab.is-active {
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+}
+
+.nav-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.nav-pagination__status {
+  color: var(--nav-color-text-muted);
+}
+
+.nav-pagination__link.is-disabled {
+  color: var(--nav-color-text-muted);
+  pointer-events: none;
+}
+
+.lawyer-project-calendar {
+  margin-bottom: 2rem;
+}
+
+/* The Conflicts section (ENG-307). `--block`/`--review` reuse the KPI pie's
+   red/yellow so severity reads consistently with the closed/pitch pills
+   above it on the same page. */
+.lawyer-conflicts {
+  margin-bottom: 2rem;
+}
+
+.conflict-findings {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+}
+
+.conflict-finding {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--nav-color-border);
+}
+
+.conflict-finding__severity {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--nav-color-on-primary);
+}
+
+.conflict-finding__severity--block {
+  background: rgb(216, 0, 35);
+}
+
+.conflict-finding__severity--review {
+  background: var(--nav-color-warning);
+}
+
+.conflict-finding__explanation {
+  flex: 1 1 auto;
+}
+
+.conflict-finding__confidence {
+  color: var(--nav-color-text-muted);
+  font-size: 0.85rem;
+}
+
+.conflict-finding__links {
+  display: flex;
+  gap: 0.75rem;
+  flex-basis: 100%;
+  font-size: 0.85rem;
+}
+
+.admin-details__columns {
+  display: grid;
+  gap: 1.5rem;
+}
+
+@media (min-width: 48rem) {
+  .admin-details__columns {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.admin-details__heading {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--nav-color-text-muted);
+  margin-top: 1.5rem;
+}
+
+.admin-details__columns > div > .admin-details__heading:first-child {
+  margin-top: 0;
+}
+
+.admin-details ul {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+
+/* The `/app/team` team home is a grid of destination cards. The cards are `<a>`
+   elements, so the whole card is the click target rather than a nested link.
+
+   They wear the treatment a reader already met on the way down `/`: the
+   practice cards' gradient ground and brand-tinted edge, and their pointer
+   response — the border takes the brand colour, the box lifts, and a wash
+   swells across it on the diagonal. The footer's contact tiles carry the same
+   one, so the card is a single object across the public site and the app.
+
+   The values are `home.css`'s and `.site-footer__office--channel`'s
+   deliberately: same 28% edge, same 240ms border and lift, same 720ms swell.
+   `--nav-color-primary` is named directly rather than `--firm-brand`, and the
+   card ground is mixed here rather than taken from `--neon-card-bg`, because
+   `brand-firm.css` is hoisted by the marketing pages while `/app/team` carries
+   only this sheet. */
+.team-home__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1.25rem;
+  margin: 2rem 0;
+}
+
+.team-home__card {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.5rem;
+  border: 1px solid
+    color-mix(in oklab, var(--nav-color-primary) 28%, transparent);
+  border-radius: 1rem;
+  background-image: linear-gradient(
+    to bottom,
+    color-mix(in oklab, var(--nav-color-surface) 88%, transparent),
+    color-mix(in oklab, var(--nav-color-surface) 40%, transparent)
+  );
+  text-decoration: none;
+  color: inherit !important;
+  transition:
+    border-color 240ms ease,
+    transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* The fill lightens with the scheme, so the washes drawn from it thin out;
+   these hold the edge and the ground visible against the dark surface — the
+   same correction `brand-firm.css` makes for `.neon-card`. */
+@media (prefers-color-scheme: dark) {
+  .team-home__card {
+    border-color: color-mix(
+      in oklab,
+      var(--nav-color-primary) 24%,
+      transparent
+    );
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--nav-color-surface-raised) 70%, transparent),
+      color-mix(in oklab, var(--nav-color-surface-raised) 32%, transparent)
+    );
+  }
+}
+
+/* `.nav-theme a:hover` recolours and underlines every link. On a box whose
+   whole surface is the anchor that underlined the title and both lines of
+   prose, and the card read as a wall of link text. The selector matches that
+   rule's specificity — element + two classes, as `home.css` does for
+   `.home-practice` — to keep the box a box. */
+.nav-theme a.team-home__card:hover,
+.nav-theme a.team-home__card:focus-visible {
+  border-color: var(--nav-color-primary);
+  color: inherit;
+  text-decoration: none;
+  transform: translateY(-2px);
+}
+
+/* The heading alone takes the brand colour — the affordance that says the box
+   is clickable. */
+.team-home__card:hover .team-home__card-title,
+.team-home__card:focus-visible .team-home__card-title {
+  color: var(--nav-color-primary-hover);
+}
+
+/* The wave, as `.home-practice::after` draws it: a circle anchored off the
+   box's bottom-left corner, scaled from nothing to past the top-right, so the
+   wash crosses the card on the diagonal rather than fading in flat. It sits at
+   `z-index: -1` under the card's own text, which is why the card isolates a
+   stacking context and clips its overflow. */
+.team-home__card::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset-inline-start: -25%;
+  inset-block-end: -55%;
+  inline-size: 150%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 30% 70%,
+    var(--nav-color-primary) 0%,
+    color-mix(in srgb, var(--nav-color-primary) 45%, transparent) 45%,
+    transparent 72%
+  );
+  opacity: 0;
+  transform: scale(0.2);
+  transform-origin: 0% 100%;
+  transition:
+    transform 720ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 320ms ease;
+}
+
+.team-home__card:hover::after,
+.team-home__card:focus-visible::after {
+  opacity: 0.22;
+  transform: scale(1.5);
+}
+
+/* The wave is decoration. Suppressed, the border and the lift still answer the
+   pointer, so the card never stops responding — it just stops swelling. */
+@media (prefers-reduced-motion: reduce) {
+  .team-home__card,
+  .team-home__card::after {
+    transition-duration: 1ms;
+  }
+}
+
+.team-home__card-title {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.team-home__card-desc {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--nav-color-text-muted);
+}
+
+/* The site-wide notice a deployment holding simulated matters publishes. It is
+   the first content in the document, injected into every HTML response by
+   `portal::dioxus_app`, so it sits above the header rather than inside the
+   page — including on the error pages, which no shell wraps.
+
+   Not sticky and not fixed. A fixed banner would need the page below it to
+   reserve room, which means a rule reaching into layouts this file does not
+   own; and a reader who has scrolled past it has already read it. Being in
+   normal flow is also what keeps it out of the way of a portal bundle's own
+   fixed chrome. */
+.sample-matters-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  /* Centred, because it is a notice about the whole deployment rather than a
+     line of the page's own content: it belongs on the page's axis, not ragged
+     against its left edge. `justify-content` centres the two spans as a row;
+     `text-align` centres the body's own lines once it wraps on a narrow
+     viewport. */
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: var(--nav-color-warning-surface);
+  color: var(--nav-color-on-warning);
+  font-family: var(--nav-font-family);
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* The sentence a reader actually has to read. It wraps on any narrow
+   viewport, and centred text whose last line is one orphaned word reads as a
+   mistake rather than as a notice — `balance` evens the lines instead. */
+.sample-matters-banner__body {
+  text-wrap: balance;
+}
+
+.sample-matters-banner__label {
+  /* Uppercased in CSS rather than in the copy so an assistive technology reads
+     the words rather than spelling out a shouted string. */
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+/* -- The focus set: Stage, Hero, ChoiceGroup, StepList, Stepper -------------
+ *
+ * `webapp/src/components/focus.rs`, ported from Navigator UX's Focus.tsx.
+ * Reads the `--nav-space-*` scale (tokens.css) — the values are a step or two
+ * up from the rest of this file on purpose; the reasoning is there.
+ */
+
+/* A utility the rest of this theme has not needed until now: content that
+   stays in the accessibility tree — a hidden legend, a step's "completed"
+   suffix — but never paints. */
+.nav-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ------------------------------------------------------------------ Stage -- */
+
+.nav-stage {
+  --nav-stage-width: var(--nav-measure-md);
+  display: grid;
+  /* `1fr`, not `minmax(0, 1fr)`: the body row must never be shorter than the
+     body, and `1fr`'s automatic minimum is what guarantees that. */
+  grid-template-rows: auto 1fr auto;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  row-gap: var(--nav-space-8);
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--nav-space-6) var(--nav-space-4);
+  background: var(--nav-color-bg);
+  color: var(--nav-color-text);
+}
+
+.nav-stage--fill {
+  min-height: var(--nav-stage-min-height);
+}
+
+.nav-stage--sm {
+  --nav-stage-width: var(--nav-measure-sm);
+}
+
+.nav-stage--lg {
+  --nav-stage-width: var(--nav-measure-lg);
+}
+
+/* All three rows share the column so a brand mark above and fine print below
+   line up with the edges of the thing between them. */
+.nav-stage__header,
+.nav-stage__body,
+.nav-stage__footer {
+  width: min(100%, var(--nav-stage-width));
+  min-width: 0;
+}
+
+/* Explicit rows, so the body is centered whether or not a header or footer
+   was given. Left to auto-placement, a stage with no header would put the
+   body in the first row and its `1fr` would go to nothing. */
+.nav-stage__header {
+  grid-row: 1;
+}
+
+.nav-stage__body {
+  grid-row: 2;
+  align-self: center;
+}
+
+.nav-stage__footer {
+  grid-row: 3;
+  color: var(--nav-color-text-muted);
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+.nav-stage__footer p {
+  margin: 0;
+}
+
+@media (min-width: 48rem) {
+  .nav-stage {
+    padding: var(--nav-space-12) var(--nav-space-8);
+  }
+}
+
+/* ------------------------------------------------------------------- Hero -- */
+
+.nav-hero {
+  display: grid;
+  justify-items: center;
+  gap: var(--nav-space-4);
+  text-align: center;
+}
+
+.nav-hero--start {
+  justify-items: start;
+  text-align: start;
+}
+
+.nav-hero__eyebrow {
+  margin: 0;
+  color: var(--nav-color-link);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Fluid between 2rem on a phone and 3.5rem on a desktop. `text-wrap: balance`
+   keeps a two-line title from leaving one word on its second line, which is
+   the thing a centered headline does most often. */
+.nav-hero__title {
+  margin: 0;
+  max-width: 20ch;
+  min-width: 0;
+  font-size: clamp(2rem, 1.5rem + 2.5vw, 3.5rem);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+  /* `.nav-hero` is an implicit-column grid, so a title with no natural break
+     (an unbroken email or URL used as a question prompt) is a grid item
+     that defaults to `min-width: auto` — it would rather overflow than
+     shrink. `min-width: 0` plus this lets it wrap instead (ENG-853). */
+  overflow-wrap: anywhere;
+}
+
+.nav-hero__lede {
+  margin: 0;
+  max-width: 44ch;
+  min-width: 0;
+  color: var(--nav-color-text-muted);
+  font-size: clamp(1.0625rem, 1rem + 0.4vw, 1.25rem);
+  line-height: 1.55;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
+.nav-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--nav-space-3);
+  margin-top: var(--nav-space-4);
+}
+
+.nav-hero--start .nav-hero__actions {
+  justify-content: flex-start;
+}
+
+/* ------------------------------------------------------------ ChoiceGroup -- */
+
+.nav-choice-group {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.nav-choice-group__legend {
+  padding: 0;
+  margin-bottom: var(--nav-space-4);
+  font-size: 1.125rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.nav-choice-group__options {
+  display: grid;
+  gap: var(--nav-space-3);
+}
+
+.nav-choice-group--cols-2 .nav-choice-group__options {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.nav-choice-group--cols-3 .nav-choice-group__options {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* The whole card is the `<label>`. The native input stays visible inside it:
+   a control that looks like a card and one that looks like a radio are read
+   differently, and this is both. */
+.nav-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--nav-space-4);
+  padding: var(--nav-space-4) var(--nav-space-6);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.nav-choice:hover {
+  background: var(--nav-color-surface-raised);
+}
+
+/* Checked: the border takes the brand and doubles, and the ground tints —
+   three cues rather than a color change alone. */
+.nav-choice.is-checked {
+  border-color: var(--nav-color-primary);
+  background: var(--nav-color-surface-subtle);
+  box-shadow: inset 0 0 0 1px var(--nav-color-primary);
+}
+
+.nav-choice.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.nav-choice__input {
+  flex: 0 0 auto;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0.125rem 0 0;
+  accent-color: var(--nav-color-primary);
+}
+
+/* The ring goes on the card, not the 20px circle inside it. */
+.nav-choice:has(.nav-choice__input:focus-visible) {
+  outline: 3px solid var(--nav-color-primary);
+  outline-offset: 0.25rem;
+}
+
+.nav-choice:has(.nav-choice__input:focus-visible) .nav-choice__input:focus-visible {
+  outline: none;
+}
+
+.nav-choice__icon {
+  flex: 0 0 auto;
+  color: var(--nav-color-primary);
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.nav-choice__text {
+  display: grid;
+  gap: var(--nav-space-1);
+  min-width: 0;
+}
+
+.nav-choice__label {
+  font-size: 1.0625rem;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.nav-choice__description {
+  color: var(--nav-color-text-muted);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.nav-choice-group.nav-field--invalid .nav-choice {
+  border-color: var(--nav-color-danger);
+}
+
+.nav-choice-group > .nav-field__help,
+.nav-choice-group > .nav-field__error {
+  margin-top: var(--nav-space-3);
+}
+
+@media (max-width: 40rem) {
+  .nav-choice-group--cols-2 .nav-choice-group__options,
+  .nav-choice-group--cols-3 .nav-choice-group__options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --------------------------------------------------------------- StepList -- */
+
+/* A rail: each step is a segment whose top edge fills as it is reached. The
+   numbers are aria-hidden — the list is ordered, so assistive technology
+   already counts — and a completed step drops its number for a check. */
+.nav-steps {
+  display: flex;
+  gap: var(--nav-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav-steps__item {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.nav-steps__step {
+  display: flex;
+  align-items: center;
+  gap: var(--nav-space-2);
+  width: 100%;
+  padding: var(--nav-space-3) 0 0;
+  border: 0;
+  border-top: 0.25rem solid var(--nav-color-border);
+  background: transparent;
+  color: var(--nav-color-text-muted);
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: start;
+  text-decoration: none;
+}
+
+.nav-steps__item.is-done .nav-steps__step,
+.nav-steps__item.is-current .nav-steps__step {
+  border-top-color: var(--nav-color-primary);
+}
+
+.nav-steps__item.is-current .nav-steps__step {
+  color: var(--nav-color-text);
+  font-weight: 700;
+}
+
+a.nav-steps__step {
+  cursor: pointer;
+}
+
+a.nav-steps__step:hover {
+  color: var(--nav-color-link);
+}
+
+a.nav-steps__step:focus-visible {
+  outline: 3px solid var(--nav-color-primary);
+  outline-offset: 0.25rem;
+  border-radius: var(--nav-radius-sm);
+}
+
+.nav-steps__marker {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.nav-steps__item.is-current .nav-steps__marker {
+  border-color: var(--nav-color-primary);
+  color: var(--nav-color-primary);
+}
+
+.nav-steps__item.is-done .nav-steps__marker {
+  border-color: var(--nav-color-primary);
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+}
+
+/* The check is drawn, like the accordion's chevron: two borders of a small box
+   turned 45 degrees. No glyph to fall back from and nothing to fetch. */
+.nav-steps__item.is-done .nav-steps__marker::before {
+  content: "";
+  width: 0.3rem;
+  height: 0.55rem;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+
+.nav-steps__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* On a phone only the current step keeps its name; the rest shrink to their
+   markers so five steps fit on one line. */
+@media (max-width: 40rem) {
+  .nav-steps__item:not(.is-current) {
+    flex: 0 0 auto;
+  }
+
+  .nav-steps__item:not(.is-current) .nav-steps__label {
+    display: none;
+  }
+}
+
+/* ---------------------------------------------------------------- Stepper -- */
+
+.nav-stepper {
+  display: grid;
+  gap: var(--nav-space-8);
+}
+
+.nav-stepper__panel {
+  display: grid;
+  gap: var(--nav-space-2);
+}
+
+/* `display: grid` above outranks the browser's own `[hidden] { display: none }`,
+   so without this every step would show at once — exactly what the component
+   exists to prevent, and it would fail silently. */
+.nav-stepper__panel[hidden] {
+  display: none;
+}
+
+.nav-stepper__count {
+  margin: 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.nav-stepper__title {
+  margin: 0;
+  min-width: 0;
+  font-size: clamp(1.5rem, 1.25rem + 1vw, 2rem);
+  font-weight: 700;
+  line-height: 1.2;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+
+/* Focus lands here when the step changes. Not a control, so no ring. */
+.nav-stepper__title:focus {
+  outline: none;
+}
+
+.nav-stepper__description {
+  margin: 0;
+  max-width: 60ch;
+  min-width: 0;
+  color: var(--nav-color-text-muted);
+  font-size: 1.0625rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.nav-stepper__body {
+  margin-top: var(--nav-space-4);
+}
+
+/* Back left, primary right, so the eye ends on the primary. On a phone the row
+   becomes a column with the primary on top, where a thumb reaches first. */
+.nav-stepper__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--nav-space-3);
+  padding-top: var(--nav-space-6);
+  border-top: 1px solid var(--nav-color-border);
+}
+
+.nav-stepper__actions > :last-child {
+  margin-inline-start: auto;
+}
+
+@media (max-width: 40rem) {
+  .nav-stepper__actions {
+    flex-direction: column-reverse;
+  }
+
+  .nav-stepper__actions .nav-btn {
+    width: 100%;
+  }
+}
+
+/* --------------------------------------------------------------- Progress -- */
+
+.nav-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--nav-space-3);
+  margin: var(--nav-space-3) 0 var(--nav-space-4);
+}
+
+.nav-progress__track {
+  flex: 1 1 auto;
+  overflow: hidden;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--nav-color-surface-raised);
+}
+
+.nav-progress__fill {
+  height: 100%;
+  background: var(--nav-color-primary);
+  transition: width 0.15s ease-out;
+}
+
+/* No known position: the fill sweeps back and forth rather than sitting at a
+   width the bar cannot honestly report. */
+.nav-progress__track--indeterminate .nav-progress__fill {
+  width: 40%;
+  animation: nav-progress-indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes nav-progress-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+.nav-progress__value {
+  flex: 0 0 auto;
+  font-size: 0.9rem;
+  color: var(--nav-color-text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-progress__track--indeterminate .nav-progress__fill {
+    animation: none;
+  }
+}
+
+/* -------------------------------------------------- Button sizes, for these -- */
+
+/* The 44px target. */
+.nav-btn--lg {
+  min-height: 2.75rem;
+  padding: var(--nav-space-3) var(--nav-space-6);
+  font-size: 1.0625rem;
+}
+
+.nav-btn--block {
+  display: block;
+  width: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-choice {
+    transition: none;
+  }
+}
+
+/* Keyboard-shortcut overlay — a native modal <dialog> (`webapp::keyboard`). */
+.nav-shortcuts-dialog {
+  width: min(100%, 32rem);
+  padding: 1.25rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  color: var(--nav-color-text);
+}
+
+.nav-shortcuts-dialog::backdrop {
+  background: var(--nav-color-scrim, rgb(0 0 0 / 0.5));
+}
+
+.nav-shortcuts-dialog:not([open]) {
+  display: none;
+}
+
+.nav-shortcuts-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.nav-shortcuts-dialog__title {
+  font-size: 1.15rem;
+  margin: 0;
+}
+
+.nav-shortcuts-dialog__close {
+  flex: 0 0 auto;
+  padding: 0 0.375rem;
+  border: 0;
+  background: transparent;
+  color: var(--nav-color-text-muted);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.nav-shortcuts-dialog__close:hover {
+  color: var(--nav-color-text);
+}
+
+.nav-shortcuts-dialog__close:focus-visible {
+  outline: var(--nav-focus-ring, 2px) solid var(--nav-color-focus);
+  outline-offset: var(--nav-focus-offset, 2px);
+}
+
+.nav-shortcuts-dialog__body {
+  margin-top: 1rem;
+}
+
+.nav-shortcuts {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.nav-shortcuts__scope {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--nav-color-text-muted);
+}
+
+.nav-shortcuts__list {
+  display: grid;
+  margin: 0;
+}
+
+.nav-shortcuts__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.375rem 0;
+  border-bottom: 1px solid var(--nav-color-border);
+}
+
+.nav-shortcuts__row dt {
+  margin: 0;
+}
+
+.nav-shortcuts__row dd {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.nav-kbd {
+  display: inline-block;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--nav-color-border);
+  border-bottom-width: 2px;
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface-raised, var(--nav-color-surface));
+  color: var(--nav-color-text);
+  font-family: var(--nav-font-mono, monospace);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+/* Owner credential rows use only metadata; saved secret values never render. */
+#deployment-keys {
+  max-width: 70rem;
+  margin-inline: auto;
+  padding: 1.5rem;
+}
+.deployment-key-row {
+  max-width: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 1fr);
+  gap: .5rem 1.5rem;
+  border-bottom: 1px solid var(--nav-color-border);
+  padding-block: 1rem;
+}
+.deployment-key-row h2,
+.deployment-key-row p {
+  grid-column: 1 / -1;
+}
+.deployment-key-row label {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.deployment-key-row input {
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: .5rem;
+  color: var(--nav-color-text);
+  background: var(--nav-color-bg);
+  border: 1px solid var(--nav-color-border);
+  border-radius: .375rem;
+}
+@media (max-width: 40rem) {
+  .deployment-key-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Hex field with a native colour swatch on its right. */
+.nav-color-picker { display: flex; align-items: center; gap: var(--nav-space-2, .5rem); }
+.nav-color-picker .nav-input { flex: 1; min-width: 0; }
+.nav-color-picker__swatch { width: 3rem; height: 2.75rem; padding: .25rem; cursor: pointer; }
+
+/* ============================================================================
+ * Matter-page primitives — Panel, Callout, toned Badge, FactCard/FactGrid,
+ * StatusStrip, ActionList, Feed, Empty, ToggleGroup, Separator
+ * (`webapp/src/components/{panel,callout,badge,…}.rs`). Every value reads a
+ * `--nav-*` token from `tokens.css`; status colour comes from the tonal bands
+ * (`-subtle` ground, `-border` edge, `on-*-subtle` ink), never the brand hue.
+ * ==========================================================================*/
+
+.nav-panel {
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-lg);
+  background: var(--nav-color-surface);
+  color: var(--nav-color-text);
+  box-shadow: var(--nav-shadow-sm);
+}
+.nav-panel__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--nav-space-3);
+  padding: var(--nav-space-4) var(--nav-space-6);
+  border-bottom: 1px solid var(--nav-color-border);
+}
+.nav-panel__heading h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+.nav-panel__note {
+  margin: var(--nav-space-1) 0 0;
+  color: var(--nav-color-text-muted);
+}
+.nav-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--nav-space-2);
+}
+.nav-panel__body {
+  padding: var(--nav-space-4) var(--nav-space-6);
+}
+
+.nav-callout {
+  padding: var(--nav-space-3) var(--nav-space-4);
+  border: 1px solid var(--nav-color-border);
+  border-left-width: 0.3rem;
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+}
+.nav-callout--info { border-left-color: var(--nav-color-link); }
+.nav-callout--warning {
+  border-color: var(--nav-color-warning-border);
+  border-left-color: var(--nav-color-on-warning-subtle);
+  background: var(--nav-color-warning-subtle);
+  color: var(--nav-color-on-warning-subtle);
+}
+.nav-callout--danger {
+  border-color: var(--nav-color-danger-border);
+  border-left-color: var(--nav-color-on-danger-subtle);
+  background: var(--nav-color-danger-subtle);
+  color: var(--nav-color-on-danger-subtle);
+}
+.nav-callout--success {
+  border-color: var(--nav-color-success-border);
+  border-left-color: var(--nav-color-on-success-subtle);
+  background: var(--nav-color-success-subtle);
+  color: var(--nav-color-on-success-subtle);
+}
+.nav-callout__title { margin: 0 0 var(--nav-space-1); }
+.nav-callout__body > :first-child { margin-top: 0; }
+.nav-callout__body > :last-child { margin-bottom: 0; }
+
+.nav-badge--active {
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+}
+.nav-badge--ready {
+  border: 1px solid var(--nav-color-success-border);
+  background: var(--nav-color-success-subtle);
+  color: var(--nav-color-on-success-subtle);
+}
+.nav-badge--next {
+  border: 1px solid var(--nav-color-notice-border);
+  background: var(--nav-color-notice-subtle);
+  color: var(--nav-color-on-notice-subtle);
+}
+.nav-badge--review {
+  border: 1px solid var(--nav-color-warning-border);
+  background: var(--nav-color-warning-subtle);
+  color: var(--nav-color-on-warning-subtle);
+}
+.nav-badge--blocked {
+  border: 1px solid var(--nav-color-danger-border);
+  background: var(--nav-color-danger-subtle);
+  color: var(--nav-color-on-danger-subtle);
+}
+.nav-badge--source {
+  border: 1px solid var(--nav-color-border);
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+}
+
+.nav-fact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: var(--nav-space-3);
+}
+.nav-fact-card {
+  padding: var(--nav-space-3) var(--nav-space-4);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+}
+.nav-fact-card__title {
+  margin: 0 0 var(--nav-space-1);
+  color: var(--nav-color-text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.nav-fact-card__body > :first-child { margin-top: 0; }
+.nav-fact-card__body > :last-child { margin-bottom: 0; }
+
+.nav-status-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  margin: 0;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+  color: var(--nav-color-text);
+  overflow: hidden;
+}
+.nav-status-strip__cell {
+  padding: var(--nav-space-3) var(--nav-space-4);
+  border-top: 0.2rem solid transparent;
+  background: var(--nav-color-surface);
+}
+.nav-status-strip__cell + .nav-status-strip__cell {
+  border-left: 1px solid var(--nav-color-border);
+}
+.nav-status-strip__cell--active { border-top-color: var(--nav-color-primary); }
+.nav-status-strip__cell--ready { border-top-color: var(--nav-color-success-border); }
+.nav-status-strip__cell--next { border-top-color: var(--nav-color-notice-border); }
+.nav-status-strip__cell--review { border-top-color: var(--nav-color-warning-border); }
+.nav-status-strip__cell--blocked { border-top-color: var(--nav-color-danger-border); }
+.nav-status-strip__cell--source { border-top-color: var(--nav-color-border); }
+.nav-status-strip__label {
+  color: var(--nav-color-text-muted);
+  font-size: 0.85rem;
+}
+.nav-status-strip__value {
+  margin: 0;
+  font-weight: 600;
+}
+
+.nav-action-list {
+  margin: 0;
+  padding-left: var(--nav-space-6);
+  color: var(--nav-color-text);
+}
+.nav-action-list__item + .nav-action-list__item {
+  margin-top: var(--nav-space-2);
+}
+.nav-action-list__detail {
+  display: block;
+  color: var(--nav-color-text-muted);
+}
+
+.nav-feed {
+  margin: 0;
+  padding: 0 0 0 var(--nav-space-6);
+  list-style: none;
+  border-left: 2px solid var(--nav-color-border);
+  color: var(--nav-color-text);
+}
+.nav-feed__item + .nav-feed__item { margin-top: var(--nav-space-4); }
+.nav-feed__year {
+  margin: 0 0 var(--nav-space-2);
+  color: var(--nav-color-text-muted);
+  font-weight: 600;
+}
+.nav-feed__post {
+  padding: var(--nav-space-3) var(--nav-space-4);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+  box-shadow: var(--nav-shadow-xs);
+}
+.nav-feed__head {
+  display: flex;
+  align-items: center;
+  gap: var(--nav-space-3);
+}
+.nav-feed__head > div { flex: 1; min-width: 0; }
+.nav-feed__actor { margin: 0; font-weight: 600; }
+.nav-feed__role,
+.nav-feed__date {
+  margin: 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.9rem;
+}
+.nav-feed__avatar {
+  display: inline-grid;
+  place-items: center;
+  width: var(--nav-control-h-md);
+  height: var(--nav-control-h-md);
+  border-radius: 50%;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.nav-feed__avatar[data-accent="brand"] { background: var(--nav-color-primary); color: var(--nav-color-on-primary); }
+.nav-feed__avatar[data-accent="link"] { background: var(--nav-color-link); color: var(--nav-color-on-primary); }
+.nav-feed__avatar[data-accent="danger"] { background: var(--nav-color-danger-solid); color: var(--nav-color-on-danger-solid); }
+.nav-feed__avatar[data-accent="success"] { background: var(--nav-color-success-subtle); color: var(--nav-color-on-success-subtle); }
+.nav-feed__avatar[data-accent="warning"] { background: var(--nav-color-warning-subtle); color: var(--nav-color-on-warning-subtle); }
+.nav-feed__avatar[data-accent="neutral"] { background: var(--nav-color-secondary); color: var(--nav-color-on-secondary); }
+.nav-feed__title { margin: var(--nav-space-3) 0 var(--nav-space-1); font-size: 1.05rem; }
+.nav-feed__body { margin: 0; }
+.nav-feed__sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--nav-space-3);
+  margin-top: var(--nav-space-2);
+}
+
+.nav-empty {
+  padding: var(--nav-space-8) var(--nav-space-4);
+  border: 1px dashed var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+  color: var(--nav-color-text);
+  text-align: center;
+}
+.nav-empty__title { margin: 0; font-weight: 600; }
+.nav-empty__description { margin: var(--nav-space-1) 0 0; color: var(--nav-color-text-muted); }
+.nav-empty__action { margin-top: var(--nav-space-4); }
+
+.nav-toggle-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--nav-space-1);
+  padding: var(--nav-space-1);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface-raised);
+}
+/* Scoped under the group so the toggle's ink outranks `.nav-theme a`. */
+.nav-toggle-group .nav-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--nav-control-h-sm);
+  padding: 0 var(--nav-space-3);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+  text-decoration: none;
+  font-weight: 600;
+}
+.nav-toggle-group a.nav-toggle:hover {
+  background: var(--nav-color-secondary);
+  color: var(--nav-color-on-secondary);
+}
+.nav-toggle-group a.nav-toggle:focus-visible {
+  outline: var(--nav-focus-ring) solid var(--nav-color-focus);
+  outline-offset: var(--nav-focus-offset);
+}
+.nav-toggle-group .nav-toggle--on,
+.nav-toggle-group a.nav-toggle--on:hover {
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+}
+.nav-toggle-group .nav-toggle--disabled {
+  color: var(--nav-color-text-muted);
+  cursor: not-allowed;
+}
+
+.nav-separator {
+  flex-shrink: 0;
+  background: var(--nav-color-border);
+}
+.nav-separator--horizontal { height: 1px; width: 100%; margin-block: var(--nav-space-4); }
+.nav-separator--vertical { width: 1px; align-self: stretch; min-height: 1rem; margin-inline: var(--nav-space-2); }
+
+/* ============================================================================
+ * Litigation board sections — `case_caption` and `docket_timeline`
+ * (`webapp/src/sections/timeline.rs`). One column at every width; a dashed
+ * card is a date still ahead, and a struck card is an appearance a later
+ * entry moved.
+ * ==========================================================================*/
+
+.matter-caption__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--nav-space-1) var(--nav-space-4);
+  margin: 0;
+}
+.matter-caption__facts dt { color: var(--nav-color-text-muted); }
+.matter-caption__facts dd { margin: 0; }
+
+.matter-timeline {
+  margin: 0;
+  padding: 0 0 0 var(--nav-space-6);
+  list-style: none;
+  border-left: 2px solid var(--nav-color-border);
+}
+.matter-timeline__item + .matter-timeline__item { margin-top: var(--nav-space-4); }
+.matter-timeline__card {
+  padding: var(--nav-space-3) var(--nav-space-4);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+  box-shadow: var(--nav-shadow-xs);
+}
+.matter-timeline__item--ahead .matter-timeline__card {
+  border-style: dashed;
+  background: var(--nav-color-surface-raised);
+  box-shadow: none;
+}
+.matter-timeline__item--superseded .matter-timeline__card { color: var(--nav-color-text-muted); }
+.matter-timeline__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--nav-space-2);
+}
+.matter-timeline__side,
+.matter-timeline__date,
+.matter-timeline__filer,
+.matter-timeline__chain {
+  color: var(--nav-color-text-muted);
+  font-size: 0.9rem;
+}
+.matter-timeline__date { margin-left: auto; }
+.matter-timeline__title { margin: var(--nav-space-2) 0 var(--nav-space-1); font-size: 1.05rem; }
+.matter-timeline__card p { margin: var(--nav-space-1) 0 0; }
+.matter-timeline__pending { margin-top: var(--nav-space-2); }
+.matter-timeline__link-document pre {
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ============================================================================
+ * Notation sections — `notation_list`, `notation_checklist`, and the client
+ * lens's `decision_queue` (`webapp/src/sections/notations.rs`). One column
+ * at every width; long titles wrap rather than widen the page.
+ * ==========================================================================*/
+
+.matter-notations,
+.matter-checklist,
+[data-section="decision_queue"] .matter-section__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.matter-notations__item + .matter-notations__item,
+.matter-checklist__step + .matter-checklist__step,
+[data-section="decision_queue"] .matter-section__row + .matter-section__row {
+  margin-top: var(--nav-space-3);
+  padding-top: var(--nav-space-3);
+  border-top: 1px solid var(--nav-color-border);
+}
+.matter-notations__item,
+.matter-checklist__step,
+[data-section="decision_queue"] .matter-section__row { overflow-wrap: anywhere; }
+.matter-notations__next,
+.matter-notations__state,
+.matter-checklist__detail {
+  margin: var(--nav-space-1) 0 0;
+  color: var(--nav-color-text-muted);
+}
+.matter-checklist__summary { margin: 0 0 var(--nav-space-3); }
+.matter-checklist__step--done strong,
+.matter-checklist__step--done a { color: var(--nav-color-text-muted); }
+/* A link sitting in a line of text is told apart by more than colour. */
+.nav-theme a.matter-notations__title,
+.nav-theme .matter-checklist__step a { text-decoration: underline; }
+
+/* `discovery_pairs` (`webapp/src/sections/discovery.rs`): one card per
+ * numbered request, the objection and the answer boxed and attributed, and
+ * the firm-only commentary set apart. */
+.matter-discovery { margin: 0; padding: 0; list-style: none; }
+.matter-discovery__item + .matter-discovery__item { margin-top: var(--nav-space-4); }
+.matter-discovery__card {
+  padding: var(--nav-space-3) var(--nav-space-4);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+}
+.matter-discovery__head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--nav-space-2); }
+.matter-discovery__kicker { margin: 0 auto 0 0; color: var(--nav-color-text-muted); font-size: 0.9rem; }
+.matter-discovery__request { margin: var(--nav-space-2) 0; }
+.matter-discovery__box,
+.matter-discovery__commentary {
+  margin-top: var(--nav-space-2);
+  padding: var(--nav-space-2) var(--nav-space-3);
+  border-left: 3px solid var(--nav-color-border);
+  background: var(--nav-color-surface-subtle);
+}
+.matter-discovery__box--objection { border-left-color: var(--nav-color-warning-border); }
+.matter-discovery__box--answer { border-left-color: var(--nav-color-success-border); }
+.matter-discovery__commentary { border-left-style: dashed; border-left-color: var(--nav-color-primary); }
+.matter-discovery__box p,
+.matter-discovery__commentary p { margin: 0; }
+.matter-discovery__label { color: var(--nav-color-text-muted); font-size: 0.9rem; }
+
+/* `authority_table` (`webapp/src/sections/authorities.rs`) and
+ * `relationship_graph` (`webapp/src/sections/graph.rs`). The graph is
+ * server-rendered SVG with its table beneath; it scales to the column. */
+.matter-authorities { margin: 0; padding: 0; list-style: none; }
+.matter-authorities__item + .matter-authorities__item { margin-top: var(--nav-space-4); }
+.matter-authorities__card {
+  padding: var(--nav-space-3) var(--nav-space-4);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+}
+.matter-authorities__head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--nav-space-2); }
+.matter-authorities__citation { margin: 0 auto 0 0; font-weight: 600; }
+.matter-authorities__title,
+.matter-authorities__source,
+.matter-authorities__role { margin: var(--nav-space-1) 0 0; }
+.matter-authorities__source,
+.matter-authorities__role { color: var(--nav-color-text-muted); font-size: 0.9rem; }
+.matter-authorities__quote {
+  margin: var(--nav-space-2) 0 0;
+  padding: var(--nav-space-2) var(--nav-space-3);
+  border-left: 3px solid var(--nav-color-border);
+  background: var(--nav-color-surface-subtle);
+}
+.matter-authorities__quote blockquote { margin: 0; }
+.matter-authorities__quote figcaption { margin-top: var(--nav-space-1); color: var(--nav-color-text-muted); font-size: 0.9rem; }
+
+.matter-graph { margin: 0 0 var(--nav-space-4); }
+.matter-graph__svg { display: block; width: 100%; height: auto; max-height: 26rem; }
+.matter-graph__edge { stroke: var(--nav-color-border); stroke-width: 2; }
+.matter-graph__edge--adverse { stroke: var(--nav-color-danger); stroke-dasharray: 6 4; }
+.matter-graph__node { fill: var(--nav-color-surface); stroke: var(--nav-color-primary); stroke-width: 2; }
+.matter-graph__node--entity { fill: var(--nav-color-primary); }
+.matter-graph__label { fill: var(--nav-color-text); font-size: 13px; }
+.matter-graph__caption,
+.matter-graph__unlinked { color: var(--nav-color-text-muted); font-size: 0.9rem; }
+
+/* ============================================================================
+ * Estate and closing sections — `webapp/src/sections/estate.rs` and
+ * `transactional.rs`. Instrument cards wrap to one column on a phone; a share
+ * bar is one image whose label lists every share, beside its table.
+ * ==========================================================================*/
+
+.matter-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--nav-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.matter-cards__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nav-space-2);
+  padding: var(--nav-space-3) var(--nav-space-4);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface);
+}
+.matter-cards__head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--nav-space-2);
+}
+.matter-cards__meta { margin: 0; color: var(--nav-color-text-muted); font-size: 0.9rem; }
+.matter-cards__blocker { margin: 0; color: var(--nav-color-danger); font-size: 0.9rem; }
+.matter-section__subhead { margin: var(--nav-space-4) 0 var(--nav-space-2); font-size: 1rem; }
+
+.matter-steps,
+.matter-stages {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.matter-steps__step + .matter-steps__step { margin-top: var(--nav-space-1); }
+.matter-stages {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--nav-space-3);
+}
+.matter-stages__stage {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--nav-space-1);
+}
+
+.matter-share-bar {
+  display: flex;
+  height: 1.5rem;
+  margin-bottom: var(--nav-space-3);
+  overflow: hidden;
+  border-radius: var(--nav-radius);
+  background: var(--nav-color-surface-subtle);
+}
+.matter-share-bar__segment + .matter-share-bar__segment { border-left: 2px solid var(--nav-color-surface); }
+.matter-share-swatch {
+  display: inline-block;
+  width: 0.65rem;
+  height: 0.65rem;
+  margin-right: var(--nav-space-2);
+  border-radius: 2px;
+}
+.matter-share--0 { background: var(--nav-color-primary); }
+.matter-share--1 { background: var(--nav-color-secondary); }
+.matter-share--2 { background: var(--nav-color-success); }
+.matter-share--3 { background: var(--nav-color-warning); }
+.matter-share--4 { background: var(--nav-color-danger); }
+.matter-share--5 { background: var(--nav-color-text-muted); }
+.matter-table__num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Portal astrology specimens share the gallery's theme and native controls. */
+.design-astrology-links, .astrology-chart__controls, .astro-map-selection {
+  display: flex; flex-wrap: wrap; gap: .6rem; margin-block: 1.25rem;
+}
+.design-astrology-links a { padding: .65rem 1rem; border: 1px solid var(--nav-color-border); border-radius: var(--nav-radius-sm); }
+.astrology-chart, .astro-map-design { scroll-margin-top: 2rem; padding: clamp(1rem, 3vw, 2rem); border: 1px solid var(--nav-color-border); border-radius: var(--nav-radius-md); background: var(--nav-color-surface); }
+.astrology-chart h2, .astro-map-design h2 { margin-top: 0; }
+.astrology-chart__controls button, .astro-map-selection button {
+  padding: .65rem .9rem; min-height: 2.75rem; border: 1px solid var(--nav-color-border); border-radius: var(--nav-radius-sm); background: var(--nav-color-surface-raised); color: var(--nav-color-text); cursor: pointer;
+}
+.astrology-chart__controls button[aria-pressed="true"], .astro-map-selection button[aria-pressed="true"] { border-color: var(--nav-color-primary); background: var(--nav-color-primary); color: var(--nav-color-on-primary); }
+.astrology-chart__controls button:focus-visible, .astro-map-selection button:focus-visible, .astro-map-layers input:focus-visible { outline: 2px solid var(--nav-color-primary); outline-offset: 3px; }
+.astrology-chart__layout { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); align-items: start; gap: 2rem; }
+.astrology-chart__wheel { display: block; width: 100%; max-width: 40rem; color: var(--nav-color-text); font-family: 'Apple Symbols', 'Segoe UI Symbol', serif; font-variant-emoji: text; }
+.astrology-chart__table { width: 100%; border-collapse: collapse; text-align: left; font-size: .9rem; }
+.astrology-chart__table caption { text-align: left; color: var(--nav-color-text-muted); margin-block: 1rem; }
+.astrology-chart__table th, .astrology-chart__table td { border-bottom: 1px solid var(--nav-color-border); padding: .6rem .35rem; overflow-wrap: anywhere; }
+.astro-eyebrow { color: var(--nav-color-primary); font-size: .85rem; letter-spacing: .08em; }
+.astro-demo-notice { border-left: 3px solid var(--nav-color-primary); padding: .8rem 1rem; background: var(--nav-color-surface-subtle); }
+.astro-map-layers { display: flex; flex-wrap: wrap; gap: .75rem 1.5rem; border: 1px solid var(--nav-color-border); padding: 1rem; margin-block: 1.5rem; }
+.astro-map-layers legend { padding-inline: .4rem; }
+.astro-map-layers label { display: inline-flex; align-items: center; gap: .5rem; min-height: 2.75rem; }
+.astro-map-layers input { accent-color: var(--nav-color-primary); }
+.astro-map-frame { padding: .5rem; border: 1px solid var(--nav-color-border); border-radius: var(--nav-radius-sm); background: var(--nav-color-surface-raised); }
+.astro-map-frame svg { display: block; width: 100%; height: auto; }
+.astro-map-background { fill: var(--nav-color-surface); }
+.astro-map-land { fill: var(--nav-color-border); stroke: var(--nav-color-text-muted); stroke-width: .35; }
+.astro-map-grid { stroke: var(--nav-color-text-muted); stroke-opacity: .25; stroke-width: .6; }
+.astro-map-coordinate { fill: var(--nav-color-text); font-size: 14px; }
+.astro-map-line { vector-effect: non-scaling-stroke; }
+.astro-map-line-0 { stroke: var(--nav-color-primary); }
+.astro-map-line-1 { stroke: var(--nav-color-success); stroke-dasharray: 8 3; }
+.astro-map-line-2 { stroke: var(--nav-color-danger); stroke-dasharray: 3 3; }
+.astro-map-line-3 { stroke: var(--nav-color-text); stroke-dasharray: 10 3 2 3; }
+.astro-map-detail { border-left: 3px solid var(--nav-color-primary); padding: .5rem 1.25rem; background: var(--nav-color-surface-subtle); }
+.astro-map-detail h3 { margin-top: .5rem; }
+.astro-map-attribution { font-size: .85rem; color: var(--nav-color-text-muted); }
+@media (max-width: 760px) {
+  .astrology-chart__layout { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+  .astrology-chart__controls button, .astro-map-selection button { flex: 1 1 7rem; }
+}

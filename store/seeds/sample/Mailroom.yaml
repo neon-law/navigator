@@ -1,0 +1,11 @@
+---
+# Synthetic. The disposable `dev` fixture's mail centre: the sample Letters in
+# `Letter.yaml` arrive here, never at a real facility. Applied by
+# `seed_sample_portfolio` on a `dev` profile only.
+lookup_fields:
+  - name
+records:
+  - name: Sample Mail Center
+    mailbox_start: 9000
+    mailbox_end: 9999
+    capacity: 1000

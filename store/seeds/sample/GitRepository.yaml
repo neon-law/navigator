@@ -1,0 +1,10 @@
+# Synthetic. Disposable `dev` fixture applied by `seed_sample_portfolio` on a
+# `dev` profile only; never a firm fact, never a client's data.
+lookup_fields:
+  - repository_name
+
+records:
+  - repository_name: navigator-examples
+    description: Example templates for development and seeding
+    project:
+      codename: navigator-examples

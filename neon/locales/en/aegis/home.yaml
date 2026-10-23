@@ -1,0 +1,37 @@
+head_title: "{site_name} | Home"
+meta_description: >-
+  Aegis Criminal Defense, a practice of Shook Law PC.
+  Your rights. Your defense. Your next step. Attorney advertisement.
+heading: "Facing criminal charges? Start with a conversation."
+lead: >-
+  Aegis Criminal Defense is a practice of Shook Law PC.
+  Your rights. Your defense. Your next step.
+  We review the matter and jurisdiction before accepting work.
+  The written engagement identifies the lawyers, scope, and fees.
+contact_label: Request a conversation
+service:
+  heading: Start with the next decision
+  body:
+    - - text: >-
+          Share the court, the type of matter, and any upcoming date. Keep the first message brief and avoid sensitive details.
+    - - text: >-
+          A contact request does not create an attorney-client relationship
+          or confirm that we can meet a deadline. We confirm representation
+          in a written engagement before work begins.
+practices_heading: What to talk with us about
+practices:
+  - mark: scales
+    heading: Criminal charges
+    body: >-
+      Tell us about the charge, court, and next scheduled date. A lawyer reviews whether the matter fits the practice.
+    href: /explainers/process
+  - mark: scales
+    heading: An investigation
+    body: >-
+      If you are seeking counsel about an investigation, start with a request for contact. Representation begins only after a written engagement.
+    href: /explainers/first-steps
+  - mark: scales
+    heading: A criminal record
+    body: >-
+      Ask about review of a past case and possible record relief. Available options depend on the record and jurisdiction.
+    href: /explainers/documents

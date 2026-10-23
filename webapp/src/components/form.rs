@@ -1,0 +1,1964 @@
+//! Create / edit form, as Dioxus components (issue #641, Phase 2).
+//!
+//! The successor to the `views::components::form`. A [`FormCard`] renders a
+//! constrained card with a heading, a stack of [`Field`]s, and a submit button.
+//! It is a **native** form — it submits over a classic navigation to `action`
+//! with `method`, so it works before hydration. (The builder also has an
+//! HTMX-submit mode; that interactive path converts to a Dioxus server function
+//! when the admin cluster migrates in Phase 3, and is intentionally out of scope
+//! here.) Every field carries a label, the accessible `required` state with a
+//! visible `*` cue, optional help text wired through `aria-describedby`, and the
+//! theme's form styling — no Bootstrap.
+
+use dioxus::prelude::*;
+
+use super::{ChoiceGroup, ChoiceGroupOption, PersonChoice, PersonPicker};
+
+/// Escape a string for safe inclusion as `<textarea>` RCDATA content: `&`
+/// becomes `&amp;` and `<` becomes `&lt;`, so the value can never introduce an
+/// entity ambiguity or a `</textarea>` that closes the element early.
+fn escape_rcdata(value: &str) -> String {
+    value.replace('&', "&amp;").replace('<', "&lt;")
+}
+
+/// One option in a [`FieldKind::Select`].
+#[derive(Clone, PartialEq, Eq)]
+pub struct Choice {
+    pub value: String,
+    pub label: String,
+}
+
+impl Choice {
+    #[must_use]
+    pub fn new(value: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            label: label.into(),
+        }
+    }
+}
+
+/// The control a [`Field`] renders.
+#[derive(Clone, PartialEq, Eq)]
+pub enum FieldKind {
+    /// A hex text input with a native colour picker on its right.
+    Color {
+        value: String,
+    },
+    /// A single-line `<input>` of the given `input_type` (`text`, `email`,
+    /// `number`, `file`, …), with optional placeholder / numeric step / prefix
+    /// add-on / datalist suggestions.
+    Input {
+        input_type: String,
+        value: String,
+        placeholder: Option<String>,
+        prefix: Option<String>,
+        step: Option<String>,
+        autocomplete: Option<String>,
+        maxlength: Option<u32>,
+        disabled: bool,
+        multiple: bool,
+        suggestions: Option<Vec<String>>,
+    },
+    Textarea {
+        value: String,
+        rows: u8,
+    },
+    Select {
+        options: Vec<Choice>,
+        selected: Option<String>,
+        disabled: bool,
+    },
+    /// A searchable selector whose submitted value is a Person foreign key.
+    PersonPicker {
+        blank_label: String,
+        people: Vec<PersonChoice>,
+        selected: Option<String>,
+        search: Option<String>,
+        disabled: bool,
+    },
+    Checkbox {
+        value: String,
+        checked: bool,
+    },
+    /// A radio group: one `<fieldset>`/`<legend>` over the mutually exclusive
+    /// choices. `locked` marks the choices already spoken for — rendered greyed
+    /// and `disabled`, so taking one is a deliberate act rather than a stray
+    /// click. A locked choice does not submit; the door that owns the invariant
+    /// still refuses it if it arrives.
+    Radio {
+        options: Vec<Choice>,
+        selected: Option<String>,
+        locked: Vec<String>,
+    },
+    /// A question among questions rather than a field among fields: the same
+    /// closed choice set as [`FieldKind::Radio`] (or, with `multiple`, a
+    /// checkbox group), rendered as [`ChoiceGroup`] cards instead of a compact
+    /// list. Used by [`question_fields`] for `radio`, `bool`/`yes_no`, and
+    /// `multiple_choice` answer types.
+    ChoiceCards {
+        options: Vec<Choice>,
+        selected: Vec<String>,
+        multiple: bool,
+    },
+}
+
+/// A labeled form control. Build with a constructor ([`Field::text`],
+/// [`Field::select`], …) and the chaining setters, then hand the `Vec<Field>` to
+/// a [`FormCard`].
+#[derive(Clone, PartialEq, Eq)]
+pub struct Field {
+    label: String,
+    name: String,
+    kind: FieldKind,
+    required: bool,
+    help: Option<String>,
+    help_runs: Option<Vec<super::copy_runs::CopyRun>>,
+    /// A validation message for this control (see [`Field::error`]).
+    error: Option<String>,
+    /// The control's DOM id, when it must differ from `name` (see
+    /// [`Field::id`]).
+    control_id: Option<String>,
+    /// A link set on the label's row, opposite the label (see
+    /// [`Field::label_link`]).
+    label_link: Option<(String, String)>,
+}
+
+impl Field {
+    /// A native hex colour field; server-side contrast validation still applies.
+    #[must_use]
+    pub fn color(
+        label: impl Into<String>,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self::new(
+            label,
+            name,
+            FieldKind::Color {
+                value: value.into(),
+            },
+        )
+    }
+    /// Whether this control is a closed set of radio or checkbox options — the
+    /// questions the numbered keyboard shortcuts can answer.
+    #[must_use]
+    pub fn has_choices(&self) -> bool {
+        matches!(
+            self.kind,
+            FieldKind::Checkbox { .. } | FieldKind::Radio { .. } | FieldKind::ChoiceCards { .. }
+        )
+    }
+
+    fn new(label: impl Into<String>, name: impl Into<String>, kind: FieldKind) -> Self {
+        Self {
+            label: label.into(),
+            name: name.into(),
+            kind,
+            required: false,
+            help: None,
+            help_runs: None,
+            error: None,
+            control_id: None,
+            label_link: None,
+        }
+    }
+
+    /// A single-line input of `input_type`.
+    #[must_use]
+    pub fn input(
+        label: impl Into<String>,
+        name: impl Into<String>,
+        value: impl Into<String>,
+        input_type: impl Into<String>,
+    ) -> Self {
+        Self::new(
+            label,
+            name,
+            FieldKind::Input {
+                input_type: input_type.into(),
+                value: value.into(),
+                placeholder: None,
+                prefix: None,
+                step: None,
+                autocomplete: None,
+                maxlength: None,
+                disabled: false,
+                multiple: false,
+                suggestions: None,
+            },
+        )
+    }
+
+    /// A `text` input.
+    #[must_use]
+    pub fn text(
+        label: impl Into<String>,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self::input(label, name, value, "text")
+    }
+
+    /// An `email` input.
+    #[must_use]
+    pub fn email(
+        label: impl Into<String>,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self::input(label, name, value, "email")
+    }
+
+    /// A `password` input. It takes no value: a password is never echoed back
+    /// into the page, not even after a failed submit.
+    #[must_use]
+    pub fn password(label: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::input(label, name, "", "password")
+    }
+
+    /// A multi-line textarea of `rows` rows.
+    #[must_use]
+    pub fn textarea(
+        label: impl Into<String>,
+        name: impl Into<String>,
+        value: impl Into<String>,
+        rows: u8,
+    ) -> Self {
+        Self::new(
+            label,
+            name,
+            FieldKind::Textarea {
+                value: value.into(),
+                rows,
+            },
+        )
+    }
+
+    /// A `<select>` of `options`, with `selected` pre-selected.
+    #[must_use]
+    pub fn select(
+        label: impl Into<String>,
+        name: impl Into<String>,
+        options: Vec<Choice>,
+        selected: Option<String>,
+    ) -> Self {
+        Self::new(
+            label,
+            name,
+            FieldKind::Select {
+                options,
+                selected,
+                disabled: false,
+            },
+        )
+    }
+
+    /// A searchable picker for a person foreign key. The form posts the
+    /// selected person's id under `name`; the displayed name and email remain
+    /// presentation context only.
+    #[must_use]
+    pub fn person_picker(
+        label: impl Into<String>,
+        name: impl Into<String>,
+        blank_label: impl Into<String>,
+        people: Vec<PersonChoice>,
+        selected: Option<String>,
+    ) -> Self {
+        Self::new(
+            label,
+            name,
+            FieldKind::PersonPicker {
+                blank_label: blank_label.into(),
+                people,
+                selected,
+                search: None,
+                disabled: false,
+            },
+        )
+    }
+
+    /// A `number` input.
+    #[must_use]
+    pub fn number(
+        label: impl Into<String>,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self::input(label, name, value, "number")
+    }
+
+    /// Preserve the non-authoritative filter text for a person picker after a
+    /// GET round trip. The selected person id remains the only submitted
+    /// foreign-key value.
+    #[must_use]
+    pub fn person_search(mut self, search: Option<String>) -> Self {
+        if let FieldKind::PersonPicker { search: value, .. } = &mut self.kind {
+            *value = search;
+        }
+        self
+    }
+
+    /// The country picker a `country` question renders: a required `value`
+    /// select over the seeded jurisdiction names, led by an empty prompt so a
+    /// blank submit is caught by the browser rather than silently storing the
+    /// first country. The chosen **name** is what posts, so the stored answer
+    /// matches a jurisdictions row.
+    #[must_use]
+    pub fn country_select(
+        label: impl Into<String>,
+        country_names: &[String],
+        prior: Option<&str>,
+    ) -> Self {
+        let mut options = vec![Choice::new("", "Select a country…")];
+        options.extend(country_names.iter().map(|name| Choice::new(name, name)));
+        Self::select(
+            label,
+            "value",
+            options,
+            prior.filter(|v| !v.is_empty()).map(str::to_string),
+        )
+        .required()
+    }
+
+    /// A file input. Pair with [`FormCard::multipart`] so the form submits as
+    /// `multipart/form-data`; add [`Field::multiple`] to accept several files.
+    #[must_use]
+    pub fn file(label: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::input(label, name, "", "file")
+    }
+
+    /// A radio group over `options`, with `selected` pre-chosen.
+    ///
+    /// Every choice needs a non-empty value: it becomes part of each input's DOM
+    /// id, which is what `<label for>` targets.
+    #[must_use]
+    pub fn radio(
+        label: impl Into<String>,
+        name: impl Into<String>,
+        options: Vec<Choice>,
+        selected: Option<String>,
+    ) -> Self {
+        Self::new(
+            label,
+            name,
+            FieldKind::Radio {
+                options,
+                selected,
+                locked: Vec::new(),
+            },
+        )
+    }
+
+    /// A single-select [`ChoiceGroup`] — the same closed choice set as
+    /// [`Field::radio`], grown to cards for a question among questions.
+    #[must_use]
+    pub fn choice_cards(
+        label: impl Into<String>,
+        name: impl Into<String>,
+        options: Vec<Choice>,
+        selected: Option<String>,
+    ) -> Self {
+        Self::new(
+            label,
+            name,
+            FieldKind::ChoiceCards {
+                options,
+                selected: selected.into_iter().collect(),
+                multiple: false,
+            },
+        )
+    }
+
+    /// A multi-select [`ChoiceGroup`] — checkboxes rendered as cards.
+    #[must_use]
+    pub fn multi_choice_cards(
+        label: impl Into<String>,
+        name: impl Into<String>,
+        options: Vec<Choice>,
+        selected: Vec<String>,
+    ) -> Self {
+        Self::new(
+            label,
+            name,
+            FieldKind::ChoiceCards {
+                options,
+                selected,
+                multiple: true,
+            },
+        )
+    }
+
+    /// Grey out and `disable` the named radio choices — the ones already spoken
+    /// for, which cannot be taken without the deliberate confirming step the
+    /// page renders beside them (no-op on other kinds).
+    #[must_use]
+    pub fn locked(mut self, values: Vec<String>) -> Self {
+        if let FieldKind::Radio { locked, .. } = &mut self.kind {
+            *locked = values;
+        }
+        self
+    }
+
+    /// A checkbox.
+    #[must_use]
+    pub fn checkbox(
+        label: impl Into<String>,
+        name: impl Into<String>,
+        value: impl Into<String>,
+        checked: bool,
+    ) -> Self {
+        Self::new(
+            label,
+            name,
+            FieldKind::Checkbox {
+                value: value.into(),
+                checked,
+            },
+        )
+    }
+
+    /// Mark the field required — sets the native `required` attribute and shows
+    /// the visible `*` cue.
+    #[must_use]
+    pub fn required(mut self) -> Self {
+        self.required = true;
+        self
+    }
+
+    /// Disable the control — sets the native `disabled` attribute (no-op on the
+    /// textarea/checkbox kinds). A disabled input/select is shown but not
+    /// submitted, so it reads as a locked, look-but-don't-touch field: the
+    /// read-only legal-name parts on the person edit form, and a role select
+    /// whose submitted value the command layer would drop.
+    #[must_use]
+    pub fn disabled(mut self) -> Self {
+        match &mut self.kind {
+            FieldKind::Input { disabled, .. }
+            | FieldKind::Select { disabled, .. }
+            | FieldKind::PersonPicker { disabled, .. } => {
+                *disabled = true;
+            }
+            FieldKind::Color { .. }
+            | FieldKind::Textarea { .. }
+            | FieldKind::Checkbox { .. }
+            | FieldKind::Radio { .. }
+            | FieldKind::ChoiceCards { .. } => {}
+        }
+        self
+    }
+
+    /// Accept several files at once — sets the native `multiple` attribute on a
+    /// file (or other) input. No-op on the non-input kinds.
+    #[must_use]
+    pub fn multiple(mut self) -> Self {
+        if let FieldKind::Input { multiple, .. } = &mut self.kind {
+            *multiple = true;
+        }
+        self
+    }
+
+    /// Set the browser's semantic input-purpose token (no-op on other kinds).
+    #[must_use]
+    pub fn autocomplete(mut self, token: impl Into<String>) -> Self {
+        if let FieldKind::Input { autocomplete, .. } = &mut self.kind {
+            *autocomplete = Some(token.into());
+        }
+        self
+    }
+
+    /// Bound the number of characters accepted by an input (no-op on other
+    /// kinds). The server must still validate the same bound.
+    #[must_use]
+    pub fn maxlength(mut self, limit: u32) -> Self {
+        if let FieldKind::Input { maxlength, .. } = &mut self.kind {
+            *maxlength = Some(limit);
+        }
+        self
+    }
+
+    /// Attach hint text below the control, wired through `aria-describedby`.
+    #[must_use]
+    pub fn help(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self.help_runs = None;
+        self
+    }
+
+    /// Attach run-marked hint text below the control, with optional links,
+    /// wired through `aria-describedby`.
+    #[must_use]
+    pub fn help_runs(mut self, runs: Vec<super::copy_runs::CopyRun>) -> Self {
+        self.help = None;
+        self.help_runs = Some(runs);
+        self
+    }
+
+    /// Attach a validation message to *this* control — Rails' `field_with_errors`
+    /// convention, where the reason sits beside the input that caused it rather
+    /// than only in a banner at the top of the form.
+    ///
+    /// Sets `aria-invalid="true"` and appends the message's id to
+    /// `aria-describedby`, so a screen reader announces the control as invalid
+    /// and reads the reason as part of the control's description. The wrapper
+    /// also gains `nav-field--invalid` for the visual treatment.
+    ///
+    /// Server-rendered: the handler redirects back with the message and the
+    /// submitted values (post/redirect/get), so this needs no JavaScript and
+    /// works before hydration.
+    #[must_use]
+    pub fn error(mut self, error: impl Into<String>) -> Self {
+        self.error = Some(error.into());
+        self
+    }
+
+    /// A placeholder for an input field (no-op on other kinds).
+    #[must_use]
+    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        if let FieldKind::Input { placeholder: p, .. } = &mut self.kind {
+            *p = Some(placeholder.into());
+        }
+        self
+    }
+
+    /// A leading add-on rendered inside the control's group — the `$` on a
+    /// currency amount (no-op on other kinds).
+    #[must_use]
+    pub fn prefix(mut self, prefix: impl Into<String>) -> Self {
+        if let FieldKind::Input { prefix: p, .. } = &mut self.kind {
+            *p = Some(prefix.into());
+        }
+        self
+    }
+
+    /// The numeric `step` increment — `0.01` on a dollars-and-cents amount
+    /// (no-op on other kinds).
+    #[must_use]
+    pub fn step(mut self, step: impl Into<String>) -> Self {
+        if let FieldKind::Input { step: s, .. } = &mut self.kind {
+            *s = Some(step.into());
+        }
+        self
+    }
+
+    /// Override the control's DOM id, which defaults to `name`.
+    ///
+    /// Needed when a page renders the same field name in more than one form —
+    /// the clause editor's per-clause `body` textareas. Without it every one of
+    /// them takes `id="body"`, and duplicate ids break `<label for>` targeting
+    /// as well as the WCAG duplicate-id rule.
+    #[must_use]
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.control_id = Some(id.into());
+        self
+    }
+
+    /// A link on the label's row, set opposite the label — the sign-in form's
+    /// "Forgot your password?" beside "Password". Rendered on input fields.
+    #[must_use]
+    pub fn label_link(mut self, text: impl Into<String>, href: impl Into<String>) -> Self {
+        self.label_link = Some((text.into(), href.into()));
+        self
+    }
+
+    /// The control's DOM id — the override when set, else `name`.
+    fn control_id(&self) -> String {
+        self.control_id.clone().unwrap_or_else(|| self.name.clone())
+    }
+
+    /// Datalist suggestions for an input field (no-op on other kinds).
+    #[must_use]
+    pub fn suggestions(mut self, suggestions: Vec<String>) -> Self {
+        if let FieldKind::Input { suggestions: s, .. } = &mut self.kind {
+            *s = Some(suggestions);
+        }
+        self
+    }
+
+    /// Render this field to an `Element`.
+    /// The id `aria-describedby` should point at, given which of the hint and
+    /// the validation message are present.
+    ///
+    /// It takes a space-separated id list, so a field carrying both announces
+    /// both — the reason first, because it is why the user is back on this
+    /// form at all.
+    fn described_by(&self) -> Option<String> {
+        let help_id = format!("{}-help", self.control_id());
+        let error_id = format!("{}-error", self.control_id());
+        match (
+            self.error.is_some(),
+            self.help.is_some() || self.help_runs.is_some(),
+        ) {
+            (true, true) => Some(format!("{error_id} {help_id}")),
+            (true, false) => Some(error_id),
+            (false, true) => Some(help_id),
+            (false, false) => None,
+        }
+    }
+
+    /// `Some("true")` when the control is invalid, shaped for the optional
+    /// `aria-invalid` attribute (absent entirely on a valid control).
+    fn invalid(&self) -> Option<&'static str> {
+        self.error.as_ref().map(|_| "true")
+    }
+
+    /// The wrapper class, carrying the invalid state for the visual treatment.
+    fn field_class(&self) -> &'static str {
+        if self.error.is_some() {
+            "nav-field nav-field--invalid"
+        } else {
+            "nav-field"
+        }
+    }
+
+    /// `pub(crate)`: [`crate::notation_demo`] renders a `Field` directly,
+    /// outside a [`FormCard`] — its stepper has no `<form>` at all, so it
+    /// cannot go through [`FormCard::render`]'s field loop.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn render(&self) -> Element {
+        let control_id = self.control_id();
+        let help_id = format!("{control_id}-help");
+        let error_id = format!("{control_id}-error");
+        let described_by = self.described_by();
+        let invalid = self.invalid();
+        let field_class = self.field_class();
+        let check_class = if self.error.is_some() {
+            "nav-field nav-field--check nav-field--invalid"
+        } else {
+            "nav-field nav-field--check"
+        };
+        let help = self.help.clone();
+        let help_runs = self.help_runs.clone();
+        let error = self.error.clone();
+        let picker_help = help.clone();
+        let picker_error = error.clone();
+        let choice_help = help.clone();
+        let choice_error = error.clone();
+        let name = self.name.clone();
+        let label = self.label.clone();
+        let required = self.required;
+
+        let help_block = rsx! {
+            if let Some(e) = error {
+                // `role="alert"` so the message is announced when the page
+                // loads after the redirect, not only when focus reaches the
+                // control.
+                div { class: "nav-field__error", id: "{error_id}", role: "alert", "{e}" }
+            }
+            if let Some(runs) = help_runs {
+                p { class: "nav-field__help", id: "{help_id}",
+                    for run in runs.iter() {
+                        if let Some(href) = run.href.as_ref() {
+                            a { href: "{href}", "{run.text}" }
+                        } else if run.emphasis {
+                            strong { "{run.text}" }
+                        } else {
+                            "{run.text}"
+                        }
+                    }
+                }
+            } else if let Some(h) = help {
+                p { class: "nav-field__help", id: "{help_id}", "{h}" }
+            }
+        };
+
+        match &self.kind {
+            FieldKind::Color { value } => rsx! {
+                div { class: "{field_class}",
+                    label { class: "nav-label", r#for: "{control_id}",
+                        "{label}"
+                        if required { span { class: "nav-required", "aria-hidden": "true", " *" } }
+                    }
+                    super::ColorPicker {
+                        id: control_id.clone(), name, value: value.clone(), required,
+                        described_by, invalid: invalid.map(str::to_string),
+                    }
+                    {help_block}
+                }
+            },
+            FieldKind::Checkbox { value, checked } => rsx! {
+                div { class: "{check_class}",
+                    input {
+                        class: "nav-checkbox",
+                        r#type: "checkbox",
+                        id: "{control_id}",
+                        name: "{name}",
+                        value: "{value}",
+                        checked: *checked,
+                        required,
+                        "aria-describedby": described_by,
+                        "aria-invalid": invalid,
+                    }
+                    label { class: "nav-label", r#for: "{control_id}",
+                        "{label}"
+                        if required {
+                            span { class: "nav-required", "aria-hidden": "true", " *" }
+                        }
+                    }
+                    {help_block}
+                }
+            },
+            FieldKind::Radio {
+                options,
+                selected,
+                locked,
+            } => rsx! {
+                fieldset { class: "{field_class} nav-field--radio",
+                    legend { class: "nav-label",
+                        "{label}"
+                        if required {
+                            span { class: "nav-required", "aria-hidden": "true", " *" }
+                        }
+                    }
+                    for choice in options.iter() {
+                        div {
+                            class: if locked.contains(&choice.value) { "nav-radio nav-radio--locked" } else { "nav-radio" },
+                            input {
+                                class: "nav-radio__input",
+                                r#type: "radio",
+                                id: "{control_id}-{choice.value}",
+                                name: "{name}",
+                                value: "{choice.value}",
+                                checked: selected.as_deref() == Some(choice.value.as_str()),
+                                disabled: locked.contains(&choice.value),
+                                "aria-describedby": described_by.clone(),
+                                "aria-invalid": invalid,
+                            }
+                            label { class: "nav-label nav-label--inline", r#for: "{control_id}-{choice.value}", "{choice.label}" }
+                        }
+                    }
+                    {help_block}
+                }
+            },
+            FieldKind::Input { .. } => self.render_input(described_by.as_deref(), help_block),
+            FieldKind::Textarea { value, rows } => rsx! {
+                div { class: "{field_class}",
+                    label { class: "nav-label", r#for: "{control_id}",
+                        "{label}"
+                        if required {
+                            span { class: "nav-required", "aria-hidden": "true", " *" }
+                        }
+                    }
+                    // A `<textarea>`'s value must be its inner content, and a
+                    // `<textarea>` is RCDATA — so neither a `value` attribute
+                    // (browsers ignore it) nor a Dioxus child text node (whose
+                    // hydration-comment markers would render as literal `<!--…-->`
+                    // text in the box) works. Set the escaped value as inner HTML.
+                    textarea {
+                        class: "nav-input",
+                        id: "{control_id}",
+                        name: "{name}",
+                        rows: "{rows}",
+                        required,
+                        "aria-describedby": described_by,
+                        "aria-invalid": invalid,
+                        dangerous_inner_html: escape_rcdata(value),
+                    }
+                    {help_block}
+                }
+            },
+            FieldKind::Select {
+                options,
+                selected,
+                disabled,
+            } => rsx! {
+                div { class: "{field_class}",
+                    label { class: "nav-label", r#for: "{control_id}",
+                        "{label}"
+                        if required {
+                            span { class: "nav-required", "aria-hidden": "true", " *" }
+                        }
+                    }
+                    select {
+                        class: "nav-select",
+                        id: "{control_id}",
+                        name: "{name}",
+                        required,
+                        disabled: *disabled,
+                        "aria-describedby": described_by,
+                        "aria-invalid": invalid,
+                        for o in options.iter() {
+                            option {
+                                value: "{o.value}",
+                                selected: Some(o.value.clone()) == *selected,
+                                "{o.label}"
+                            }
+                        }
+                    }
+                    {help_block}
+                }
+            },
+            FieldKind::PersonPicker {
+                blank_label,
+                people,
+                selected,
+                search,
+                disabled,
+            } => rsx! {
+                PersonPicker {
+                    label: label.clone(),
+                    name: name.clone(),
+                    blank_label: blank_label.clone(),
+                    people: people.clone(),
+                    selected: selected.clone(),
+                    search: search.clone(),
+                    help: picker_help,
+                    error: picker_error,
+                    required,
+                    disabled: *disabled,
+                    control_id: Some(control_id.clone()),
+                }
+            },
+            FieldKind::ChoiceCards {
+                options,
+                selected,
+                multiple,
+            } => rsx! {
+                ChoiceGroup {
+                    legend: rsx! { "{label}" },
+                    name: name.clone(),
+                    options: options
+                        .iter()
+                        .map(|c| ChoiceGroupOption::new(c.value.clone(), c.label.clone()))
+                        .collect::<Vec<_>>(),
+                    selected: selected.clone(),
+                    multiple: *multiple,
+                    help: choice_help,
+                    error: choice_error,
+                    required,
+                }
+            },
+        }
+    }
+
+    /// Render the [`FieldKind::Input`] variant (the richest one: prefix add-on,
+    /// placeholder, numeric step, datalist suggestions), split out to keep
+    /// [`Field::render`] under the line limit. `self.kind` is always `Input`
+    /// here — the sole caller dispatches on it.
+    fn render_input(&self, described_by: Option<&str>, help_block: Element) -> Element {
+        let name = self.name.clone();
+        let label = self.label.clone();
+        let required = self.required;
+        let invalid = self.invalid();
+        let field_class = self.field_class();
+        let FieldKind::Input {
+            input_type,
+            value,
+            placeholder,
+            prefix,
+            step,
+            disabled,
+            multiple,
+            suggestions,
+            autocomplete,
+            maxlength,
+        } = &self.kind
+        else {
+            return rsx! {};
+        };
+        let control_id = self.control_id();
+        let list_id = format!("{control_id}-suggestions");
+        let list_attr = suggestions.as_ref().map(|_| list_id.clone());
+        let options = suggestions.clone().unwrap_or_default();
+        // A file input is not a controlled value: setting `value=""` on every
+        // Dioxus render clears the selected file before submit (native or
+        // in-place fetch) can read it. Omit the attribute for `type="file"`.
+        // A password is never echoed back into the page, so it carries none
+        // either.
+        let input_value =
+            (!matches!(input_type.as_str(), "file" | "password")).then(|| value.clone());
+        let label_el = rsx! {
+            label { class: "nav-label", r#for: "{control_id}",
+                "{label}"
+                if required {
+                    span { class: "nav-required", "aria-hidden": "true", " *" }
+                }
+            }
+        };
+        rsx! {
+            div { class: "{field_class}",
+                if let Some((text, href)) = self.label_link.as_ref() {
+                    div { class: "nav-field__label-row",
+                        {label_el}
+                        a { class: "nav-field__label-link", href: "{href}", "{text}" }
+                    }
+                } else {
+                    {label_el}
+                }
+                if let Some(prefix) = prefix {
+                    div { class: "nav-input-group",
+                        span { class: "nav-input-group__addon", "{prefix}" }
+                        input {
+                            class: "nav-input",
+                            r#type: "{input_type}",
+                            id: "{control_id}",
+                            name: "{name}",
+                            value: input_value.clone(),
+                            placeholder: placeholder.clone(),
+                            step: step.clone(),
+                            autocomplete: autocomplete.clone(),
+                            maxlength: maxlength.map(|limit| limit.to_string()),
+                            required,
+                            disabled: *disabled,
+                            multiple: *multiple,
+                            list: list_attr.clone(),
+                            "aria-describedby": described_by,
+                        "aria-invalid": invalid,
+                        }
+                    }
+                } else {
+                    input {
+                        class: "nav-input",
+                        r#type: "{input_type}",
+                        id: "{control_id}",
+                        name: "{name}",
+                        value: input_value.clone(),
+                        placeholder: placeholder.clone(),
+                        step: step.clone(),
+                        autocomplete: autocomplete.clone(),
+                        maxlength: maxlength.map(|limit| limit.to_string()),
+                        required,
+                        disabled: *disabled,
+                        multiple: *multiple,
+                        list: list_attr.clone(),
+                        "aria-describedby": described_by,
+                        "aria-invalid": invalid,
+                    }
+                }
+                if !options.is_empty() {
+                    datalist { id: "{list_id}",
+                        for opt in options.iter() {
+                            option { value: "{opt}" }
+                        }
+                    }
+                }
+                {help_block}
+            }
+        }
+    }
+}
+
+/// Reference data a question's control may need beyond its raw `answer_type`,
+/// prompt, and prior value — one struct so [`question_fields`]'s signature
+/// doesn't grow a positional slice parameter per answer type.
+#[derive(Clone, Default)]
+pub struct QuestionFieldContext {
+    /// Seeded option names for a `country` question; empty for every other
+    /// `answer_type`.
+    pub country_options: Vec<String>,
+    /// `(value, label)` options for a `radio` question — the template's own
+    /// declared choices (e.g. `custom_single_choice__governing_law`'s
+    /// nevada/california/washington). Empty for every other `answer_type`.
+    pub choices: Vec<(String, String)>,
+    /// The project-scoped people a `person` question may pick from
+    /// (`portal::intake::reference_candidates`). Empty for every other
+    /// `answer_type`.
+    pub person_candidates: Vec<PersonChoice>,
+}
+
+/// Build the control(s) a questionnaire question renders for its `answer_type`.
+///
+/// Shared by both walkers over the same notation — the lawyer walk and the
+/// client self-serve intake — so a client confirming what lawyer entered meets
+/// the same control for the same answer type.
+///
+/// `people_list` returns no [`Field`] at all: it is a composite widget whose
+/// rows come through the card's `extra_fields` slot (see
+/// [`crate::components::PeopleListInputs`]), which the `POST` handler assembles
+/// into one answer.
+#[must_use]
+pub fn question_fields(
+    answer_type: &str,
+    prompt: &str,
+    prior: &str,
+    context: &QuestionFieldContext,
+) -> Vec<Field> {
+    match answer_type {
+        "people_list" => Vec::new(),
+        "text" => vec![Field::textarea(prompt, "value", prior, 4).required()],
+        "int" => vec![Field::number(prompt, "value", prior).required()],
+        "datetime" => vec![Field::input(prompt, "value", prior, "datetime-local").required()],
+        "custom_usd" => vec![Field::input(prompt, "value", prior, "number")
+            .prefix("$")
+            .step("0.01")
+            .placeholder("0.00")
+            .help("Enter dollars and cents, e.g. 1250.00.")
+            .required()],
+        "custom_phone" => vec![Field::input(prompt, "value", prior, "tel")
+            .placeholder("(702) 555-0100")
+            .help("Include the country code if the number is outside the U.S.")
+            .required()],
+        "country" => vec![Field::country_select(
+            prompt,
+            &context.country_options,
+            Some(prior).filter(|v| !v.is_empty()),
+        )],
+        // ENG-504: a two-card choice, not a lone checkbox — "false" is a real,
+        // pre-selectable answer rather than the mere absence of "true".
+        "bool" | "yes_no" => vec![Field::choice_cards(
+            prompt,
+            "value",
+            vec![Choice::new("true", "Yes"), Choice::new("false", "No")],
+            Some(prior).filter(|v| !v.is_empty()).map(str::to_string),
+        )
+        .required()],
+        // ENG-454/ENG-504: a template's own one-off radio options (e.g.
+        // `custom_single_choice__governing_law`), grown to cards. The DB
+        // `answer_type` for a `custom_single_choice` question is the seeded
+        // catalog row's `question_type: radio` (`store/seeds/Question.yaml`),
+        // not the state's own `custom_single_choice` prefix — see
+        // `workflows::notation_session::load_question`.
+        "radio" => vec![Field::choice_cards(
+            prompt,
+            "value",
+            context
+                .choices
+                .iter()
+                .map(|(value, label)| Choice::new(value.clone(), label.clone()))
+                .collect(),
+            Some(prior).filter(|v| !v.is_empty()).map(str::to_string),
+        )
+        .required()],
+        // ENG-505: the checkbox-group sibling of `radio` — `prior` is the
+        // stored JSON array of previously selected keys, not a single value.
+        "multiple_choice" => vec![Field::multi_choice_cards(
+            prompt,
+            "value",
+            context
+                .choices
+                .iter()
+                .map(|(value, label)| Choice::new(value.clone(), label.clone()))
+                .collect(),
+            serde_json::from_str(prior).unwrap_or_default(),
+        )],
+        // ENG-454: a `person` question with a real, project-scoped candidate
+        // list (`portal::intake::reference_candidates`) — the people already
+        // on this matter. Offered only when there is nothing to lose: no
+        // prior answer yet, or the prior answer already names one of these
+        // candidates. A prior answer that was typed free-text and matches no
+        // candidate (e.g. a lawyer named someone not yet a participant) keeps
+        // the free-text path — a `<select>` cannot represent an option it
+        // doesn't list, and silently dropping what was already typed would
+        // be worse than not offering the picker at all.
+        "person"
+            if !context.person_candidates.is_empty()
+                && (prior.is_empty()
+                    || context.person_candidates.iter().any(|p| p.name == prior)) =>
+        {
+            let selected = context
+                .person_candidates
+                .iter()
+                .find(|person| person.name == prior)
+                .map(|person| person.id.clone());
+            vec![Field::person_picker(
+                prompt,
+                "value",
+                "Choose a person…",
+                context.person_candidates.clone(),
+                selected,
+            )]
+        }
+        _ => vec![Field::text(prompt, "value", prior).required()],
+    }
+}
+
+/// The heading level at the top of the card. A standalone form page owns the
+/// page `h1`; a form embedded under an existing `h1` uses `h2`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Heading {
+    H1,
+    H2,
+    /// Do not render a visible heading; the form keeps `title` as its
+    /// accessible name for an embedded CTA whose surrounding section already
+    /// supplies the visible heading.
+    Hidden,
+}
+
+/// A complete create / edit form rendered as a constrained card. Native submit
+/// to `action` with `method` (works pre-hydration).
+#[component]
+pub fn FormCard(
+    title: String,
+    action: String,
+    submit_label: String,
+    #[props(default = "post".to_string())] method: String,
+    #[props(default = Heading::H1)] heading: Heading,
+    #[props(default)] multipart: bool,
+    /// The session CSRF token. When present it renders a hidden `_csrf` field so
+    /// a `POST` form clears the CSRF guard on the mutation handler; `None` on the
+    /// public forms (e.g. the design gallery) that post nowhere protected.
+    #[props(default)]
+    csrf_token: Option<String>,
+    /// Render the form read-only: keep the (disabled) fields for context but omit
+    /// the submit button, so nothing on the page invites a write. The immutable
+    /// super-admin person record uses this — the command layer rejects every edit
+    /// to it, so the form must not offer a Save.
+    #[props(default)]
+    read_only: bool,
+    /// Muted introductory prose between the title and the fields — the "here's
+    /// what you're confirming" framing a client-facing form leads with.
+    #[props(default)]
+    intro: Option<Element>,
+    /// Controls appended inside the `<form>` after the [`Field`]s, for a
+    /// composite widget one `Field` cannot express — the `people_list` row
+    /// groups, whose several inputs the handler assembles into one answer.
+    /// They post with the rest of the form.
+    #[props(default)]
+    extra_fields: Option<Element>,
+    fields: Vec<Field>,
+) -> Element {
+    let enctype = multipart.then(|| "multipart/form-data".to_string());
+    rsx! {
+        div { class: "nav-card nav-form-card",
+            div { class: "nav-card__body",
+                if heading == Heading::H1 {
+                    h1 { class: "nav-form-card__title", "{title}" }
+                } else if heading == Heading::H2 {
+                    h2 { class: "nav-form-card__title", "{title}" }
+                }
+                if let Some(intro) = intro {
+                    div { class: "nav-muted nav-form-card__intro", {intro} }
+                }
+                form {
+                    // `admin-form` carries no styling — it is the stable hook the
+                    // browser accessibility e2e (`web/tests/accessibility_e2e.rs`)
+                    // scopes axe to. The form it succeeds kept it for the same
+                    // reason; dropping it in the Phase 3 migration timed the gate out.
+                    class: "nav-form admin-form",
+                    action: "{action}",
+                    method: "{method}",
+                    // The card title is the form's accessible name (WCAG: a
+                    // `<form>` is only exposed as a landmark when it is named),
+                    // matching the form a11y invariant.
+                    "aria-label": "{title}",
+                    enctype,
+                    if let Some(token) = csrf_token.as_ref() {
+                        input { r#type: "hidden", name: "_csrf", value: "{token}" }
+                    }
+                    for field in fields.iter() {
+                        {field.render()}
+                    }
+                    if let Some(extra) = extra_fields {
+                        {extra}
+                    }
+                    if !read_only {
+                        button { class: "nav-btn nav-btn--primary", r#type: "submit", "{submit_label}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Layer-1 accessibility invariants for a rendered form page — the Dioxus
+/// successor to the `views/tests/accessibility.rs` gate the migrated pages
+/// were held to. Test-only, and shared across the page modules so each migrated
+/// form is checked against exactly the same rules:
+///
+/// 1. no positive `tabindex` (DOM order drives focus);
+/// 2. every `<label for>` points at an id that exists;
+/// 3. every `aria-describedby` points at an id that exists; and
+/// 4. every `<form>` carries an accessible name (`aria-label`).
+///
+/// `label` names the page in the failure message.
+#[cfg(test)]
+pub(crate) fn assert_forms_accessible(html: &str, label: &str) {
+    /// Collect the values of every `attr="…"` occurrence in `html`.
+    fn values<'a>(html: &'a str, attr: &str) -> Vec<&'a str> {
+        let needle = format!(" {attr}=\"");
+        html.match_indices(&needle)
+            .filter_map(|(at, _)| {
+                let rest = &html[at + needle.len()..];
+                rest.find('"').map(|end| &rest[..end])
+            })
+            .collect()
+    }
+
+    let mut ids = std::collections::HashSet::new();
+    for id in values(html, "id") {
+        assert!(
+            ids.insert(id),
+            "{label}: duplicate id=\"{id}\" — a <label for> reaches only the first one",
+        );
+    }
+
+    for raw in values(html, "tabindex") {
+        let value: i32 = raw.parse().unwrap_or(0);
+        assert!(
+            value <= 0,
+            "{label}: positive tabindex ({value}) breaks DOM focus order",
+        );
+    }
+    for target in values(html, "for") {
+        assert!(
+            ids.contains(target),
+            "{label}: <label for=\"{target}\"> points at no element",
+        );
+    }
+    for described in values(html, "aria-describedby") {
+        for target in described.split_whitespace() {
+            assert!(
+                ids.contains(target),
+                "{label}: aria-describedby=\"{target}\" points at no element",
+            );
+        }
+    }
+    let forms = html.matches("<form").count();
+    let named = values(html, "aria-label").len();
+    assert!(
+        named >= forms,
+        "{label}: {forms} form(s) but only {named} aria-label(s) — a form is only \
+         exposed as a landmark when it is named",
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ssr(app: fn() -> Element) -> String {
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        dioxus_ssr::render(&dom)
+    }
+
+    #[test]
+    fn renders_a_native_form_with_labeled_fields_and_submit() {
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Contact us".to_string(),
+                    action: "/contact".to_string(),
+                    submit_label: "Send".to_string(),
+                    fields: vec![
+                        Field::email("Email", "email", "").required(),
+                        Field::textarea("Message", "message", "", 4),
+                    ],
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(
+            html.contains(r#"<form class="nav-form admin-form" action="/contact" method="post""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<label class="nav-label" for="email""#),
+            "{html}"
+        );
+        assert!(html.contains(r#"type="email""#), "{html}");
+        assert!(html.contains("required"), "{html}");
+        // Required cue is a visible, aria-hidden star.
+        assert!(
+            html.contains(r#"<span class="nav-required" aria-hidden="true"> *</span>"#),
+            "{html}"
+        );
+        assert!(html.contains("<textarea"), "{html}");
+        assert!(html.contains(r#"type="submit""#), "{html}");
+        assert!(html.contains("Send"), "{html}");
+        // No Bootstrap classes.
+        assert!(!html.contains("form-control"), "{html}");
+    }
+
+    #[test]
+    fn renders_input_purpose_limits_linked_help_and_a_hidden_heading() {
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Embedded form".to_string(),
+                    action: "/contact".to_string(),
+                    submit_label: "Send".to_string(),
+                    heading: Heading::Hidden,
+                    fields: vec![Field::email("Email", "email", "")
+                        .autocomplete("email")
+                        .maxlength(254)
+                        .help_runs(vec![super::super::copy_runs::CopyRun {
+                            text: "Privacy Policy".to_string(),
+                            emphasis: false,
+                            href: Some("/privacy".to_string()),
+                        }])],
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(!html.contains("nav-form-card__title"), "{html}");
+        assert!(html.contains(r#"aria-label="Embedded form""#), "{html}");
+        assert!(html.contains(r#"autocomplete="email""#), "{html}");
+        assert!(html.contains(r#"maxlength="254""#), "{html}");
+        assert!(html.contains(r#"href="/privacy""#), "{html}");
+        // The help line is a paragraph holding a class-less anchor, which is
+        // exactly what the shared inline-prose rule underlines. As a `<div>`
+        // holding the same link, the cue was colour alone and axe failed
+        // `link-in-text-block` on `/design`.
+        assert!(
+            html.contains(r#"<p class="nav-field__help""#),
+            "help text is prose, so the WCAG 1.4.1 underline can reach it: {html}"
+        );
+        let help = html
+            .split(r#"<p class="nav-field__help""#)
+            .nth(1)
+            .expect("the help paragraph");
+        assert!(
+            help.contains(r#"<a href="/privacy""#),
+            "the help link stays class-less, so `:is(p, li) > a:not([class])` \
+             matches it: {help}"
+        );
+        assert_forms_accessible(&html, "embedded form");
+    }
+
+    #[test]
+    fn a_file_input_does_not_carry_a_value_attribute() {
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Upload".to_string(),
+                    action: "/app/avatar".to_string(),
+                    submit_label: "Upload".to_string(),
+                    multipart: true,
+                    fields: vec![Field::file("Avatar", "file").required()],
+                }
+            }
+        }
+        let html = ssr(app);
+        let file_tag = html
+            .split("<input")
+            .find(|chunk| chunk.contains(r#"type="file""#))
+            .expect("a file input");
+        let tag = file_tag.split('>').next().expect("the opening tag");
+        assert!(
+            !tag.contains("value="),
+            "a file input with value=\"\" is a controlled field that clears the selected file: {tag}"
+        );
+    }
+
+    #[test]
+    fn keeps_admin_form_class_for_the_e2e_selector() {
+        // `web/tests/accessibility_e2e.rs` waits for `form.admin-form` before
+        // running axe. The Phase 3 migration to this Dioxus FormCard must keep
+        // the class or the deploy's browser gate times out (WaitTimeout).
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Edit".to_string(),
+                    action: "/x".to_string(),
+                    submit_label: "Save".to_string(),
+                    fields: vec![Field::text("Name", "name", "")],
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(
+            html.contains("admin-form"),
+            "browser e2e locates the form by .admin-form, got: {html}"
+        );
+    }
+
+    #[test]
+    fn select_marks_the_selected_option() {
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Pick".to_string(),
+                    action: "/pick".to_string(),
+                    submit_label: "Go".to_string(),
+                    fields: vec![Field::select(
+                        "Role",
+                        "role",
+                        vec![Choice::new("lawyer", "Lawyer"), Choice::new("admin", "Admin")],
+                        Some("admin".to_string()),
+                    )],
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(html.contains(r#"<select class="nav-select""#), "{html}");
+        assert!(html.contains(r#"<option value="admin" selected"#), "{html}");
+    }
+
+    /// Rails' `field_with_errors`, as this component expresses it: the message
+    /// sits with the control, the control is marked invalid, and both the
+    /// message and any hint are reachable from `aria-describedby`.
+    #[test]
+    fn a_field_error_marks_the_control_invalid_and_describes_it() {
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Add person".to_string(),
+                    action: "/app/admin/people".to_string(),
+                    submit_label: "Create".to_string(),
+                    fields: vec![
+                        Field::email("Email", "email", "not-an-email")
+                            .required()
+                            .help("We reply here.")
+                            .error("Enter a valid email address."),
+                        Field::text("Name", "name", "Ada"),
+                    ],
+                }
+            }
+        }
+        let html = ssr(app);
+
+        // The message renders beside its control, announced on load rather than
+        // only when focus arrives. SSR interleaves hydration comments between an
+        // element's attributes and its text, so match `>Text<`, never
+        // `class="x">Text`.
+        assert!(html.contains(r#"id="email-error""#), "{html}");
+        assert!(html.contains(r#"role="alert""#), "{html}");
+        assert!(html.contains(">Enter a valid email address.<"), "{html}");
+
+        // The control is marked invalid and describes itself with the reason
+        // FIRST, then the hint.
+        assert!(html.contains(r#"aria-invalid="true""#), "{html}");
+        assert!(
+            html.contains(r#"aria-describedby="email-error email-help""#),
+            "reason precedes hint in the description: {html}"
+        );
+
+        // The wrapper carries the invalid state for the visual treatment.
+        assert!(html.contains("nav-field nav-field--invalid"), "{html}");
+
+        // The value the user submitted survives the redirect, so the draft is
+        // not retyped.
+        assert!(html.contains(r#"value="not-an-email""#), "{html}");
+
+        // A field with no error is untouched: no stray invalid state anywhere.
+        assert!(!html.contains(r#"id="name-error""#), "{html}");
+
+        // The whole-form accessibility invariants still hold, including that
+        // every `aria-describedby` points at an element that exists.
+        assert_forms_accessible(&html, "field error");
+    }
+
+    #[test]
+    fn a_field_error_without_help_describes_only_the_error() {
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Add person".to_string(),
+                    action: "/app/admin/people".to_string(),
+                    submit_label: "Create".to_string(),
+                    fields: vec![Field::text("Name", "name", "").error("Name is required.")],
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(html.contains(r#"aria-describedby="name-error""#), "{html}");
+        assert!(!html.contains("name-help"), "{html}");
+        assert_forms_accessible(&html, "field error, no help");
+    }
+
+    /// A clean form must gain nothing from this feature — no invalid state, no
+    /// empty message node, no dangling description.
+    #[test]
+    fn a_form_without_errors_is_unchanged() {
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Add person".to_string(),
+                    action: "/app/admin/people".to_string(),
+                    submit_label: "Create".to_string(),
+                    fields: vec![Field::text("Name", "name", "Ada").help("Legal name.")],
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(!html.contains("nav-field--invalid"), "{html}");
+        assert!(!html.contains("aria-invalid"), "{html}");
+        assert!(!html.contains("nav-field__error"), "{html}");
+        assert!(html.contains(r#"aria-describedby="name-help""#), "{html}");
+    }
+
+    #[test]
+    fn read_only_card_disables_fields_and_omits_the_submit() {
+        // The immutable super-admin person record renders its fields for context
+        // but offers no Save, and a `.disabled()` field carries the native
+        // `disabled` attribute so nothing on the page invites a rejected write.
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Edit person".to_string(),
+                    action: "/app/admin/people/1".to_string(),
+                    submit_label: "Save".to_string(),
+                    read_only: true,
+                    fields: vec![
+                        Field::text("Name", "name", "Nick").disabled(),
+                        Field::select(
+                            "Role",
+                            "role",
+                            vec![Choice::new("admin", "Admin")],
+                            Some("admin".to_string()),
+                        )
+                        .disabled(),
+                    ],
+                }
+            }
+        }
+        let html = ssr(app);
+        // The disabled attribute is present on both controls.
+        assert!(
+            html.contains(r#"id="name""#) && html.contains("disabled"),
+            "{html}"
+        );
+        assert!(html.contains(r#"<select class="nav-select""#), "{html}");
+        // No submit button on a read-only card.
+        assert!(!html.contains(r#"type="submit""#), "{html}");
+    }
+
+    #[test]
+    fn input_help_is_wired_through_aria_describedby() {
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Kind".to_string(),
+                    action: "/k".to_string(),
+                    submit_label: "Save".to_string(),
+                    fields: vec![Field::text("Kind", "kind", "").help("Optional.")],
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(html.contains(r#"aria-describedby="kind-help""#), "{html}");
+        assert!(
+            html.contains(r#"<p class="nav-field__help" id="kind-help">Optional."#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn checkbox_renders_its_checked_state() {
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Prefs".to_string(),
+                    action: "/p".to_string(),
+                    submit_label: "Save".to_string(),
+                    fields: vec![Field::checkbox("Subscribe", "subscribe", "yes", true)],
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(html.contains(r#"type="checkbox""#), "{html}");
+        assert!(html.contains("checked"), "{html}");
+    }
+
+    #[test]
+    fn checkbox_marks_required() {
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Terms".to_string(),
+                    action: "/t".to_string(),
+                    submit_label: "Save".to_string(),
+                    fields: vec![
+                        Field::checkbox("I agree to the terms", "agree", "yes", false).required(),
+                    ],
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(html.contains(r#"type="checkbox""#), "{html}");
+        // The native required state is on the control...
+        assert!(html.contains("required"), "{html}");
+        // ...and the visible, aria-hidden star cue is on the label.
+        assert!(
+            html.contains(r#"<span class="nav-required" aria-hidden="true"> *</span>"#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn input_prefix_and_suggestions_render() {
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Fee".to_string(),
+                    action: "/f".to_string(),
+                    submit_label: "Save".to_string(),
+                    fields: vec![
+                        Field::input("Amount", "amount", "", "number")
+                            .placeholder("0.00")
+                            .suggestions(vec!["100".to_string(), "250".to_string()]),
+                    ],
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(html.contains(r#"placeholder="0.00""#), "{html}");
+        assert!(html.contains("<datalist"), "{html}");
+        assert!(html.contains(r#"list="amount-suggestions""#), "{html}");
+    }
+
+    #[test]
+    fn eng_454_a_radio_answer_type_renders_the_templates_own_choices() {
+        // ENG-454: a `custom_single_choice` question's real DB `answer_type`
+        // is the seeded catalog row's `question_type: radio`
+        // (`store/seeds/Question.yaml`), not the state's own
+        // `custom_single_choice` prefix — see
+        // `workflows::notation_session::load_question`. Before this fix,
+        // `question_fields` had no `"radio"` arm and fell through to the
+        // default `Field::text`, a plain single-line box, even though the
+        // template declared real choices.
+        fn app() -> Element {
+            let fields = question_fields(
+                "radio",
+                "Which state's law governs?",
+                "nevada",
+                &QuestionFieldContext {
+                    country_options: Vec::new(),
+                    choices: vec![
+                        ("nevada".to_string(), "Nevada".to_string()),
+                        ("california".to_string(), "California".to_string()),
+                    ],
+                    person_candidates: Vec::new(),
+                },
+            );
+            rsx! {
+                FormCard {
+                    title: "Step".to_string(),
+                    action: "/step".to_string(),
+                    submit_label: "Continue".to_string(),
+                    fields,
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(html.contains(r#"type="radio""#), "{html}");
+        assert!(
+            html.contains("Nevada") && html.contains("California"),
+            "{html}"
+        );
+        let nevada = html.find("value=\"nevada\"").expect("the option renders");
+        assert!(
+            html[nevada..].contains("checked"),
+            "the prior answer stays selected: {html}"
+        );
+        // ENG-504: cards, not a compact radio list.
+        assert!(html.contains("nav-choice-group"), "{html}");
+        assert!(html.contains("nav-choice"), "{html}");
+    }
+
+    #[test]
+    fn eng_504_a_bool_answer_type_renders_a_two_card_yes_no_choice() {
+        fn app() -> Element {
+            let fields = question_fields(
+                "bool",
+                "Do you have counsel?",
+                "true",
+                &QuestionFieldContext::default(),
+            );
+            rsx! {
+                FormCard {
+                    title: "Step".to_string(),
+                    action: "/step".to_string(),
+                    submit_label: "Continue".to_string(),
+                    fields,
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(html.contains("nav-choice-group"), "{html}");
+        assert_eq!(html.matches("nav-choice__input").count(), 2, "{html}");
+        assert!(html.contains(">Yes<") && html.contains(">No<"), "{html}");
+        let yes = html.find("value=\"true\"").expect("the Yes card renders");
+        assert!(
+            html[yes..].contains("checked"),
+            "the prior answer stays selected: {html}"
+        );
+    }
+
+    #[test]
+    fn eng_505_a_multiple_choice_answer_type_renders_a_checkbox_choice_group() {
+        fn app() -> Element {
+            let fields = question_fields(
+                "multiple_choice",
+                "Which options apply?",
+                r#"["ein"]"#,
+                &QuestionFieldContext {
+                    country_options: Vec::new(),
+                    choices: vec![
+                        ("name".to_string(), "A name in mind".to_string()),
+                        ("ein".to_string(), "An EIN".to_string()),
+                    ],
+                    person_candidates: Vec::new(),
+                },
+            );
+            rsx! {
+                FormCard {
+                    title: "Step".to_string(),
+                    action: "/step".to_string(),
+                    submit_label: "Continue".to_string(),
+                    fields,
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(html.contains("nav-choice-group"), "{html}");
+        assert_eq!(html.matches(r#"type="checkbox""#).count(), 2, "{html}");
+        let ein = html.find("value=\"ein\"").expect("the EIN card renders");
+        assert!(
+            html[ein..].contains("checked"),
+            "the prior selection stays checked: {html}"
+        );
+        let name = html.find("value=\"name\"").expect("the name card renders");
+        let name_card_end = html[name..]
+            .find("</label>")
+            .map_or(html.len(), |i| name + i);
+        assert!(
+            !html[name..name_card_end].contains("checked"),
+            "the un-selected card stays unchecked: {html}"
+        );
+    }
+
+    #[test]
+    fn country_arm_still_uses_the_context_struct() {
+        // Guards the `country_options` plumbing through `QuestionFieldContext`
+        // — the ENG-454 signature change must not silently drop it.
+        fn app() -> Element {
+            let fields = question_fields(
+                "country",
+                "Which country?",
+                "Mexico",
+                &QuestionFieldContext {
+                    country_options: vec!["Canada".to_string(), "Mexico".to_string()],
+                    choices: Vec::new(),
+                    person_candidates: Vec::new(),
+                },
+            );
+            rsx! {
+                FormCard {
+                    title: "Step".to_string(),
+                    action: "/step".to_string(),
+                    submit_label: "Continue".to_string(),
+                    fields,
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(html.contains("<select"), "{html}");
+        assert!(html.contains("value=\"Mexico\" selected"), "{html}");
+    }
+
+    #[test]
+    fn eng_454_a_person_answer_type_with_candidates_renders_a_picker() {
+        // Before this fix, a `person` question fell through to the default
+        // `Field::text` even when `portal::intake::reference_candidates`
+        // resolved real, project-scoped people for it.
+        fn app() -> Element {
+            let fields = question_fields(
+                "person",
+                "Who is the client?",
+                "",
+                &QuestionFieldContext {
+                    country_options: Vec::new(),
+                    choices: Vec::new(),
+                    person_candidates: vec![PersonChoice::new(
+                        "00000000-0000-0000-0000-000000000010",
+                        "Aquarius Lumen",
+                        "aquarius@example.com",
+                    )],
+                },
+            );
+            rsx! {
+                FormCard {
+                    title: "Step".to_string(),
+                    action: "/step".to_string(),
+                    submit_label: "Continue".to_string(),
+                    fields,
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(html.contains("Aquarius Lumen"), "{html}");
+        assert!(!html.contains(r#"type="text""#), "{html}");
+    }
+
+    #[test]
+    fn a_person_answer_type_with_no_candidates_keeps_the_free_text_path() {
+        fn app() -> Element {
+            let fields = question_fields(
+                "person",
+                "Who is the client?",
+                "",
+                &QuestionFieldContext::default(),
+            );
+            rsx! {
+                FormCard {
+                    title: "Step".to_string(),
+                    action: "/step".to_string(),
+                    submit_label: "Continue".to_string(),
+                    fields,
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(html.contains(r#"type="text""#), "{html}");
+    }
+
+    #[test]
+    fn a_free_typed_prior_answer_matching_no_candidate_keeps_the_free_text_path() {
+        // Regression: a lawyer can name a `person__client` before that person
+        // is a project participant (free text, `id: None` per
+        // `resolve_reference_answer`). A `<select>` cannot represent a value
+        // it doesn't list, so switching to the picker once real candidates
+        // exist must not hide or drop that already-typed name.
+        fn app() -> Element {
+            let fields = question_fields(
+                "person",
+                "Who is the client?",
+                "Lawyer-typed Libra",
+                &QuestionFieldContext {
+                    country_options: Vec::new(),
+                    choices: Vec::new(),
+                    person_candidates: vec![PersonChoice::new(
+                        "00000000-0000-0000-0000-000000000010",
+                        "Libra",
+                        "libra@example.com",
+                    )],
+                },
+            );
+            rsx! {
+                FormCard {
+                    title: "Step".to_string(),
+                    action: "/step".to_string(),
+                    submit_label: "Continue".to_string(),
+                    fields,
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(html.contains("value=\"Lawyer-typed Libra\""), "{html}");
+        assert!(html.contains(r#"type="text""#), "{html}");
+    }
+
+    /// A password field never echoes a value back into the page, and its label
+    /// row can carry the recovery link opposite the label.
+    #[test]
+    fn password_field_echoes_no_value_and_carries_a_label_link() {
+        let html = {
+            let mut dom = VirtualDom::new(|| {
+                Field::password("Password", "password")
+                    .required()
+                    .autocomplete("current-password")
+                    .label_link("Forgot your password?", "/auth/password/reset")
+                    .render()
+            });
+            dom.rebuild_in_place();
+            dioxus_ssr::render(&dom)
+        };
+        assert!(html.contains(r#"type="password""#), "{html}");
+        assert!(html.contains(r#"class="nav-input""#), "{html}");
+        assert!(!html.contains("value="), "{html}");
+        assert!(
+            html.contains(r#"autocomplete="current-password""#),
+            "{html}"
+        );
+        assert!(html.contains(r#"class="nav-field__label-row""#), "{html}");
+        assert!(
+            html.contains(r#"<a class="nav-field__label-link" href="/auth/password/reset">Forgot your password?</a>"#),
+            "{html}"
+        );
+    }
+
+    /// Every email and password input in the workspace renders through
+    /// [`Field::email`] / [`Field::password`], so they all wear one design: the
+    /// `.nav-field` wrapper, the `.nav-label`, and the `.nav-input` control.
+    /// A hand-rolled `input { r#type: "email" }` (or a `Field::input` spelling
+    /// the type out) fails here, naming the file.
+    #[test]
+    fn email_and_password_inputs_render_only_through_field() {
+        fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if path.is_dir() {
+                    if !name.starts_with('.')
+                        && !matches!(
+                            name.as_ref(),
+                            "target" | "vendor" | "node_modules" | "public"
+                        )
+                    {
+                        rust_sources(&path, out);
+                    }
+                } else if name.ends_with(".rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        /// The argument list of each `Field::input(…)` call, whitespace removed.
+        fn field_input_args(code: &str) -> Vec<&str> {
+            let mut found = Vec::new();
+            let mut rest = code;
+            while let Some(start) = rest.find("Field::input(") {
+                let args = &rest[start + "Field::input(".len()..];
+                let mut depth = 1;
+                let end = args
+                    .char_indices()
+                    .find_map(|(i, c)| {
+                        match c {
+                            '(' => depth += 1,
+                            ')' => depth -= 1,
+                            _ => {}
+                        }
+                        (depth == 0).then_some(i)
+                    })
+                    .unwrap_or(args.len());
+                found.push(&args[..end]);
+                rest = &args[end..];
+            }
+            found
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut files = Vec::new();
+        rust_sources(&root, &mut files);
+        assert!(
+            files
+                .iter()
+                .any(|f| f.ends_with("webapp/src/auth_pages.rs")),
+            "the scan reaches the sign-in form"
+        );
+        let mut offenders = Vec::new();
+        for file in files {
+            if file.ends_with("webapp/src/components/form.rs") {
+                continue;
+            }
+            let Ok(source) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            // Test modules sit at the bottom and assert on rendered markup.
+            let code = source.split("#[cfg(test)]").next().unwrap_or_default();
+            let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+            let raw = [
+                r#"r#type:"email""#,
+                r#"r#type:"password""#,
+                r#"{"password"}"#,
+                r#"type="email""#,
+                r#"type="password""#,
+                r#"type=\"email\""#,
+                r#"type=\"password\""#,
+            ]
+            .into_iter()
+            .any(|needle| code.contains(needle));
+            let spelled = field_input_args(&code)
+                .iter()
+                .any(|args| args.ends_with(r#","email""#) || args.ends_with(r#","password""#));
+            if raw || spelled {
+                offenders.push(
+                    file.strip_prefix(&root)
+                        .unwrap_or(&file)
+                        .display()
+                        .to_string(),
+                );
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "render email and password inputs with Field::email / Field::password: {offenders:#?}"
+        );
+    }
+}

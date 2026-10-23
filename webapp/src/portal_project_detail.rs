@@ -1,0 +1,2207 @@
+//! The matter page (`/app/projects/{code}`) as a Dioxus
+//! component (#641 Phase 3, projects cluster) — the single-matter client view.
+//!
+//! The successor to the `portal::projects::detail` render. Every caller
+//! sees the matter through the client lens: a lawyer/admin user who also holds
+//! client-side matters gets the same view a client does, and a caller without
+//! client-side scope gets `404` (never `403` — the matter does not exist from
+//! their perspective). The page gathers, server-side of the render:
+//!
+//! - the matter name and status;
+//! - the invoice from the local Xero mirror (never Xero live);
+//! - the matter's notations (retainer, etc.) with a download link per PDF that
+//!   exists in the object store (`store::notations` keys, probed through the
+//!   injected storage handle) — except the signed copy, which additionally
+//!   requires a completed `store::signatures` record, so an object at that
+//!   key never reads as executed on its own;
+//! - the client-readable review drafts;
+//! - the matter's documents.
+
+use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
+
+use crate::components::{Choice, Field, FormCard, Heading, Tab, Tabs};
+use crate::people::ViewerRole;
+use crate::portal_project_list::PersonId;
+
+/// The pending client-intake notation resolved by the portal request layer.
+/// The resolver lives in `portal`, which owns the workflow dependency; this
+/// wasm-safe extension carries only the link target into the Dioxus server fn.
+#[derive(Clone, Default)]
+pub struct PendingClientIntake(pub Option<String>);
+
+/// One of the matter's invoices, read from the local Xero mirror. The Xero
+/// invoice id is deliberately not carried — only client-facing fields.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct InvoiceView {
+    /// The invoice-level reference (`Matter <project_id>`).
+    pub reference: String,
+    /// Formatted total, e.g. `$3,333.00`.
+    pub amount: String,
+    /// Provider status mirror (`AUTHORISED`, `PAID`, …).
+    pub status: String,
+    /// `true` once reconcile has seen the invoice paid in full.
+    pub paid: bool,
+    /// The date Xero raised the invoice, `YYYY-MM-DD`.
+    pub issued_on: String,
+}
+
+/// What the matter holds in the firm's client trust account, and how it got
+/// there — this matter's own funds only.
+///
+/// IOLTA is a pooled bank account: the firm's Nevada account holds many
+/// clients' money at once. A client is shown their own position and nothing
+/// else — never the pooled balance, never another matter's cents. The numbers
+/// are folded from `store::trust`, which mirrors what the firm recorded in
+/// Xero.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct TrustView {
+    /// Total this matter has paid into trust, e.g. `"$5,000.00"`.
+    pub deposited: String,
+    /// Still held for this matter — money paid in advance and not yet
+    /// earned, which is what would be refunded if the matter closed today.
+    pub held: String,
+    /// Earned by the firm and drawn out of trust against this matter's
+    /// invoices.
+    pub drawn: String,
+    /// Returned to the client.
+    pub refunded: String,
+    /// `true` when this matter has any trust posting at all — the section is
+    /// not rendered otherwise, so a matter that never held client funds says
+    /// nothing rather than showing four zeroes.
+    pub any: bool,
+    /// How this matter's funds left trust, newest first. Only this matter's
+    /// lines: the pooled transfer they were part of is a firm-side number.
+    #[serde(default)]
+    pub allocations: Vec<TrustAllocationView>,
+}
+
+/// One line of a pooled withdrawal that belonged to **this** matter: how
+/// much of the firm's transfer out of trust settled which of this matter's
+/// invoices.
+///
+/// The bank made one transfer covering several matters. What is rendered
+/// here is only the part funded by this client's money — never the pooled
+/// total, never another matter's share, and never the Xero ids behind
+/// either.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct TrustAllocationView {
+    /// The invoice this settled, by its human reference.
+    pub invoice_reference: String,
+    /// This matter's share, e.g. `"$600.00"`.
+    pub amount: String,
+    /// The date the money left trust, `YYYY-MM-DD`.
+    pub occurred_on: String,
+}
+
+/// Render one matter's [`store::trust::Position`] as the client-safe view
+/// both the client page and the lawyer matter page show. One constructor, so
+/// the two surfaces cannot drift into showing different numbers for the same
+/// matter.
+#[cfg(feature = "server")]
+#[must_use]
+pub fn trust_view(
+    position: &store::trust::Position,
+    allocations: &[store::iolta_withdrawals::IoltaAllocation],
+) -> TrustView {
+    TrustView {
+        deposited: format_usd(position.deposited_cents),
+        held: format_usd(position.held_cents()),
+        drawn: format_usd(position.earned_cents),
+        refunded: format_usd(position.refunded_cents),
+        any: position.deposited_cents != 0
+            || position.earned_cents != 0
+            || position.refunded_cents != 0,
+        allocations: allocations
+            .iter()
+            .map(|line| TrustAllocationView {
+                invoice_reference: line.invoice_reference.clone(),
+                amount: format_usd(line.amount_cents),
+                occurred_on: line.occurred_at.format("%Y-%m-%d").to_string(),
+            })
+            .collect(),
+    }
+}
+
+/// One of the matter's notations (e.g. the retainer), in plain words, with the
+/// download links keyed off which of its three PDFs exist in storage.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // One independent readiness flag per document/action.
+pub struct NotationRow {
+    pub id: String,
+    pub title: String,
+    /// Client-friendly status, e.g. "Signed" / "Awaiting your signature".
+    pub status: String,
+    /// The client-facing explanation of what happens next.
+    pub whats_next: String,
+    pub rendered_ready: bool,
+    /// Whether a completed signature record — provider id and `signed_at`
+    /// — backs this notation's document. Deliberately not "does an object
+    /// exist at the signed-document storage key": that would let any
+    /// upload landing at that key read as executed. See
+    /// [`notation_status_label`].
+    pub signed_ready: bool,
+    pub certificate_ready: bool,
+    /// True only for a live envelope (signature
+    /// [`store::signatures::SignatureState::Requested`]) whose bound signer
+    /// (`notation.person_id`) is the current session's person — never for a
+    /// declined, voided, expired, or already-completed envelope, and never
+    /// for a notation addressed to a different participant on the same
+    /// matter.
+    ///
+    /// Also false for `emailed` delivery, whose recipient carries no
+    /// `clientUserId`: the sign route has no embedded session to mint for
+    /// one and answers `409`, so the action would lead nowhere.
+    pub signable: bool,
+    /// Where the client reaches the firm when the status tells them to:
+    /// a `mailto:` for the brand's firm address on a declined, voided, or
+    /// expired envelope, `None` otherwise.
+    #[serde(default)]
+    pub contact_href: Option<String>,
+}
+
+/// One attorney-advanced draft the client may read and comment on.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ReviewDocRow {
+    pub id: String,
+    pub title: String,
+    pub kind: String,
+    pub status: String,
+}
+
+/// The client DRI's editable testimonial, without internal record ids or
+/// publication timestamps.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct ClientTestimonialView {
+    pub quote: String,
+    pub attribution: String,
+    /// A public request is represented by client consent; publication remains
+    /// a separate lawyer/admin decision and is never client-controlled.
+    pub public_requested: bool,
+}
+
+/// Which panel the documents/testimonial tab region server-renders.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MatterDetailTab {
+    #[default]
+    Documents,
+    Testimonial,
+}
+
+/// Consent copy aligned with the public homepage: the quote plus the chosen
+/// attribution, and nothing inferred from the stored Person record.
+const TESTIMONIAL_CONSENT: &str = "You can keep this testimonial private or request that the firm consider it for the public homepage. If the firm publishes it, the homepage shows the quote and the attribution you enter here. It does not show your stored name, title, or profile image. Leave attribution blank to publish the quote without a name. Public use requires your consent and the firm's approval.";
+
+#[cfg(feature = "server")]
+#[derive(Deserialize, Default)]
+struct ProjectDetailQuery {
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+#[cfg(any(test, feature = "server"))]
+fn parse_matter_tab(raw: Option<&str>, can_edit_testimonial: bool) -> MatterDetailTab {
+    match raw.map(str::trim) {
+        Some(value) if can_edit_testimonial && value.eq_ignore_ascii_case("testimonial") => {
+            MatterDetailTab::Testimonial
+        }
+        _ => MatterDetailTab::Documents,
+    }
+}
+
+/// The rendered matter-detail view — every field wasm-safe (plain scalars; no
+/// `store`/`SeaORM`/`cloud` type crosses to the client build).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct ProjectDetailView {
+    /// The matter's page strip from its synced `pages:`, client lens.
+    pub page_tabs: Vec<crate::sections::page::PageTab>,
+    pub id: String,
+    /// The Project code, which keys both the matter page and Portal.
+    pub code: String,
+    pub name: String,
+    pub status: String,
+    /// Every invoice mirrored for this matter, newest first — a matter may
+    /// carry more than one over time (ENG-588). Empty until Xero raises one.
+    pub invoices: Vec<InvoiceView>,
+    /// This matter's client-trust position. Never another matter's, and
+    /// never the pooled account's own balance.
+    #[serde(default)]
+    pub trust: TrustView,
+    pub notations: Vec<NotationRow>,
+    pub documents: Vec<String>,
+    pub review_docs: Vec<ReviewDocRow>,
+    /// The matter's collaboration resources, filtered to a client's audience:
+    /// the shared Slack channel, the shared Notion page, and the portal. The
+    /// firm's three private resources are never built for this view, so no
+    /// firm-only URL reaches a client's markup or hydration payload.
+    #[serde(default)]
+    pub resources: crate::project_resources::ProjectResourcesView,
+    /// The open deadlines the firm chose to warn the client about: only rows
+    /// with a client lead time. Internal dates never reach this view.
+    #[serde(default)]
+    pub deadlines: Vec<crate::project_deadlines::DeadlineRow>,
+    /// Historical rows that still carry an explicit client lead time.
+    #[serde(default)]
+    pub past_deadlines: Vec<crate::project_deadlines::DeadlineRow>,
+    pub csrf_token: String,
+    pub role: ViewerRole,
+    /// The original firm actor when this client lens is a matter preview. The
+    /// page renders its exit banner from this server-injected state rather than
+    /// inferring anything from the effective client session.
+    #[serde(default)]
+    pub viewing_as_dri: Option<crate::components::ClientDriView>,
+    /// The deploy's brand mark for the navbar. `None` when the mounted brand
+    /// configures none.
+    #[serde(default)]
+    pub logo: Option<crate::components::AppLogo>,
+    /// The practice whose public storefront opened this Project. The client
+    /// matter view alone wears this mark rather than the deployment's mark.
+    #[serde(default)]
+    pub brand_name: String,
+    /// The Project brand's firm of record, rendered in the matter page's
+    /// copyright notice.
+    #[serde(default)]
+    pub legal_entity: String,
+    /// The calendar year for the Project-brand copyright notice, resolved on
+    /// the server so the browser bundle needs no clock dependency.
+    #[serde(default)]
+    pub copyright_year: i32,
+    /// The resolved brand's tokens stylesheet href, so the page wears
+    /// its own palette rather than the firm's on a non-default host.
+    #[serde(default)]
+    pub tokens_href: String,
+    /// The one client-facing intake continuation for this matter, when the
+    /// current client-facing workflow still needs an answer.
+    #[serde(default)]
+    pub pending_intake: Option<String>,
+    /// The current client's testimonial, visible and editable only to the
+    /// project's client DRI.
+    #[serde(default)]
+    pub testimonial: Option<ClientTestimonialView>,
+    #[serde(default)]
+    pub can_edit_testimonial: bool,
+    /// The selected documents/testimonial panel. Absent or unrecognised `?tab=`
+    /// values render Documents. Testimonial is only selectable for a client DRI.
+    #[serde(default)]
+    pub selected_tab: MatterDetailTab,
+}
+
+/// A signer refused the envelope.
+#[cfg(feature = "server")]
+const DECLINED_LABEL: &str = "Signing was declined. Contact the firm to continue.";
+/// The firm cancelled the signature request.
+#[cfg(feature = "server")]
+const VOIDED_LABEL: &str =
+    "The firm cancelled this signature request. Contact the firm to continue.";
+/// The request lapsed before every signer finished; the firm can reissue it.
+#[cfg(feature = "server")]
+const EXPIRED_LABEL: &str =
+    "This signature request expired. Contact the firm to have it sent again.";
+/// The client has signed; the firm has not countersigned yet.
+#[cfg(feature = "server")]
+const COUNTERSIGNATURE_LABEL: &str = "You have signed. Awaiting the firm's countersignature.";
+
+/// Client-friendly status for a notation, derived from its workflow state,
+/// its signature evidence, and which PDFs have materialized — never the raw
+/// docket state. Mirrors the `notation_status_label`.
+///
+/// `signed_ready` here is signature evidence
+/// ([`store::signatures::completed_for_notation`]), not object presence — a
+/// declined or voided envelope, or one still outstanding, both leave it
+/// `false`, so neither renders "Signed". `signature_state` is what tells
+/// those two apart: a live envelope reads
+/// [`store::signatures::SignatureState::Requested`], while a dead one reads
+/// `Declined`, `Voided`, or `Expired` — none of those may read as "Ready for
+/// signature" or "Awaiting your signature", both of which offer a signing
+/// action that no longer exists (ENG-558/ENG-560).
+///
+/// `awaiting_countersignature` is true while the envelope is still live but
+/// the client's own recipient step is recorded as complete
+/// ([`store::signatures::Signature::completed_signer_roles`], written by
+/// `esignature_webhook` on `recipient-completed`): the client has signed
+/// and the firm has not yet countersigned.
+#[cfg(feature = "server")]
+fn notation_status_label(
+    state: &str,
+    signature_state: Option<store::signatures::SignatureState>,
+    signed_ready: bool,
+    rendered_ready: bool,
+    awaiting_countersignature: bool,
+) -> &'static str {
+    use store::signatures::SignatureState;
+    if signed_ready {
+        "Signed"
+    } else if signature_state == Some(SignatureState::Declined) {
+        DECLINED_LABEL
+    } else if signature_state == Some(SignatureState::Voided) {
+        VOIDED_LABEL
+    } else if signature_state == Some(SignatureState::Expired) {
+        EXPIRED_LABEL
+    } else if awaiting_countersignature {
+        COUNTERSIGNATURE_LABEL
+    } else if state == "END" {
+        "Closed"
+    } else if state.starts_with("sent_for_signature") {
+        "Awaiting your signature"
+    } else if rendered_ready {
+        "Ready for signature"
+    } else {
+        workflows::client_phrase_for(state).where_this_is
+    }
+}
+
+/// Format integer cents as a US dollar amount with thousands separators, e.g.
+/// `333_300` → `"$3,333.00"`. Mirrors the `format_usd`; money never flows
+/// through a float.
+#[cfg(feature = "server")]
+pub(crate) fn format_usd(cents: i64) -> String {
+    let sign = if cents < 0 { "-" } else { "" };
+    let abs = cents.unsigned_abs();
+    let digits = (abs / 100).to_string();
+    let mut grouped = String::new();
+    for (i, ch) in digits.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    let grouped: String = grouped.chars().rev().collect();
+    format!("${sign}{grouped}.{:02}", abs % 100)
+}
+
+/// Fetch one matter's client-lens detail for the current request. Refuses a
+/// caller without client-side scope with a `404` (the matter does not exist for
+/// them), then gathers the invoice, notations (with per-PDF storage probes),
+/// review drafts, and documents.
+#[server]
+#[cfg_attr(feature = "server", allow(clippy::too_many_lines))]
+pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
+    use chrono::Datelike;
+    use std::sync::Arc;
+
+    let axum::extract::Path(code) =
+        dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Path<String>, _>()
+            .await?;
+    let query = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::extract::Query<ProjectDetailQuery>,
+        _,
+    >()
+    .await
+    .map(|axum::extract::Query(query)| query)
+    .unwrap_or_default();
+    let PersonId(person_id) =
+        dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<PersonId>, _>()
+            .await
+            .map(|axum::Extension(id)| id)
+            .unwrap_or_default();
+    let role = dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<ViewerRole>, _>()
+        .await
+        .map(|axum::Extension(role)| role)
+        .unwrap_or_default();
+    // The navbar renders on the 404 body too, so the mark is resolved before the
+    // first early return rather than only on the happy path.
+    let logo = crate::app_chrome::app_logo_from_context().await;
+    let tokens_href = crate::app_chrome::app_tokens_href_from_context().await;
+    let csrf_token = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::Extension<crate::csrf::CsrfToken>,
+        _,
+    >()
+    .await
+    .map(|axum::Extension(token)| token.0)
+    .unwrap_or_default();
+    let crate::components::ViewingAsDri(viewing_as_dri) =
+        dioxus_fullstack_core::FullstackContext::extract::<
+            axum::Extension<crate::components::ViewingAsDri>,
+            _,
+        >()
+        .await
+        .map(|axum::Extension(viewing_as_dri)| viewing_as_dri)
+        .unwrap_or_default();
+    let pending_intake = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::Extension<PendingClientIntake>,
+        _,
+    >()
+    .await
+    .map(|axum::Extension(intake)| intake.0)
+    .unwrap_or_default();
+    let person_id = person_id.and_then(|raw| raw.parse::<uuid::Uuid>().ok());
+
+    let surreal = consume_context::<store::surreal::SurrealDb>();
+    let storage = consume_context::<Arc<dyn cloud::StorageService>>();
+    let Some(project) = store::projects::find_by_code(&surreal, &code)
+        .await
+        .map_err(server_error)?
+    else {
+        return Ok(not_found(uuid::Uuid::nil(), role, logo, csrf_token));
+    };
+    let id = project.id;
+
+    // Row-visibility runs before the row load, so an unauthorised caller never
+    // even pulls the matter name into the response — the same 404 a missing id
+    // would produce (never 403). A read error is a 500.
+    let visible = store::projects::can_access_as_client_in_surreal(&surreal, person_id, id)
+        .await
+        .map_err(server_error)?;
+    if !visible {
+        return Ok(not_found(id, role, logo, csrf_token));
+    }
+    let (logo, brand_name, legal_entity) = project_brand_chrome(&surreal, &project.brand).await;
+    let client_dri =
+        store::projects::participation_for_person(&surreal, person_id.unwrap_or_default(), id)
+            .await
+            .map_err(server_error)?
+            .filter(|row| {
+                row.is_client_dri
+                    && store::projects::PARTICIPATION_CLIENT_SIDE
+                        .contains(&row.participation.as_str())
+            });
+    let can_edit_testimonial = client_dri.is_some();
+    let testimonial = if can_edit_testimonial {
+        store::testimonials::for_person_project(&surreal, person_id.unwrap_or_default(), id)
+            .await
+            .map_err(server_error)?
+            .map(|row| ClientTestimonialView {
+                quote: row.quote,
+                attribution: row.attribution_label.unwrap_or_default(),
+                public_requested: row.consented_at.is_some(),
+            })
+    } else {
+        None
+    };
+    // Queue only for a real client session. A firm member's read-only
+    // client-DRI view renders the same page but must not look like client
+    // activity in the firm's channel. The one-way Restate call is best-effort
+    // for the page: a Slack outage must not turn an authorized portal read into
+    // a failed client request.
+    if role == ViewerRole::Client && viewing_as_dri.is_none() {
+        tokio::spawn(queue_client_project_view(id));
+    }
+    // Notations, each with which of its three PDFs exist in storage.
+    // The firm address a dead envelope's status points the client at, from
+    // the Project's own brand like the rest of this page's chrome.
+    let contact_email = views::brand::BrandKey::parse(&project.brand).map_or_else(
+        || views::brand::firm_email().to_string(),
+        |key| {
+            key.resolve_branding(&views::brand::DEFAULT_BRANDING)
+                .firm_email
+                .to_string()
+        },
+    );
+    let store_role = match role {
+        ViewerRole::Owner => store::persons::Role::Owner,
+        ViewerRole::Admin => store::persons::Role::Admin,
+        ViewerRole::Lawyer => store::persons::Role::Lawyer,
+        ViewerRole::Clerk => store::persons::Role::Clerk,
+        ViewerRole::Client => store::persons::Role::Client,
+    };
+    let notation_rows = notation_rows_for_viewer(
+        &surreal,
+        storage.as_ref(),
+        id,
+        person_id,
+        store_role,
+        &contact_email,
+    )
+    .await?;
+
+    // Client-readable drafts (only those an attorney has advanced past `draft`).
+    let review_docs = store::review_documents::client_visible_for_project(&surreal, id)
+        .await
+        .map_err(server_error)?;
+    let review_rows = review_docs
+        .iter()
+        .map(|d| ReviewDocRow {
+            id: d.id.to_string(),
+            title: d.title.clone(),
+            kind: d.kind.clone(),
+            status: d.status.clone(),
+        })
+        .collect();
+
+    // Documents (read-only list of filenames) — gated to the assets a
+    // lawyer has explicitly marked client-visible. Internal work product
+    // (`review_memo`, `unclassified` lawyer/email uploads) never reaches
+    // this list (#782).
+    let documents = store::assets::for_project(&surreal, id)
+        .await
+        .map_err(server_error)?
+        .into_iter()
+        .filter(|d| d.visibility == store::documents::visibility::CLIENT)
+        .map(|d| d.filename.unwrap_or_default())
+        .collect();
+
+    // Every invoice from the local mirror, newest first; only client-facing
+    // fields reach the client (never the Xero invoice id).
+    let invoices = store::xero_invoices::for_projects(&surreal, &[id])
+        .await
+        .map_err(server_error)?
+        .into_iter()
+        .map(|r| InvoiceView {
+            reference: r.reference,
+            amount: format_usd(r.amount_cents),
+            paid: r.amount_cents > 0 && r.amount_paid_cents >= r.amount_cents,
+            status: r.status,
+            issued_on: r.issued_at.format("%Y-%m-%d").to_string(),
+        })
+        .collect();
+
+    // This matter's trust position, folded from its own ledger. A pooled
+    // IOLTA account holds many clients' funds; nothing here reads beyond
+    // this one matter's postings.
+    let trust = trust_view(
+        &store::trust::position_for_project(&surreal, id)
+            .await
+            .map_err(server_error)?,
+        &store::iolta_withdrawals::for_project(&surreal, id)
+            .await
+            .map_err(server_error)?,
+    );
+
+    let resources = crate::project_resources::ProjectResourcesView {
+        resources: crate::project_resources::visible_resources(
+            &crate::project_resources::ProjectResourceLinks {
+                private_slack_channel_url: project.internal_slack_channel_url.clone(),
+                private_notion_page_url: project.private_notion_page_url.clone(),
+                drive_folder_id: project.drive_folder_id.clone(),
+                shared_slack_channel_url: project.external_slack_channel_url.clone(),
+                shared_notion_page_url: project.shared_notion_page_url.clone(),
+            },
+            role,
+        ),
+        // A client never configures a resource; the affordance is a lawyer's.
+        can_configure: false,
+        project_code: project.code.clone(),
+    };
+    let deadline_groups = crate::project_deadlines::deadline_groups(
+        &store::project_deadlines::list(&surreal, id)
+            .await
+            .map_err(server_error)?,
+        chrono::Utc::now(),
+        true,
+    );
+    let page_tabs = crate::sections::page::stored_page_tabs(
+        &surreal,
+        id,
+        &project.code,
+        crate::sections::PageLens::Client,
+    )
+    .await;
+    Ok(ProjectDetailView {
+        page_tabs,
+        id: project.id.to_string(),
+        code: project.code,
+        name: project.name,
+        status: project.status,
+        invoices,
+        trust,
+        notations: notation_rows,
+        documents,
+        review_docs: review_rows,
+        resources,
+        deadlines: deadline_groups.open,
+        past_deadlines: deadline_groups.past,
+        csrf_token,
+        role,
+        viewing_as_dri,
+        logo,
+        brand_name,
+        legal_entity,
+        copyright_year: chrono::Utc::now().year(),
+        tokens_href,
+        pending_intake,
+        testimonial,
+        can_edit_testimonial,
+        selected_tab: parse_matter_tab(query.tab.as_deref(), can_edit_testimonial),
+    })
+}
+
+/// Resolve the Project's brand after the client-scope gate succeeds. The
+/// project row carries a closed compiled key, while the store row supplies an
+/// uploaded logo or a firm-specific legal entity when either has changed.
+#[cfg(feature = "server")]
+async fn project_brand_chrome(
+    surreal: &store::surreal::SurrealDb,
+    project_brand: &str,
+) -> (Option<crate::components::AppLogo>, String, String) {
+    let compiled = views::brand::BrandKey::parse(project_brand);
+    let branding = compiled.map(|key| key.resolve_branding(&views::brand::DEFAULT_BRANDING));
+    let fallback_name = branding.map_or_else(
+        || project_brand.to_string(),
+        |branding| branding.firm.site_name.to_string(),
+    );
+    let fallback_legal_entity = branding.map_or_else(
+        || project_brand.to_string(),
+        |branding| branding.firm.legal_entity.to_string(),
+    );
+    let fallback_logo = branding.and_then(|branding| {
+        (!branding.firm.logo_href.is_empty()).then(|| crate::components::AppLogo {
+            src: branding.firm.logo_href.to_string(),
+            href: branding.firm.home_href.to_string(),
+            brand_name: fallback_name.clone(),
+        })
+    });
+
+    let brand = store::brands::find_by_key(surreal, project_brand)
+        .await
+        .ok()
+        .flatten();
+    let brand_name = brand
+        .as_ref()
+        .map(|brand| brand.name.clone())
+        .unwrap_or(fallback_name);
+    let legal_entity = brand
+        .as_ref()
+        .and_then(|brand| brand.legal_entity.clone())
+        .unwrap_or(fallback_legal_entity);
+    let logo = brand
+        .and_then(|brand| {
+            brand
+                .logo_object_key
+                .map(|object_key| crate::components::AppLogo {
+                    src: format!("/assets/{object_key}"),
+                    href: "/".to_string(),
+                    brand_name: brand_name.clone(),
+                })
+        })
+        .or(fallback_logo);
+
+    (logo, brand_name, legal_entity)
+}
+
+/// Start the per-Project Slack virtual object after a client has passed the
+/// same server-side visibility check used to render this page. Local in-memory
+/// development has no Restate broker, so it intentionally does not enqueue.
+#[cfg(feature = "server")]
+async fn queue_client_project_view(project_id: uuid::Uuid) {
+    let Some(broker) = std::env::var("RESTATE_BROKER_URL")
+        .ok()
+        .map(|url| url.trim_end_matches('/').to_string())
+        .filter(|url| !url.trim().is_empty())
+    else {
+        return;
+    };
+    let token = std::env::var("RESTATE_AUTH_TOKEN").ok();
+    if let Err(error) = workflows::start_workflow(
+        &broker,
+        token.as_deref(),
+        "project-slack",
+        &project_id.to_string(),
+        "client_project_view",
+        &serde_json::json!({}),
+        true,
+    )
+    .await
+    {
+        tracing::error!(%project_id, %error, "client Project view Slack notice was not queued");
+    }
+}
+
+/// Build the per-notation rows for a matter: title, a client-friendly status,
+/// and which of the three PDFs exist. `exists` is a metadata-only HEAD, so a
+/// handful of probes per matter is cheap. `person_id` is the current
+/// session's person, used only to decide [`NotationRow::signable`]. Client
+/// lenses omit internal `TrialPrep` Notations; the lawyer lens can see all
+/// Notations. Mirrors the `notation_rows`.
+///
+/// `signed_ready` is the one field this loop does not answer from storage:
+/// an object at the signed-document key only proves bytes were written
+/// there, never that a provider confirmed execution — a lawyer-uploaded PDF
+/// that merely looks signed would satisfy the same probe. It reads
+/// [`store::signatures::completed_for_notation`] instead, so the client
+/// only sees "Signed" when a completed signature record — provider id and
+/// `signed_at` — backs the document.
+#[cfg(feature = "server")]
+#[cfg(test)]
+async fn notation_rows(
+    surreal: &store::surreal::SurrealDb,
+    storage: &dyn cloud::StorageService,
+    project_id: uuid::Uuid,
+    person_id: Option<uuid::Uuid>,
+    contact_email: &str,
+) -> Result<Vec<NotationRow>, ServerFnError> {
+    notation_rows_for_lens(
+        surreal,
+        storage,
+        project_id,
+        person_id,
+        contact_email,
+        false,
+    )
+    .await
+}
+
+#[cfg(feature = "server")]
+async fn notation_rows_for_lens(
+    surreal: &store::surreal::SurrealDb,
+    storage: &dyn cloud::StorageService,
+    project_id: uuid::Uuid,
+    person_id: Option<uuid::Uuid>,
+    contact_email: &str,
+    lawyer_lens: bool,
+) -> Result<Vec<NotationRow>, ServerFnError> {
+    let notations = store::notations::list_by_project(surreal, project_id)
+        .await
+        .map_err(server_error)?;
+    let template_ids: Vec<_> = notations
+        .iter()
+        .map(|notation| notation.template_id)
+        .collect();
+    let templates = store::templates::find_by_ids(surreal, &template_ids)
+        .await
+        .map_err(server_error)?;
+    let mut rows = Vec::with_capacity(notations.len());
+    for n in &notations {
+        let template = templates
+            .iter()
+            .find(|template| template.id == n.template_id);
+        if !lawyer_lens && template.is_none() {
+            continue;
+        }
+        if !notation_kind_visible_to_lens(
+            template.and_then(|template| template.kind.as_deref()),
+            lawyer_lens,
+        ) {
+            continue;
+        }
+        let title = template.map_or_else(|| "Agreement".to_string(), |t| t.title.clone());
+        let rendered_ready = storage
+            .exists(&store::notations::document_pdf_storage_key(n.id))
+            .await
+            .unwrap_or(false);
+        let signed_ready = store::signatures::completed_for_notation(surreal, n.id)
+            .await
+            .ok()
+            .flatten()
+            .is_some();
+        let latest = store::signatures::latest_for_notation(surreal, n.id)
+            .await
+            .ok()
+            .flatten();
+        let signature_state = latest.as_ref().map(|s| s.state);
+        // The client's own recipient step is done on a still-live envelope:
+        // they have signed and the firm's countersignature is outstanding.
+        let awaiting_countersignature = latest.as_ref().is_some_and(|s| {
+            s.state == store::signatures::SignatureState::Requested && s.signer_completed("client")
+        });
+        let dead_envelope = matches!(
+            signature_state,
+            Some(
+                store::signatures::SignatureState::Declined
+                    | store::signatures::SignatureState::Voided
+                    | store::signatures::SignatureState::Expired
+            )
+        ) && !signed_ready;
+        let certificate_ready = storage
+            .exists(&store::notations::certificate_of_completion_storage_key(
+                n.id,
+            ))
+            .await
+            .unwrap_or(false);
+        // Live envelope, addressed to this exact signer, that the sign
+        // route can actually open — a matter can carry several client
+        // participants, so a live envelope bound to one of them must never
+        // offer the sign action to another (mirrors the identity gate
+        // `esign_view::sign_get` applies before minting a recipient view).
+        //
+        // `emailed` delivery is excluded for the same reason: a
+        // non-captive recipient carries no `clientUserId`, so there is no
+        // embedded session to mint and that route answers `409` rather
+        // than a redirect (`server/tests/esign_redirect.rs`,
+        // `an_emailed_envelope_has_no_embedded_session_to_open`). Offering
+        // an action whose only outcome is a conflict is the same defect as
+        // offering one for a dead envelope.
+        //
+        // A client whose own step is already recorded has nothing left to
+        // sign; the provider would refuse a view for a completed recipient.
+        let signable = person_id == Some(n.person_id)
+            && n.delivery != store::notations::DELIVERY_EMAILED
+            && !awaiting_countersignature
+            && matches!(
+                signature_state,
+                Some(store::signatures::SignatureState::Requested)
+            );
+        rows.push(NotationRow {
+            id: n.id.to_string(),
+            title,
+            status: notation_status_label(
+                &n.state,
+                signature_state,
+                signed_ready,
+                rendered_ready,
+                awaiting_countersignature,
+            )
+            .to_string(),
+            // The countersignature window is the firm's signing step, so it
+            // reads that step's next-step phrase rather than the wait state's
+            // "Review and sign".
+            whats_next: workflows::client_phrase_for(if awaiting_countersignature {
+                "firm_signature"
+            } else {
+                &n.state
+            })
+            .whats_next
+            .to_string(),
+            rendered_ready,
+            signed_ready,
+            certificate_ready,
+            signable,
+            contact_href: dead_envelope.then(|| format!("mailto:{contact_email}")),
+        });
+    }
+    Ok(rows)
+}
+
+/// Resolve the listing lens from the participation ledger before building
+/// client matter rows. A firm-tier person with client-side participation sees
+/// this list through the client lens, even with no explicit View-as-Client
+/// extension.
+#[cfg(feature = "server")]
+async fn notation_rows_for_viewer(
+    surreal: &store::surreal::SurrealDb,
+    storage: &dyn cloud::StorageService,
+    project_id: uuid::Uuid,
+    person_id: Option<uuid::Uuid>,
+    role: store::persons::Role,
+    contact_email: &str,
+) -> Result<Vec<NotationRow>, ServerFnError> {
+    let lawyer_lens = store::access::matter_lens(surreal, person_id, role, project_id)
+        .await
+        .map_err(server_error)?
+        == Some(store::access::ProjectLens::Lawyer);
+    notation_rows_for_lens(
+        surreal,
+        storage,
+        project_id,
+        person_id,
+        contact_email,
+        lawyer_lens,
+    )
+    .await
+}
+
+#[cfg(feature = "server")]
+fn notation_kind_visible_to_lens(kind: Option<&str>, lawyer_lens: bool) -> bool {
+    lawyer_lens
+        || kind
+            .and_then(rules::kind::Kind::parse)
+            .is_none_or(rules::kind::Kind::is_client_visible)
+}
+
+/// Commit a `500` and wrap a query error, mirroring the sibling list pages: a
+/// matter whose detail cannot be loaded is a server error, not a `200` with an
+/// error body.
+#[cfg(feature = "server")]
+fn server_error(e: impl std::fmt::Display) -> ServerFnError {
+    dioxus_fullstack_core::FullstackContext::commit_http_status(
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        None,
+    );
+    ServerFnError::new(e.to_string())
+}
+
+/// Commit the `404` the handler returned for a matter the caller cannot see
+/// (or that does not exist) and return an empty view — the render shows the
+/// not-found state under the committed status.
+#[cfg(feature = "server")]
+fn not_found(
+    id: uuid::Uuid,
+    role: ViewerRole,
+    logo: Option<crate::components::AppLogo>,
+    csrf_token: String,
+) -> ProjectDetailView {
+    dioxus_fullstack_core::FullstackContext::commit_http_status(
+        axum::http::StatusCode::NOT_FOUND,
+        None,
+    );
+    ProjectDetailView {
+        id: id.to_string(),
+        role,
+        logo,
+        csrf_token,
+        ..ProjectDetailView::default()
+    }
+}
+
+/// The client matter-detail page. Server-side rendered with the matter already
+/// in the markup (via [`use_server_future`]), readable before hydration.
+#[component]
+pub fn ClientProjectDetail() -> Element {
+    let resource = use_server_future(get_project_detail)?;
+
+    let view = match &*resource.read() {
+        Some(Ok(view)) if !view.name.is_empty() => view.clone(),
+        // A committed 404 returns an empty (nameless) view; render the same
+        // "not found" state the handler served under that status.
+        Some(Ok(_)) => {
+            return rsx! {
+                main { id: "portal-project", p { "That matter was not found." } }
+            }
+        }
+        Some(Err(_)) => {
+            return rsx! {
+                main { id: "portal-project", p { "Failed to load this matter." } }
+            }
+        }
+        None => {
+            return rsx! {
+                main { id: "portal-project", p { "Loading…" } }
+            }
+        }
+    };
+
+    rsx! {
+        ClientProjectDetailPage { view }
+    }
+}
+
+fn testimonial_fields(view: &ProjectDetailView) -> Vec<Field> {
+    let quote = view
+        .testimonial
+        .as_ref()
+        .map(|row| row.quote.clone())
+        .unwrap_or_default();
+    let attribution = view
+        .testimonial
+        .as_ref()
+        .map(|row| row.attribution.clone())
+        .unwrap_or_default();
+    let publication = if view
+        .testimonial
+        .as_ref()
+        .is_some_and(|row| row.public_requested)
+    {
+        "public"
+    } else {
+        "private"
+    };
+    vec![
+        Field::textarea("Quote", "quote", quote, 5).required(),
+        Field::text("Attribution", "attribution", attribution)
+            .placeholder("Name or title to show publicly"),
+        Field::radio(
+            "Public use",
+            "publication",
+            vec![
+                Choice::new("private", "Keep private"),
+                Choice::new("public", "Request public use"),
+            ],
+            Some(publication.to_string()),
+        ),
+    ]
+}
+
+/// The pure matter-detail page. Prop-driven so SSR tests can render it without
+/// a server future.
+#[component]
+pub fn ClientProjectDetailPage(view: ProjectDetailView) -> Element {
+    let has_documents = !view.documents.is_empty();
+    let has_review_docs = !view.review_docs.is_empty();
+    let show_testimonial_tab = view.can_edit_testimonial;
+    let testimonial_selected =
+        show_testimonial_tab && view.selected_tab == MatterDetailTab::Testimonial;
+    let testimonial_fields = testimonial_fields(&view);
+
+    rsx! {
+        document::Title { "{view.brand_name} | {view.name}" }
+        document::Stylesheet { href: crate::components::THEME_STYLESHEET_HREF }
+        document::Stylesheet { href: "{view.tokens_href}" }
+        crate::components::ClientDriViewBanner { view: view.viewing_as_dri.clone() }
+        crate::components::AppNavbar {
+            destinations: crate::app_chrome::app_destinations(view.role),
+            logo: view.logo.clone(),
+        }
+        main { id: "portal-project", class: "nav-theme portal-detail",
+            nav { class: "portal-detail__back",
+                a { class: "nav-link", href: "/app/projects", "← Your Projects" }
+            }
+            h1 { "{view.name}" }
+            crate::sections::page::CaseNav {
+                tabs: view.page_tabs.clone(),
+                current: format!("/app/projects/{}", view.code),
+            }
+            p { span { class: "status-chip", "{view.status}" } }
+
+            crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
+
+            if !view.deadlines.is_empty() || !view.past_deadlines.is_empty() {
+                crate::project_deadlines::ProjectDeadlinesPanel {
+                    section_class: "portal-detail__section".to_string(),
+                    rows: view.deadlines.clone(),
+                    past: view.past_deadlines.clone(),
+                }
+            }
+
+            if !view.invoices.is_empty() {
+                section { class: "portal-detail__section",
+                    h2 { "Invoice" }
+                    for inv in view.invoices.iter() {
+                        div { class: "portal-card portal-card--split",
+                            div {
+                                div { class: "portal-card__title", "{inv.amount}" }
+                                div { class: "portal-card__meta", "Status: {inv.status}" }
+                                div { class: "portal-card__meta", "Issued: {inv.issued_on}" }
+                            }
+                            if inv.paid {
+                                span { class: "status-chip status-chip--paid", "Paid" }
+                            } else {
+                                span { class: "status-chip status-chip--due", "Due" }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if view.trust.any {
+                section { class: "portal-detail__section",
+                    h2 { "Funds we hold for you" }
+                    p { class: "nav-muted",
+                        "Money you pay in advance is held in the firm's client trust account \
+                         and drawn only as work is earned. Whatever is still held is yours."
+                    }
+                    div { class: "portal-card portal-card--trust",
+                        div {
+                            div { class: "portal-card__title", "{view.trust.held}" }
+                            div { class: "portal-card__meta", "Still held for you" }
+                        }
+                        div {
+                            div { class: "portal-card__meta", "Paid in: {view.trust.deposited}" }
+                            div { class: "portal-card__meta", "Earned and drawn: {view.trust.drawn}" }
+                            if view.trust.refunded != "$0.00" {
+                                div { class: "portal-card__meta", "Refunded: {view.trust.refunded}" }
+                            }
+                        }
+                    }
+                    if !view.trust.allocations.is_empty() {
+                        p { class: "nav-muted", "How your funds were applied" }
+                        ul {
+                            for line in view.trust.allocations.iter() {
+                                li {
+                                    "{line.amount} to {line.invoice_reference} on {line.occurred_on}"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(notation_id) = view.pending_intake.as_ref() {
+                p { class: "portal-detail__actions",
+                    a {
+                        class: "nav-btn nav-btn--primary",
+                        href: "/app/projects/{view.code}/intake/{notation_id}",
+                        role: "button",
+                        "Continue intake"
+                    }
+                }
+            }
+
+            if !view.notations.is_empty() {
+                section { class: "portal-detail__section",
+                    h2 { "Your agreements" }
+                    div { class: "portal-agreements",
+                        for n in view.notations.iter() {
+                            div { class: "portal-agreement", key: "{n.id}",
+                                span {
+                                    "{n.title}"
+                                    span { class: "status-chip", " {n.status}" }
+                                }
+                                if let Some(href) = n.contact_href.as_ref() {
+                                    p { a { href: "{href}", "Contact the firm" } }
+                                }
+                                p { class: "nav-muted", "{n.whats_next}" }
+                                span { class: "portal-agreement__links",
+                                    if n.signable {
+                                        a {
+                                            class: "nav-btn nav-btn--primary",
+                                            href: "/app/notations/{n.id}/sign",
+                                            role: "button",
+                                            "Review and sign"
+                                        }
+                                    }
+                                    a {
+                                        class: "nav-btn nav-btn--secondary",
+                                        href: "{crate::notation_outline::notation_outline_href(&view.code, &n.id)}",
+                                        "Outline"
+                                    }
+                                    if n.rendered_ready {
+                                        a {
+                                            class: "nav-btn nav-btn--secondary",
+                                            href: "/app/notations/{n.id}/documents/retainer",
+                                            "Agreement"
+                                        }
+                                    }
+                                    if n.signed_ready {
+                                        a {
+                                            class: "nav-btn nav-btn--secondary",
+                                            href: "/app/notations/{n.id}/documents/signed",
+                                            "Signed copy"
+                                        }
+                                    }
+                                    if n.certificate_ready {
+                                        a {
+                                            class: "nav-btn nav-btn--secondary",
+                                            href: "/app/notations/{n.id}/documents/certificate",
+                                            "Certificate"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if show_testimonial_tab {
+                Tabs {
+                    aria_label: "Matter sections".to_string(),
+                    tabs: vec![
+                        Tab::new(
+                            "Documents",
+                            format!("/app/projects/{}?tab=documents", view.code),
+                            !testimonial_selected,
+                        ),
+                        Tab::new(
+                            "Testimonial",
+                            format!("/app/projects/{}?tab=testimonial", view.code),
+                            testimonial_selected,
+                        ),
+                    ],
+                }
+            }
+
+            if testimonial_selected {
+                FormCard {
+                    title: "Share your experience".to_string(),
+                    action: format!("/app/projects/{}/testimonial", view.code),
+                    submit_label: "Save testimonial".to_string(),
+                    heading: Heading::H2,
+                    csrf_token: Some(view.csrf_token.clone()),
+                    intro: rsx! { p { "{TESTIMONIAL_CONSENT}" } },
+                    fields: testimonial_fields.clone(),
+                }
+            } else {
+                if has_documents {
+                    p { class: "portal-detail__actions",
+                        a {
+                            class: "nav-btn nav-btn--secondary",
+                            href: "/app/projects/{view.code}/documents.zip",
+                            role: "button",
+                            "Download all my documents"
+                        }
+                    }
+                }
+                section { class: "portal-detail__section",
+                    h2 { "Your documents" }
+                    div { class: "nav-table-wrap",
+                        table { class: "nav-table",
+                            thead {
+                                tr { th { scope: "col", "Document" } }
+                            }
+                            tbody {
+                                for filename in view.documents.iter() {
+                                    tr { td { "{filename}" } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if has_review_docs {
+                section { class: "portal-detail__section",
+                    h2 { "Documents to review" }
+                    div { class: "nav-table-wrap",
+                        table { class: "nav-table",
+                            thead {
+                                tr {
+                                    th { scope: "col", "Document" }
+                                    th { scope: "col", "Type" }
+                                    th { scope: "col", "Status" }
+                                    th { scope: "col", class: "nav-table__end", "Action" }
+                                }
+                            }
+                            tbody {
+                                for doc in view.review_docs.iter() {
+                                    tr {
+                                        td { "{doc.title}" }
+                                        td { span { class: "status-chip", "{doc.kind}" } }
+                                        td { span { class: "status-chip", "{doc.status}" } }
+                                        td { class: "nav-table__end",
+                                            a {
+                                                class: "nav-btn nav-btn--secondary",
+                                                href: "/app/projects/{view.code}/review/{doc.id}",
+                                                "Review"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !view.brand_name.is_empty() && !view.legal_entity.is_empty() {
+            crate::firm_footer::ClientPortalFooter {
+                model: crate::firm_footer::ClientPortalFooterModel {
+                    brand_name: view.brand_name.clone(),
+                    legal_entity: view.legal_entity.clone(),
+                    copyright_year: view.copyright_year,
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static VIEW: RefCell<ProjectDetailView> = RefCell::new(ProjectDetailView::default());
+    }
+
+    fn app() -> Element {
+        let view = VIEW.with(|slot| slot.borrow().clone());
+        rsx! { ClientProjectDetailPage { view } }
+    }
+
+    fn render_page(view: ProjectDetailView) -> String {
+        VIEW.with(|slot| *slot.borrow_mut() = view);
+        let mut vdom = VirtualDom::new(app);
+        vdom.rebuild_in_place();
+        dioxus_ssr::render(&vdom)
+    }
+
+    /// The client panel includes only deadline rows prepared through the
+    /// client-lead lens, and omits the panel when there is no visible history.
+    #[test]
+    fn the_deadlines_panel_renders_client_visible_open_and_past_rows() {
+        let base = ProjectDetailView {
+            code: "acme".into(),
+            name: "Sample Matter".into(),
+            ..ProjectDetailView::default()
+        };
+        let empty = render_page(base.clone());
+        assert!(!empty.contains("project-deadlines"), "{empty}");
+
+        let html = render_page(ProjectDetailView {
+            deadlines: vec![crate::project_deadlines::DeadlineRow {
+                id: "d1".into(),
+                due: "2026-11-02 17:00 -08:00".into(),
+                role: "Hearing".into(),
+                authority: "Notice of hearing".into(),
+                authority_preview: "Notice of hearing".into(),
+                authority_kind: "Court order".into(),
+                status: "open".into(),
+                state: "Due soon".into(),
+                overdue: false,
+            }],
+            past_deadlines: vec![crate::project_deadlines::DeadlineRow {
+                id: "d2".into(),
+                due: "Monday, 7 Sep 26 17:00 -08:00".into(),
+                role: "Hearing".into(),
+                authority: "Earlier notice".into(),
+                authority_preview: "Earlier notice".into(),
+                authority_kind: "Court order".into(),
+                status: "cancelled".into(),
+                state: "Cancelled".into(),
+                overdue: false,
+            }],
+            ..base
+        });
+        assert!(html.contains("id=\"deadlines\""), "{html}");
+        assert!(html.contains("Notice of hearing"), "{html}");
+        assert!(html.contains("Due soon"), "{html}");
+        assert!(html.contains("Past (1)"), "{html}");
+        assert!(html.contains("Earlier notice"), "{html}");
+    }
+
+    fn saved_testimonial_view() -> ProjectDetailView {
+        ProjectDetailView {
+            code: "acme".into(),
+            name: "Sample Matter".into(),
+            csrf_token: "csrf-token".into(),
+            can_edit_testimonial: true,
+            selected_tab: MatterDetailTab::Testimonial,
+            testimonial: Some(ClientTestimonialView {
+                quote: "Saved quote.".into(),
+                attribution: "Chosen Label".into(),
+                public_requested: true,
+            }),
+            documents: vec!["retainer.pdf".into()],
+            ..ProjectDetailView::default()
+        }
+    }
+
+    #[test]
+    fn parse_matter_tab_defaults_and_requires_client_dri() {
+        assert_eq!(parse_matter_tab(None, true), MatterDetailTab::Documents);
+        assert_eq!(
+            parse_matter_tab(Some("unknown"), true),
+            MatterDetailTab::Documents
+        );
+        assert_eq!(
+            parse_matter_tab(Some("testimonial"), true),
+            MatterDetailTab::Testimonial
+        );
+        assert_eq!(
+            parse_matter_tab(Some("testimonial"), false),
+            MatterDetailTab::Documents
+        );
+    }
+
+    #[test]
+    fn testimonial_form_uses_formcard_fields_and_round_trips_saved_values() {
+        let html = render_page(saved_testimonial_view());
+        assert!(html.contains("nav-form-card"), "{html}");
+        assert!(html.contains("nav-field"), "{html}");
+        assert!(html.contains(r#"name="quote""#), "{html}");
+        assert!(html.contains("Saved quote."), "{html}");
+        assert!(html.contains(r#"name="attribution""#), "{html}");
+        assert!(html.contains("Chosen Label"), "{html}");
+        assert!(html.contains(r#"name="publication""#), "{html}");
+        assert!(html.contains(r#"value="private""#), "{html}");
+        assert!(html.contains(r#"value="public""#), "{html}");
+        assert!(html.contains(r#"name="_csrf""#), "{html}");
+        assert!(html.contains("csrf-token"), "{html}");
+        assert!(
+            html.contains("the homepage shows the quote and the attribution you enter here"),
+            "{html}"
+        );
+        assert!(
+            html.contains("It does not show your stored name, title, or profile image"),
+            "{html}"
+        );
+        assert!(!html.contains("portal-form"), "{html}");
+        assert!(!html.contains("testimonial-form"), "{html}");
+        assert!(!html.contains("Your documents"), "{html}");
+    }
+
+    #[test]
+    fn documents_tab_is_the_default_panel() {
+        let html = render_page(ProjectDetailView {
+            code: "acme".into(),
+            name: "Sample Matter".into(),
+            can_edit_testimonial: true,
+            selected_tab: MatterDetailTab::Documents,
+            documents: vec!["retainer.pdf".into()],
+            ..ProjectDetailView::default()
+        });
+        assert!(html.contains("Your documents"), "{html}");
+        assert!(html.contains("retainer.pdf"), "{html}");
+        assert!(html.contains("nav-tabs"), "{html}");
+        assert!(html.contains("Testimonial"), "{html}");
+        assert!(!html.contains("nav-form-card"), "{html}");
+    }
+
+    #[test]
+    fn a_client_without_testimonial_access_sees_no_testimonial_tab() {
+        let html = render_page(ProjectDetailView {
+            code: "acme".into(),
+            name: "Sample Matter".into(),
+            can_edit_testimonial: false,
+            selected_tab: MatterDetailTab::Testimonial,
+            documents: vec!["retainer.pdf".into()],
+            ..ProjectDetailView::default()
+        });
+        assert!(html.contains("Your documents"), "{html}");
+        assert!(!html.contains("Share your experience"), "{html}");
+        assert!(!html.contains("nav-tabs"), "{html}");
+        assert!(!html.contains(">Testimonial<"), "{html}");
+    }
+
+    #[test]
+    fn client_portal_wears_the_project_brand_in_its_header_and_footer() {
+        let html = render_page(ProjectDetailView {
+            code: "abhaya-case".into(),
+            name: "Sample Matter".into(),
+            brand_name: "Abhaya Immigration".into(),
+            legal_entity: "Shook Law PC".into(),
+            copyright_year: 2026,
+            logo: Some(crate::components::AppLogo {
+                src: "/public/brand/abhaya/logo.svg".into(),
+                href: "/".into(),
+                brand_name: "Abhaya Immigration".into(),
+            }),
+            ..ProjectDetailView::default()
+        });
+        assert!(html.contains("/public/brand/abhaya/logo.svg"), "{html}");
+        assert!(
+            html.contains(
+                "Abhaya Immigration is powered by Neon Law Navigator. © 2026 Shook Law PC"
+            ),
+            "{html}"
+        );
+        assert!(html.contains("app-footer--client-portal"), "{html}");
+    }
+
+    #[test]
+    fn obsolete_form_class_names_are_gone() {
+        let source = include_str!("portal_project_detail.rs")
+            .split("mod render_tests")
+            .next()
+            .expect("page source before tests");
+        assert!(!source.contains("portal-form"));
+        assert!(!source.contains("testimonial-form"));
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::{
+        notation_kind_visible_to_lens, notation_rows, notation_rows_for_viewer,
+        notation_status_label, project_brand_chrome, NotationRow, COUNTERSIGNATURE_LABEL,
+        DECLINED_LABEL, EXPIRED_LABEL, VOIDED_LABEL,
+    };
+    use cloud::StorageService;
+    use store::signatures::SignatureState;
+
+    #[test]
+    fn client_portal_listing_hides_trial_prep_notations() {
+        assert!(!notation_kind_visible_to_lens(Some("trial_prep"), false));
+        assert!(notation_kind_visible_to_lens(Some("trial_prep"), true));
+        assert!(notation_kind_visible_to_lens(Some("agreement"), false));
+    }
+
+    #[tokio::test]
+    async fn client_lens_notation_query_filters_trial_prep_before_building_rows() {
+        let surreal = store::surreal::test_support::mem().await;
+        let notation_id =
+            store::test_support::seed_notation_with_kind(&surreal, Some("trial_prep")).await;
+        let notation = store::notations::find_by_id(&surreal, notation_id)
+            .await
+            .expect("query notation")
+            .expect("seeded notation exists");
+        let storage = temp_storage("trial-prep-visibility", notation_id).await;
+
+        let client_rows = super::notation_rows_for_lens(
+            &surreal,
+            &storage,
+            notation.project_id,
+            Some(notation.person_id),
+            "contact@example.com",
+            false,
+        )
+        .await
+        .expect("load client notation rows");
+        assert!(client_rows.is_empty(), "client lens must omit TrialPrep");
+
+        let lawyer_rows = super::notation_rows_for_lens(
+            &surreal,
+            &storage,
+            notation.project_id,
+            Some(notation.person_id),
+            "contact@example.com",
+            true,
+        )
+        .await
+        .expect("load lawyer notation rows");
+        assert_eq!(lawyer_rows.len(), 1);
+        assert_eq!(lawyer_rows[0].id, notation_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn lawyer_tier_client_participant_uses_client_notation_lens_without_preview_extension() {
+        let surreal = store::surreal::test_support::mem().await;
+        let notation_id =
+            store::test_support::seed_notation_with_kind(&surreal, Some("trial_prep")).await;
+        let notation = store::notations::find_by_id(&surreal, notation_id)
+            .await
+            .expect("query notation")
+            .expect("seeded notation exists");
+        store::persons::set_role(&surreal, notation.person_id, store::persons::Role::Lawyer)
+            .await
+            .expect("promote test person")
+            .expect("seeded person exists");
+        let storage = temp_storage("trial-prep-viewer-lens", notation_id).await;
+
+        let rows = notation_rows_for_viewer(
+            &surreal,
+            &storage,
+            notation.project_id,
+            Some(notation.person_id),
+            store::persons::Role::Lawyer,
+            "contact@example.com",
+        )
+        .await
+        .expect("load effective-lens notation rows");
+        assert!(
+            rows.is_empty(),
+            "client-side participation must override the lawyer tier when listing"
+        );
+    }
+
+    #[test]
+    fn workflow_states_use_client_facing_status_phrases() {
+        assert_eq!(
+            notation_status_label("lawyer_review", None, false, false, false),
+            "The firm is reviewing"
+        );
+        assert_eq!(
+            notation_status_label("END", None, false, true, false),
+            "Closed"
+        );
+        assert_eq!(
+            notation_status_label("lawyer_review__for_trustee", None, false, false, false,),
+            "The firm is reviewing"
+        );
+        assert_eq!(
+            notation_status_label("unknown__state", None, false, false, false),
+            "In progress"
+        );
+    }
+
+    #[tokio::test]
+    async fn project_brand_chrome_uses_the_project_brand_not_the_request_brand() {
+        let surreal = store::surreal::test_support::mem().await;
+        let key = "matter-page-brand";
+        // A brand's `legal_entity` is inherited from its Firm's own linked
+        // Entity (ENG-659) — never caller input — so the Firm here is on an
+        // Entity named exactly what this test expects to read back.
+        let entity = store::entities::create(
+            &surreal,
+            &store::entities::NewEntity {
+                name: "Shook Law PC".to_string(),
+                entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
+                jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
+                phone: None,
+                url: None,
+                xero_id: None,
+                firm_anchor_key: None,
+            },
+        )
+        .await
+        .expect("test entity inserts");
+        let admin = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::with_role(
+                "Project Brand Admin DRI",
+                "project-brand-admin-dri@example.com",
+                store::persons::Role::Admin,
+            ),
+        )
+        .await
+        .expect("test admin inserts");
+        let firm = store::firms::create(
+            &surreal,
+            &store::firms::NewFirm {
+                name: "Project Practice Firm".to_string(),
+                status: "active".to_string(),
+                entity_id: entity.id,
+                admin_dri_person_id: admin.id,
+            },
+        )
+        .await
+        .expect("test firm inserts");
+        store::brands::create(
+            &surreal,
+            store::persons::Role::Admin,
+            Some(admin.id),
+            &store::brands::NewBrand {
+                name: "Project Practice".to_string(),
+                key: key.to_string(),
+                firm_id: Some(firm.id),
+                ..store::brands::NewBrand::default()
+            },
+        )
+        .await
+        .expect("test brand inserts");
+
+        let (logo, name, legal_entity) = project_brand_chrome(&surreal, key).await;
+        assert_eq!(name, "Project Practice");
+        assert_eq!(legal_entity, "Shook Law PC");
+        assert!(logo.is_none());
+    }
+
+    /// Signature evidence, not workflow state, decides the label — with
+    /// `state` and `rendered_ready` held fixed, only flipping evidence flips
+    /// the label (ENG-421, covering test 1 & 2: an unsigned notation never
+    /// gets the signed label, a signed one always does).
+    #[test]
+    fn signature_evidence_alone_changes_the_label() {
+        let unsigned = notation_status_label(
+            "sent_for_signature__pending",
+            Some(SignatureState::Requested),
+            false,
+            true,
+            false,
+        );
+        let signed = notation_status_label(
+            "sent_for_signature__pending",
+            Some(SignatureState::Completed),
+            true,
+            true,
+            false,
+        );
+        assert_ne!(unsigned, signed);
+    }
+
+    /// Once there is signature evidence, the label does not depend on the
+    /// workflow state or whether a rendered draft exists — evidence is the
+    /// one thing that can assert execution.
+    #[test]
+    fn signature_evidence_produces_the_same_label_regardless_of_workflow_state() {
+        let via_pending = notation_status_label(
+            "sent_for_signature__pending",
+            Some(SignatureState::Completed),
+            true,
+            true,
+            false,
+        );
+        let via_end =
+            notation_status_label("END", Some(SignatureState::Completed), true, true, false);
+        let via_no_render =
+            notation_status_label("BEGIN", Some(SignatureState::Completed), true, false, false);
+        assert_eq!(via_pending, via_end);
+        assert_eq!(via_pending, via_no_render);
+    }
+
+    /// A declined, voided, or expired envelope (which the esignature
+    /// webhook leaves at the terminal `END` state without ever stamping
+    /// `signed_at`) reads correctly — not merely distinctly — as told to a
+    /// client: each names who ended it (the signer, the firm, or the
+    /// clock) and points them to the firm, never asserting that a signing
+    /// action still exists (ENG-558; ENG-421 covering test 3 for the
+    /// distinctness half).
+    #[test]
+    fn a_dead_envelope_reads_its_own_copy_with_no_signing_action_implied() {
+        let outstanding = notation_status_label(
+            "sent_for_signature__pending",
+            Some(SignatureState::Requested),
+            false,
+            true,
+            false,
+        );
+        let signed =
+            notation_status_label("END", Some(SignatureState::Completed), true, true, false);
+        for (state, copy) in [
+            (SignatureState::Declined, DECLINED_LABEL),
+            (SignatureState::Voided, VOIDED_LABEL),
+            (SignatureState::Expired, EXPIRED_LABEL),
+        ] {
+            let declined = notation_status_label("END", Some(state), false, true, false);
+            assert_eq!(
+                declined, copy,
+                "{state:?} must read its own copy verbatim, not merely something distinct"
+            );
+            assert_ne!(outstanding, declined);
+            assert_ne!(declined, signed);
+        }
+    }
+
+    /// The countersignature-window copy is correct and covered directly,
+    /// even though no caller can produce its precondition today — see the
+    /// doc comment on `notation_status_label` for why `awaiting_countersignature`
+    /// is always `false` from `notation_rows`.
+    #[test]
+    fn the_countersignature_window_copy_never_claims_the_client_still_owes_a_signature() {
+        let label = notation_status_label(
+            "sent_for_signature__pending",
+            Some(SignatureState::Requested),
+            false,
+            true,
+            true,
+        );
+        assert_eq!(label, COUNTERSIGNATURE_LABEL);
+    }
+
+    /// Once the provider reports the client's own recipient step complete,
+    /// the client reads the countersignature copy and is offered no signing
+    /// action, while the envelope itself is still live (ENG-562).
+    #[tokio::test]
+    async fn a_client_who_has_signed_awaits_countersignature_with_no_sign_action() {
+        let surreal = store::surreal::test_support::mem().await;
+        let notation_id = store::test_support::seed_notation(&surreal).await;
+        let notation = store::notations::find_by_id(&surreal, notation_id)
+            .await
+            .expect("query notation")
+            .expect("seeded notation exists");
+        store::notations::update_state(&surreal, notation_id, "sent_for_signature__pending")
+            .await
+            .expect("park at the signature wait");
+        let storage = temp_storage("countersignature", notation_id).await;
+        store::signatures::record_request(
+            &surreal,
+            notation_id,
+            store::signatures::SignatureProvider::DocuSign,
+            "env-eng-562-countersign",
+        )
+        .await
+        .expect("record signature request");
+        let row = |rows: Vec<NotationRow>| {
+            rows.into_iter()
+                .find(|r| r.id == notation_id.to_string())
+                .expect("the notation's row renders")
+        };
+
+        let before = row(notation_rows(
+            &surreal,
+            &storage,
+            notation.project_id,
+            Some(notation.person_id),
+            "contact@example.com",
+        )
+        .await
+        .expect("build notation rows"));
+        assert!(before.signable);
+        assert_eq!(before.status, "Awaiting your signature");
+
+        // The firm finishing first changes nothing for the client.
+        store::signatures::record_signer_completion(
+            &surreal,
+            store::signatures::SignatureProvider::DocuSign,
+            "env-eng-562-countersign",
+            "firm",
+        )
+        .await
+        .expect("record firm completion");
+        assert!(
+            row(notation_rows(
+                &surreal,
+                &storage,
+                notation.project_id,
+                Some(notation.person_id),
+                "contact@example.com",
+            )
+            .await
+            .expect("build notation rows"))
+            .signable
+        );
+
+        store::signatures::record_signer_completion(
+            &surreal,
+            store::signatures::SignatureProvider::DocuSign,
+            "env-eng-562-countersign",
+            "client",
+        )
+        .await
+        .expect("record client completion");
+        let after = row(notation_rows(
+            &surreal,
+            &storage,
+            notation.project_id,
+            Some(notation.person_id),
+            "contact@example.com",
+        )
+        .await
+        .expect("build notation rows"));
+        assert_eq!(after.status, COUNTERSIGNATURE_LABEL);
+        assert_eq!(
+            after.whats_next,
+            workflows::client_phrase_for("firm_signature").whats_next,
+            "the next step is the firm's, not the client's"
+        );
+        assert!(
+            !after.signable,
+            "a client who has signed is offered no signing action"
+        );
+        assert!(!after.signed_ready, "the envelope is not executed yet");
+        assert_eq!(after.contact_href, None);
+    }
+
+    /// The route-level proof: `notation_rows` must not read `signed_ready`
+    /// off `storage.exists()`. An object at the signed-document key with no
+    /// completed `store::signatures` row must not read as signed — the
+    /// exact failure mode ENG-421 reports (a lawyer-uploaded PDF landing at
+    /// that key would otherwise claim execution). Once the provider's
+    /// completion is recorded, the same notation reads as signed with no
+    /// change to what is in storage.
+    #[tokio::test]
+    async fn notation_rows_reads_signed_ready_from_signature_evidence_not_storage() {
+        let surreal = store::surreal::test_support::mem().await;
+        let notation_id = store::test_support::seed_notation(&surreal).await;
+        let notation = store::notations::find_by_id(&surreal, notation_id)
+            .await
+            .expect("query notation")
+            .expect("seeded notation exists");
+        let storage = cloud::FsStorage::new(std::env::temp_dir().join(format!(
+            "navigator-webapp-portal-project-detail-{notation_id}"
+        )))
+        .await
+        .expect("create FsStorage temp root");
+
+        // An object at the signed-document key alone — no signature ever
+        // recorded — must not read as signed.
+        storage
+            .put(
+                &store::notations::signed_document_storage_key(notation_id),
+                b"looks-signed-but-isn't",
+                "application/pdf",
+            )
+            .await
+            .expect("write object at the signed key");
+        let rows = notation_rows(
+            &surreal,
+            &storage,
+            notation.project_id,
+            None,
+            "contact@example.com",
+        )
+        .await
+        .expect("build notation rows");
+        let row = rows.iter().find(|r| r.id == notation_id.to_string());
+        assert_eq!(
+            row.map(|r| r.signed_ready),
+            Some(false),
+            "an object at the signed key with no signature record must not be signed_ready"
+        );
+
+        // Recording the provider's completed signature — no change to what
+        // is in storage — is what flips it.
+        store::signatures::record_request(
+            &surreal,
+            notation_id,
+            store::signatures::SignatureProvider::DocuSign,
+            "env-eng-421",
+        )
+        .await
+        .expect("record signature request");
+        store::signatures::stamp_signed(
+            &surreal,
+            store::signatures::SignatureProvider::DocuSign,
+            "env-eng-421",
+            "2026-06-30T00:00:00Z",
+        )
+        .await
+        .expect("stamp signed_at");
+        let rows = notation_rows(
+            &surreal,
+            &storage,
+            notation.project_id,
+            None,
+            "contact@example.com",
+        )
+        .await
+        .expect("build notation rows");
+        let row = rows.iter().find(|r| r.id == notation_id.to_string());
+        assert_eq!(
+            row.map(|r| r.signed_ready),
+            Some(true),
+            "a completed signature record must make the notation signed_ready"
+        );
+    }
+
+    /// A fresh `FsStorage` temp root, mirroring the setup every other
+    /// `notation_rows` test in this module shares.
+    async fn temp_storage(label: &str, notation_id: uuid::Uuid) -> cloud::FsStorage {
+        cloud::FsStorage::new(
+            std::env::temp_dir().join(format!("navigator-webapp-portal-{label}-{notation_id}")),
+        )
+        .await
+        .expect("create FsStorage temp root")
+    }
+
+    /// `signable` is the gate the "Review and sign" action renders behind
+    /// (ENG-558): only a live envelope (`Requested`) whose bound signer is
+    /// the current session may see it. Before any envelope is sent, and
+    /// when a live envelope belongs to a different participant on the same
+    /// matter, it must be `false`.
+    #[tokio::test]
+    async fn signable_is_true_only_for_a_live_envelope_addressed_to_its_signer() {
+        let surreal = store::surreal::test_support::mem().await;
+        let notation_id = store::test_support::seed_notation(&surreal).await;
+        let notation = store::notations::find_by_id(&surreal, notation_id)
+            .await
+            .expect("query notation")
+            .expect("seeded notation exists");
+        let storage = temp_storage("signable-addressed", notation_id).await;
+
+        // No envelope has been sent yet: nothing to sign.
+        let rows = notation_rows(
+            &surreal,
+            &storage,
+            notation.project_id,
+            Some(notation.person_id),
+            "contact@example.com",
+        )
+        .await
+        .expect("build notation rows");
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.id == notation_id.to_string())
+                .map(|r| r.signable),
+            Some(false),
+            "a notation with no envelope yet must not be signable"
+        );
+
+        store::signatures::record_request(
+            &surreal,
+            notation_id,
+            store::signatures::SignatureProvider::DocuSign,
+            "env-eng-558-live",
+        )
+        .await
+        .expect("record signature request");
+
+        // The bound signer, viewing a live envelope, may sign it.
+        let rows = notation_rows(
+            &surreal,
+            &storage,
+            notation.project_id,
+            Some(notation.person_id),
+            "contact@example.com",
+        )
+        .await
+        .expect("build notation rows");
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.id == notation_id.to_string())
+                .map(|r| r.signable),
+            Some(true),
+            "a live envelope addressed to the current session's person must be signable"
+        );
+
+        // A different participant on the same matter must never see the
+        // action for someone else's envelope.
+        let other = store::persons::find_or_create(
+            &surreal,
+            &store::persons::NewPerson::new("Aries", "aries@example.com"),
+        )
+        .await
+        .expect("seed a second participant");
+        let rows = notation_rows(
+            &surreal,
+            &storage,
+            notation.project_id,
+            Some(other.id),
+            "contact@example.com",
+        )
+        .await
+        .expect("build notation rows");
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.id == notation_id.to_string())
+                .map(|r| r.signable),
+            Some(false),
+            "a live envelope must never be signable to another participant"
+        );
+
+        // No session identity at all — the client-DRI / logged-out shape.
+        let rows = notation_rows(
+            &surreal,
+            &storage,
+            notation.project_id,
+            None,
+            "contact@example.com",
+        )
+        .await
+        .expect("build notation rows");
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.id == notation_id.to_string())
+                .map(|r| r.signable),
+            Some(false),
+            "no session person means no one is signable"
+        );
+    }
+
+    /// A dead envelope offers no signing action to anyone, even its bound
+    /// signer (ENG-558 acceptance: declined and expired must both be
+    /// `false`; voided follows the same terminal-state rule).
+    #[tokio::test]
+    async fn signable_is_false_for_a_declined_voided_or_expired_envelope() {
+        for (label, provider_id) in [
+            ("declined", "env-eng-558-declined"),
+            ("voided", "env-eng-558-voided"),
+            ("expired", "env-eng-558-expired"),
+        ] {
+            let surreal = store::surreal::test_support::mem().await;
+            let notation_id = store::test_support::seed_notation(&surreal).await;
+            let notation = store::notations::find_by_id(&surreal, notation_id)
+                .await
+                .expect("query notation")
+                .expect("seeded notation exists");
+            let storage = temp_storage(&format!("signable-{label}"), notation_id).await;
+
+            store::signatures::record_request(
+                &surreal,
+                notation_id,
+                store::signatures::SignatureProvider::DocuSign,
+                provider_id,
+            )
+            .await
+            .expect("record signature request");
+            match label {
+                "declined" => {
+                    store::signatures::stamp_declined(
+                        &surreal,
+                        store::signatures::SignatureProvider::DocuSign,
+                        provider_id,
+                    )
+                    .await
+                }
+                "voided" => {
+                    store::signatures::stamp_voided(
+                        &surreal,
+                        store::signatures::SignatureProvider::DocuSign,
+                        provider_id,
+                    )
+                    .await
+                }
+                _ => {
+                    store::signatures::stamp_expired(
+                        &surreal,
+                        store::signatures::SignatureProvider::DocuSign,
+                        provider_id,
+                    )
+                    .await
+                }
+            }
+            .expect("stamp terminal state");
+
+            let rows = notation_rows(
+                &surreal,
+                &storage,
+                notation.project_id,
+                Some(notation.person_id),
+                "contact@example.com",
+            )
+            .await
+            .expect("build notation rows");
+            assert_eq!(
+                rows.iter()
+                    .find(|r| r.id == notation_id.to_string())
+                    .map(|r| r.signable),
+                Some(false),
+                "a {label} envelope must not be signable"
+            );
+            // Its copy tells the client to contact the firm, so the row
+            // carries the way to do that.
+            let contact = rows
+                .iter()
+                .find(|r| r.id == notation_id.to_string())
+                .and_then(|r| r.contact_href.clone())
+                .unwrap_or_default();
+            assert!(
+                contact.starts_with("mailto:") && contact.len() > "mailto:".len(),
+                "a {label} envelope's row must link to the firm, got {contact:?}"
+            );
+        }
+    }
+
+    /// An `emailed` (non-captive) recipient has no embedded session to
+    /// open: `esign_view::sign_get` resolves the recipient through the send
+    /// path's own function, finds no `clientUserId`, and answers `409` —
+    /// pinned by `server/tests/esign_redirect.rs`,
+    /// `an_emailed_envelope_has_no_embedded_session_to_open`. A live
+    /// envelope addressed to its own signer must therefore still not be
+    /// signable when the notation was delivered by email, or the portal
+    /// offers an action whose only outcome is a conflict.
+    #[tokio::test]
+    async fn signable_is_false_for_an_emailed_delivery_even_with_a_live_envelope() {
+        let surreal = store::surreal::test_support::mem().await;
+        let seeded_id = store::test_support::seed_notation(&surreal).await;
+        let seeded = store::notations::find_by_id(&surreal, seeded_id)
+            .await
+            .expect("query notation")
+            .expect("seeded notation exists");
+        let storage = temp_storage("signable-emailed", seeded_id).await;
+
+        // Same template, signer, and matter as the seeded notation; only the
+        // delivery mode differs, so delivery is the single variable.
+        let emailed_id = store::notations::create(
+            &surreal,
+            &store::notations::NewNotation::new(
+                seeded.template_id,
+                seeded.person_id,
+                seeded.project_id,
+                "sent_for_signature__pending",
+            )
+            .with_delivery(store::notations::DELIVERY_EMAILED),
+        )
+        .await
+        .expect("create an emailed-delivery notation")
+        .id;
+        // Both notations get their own live envelope, so delivery is the
+        // only difference between the two rows compared below.
+        for (notation_id, provider_id) in [
+            (emailed_id, "env-eng-558-emailed"),
+            (seeded_id, "env-eng-558-embedded"),
+        ] {
+            store::signatures::record_request(
+                &surreal,
+                notation_id,
+                store::signatures::SignatureProvider::DocuSign,
+                provider_id,
+            )
+            .await
+            .expect("record signature request");
+        }
+
+        let rows = notation_rows(
+            &surreal,
+            &storage,
+            seeded.project_id,
+            Some(seeded.person_id),
+            "contact@example.com",
+        )
+        .await
+        .expect("build notation rows");
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.id == emailed_id.to_string())
+                .map(|r| r.signable),
+            Some(false),
+            "an emailed recipient has no embedded session, so the action must not be offered"
+        );
+        // The embedded sibling — same matter, same signer, same live
+        // envelope state — stays signable, so delivery alone decided it.
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.id == seeded_id.to_string())
+                .map(|r| r.signable),
+            Some(true),
+            "embedded delivery with the same live envelope and signer must remain signable"
+        );
+    }
+
+    /// Once fully executed, the client cannot re-enter the ceremony — a
+    /// completed envelope is not signable even to its own signer (ENG-558
+    /// acceptance: "already signed by this client").
+    #[tokio::test]
+    async fn signable_is_false_once_the_envelope_is_fully_signed() {
+        let surreal = store::surreal::test_support::mem().await;
+        let notation_id = store::test_support::seed_notation(&surreal).await;
+        let notation = store::notations::find_by_id(&surreal, notation_id)
+            .await
+            .expect("query notation")
+            .expect("seeded notation exists");
+        let storage = temp_storage("signable-completed", notation_id).await;
+
+        store::signatures::record_request(
+            &surreal,
+            notation_id,
+            store::signatures::SignatureProvider::DocuSign,
+            "env-eng-558-completed",
+        )
+        .await
+        .expect("record signature request");
+        store::signatures::stamp_signed(
+            &surreal,
+            store::signatures::SignatureProvider::DocuSign,
+            "env-eng-558-completed",
+            "2026-06-30T00:00:00Z",
+        )
+        .await
+        .expect("stamp signed_at");
+
+        let rows = notation_rows(
+            &surreal,
+            &storage,
+            notation.project_id,
+            Some(notation.person_id),
+            "contact@example.com",
+        )
+        .await
+        .expect("build notation rows");
+        let row = rows.iter().find(|r| r.id == notation_id.to_string());
+        assert_eq!(
+            row.map(|r| r.signable),
+            Some(false),
+            "an already-signed notation must not be signable"
+        );
+        assert_eq!(row.map(|r| r.signed_ready), Some(true));
+    }
+}

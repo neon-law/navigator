@@ -1,0 +1,51 @@
+APP_NAME = Navigator Forgejo
+RUN_MODE = prod
+[server]
+PROTOCOL = http
+HTTP_ADDR = 0.0.0.0
+HTTP_PORT = 3000
+ROOT_URL = https://forge.example.invalid/
+DISABLE_SSH = true
+APP_DATA_PATH = /var/lib/gitea/data
+[database]
+DB_TYPE = postgres
+HOST = navigator-postgres:5432
+NAME = forgejo
+USER = forgejo
+MAX_OPEN_CONNS = 10
+PASSWD = __NAVIGATOR_FORGEJO_DATABASE_PASSWORD__
+SSL_MODE = verify-full
+[repository]
+ROOT = /var/lib/gitea/git/repositories
+DEFAULT_PRIVATE = private
+[security]
+INSTALL_LOCK = true
+SECRET_KEY = __NAVIGATOR_FORGEJO_SECRET_KEY__
+INTERNAL_TOKEN = __NAVIGATOR_FORGEJO_INTERNAL_TOKEN__
+GLOBAL_TWO_FACTOR_REQUIREMENT = all
+[service]
+DISABLE_REGISTRATION = true
+ENABLE_INTERNAL_SIGNIN = false
+ENABLE_BASIC_AUTHENTICATION = false
+ALLOW_ONLY_EXTERNAL_REGISTRATION = true
+EMAIL_DOMAIN_ALLOWLIST =
+ENABLE_REVERSE_PROXY_AUTHENTICATION = false
+[openid]
+ENABLE_OPENID_SIGNIN = false
+ENABLE_OPENID_SIGNUP = false
+[oauth2]
+JWT_SIGNING_ALGORITHM = HS256
+JWT_SECRET_URI = file:/etc/forgejo/oauth2_jwt_secret
+[oauth2_client]
+ENABLE_AUTO_REGISTRATION = false
+ACCOUNT_LINKING = disabled
+USERNAME = email
+REGISTER_EMAIL_CONFIRM = false
+UPDATE_AVATAR = false
+[admin]
+DISABLE_REGULAR_ORG_CREATION = true
+[actions]
+ENABLED = false
+[log]
+MODE = console
+LEVEL = Info

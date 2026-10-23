@@ -1,0 +1,6 @@
+# Synthetic. Disposable `dev` fixture applied by `seed_sample_portfolio` on a
+# `dev` profile only; never a firm fact, never a client's data.
+lookup_fields:
+  - person_id
+  - project_id
+records: []

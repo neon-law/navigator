@@ -1,0 +1,39 @@
+pages:
+  - slug: timeline
+    kind: docket_deadline_board
+    title: Timeline
+    lenses:
+      lawyer: [case_caption, fact_strip, key_dates_strip, docket_timeline, deadline_board, party_roster, efiling_receipts, relationship_graph, boundary_note, provenance_statement]
+      client: [case_caption, fact_strip, key_dates_strip, docket_timeline, deadline_board, party_roster, efiling_receipts, boundary_note, provenance_statement]
+  - slug: discovery
+    kind: discovery_cockpit
+    title: Discovery
+    lenses:
+      lawyer: [discovery_pairs, progress_counter, item_status_setter, boundary_note, provenance_statement]
+      client: [discovery_pairs, boundary_note, provenance_statement]
+  - slug: trial-prep
+    kind: hearing_console
+    title: Trial prep
+    lenses:
+      lawyer: [case_caption, key_dates_strip, stage_list, authority_table, boundary_note, provenance_statement]
+      client: [case_caption, key_dates_strip, boundary_note, provenance_statement]
+  - slug: motion
+    kind: document_workbench
+    title: Motion
+    draft: drafts/motion_partial_summary_judgment__nevada.md
+    lenses:
+      lawyer: [document_body, notation_document, notation_checklist, boundary_note, provenance_statement]
+      client: [notation_document, boundary_note, provenance_statement]
+  - slug: case-library
+    kind: authority_library
+    title: Case Library
+    lenses:
+      lawyer: [authority_table, boundary_note, provenance_statement]
+      client: [boundary_note, provenance_statement]
+  - slug: engagement
+    kind: engagement_billing_records
+    title: Engagement and billing
+    draft: drafts/sample_litigation__engagement.md
+    lenses:
+      lawyer: [engagement_letter, invoice, prebill_review, boundary_note, provenance_statement]
+      client: [engagement_letter, invoice, boundary_note, provenance_statement]

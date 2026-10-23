@@ -1,0 +1,159 @@
+# Daily base backup. With the continuous WAL archive it bounds how much WAL a
+# point-in-time restore must replay. `basebackup` writes a compressed tar
+# backup to a per-run ephemeral claim; `upload` copies it to
+# gs://<bucket>/<namespace>/navigator-postgres/base/<UTC stamp>/ and writes
+# `_COMPLETE` last. Retention is the bucket's lifecycle policy.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: navigator-postgres-base-backup
+spec:
+  schedule: "30 9 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 10800
+      template:
+        metadata:
+          labels:
+            app: navigator-postgres-base-backup
+            navigator.neonlaw.org/postgres-client: "true"
+        spec:
+          restartPolicy: Never
+          serviceAccountName: navigator-postgres-backup
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: basebackup
+              image: neon-law-postgres:16.15-age1.6.0-vector0.8.2
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - /etc/navigator/postgres/scripts/base-backup.sh
+              env:
+                - name: PGHOST
+                  valueFrom:
+                    configMapKeyRef:
+                      name: navigator-postgres-client
+                      key: host
+                - name: PGPORT
+                  valueFrom:
+                    configMapKeyRef:
+                      name: navigator-postgres-client
+                      key: port
+                - name: PGSSLMODE
+                  valueFrom:
+                    configMapKeyRef:
+                      name: navigator-postgres-client
+                      key: sslmode
+                - name: PGSSLROOTCERT
+                  value: /etc/navigator/postgres/backup/ca.crt
+                - name: PGUSER
+                  value: navigator_backup
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-postgres-backup
+                      key: password
+                - name: PGAPPNAME
+                  value: navigator-postgres-base-backup
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 128Mi
+                  ephemeral-storage: 64Mi
+                limits:
+                  memory: 512Mi
+                  ephemeral-storage: 64Mi
+              volumeMounts:
+                - name: backup-work
+                  mountPath: /backup
+                - name: scripts
+                  mountPath: /etc/navigator/postgres/scripts
+                  readOnly: true
+                - name: backup
+                  mountPath: /etc/navigator/postgres/backup
+                  readOnly: true
+          containers:
+            - name: upload
+              image: google-cloud-cli:540.0.0-slim
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/bash
+                - /etc/navigator/postgres/scripts/upload-base-backup.sh
+              env:
+                - name: BACKUP_BUCKET
+                  valueFrom:
+                    configMapKeyRef:
+                      name: navigator-postgres-backup-target
+                      key: bucket
+                - name: POD_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: HOME
+                  value: /tmp
+                - name: CLOUDSDK_CONFIG
+                  value: /tmp/gcloud
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 256Mi
+                  ephemeral-storage: 256Mi
+                limits:
+                  memory: 1Gi
+                  ephemeral-storage: 256Mi
+              volumeMounts:
+                - name: backup-work
+                  mountPath: /backup
+                  readOnly: true
+                - name: scripts
+                  mountPath: /etc/navigator/postgres/scripts
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: backup-work
+              ephemeral:
+                volumeClaimTemplate:
+                  spec:
+                    accessModes:
+                      - ReadWriteOnce
+                    resources:
+                      requests:
+                        storage: 50Gi
+            - name: scripts
+              configMap:
+                name: navigator-postgres-backup-scripts
+            - name: backup
+              secret:
+                secretName: navigator-postgres-backup
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+                defaultMode: 0444
+            - name: tmp
+              emptyDir:
+                sizeLimit: 256Mi

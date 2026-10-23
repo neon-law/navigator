@@ -1,0 +1,176 @@
+head_title: "{site_name} | NYC hearing representation from $100"
+meta_description: >-
+  Local counsel for NYC OATH summonses. $100 per telephone hearing or a one-time $500 in-person appearance.
+  A private law firm, not affiliated with the City of New York or OATH. Attorney advertisement.
+heading: A city summons. A clear next step.
+lead: >-
+  Keep your day moving. Our local counsel appears at your NYC OATH hearing.
+  Tell us your story once, get your documents in order, and let a lawyer take it from there.
+contact_label: Start your intake
+summons:
+  eyebrow: NYC SUMMONS DEFENSE / ALL FIVE BOROUGHS
+  nav:
+    - [How it works, '#how-it-works']
+    - [The fees, '#fees']
+    - [Summons guide, '#guides']
+    - [NYC resources, '#resources']
+  hero_note: >-
+    Private counsel, not affiliated with the City of New York or OATH. For accepted OATH Hearings Division matters;
+    representation is confirmed in writing.
+  fees_heading: A LAWYER AT YOUR HEARING
+  fees:
+    - [By telephone, '$100', per hearing, Local counsel takes the call and appears on your behalf.]
+    - [In person, '$500', one-time appearance fee, Local counsel attends your agreed in-person hearing.]
+  fees_note: >-
+    Attorney appearance fees. City fines and penalties are separate. We confirm the covered hearing and any
+    additional work in writing. In-person hearings require OATH approval and advance scheduling.
+  process_heading: Tell us once. We take it from there.
+  steps:
+    - - One intake, with help
+      - An assistant or AI-enabled assistant helps gather your information, summonses, hearing dates, and documents together.
+    - - A lawyer reviews your matter
+      - Local counsel checks the charges, evidence, hearing format, and scope. We confirm the engagement and fee in writing.
+    - - We appear. You get an update.
+      - Your lawyer presents your defense and explains the decision and next steps. We tell you if your participation is needed.
+  guides_heading: Start with the agency on your summons.
+  guides_intro: >-
+    Different charges need different evidence. Open a guide for a practical preparation checklist and the City’s own
+    instructions. Counsel confirms whether your particular summons fits this service.
+  guides:
+    - - DSNY
+      - Sanitation & sidewalks
+      - Recycling, set-out rules, and street conditions
+      - |-
+        Save dated photos showing the condition and the exact location cited.
+        Gather collection schedules, cleaning logs, and receipts relevant to the alleged violation.
+        Read the charge and penalty notice carefully; fixing a condition does not by itself dismiss a summons.
+      - https://www.nyc.gov/site/oath/help-center/frequently-asked-questions.page
+    - - DOB
+      - Buildings & construction
+      - Permits, alterations, and correction orders
+      - |-
+        Gather permits, approved plans, work records, and photos tied to the date of the charge.
+        Check whether your summons offers a cure and identify its specific deadline.
+        Paying a penalty does not close the correction process. Check DOB’s certificate-of-correction requirements.
+      - https://www.nyc.gov/site/buildings/property-or-business-owner/certificate-of-correction-frequently-asked-questions.page
+    - - FDNY
+      - Fire safety
+      - Inspections, equipment, and fire-code summonses
+      - |-
+        Identify whether the document is an OATH summons, a violation order, or a criminal court notice.
+        Gather inspection reports, maintenance records, and dated proof of correction.
+        Use FDNY Business for certificate-of-correction requests and verify whether you still need a hearing.
+      - https://www.nyc.gov/site/fdny/business/violations/violations.page
+    - - DEP
+      - Noise & environmental rules
+      - Noise, idling, air, and equipment
+      - |-
+        Match each charge to its location, date, time, and cited rule.
+        Preserve relevant video, equipment records, permits, and service or removal records.
+        Organize what the records establish about the condition on the cited date, not just its condition today.
+      - https://www.nyc.gov/site/oath/trials/bnotes-1025archive.page
+    - - DCWP
+      - Shops & businesses
+      - Licenses, prices, signs, and consumer rules
+      - |-
+        Pull the City inspection checklist for your type of business.
+        Save the licenses, price displays, receipts, and records relevant to each charge.
+        Compare the inspector’s description with your dated records; prepare an answer to each alleged violation.
+      - https://www.nyc.gov/site/dca/businesses/inspection-checklists.page
+    - - DOHMH
+      - Restaurants & food service
+      - Inspection findings and health-code charges
+      - |-
+        Keep the full inspection report and identify each condition you dispute.
+        Gather relevant temperature logs, pest-control records, permits, and dated photos.
+        Review the Health Department’s inspection guide and keep correcting unsafe conditions while the case proceeds.
+      - https://www.nyc.gov/assets/doh/downloads/pdf/rii/blue-book.pdf
+  cases_heading: Small details can matter. Here’s the record.
+  cases_note: >-
+    Examples from OATH’s published summaries, not our client results. These decisions turn on their own facts and
+    rules; they do not predict your outcome. Preparation tips are general information, not advice for your case.
+  cases:
+    - - SANITATION / APPEAL 2100929
+      - Read the penalty notice.
+      - >-
+        In a 2021 recycling appeal, OATH reversed a repeat-offender finding because the summons did not adequately
+        explain the maximum penalty. The wording of the notice mattered.
+      - https://www.nyc.gov/site/oath/hearings/decisions0222.page
+    - - BUILDINGS / APPEAL 2500988
+      - Keep the original approvals.
+      - >-
+        In a September 2025 outdoor-dining appeal, OATH reversed a work-without-a-permit finding because the structure
+        was exempt when built. The decision depended on that program and its timing.
+      - https://www.nyc.gov/site/oath/trials/bnotes-1025archive.page
+    - - BUILDINGS / APPEAL 2101404
+      - Explain barriers with evidence.
+      - >-
+        In a 2021 correction-order appeal, OATH upheld liability: the owner’s evidence did not establish an
+        impossibility defense. Difficulty making repairs was not enough on that record.
+      - https://www.nyc.gov/site/oath/hearings/decisions0322.page
+  intake_heading: One place to start.
+  intake_body: >-
+    Leave your contact details below to arrange intake. An assistant or AI-enabled assistant will help collect the
+    information for your lawyer’s review. We aim to gather it together once; your lawyer may ask for missing details.
+  intake_checklist:
+    - Have every page of your summons ready.
+    - Note the hearing date and any notices changing it.
+    - Gather photos, permits, receipts, and your account of what happened.
+    - Tell the assistant about language or accessibility needs.
+  intake_note: >-
+    This form requests contact only. It does not upload evidence, hire a lawyer, or reserve a hearing appearance.
+    We will arrange collection of your documents during intake. If your hearing is close, contact OATH directly
+    while you wait for our written confirmation.
+  resources_heading: Straight from the City.
+  reviewed: Government sources only. Reviewed September 28, 2026. Check the linked page for current instructions.
+  resources:
+    - [Find your summons and case status, 'https://www.nyc.gov/site/oath/help-center/case-status.page']
+    - [Schedule a telephone hearing, 'https://www.nyc.gov/site/oath/hearings/hearing-by-phone.page']
+    - [Request an in-person hearing, 'https://www.nyc.gov/site/oath/hearings/hearing-in-person.page']
+    - [Hearing options and defaults, 'https://www.nyc.gov/site/oath/hearings/hearings-and-defaults.page']
+    - [Hearing questions and evidence, 'https://www.nyc.gov/site/oath/hearings/hearings-frequently-asked-questions.page']
+    - [Appeal a decision, 'https://www.nyc.gov/site/oath/hearings/appeal-a-decision.page']
+    - [Appeal rules and deadlines, 'https://www.nyc.gov/site/oath/hearings/subchapter-d-appeals.page']
+    - [OATH’s free Help Center, 'https://www.nyc.gov/site/oath/help-center/help-center.page']
+    - [Request free legal assistance, 'https://www.nyc.gov/site/oath/help-center/free-legal-assistance-request-form.page']
+    - [OATH fact sheets and FAQs, 'https://www.nyc.gov/site/oath/help-center/frequently-asked-questions.page']
+    - [DOB summonses and violations, 'https://www.nyc.gov/site/buildings/dob/resolve-a-summons-or-violation.page']
+    - [DOB certificate-of-correction guide, 'https://www.nyc.gov/assets/buildings/pdf/cofc_user_guide.pdf']
+    - [FDNY violations and corrections, 'https://www.nyc.gov/site/fdny/business/violations/violations.page']
+    - [DCWP business inspection checklists, 'https://www.nyc.gov/site/dca/businesses/inspection-checklists.page']
+    - [NYC restaurant inspection guide, 'https://www.nyc.gov/assets/doh/downloads/pdf/rii/blue-book.pdf']
+    - [DEP environmental programs and evidence resources, 'https://www.nyc.gov/site/dep/index.page']
+    - [OATH published decision archives, 'https://www.nyc.gov/site/oath/trials/benchnotes-archives.page']
+  faq_heading: Before you get started.
+  faqs:
+    - - Do I have to attend the hearing?
+      - >-
+        Counsel appears on your behalf for the accepted hearing. Your testimony or participation may still be needed.
+        Your lawyer will confirm that with you before the hearing.
+    - - Is this a City service?
+      - >-
+        No. Summons Defense is a practice of Shook Law PC, a private law firm, not affiliated with the City of
+        New York or OATH. You may represent yourself. OATH’s Help Center offers free procedural information,
+        and some matters may qualify for free outside legal assistance.
+    - - How far ahead should I act?
+      - >-
+        Act as soon as you receive the summons. OATH says to request a phone hearing at least three business days
+        and no more than one month before the hearing date. In-person requests must be made at least five business
+        days ahead. Sending this form does not satisfy either deadline.
+    - - What if I missed a hearing or want to appeal?
+      - >-
+        Contact OATH promptly and read its current instructions. Reopening a default is different from appealing a
+        hearing decision. Appeals generally must be filed within 30 days of the decision, or 35 days if mailed;
+        service and payment or waiver requirements also apply. These are separate from an appearance engagement.
+    - - What does the fee cover?
+      - >-
+        The agreed hearing appearance: $100 per telephone hearing, or a one-time $500 in-person appearance fee.
+        City fines and penalties are separate. We confirm any additional preparation, repeat appearance,
+        appeal, correction filing, or other work in writing before you agree to it.
+    - - Will an AI assistant represent me?
+      - >-
+        No. An assistant or AI-enabled assistant can help organize intake. Local counsel reviews the matter and
+        appears at the hearing. Legal judgment and representation stay with your lawyer.
+  footer_note: >-
+    Summons Defense is a practice of Shook Law PC. A private law firm, not affiliated with the City of New York or
+    OATH. Attorney advertisement. No result is guaranteed. Representation begins only after written acceptance.

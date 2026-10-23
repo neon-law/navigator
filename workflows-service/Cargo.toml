@@ -1,0 +1,77 @@
+[package]
+name = "workflows-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The Restate worker binary that registers the `notation` virtual
+# object's handlers. Talks to the broker over the restate-sdk's
+# HTTP server endpoint; talks to the store via the `store` crate
+# to project each state-machine transition into the
+# `notation_events` journal.
+[[bin]]
+name = "workflows-service"
+path = "src/main.rs"
+
+[[bin]]
+name = "social-publish-reconciler-trigger"
+path = "src/bin/social-publish-reconciler-trigger.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+billing.workspace = true
+anyhow.workspace = true
+archives = { workspace = true }
+async-trait.workspace = true
+axum.workspace = true
+billing-workflows = { workspace = true }
+dbos.workspace = true
+chrono.workspace = true
+cloud.workspace = true
+dotenvy.workspace = true
+restate-sdk.workspace = true
+# `restate-jwt` is `restate-sdk-shared-core`'s own `jsonwebtoken` dependency
+# (feature = "rust_crypto"). Pinning the process-level `CryptoProvider` to it
+# in `main()` (see `request_identity::install_crypto_provider`) needs this in
+# the shipped binary, not just in tests — `store`'s `surrealdb-core`
+# dependency compiles the same `jsonwebtoken` version with `aws_lc_rs`, and
+# the two features being unified into one build is otherwise ambiguous
+# (ENG-550).
+restate-jwt.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+# The `repository` child reads a Project repository's `navigator.yaml` pin
+# through `rules::project_manifest`, the same reader `navigator project gate`
+# uses, so the two can never disagree about what a repository pins.
+rules.workspace = true
+store = { workspace = true }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "net"] }
+telemetry.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+url.workspace = true
+workflows = { workspace = true, features = ["dbos"] }
+views.workspace = true
+
+[dev-dependencies]
+bs58.workspace = true
+sqlx.workspace = true
+ed25519-dalek.workspace = true
+store = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
+tower = { workspace = true }
+wiremock.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,1313 @@
+//! `store::documents` — write-side primitive for **document assets**.
+//!
+//! A matter document (a portal upload, an inbound-email attachment, a
+//! generated PDF) is one `asset` row carrying both the byte pointer and
+//! the document metadata. [`ingest_bytes`] is the one entry point. Given
+//! a project, bytes, and provenance, it:
+//!
+//! 1. Computes a SHA-256 of the bytes.
+//! 2. If an `asset` row **on this project** already references that content,
+//!    the object is already stored beneath
+//!    `projects/<code>/documents/<sha>` — the storage write is skipped.
+//!    Otherwise it writes the bytes through [`cloud::StorageService`].
+//! 3. Inserts one `asset` row carrying the byte pointer plus the
+//!    inbound-channel provenance (`source`, `received_at`), the
+//!    `filename`/`kind`, and the optional lawyer-view `description`.
+//!
+//! # Ordering, not a transaction
+//!
+//! A multi-statement Surreal query is not one transaction, so steps 2–3
+//! do not share one. They do not need to. The guarantee to hold is "never
+//! leave a row pointing at a storage key
+//! that does not exist", and that is a property of the **order**: the
+//! object is written before the row that names it, so a failure between
+//! them leaves an unreferenced object rather than a dangling row. An
+//! unreferenced object at a Project-scoped content-addressed key is inert —
+//! the next ingest of the same bytes reuses it.
+//!
+//! The dedup probe losing a race is equally benign: both writers then
+//! `put` identical bytes to the same Project-scoped content-addressed key,
+//! and `put` is idempotent on both `FsStorage` and `GcsStorage`. The only
+//! observable difference is a redundant write, never a wrong byte.
+//!
+//! The bare-content lane (template bodies, raw `.eml`) is
+//! [`crate::assets::ingest_content`], which writes an `asset` row with
+//! the document-metadata fields left unset.
+
+use std::sync::Arc;
+use std::{fmt, path::Path};
+
+use chrono::Utc;
+use cloud::{StorageError, StorageService};
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
+
+use crate::assets::{sha256_hex as asset_sha256_hex, SELECT, TABLE};
+use crate::surreal::{record_id, SurrealDb};
+
+/// Maximum size of one document accepted by the document upload lane.
+///
+/// Twenty-five MiB matches the size mail systems accept for real instruments
+/// while keeping the buffered REST upload bounded until the lane can stream.
+/// Keep this limit here so every document-ingest caller shares one contract.
+pub const MAX_DOCUMENT_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
+
+/// Maximum REST request size needed to carry the document limit as base64 JSON.
+///
+/// The request body is larger than the document bytes because the REST door
+/// carries the content as base64 plus a small JSON envelope. The expansion
+/// uses `div_ceil` so a maximum-size document does not spend JSON allowance
+/// on the encoding.
+pub const MAX_DOCUMENT_UPLOAD_REQUEST_BYTES: usize =
+    MAX_DOCUMENT_UPLOAD_BYTES.div_ceil(3) * 4 + MAX_DOCUMENT_UPLOAD_JSON_BYTES;
+
+/// Room the request cap leaves for the upload's own JSON fields.
+///
+/// Everything in the request that is not the encoded document: `filename`,
+/// `kind`, `visibility`, `description`, `slug`, and the free-form `metadata`
+/// the caller passes through verbatim.
+pub const MAX_DOCUMENT_UPLOAD_JSON_BYTES: usize = 4096;
+
+/// Explain a document-size rejection with the configured maximum and actual size.
+#[must_use]
+pub fn document_upload_size_message(actual: usize) -> String {
+    format!(
+        "Document upload exceeds the maximum of {MAX_DOCUMENT_UPLOAD_BYTES} bytes; received {actual} bytes."
+    )
+}
+
+/// The repository pointer path must retain the uploaded filename's extension.
+/// A slug without one cannot be represented as `blobs/<slug>.yaml` while
+/// also satisfying the Project gate's pointer rule.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DocumentSlugError {
+    MissingOrMismatchedExtension { filename: String, slug: String },
+}
+
+impl fmt::Display for DocumentSlugError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingOrMismatchedExtension { filename, slug } => {
+                if let Some(suggested_slug) = suggested_slug(filename, slug) {
+                    write!(
+                        formatter,
+                        "document slug `{slug}` must carry the source extension from `{filename}`; use `{suggested_slug}` so it can be represented as a repository pointer"
+                    )
+                } else {
+                    write!(
+                        formatter,
+                        "document slug `{slug}` must carry the source extension from `{filename}` so it can be represented as a repository pointer"
+                    )
+                }
+            }
+        }
+    }
+}
+
+impl std::error::Error for DocumentSlugError {}
+
+fn suggested_slug(filename: &str, slug: &str) -> Option<String> {
+    let extension = Path::new(filename)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| !extension.is_empty())?;
+    let stem = slug
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .filter(|stem| !stem.is_empty() && !stem.ends_with('/') && !stem.ends_with('\\'))
+        .unwrap_or(slug);
+    Some(format!("{stem}.{extension}"))
+}
+
+/// Reject a document identity that cannot be represented by a repository
+/// pointer. Upload callers share this check so a pointer is never issued that
+/// the local gate would necessarily reject.
+pub fn validate_document_slug(filename: &str, slug: &str) -> Result<(), DocumentSlugError> {
+    let filename_extension = Path::new(filename)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| !extension.is_empty());
+    let slug_extension = Path::new(slug)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| !extension.is_empty());
+
+    if filename_extension.is_some_and(|expected| {
+        slug_extension.is_some_and(|actual| expected.eq_ignore_ascii_case(actual))
+    }) {
+        Ok(())
+    } else {
+        Err(DocumentSlugError::MissingOrMismatchedExtension {
+            filename: filename.to_string(),
+            slug: slug.to_string(),
+        })
+    }
+}
+
+/// Inbound-channel literals written to `assets.source`. Centralized here
+/// so handlers and tests agree on the same strings; mismatches turn into
+/// silent dedup-planner bugs.
+pub mod source {
+    pub const UPLOAD: &str = "upload";
+    /// An attachment received on inbound `support@` mail (see
+    /// `portal::email_threads`).
+    pub const EMAIL: &str = "email";
+    /// A document the workflow engine rendered itself — the PDF a
+    /// `generate_pdf__*` step produces (retainer, trust, filled
+    /// government packet). Not an inbound channel; the bytes originate
+    /// in-house from the template + answers.
+    pub const GENERATED: &str = "generated";
+    /// A file copied from the Project's Google Drive ingest folder.
+    pub const DRIVE: &str = "drive";
+}
+
+/// Matter-page visibility literals written to `assets.visibility`. A
+/// closed vocabulary enforced by the schema ASSERT on `asset.visibility`;
+/// centralized here so every caller states its intent explicitly rather
+/// than falling back to a silent default (#782).
+pub mod visibility {
+    /// Lawyer-only — the default. Attorney work product (`review_memo`) and
+    /// `unclassified` lawyer/email uploads.
+    pub const INTERNAL: &str = "internal";
+    /// Listed in the client's "Your documents".
+    pub const CLIENT: &str = "client";
+}
+
+/// Errors surfaced by [`ingest_bytes`].
+#[derive(Debug, thiserror::Error)]
+pub enum IngestError {
+    #[error("database: {0}")]
+    Db(#[from] surrealdb::Error),
+    #[error("storage: {0}")]
+    Storage(#[from] StorageError),
+    #[error(transparent)]
+    Asset(#[from] crate::assets::AssetError),
+    #[error(transparent)]
+    Project(#[from] crate::projects::ProjectStoreError),
+    /// The insert reported success but returned no row this module could
+    /// read back.
+    #[error("writing a document asset returned no usable row")]
+    WriteReturnedNothing,
+    /// A stable server-generated document identity was reused for different
+    /// bytes or different document metadata.
+    #[error("idempotent document identity conflicts with an existing asset: {0}")]
+    IdempotencyConflict(String),
+    /// `args.kind` is not a [`rules::kind::Kind`] valid in
+    /// [`rules::kind::Lane::Asset`]. The ingest boundary rejects rather than
+    /// silently coercing to `unclassified` — a lane whose whole job is
+    /// classification should refuse a bad classification loudly, not file it
+    /// under a value the caller never chose.
+    #[error("`{0}` is not a valid asset-lane kind")]
+    InvalidKind(String),
+}
+
+/// Inputs to [`ingest_bytes`]. Held in a struct (rather than a long
+/// positional list) so future fields don't break callers.
+#[derive(Debug, Clone)]
+pub struct IngestArgs<'a> {
+    /// Project the document belongs to.
+    pub project_id: Uuid,
+    /// Inbound channel name — `upload`, `email`, `generated`, or `drive`.
+    /// Goes into `assets.source`.
+    pub source: &'a str,
+    /// Caller-visible filename. Goes into `assets.filename`.
+    pub filename: &'a str,
+    /// Document classification — one of [`rules::kind::Kind::valid_for`]
+    /// [`rules::kind::Lane::Asset`] (`onboarding`, `offboarding`,
+    /// `unclassified`, …). Goes into `assets.kind`; [`ingest_bytes`] rejects
+    /// any other value.
+    pub kind: &'a str,
+    /// MIME content type of `bytes`.
+    pub content_type: &'a str,
+    /// Optional lawyer-view caption; goes into `assets.description`.
+    pub description: Option<&'a str>,
+    /// Matter-page visibility — `visibility::INTERNAL` or
+    /// `visibility::CLIENT`. Every caller states this explicitly (no silent
+    /// default at the Rust layer) even though the column itself defaults to
+    /// `internal`, so a call site that should be client-visible can't
+    /// silently forget to say so.
+    pub visibility: &'a str,
+    /// A second object-storage key holding the **same bytes**, written
+    /// outside content-addressing — a generated PDF's notation key
+    /// (`notations/<id>/document.pdf`). Stamped onto the asset row in the
+    /// **same transaction** as the insert so every asset row for the bytes
+    /// carries it, and a governed expunge deletes every copy (#470). `None`
+    /// for the common single-copy ingest.
+    pub secondary_storage_key: Option<&'a str>,
+}
+
+/// The **document identity** an ingest optionally carries — the asset
+/// lane's slug, publication stamp, and free-form detail.
+///
+/// Separate from [`IngestArgs`] rather than three more fields on it
+/// because the two answer different questions. `IngestArgs` describes
+/// *these bytes*: where they came from, what they are, who may see them.
+/// This describes *which document they are a revision of*, and almost
+/// every caller has no answer — an inbound email attachment or a
+/// generated PDF is a one-off artifact, not a revision of anything. Those
+/// callers use [`ingest_bytes`] and get [`DocumentIdentity::default`],
+/// a `NULL` slug.
+///
+/// A caller that *does* know the document identity goes through
+/// [`crate::assets::file_revision`], which enforces the asset lane's
+/// write rules rather than writing a row directly.
+#[derive(Debug, Clone, Default)]
+pub struct DocumentIdentity<'a> {
+    /// The lawyer-chosen document identity within the Project, or `None`
+    /// for a one-off artifact. Never derived from the filename: a
+    /// re-upload named `captable_final_v2.pdf` must not fork a chain, and
+    /// two unrelated `agreement.pdf`s must not merge into one.
+    pub slug: Option<&'a str>,
+    /// RFC 3339 publication stamp, back-datable to a court's file stamp.
+    /// Distinct from `received_at`, which every ingest stamps with the
+    /// moment the bytes arrived.
+    pub published_at: Option<&'a str>,
+    /// Free-form per-kind detail — a back-dating reason, a court's entry
+    /// sequence. Validators belong in the `rules` crate, never a database
+    /// CHECK.
+    pub metadata: Option<serde_json::Value>,
+    /// JSON `derived_from` relation for generated Project documents such as
+    /// OCR transcripts. The shape is `{document_id, version, sha256}`.
+    pub derived_from: Option<serde_json::Value>,
+    /// Transcript provenance quality; other document kinds leave it unset.
+    pub transcript_quality: Option<&'a str>,
+    /// How an executed document was signed. Optional on every kind.
+    pub signing: Option<Signing>,
+    /// The notarial acknowledgments on an executed document, if any.
+    pub notarization: Vec<Notarization>,
+}
+
+/// How an executed document was signed: in wet ink on paper, or through
+/// `DocuSign`. See the glossary's Signing Method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SigningMethod {
+    WetInk,
+    Docusign,
+}
+
+impl SigningMethod {
+    /// Every method, in the order help and errors name them.
+    pub const ALL: [Self; 2] = [Self::WetInk, Self::Docusign];
+
+    /// The stored and committed spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::WetInk => "wet_ink",
+            Self::Docusign => "docusign",
+        }
+    }
+
+    /// Parse the stored and committed spelling.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|method| method.as_str() == value)
+    }
+}
+
+/// The signing record on an executed document: its [`SigningMethod`] and the
+/// calendar date it was signed (`YYYY-MM-DD`). Stored on the `asset` row and
+/// carried on its committed pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Signing {
+    pub method: SigningMethod,
+    pub signed_on: chrono::NaiveDate,
+}
+
+/// How a notarial acknowledgment was taken: before a notary in person, or
+/// by remote online notarization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotarizationMethod {
+    InPerson,
+    RemoteOnline,
+}
+
+impl NotarizationMethod {
+    /// Every method, in the order help and errors name them.
+    pub const ALL: [Self; 2] = [Self::InPerson, Self::RemoteOnline];
+
+    /// The stored and committed spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InPerson => "in_person",
+            Self::RemoteOnline => "remote_online",
+        }
+    }
+
+    /// Parse the stored and committed spelling.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|method| method.as_str() == value)
+    }
+}
+
+/// One notarial acknowledgment on an executed document. A packet may hold
+/// several, so a document carries a list. It records where and how the
+/// acknowledgment was taken and when the notary's commission expires, and
+/// deliberately never the notary's name or commission number.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Notarization {
+    pub method: NotarizationMethod,
+    pub acknowledged_on: chrono::NaiveDate,
+    /// The two-letter state code where the notary is commissioned, such as `NV`.
+    pub state: String,
+    pub county: String,
+    pub commission_expires: chrono::NaiveDate,
+}
+
+/// Why a [`Notarization`] cannot be recorded.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum NotarizationError {
+    #[error("notarization state must be a two-letter code such as `NV`, not `{0}`")]
+    State(String),
+    #[error("notarization county must not be blank")]
+    County,
+    #[error("the notary's commission must not expire before the acknowledgment date")]
+    CommissionExpired,
+}
+
+impl Notarization {
+    /// Enforce what the field types cannot: a two-letter uppercase state
+    /// code, a non-blank county, and a commission still in force on the
+    /// acknowledgment date.
+    ///
+    /// # Errors
+    /// The first [`NotarizationError`].
+    pub fn validate(&self) -> Result<(), NotarizationError> {
+        if self.state.len() != 2 || !self.state.bytes().all(|byte| byte.is_ascii_uppercase()) {
+            return Err(NotarizationError::State(self.state.clone()));
+        }
+        if self.county.trim().is_empty() {
+            return Err(NotarizationError::County);
+        }
+        if self.commission_expires < self.acknowledged_on {
+            return Err(NotarizationError::CommissionExpired);
+        }
+        Ok(())
+    }
+}
+
+/// The exact source document revision a generated transcript was produced from.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DerivedFrom {
+    pub document_id: uuid::Uuid,
+    pub version: usize,
+    pub sha256: String,
+}
+
+/// Inbound-mail provenance for one filed attachment (ENG-517) — the sender,
+/// message id, received timestamp, and subject of the
+/// `email_conversation_message` the bytes came from. A hand-download loses
+/// all four, which is exactly the gap `navigator site mail file` closes.
+///
+/// Deliberately not a field on [`IngestArgs`] or [`DocumentIdentity`]: those
+/// are constructed at roughly two dozen call sites across the workspace, and
+/// only mail filing's one server-side handler ever has this to give. A
+/// separate, `Default`-derived struct threaded through
+/// [`ingest_bytes_with_mail_provenance`] keeps every existing call site
+/// untouched.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MailProvenance<'a> {
+    pub message_id: &'a str,
+    pub sender: &'a str,
+    pub received_at: &'a str,
+    pub subject: &'a str,
+}
+
+/// What [`ingest_bytes`] writes, returned for the caller to log /
+/// reference / show in a UI.
+#[derive(Debug, Clone)]
+pub struct IngestedDocument {
+    /// The `assets` row id for this document.
+    pub asset_id: Uuid,
+    /// Project-scoped content-addressed object key written for this document.
+    pub storage_key: String,
+    pub sha256_hex: String,
+    pub byte_size: i64,
+    /// `true` when this Project already stored the bytes under another asset,
+    /// so no new storage write happened.
+    pub reused: bool,
+}
+
+/// Ingest one artifact: write the bytes (if new), insert the document
+/// `asset` row, return the id.
+///
+/// # Errors
+/// [`IngestError`] on a storage or database failure.
+pub async fn ingest_bytes(
+    db: &SurrealDb,
+    storage: &Arc<dyn StorageService>,
+    args: &IngestArgs<'_>,
+    bytes: &[u8],
+) -> Result<IngestedDocument, IngestError> {
+    ingest_bytes_as(db, storage, args, &DocumentIdentity::default(), bytes).await
+}
+
+/// Ingest one artifact exactly once for a `(Project, filename, content)`
+/// identity. Restate replay may run the caller again after the asset row was
+/// committed; returning that row prevents a second internal document record
+/// while retaining the ordinary content-addressed storage semantics.
+pub async fn ingest_bytes_exactly_once(
+    db: &SurrealDb,
+    storage: &Arc<dyn StorageService>,
+    args: &IngestArgs<'_>,
+    bytes: &[u8],
+) -> Result<IngestedDocument, IngestError> {
+    let sha_hex = crate::assets::sha256_hex(bytes);
+    if let Some(existing) =
+        crate::assets::find_filed_copy(db, args.project_id, args.filename, &sha_hex).await?
+    {
+        return Ok(IngestedDocument {
+            asset_id: existing.id,
+            storage_key: existing.storage_key,
+            sha256_hex: existing.sha256_hex,
+            byte_size: existing.byte_size,
+            reused: true,
+        });
+    }
+    ingest_bytes(db, storage, args, bytes).await
+}
+
+/// Ingest one server-generated document under a caller-supplied stable key.
+/// The key must be namespaced to the document purpose and include the Project
+/// and canonical filename. A deterministic Surreal record id elects one
+/// writer when requests race; concurrent losers return the exact row written
+/// by the winner, but only when bytes and document metadata match.
+///
+/// Object storage is still written before the asset row, so no row can point
+/// at bytes that failed to persist. A losing concurrent put is content
+/// addressed and harmless; its row insert resolves to the winner's record.
+///
+/// # Errors
+/// [`IngestError`] on storage/database failure or when a stable key is reused
+/// for different bytes or metadata.
+pub async fn ingest_bytes_with_idempotency_key(
+    db: &SurrealDb,
+    storage: &Arc<dyn StorageService>,
+    args: &IngestArgs<'_>,
+    idempotency_key: &str,
+    bytes: &[u8],
+) -> Result<IngestedDocument, IngestError> {
+    let expected_sha = sha256_hex(bytes);
+    if let Some(existing) =
+        crate::assets::find_by_project_and_filename(db, args.project_id, args.filename).await?
+    {
+        return existing_document(existing, args, &expected_sha);
+    }
+
+    let asset_id = stable_asset_id(args.project_id, args.filename, idempotency_key);
+    match ingest_bytes_as_inner(
+        db,
+        storage,
+        args,
+        &DocumentIdentity::default(),
+        None,
+        Some(asset_id),
+        bytes,
+    )
+    .await
+    {
+        Ok(document) => Ok(document),
+        Err(error) => {
+            if let Some(existing) = crate::assets::find_by_id(db, asset_id).await? {
+                return existing_document(existing, args, &expected_sha);
+            }
+            Err(error)
+        }
+    }
+}
+
+fn existing_document(
+    existing: crate::assets::Asset,
+    args: &IngestArgs<'_>,
+    expected_sha: &str,
+) -> Result<IngestedDocument, IngestError> {
+    if existing.project_id != Some(args.project_id)
+        || existing.filename.as_deref() != Some(args.filename)
+        || existing.kind.as_deref() != Some(args.kind)
+        || existing.source.as_deref() != Some(args.source)
+        || existing.content_type != args.content_type
+        || existing.description.as_deref() != args.description
+        || existing.secondary_storage_key != args.secondary_storage_key.map(str::to_string)
+        || existing.visibility != args.visibility
+        || existing.sha256_hex != expected_sha
+    {
+        return Err(IngestError::IdempotencyConflict(args.filename.to_string()));
+    }
+    Ok(IngestedDocument {
+        asset_id: existing.id,
+        storage_key: existing.storage_key,
+        sha256_hex: existing.sha256_hex,
+        byte_size: existing.byte_size,
+        reused: true,
+    })
+}
+
+fn stable_asset_id(project_id: Uuid, filename: &str, idempotency_key: &str) -> Uuid {
+    let mut digest = Sha256::new();
+    digest.update(b"navigator/document-idempotency/v1\0");
+    digest.update(project_id.as_bytes());
+    for part in [filename.as_bytes(), idempotency_key.as_bytes()] {
+        digest.update(u64::try_from(part.len()).unwrap_or(u64::MAX).to_be_bytes());
+        digest.update(part);
+    }
+    let hash = digest.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&hash[..16]);
+    // Version 8 marks this as a custom SHA-256-derived identity, not an
+    // RFC 4122 v5 UUID (which is defined over SHA-1).
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
+/// [`ingest_bytes`], filing the bytes as a revision of the document named
+/// by `identity`.
+///
+/// The raw write. It does **not** enforce the asset lane's rules — that
+/// is [`crate::assets::file_revision`]'s job, and slugged callers should
+/// go through it so no call site reimplements the no-op and immutability
+/// checks and drifts.
+///
+/// # Errors
+/// Propagates database and storage errors.
+pub async fn ingest_bytes_as(
+    db: &SurrealDb,
+    storage: &Arc<dyn StorageService>,
+    args: &IngestArgs<'_>,
+    identity: &DocumentIdentity<'_>,
+    bytes: &[u8],
+) -> Result<IngestedDocument, IngestError> {
+    ingest_bytes_as_inner(db, storage, args, identity, None, None, bytes).await
+}
+
+/// [`ingest_bytes_as`], additionally stamping [`MailProvenance`] onto the
+/// inserted row (ENG-517). The one caller is `navigator site mail file`'s
+/// server-side handler; every other ingest lane goes through
+/// [`ingest_bytes_as`] and leaves the four provenance columns unset.
+///
+/// # Errors
+/// Propagates database and storage errors.
+pub async fn ingest_bytes_with_mail_provenance(
+    db: &SurrealDb,
+    storage: &Arc<dyn StorageService>,
+    args: &IngestArgs<'_>,
+    identity: &DocumentIdentity<'_>,
+    provenance: &MailProvenance<'_>,
+    bytes: &[u8],
+) -> Result<IngestedDocument, IngestError> {
+    ingest_bytes_as_inner(db, storage, args, identity, Some(provenance), None, bytes).await
+}
+
+async fn ingest_bytes_as_inner(
+    db: &SurrealDb,
+    storage: &Arc<dyn StorageService>,
+    args: &IngestArgs<'_>,
+    identity: &DocumentIdentity<'_>,
+    provenance: Option<&MailProvenance<'_>>,
+    asset_id: Option<Uuid>,
+    bytes: &[u8],
+) -> Result<IngestedDocument, IngestError> {
+    if !rules::kind::Kind::parse(args.kind).is_some_and(|k| k.valid_for(rules::kind::Lane::Asset)) {
+        return Err(IngestError::InvalidKind(args.kind.to_string()));
+    }
+
+    let sha_hex = sha256_hex(bytes);
+    let byte_size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+    let project = crate::projects::find_by_id(db, args.project_id)
+        .await?
+        .ok_or(crate::projects::ProjectStoreError::NoSuchProject(
+            args.project_id,
+        ))?;
+    let storage_key = format!(
+        "{}/{sha_hex}",
+        cloud::workspace::documents_prefix(&project.code)
+    );
+
+    // Storage dedup, scoped to this matter: if an asset **on this project**
+    // already references this content, the object is stored; otherwise write
+    // it once. Write before inserting the row so a crash mid-ingest never
+    // leaves an `asset` row pointing at a key that doesn't exist — the
+    // ordering is what carries that, not a transaction (see the module doc).
+    //
+    // The `project_id` filter is the whole point: deduping across matters
+    // made one matter's governed expunge destroy another's document. Two
+    // matters holding the same exhibit is ordinary; a sealing order on one
+    // silently emptying the other is not. Bytes are cheap, cross-matter
+    // coupling is not.
+    let reused = project_holds_content(db, args.project_id, &sha_hex).await?;
+    if !reused {
+        storage.put(&storage_key, bytes, args.content_type).await?;
+    }
+
+    let asset_id = insert_asset_row(
+        db,
+        args,
+        identity,
+        provenance,
+        StoredDocumentBytes {
+            storage_key: &storage_key,
+            sha256_hex: &sha_hex,
+            byte_size,
+        },
+        asset_id,
+    )
+    .await?;
+
+    Ok(IngestedDocument {
+        asset_id,
+        storage_key,
+        sha256_hex: sha_hex,
+        byte_size,
+        reused,
+    })
+}
+
+/// Whether this matter already holds an asset referencing `sha_hex`.
+async fn project_holds_content(
+    db: &SurrealDb,
+    project_id: Uuid,
+    sha_hex: &str,
+) -> Result<bool, IngestError> {
+    let mut response = db
+        .query(format!(
+            "SELECT VALUE id FROM {TABLE} \
+             WHERE sha256_hex = $sha AND project_id = $project LIMIT 1"
+        ))
+        .bind(("sha", sha_hex.to_string()))
+        .bind((
+            "project",
+            record_id(crate::projects::PROJECT_TABLE, project_id),
+        ))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?;
+    let found: Option<surrealdb::types::RecordId> = response.take(0)?;
+    Ok(found.is_some())
+}
+
+/// The content hash every document is stored and deduped under.
+///
+/// Public so a caller that needs to ask "does this project already hold
+/// these bytes?" hashes them exactly the way ingest does — a second
+/// implementation would drift and silently stop matching. Delegates to
+/// [`crate::assets::sha256_hex`] so both lanes share one digest.
+#[must_use]
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    asset_sha256_hex(bytes)
+}
+
+/// The docket-record attestation (LAW-24, option 1): does an independently
+/// fetched copy of a filed document hash to the same bytes Navigator
+/// stored?
+///
+/// This is the real authenticity check available for a court PDF — these
+/// carry no `/ByteRange`, `/Sig`, or `SigFlags`, so there is no signature to
+/// verify. Comparing against a second, independently obtained copy is
+/// possible instead: fetching that copy is the caller's job (the source is
+/// the [`crate::cases::Case`]'s `forum`/`docket_number` and the
+/// [`crate::cases::DocketEntry`]'s `entry_number`), and this function does
+/// only the comparison, so the one hash algorithm both sides agree on
+/// cannot drift between the stored-document path and this one.
+#[must_use]
+pub fn verify_independent_copy(recorded_sha256_hex: &str, independently_fetched: &[u8]) -> bool {
+    sha256_hex(independently_fetched) == recorded_sha256_hex
+}
+
+struct StoredDocumentBytes<'a> {
+    storage_key: &'a str,
+    sha256_hex: &'a str,
+    byte_size: i64,
+}
+
+async fn insert_asset_row(
+    db: &SurrealDb,
+    args: &IngestArgs<'_>,
+    identity: &DocumentIdentity<'_>,
+    provenance: Option<&MailProvenance<'_>>,
+    bytes: StoredDocumentBytes<'_>,
+    asset_id: Option<Uuid>,
+) -> Result<Uuid, IngestError> {
+    let id = asset_id.unwrap_or_else(Uuid::now_v7);
+    let mut response = crate::assets::writing(|| {
+        db.query(format!(
+            "CREATE $id SET \
+             storage_key = $storage_key, \
+             secondary_storage_key = $secondary_storage_key, \
+             content_type = $content_type, \
+             byte_size = $byte_size, \
+             sha256_hex = $sha256_hex, \
+             project_id = $project_id, \
+             filename = $filename, \
+             kind = $kind, \
+             source = $source, \
+             received_at = $received_at, \
+             description = $description, \
+             visibility = $visibility, \
+             slug = $slug, \
+             published_at = $published_at, \
+             source_message_id = $source_message_id, \
+             source_sender = $source_sender, \
+             source_received_at = $source_received_at, \
+             source_subject = $source_subject, \
+             metadata = $metadata, \
+             derived_from = $derived_from, \
+             transcript_quality = $transcript_quality, \
+             signing = $signing, \
+             notarization = $notarization \
+             RETURN {SELECT}"
+        ))
+        .bind(("id", record_id(TABLE, id)))
+        .bind(("storage_key", bytes.storage_key.to_string()))
+        .bind((
+            "secondary_storage_key",
+            args.secondary_storage_key.map(String::from),
+        ))
+        .bind(("content_type", args.content_type.to_string()))
+        .bind(("byte_size", bytes.byte_size))
+        .bind(("sha256_hex", bytes.sha256_hex.to_string()))
+        .bind((
+            "project_id",
+            record_id(crate::projects::PROJECT_TABLE, args.project_id),
+        ))
+        .bind(("filename", Some(args.filename.to_string())))
+        .bind(("kind", Some(args.kind.to_string())))
+        .bind(("source", Some(args.source.to_string())))
+        .bind(("received_at", Some(Utc::now().to_rfc3339())))
+        .bind(("description", args.description.map(String::from)))
+        .bind(("visibility", args.visibility.to_string()))
+        .bind(("slug", identity.slug.map(String::from)))
+        .bind(("published_at", identity.published_at.map(String::from)))
+        .bind((
+            "source_message_id",
+            provenance.map(|p| p.message_id.to_string()),
+        ))
+        .bind(("source_sender", provenance.map(|p| p.sender.to_string())))
+        .bind((
+            "source_received_at",
+            provenance.map(|p| p.received_at.to_string()),
+        ))
+        .bind(("source_subject", provenance.map(|p| p.subject.to_string())))
+        .bind(("metadata", identity.metadata.clone()))
+        .bind(("derived_from", identity.derived_from.clone()))
+        .bind((
+            "transcript_quality",
+            identity.transcript_quality.map(String::from),
+        ))
+        .bind((
+            "signing",
+            identity
+                .signing
+                .and_then(|signing| serde_json::to_value(signing).ok()),
+        ))
+        .bind((
+            "notarization",
+            (!identity.notarization.is_empty())
+                .then(|| serde_json::to_value(&identity.notarization).ok())
+                .flatten(),
+        ))
+    })
+    .await?;
+
+    let written: Option<surrealdb::types::RecordId> = response.take((0, "id"))?;
+    let id = written
+        .as_ref()
+        .and_then(crate::surreal::record_uuid)
+        .ok_or(IngestError::WriteReturnedNothing)?;
+    crate::assets::mirror_writes(db, &[id]).await;
+    Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stable_asset_ids_include_project_filename_and_document_purpose_key() {
+        let project_a = Uuid::from_u128(1);
+        let project_b = Uuid::from_u128(2);
+        let id = stable_asset_id(project_a, "letter.pdf", "pitch-offboarding/v1");
+        assert_eq!(id.get_version_num(), 8);
+        assert_ne!(
+            id,
+            stable_asset_id(project_b, "letter.pdf", "pitch-offboarding/v1")
+        );
+        assert_ne!(
+            id,
+            stable_asset_id(project_a, "other.pdf", "pitch-offboarding/v1")
+        );
+        assert_ne!(
+            id,
+            stable_asset_id(project_a, "letter.pdf", "other-purpose/v1")
+        );
+    }
+    use crate::assets::find_by_id;
+    use crate::surreal::test_support::mem;
+    use cloud::FsStorage;
+
+    async fn fixtures() -> (SurrealDb, Arc<dyn StorageService>, tempfile::TempDir, Uuid) {
+        let db = mem().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn StorageService> =
+            Arc::new(FsStorage::new(tmp.path().to_path_buf()).await.unwrap());
+        let project_id = crate::test_support::seed_project_surreal(&db, "Test Matter").await;
+        (db, storage, tmp, project_id)
+    }
+
+    #[test]
+    fn the_request_cap_covers_a_maximum_document_as_base64_plus_its_json() {
+        // base64 spends four characters on every three bytes, rounding the
+        // final partial group up. Truncating that division instead spends
+        // part of the JSON allowance on the encoding, so a maximum-size
+        // document carrying a `description` or `metadata` would be refused
+        // by the framework's body cap rather than by the door's own size
+        // check — the raw buffering error ENG-602 set out to replace.
+        use base64::Engine as _;
+
+        let engine = base64::engine::general_purpose::STANDARD;
+        for len in 0..=9usize {
+            assert_eq!(len.div_ceil(3) * 4, engine.encode(vec![0u8; len]).len());
+        }
+
+        assert!(
+            MAX_DOCUMENT_UPLOAD_REQUEST_BYTES
+                >= MAX_DOCUMENT_UPLOAD_BYTES.div_ceil(3) * 4 + MAX_DOCUMENT_UPLOAD_JSON_BYTES
+        );
+    }
+
+    #[test]
+    fn verify_independent_copy_compares_by_hash_not_by_bytes_identity() {
+        let recorded = sha256_hex(b"the filed document");
+        assert!(verify_independent_copy(&recorded, b"the filed document"));
+        assert!(!verify_independent_copy(&recorded, b"a tampered document"));
+    }
+
+    #[test]
+    fn a_document_slug_keeps_the_uploaded_filename_extension() {
+        assert!(validate_document_slug("complaint.pdf", "dkt-001-complaint.pdf").is_ok());
+        assert!(validate_document_slug("complaint.PDF", "dkt-001-complaint.pdf").is_ok());
+
+        let error = validate_document_slug("complaint.pdf", "dkt-001-complaint").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "document slug `dkt-001-complaint` must carry the source extension from `complaint.pdf`; use `dkt-001-complaint.pdf` so it can be represented as a repository pointer"
+        );
+        assert!(matches!(
+            error,
+            DocumentSlugError::MissingOrMismatchedExtension { .. }
+        ));
+        assert!(validate_document_slug("complaint.pdf", "dkt-001-complaint.txt").is_err());
+        assert!(validate_document_slug("complaint", "dkt-001-complaint").is_err());
+    }
+
+    #[tokio::test]
+    async fn ingest_writes_a_document_asset_with_provenance() {
+        let (db, storage, _tmp, project_id) = fixtures().await;
+        let args = IngestArgs {
+            project_id,
+            source: "upload",
+            filename: "retainer.pdf",
+            kind: "onboarding",
+            content_type: "application/pdf",
+            description: Some("client-signed retainer"),
+            secondary_storage_key: None,
+            visibility: visibility::INTERNAL,
+        };
+
+        let out = ingest_bytes(&db, &storage, &args, b"hello world")
+            .await
+            .unwrap();
+
+        assert!(!out.reused);
+        assert_eq!(out.byte_size, 11);
+        // sha256("hello world") =
+        //   b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
+        assert_eq!(
+            out.sha256_hex,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+
+        let a = find_by_id(&db, out.asset_id)
+            .await
+            .unwrap()
+            .expect("asset row");
+        assert_eq!(a.content_type, "application/pdf");
+        assert_eq!(a.byte_size, 11);
+        let project = crate::projects::find_by_id(&db, project_id)
+            .await
+            .unwrap()
+            .expect("project row");
+        assert_eq!(
+            a.storage_key,
+            format!("projects/{}/documents/{}", project.code, out.sha256_hex)
+        );
+        assert_eq!(a.filename.as_deref(), Some("retainer.pdf"));
+        assert_eq!(a.kind.as_deref(), Some("onboarding"));
+        assert_eq!(a.project_id, Some(project_id));
+        assert_eq!(a.source.as_deref(), Some("upload"));
+        assert_eq!(a.description.as_deref(), Some("client-signed retainer"));
+        assert!(
+            a.received_at.is_some(),
+            "received_at must be stamped on insert"
+        );
+        assert_eq!(a.visibility, visibility::INTERNAL);
+
+        let stored = storage.get(&a.storage_key).await.unwrap();
+        assert_eq!(stored.bytes, b"hello world");
+    }
+
+    #[tokio::test]
+    async fn ingest_refuses_an_unknown_project_before_writing() {
+        let (db, storage, _tmp, _project_id) = fixtures().await;
+        let missing_project = Uuid::now_v7();
+        let args = IngestArgs {
+            project_id: missing_project,
+            source: source::UPLOAD,
+            filename: "retainer.pdf",
+            kind: "onboarding",
+            content_type: "application/pdf",
+            description: None,
+            secondary_storage_key: None,
+            visibility: visibility::INTERNAL,
+        };
+
+        let error = ingest_bytes(&db, &storage, &args, b"hello world")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            IngestError::Project(crate::projects::ProjectStoreError::NoSuchProject(id)) if id == missing_project
+        ));
+    }
+
+    #[tokio::test]
+    async fn ingest_dedupes_storage_but_keeps_distinct_asset_rows() {
+        let (db, storage, _tmp, project_id) = fixtures().await;
+        let bytes = b"same bytes";
+        let mk = |fname: &'static str| IngestArgs {
+            project_id,
+            source: "upload",
+            filename: fname,
+            kind: "unclassified",
+            content_type: "text/plain",
+            description: None,
+            secondary_storage_key: None,
+            visibility: visibility::INTERNAL,
+        };
+
+        let first = ingest_bytes(&db, &storage, &mk("a.txt"), bytes)
+            .await
+            .unwrap();
+        assert!(!first.reused);
+
+        let second = ingest_bytes(&db, &storage, &mk("b.txt"), bytes)
+            .await
+            .unwrap();
+        assert!(second.reused, "the content-addressed object is reused");
+        assert_ne!(
+            second.asset_id, first.asset_id,
+            "each document ingest is a distinct asset row, even sharing bytes"
+        );
+
+        // Two asset rows on this matter, one shared storage key. Scoped to
+        // the project rather than counted table-wide: the cucumber suite
+        // shares one engine across concurrent scenarios.
+        let assets = crate::assets::for_project(&db, project_id).await.unwrap();
+        assert_eq!(assets.len(), 2);
+        assert_eq!(assets[0].storage_key, assets[1].storage_key);
+    }
+
+    #[tokio::test]
+    async fn exact_once_ingest_reuses_the_committed_document_row_on_replay() {
+        let (db, storage, _tmp, project_id) = fixtures().await;
+        let args = IngestArgs {
+            project_id,
+            source: "generated",
+            filename: "reviewed-contract.docx",
+            kind: "inbound_contract",
+            content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            description: Some("Attorney-reviewed Word contract"),
+            secondary_storage_key: None,
+            visibility: visibility::INTERNAL,
+        };
+        let first = ingest_bytes_exactly_once(&db, &storage, &args, b"reviewed bytes")
+            .await
+            .unwrap();
+        let second = ingest_bytes_exactly_once(&db, &storage, &args, b"reviewed bytes")
+            .await
+            .unwrap();
+        assert_eq!(first.asset_id, second.asset_id);
+        assert!(!first.reused);
+        assert!(second.reused);
+    }
+
+    #[tokio::test]
+    async fn keyed_ingest_rejects_changed_bytes_without_replacing_the_filed_document() {
+        let (db, storage, _tmp, project_id) = fixtures().await;
+        let args = IngestArgs {
+            project_id,
+            source: source::GENERATED,
+            filename: "pitch-offboarding-letter.pdf",
+            kind: "offboarding",
+            content_type: "application/pdf",
+            description: Some("Generated pitch offboarding letter"),
+            secondary_storage_key: None,
+            visibility: visibility::INTERNAL,
+        };
+        let first = ingest_bytes_with_idempotency_key(
+            &db,
+            &storage,
+            &args,
+            "pitch-offboarding/v1",
+            b"first letter",
+        )
+        .await
+        .unwrap();
+        let error = ingest_bytes_with_idempotency_key(
+            &db,
+            &storage,
+            &args,
+            "pitch-offboarding/v1",
+            b"different letter",
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, IngestError::IdempotencyConflict(_)));
+
+        let saved = find_by_id(&db, first.asset_id).await.unwrap().unwrap();
+        assert_eq!(saved.sha256_hex, sha256_hex(b"first letter"));
+        assert_eq!(
+            storage.get(&saved.storage_key).await.unwrap().bytes,
+            b"first letter"
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_does_not_dedupe_across_matters() {
+        // Dedup is scoped to one matter. Two matters that happen to receive
+        // identical bytes each get their own storage write.
+        //
+        // Global dedup made one matter's governed expunge destroy another's
+        // document. Two clients sharing a common exhibit is ordinary; one
+        // client's sealing order silently emptying an unrelated matter is not.
+        let (db, storage, _tmp, first) = fixtures().await;
+        let second = crate::test_support::seed_project_surreal(&db, "Second Matter").await;
+        let bytes = b"an exhibit filed on two matters";
+        let mk = |project_id: Uuid| IngestArgs {
+            project_id,
+            source: "upload",
+            filename: "exhibit.pdf",
+            kind: "unclassified",
+            content_type: "application/pdf",
+            description: None,
+            secondary_storage_key: None,
+            visibility: visibility::INTERNAL,
+        };
+
+        let a = ingest_bytes(&db, &storage, &mk(first), bytes)
+            .await
+            .unwrap();
+        assert!(!a.reused);
+
+        let b = ingest_bytes(&db, &storage, &mk(second), bytes)
+            .await
+            .unwrap();
+        assert!(
+            !b.reused,
+            "a second matter must own its copy, not reuse the first matter's object"
+        );
+
+        // The same hash is stored at two Project-scoped keys. Each matter owns
+        // its copy, which is what `reused: false` records.
+        assert_eq!(a.sha256_hex, b.sha256_hex);
+        assert_ne!(a.asset_id, b.asset_id);
+        let first_asset = find_by_id(&db, a.asset_id)
+            .await
+            .unwrap()
+            .expect("first asset");
+        let second_asset = find_by_id(&db, b.asset_id)
+            .await
+            .unwrap()
+            .expect("second asset");
+        assert_ne!(first_asset.storage_key, second_asset.storage_key);
+        assert!(first_asset.storage_key.ends_with(&a.sha256_hex));
+        assert!(second_asset.storage_key.ends_with(&b.sha256_hex));
+    }
+
+    #[tokio::test]
+    async fn ingest_different_bytes_produces_different_assets() {
+        let (db, storage, _tmp, project_id) = fixtures().await;
+        let mk = |fname: &'static str| IngestArgs {
+            project_id,
+            source: "upload",
+            filename: fname,
+            kind: "unclassified",
+            content_type: "text/plain",
+            description: None,
+            secondary_storage_key: None,
+            visibility: visibility::INTERNAL,
+        };
+        let a = ingest_bytes(&db, &storage, &mk("a.txt"), b"alpha")
+            .await
+            .unwrap();
+        let b = ingest_bytes(&db, &storage, &mk("b.txt"), b"bravo")
+            .await
+            .unwrap();
+        assert_ne!(a.asset_id, b.asset_id);
+        assert_ne!(a.sha256_hex, b.sha256_hex);
+    }
+
+    #[tokio::test]
+    async fn ingest_stamps_the_secondary_key_with_the_row() {
+        // #470: a generated PDF's notation-key copy is recorded on the asset
+        // row by the SAME statement that creates it, so every asset row for
+        // the bytes carries it and a governed expunge can delete every copy —
+        // no window where a committed row is missing its second key.
+        let (db, storage, _tmp, project_id) = fixtures().await;
+        let notation_key = "notations/abc/document.pdf";
+        let args = IngestArgs {
+            project_id,
+            source: source::GENERATED,
+            filename: "document.pdf",
+            kind: "onboarding",
+            content_type: "application/pdf",
+            description: None,
+            secondary_storage_key: Some(notation_key),
+            visibility: visibility::INTERNAL,
+        };
+        let ingested = ingest_bytes(&db, &storage, &args, b"%PDF-1.7 body")
+            .await
+            .unwrap();
+
+        let row = find_by_id(&db, ingested.asset_id).await.unwrap().unwrap();
+        assert_eq!(row.secondary_storage_key.as_deref(), Some(notation_key));
+        let project = crate::projects::find_by_id(&db, project_id)
+            .await
+            .unwrap()
+            .expect("project row");
+        assert_eq!(
+            row.storage_key,
+            format!(
+                "projects/{}/documents/{}",
+                project.code, ingested.sha256_hex
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_leaves_the_secondary_key_unset_by_default() {
+        let (db, storage, _tmp, project_id) = fixtures().await;
+        let args = IngestArgs {
+            project_id,
+            source: "upload",
+            filename: "a.txt",
+            kind: "unclassified",
+            content_type: "text/plain",
+            description: None,
+            secondary_storage_key: None,
+            visibility: visibility::INTERNAL,
+        };
+        let ingested = ingest_bytes(&db, &storage, &args, b"plain").await.unwrap();
+        let row = find_by_id(&db, ingested.asset_id).await.unwrap().unwrap();
+        assert_eq!(row.secondary_storage_key, None);
+    }
+
+    #[tokio::test]
+    async fn ingest_stamps_the_caller_stated_visibility() {
+        let (db, storage, _tmp, project_id) = fixtures().await;
+        let args = IngestArgs {
+            project_id,
+            source: "upload",
+            filename: "client-visible.pdf",
+            kind: "unclassified",
+            content_type: "application/pdf",
+            description: None,
+            secondary_storage_key: None,
+            visibility: visibility::CLIENT,
+        };
+        let ingested = ingest_bytes(&db, &storage, &args, b"client bytes")
+            .await
+            .unwrap();
+        let row = find_by_id(&db, ingested.asset_id).await.unwrap().unwrap();
+        assert_eq!(row.visibility, visibility::CLIENT);
+    }
+
+    /// The schema ASSERT is what closes the visibility vocabulary.
+    /// A typo'd visibility would drop a document out of the client's "Your
+    /// documents" silently rather than fail, so it must fail at write time.
+    #[tokio::test]
+    async fn an_unknown_visibility_is_refused_by_the_schema() {
+        let (db, storage, _tmp, project_id) = fixtures().await;
+        let args = IngestArgs {
+            project_id,
+            source: "upload",
+            filename: "typo.pdf",
+            kind: "unclassified",
+            content_type: "application/pdf",
+            description: None,
+            secondary_storage_key: None,
+            visibility: "clientt",
+        };
+        assert!(
+            ingest_bytes(&db, &storage, &args, b"bytes").await.is_err(),
+            "the engine accepted visibility `clientt`"
+        );
+    }
+
+    /// The ingest boundary is the asset lane's write gate: a `kind` outside
+    /// `rules::kind::Kind::valid_for(Lane::Asset)` must be refused before any
+    /// bytes are written or any row is inserted, not silently coerced to
+    /// `unclassified`.
+    #[tokio::test]
+    async fn ingest_bytes_rejects_a_kind_outside_the_asset_lane() {
+        let (db, storage, _tmp, project_id) = fixtures().await;
+        let args = IngestArgs {
+            project_id,
+            source: "upload",
+            filename: "typo.pdf",
+            kind: "bogus",
+            content_type: "application/pdf",
+            description: None,
+            secondary_storage_key: None,
+            visibility: visibility::INTERNAL,
+        };
+        assert!(
+            matches!(
+                ingest_bytes(&db, &storage, &args, b"bytes").await,
+                Err(IngestError::InvalidKind(k)) if k == "bogus"
+            ),
+            "the engine accepted kind `bogus`"
+        );
+    }
+
+    /// A template-lane-only kind (a matter dashboard, a content page) is not
+    /// a document classification either — the same lane split
+    /// `rules::kind::Kind::valid_for` enforces on the template side must hold
+    /// on the asset side.
+    #[tokio::test]
+    async fn ingest_bytes_rejects_a_template_lane_only_kind() {
+        let (db, storage, _tmp, project_id) = fixtures().await;
+        let args = IngestArgs {
+            project_id,
+            source: "upload",
+            filename: "not-a-workshop.pdf",
+            kind: "workshop",
+            content_type: "application/pdf",
+            description: None,
+            secondary_storage_key: None,
+            visibility: visibility::INTERNAL,
+        };
+        assert!(
+            ingest_bytes(&db, &storage, &args, b"bytes").await.is_err(),
+            "the engine accepted the template-lane-only kind `workshop`"
+        );
+    }
+}

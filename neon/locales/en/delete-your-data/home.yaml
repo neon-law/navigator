@@ -1,0 +1,71 @@
+head_title: "{site_name} | Privacy for $29/mo or $290/year prepaid"
+meta_description: >-
+  Data removal, privacy protection, and basic form filings such as an LLC, for $29/mo or $290/year prepaid. Gift cards
+  available. Opt-in privacy and credit monitoring. Data removal is a non-legal service.
+heading: Your Life. Less Exposed.
+lead: Data removal, privacy protection, and basic form filings. $29/mo or $290/year prepaid.
+contact_label: Get privacy protection
+practices: []
+privacy:
+  eyebrow: DeleteYourData.com
+  price: "$29/mo"
+  price_term: ""
+  annual_price: "$290/year"
+  annual_term: ""
+  monthly_label: Monthly
+  annual_label: Annual — prepaid
+  household_note: ""
+  annual_household_note: Prepay $290/year. Basic form filings, such as forming an LLC, are included. Government fees are separate.
+  offer_note: Data removal is a non-legal service. Basic form filings, such as forming an LLC, are included. Government fees are separate. Enrollment does not create an attorney-client relationship.
+  gift_link: Gift cards available
+  benefits_heading: Your privacy. Your choice.
+  benefits:
+    - [Data removal, "We help you ask companies to delete the personal data they hold about you. This is a non-legal service. Legal advice and representation require a separate engagement."]
+    - [Simple pricing, "$29/mo, or $290/year prepaid. Basic form filings, such as forming an LLC, are included. Government fees are separate. Gift cards are available."]
+    - [Privacy & Credit, "Privacy and credit monitoring are optional. Choose whether to opt in when you enroll."]
+  record_label: Request records on Solana
+  record_heading: A record you can verify.
+  record_body: >-
+    Record your removal requests on Solana to help document what you requested.
+    If a data leak or misuse has caused harm, Cyber Injury Law can review
+    whether a separate legal claim may be appropriate. Data removal does not
+    guarantee that a company will comply or prevent a future leak.
+  sibling_practices:
+    - brand: vesta
+      eyebrow: With a Vesta estate plan
+      heading: An optional death check.
+      body: >-
+        When you make your estate plan with Vesta Estate Planning, we set its
+        triggers together: who to tell, which claims to file, and which accounts
+        to close. While your DeleteYourData.com subscription, also called Neon
+        Law Nautilus, is active, a death check sets those triggers in motion on
+        your behalf. You choose whether to turn it on.
+      note: >-
+        Why it matters: a life insurer settles a death claim once it receives
+        due proof of death. Nevada requires insurers to check the federal Death
+        Master File only twice a year, and a benefit whose beneficiary cannot be
+        found is presumed abandoned. A Florida appeals court found that when a
+        death goes unidentified, beneficiaries are not notified or paid.
+      sources:
+        - ["Nev. Rev. Stat. § 688A.140", "https://app.midpage.ai/laws/nv-nrs/t57/ch688A/s688A_140-9e5653?utm_source=mcp"]
+        - ["Nev. Rev. Stat. § 688D.090", "https://app.midpage.ai/laws/nv-nrs/t57/ch688D/s688D_090-b48728?utm_source=mcp"]
+        - ["Patronis v. United Ins. Co. of Am., No. 1D18-2114 (Fla. 1st DCA June 3, 2020)", "https://app.midpage.ai/document/jimmy-patronis-in-his-official--b7fe6425-201e-44f5-93bb-980abef1299c?utm_source=mcp"]
+      cta_label: Visit Vesta Estate Planning
+    - brand: cyber-injury-law
+      eyebrow: Cyber crimes
+      heading: Also available for cyber crimes.
+      body: >-
+        If a hack, data theft, identity theft, or online abuse has already
+        caused you harm, Cyber Injury Law reviews the
+        facts and whether a separate legal claim may be appropriate.
+      cta_label: Visit CyberInjuryLaw.com
+  gift_heading: Give the gift of privacy.
+  gift_body: >-
+    A gift card covers data removal, privacy protection, and basic form filings
+    such as forming an LLC, for someone you care about, for $29/mo or $290/year
+    prepaid. Government fees are separate. They choose when to get started and
+    whether to opt in to monitoring.
+  gift_cta: Ask for a gift card
+  gift_card_label: DeleteYourData.com
+  gift_card_term: "$29/mo or $290/year prepaid. Their choice."
+  closing_heading: Make privacy your next move.

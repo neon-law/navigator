@@ -1,0 +1,319 @@
+head_title: "{site_name} | Immigration services"
+meta_description: >-
+  Immigration work from Abhaya Immigration, a practice of Shook Law PC.
+  Work visas, family petitions, green cards, citizenship, employer sponsorship,
+  and USCIS notice responses. This is an attorney advertisement.
+title: Immigration services
+hero_mark: gavel
+tagline: Flat fees, quoted first
+hero_lines:
+  - text: Build your future
+    accent_words: 2
+  - text: with a clear plan
+    accent_words: 0
+hero_lead: >-
+  Immigration counsel for individuals, families, founders, and employers.
+  We explain your options and agree on a flat fee before work begins.
+  Government fees are separate. Shook Law PC is the law firm you would retain.
+hero_cta:
+  href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
+  label: Book Consultation
+skin: practice
+bands:
+  - kind: cards
+    anchor: work
+    overline: Work, talent, and investment
+    heading: A place for what you do
+    description: >-
+      We assess the category that fits your plans and explain who must file,
+      what evidence is needed, and which agency handles each step.
+    items:
+      - title: O-1 extraordinary ability
+        body:
+          - - text: >-
+                Petitions for people with extraordinary ability or achievement,
+                including work in science, business, education, arts, and athletics.
+      - title: H-1B specialty occupations
+        body:
+          - - text: >-
+                Employer-sponsored petitions for specialty-occupation roles.
+                We review the position, qualifications, and filing requirements.
+      - title: TN Canadian and Mexican professionals
+        body:
+          - - text: >-
+                Matters for eligible Canadian and Mexican citizens coming
+                to work in a qualifying profession.
+      - title: E-3 Australian professionals
+        body:
+          - - text: >-
+                Specialty-occupation matters for eligible Australian citizens,
+                including the proposed role and employer requirements.
+      - title: E-1 treaty traders
+        body:
+          - - text: >-
+                Review treaty nationality, qualifying trade, and the proposed
+                U.S. activity for treaty-trader matters.
+      - title: E-2 treaty investors
+        body:
+          - - text: >-
+                Review treaty nationality, the investment, and the business
+                you plan to develop and direct in the United States.
+      - title: L-1 company transfers
+        body:
+          - - text: >-
+                Transfers of qualifying executives, managers, and employees
+                with specialized knowledge between related businesses.
+      - title: J-1 exchange visitors
+        body:
+          - - text: >-
+                Guidance on exchange-visitor matters, sponsor requirements,
+                and the conditions that may affect your next immigration step.
+      - title: P-1 athletes and entertainers
+        body:
+          - - text: >-
+                Petitions for qualifying athletes, teams, and entertainment
+                groups coming to the United States for their work.
+      - title: R-1 religious workers
+        body:
+          - - text: >-
+                Temporary religious-worker petitions for qualifying workers
+                and the religious organizations sponsoring them.
+  - kind: cards
+    anchor: residence
+    overline: Family, residence, and citizenship
+    heading: Make room for the life ahead
+    description: >-
+      We review eligibility and explain the petition, application, and
+      interview steps that apply to your circumstances.
+    items:
+      - title: Marriage-based green cards
+        body:
+          - - text: >-
+                Petitions and applications for eligible spouses, with adjustment
+                of status or processing abroad as appropriate.
+      - title: Family petitions
+        body:
+          - - text: >-
+                Petitions for eligible relatives. We review the family
+                relationship and explain the application steps and visa availability.
+      - title: K-1 fiancé petitions
+        body:
+          - - text: >-
+                Guidance for eligible couples planning to marry in the United
+                States, from the petition through the next application steps.
+      - title: EB-1 permanent residence
+        body:
+          - - text: >-
+                Extraordinary ability, outstanding professor or researcher,
+                and multinational executive or manager petitions.
+      - title: EB-2 national interest waiver
+        body:
+          - - text: >-
+                Assess eligibility and prepare evidence for a request to waive
+                the job-offer and labor-certification requirements in the
+                national interest.
+      - title: EB-2 with PERM labor certification
+        body:
+          - - text: >-
+                Employer-sponsored permanent residence for qualifying advanced-degree
+                professionals or people with exceptional ability, including required
+                Department of Labor certification.
+      - title: EB-3 employer sponsorship
+        body:
+          - - text: >-
+                Permanent-residence matters for qualifying skilled workers,
+                professionals, and other workers, including labor certification
+                where required.
+      - title: EB-5 investors
+        body:
+          - - text: >-
+                Immigration planning and petitions for qualifying investors.
+                We explain the evidence needed for the proposed investment
+                and the immigration work covered by the engagement.
+      - title: Gold Card program review
+        body:
+          - - text: >-
+                Review the current program rules, availability, and your
+                circumstances before agreeing on any application work. We
+                explain government payments separately from our legal fee.
+      - title: Naturalization
+        body:
+          - - text: >-
+                Eligibility review, application preparation, and interview
+                preparation for people seeking U.S. citizenship.
+      - title: Consular processing
+        body:
+          - - text: >-
+                Prepare for the steps handled by the Department of State and
+                U.S. consulates abroad, including documents and interviews.
+  - kind: cards
+    anchor: employers
+    overline: Business immigration
+    heading: From the founding team to the next hire
+    description: >-
+      Support for startups, growing employers, and established teams with
+      ongoing U.S. immigration needs. Scope and fees are agreed in writing.
+    items:
+      - title: Founders and first hires
+        body:
+          - - text: >-
+                Assess visa options for founders and early employees, explain
+                sponsorship responsibilities, and plan the evidence needed.
+      - title: Employee sponsorship and transfers
+        body:
+          - - text: >-
+                Coordinate work-visa petitions, renewals, company transfers,
+                and permanent-residence matters within the agreed scope.
+      - title: Immigration program planning
+        body:
+          - - text: >-
+                Help employers organize case deadlines, sponsorship records,
+                and U.S. immigration steps for international hiring and relocation.
+  - kind: cards
+    anchor: notices
+    overline: When the government asks for more
+    heading: Understand the notice. Plan the response.
+    description: >-
+      Send the complete notice and its deadline so we can assess whether we
+      can take the work in time. Accepting a case requires a written engagement.
+    items:
+      - title: Requests for Evidence (RFE)
+        body:
+          - - text: >-
+                Review what USCIS is asking for, identify the evidence needed,
+                and prepare a response within the agreed scope.
+      - title: Notices of Intent to Deny (NOID)
+        body:
+          - - text: >-
+                Assess the concerns in the notice, explain the available
+                response, and prepare supporting evidence and legal arguments.
+  - kind: steps
+    anchor: how
+    overline: Your next step
+    heading: From the first conversation to the filing
+    description: >-
+      You do not need to know the visa category before you book. Tell us your
+      plans, current location, and any deadline so we can discuss the right scope.
+    items:
+      - title: Book a consultation
+        body:
+          - - text: >-
+                Talk through your goals and any immigration history or notice
+                that may affect your options.
+      - title: Agree on the work and fee
+        body:
+          - - text: >-
+                We confirm the legal work and flat fee in writing. Government
+                filing fees and other agreed costs are separate.
+      - title: Prepare the case together
+        body:
+          - - text: >-
+                We identify the documents needed, prepare the agreed work, and
+                have a licensed attorney review it before submission.
+  - kind: services
+    anchor: prices
+    overline: Prices
+    heading: Flat fees for common filings
+    description: >-
+      Our fee for each common filing, agreed in writing before work begins.
+      Government filing fees are separate. Other matters are quoted after a
+      consultation.
+    search_label: Search filings
+    search_placeholder: O-1, H-1B, green card, work permit
+    submit_label: Search
+    examples:
+      - label: Work visa
+        query: visa
+      - label: Green card
+        query: green card
+      - label: Work permit
+        query: work permit
+    fee_label: Our fee
+    includes_label: What this includes
+    package_badge: Package
+    package_members_label: Package includes
+    members_badge: Plan required
+    state_fee_badge: Government fees cost extra
+    empty: We could not find that filing.
+    empty_help: >-
+      Book a consultation and we will tell you the fee before any work begins.
+    clear_label: Show all filings
+  - kind: cards
+    anchor: fees
+    overline: Fees
+    heading: What it costs
+    description: >-
+      Our fee is flat and agreed in writing before work begins. Government filing
+      fees are set by the relevant agency, are separate from our fee, and are paid
+      to the government rather than to us.
+    items:
+      - title: Our fee
+        body:
+          - - text: >-
+                One flat amount for the case we agree to handle. We tell you
+                the amount first. If the case changes, we tell you before we
+                do more work.
+      - title: Government fees
+        body:
+          - - text: >-
+                Government agencies set their own filing fees and can change them. We will
+                tell you the current amount. These are not our fees and we do
+                not keep them.
+      - title: What we do not promise
+        body:
+          - - text: >-
+                We do not promise that a case will be approved. We do not
+                promise a government timeline. USCIS, the Department of State,
+                and other agencies decide matters within their authority.
+  - kind: cards
+    anchor: privacy
+    overline: Privacy
+    heading: What we store, and what we do not
+    description: >-
+      Your immigration information is sensitive. Here is what happens to it.
+    items:
+      - title: This website
+        body:
+          - - text: >-
+                This site loads no third-party analytics and no third-party
+                fonts. Nothing on this page reports your visit to another
+                company. The fonts are served from our own site.
+      - title: What we keep
+        body:
+          - - text: >-
+                If you write to us, we keep your message and the documents
+                you send, because a law firm has to keep a file. We keep them
+                in the firm's own systems.
+      - title: What we do not do
+        body:
+          - - text: >-
+                We do not sell your information. We do not share your file
+                with anyone outside the firm except as the law requires or
+                your case needs, and we will tell you when that happens.
+  - kind: cards
+    anchor: about
+    overline: About
+    heading: Why Abhaya
+    description: ""
+    items:
+      - title: The name
+        body:
+          - - text: >-
+                Abhaya means "without fear" in Sanskrit. The abhaya mudra is
+                a gesture of protection and reassurance. The name is for what
+                the work should feel like.
+      - title: The firm
+        body:
+          - - text: >-
+                Abhaya Immigration is a trade name of Shook Law PC, a
+                California professional corporation. Shook Law PC
+                is the firm you would retain.
+  - kind: cta
+    heading: Start with a conversation
+    body: >-
+      Tell us what you hope to do and whether you have a deadline. You do not
+      need to choose a visa category before booking a consultation.
+    email: "{firm_email}"
+    action:
+      href: https://calendar.notion.so/meet/nick-shook/or15n4yy7
+      label: Book Consultation

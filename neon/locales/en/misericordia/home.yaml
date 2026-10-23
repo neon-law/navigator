@@ -1,0 +1,66 @@
+head_title: "{site_name} | Home"
+meta_description: >-
+  Misericordia Injury Law is a practice of Shook Law PC. Car, truck,
+  motorcycle, premises, catastrophic injury, wrongful death, elder care
+  abuse, and medical negligence claims. Free consultation. Attorney advertisement.
+heading: You were hurt. We are here to listen.
+lead: >-
+  An injury can change life for you and the people who care about you.
+  Tell us what happened, and we will help you understand the next step.
+  Misericordia Injury Law is a practice of Shook Law PC. The first
+  conversation is free. Attorney's fees depend on recovery; case costs
+  are separate and explained in your written agreement.
+contact_label: Call for a free consultation
+service:
+  heading: What to do first
+  body:
+    - - text: >-
+          Get medical care. Tell the doctor everything that hurts, even if it
+          seems small. The record made now is the record that matters later.
+    - - text: >-
+          Write down what happened while you remember it. Photographs help.
+          So do the names of anyone who saw it.
+    - - text: >-
+          You do not have to give a recorded statement to another driver's
+          insurer. You can say you will call back.
+    - - text: >-
+          There is a deadline to bring a claim, and it is not the same for
+          every kind of case. Call and we will tell you what applies to yours.
+    - - text: "Call "
+      - text: "+1 510 800 2090"
+        href: "tel:+15108002090"
+      - text: " or write to "
+      - text: "{firm_email}"
+      - text: ". The first conversation is free."
+practices_heading: What we handle
+practices:
+  - mark: scales
+    heading: Vehicle collisions
+    body: >-
+      Car, truck, motorcycle, and pedestrian claims. Free consultation. This
+      is an attorney advertisement.
+    href: /services
+  - mark: gavel
+    heading: Premises and wrongful death
+    body: >-
+      Injuries on someone else's property, and claims brought after a death.
+      Free consultation.
+    href: /services
+  - mark: scales
+    heading: Catastrophic injuries
+    body: >-
+      Serious injuries that change daily life, work, and long-term care needs.
+      We start by listening to what you and your family are facing.
+    href: /services
+  - mark: scales
+    heading: Elder care abuse and neglect
+    body: >-
+      Concerns about injuries, abuse, or neglect in nursing homes and other
+      care settings. Talk with us about what happened to your loved one.
+    href: /services
+  - mark: scales
+    heading: Medical negligence
+    body: >-
+      Injuries involving medical care. We review the circumstances with you
+      to understand whether a claim may be appropriate.
+    href: /services

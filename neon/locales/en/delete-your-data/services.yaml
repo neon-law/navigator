@@ -1,0 +1,24 @@
+head_title: "{site_name} | Privacy protection"
+meta_description: Data removal, privacy protection, and basic form filings such as an LLC, for $29/mo or $290/year prepaid. Data removal is a non-legal service.
+title: Privacy protection
+hero_mark: gavel
+tagline: Your privacy. Your billing choice.
+hero_lines:
+  - text: Your privacy.
+    accent_words: 0
+  - text: Your choice.
+    accent_words: 0
+hero_lead: Data removal, privacy protection, and basic form filings such as an LLC, for $29/mo or $290/year prepaid. Data removal is a non-legal service. Government fees are separate. Enrollment does not create an attorney-client relationship.
+hero_cta:
+  href: /
+  label: Compare privacy plans
+skin: practice
+bands:
+  - kind: statement
+    heading: Monthly or annual privacy protection
+    lead: ""
+    body:
+      - - text: >-
+            $29/mo or $290/year prepaid for data removal, privacy protection, and basic form filings such as forming an LLC. Government fees are separate. Gift cards are
+            available. Privacy and credit monitoring require your opt-in.
+            Solana recording is coming soon. Data removal is a non-legal service; enrollment does not create an attorney-client relationship.

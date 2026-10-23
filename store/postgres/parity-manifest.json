@@ -1,0 +1,4634 @@
+{
+  "differences": [
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": "relationship holder_id → person|entity",
+      "missing_table": null,
+      "table": "cap_table_holding"
+    },
+    {
+      "extra_column": "entity_id",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "entity_role"
+    },
+    {
+      "extra_column": "person_id",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "entity_role"
+    },
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": "relationship fiduciary_id → person|entity",
+      "missing_table": null,
+      "table": "fiduciary_role"
+    },
+    {
+      "extra_column": "id_kind",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "firm_anchor"
+    },
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": "relationship entity_id → entity",
+      "missing_table": null,
+      "table": "firm_anchor"
+    },
+    {
+      "extra_column": "actor_id",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "journal_entry"
+    },
+    {
+      "extra_column": "digest",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "journal_entry"
+    },
+    {
+      "extra_column": "legacy_imported_at",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "journal_entry"
+    },
+    {
+      "extra_column": "legacy_inserted_at_known",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "journal_entry"
+    },
+    {
+      "extra_column": "legacy_inserted_at_source",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "journal_entry"
+    },
+    {
+      "extra_column": "memo",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "journal_entry"
+    },
+    {
+      "extra_column": "occurred_at",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "journal_entry"
+    },
+    {
+      "extra_column": "reversal_of",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "journal_entry"
+    },
+    {
+      "extra_column": "firm_id",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "matter_caption"
+    },
+    {
+      "extra_column": "firm_id",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "matter_page"
+    },
+    {
+      "extra_column": "entity_id",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "project_reference"
+    },
+    {
+      "extra_column": "person_id",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "project_reference"
+    },
+    {
+      "extra_column": "project_id",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "project_reference"
+    },
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": "relationship in → person|entity",
+      "missing_table": null,
+      "table": "relationship"
+    },
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": "relationship out → person|entity",
+      "missing_table": null,
+      "table": "relationship"
+    },
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": "relationship source_id → relationship_log|disclosure",
+      "missing_table": null,
+      "table": "relationship"
+    },
+    {
+      "extra_column": null,
+      "extra_table": "archived_object_purge",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "clause",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "dbos_workflow_request",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "document_chain_archive",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "document_chain_archive_item",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "journal_entry_source",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "journal_posting",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "journal_reconciliation",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "journal_reconciliation_signal",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "journal_source_reference",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "journal_source_snapshot",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "mirror_backfill_checkpoint",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "mirror_backfill_failure",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "mirror_backfill_run",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_archive_generation",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_archive_item",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_cost_events",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_costs",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_handoff",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_handoff_acknowledgment",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_source_import",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "purchase",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "retention_purge",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": "draft",
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": "schema_version",
+      "table": null
+    }
+  ],
+  "source": {
+    "name": "SurrealDB",
+    "table_count": 106,
+    "tables": {
+      "address": {
+        "city": "string",
+        "country": "string",
+        "entity_id": "option<record<entity>>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "line1": "string",
+        "line2": "option<string>",
+        "person_id": "option<record<person>>",
+        "postal_code": "string",
+        "region": "string",
+        "updated_at": "datetime"
+      },
+      "answer": {
+        "authored_by_person_id": "option<record<person>>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "notation_id": "option<record<notation>>",
+        "person_id": "record<person>",
+        "question_id": "record<question>",
+        "source": "string",
+        "state_name": "option<string>",
+        "updated_at": "datetime",
+        "value": "any"
+      },
+      "asset": {
+        "byte_size": "int",
+        "content_type": "string",
+        "deleted_at": "option<datetime>",
+        "deleted_by_person_id": "option<record<person>>",
+        "deleted_commit_sha": "option<string>",
+        "derived_from": "any",
+        "description": "option<string>",
+        "filename": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "kind": "option<string>",
+        "legal_hold_at": "option<datetime>",
+        "metadata": "any",
+        "notarization": "any",
+        "project_id": "option<record<project>>",
+        "published_at": "option<string>",
+        "purge_after": "option<datetime>",
+        "purged_at": "option<datetime>",
+        "received_at": "option<string>",
+        "secondary_storage_key": "option<string>",
+        "sha256_hex": "string",
+        "signing": "any",
+        "slug": "option<string>",
+        "source": "option<string>",
+        "source_message_id": "option<string>",
+        "source_received_at": "option<string>",
+        "source_sender": "option<string>",
+        "source_subject": "option<string>",
+        "storage_key": "string",
+        "transcript_quality": "option<string>",
+        "updated_at": "datetime",
+        "visibility": "string"
+      },
+      "attestation": {
+        "chain": "string",
+        "client_wallet": "option<string>",
+        "firm_wallet": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "notation_id": "record<notation>",
+        "pda": "option<string>",
+        "recorded_at": "option<string>",
+        "sha256": "string",
+        "status": "string",
+        "tx_signature": "option<string>",
+        "updated_at": "datetime"
+      },
+      "authority": {
+        "archived_asset_id": "option<record<asset>>",
+        "canonical_url": "option<string>",
+        "checked_on": "option<string>",
+        "citation": "string",
+        "class": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "issued_on": "option<string>",
+        "publisher": "option<string>",
+        "short_cite": "option<string>",
+        "title": "string",
+        "updated_at": "datetime"
+      },
+      "authority_use": {
+        "authority_id": "record<authority>",
+        "disposition": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "position": "string",
+        "project_id": "record<project>",
+        "role": "option<string>",
+        "updated_at": "datetime"
+      },
+      "blog_video": {
+        "brand_key": "string",
+        "height": "int",
+        "id": "record",
+        "inserted_at": "datetime",
+        "object_key": "string",
+        "orientation": "string",
+        "width": "int"
+      },
+      "brand": {
+        "accent_color": "option<string>",
+        "brand_key": "string",
+        "firm_id": "option<record<firm>>",
+        "font_family": "option<string>",
+        "font_licence": "option<string>",
+        "font_object_key": "option<string>",
+        "id": "record",
+        "inserted_at": "string",
+        "is_law_firm": "bool",
+        "legal_entity": "option<string>",
+        "logo_content_type": "option<string>",
+        "logo_object_key": "option<string>",
+        "name": "string",
+        "primary_color": "option<string>",
+        "typeface": "option<string>",
+        "updated_at": "string",
+        "website_url": "option<string>"
+      },
+      "cap_table_holding": {
+        "holder_id": "record<person|entity>",
+        "id": "record",
+        "inserted_at": "string",
+        "project_id": "record<project>",
+        "share_class": "string",
+        "shares": "int",
+        "updated_at": "string",
+        "vesting_note": "option<string>"
+      },
+      "case": {
+        "caption": "string",
+        "docket_number": "option<string>",
+        "forum": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "judge": "option<string>",
+        "jurisdiction": "option<string>",
+        "posture": "string",
+        "project_id": "record<project>",
+        "status": "string",
+        "updated_at": "datetime"
+      },
+      "case_docket_entry": {
+        "case_id": "record<case>",
+        "document_asset_id": "option<record<asset>>",
+        "entry_number": "string",
+        "filed_or_served_on": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "integrity_checked_at": "option<datetime>",
+        "integrity_matched": "option<bool>",
+        "integrity_source_sha256_hex": "option<string>",
+        "kind": "string",
+        "notation_id": "option<record<notation>>",
+        "party": "option<string>",
+        "scheduled_on": "option<datetime>",
+        "stamp_case_number": "option<string>",
+        "stamp_entry_number": "option<string>",
+        "stamp_filed_on": "option<string>",
+        "supersedes": "option<record<case_docket_entry>>",
+        "title": "string",
+        "updated_at": "datetime"
+      },
+      "citation": {
+        "authority_use_id": "record<authority_use>",
+        "draft_pin": "any",
+        "id": "record",
+        "inserted_at": "datetime",
+        "quote": "string",
+        "source_pin": "any",
+        "updated_at": "datetime",
+        "why": "string"
+      },
+      "communication": {
+        "agreements": "any",
+        "asset_id": "option<record<asset>>",
+        "author_person_id": "option<record<person>>",
+        "body": "string",
+        "call": "any",
+        "channel": "string",
+        "counterparty": "option<string>",
+        "direction": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "occurred_at": "string",
+        "project_id": "record<project>",
+        "source_ref": "option<string>",
+        "subject": "option<string>",
+        "updated_at": "datetime"
+      },
+      "contract_review": {
+        "asset_id": "option<record<asset>>",
+        "findings": "any",
+        "id": "record",
+        "inserted_at": "datetime",
+        "notation_id": "record<notation>",
+        "playbook_id": "record<playbook>",
+        "risk_summary": "option<string>",
+        "status": "string",
+        "updated_at": "datetime"
+      },
+      "credential": {
+        "id": "record",
+        "inserted_at": "datetime",
+        "jurisdiction_id": "record<jurisdiction>",
+        "license_number": "string",
+        "person_id": "record<person>",
+        "updated_at": "datetime"
+      },
+      "deployment_secret_change": {
+        "actor_id": "string",
+        "ciphertext": "string",
+        "id": "record",
+        "inserted_at": "string",
+        "key": "string",
+        "kms_key_version": "string",
+        "request_id": "string",
+        "updated_at": "datetime",
+        "wrapped_key": "string"
+      },
+      "disclosure": {
+        "entity_id": "option<record<entity>>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "kind": "string",
+        "project_id": "option<record<project>>",
+        "summary": "string",
+        "updated_at": "datetime"
+      },
+      "discovery_item": {
+        "discovery_request_id": "record<discovery_request>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "item_number": "int",
+        "objections": "option<string>",
+        "request_text": "string",
+        "response_text": "option<string>",
+        "updated_at": "datetime"
+      },
+      "discovery_request": {
+        "case_id": "record<case>",
+        "device": "string",
+        "docket_entry_id": "option<record<case_docket_entry>>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "propounding_party": "string",
+        "responding_party": "string",
+        "responses_due_on": "option<string>",
+        "served_on": "option<string>",
+        "set_number": "int",
+        "status": "string",
+        "updated_at": "datetime"
+      },
+      "document_comment": {
+        "anchor_end": "int",
+        "anchor_start": "int",
+        "body": "string",
+        "communication_id": "option<uuid>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "person_id": "record<person>",
+        "quoted_text": "string",
+        "resolved": "bool",
+        "review_document_id": "record<review_document>",
+        "updated_at": "datetime"
+      },
+      "draft": {
+        "id": "record"
+      },
+      "efiling_transactions": {
+        "accepted_on": "option<string>",
+        "case_number": "string",
+        "conformed_document_id": "option<record<asset>>",
+        "court": "string",
+        "efsp": "string",
+        "filed_on": "option<string>",
+        "id": "record",
+        "inserted_at": "string",
+        "needs_entered_order": "bool",
+        "note": "string",
+        "project_id": "record<project>",
+        "status": "string",
+        "submitted_document_id": "option<record<asset>>",
+        "transaction_id": "string",
+        "updated_at": "string"
+      },
+      "email_conversation": {
+        "external_email": "string",
+        "external_name": "option<string>",
+        "firm_id": "option<record<firm>>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "notation_id": "option<record<notation>>",
+        "person_id": "option<record<person>>",
+        "project_id": "option<record<project>>",
+        "status": "string",
+        "subject": "string",
+        "token": "string",
+        "updated_at": "datetime"
+      },
+      "email_conversation_message": {
+        "body_text": "string",
+        "command_payload": "option<string>",
+        "conversation_id": "record<email_conversation>",
+        "direction": "string",
+        "from_addr": "string",
+        "id": "record",
+        "in_reply_to": "option<string>",
+        "inserted_at": "datetime",
+        "provider_message_id": "option<string>",
+        "raw_storage_key": "option<string>",
+        "subject": "string",
+        "to_addr": "string",
+        "updated_at": "datetime"
+      },
+      "email_delivery": {
+        "channel_id": "string",
+        "current_correlation_id": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "last_error": "option<string>",
+        "receipt_id": "record<email_receipt>",
+        "reconciled_at": "option<datetime>",
+        "reconciled_by": "option<string>",
+        "reconciliation": "option<string>",
+        "slack_timestamp": "option<string>",
+        "state": "string",
+        "updated_at": "datetime"
+      },
+      "email_delivery_attempt": {
+        "correlation_id": "string",
+        "delivery_id": "record<email_delivery>",
+        "error": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "slack_timestamp": "option<string>",
+        "state": "string",
+        "updated_at": "datetime"
+      },
+      "email_receipt": {
+        "archive_key": "string",
+        "delivery_state": "string",
+        "deployment": "string",
+        "firm_id": "option<record<firm>>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "letter_id": "record<letter>",
+        "processing_state": "string",
+        "provider_account": "option<string>",
+        "raw_digest": "string",
+        "receiving_mailbox": "string",
+        "sender_authenticated": "bool",
+        "source_message_id": "option<string>",
+        "updated_at": "datetime"
+      },
+      "email_token": {
+        "email": "string",
+        "expires_at": "datetime",
+        "id": "record",
+        "inserted_at": "datetime",
+        "person_id": "record<person>",
+        "purpose": "string",
+        "token_hash": "string",
+        "updated_at": "datetime",
+        "used_at": "option<datetime>"
+      },
+      "entity": {
+        "avatar_url": "option<string>",
+        "entity_type_id": "record<entity_type>",
+        "firm_anchor_key": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "jurisdiction_id": "record<jurisdiction>",
+        "name": "string",
+        "phone": "option<string>",
+        "updated_at": "datetime",
+        "url": "option<string>",
+        "xero_id": "option<string>"
+      },
+      "entity_role": {
+        "id": "record",
+        "inserted_at": "datetime",
+        "role": "string",
+        "updated_at": "datetime"
+      },
+      "entity_type": {
+        "id": "record",
+        "inserted_at": "datetime",
+        "name": "string",
+        "updated_at": "datetime"
+      },
+      "estate_asset": {
+        "category": "string",
+        "description": "string",
+        "funding_state": "string",
+        "id": "record",
+        "inserted_at": "string",
+        "note": "option<string>",
+        "passes_by": "string",
+        "project_id": "record<project>",
+        "updated_at": "string"
+      },
+      "expunge_record": {
+        "authorized_by_person_id": "record<person>",
+        "category": "string",
+        "head_after": "option<string>",
+        "head_before": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "note": "option<string>",
+        "path": "string",
+        "project_id": "record<project>",
+        "updated_at": "datetime"
+      },
+      "expunge_request": {
+        "asset_id": "record<asset>",
+        "expunge_record_id": "option<record<expunge_record>>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "note": "option<string>",
+        "project_id": "record<project>",
+        "requested_by_person_id": "record<person>",
+        "resolved_by_person_id": "option<record<person>>",
+        "status": "string",
+        "updated_at": "datetime"
+      },
+      "fiduciary_role": {
+        "fiduciary_id": "record<person|entity>",
+        "id": "record",
+        "inserted_at": "string",
+        "notation_id": "option<record<notation>>",
+        "project_id": "record<project>",
+        "role": "string",
+        "successor_order": "int",
+        "updated_at": "string"
+      },
+      "filing": {
+        "id": "record",
+        "inserted_at": "datetime",
+        "kind": "string",
+        "notation_id": "record<notation>",
+        "office": "string",
+        "reference": "option<string>",
+        "submitted_at": "string",
+        "summary": "string",
+        "updated_at": "datetime"
+      },
+      "finance_aggregate": {
+        "computed_at": "datetime",
+        "id": "record",
+        "inserted_at": "datetime",
+        "parameters": "object",
+        "parameters.attorney_pct": "int",
+        "parameters.lead_pct": "int",
+        "parameters.overhead_pct": "int",
+        "project_id": "record<project>",
+        "report_json": "string",
+        "run_id": "string",
+        "updated_at": "datetime"
+      },
+      "firm": {
+        "entity_id": "option<record<entity>>",
+        "id": "record",
+        "inserted_at": "string",
+        "name": "string",
+        "slug": "option<string>",
+        "status": "string",
+        "updated_at": "string"
+      },
+      "firm_anchor": {
+        "entity_id": "record<entity>",
+        "id": "record"
+      },
+      "firm_brand": {
+        "brand_key": "string",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "string",
+        "updated_at": "string"
+      },
+      "firm_integration_secret": {
+        "actor_id": "record<person>",
+        "ciphertext": "string",
+        "created_at": "string",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "kind": "string",
+        "kms_context": "string",
+        "kms_key_version": "string",
+        "provider": "string",
+        "status": "string",
+        "updated_at": "string",
+        "version": "int",
+        "wrapped_dek": "string"
+      },
+      "git_access_token": {
+        "expires_at": "string",
+        "id": "record",
+        "inserted_at": "string",
+        "person_id": "record<person>",
+        "project_id": "option<record<project>>",
+        "scope": "string",
+        "token_hash": "string",
+        "updated_at": "string"
+      },
+      "git_repository": {
+        "id": "record",
+        "inserted_at": "datetime",
+        "last_commit_sha": "string",
+        "remote_hash": "string",
+        "updated_at": "datetime"
+      },
+      "glossary_term": {
+        "body": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "slug": "string",
+        "title": "string",
+        "updated_at": "datetime"
+      },
+      "inbox_assignment": {
+        "actor_person_id": "record<person>",
+        "conversation_id": "record<inbox_conversation>",
+        "firm_id": "record<firm>",
+        "from_project_id": "option<record<project>>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "to_project_id": "record<project>"
+      },
+      "inbox_conversation": {
+        "brand_key": "option<string>",
+        "channel": "string",
+        "email_conversation_id": "option<record<email_conversation>>",
+        "external_address": "string",
+        "external_name": "option<string>",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "interaction_type": "string",
+        "matter_consent": "bool",
+        "project_id": "option<record<project>>",
+        "promotional_opt_in": "bool",
+        "promotional_opt_out": "bool",
+        "provider_account": "string",
+        "provider_post_id": "option<string>",
+        "provider_thread_ref": "option<string>",
+        "source_channel": "option<string>",
+        "source_page": "option<string>",
+        "subject": "option<string>",
+        "unread": "bool",
+        "updated_at": "datetime"
+      },
+      "inbox_delivery_attempt": {
+        "detail": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "message_id": "record<message>",
+        "provider_ref": "option<string>",
+        "state": "string"
+      },
+      "inbox_ingress": {
+        "channel": "string",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "message_id": "record<message>",
+        "provider_account": "string",
+        "provider_message_id": "string"
+      },
+      "iolta_account": {
+        "balance_cents": "int",
+        "currency": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "jurisdiction_id": "record<jurisdiction>",
+        "mirrored_at": "option<datetime>",
+        "name": "string",
+        "updated_at": "datetime",
+        "xero_account_code": "option<string>",
+        "xero_account_id": "string"
+      },
+      "iolta_allocation": {
+        "amount_cents": "int",
+        "id": "record",
+        "inserted_at": "datetime",
+        "invoice_reference": "string",
+        "occurred_at": "datetime",
+        "project_id": "record<project>",
+        "updated_at": "datetime",
+        "withdrawal_id": "string",
+        "xero_invoice_id": "string"
+      },
+      "iolta_withdrawal": {
+        "currency": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "jurisdiction_id": "record<jurisdiction>",
+        "occurred_at": "datetime",
+        "total_cents": "int",
+        "updated_at": "datetime",
+        "xero_transaction_id": "string"
+      },
+      "journal_entry": {
+        "command_key": "string",
+        "firm_id": "string",
+        "id": "record",
+        "inserted_at": "option<string",
+        "payload": "string"
+      },
+      "jurisdiction": {
+        "code": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "jurisdiction_type": "string",
+        "name": "string",
+        "updated_at": "datetime"
+      },
+      "lead": {
+        "brand_key": "string",
+        "consent_version": "string",
+        "consented_at": "datetime",
+        "email": "string",
+        "email_lower": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "person_id": "option<record<person>>",
+        "phone": "option<string>",
+        "source_path": "string",
+        "status": "string",
+        "submissions": "int",
+        "unsubscribed_at": "option<datetime>",
+        "updated_at": "datetime"
+      },
+      "lead_consent": {
+        "consented_at": "datetime",
+        "id": "record",
+        "lead_id": "record<lead>",
+        "phone": "option<string>",
+        "sms_consent_version": "string",
+        "sms_opt_in": "bool",
+        "sms_policy_version": "string",
+        "source_path": "string"
+      },
+      "letter": {
+        "direction": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "mailroom_id": "record<mailroom>",
+        "project_id": "option<record<project>>",
+        "recipient": "string",
+        "sender": "string",
+        "summary": "string",
+        "updated_at": "datetime"
+      },
+      "mailroom": {
+        "address_id": "record<address>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "name": "string",
+        "updated_at": "datetime"
+      },
+      "matter_caption": {
+        "case_number": "string",
+        "counsel": "object",
+        "counsel.address": "array<string>",
+        "counsel.appears_for": "string",
+        "counsel.bar_jurisdiction": "string",
+        "counsel.bar_number": "string",
+        "counsel.email": "string",
+        "counsel.firm": "string",
+        "counsel.name": "string",
+        "counsel.pro_per": "bool",
+        "counsel.telephone": "string",
+        "court": "array<string>",
+        "department": "string",
+        "filed_on": "string",
+        "id": "record",
+        "judicial_officer": "string",
+        "parties": "array<object>",
+        "parties.*.name": "string",
+        "parties.*.role": "string",
+        "project_id": "record<project>",
+        "synced_at": "string",
+        "trial_on": "option<string>"
+      },
+      "matter_page": {
+        "clerk_sections": "option<array<string>>",
+        "client_sections": "option<array<string>>",
+        "draft": "option<string>",
+        "id": "record",
+        "kind": "string",
+        "lawyer_sections": "option<array<string>>",
+        "position": "int",
+        "project_id": "record<project>",
+        "slug": "string",
+        "synced_at": "string",
+        "title": "string"
+      },
+      "message": {
+        "alert_channel_id": "option<string>",
+        "alert_state": "option<string>",
+        "alert_timestamp": "option<string>",
+        "attachment_asset_id": "option<record<asset>>",
+        "author_person_id": "option<record<person>>",
+        "body": "string",
+        "communication_id": "option<record<communication>>",
+        "conversation_id": "record<inbox_conversation>",
+        "delivery_state": "string",
+        "direction": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "occurred_at": "string",
+        "parent_message_id": "option<record<message>>",
+        "provider_message_id": "option<string>",
+        "provider_ref": "option<string>",
+        "purpose": "string",
+        "updated_at": "datetime",
+        "visibility": "option<string>"
+      },
+      "notarization": {
+        "asset_id": "option<record<asset>>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "notarized_at": "option<string>",
+        "notary_person_id": "option<record<person>>",
+        "notation_id": "record<notation>",
+        "provider": "string",
+        "provider_id": "string",
+        "updated_at": "datetime"
+      },
+      "notation": {
+        "delivery": "string",
+        "entity_id": "option<record<entity>>",
+        "git_commit_sha": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "package_id": "option<record<notation_package>>",
+        "person_id": "record<person>",
+        "project_id": "record<project>",
+        "questionnaire_snapshot": "any",
+        "state": "string",
+        "template_body_sha256": "option<string>",
+        "template_id": "record<template>",
+        "template_source_commit_sha": "option<string>",
+        "updated_at": "datetime"
+      },
+      "notation_clause": {
+        "authored_by_person_id": "option<record<person>>",
+        "body_markdown": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "notation_id": "record<notation>",
+        "position": "int",
+        "updated_at": "datetime"
+      },
+      "notation_document": {
+        "current_version_id": "option<record<notation_document_version>>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "notation_id": "record<notation>",
+        "original_asset_id": "record<asset>",
+        "updated_at": "datetime"
+      },
+      "notation_document_comment": {
+        "anchor": "string",
+        "body": "string",
+        "decision": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "person_id": "record<person>",
+        "resolved": "bool",
+        "updated_at": "datetime",
+        "version_id": "record<notation_document_version>"
+      },
+      "notation_document_version": {
+        "anchor_manifest_asset_id": "record<asset>",
+        "authored_by_person_id": "record<person>",
+        "document_id": "record<notation_document>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "markdown_asset_id": "record<asset>",
+        "parent_version_id": "option<record<notation_document_version>>",
+        "parser_version": "string",
+        "schema_version": "int",
+        "status": "string",
+        "updated_at": "datetime"
+      },
+      "notation_draft": {
+        "expires_at": "datetime",
+        "id": "record",
+        "inserted_at": "datetime",
+        "project_id": "record<project>",
+        "slug": "string",
+        "source": "string",
+        "title": "string"
+      },
+      "notation_event": {
+        "acting_person_id": "record<person>",
+        "condition": "string",
+        "from_state": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "machine_kind": "string",
+        "notation_id": "record<notation>",
+        "payload": "option<string>",
+        "recorded_at": "string",
+        "template_version_id": "record<template>",
+        "to_state": "string",
+        "updated_at": "datetime"
+      },
+      "notation_meter_entry": {
+        "currency": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "notation_id": "option<record<notation>>",
+        "package_id": "option<record<notation_package>>",
+        "project_id": "record<project>",
+        "quantity": "int",
+        "rate_id": "record<notation_rate>",
+        "state": "string",
+        "unit_amount_cents": "int",
+        "updated_at": "datetime"
+      },
+      "notation_package": {
+        "active": "bool",
+        "code": "string",
+        "complexity": "string",
+        "currency": "string",
+        "description": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "starting_price_cents": "int",
+        "title": "string",
+        "updated_at": "datetime"
+      },
+      "notation_package_template": {
+        "id": "record",
+        "inserted_at": "datetime",
+        "package_id": "record<notation_package>",
+        "position": "int",
+        "required": "bool",
+        "template_id": "record<template>",
+        "updated_at": "datetime"
+      },
+      "notation_rate": {
+        "active": "bool",
+        "code": "string",
+        "currency": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "label": "string",
+        "unit": "string",
+        "unit_amount_cents": "int",
+        "updated_at": "datetime"
+      },
+      "notation_source": {
+        "communication_id": "option<record<communication>>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "kind": "string",
+        "notation_id": "record<notation>",
+        "position": "int",
+        "source_ref": "option<string>",
+        "updated_at": "datetime"
+      },
+      "person": {
+        "apple_subject": "option<string>",
+        "email": "string",
+        "email_confirmed": "bool",
+        "email_lower": "string",
+        "family_name": "option<string>",
+        "given_name": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "is_admitted": "bool",
+        "linkedin_url": "option<string>",
+        "microsoft_subject": "option<string>",
+        "middle_name": "option<string>",
+        "name": "string",
+        "oidc_subject": "option<string>",
+        "phone": "option<string>",
+        "profile_image_url": "option<string>",
+        "role": "string",
+        "title": "option<string>",
+        "updated_at": "datetime",
+        "xero_contact_id": "option<string>"
+      },
+      "person_delegate": {
+        "basis": "string",
+        "delegate_person_id": "record<person>",
+        "granted_at": "string",
+        "granted_by_person_id": "record<person>",
+        "id": "record",
+        "inserted_at": "string",
+        "instrument_reference": "option<string>",
+        "revoked_at": "option<string>",
+        "revoked_by_person_id": "option<record<person>>",
+        "subject_notified_at": "option<string>",
+        "subject_notified_channel": "option<string>",
+        "subject_person_id": "record<person>",
+        "updated_at": "string"
+      },
+      "person_external_identity": {
+        "external_id": "string",
+        "handle": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "person_id": "record<person>",
+        "system": "string",
+        "updated_at": "datetime"
+      },
+      "person_firm_role": {
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "string",
+        "is_dri": "bool",
+        "membership": "string",
+        "person_id": "record<person>",
+        "updated_at": "string"
+      },
+      "person_mailbox": {
+        "id": "record",
+        "person_id": "record<person>"
+      },
+      "person_project_role": {
+        "id": "record",
+        "inserted_at": "string",
+        "is_client_dri": "bool",
+        "is_lawyer_dri": "bool",
+        "participation": "string",
+        "person_id": "record<person>",
+        "project_id": "record<project>",
+        "updated_at": "string"
+      },
+      "playbook": {
+        "active": "bool",
+        "entity_id": "record<entity>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "name": "string",
+        "positions": "any",
+        "updated_at": "datetime"
+      },
+      "post": {
+        "body_html": "string",
+        "body_markdown": "option<string>",
+        "brand_key": "string",
+        "description": "string",
+        "facebook_caption": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "instagram_caption": "option<string>",
+        "publish_at": "option<datetime>",
+        "selected_social_accounts": "array<string>",
+        "slug": "string",
+        "social_links": "array<object>",
+        "social_links.*.account": "string",
+        "social_links.*.permalink": "option<string>",
+        "social_links.*.post_id": "option<string>",
+        "social_links.*.provider": "string",
+        "source_digest": "option<string>",
+        "status": "string",
+        "threads_caption": "option<string>",
+        "tiktok_ai_generated": "option<bool>",
+        "title": "string",
+        "updated_at": "datetime",
+        "vertical_video": "bool",
+        "video_asset": "option<string>",
+        "video_orientation": "option<string>",
+        "youtube_caption": "option<string>"
+      },
+      "project": {
+        "brand": "option<string>",
+        "closed_at": "option<string>",
+        "closure_reason": "option<string>",
+        "code": "string",
+        "description": "option<string>",
+        "drive_folder_id": "option<string>",
+        "entity_id": "record<entity>",
+        "external_slack_channel_url": "option<string>",
+        "firm_id": "option<record<firm>>",
+        "forge_provisioned_at": "option<string>",
+        "git_initialized_at": "option<string>",
+        "id": "record",
+        "inserted_at": "string",
+        "internal_slack_channel_id": "option<string>",
+        "internal_slack_channel_url": "option<string>",
+        "jurisdiction_id": "option<record<jurisdiction>>",
+        "name": "string",
+        "private_notion_page_url": "option<string>",
+        "repository_url": "option<string>",
+        "shared_notion_page_url": "option<string>",
+        "status": "string",
+        "updated_at": "string"
+      },
+      "project_deadlines": {
+        "authority": "string",
+        "authority_kind": "string",
+        "calendar_role": "string",
+        "client_lead_days": "option<int>",
+        "due_at": "string",
+        "id": "record",
+        "inserted_at": "string",
+        "internal_lead_days": "option<int>",
+        "owner_person_id": "option<record<person>>",
+        "project_id": "record<project>",
+        "replay_key": "option<string>",
+        "source": "string",
+        "source_document_id": "option<record<asset>>",
+        "status": "string",
+        "updated_at": "string"
+      },
+      "project_module": {
+        "enabled_at": "string",
+        "enabled_by_person_id": "option<record<person>>",
+        "id": "record",
+        "inserted_at": "string",
+        "module": "string",
+        "project_id": "record<project>",
+        "updated_at": "string"
+      },
+      "project_reference": {
+        "id": "record",
+        "inserted_at": "datetime",
+        "reason": "string",
+        "updated_at": "datetime"
+      },
+      "project_service": {
+        "address": "string",
+        "counsel_for": "option<string>",
+        "declarant": "string",
+        "declarant_person_id": "option<record<person>>",
+        "document_id": "record<asset>",
+        "id": "record",
+        "inserted_at": "string",
+        "letter_id": "option<record<letter>>",
+        "method": "string",
+        "project_id": "record<project>",
+        "recipient": "string",
+        "recipient_entity_id": "option<record<entity>>",
+        "recipient_person_id": "option<record<person>>",
+        "sent_email_id": "option<record<sent_email>>",
+        "served_on": "string",
+        "updated_at": "string"
+      },
+      "question": {
+        "answer_type": "string",
+        "audience": "string",
+        "code": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "prompt": "string",
+        "updated_at": "datetime"
+      },
+      "relationship": {
+        "confidence_pct": "int",
+        "detail": "option<string>",
+        "id": "record",
+        "in": "record<person|entity>",
+        "inserted_at": "datetime",
+        "kind": "string",
+        "out": "record<person|entity>",
+        "source_id": "option<record<relationship_log|disclosure>>",
+        "source_kind": "string",
+        "updated_at": "datetime"
+      },
+      "relationship_log": {
+        "action": "string",
+        "actor_person_id": "option<record<person>>",
+        "detail": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "project_id": "option<record<project>>",
+        "subject_id": "uuid",
+        "subject_type": "string",
+        "updated_at": "datetime"
+      },
+      "review_document": {
+        "body_html": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "kind": "string",
+        "notation_id": "record<notation>",
+        "status": "string",
+        "title": "string",
+        "updated_at": "datetime"
+      },
+      "schema_version": {
+        "applied_at": "datetime",
+        "id": "record",
+        "version": "int"
+      },
+      "sent_email": {
+        "body": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "outcome": "string",
+        "project_id": "option<record<project>>",
+        "recipient": "string",
+        "sender": "string",
+        "sent_at": "datetime",
+        "sg_message_id": "option<string>",
+        "subject": "string",
+        "template_slug": "option<string>",
+        "updated_at": "datetime"
+      },
+      "signature": {
+        "completed_signer_roles": "option<array<string>>",
+        "field": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "notation_id": "record<notation>",
+        "provider": "string",
+        "provider_id": "string",
+        "signed_at": "option<string>",
+        "signer_person_id": "option<record<person>>",
+        "state": "string",
+        "updated_at": "datetime"
+      },
+      "social_account": {
+        "brand_key": "string",
+        "ciphertext": "string",
+        "connected_by_person_id": "record<person>",
+        "display_name": "option<string>",
+        "expires_at": "option<datetime>",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "kms_context": "string",
+        "kms_key_version": "string",
+        "provider": "string",
+        "provider_account_id": "string",
+        "revoked_at": "option<datetime>",
+        "revoked_by_person_id": "option<record<person>>",
+        "scopes": "array<string>",
+        "status": "string",
+        "updated_at": "datetime",
+        "wrapped_dek": "string"
+      },
+      "social_account_selection": {
+        "brand_key": "string",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "provider": "string",
+        "provider_account_id": "string",
+        "updated_at": "datetime"
+      },
+      "social_handle": {
+        "brand_key": "string",
+        "handle": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "provider": "string"
+      },
+      "social_oauth_attempt": {
+        "actor_person_id": "record<person>",
+        "brand_key": "string",
+        "consumed_at": "option<datetime>",
+        "expires_at": "datetime",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "instagram_account_id": "option<string>",
+        "pkce_verifier": "string",
+        "provider": "string",
+        "provider_account_id": "option<string>",
+        "state_hash": "string"
+      },
+      "social_publication": {
+        "attempt_count": "int",
+        "id": "record",
+        "inserted_at": "datetime",
+        "last_error": "option<string>",
+        "permalink": "option<string>",
+        "post_id": "record<post>",
+        "provider": "string",
+        "provider_post_id": "option<string>",
+        "provider_task_id": "option<string>",
+        "state": "string",
+        "updated_at": "datetime"
+      },
+      "statutory_deadline": {
+        "due_on": "string",
+        "id": "record",
+        "inserted_at": "string",
+        "kind": "string",
+        "project_id": "record<project>",
+        "source": "string",
+        "status": "string",
+        "statute": "string",
+        "trigger_on": "string",
+        "updated_at": "string"
+      },
+      "summary_sender_approval": {
+        "firm_id": "record<firm>",
+        "id": "record",
+        "person_id": "record<person>",
+        "project_id": "option<record<project>>",
+        "provider_account": "string",
+        "sender_email": "string",
+        "status": "string",
+        "updated_at": "datetime"
+      },
+      "summary_sender_approval_event": {
+        "action": "string",
+        "actor_person_id": "record<person>",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "person_id": "record<person>",
+        "project_id": "option<record<project>>",
+        "provider_account": "string",
+        "sender_email": "string"
+      },
+      "template": {
+        "asset_id": "option<record<asset>>",
+        "body_sha256": "option<string>",
+        "code": "string",
+        "current_key": "option<string>",
+        "form_code": "option<string>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "is_current": "bool",
+        "kind": "option<string>",
+        "project_id": "option<record<project>>",
+        "respondent_type": "string",
+        "source_commit_sha": "option<string>",
+        "title": "string",
+        "updated_at": "datetime"
+      },
+      "testimonial": {
+        "attribution_label": "option<string>",
+        "consented_at": "option<string>",
+        "display_order": "int",
+        "id": "record",
+        "inserted_at": "string",
+        "person_id": "record<person>",
+        "project_id": "record<project>",
+        "published_at": "option<string>",
+        "quote": "string",
+        "updated_at": "string"
+      },
+      "verification": {
+        "citation_id": "record<citation>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "revision_sha": "string",
+        "status_citation": "string",
+        "status_proposition": "string",
+        "status_quote": "string",
+        "updated_at": "datetime",
+        "verifier_person_id": "record<person>"
+      },
+      "visitor_route_count": {
+        "bucket_date": "datetime",
+        "country_code": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "locale": "string",
+        "route_pattern": "string",
+        "source": "string",
+        "status_class": "string",
+        "updated_at": "datetime",
+        "visits": "int"
+      },
+      "xero_invoice": {
+        "amount_cents": "int",
+        "amount_paid_cents": "int",
+        "currency": "string",
+        "due_at": "option<datetime>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "issued_at": "datetime",
+        "project_id": "record<project>",
+        "reference": "string",
+        "status": "string",
+        "updated_at": "datetime",
+        "xero_invoice_id": "string"
+      }
+    }
+  },
+  "target": {
+    "name": "PostgreSQL",
+    "table_count": 127,
+    "tables": {
+      "address": {
+        "columns": {
+          "city": "TEXT",
+          "country": "TEXT",
+          "entity_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "line1": "TEXT",
+          "line2": "TEXT",
+          "person_id": "UUID",
+          "postal_code": "TEXT",
+          "region": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "entity_id",
+            "entity"
+          ],
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "address",
+        "references": [
+          "entity",
+          "person"
+        ]
+      },
+      "answer": {
+        "columns": {
+          "authored_by_person_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "notation_id": "UUID",
+          "person_id": "UUID",
+          "question_id": "UUID",
+          "source": "TEXT",
+          "state_name": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "value": "JSONB"
+        },
+        "foreign_keys": [
+          [
+            "authored_by_person_id",
+            "person"
+          ],
+          [
+            "notation_id",
+            "notation"
+          ],
+          [
+            "person_id",
+            "person"
+          ],
+          [
+            "question_id",
+            "question"
+          ]
+        ],
+        "name": "answer",
+        "references": [
+          "notation",
+          "person",
+          "question"
+        ]
+      },
+      "archived_object_purge": {
+        "columns": {
+          "expunge_record_id": "UUID",
+          "project_id": "UUID",
+          "purged_at": "TIMESTAMPTZ",
+          "sha256": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "archived_object_purge",
+        "references": []
+      },
+      "asset": {
+        "columns": {
+          "byte_size": "BIGINT",
+          "content_type": "TEXT",
+          "deleted_at": "TIMESTAMPTZ",
+          "deleted_by_person_id": "UUID",
+          "deleted_commit_sha": "TEXT",
+          "derived_from": "JSONB",
+          "description": "TEXT",
+          "filename": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "kind": "TEXT",
+          "legal_hold_at": "TIMESTAMPTZ",
+          "metadata": "JSONB",
+          "notarization": "JSONB",
+          "project_id": "UUID",
+          "published_at": "TEXT",
+          "purge_after": "TIMESTAMPTZ",
+          "purged_at": "TIMESTAMPTZ",
+          "received_at": "TEXT",
+          "secondary_storage_key": "TEXT",
+          "sha256_hex": "TEXT",
+          "signing": "JSONB",
+          "slug": "TEXT",
+          "source": "TEXT",
+          "source_message_id": "TEXT",
+          "source_received_at": "TEXT",
+          "source_sender": "TEXT",
+          "source_subject": "TEXT",
+          "storage_key": "TEXT",
+          "transcript_quality": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "visibility": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "deleted_by_person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "asset",
+        "references": [
+          "person",
+          "project"
+        ]
+      },
+      "attestation": {
+        "columns": {
+          "chain": "TEXT",
+          "client_wallet": "TEXT",
+          "firm_wallet": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "notation_id": "UUID",
+          "pda": "TEXT",
+          "recorded_at": "TIMESTAMPTZ",
+          "sha256": "TEXT",
+          "status": "TEXT",
+          "tx_signature": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "notation_id",
+            "notation"
+          ]
+        ],
+        "name": "attestation",
+        "references": [
+          "notation"
+        ]
+      },
+      "authority": {
+        "columns": {
+          "archived_asset_id": "UUID",
+          "canonical_url": "TEXT",
+          "checked_on": "TEXT",
+          "citation": "TEXT",
+          "class": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "issued_on": "TEXT",
+          "publisher": "TEXT",
+          "short_cite": "TEXT",
+          "title": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "archived_asset_id",
+            "asset"
+          ]
+        ],
+        "name": "authority",
+        "references": [
+          "asset"
+        ]
+      },
+      "authority_use": {
+        "columns": {
+          "authority_id": "UUID",
+          "disposition": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "position": "TEXT",
+          "project_id": "UUID",
+          "role": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "authority_use",
+        "references": []
+      },
+      "blog_video": {
+        "columns": {
+          "brand_key": "TEXT",
+          "height": "BIGINT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "object_key": "TEXT",
+          "orientation": "TEXT",
+          "width": "BIGINT"
+        },
+        "foreign_keys": [
+          [
+            "brand_key",
+            "brand"
+          ]
+        ],
+        "name": "blog_video",
+        "references": [
+          "brand"
+        ]
+      },
+      "brand": {
+        "columns": {
+          "accent_color": "TEXT",
+          "brand_key": "TEXT",
+          "firm_id": "UUID",
+          "font_family": "TEXT",
+          "font_licence": "TEXT",
+          "font_object_key": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "is_law_firm": "BOOLEAN",
+          "legal_entity": "TEXT",
+          "logo_content_type": "TEXT",
+          "logo_object_key": "TEXT",
+          "name": "TEXT",
+          "primary_color": "TEXT",
+          "typeface": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "website_url": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "brand",
+        "references": [
+          "firm"
+        ]
+      },
+      "cap_table_holding": {
+        "columns": {
+          "holder_id": "JSONB",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "share_class": "TEXT",
+          "shares": "BIGINT",
+          "updated_at": "TIMESTAMPTZ",
+          "vesting_note": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "cap_table_holding",
+        "references": []
+      },
+      "case": {
+        "columns": {
+          "caption": "TEXT",
+          "docket_number": "TEXT",
+          "forum": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "judge": "TEXT",
+          "jurisdiction": "TEXT",
+          "posture": "TEXT",
+          "project_id": "UUID",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "case",
+        "references": []
+      },
+      "case_docket_entry": {
+        "columns": {
+          "case_id": "UUID",
+          "document_asset_id": "UUID",
+          "entry_number": "TEXT",
+          "filed_or_served_on": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "integrity_checked_at": "TIMESTAMPTZ",
+          "integrity_matched": "BOOLEAN",
+          "integrity_source_sha256_hex": "TEXT",
+          "kind": "TEXT",
+          "notation_id": "UUID",
+          "party": "TEXT",
+          "scheduled_on": "TIMESTAMPTZ",
+          "stamp_case_number": "TEXT",
+          "stamp_entry_number": "TEXT",
+          "stamp_filed_on": "TEXT",
+          "supersedes": "UUID",
+          "title": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "case_docket_entry",
+        "references": []
+      },
+      "citation": {
+        "columns": {
+          "authority_use_id": "UUID",
+          "draft_pin": "JSONB",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "quote": "TEXT",
+          "source_pin": "JSONB",
+          "updated_at": "TIMESTAMPTZ",
+          "why": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "citation",
+        "references": []
+      },
+      "clause": {
+        "columns": {
+          "body": "TEXT",
+          "body_sha256": "TEXT",
+          "code": "TEXT",
+          "id": "UUID",
+          "inputs": "JSONB",
+          "inserted_at": "TIMESTAMPTZ",
+          "is_current": "BOOLEAN",
+          "kind": "TEXT",
+          "retired_at": "TIMESTAMPTZ",
+          "version": "INTEGER"
+        },
+        "foreign_keys": [],
+        "name": "clause",
+        "references": []
+      },
+      "communication": {
+        "columns": {
+          "agreements": "JSONB",
+          "asset_id": "UUID",
+          "author_person_id": "UUID",
+          "body": "TEXT",
+          "call": "JSONB",
+          "channel": "TEXT",
+          "counterparty": "TEXT",
+          "direction": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "occurred_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "source_ref": "TEXT",
+          "subject": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "asset_id",
+            "asset"
+          ],
+          [
+            "author_person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "communication",
+        "references": [
+          "asset",
+          "person",
+          "project"
+        ]
+      },
+      "contract_review": {
+        "columns": {
+          "asset_id": "UUID",
+          "findings": "JSONB",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "notation_id": "UUID",
+          "playbook_id": "UUID",
+          "risk_summary": "TEXT",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "contract_review",
+        "references": []
+      },
+      "credential": {
+        "columns": {
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "jurisdiction_id": "UUID",
+          "license_number": "TEXT",
+          "person_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "jurisdiction_id",
+            "jurisdiction"
+          ],
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "credential",
+        "references": [
+          "jurisdiction",
+          "person"
+        ]
+      },
+      "dbos_workflow_request": {
+        "columns": {
+          "inserted_at": "TIMESTAMPTZ",
+          "request_fingerprint": "BYTEA",
+          "workflow_id": "TEXT",
+          "workflow_name": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "dbos_workflow_request",
+        "references": []
+      },
+      "deployment_secret_change": {
+        "columns": {
+          "actor_id": "TEXT",
+          "ciphertext": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "key": "TEXT",
+          "kms_key_version": "TEXT",
+          "request_id": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "wrapped_key": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "deployment_secret_change",
+        "references": []
+      },
+      "disclosure": {
+        "columns": {
+          "entity_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "kind": "TEXT",
+          "project_id": "UUID",
+          "summary": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "disclosure",
+        "references": []
+      },
+      "discovery_item": {
+        "columns": {
+          "discovery_request_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "item_number": "BIGINT",
+          "objections": "TEXT",
+          "request_text": "TEXT",
+          "response_text": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "discovery_item",
+        "references": []
+      },
+      "discovery_request": {
+        "columns": {
+          "case_id": "UUID",
+          "device": "TEXT",
+          "docket_entry_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "propounding_party": "TEXT",
+          "responding_party": "TEXT",
+          "responses_due_on": "TEXT",
+          "served_on": "TEXT",
+          "set_number": "BIGINT",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "discovery_request",
+        "references": []
+      },
+      "document_chain_archive": {
+        "columns": {
+          "active_removed_at": "TIMESTAMPTZ",
+          "archived_at": "TIMESTAMPTZ",
+          "attempts": "INTEGER",
+          "chain_key": "TEXT",
+          "deleted_at": "TIMESTAMPTZ",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "last_error": "TEXT",
+          "project_id": "UUID",
+          "purged_at": "TIMESTAMPTZ",
+          "requested_at": "TIMESTAMPTZ",
+          "restored_at": "TIMESTAMPTZ",
+          "state": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "document_chain_archive",
+        "references": []
+      },
+      "document_chain_archive_item": {
+        "columns": {
+          "archive_id": "UUID",
+          "asset_id": "UUID",
+          "object_key": "TEXT",
+          "sha256": "TEXT",
+          "size_bytes": "BIGINT",
+          "storage_key": "TEXT",
+          "verified_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "archive_id",
+            "document_chain_archive"
+          ]
+        ],
+        "name": "document_chain_archive_item",
+        "references": [
+          "document_chain_archive"
+        ]
+      },
+      "document_comment": {
+        "columns": {
+          "anchor_end": "BIGINT",
+          "anchor_start": "BIGINT",
+          "body": "TEXT",
+          "communication_id": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "person_id": "UUID",
+          "quoted_text": "TEXT",
+          "resolved": "BOOLEAN",
+          "review_document_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "document_comment",
+        "references": []
+      },
+      "efiling_transactions": {
+        "columns": {
+          "accepted_on": "TEXT",
+          "case_number": "TEXT",
+          "conformed_document_id": "UUID",
+          "court": "TEXT",
+          "efsp": "TEXT",
+          "filed_on": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "needs_entered_order": "BOOLEAN",
+          "note": "TEXT",
+          "project_id": "UUID",
+          "status": "TEXT",
+          "submitted_document_id": "UUID",
+          "transaction_id": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "efiling_transactions",
+        "references": []
+      },
+      "email_conversation": {
+        "columns": {
+          "external_email": "TEXT",
+          "external_name": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "notation_id": "UUID",
+          "person_id": "UUID",
+          "project_id": "UUID",
+          "status": "TEXT",
+          "subject": "TEXT",
+          "token": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "notation_id",
+            "notation"
+          ],
+          [
+            "person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "email_conversation",
+        "references": [
+          "firm",
+          "notation",
+          "person",
+          "project"
+        ]
+      },
+      "email_conversation_message": {
+        "columns": {
+          "body_text": "TEXT",
+          "command_payload": "TEXT",
+          "conversation_id": "UUID",
+          "direction": "TEXT",
+          "from_addr": "TEXT",
+          "id": "UUID",
+          "in_reply_to": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "provider_message_id": "TEXT",
+          "raw_storage_key": "TEXT",
+          "subject": "TEXT",
+          "to_addr": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "conversation_id",
+            "email_conversation"
+          ]
+        ],
+        "name": "email_conversation_message",
+        "references": [
+          "email_conversation"
+        ]
+      },
+      "email_delivery": {
+        "columns": {
+          "channel_id": "TEXT",
+          "current_correlation_id": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "last_error": "TEXT",
+          "receipt_id": "UUID",
+          "reconciled_at": "TIMESTAMPTZ",
+          "reconciled_by": "TEXT",
+          "reconciliation": "TEXT",
+          "slack_timestamp": "TEXT",
+          "state": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "receipt_id",
+            "email_receipt"
+          ]
+        ],
+        "name": "email_delivery",
+        "references": [
+          "email_receipt"
+        ]
+      },
+      "email_delivery_attempt": {
+        "columns": {
+          "correlation_id": "TEXT",
+          "delivery_id": "UUID",
+          "error": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "slack_timestamp": "TEXT",
+          "state": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "delivery_id",
+            "email_delivery"
+          ]
+        ],
+        "name": "email_delivery_attempt",
+        "references": [
+          "email_delivery"
+        ]
+      },
+      "email_receipt": {
+        "columns": {
+          "archive_key": "TEXT",
+          "delivery_state": "TEXT",
+          "deployment": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "letter_id": "UUID",
+          "processing_state": "TEXT",
+          "provider_account": "TEXT",
+          "raw_digest": "TEXT",
+          "receiving_mailbox": "TEXT",
+          "sender_authenticated": "BOOLEAN",
+          "source_message_id": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "email_receipt",
+        "references": [
+          "firm"
+        ]
+      },
+      "email_token": {
+        "columns": {
+          "email": "TEXT",
+          "expires_at": "TIMESTAMPTZ",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "person_id": "UUID",
+          "purpose": "TEXT",
+          "token_hash": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "used_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "email_token",
+        "references": [
+          "person"
+        ]
+      },
+      "entity": {
+        "columns": {
+          "avatar_url": "TEXT",
+          "entity_type_id": "UUID",
+          "firm_anchor_key": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "jurisdiction_id": "UUID",
+          "name": "TEXT",
+          "phone": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "url": "TEXT",
+          "xero_id": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "entity_type_id",
+            "entity_type"
+          ],
+          [
+            "jurisdiction_id",
+            "jurisdiction"
+          ]
+        ],
+        "name": "entity",
+        "references": [
+          "entity_type",
+          "jurisdiction"
+        ]
+      },
+      "entity_role": {
+        "columns": {
+          "entity_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "person_id": "UUID",
+          "role": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "entity_id",
+            "entity"
+          ],
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "entity_role",
+        "references": [
+          "entity",
+          "person"
+        ]
+      },
+      "entity_type": {
+        "columns": {
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "name": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "entity_type",
+        "references": []
+      },
+      "estate_asset": {
+        "columns": {
+          "category": "TEXT",
+          "description": "TEXT",
+          "funding_state": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "note": "TEXT",
+          "passes_by": "TEXT",
+          "project_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "estate_asset",
+        "references": []
+      },
+      "expunge_record": {
+        "columns": {
+          "authorized_by_person_id": "UUID",
+          "category": "TEXT",
+          "head_after": "TEXT",
+          "head_before": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "note": "TEXT",
+          "path": "TEXT",
+          "project_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "expunge_record",
+        "references": []
+      },
+      "expunge_request": {
+        "columns": {
+          "asset_id": "UUID",
+          "expunge_record_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "note": "TEXT",
+          "project_id": "UUID",
+          "requested_by_person_id": "UUID",
+          "resolved_by_person_id": "UUID",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "expunge_request",
+        "references": []
+      },
+      "fiduciary_role": {
+        "columns": {
+          "fiduciary_id": "JSONB",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "notation_id": "UUID",
+          "project_id": "UUID",
+          "role": "TEXT",
+          "successor_order": "BIGINT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "fiduciary_role",
+        "references": []
+      },
+      "filing": {
+        "columns": {
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "kind": "TEXT",
+          "notation_id": "UUID",
+          "office": "TEXT",
+          "reference": "TEXT",
+          "submitted_at": "TIMESTAMPTZ",
+          "summary": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "filing",
+        "references": []
+      },
+      "finance_aggregate": {
+        "columns": {
+          "computed_at": "TIMESTAMPTZ",
+          "id": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "parameters": "JSONB",
+          "project_id": "UUID",
+          "report_json": "TEXT",
+          "run_id": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "finance_aggregate",
+        "references": []
+      },
+      "firm": {
+        "columns": {
+          "entity_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "name": "TEXT",
+          "slug": "TEXT",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "entity_id",
+            "entity"
+          ]
+        ],
+        "name": "firm",
+        "references": [
+          "entity"
+        ]
+      },
+      "firm_anchor": {
+        "columns": {
+          "entity_id": "JSONB",
+          "id": "TEXT",
+          "id_kind": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "firm_anchor",
+        "references": []
+      },
+      "firm_brand": {
+        "columns": {
+          "brand_key": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "brand_key",
+            "brand"
+          ],
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "firm_brand",
+        "references": [
+          "brand",
+          "firm"
+        ]
+      },
+      "firm_integration_secret": {
+        "columns": {
+          "actor_id": "UUID",
+          "ciphertext": "TEXT",
+          "created_at": "TIMESTAMPTZ",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "kind": "TEXT",
+          "kms_context": "TEXT",
+          "kms_key_version": "TEXT",
+          "provider": "TEXT",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "version": "BIGINT",
+          "wrapped_dek": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "actor_id",
+            "person"
+          ],
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "firm_integration_secret",
+        "references": [
+          "firm",
+          "person"
+        ]
+      },
+      "git_access_token": {
+        "columns": {
+          "expires_at": "TIMESTAMPTZ",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "person_id": "UUID",
+          "project_id": "UUID",
+          "scope": "TEXT",
+          "token_hash": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "git_access_token",
+        "references": [
+          "person",
+          "project"
+        ]
+      },
+      "git_repository": {
+        "columns": {
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "last_commit_sha": "TEXT",
+          "remote_hash": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "git_repository",
+        "references": []
+      },
+      "glossary_term": {
+        "columns": {
+          "body": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "slug": "TEXT",
+          "title": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "glossary_term",
+        "references": []
+      },
+      "inbox_assignment": {
+        "columns": {
+          "actor_person_id": "UUID",
+          "conversation_id": "UUID",
+          "firm_id": "UUID",
+          "from_project_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "to_project_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "actor_person_id",
+            "person"
+          ],
+          [
+            "conversation_id",
+            "inbox_conversation"
+          ],
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "from_project_id",
+            "project"
+          ],
+          [
+            "to_project_id",
+            "project"
+          ]
+        ],
+        "name": "inbox_assignment",
+        "references": [
+          "firm",
+          "inbox_conversation",
+          "person",
+          "project"
+        ]
+      },
+      "inbox_conversation": {
+        "columns": {
+          "brand_key": "TEXT",
+          "channel": "TEXT",
+          "email_conversation_id": "UUID",
+          "external_address": "TEXT",
+          "external_name": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "interaction_type": "TEXT",
+          "matter_consent": "BOOLEAN",
+          "project_id": "UUID",
+          "promotional_opt_in": "BOOLEAN",
+          "promotional_opt_out": "BOOLEAN",
+          "provider_account": "TEXT",
+          "provider_post_id": "TEXT",
+          "provider_thread_ref": "TEXT",
+          "source_channel": "TEXT",
+          "source_page": "TEXT",
+          "subject": "TEXT",
+          "unread": "BOOLEAN",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "email_conversation_id",
+            "email_conversation"
+          ],
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "inbox_conversation",
+        "references": [
+          "email_conversation",
+          "firm",
+          "project"
+        ]
+      },
+      "inbox_delivery_attempt": {
+        "columns": {
+          "detail": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "message_id": "UUID",
+          "provider_ref": "TEXT",
+          "state": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "message_id",
+            "message"
+          ]
+        ],
+        "name": "inbox_delivery_attempt",
+        "references": [
+          "message"
+        ]
+      },
+      "inbox_ingress": {
+        "columns": {
+          "channel": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "message_id": "UUID",
+          "provider_account": "TEXT",
+          "provider_message_id": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "message_id",
+            "message"
+          ]
+        ],
+        "name": "inbox_ingress",
+        "references": [
+          "firm",
+          "message"
+        ]
+      },
+      "iolta_account": {
+        "columns": {
+          "balance_cents": "BIGINT",
+          "currency": "TEXT",
+          "id": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "jurisdiction_id": "UUID",
+          "mirrored_at": "TIMESTAMPTZ",
+          "name": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "xero_account_code": "TEXT",
+          "xero_account_id": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "iolta_account",
+        "references": []
+      },
+      "iolta_allocation": {
+        "columns": {
+          "amount_cents": "BIGINT",
+          "id": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "invoice_reference": "TEXT",
+          "occurred_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "updated_at": "TIMESTAMPTZ",
+          "withdrawal_id": "TEXT",
+          "xero_invoice_id": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "iolta_allocation",
+        "references": []
+      },
+      "iolta_withdrawal": {
+        "columns": {
+          "currency": "TEXT",
+          "id": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "jurisdiction_id": "UUID",
+          "occurred_at": "TIMESTAMPTZ",
+          "total_cents": "BIGINT",
+          "updated_at": "TIMESTAMPTZ",
+          "xero_transaction_id": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "iolta_withdrawal",
+        "references": []
+      },
+      "journal_entry": {
+        "columns": {
+          "actor_id": "UUID",
+          "command_key": "TEXT",
+          "digest": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "legacy_imported_at": "TIMESTAMPTZ",
+          "legacy_inserted_at_known": "BOOLEAN",
+          "legacy_inserted_at_source": "TEXT",
+          "memo": "TEXT",
+          "occurred_at": "TIMESTAMPTZ",
+          "payload": "JSONB",
+          "reversal_of": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "reversal_of",
+            "journal_entry"
+          ]
+        ],
+        "name": "journal_entry",
+        "references": [
+          "firm",
+          "journal_entry"
+        ]
+      },
+      "journal_entry_source": {
+        "columns": {
+          "entry_id": "UUID",
+          "source_id": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "entry_id",
+            "journal_entry"
+          ],
+          [
+            "source_id",
+            "journal_source_reference"
+          ]
+        ],
+        "name": "journal_entry_source",
+        "references": [
+          "journal_entry",
+          "journal_source_reference"
+        ]
+      },
+      "journal_posting": {
+        "columns": {
+          "account": "TEXT",
+          "category": "TEXT",
+          "entry_id": "UUID",
+          "firm_id": "UUID",
+          "ownership": "TEXT",
+          "position": "INTEGER",
+          "project_id": "UUID",
+          "quantity": "NUMERIC",
+          "restrictions": "JSONB",
+          "unit": "JSONB"
+        },
+        "foreign_keys": [],
+        "name": "journal_posting",
+        "references": [
+          "journal_entry"
+        ]
+      },
+      "journal_reconciliation": {
+        "columns": {
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "job_id": "UUID",
+          "mode": "TEXT",
+          "payload": "JSONB"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "journal_reconciliation",
+        "references": [
+          "firm"
+        ]
+      },
+      "journal_reconciliation_signal": {
+        "columns": {
+          "event_id": "TEXT",
+          "firm_id": "UUID",
+          "id": "BIGINT",
+          "inserted_at": "TIMESTAMPTZ",
+          "occurred_at": "TIMESTAMPTZ",
+          "source_id": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "source_id",
+            "journal_source_reference"
+          ]
+        ],
+        "name": "journal_reconciliation_signal",
+        "references": [
+          "firm",
+          "journal_source_reference"
+        ]
+      },
+      "journal_source_reference": {
+        "columns": {
+          "account": "TEXT",
+          "external_id": "TEXT",
+          "firm_id": "UUID",
+          "id": "TEXT",
+          "locator": "TEXT",
+          "object_type": "TEXT",
+          "payload": "JSONB",
+          "provider": "TEXT",
+          "provider_scope": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "journal_source_reference",
+        "references": [
+          "firm"
+        ]
+      },
+      "journal_source_snapshot": {
+        "columns": {
+          "digest": "TEXT",
+          "firm_id": "UUID",
+          "id": "TEXT",
+          "payload": "JSONB",
+          "retrieved_at": "TIMESTAMPTZ",
+          "revision": "TEXT",
+          "source_id": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "source_id",
+            "journal_source_reference"
+          ]
+        ],
+        "name": "journal_source_snapshot",
+        "references": [
+          "firm",
+          "journal_source_reference"
+        ]
+      },
+      "jurisdiction": {
+        "columns": {
+          "code": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "jurisdiction_type": "TEXT",
+          "name": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "jurisdiction",
+        "references": []
+      },
+      "lead": {
+        "columns": {
+          "brand_key": "TEXT",
+          "consent_version": "TEXT",
+          "consented_at": "TIMESTAMPTZ",
+          "email": "TEXT",
+          "email_lower": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "person_id": "UUID",
+          "phone": "TEXT",
+          "source_path": "TEXT",
+          "status": "TEXT",
+          "submissions": "BIGINT",
+          "unsubscribed_at": "TIMESTAMPTZ",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "lead",
+        "references": []
+      },
+      "lead_consent": {
+        "columns": {
+          "consented_at": "TIMESTAMPTZ",
+          "id": "UUID",
+          "lead_id": "UUID",
+          "phone": "TEXT",
+          "sms_consent_version": "TEXT",
+          "sms_opt_in": "BOOLEAN",
+          "sms_policy_version": "TEXT",
+          "source_path": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "lead_consent",
+        "references": []
+      },
+      "letter": {
+        "columns": {
+          "direction": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "mailroom_id": "UUID",
+          "project_id": "UUID",
+          "recipient": "TEXT",
+          "sender": "TEXT",
+          "summary": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "mailroom_id",
+            "mailroom"
+          ]
+        ],
+        "name": "letter",
+        "references": [
+          "mailroom"
+        ]
+      },
+      "mailroom": {
+        "columns": {
+          "address_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "name": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "address_id",
+            "address"
+          ]
+        ],
+        "name": "mailroom",
+        "references": [
+          "address"
+        ]
+      },
+      "matter_caption": {
+        "columns": {
+          "case_number": "TEXT",
+          "counsel": "JSONB",
+          "court": "TEXT[]",
+          "department": "TEXT",
+          "filed_on": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "judicial_officer": "TEXT",
+          "parties": "JSONB",
+          "project_id": "UUID",
+          "synced_at": "TIMESTAMPTZ",
+          "trial_on": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "matter_caption",
+        "references": [
+          "firm",
+          "project"
+        ]
+      },
+      "matter_page": {
+        "columns": {
+          "clerk_sections": "TEXT[]",
+          "client_sections": "TEXT[]",
+          "draft": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "kind": "TEXT",
+          "lawyer_sections": "TEXT[]",
+          "position": "BIGINT",
+          "project_id": "UUID",
+          "slug": "TEXT",
+          "synced_at": "TIMESTAMPTZ",
+          "title": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "matter_page",
+        "references": [
+          "firm",
+          "project"
+        ]
+      },
+      "message": {
+        "columns": {
+          "alert_channel_id": "TEXT",
+          "alert_state": "TEXT",
+          "alert_timestamp": "TEXT",
+          "attachment_asset_id": "UUID",
+          "author_person_id": "UUID",
+          "body": "TEXT",
+          "communication_id": "UUID",
+          "conversation_id": "UUID",
+          "delivery_state": "TEXT",
+          "direction": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "occurred_at": "TEXT",
+          "parent_message_id": "UUID",
+          "provider_message_id": "TEXT",
+          "provider_ref": "TEXT",
+          "purpose": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "visibility": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "attachment_asset_id",
+            "asset"
+          ],
+          [
+            "author_person_id",
+            "person"
+          ],
+          [
+            "communication_id",
+            "communication"
+          ],
+          [
+            "conversation_id",
+            "inbox_conversation"
+          ],
+          [
+            "parent_message_id",
+            "message"
+          ]
+        ],
+        "name": "message",
+        "references": [
+          "asset",
+          "communication",
+          "inbox_conversation",
+          "message",
+          "person"
+        ]
+      },
+      "mirror_backfill_checkpoint": {
+        "columns": {
+          "applied": "INTEGER",
+          "batches": "INTEGER",
+          "completed_at": "TIMESTAMPTZ",
+          "failed": "INTEGER",
+          "inserted_at": "TIMESTAMPTZ",
+          "mirror": "TEXT",
+          "run_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "run_id",
+            "mirror_backfill_run"
+          ]
+        ],
+        "name": "mirror_backfill_checkpoint",
+        "references": [
+          "mirror_backfill_run"
+        ]
+      },
+      "mirror_backfill_failure": {
+        "columns": {
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "mirror": "TEXT",
+          "reason": "TEXT",
+          "row_id": "TEXT",
+          "row_table": "TEXT",
+          "run_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "run_id",
+            "mirror_backfill_run"
+          ]
+        ],
+        "name": "mirror_backfill_failure",
+        "references": [
+          "mirror_backfill_run"
+        ]
+      },
+      "mirror_backfill_run": {
+        "columns": {
+          "batch_size": "INTEGER",
+          "completed_at": "TIMESTAMPTZ",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "mirror_backfill_run",
+        "references": []
+      },
+      "notarization": {
+        "columns": {
+          "asset_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "notarized_at": "TIMESTAMPTZ",
+          "notary_person_id": "UUID",
+          "notation_id": "UUID",
+          "provider": "TEXT",
+          "provider_id": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "notarization",
+        "references": []
+      },
+      "notation": {
+        "columns": {
+          "delivery": "TEXT",
+          "entity_id": "UUID",
+          "git_commit_sha": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "package_id": "UUID",
+          "person_id": "UUID",
+          "project_id": "UUID",
+          "questionnaire_snapshot": "JSONB",
+          "state": "TEXT",
+          "template_body_sha256": "TEXT",
+          "template_id": "UUID",
+          "template_source_commit_sha": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "entity_id",
+            "entity"
+          ],
+          [
+            "package_id",
+            "notation_package"
+          ],
+          [
+            "person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ],
+          [
+            "template_id",
+            "template"
+          ]
+        ],
+        "name": "notation",
+        "references": [
+          "entity",
+          "notation_package",
+          "person",
+          "project",
+          "template"
+        ]
+      },
+      "notation_clause": {
+        "columns": {
+          "authored_by_person_id": "UUID",
+          "body_markdown": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "notation_id": "UUID",
+          "position": "INTEGER",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "authored_by_person_id",
+            "person"
+          ],
+          [
+            "notation_id",
+            "notation"
+          ]
+        ],
+        "name": "notation_clause",
+        "references": [
+          "notation",
+          "person"
+        ]
+      },
+      "notation_document": {
+        "columns": {
+          "current_version_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "notation_id": "UUID",
+          "original_asset_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "notation_document",
+        "references": []
+      },
+      "notation_document_comment": {
+        "columns": {
+          "anchor": "TEXT",
+          "body": "TEXT",
+          "decision": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "person_id": "UUID",
+          "resolved": "BOOLEAN",
+          "updated_at": "TIMESTAMPTZ",
+          "version_id": "UUID"
+        },
+        "foreign_keys": [],
+        "name": "notation_document_comment",
+        "references": []
+      },
+      "notation_document_version": {
+        "columns": {
+          "anchor_manifest_asset_id": "UUID",
+          "authored_by_person_id": "UUID",
+          "document_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "markdown_asset_id": "UUID",
+          "parent_version_id": "UUID",
+          "parser_version": "TEXT",
+          "schema_version": "BIGINT",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "notation_document_version",
+        "references": []
+      },
+      "notation_draft": {
+        "columns": {
+          "expires_at": "TIMESTAMPTZ",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "slug": "TEXT",
+          "source": "TEXT",
+          "title": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "notation_draft",
+        "references": [
+          "project"
+        ]
+      },
+      "notation_event": {
+        "columns": {
+          "acting_person_id": "UUID",
+          "condition": "TEXT",
+          "from_state": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "machine_kind": "TEXT",
+          "notation_id": "UUID",
+          "payload": "TEXT",
+          "recorded_at": "TEXT",
+          "template_version_id": "UUID",
+          "to_state": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "acting_person_id",
+            "person"
+          ],
+          [
+            "notation_id",
+            "notation"
+          ],
+          [
+            "template_version_id",
+            "template"
+          ]
+        ],
+        "name": "notation_event",
+        "references": [
+          "notation",
+          "person",
+          "template"
+        ]
+      },
+      "notation_meter_entry": {
+        "columns": {
+          "currency": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "notation_id": "UUID",
+          "package_id": "UUID",
+          "project_id": "UUID",
+          "quantity": "BIGINT",
+          "rate_id": "UUID",
+          "state": "TEXT",
+          "unit_amount_cents": "BIGINT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "notation_meter_entry",
+        "references": []
+      },
+      "notation_package": {
+        "columns": {
+          "active": "BOOLEAN",
+          "code": "TEXT",
+          "complexity": "TEXT",
+          "currency": "TEXT",
+          "description": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "starting_price_cents": "BIGINT",
+          "title": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "notation_package",
+        "references": []
+      },
+      "notation_package_template": {
+        "columns": {
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "package_id": "UUID",
+          "position": "INTEGER",
+          "required": "BOOLEAN",
+          "template_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "package_id",
+            "notation_package"
+          ],
+          [
+            "template_id",
+            "template"
+          ]
+        ],
+        "name": "notation_package_template",
+        "references": [
+          "notation_package",
+          "template"
+        ]
+      },
+      "notation_rate": {
+        "columns": {
+          "active": "BOOLEAN",
+          "code": "TEXT",
+          "currency": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "label": "TEXT",
+          "unit": "TEXT",
+          "unit_amount_cents": "BIGINT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "notation_rate",
+        "references": []
+      },
+      "notation_source": {
+        "columns": {
+          "communication_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "kind": "TEXT",
+          "notation_id": "UUID",
+          "position": "INTEGER",
+          "source_ref": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "communication_id",
+            "communication"
+          ],
+          [
+            "notation_id",
+            "notation"
+          ]
+        ],
+        "name": "notation_source",
+        "references": [
+          "communication",
+          "notation"
+        ]
+      },
+      "person": {
+        "columns": {
+          "apple_subject": "TEXT",
+          "email": "TEXT",
+          "email_confirmed": "BOOLEAN",
+          "email_lower": "TEXT",
+          "family_name": "TEXT",
+          "given_name": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "is_admitted": "BOOLEAN",
+          "linkedin_url": "TEXT",
+          "microsoft_subject": "TEXT",
+          "middle_name": "TEXT",
+          "name": "TEXT",
+          "oidc_subject": "TEXT",
+          "phone": "TEXT",
+          "profile_image_url": "TEXT",
+          "role": "TEXT",
+          "title": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "xero_contact_id": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "person",
+        "references": []
+      },
+      "person_delegate": {
+        "columns": {
+          "basis": "TEXT",
+          "delegate_person_id": "UUID",
+          "granted_at": "TIMESTAMPTZ",
+          "granted_by_person_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "instrument_reference": "TEXT",
+          "revoked_at": "TIMESTAMPTZ",
+          "revoked_by_person_id": "UUID",
+          "subject_notified_at": "TIMESTAMPTZ",
+          "subject_notified_channel": "TEXT",
+          "subject_person_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "delegate_person_id",
+            "person"
+          ],
+          [
+            "granted_by_person_id",
+            "person"
+          ],
+          [
+            "revoked_by_person_id",
+            "person"
+          ],
+          [
+            "subject_person_id",
+            "person"
+          ]
+        ],
+        "name": "person_delegate",
+        "references": [
+          "person"
+        ]
+      },
+      "person_external_identity": {
+        "columns": {
+          "external_id": "TEXT",
+          "handle": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "person_id": "UUID",
+          "system": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "person_external_identity",
+        "references": [
+          "person"
+        ]
+      },
+      "person_firm_role": {
+        "columns": {
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "is_dri": "BOOLEAN",
+          "membership": "TEXT",
+          "person_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "person_firm_role",
+        "references": [
+          "firm",
+          "person"
+        ]
+      },
+      "person_mailbox": {
+        "columns": {
+          "id": "TEXT",
+          "person_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "person_mailbox",
+        "references": [
+          "person"
+        ]
+      },
+      "person_project_role": {
+        "columns": {
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "is_client_dri": "BOOLEAN",
+          "is_lawyer_dri": "BOOLEAN",
+          "participation": "TEXT",
+          "person_id": "UUID",
+          "project_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "person_project_role",
+        "references": [
+          "person",
+          "project"
+        ]
+      },
+      "playbook": {
+        "columns": {
+          "active": "BOOLEAN",
+          "entity_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "name": "TEXT",
+          "positions": "JSONB",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "entity_id",
+            "entity"
+          ]
+        ],
+        "name": "playbook",
+        "references": [
+          "entity"
+        ]
+      },
+      "post": {
+        "columns": {
+          "body_html": "TEXT",
+          "body_markdown": "TEXT",
+          "brand_key": "TEXT",
+          "description": "TEXT",
+          "facebook_caption": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "instagram_caption": "TEXT",
+          "publish_at": "TIMESTAMPTZ",
+          "selected_social_accounts": "TEXT[]",
+          "slug": "TEXT",
+          "social_links": "JSONB",
+          "source_digest": "TEXT",
+          "status": "TEXT",
+          "threads_caption": "TEXT",
+          "tiktok_ai_generated": "BOOLEAN",
+          "title": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "vertical_video": "BOOLEAN",
+          "video_asset": "TEXT",
+          "video_orientation": "TEXT",
+          "youtube_caption": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "brand_key",
+            "brand"
+          ]
+        ],
+        "name": "post",
+        "references": [
+          "brand"
+        ]
+      },
+      "project": {
+        "columns": {
+          "brand": "TEXT",
+          "closed_at": "TEXT",
+          "closure_reason": "TEXT",
+          "code": "TEXT",
+          "description": "TEXT",
+          "drive_folder_id": "TEXT",
+          "entity_id": "UUID",
+          "external_slack_channel_url": "TEXT",
+          "firm_id": "UUID",
+          "forge_provisioned_at": "TEXT",
+          "git_initialized_at": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "internal_slack_channel_id": "TEXT",
+          "internal_slack_channel_url": "TEXT",
+          "jurisdiction_id": "UUID",
+          "name": "TEXT",
+          "private_notion_page_url": "TEXT",
+          "repository_url": "TEXT",
+          "shared_notion_page_url": "TEXT",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "entity_id",
+            "entity"
+          ],
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "jurisdiction_id",
+            "jurisdiction"
+          ]
+        ],
+        "name": "project",
+        "references": [
+          "entity",
+          "firm",
+          "jurisdiction"
+        ]
+      },
+      "project_archive_generation": {
+        "columns": {
+          "attempts": "INTEGER",
+          "committed_at": "TIMESTAMPTZ",
+          "cutoff_at": "TIMESTAMPTZ",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inventory_sha256": "TEXT",
+          "item_count": "INTEGER",
+          "last_error": "TEXT",
+          "manifest_key": "TEXT",
+          "manifest_sha256": "TEXT",
+          "manifest_size_bytes": "BIGINT",
+          "operation_key": "TEXT",
+          "project_id": "UUID",
+          "requested_at": "TIMESTAMPTZ",
+          "requested_by_person_id": "UUID",
+          "source_backup": "JSONB",
+          "state": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "project_archive_generation",
+        "references": []
+      },
+      "project_archive_item": {
+        "columns": {
+          "asset_id": "UUID",
+          "generation_id": "UUID",
+          "kind": "TEXT",
+          "object_key": "TEXT",
+          "path": "TEXT",
+          "sha256": "TEXT",
+          "size_bytes": "BIGINT",
+          "source_key": "TEXT",
+          "verified_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "generation_id",
+            "project_archive_generation"
+          ]
+        ],
+        "name": "project_archive_item",
+        "references": [
+          "project_archive_generation"
+        ]
+      },
+      "project_cost_events": {
+        "columns": {
+          "actor_person_id": "UUID",
+          "after_state": "JSONB",
+          "before_state": "JSONB",
+          "event_kind": "TEXT",
+          "id": "UUID",
+          "occurred_at": "TIMESTAMPTZ",
+          "project_cost_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "actor_person_id",
+            "person"
+          ],
+          [
+            "project_cost_id",
+            "project_costs"
+          ]
+        ],
+        "name": "project_cost_events",
+        "references": [
+          "person",
+          "project_costs"
+        ]
+      },
+      "project_costs": {
+        "columns": {
+          "amount_cents": "BIGINT",
+          "amount_status": "TEXT",
+          "billing_status": "TEXT",
+          "currency": "TEXT",
+          "description": "TEXT",
+          "id": "UUID",
+          "idempotency_key": "TEXT",
+          "idempotency_payload": "JSONB",
+          "inserted_at": "TIMESTAMPTZ",
+          "occurred_on": "DATE",
+          "payee": "TEXT",
+          "project_id": "UUID",
+          "receipt_document_id": "UUID",
+          "updated_at": "TIMESTAMPTZ",
+          "xero_invoice_id": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "project_costs",
+        "references": [
+          "asset",
+          "project"
+        ]
+      },
+      "project_deadlines": {
+        "columns": {
+          "authority": "TEXT",
+          "authority_kind": "TEXT",
+          "calendar_role": "TEXT",
+          "client_lead_days": "BIGINT",
+          "due_at": "TIMESTAMPTZ",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "internal_lead_days": "BIGINT",
+          "owner_person_id": "UUID",
+          "project_id": "UUID",
+          "replay_key": "TEXT",
+          "source": "TEXT",
+          "source_document_id": "UUID",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "owner_person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ],
+          [
+            "source_document_id",
+            "asset"
+          ]
+        ],
+        "name": "project_deadlines",
+        "references": [
+          "asset",
+          "person",
+          "project"
+        ]
+      },
+      "project_handoff": {
+        "columns": {
+          "created_at": "TIMESTAMPTZ",
+          "created_by_person_id": "UUID",
+          "file_count": "INTEGER",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "lens": "TEXT",
+          "manifest": "JSONB",
+          "manifest_sha256": "TEXT",
+          "project_id": "UUID",
+          "recipient_person_id": "UUID",
+          "required": "BOOLEAN",
+          "total_bytes": "BIGINT"
+        },
+        "foreign_keys": [],
+        "name": "project_handoff",
+        "references": []
+      },
+      "project_handoff_acknowledgment": {
+        "columns": {
+          "acknowledged_at": "TIMESTAMPTZ",
+          "acknowledged_by_person_id": "UUID",
+          "handoff_id": "UUID",
+          "manifest_sha256": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "handoff_id",
+            "project_handoff"
+          ]
+        ],
+        "name": "project_handoff_acknowledgment",
+        "references": [
+          "project_handoff"
+        ]
+      },
+      "project_module": {
+        "columns": {
+          "enabled_at": "TIMESTAMPTZ",
+          "enabled_by_person_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "module": "TEXT",
+          "project_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "enabled_by_person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "project_module",
+        "references": [
+          "person",
+          "project"
+        ]
+      },
+      "project_reference": {
+        "columns": {
+          "entity_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "person_id": "UUID",
+          "project_id": "UUID",
+          "reason": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "entity_id",
+            "entity"
+          ],
+          [
+            "person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "project_reference",
+        "references": [
+          "entity",
+          "person",
+          "project"
+        ]
+      },
+      "project_service": {
+        "columns": {
+          "address": "TEXT",
+          "counsel_for": "TEXT",
+          "declarant": "TEXT",
+          "declarant_person_id": "UUID",
+          "document_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "letter_id": "UUID",
+          "method": "TEXT",
+          "project_id": "UUID",
+          "recipient": "TEXT",
+          "recipient_entity_id": "UUID",
+          "recipient_person_id": "UUID",
+          "sent_email_id": "UUID",
+          "served_on": "DATE",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "declarant_person_id",
+            "person"
+          ],
+          [
+            "document_id",
+            "asset"
+          ],
+          [
+            "project_id",
+            "project"
+          ],
+          [
+            "recipient_entity_id",
+            "entity"
+          ],
+          [
+            "recipient_person_id",
+            "person"
+          ],
+          [
+            "sent_email_id",
+            "sent_email"
+          ]
+        ],
+        "name": "project_service",
+        "references": [
+          "asset",
+          "entity",
+          "person",
+          "project",
+          "sent_email"
+        ]
+      },
+      "project_source_import": {
+        "columns": {
+          "attempts": "INTEGER",
+          "canonical_zip": "BYTEA",
+          "commit_sha": "TEXT",
+          "file_count": "INTEGER",
+          "finished_at": "TIMESTAMPTZ",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "last_error": "TEXT",
+          "operation_key": "TEXT",
+          "project_id": "UUID",
+          "repository_url": "TEXT",
+          "requested_at": "TIMESTAMPTZ",
+          "requested_by_person_id": "UUID",
+          "state": "TEXT",
+          "tree_sha256": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "project_source_import",
+        "references": []
+      },
+      "purchase": {
+        "columns": {
+          "account_code": "TEXT",
+          "activated_at": "TIMESTAMPTZ",
+          "amount_cents": "BIGINT",
+          "cadence": "TEXT",
+          "currency": "TEXT",
+          "email": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "invoice_url": "TEXT",
+          "offering": "TEXT",
+          "offering_name": "TEXT",
+          "person_id": "UUID",
+          "state": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "xero_contact_id": "TEXT",
+          "xero_invoice_id": "TEXT",
+          "xero_repeating_invoice_id": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "purchase",
+        "references": []
+      },
+      "question": {
+        "columns": {
+          "answer_type": "TEXT",
+          "audience": "TEXT",
+          "code": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "prompt": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "question",
+        "references": []
+      },
+      "relationship": {
+        "columns": {
+          "confidence_pct": "BIGINT",
+          "detail": "TEXT",
+          "id": "TEXT",
+          "in": "JSONB",
+          "inserted_at": "TIMESTAMPTZ",
+          "kind": "TEXT",
+          "out": "JSONB",
+          "source_id": "JSONB",
+          "source_kind": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "relationship",
+        "references": []
+      },
+      "relationship_log": {
+        "columns": {
+          "action": "TEXT",
+          "actor_person_id": "UUID",
+          "detail": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "subject_id": "UUID",
+          "subject_type": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "actor_person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "relationship_log",
+        "references": [
+          "person",
+          "project"
+        ]
+      },
+      "retention_purge": {
+        "columns": {
+          "authorized_by_person_id": "UUID",
+          "chain_key": "TEXT",
+          "expunge_record_id": "UUID",
+          "finished_at": "TIMESTAMPTZ",
+          "firm_id": "UUID",
+          "project_id": "UUID",
+          "purge_after": "TIMESTAMPTZ",
+          "started_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "retention_purge",
+        "references": []
+      },
+      "review_document": {
+        "columns": {
+          "body_html": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "kind": "TEXT",
+          "notation_id": "UUID",
+          "status": "TEXT",
+          "title": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "review_document",
+        "references": []
+      },
+      "sent_email": {
+        "columns": {
+          "body": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "outcome": "TEXT",
+          "project_id": "UUID",
+          "recipient": "TEXT",
+          "sender": "TEXT",
+          "sent_at": "TIMESTAMPTZ",
+          "sg_message_id": "TEXT",
+          "subject": "TEXT",
+          "template_slug": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "sent_email",
+        "references": [
+          "project"
+        ]
+      },
+      "signature": {
+        "columns": {
+          "completed_signer_roles": "JSONB",
+          "field": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "notation_id": "UUID",
+          "provider": "TEXT",
+          "provider_id": "TEXT",
+          "signed_at": "TIMESTAMPTZ",
+          "signer_person_id": "UUID",
+          "state": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "signature",
+        "references": []
+      },
+      "social_account": {
+        "columns": {
+          "brand_key": "TEXT",
+          "ciphertext": "TEXT",
+          "connected_by_person_id": "UUID",
+          "display_name": "TEXT",
+          "expires_at": "TIMESTAMPTZ",
+          "firm_id": "UUID",
+          "id": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "kms_context": "TEXT",
+          "kms_key_version": "TEXT",
+          "provider": "TEXT",
+          "provider_account_id": "TEXT",
+          "revoked_at": "TIMESTAMPTZ",
+          "revoked_by_person_id": "UUID",
+          "scopes": "TEXT[]",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "wrapped_dek": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "connected_by_person_id",
+            "person"
+          ],
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "revoked_by_person_id",
+            "person"
+          ]
+        ],
+        "name": "social_account",
+        "references": [
+          "brand",
+          "firm",
+          "person"
+        ]
+      },
+      "social_account_selection": {
+        "columns": {
+          "brand_key": "TEXT",
+          "firm_id": "UUID",
+          "id": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "provider": "TEXT",
+          "provider_account_id": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "social_account_selection",
+        "references": [
+          "brand",
+          "firm"
+        ]
+      },
+      "social_handle": {
+        "columns": {
+          "brand_key": "TEXT",
+          "handle": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "provider": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "brand_key",
+            "brand"
+          ]
+        ],
+        "name": "social_handle",
+        "references": [
+          "brand"
+        ]
+      },
+      "social_oauth_attempt": {
+        "columns": {
+          "actor_person_id": "UUID",
+          "brand_key": "TEXT",
+          "consumed_at": "TIMESTAMPTZ",
+          "expires_at": "TIMESTAMPTZ",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "instagram_account_id": "TEXT",
+          "pkce_verifier": "TEXT",
+          "provider": "TEXT",
+          "provider_account_id": "TEXT",
+          "state_hash": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "social_oauth_attempt",
+        "references": []
+      },
+      "social_publication": {
+        "columns": {
+          "attempt_count": "INTEGER",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "last_error": "TEXT",
+          "permalink": "TEXT",
+          "post_id": "UUID",
+          "provider": "TEXT",
+          "provider_post_id": "TEXT",
+          "provider_task_id": "TEXT",
+          "state": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "post_id",
+            "post"
+          ]
+        ],
+        "name": "social_publication",
+        "references": [
+          "post"
+        ]
+      },
+      "statutory_deadline": {
+        "columns": {
+          "due_on": "DATE",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "kind": "TEXT",
+          "project_id": "UUID",
+          "source": "TEXT",
+          "status": "TEXT",
+          "statute": "TEXT",
+          "trigger_on": "DATE",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "statutory_deadline",
+        "references": [
+          "project"
+        ]
+      },
+      "summary_sender_approval": {
+        "columns": {
+          "firm_id": "UUID",
+          "id": "UUID",
+          "person_id": "UUID",
+          "project_id": "UUID",
+          "provider_account": "TEXT",
+          "sender_email": "TEXT",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "summary_sender_approval",
+        "references": [
+          "firm",
+          "person",
+          "project"
+        ]
+      },
+      "summary_sender_approval_event": {
+        "columns": {
+          "action": "TEXT",
+          "actor_person_id": "UUID",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "person_id": "UUID",
+          "project_id": "UUID",
+          "provider_account": "TEXT",
+          "sender_email": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "actor_person_id",
+            "person"
+          ],
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "summary_sender_approval_event",
+        "references": [
+          "firm",
+          "person",
+          "project"
+        ]
+      },
+      "template": {
+        "columns": {
+          "asset_id": "UUID",
+          "body_sha256": "TEXT",
+          "code": "TEXT",
+          "current_key": "TEXT",
+          "form_code": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "is_current": "BOOLEAN",
+          "kind": "TEXT",
+          "project_id": "UUID",
+          "respondent_type": "TEXT",
+          "source_commit_sha": "TEXT",
+          "title": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "asset_id",
+            "asset"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "template",
+        "references": [
+          "asset",
+          "project"
+        ]
+      },
+      "testimonial": {
+        "columns": {
+          "attribution_label": "TEXT",
+          "consented_at": "TIMESTAMPTZ",
+          "display_order": "INTEGER",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "person_id": "UUID",
+          "project_id": "UUID",
+          "published_at": "TIMESTAMPTZ",
+          "quote": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "testimonial",
+        "references": [
+          "person",
+          "project"
+        ]
+      },
+      "verification": {
+        "columns": {
+          "citation_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "revision_sha": "TEXT",
+          "status_citation": "TEXT",
+          "status_proposition": "TEXT",
+          "status_quote": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "verifier_person_id": "UUID"
+        },
+        "foreign_keys": [],
+        "name": "verification",
+        "references": []
+      },
+      "visitor_route_count": {
+        "columns": {
+          "bucket_date": "TIMESTAMPTZ",
+          "country_code": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "locale": "TEXT",
+          "route_pattern": "TEXT",
+          "source": "TEXT",
+          "status_class": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "visits": "BIGINT"
+        },
+        "foreign_keys": [],
+        "name": "visitor_route_count",
+        "references": []
+      },
+      "xero_invoice": {
+        "columns": {
+          "amount_cents": "BIGINT",
+          "amount_paid_cents": "BIGINT",
+          "currency": "TEXT",
+          "due_at": "TIMESTAMPTZ",
+          "id": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "issued_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "reference": "TEXT",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "xero_invoice_id": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "xero_invoice",
+        "references": []
+      }
+    }
+  }
+}

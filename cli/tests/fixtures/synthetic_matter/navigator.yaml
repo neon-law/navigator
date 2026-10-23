@@ -1,0 +1,36 @@
+version: v26.10.6
+project:
+  host: staging.neonlaw.com
+  name: sample-litigation
+  lawyer_dri: pat@example.invalid
+  client_dri: sam@example.invalid
+  private_slack_channel: not provisioned
+  private_notion_page: not provisioned
+matter:
+  court:
+    - SUPERIOR COURT OF THE STATE OF CALIFORNIA
+    - COUNTY OF SAMPLE
+  case_number: 00CV000000
+  judicial_officer: Hon. Sample Q. Jurist
+  department: "12"
+  filed_on: 2026-02-02
+  parties:
+    - name: SAMPLE SYNTHETIC HOLDINGS OF NORTHERN CALIFORNIA, A LIMITED LIABILITY COMPANY, AND DOES 1 THROUGH 50, INCLUSIVE
+      role: Plaintiff
+    - name: EXAMPLE FICTITIOUS PROPERTY MANAGEMENT SERVICES, A CORPORATION, AND DOES 51 THROUGH 100, INCLUSIVE
+      role: Defendant
+    - name: ILLUSTRATIVE SUBSIDIARY HOLDINGS OF SAMPLETON, A GENERAL PARTNERSHIP
+      role: Defendant
+    - name: PLACEHOLDER OPERATING COMPANY, AN UNINCORPORATED ASSOCIATION
+      role: Defendant
+  counsel:
+    name: Pat Sample
+    bar_jurisdiction: California
+    bar_number: "000000"
+    firm: SAMPLE SYNTHETIC LAW GROUP, APC
+    address:
+      - 100 Example Boulevard, Suite 200
+      - Sampleton, California 90000
+    telephone: (000) 555-0100
+    email: pat@example.invalid
+    appears_for: Plaintiff SAMPLE HOLDINGS

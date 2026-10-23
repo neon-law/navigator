@@ -1,0 +1,122 @@
+# Recover durable mirror drift even after a web process exits.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: navigator-postgres-mirror-recovery
+  namespace: navigator
+spec:
+  schedule: "*/5 * * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app: navigator-postgres-mirror-reconcile
+            navigator.neonlaw.org/postgres-client: "true"
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: reconcile
+              image: YOUR_IMAGE_REGISTRY/navigator-surreal-archive:YY.M.D
+              imagePullPolicy: IfNotPresent
+              # A contract test keeps this invocation and the recovery CronJob aligned.
+              args:
+                - ops
+                - postgres
+                - mirror
+                - reconcile
+                - --json
+              env:
+                - name: NAVIGATOR_SURREAL_ENDPOINT
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: NAVIGATOR_SURREAL_ENDPOINT
+                - name: NAVIGATOR_SURREAL_NAMESPACE
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: NAVIGATOR_SURREAL_NAMESPACE
+                - name: NAVIGATOR_SURREAL_DATABASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: NAVIGATOR_SURREAL_DATABASE
+                - name: NAVIGATOR_SURREAL_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: NAVIGATOR_SURREAL_USER
+                - name: NAVIGATOR_SURREAL_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-web-secrets
+                      key: NAVIGATOR_SURREAL_PASSWORD
+                - name: NAVIGATOR_POSTGRES_HOST
+                  valueFrom:
+                    configMapKeyRef:
+                      name: navigator-postgres-client
+                      key: host
+                - name: NAVIGATOR_POSTGRES_PORT
+                  valueFrom:
+                    configMapKeyRef:
+                      name: navigator-postgres-client
+                      key: port
+                - name: NAVIGATOR_POSTGRES_DATABASE
+                  valueFrom:
+                    configMapKeyRef:
+                      name: navigator-postgres-client
+                      key: database
+                - name: NAVIGATOR_POSTGRES_SSLMODE
+                  valueFrom:
+                    configMapKeyRef:
+                      name: navigator-postgres-client
+                      key: sslmode
+                - name: NAVIGATOR_POSTGRES_ROOT_CERT
+                  value: /etc/navigator/postgres/ca.crt
+                - name: NAVIGATOR_POSTGRES_USER
+                  value: navigator_app
+                - name: NAVIGATOR_POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: navigator-postgres-app
+                      key: password
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  memory: 512Mi
+              volumeMounts:
+                - name: ca
+                  mountPath: /etc/navigator/postgres
+                  readOnly: true
+          volumes:
+            - name: ca
+              secret:
+                secretName: navigator-postgres-app
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+                defaultMode: 0444

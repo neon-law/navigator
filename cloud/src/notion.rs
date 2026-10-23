@@ -1,0 +1,823 @@
+//! Firm-private Notion resource adapter.
+//!
+//! The adapter knows how to create, find, and update a private page. It does
+//! not expose the page to a client-facing payload; callers decide explicitly
+//! which internal resource coordinates may cross that boundary.
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use serde::Deserialize;
+use serde_json::json;
+use thiserror::Error;
+
+const NOTION_VERSION: &str = "2022-06-28";
+/// The title property the reconciler writes and reads. It is the only
+/// property a page is matched on, so the name is stated once.
+const PROJECT_CODE_PROPERTY: &str = "Project code";
+const NOTION_BASE_URL: &str = "https://api.notion.com/v1";
+/// Notion caps `/search` at 100 results a page. The reconciler has to see
+/// every page carrying a code to report a duplicate, so the search follows
+/// the cursor instead of reading the first page and stopping.
+const SEARCH_PAGE_SIZE: u32 = 100;
+/// A Firm past this many search pages is a misconfigured parent database,
+/// not a matter list. Bounded so a provider that never clears `has_more`
+/// cannot spin a request forever.
+const MAX_SEARCH_PAGES: usize = 20;
+
+#[derive(Debug, Error)]
+pub enum NotionError {
+    #[error("Notion credential is unavailable")]
+    MissingCredential,
+    #[error("Notion request failed")]
+    Transport,
+    #[error("Notion returned HTTP {0}")]
+    HttpStatus(u16),
+    #[error("Notion rejected the request")]
+    Api,
+    #[error("Notion returned an incomplete page")]
+    IncompleteResponse,
+    #[error("Notion page is outside the configured Projects database")]
+    WrongParent,
+}
+
+/// The internal page coordinate returned by Notion. It is intentionally not
+/// serializable as part of a client project response.
+///
+/// `archived` is `false` on every page a title search (`find_private_page`/
+/// `list_private_pages`) can return — Notion's own `/search` excludes
+/// archived pages, so a search result is never stale in that dimension. It
+/// only ever reads `true` on the result of [`NotionService::get_page`],
+/// which looks up a specific, already-recorded id directly rather than by
+/// title and so can observe a page a search would silently hide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotionPage {
+    pub id: String,
+    pub url: String,
+    pub project_code: String,
+    pub archived: bool,
+    pub parent_database_id: Option<String>,
+}
+
+/// Pull the 32-lowercase-hex-character id off the end of a Notion page URL
+/// (`.../My-Page-Title-<32 hex chars>`), the shape both the real API's
+/// returned `url` and [`FakeNotion`]'s synthetic ones carry. `None` for a URL
+/// that does not end in a recognizable id — a hand-typed URL, or a row
+/// written before this shape existed — so a caller can fall back to treating
+/// the resource as unrecorded rather than looking up a wrong id.
+#[must_use]
+pub fn extract_page_id(url: &str) -> Option<String> {
+    let last_segment = url.rsplit('/').next()?;
+    let candidate = last_segment.rsplit('-').next()?;
+    (candidate.len() == 32 && candidate.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| candidate.to_ascii_lowercase())
+}
+
+#[async_trait]
+pub trait NotionService: Send + Sync {
+    async fn find_private_page(
+        &self,
+        project_code: &str,
+    ) -> Result<Option<NotionPage>, NotionError>;
+    /// Every page carrying this Project code, not just the first.
+    ///
+    /// Reconciliation distinguishes a missing page from a duplicated one, and
+    /// a lookup that can only answer `Option` collapses those two into the
+    /// same answer. The default delegates, so an adapter that genuinely has
+    /// one page per code needs no extra work; the REST client overrides it.
+    async fn list_private_pages(&self, project_code: &str) -> Result<Vec<NotionPage>, NotionError> {
+        Ok(self
+            .find_private_page(project_code)
+            .await?
+            .into_iter()
+            .collect())
+    }
+    async fn create_private_page(&self, project_code: &str) -> Result<NotionPage, NotionError>;
+    async fn update_private_page(
+        &self,
+        page_id: &str,
+        project_code: &str,
+    ) -> Result<NotionPage, NotionError>;
+    /// Look up the exact page Navigator already recorded, by id. Unlike a
+    /// title search, this sees a page even after it has been renamed away
+    /// from its recorded title or archived — the two states a search-based
+    /// lookup cannot distinguish from "never existed". `Ok(None)` means the
+    /// id no longer resolves to any page (deleted, or a foreign/malformed id).
+    async fn get_page(&self, page_id: &str) -> Result<Option<NotionPage>, NotionError>;
+
+    /// Whether this response belongs to the configured Projects database.
+    /// The REST adapter checks the provider response; fakes default to true.
+    fn is_expected_parent(&self, _page: &NotionPage) -> bool {
+        true
+    }
+}
+
+/// Find-then-create is the idempotency boundary. A failed lookup never falls
+/// through to create, so a transient Notion outage cannot make a duplicate.
+pub async fn ensure_private_page<S: NotionService + ?Sized>(
+    service: &S,
+    project_code: &str,
+) -> Result<(NotionPage, bool), NotionError> {
+    if let Some(page) = service.find_private_page(project_code).await? {
+        if !service.is_expected_parent(&page) {
+            return Err(NotionError::WrongParent);
+        }
+        return Ok((page, false));
+    }
+    let page = service.create_private_page(project_code).await?;
+    if !service.is_expected_parent(&page) {
+        return Err(NotionError::WrongParent);
+    }
+    Ok((page, true))
+}
+
+/// Deterministic fake used by provider and durable-workflow tests.
+///
+/// Storage is keyed by id, not by project code: a renamed page keeps its id
+/// but no longer carries the code that would let a title search find it, and
+/// an archived page keeps its id but drops out of every title search too.
+/// Both are real Notion behaviors this fake has to reproduce for
+/// [`NotionService::get_page`] to be worth testing against.
+#[derive(Debug, Clone, Default)]
+pub struct FakeNotion {
+    by_id: Arc<Mutex<BTreeMap<String, NotionPage>>>,
+    /// Extra pages carrying a code the fake did not create, so a test can
+    /// drive the duplicate outcome the reconciler reports.
+    duplicates: Arc<Mutex<BTreeMap<String, Vec<NotionPage>>>>,
+    create_calls: Arc<Mutex<usize>>,
+    update_calls: Arc<Mutex<usize>>,
+    unavailable: Arc<Mutex<bool>>,
+    wrong_parent: Arc<Mutex<bool>>,
+}
+
+impl FakeNotion {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_unavailable(&self, unavailable: bool) {
+        *self.unavailable.lock().expect("Notion fake lock poisoned") = unavailable;
+    }
+
+    pub fn set_wrong_parent(&self, wrong_parent: bool) {
+        *self.wrong_parent.lock().expect("Notion fake lock poisoned") = wrong_parent;
+    }
+
+    /// Seed a second page carrying `project_code`, as a Firm's workspace can
+    /// hold when someone created one by hand beside the provisioned page.
+    pub fn add_duplicate(&self, project_code: &str, page_id: &str) {
+        self.duplicates
+            .lock()
+            .expect("Notion fake lock poisoned")
+            .entry(project_code.to_string())
+            .or_default()
+            .push(NotionPage {
+                id: page_id.to_string(),
+                url: format!("https://notion.example/{page_id}"),
+                project_code: project_code.to_string(),
+                archived: false,
+                parent_database_id: Some("fake-database".to_string()),
+            });
+    }
+
+    /// Simulate someone archiving the page by hand in Notion. It keeps its
+    /// id (so [`NotionService::get_page`] still finds it) but stops
+    /// appearing in any title search, exactly like a real archived page.
+    pub fn archive(&self, page_id: &str) {
+        if let Some(page) = self
+            .by_id
+            .lock()
+            .expect("Notion fake lock poisoned")
+            .get_mut(page_id)
+        {
+            page.archived = true;
+        }
+    }
+
+    /// Simulate someone renaming the page's title away from the Project
+    /// code by hand. It keeps its id, so `get_page` still finds it under
+    /// its new title, but a title search for the old code no longer will.
+    pub fn rename(&self, page_id: &str, new_title: &str) {
+        if let Some(page) = self
+            .by_id
+            .lock()
+            .expect("Notion fake lock poisoned")
+            .get_mut(page_id)
+        {
+            page.project_code = new_title.to_string();
+        }
+    }
+
+    /// Simulate the provider deleting the page while its URL remains on the
+    /// Project row.
+    pub fn remove(&self, page_id: &str) {
+        self.by_id
+            .lock()
+            .expect("Notion fake lock poisoned")
+            .remove(page_id);
+    }
+
+    #[must_use]
+    pub fn create_calls(&self) -> usize {
+        *self.create_calls.lock().expect("Notion fake lock poisoned")
+    }
+
+    #[must_use]
+    pub fn update_calls(&self) -> usize {
+        *self.update_calls.lock().expect("Notion fake lock poisoned")
+    }
+
+    /// The current page findable under `project_code` — `None` once that
+    /// page has been renamed or archived, matching what a title search
+    /// would see.
+    #[must_use]
+    pub fn page(&self, project_code: &str) -> Option<NotionPage> {
+        self.by_id
+            .lock()
+            .expect("Notion fake lock poisoned")
+            .values()
+            .find(|page| !page.archived && page.project_code == project_code)
+            .cloned()
+    }
+
+    fn check_available(&self) -> Result<(), NotionError> {
+        if *self.unavailable.lock().expect("Notion fake lock poisoned") {
+            Err(NotionError::Transport)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// A stable, 32-lowercase-hex-character id derived from `project_code` —
+    /// long enough, and shaped like [`extract_page_id`] expects, to round-trip
+    /// through a URL exactly like a real Notion page id would.
+    fn synthetic_id(project_code: &str) -> String {
+        use sha2::{Digest, Sha256};
+        use std::fmt::Write as _;
+        Sha256::digest(project_code.as_bytes())
+            .iter()
+            .take(16)
+            .fold(String::new(), |mut hex, byte| {
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            })
+    }
+}
+
+#[async_trait]
+impl NotionService for FakeNotion {
+    async fn find_private_page(
+        &self,
+        project_code: &str,
+    ) -> Result<Option<NotionPage>, NotionError> {
+        self.check_available()?;
+        Ok(self.page(project_code))
+    }
+
+    async fn list_private_pages(&self, project_code: &str) -> Result<Vec<NotionPage>, NotionError> {
+        self.check_available()?;
+        let mut pages: Vec<NotionPage> = self.page(project_code).into_iter().collect();
+        pages.extend(
+            self.duplicates
+                .lock()
+                .expect("Notion fake lock poisoned")
+                .get(project_code)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        Ok(pages)
+    }
+
+    async fn create_private_page(&self, project_code: &str) -> Result<NotionPage, NotionError> {
+        self.check_available()?;
+        if let Some(page) = self.page(project_code) {
+            return Ok(page);
+        }
+        *self.create_calls.lock().expect("Notion fake lock poisoned") += 1;
+        let id = Self::synthetic_id(project_code);
+        let page = NotionPage {
+            url: format!("https://notion.example/{project_code}-{id}"),
+            id,
+            project_code: project_code.to_string(),
+            archived: false,
+            parent_database_id: Some("fake-database".to_string()),
+        };
+        self.by_id
+            .lock()
+            .expect("Notion fake lock poisoned")
+            .insert(page.id.clone(), page.clone());
+        Ok(page)
+    }
+
+    async fn update_private_page(
+        &self,
+        page_id: &str,
+        project_code: &str,
+    ) -> Result<NotionPage, NotionError> {
+        self.check_available()?;
+        *self.update_calls.lock().expect("Notion fake lock poisoned") += 1;
+        let page = NotionPage {
+            id: page_id.to_string(),
+            url: format!("https://notion.example/{project_code}-{page_id}"),
+            project_code: project_code.to_string(),
+            archived: false,
+            parent_database_id: Some("fake-database".to_string()),
+        };
+        self.by_id
+            .lock()
+            .expect("Notion fake lock poisoned")
+            .insert(page_id.to_string(), page.clone());
+        Ok(page)
+    }
+
+    async fn get_page(&self, page_id: &str) -> Result<Option<NotionPage>, NotionError> {
+        self.check_available()?;
+        Ok(self
+            .by_id
+            .lock()
+            .expect("Notion fake lock poisoned")
+            .get(page_id)
+            .cloned())
+    }
+
+    fn is_expected_parent(&self, _page: &NotionPage) -> bool {
+        !*self.wrong_parent.lock().expect("Notion fake lock poisoned")
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchResponse {
+    #[serde(default)]
+    results: Vec<PageResponse>,
+    #[serde(default)]
+    has_more: bool,
+    #[serde(default)]
+    next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PageResponse {
+    id: String,
+    url: String,
+    #[serde(default)]
+    properties: serde_json::Value,
+    #[serde(default)]
+    archived: bool,
+    #[serde(default)]
+    parent: Option<ParentResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ParentResponse {
+    #[serde(default)]
+    database_id: Option<String>,
+}
+
+/// Read the whole `Project code` title out of one search result.
+///
+/// The match has to be the assembled title compared for equality, not a
+/// substring of the serialized properties: a code is a prefix of other codes
+/// (`sample-project` of `sample-project-two`), and any property text can
+/// contain it, so a substring test adopts another matter's page and the next
+/// update writes this Project's code over it. Notion splits a title into rich
+/// text runs, so the runs are joined before the comparison.
+fn project_code_title(properties: &serde_json::Value) -> Option<String> {
+    let runs = properties
+        .get(PROJECT_CODE_PROPERTY)?
+        .get("title")?
+        .as_array()?;
+    let mut title = String::new();
+    for run in runs {
+        let text = run
+            .get("plain_text")
+            .or_else(|| run.pointer("/text/content"))?
+            .as_str()?;
+        title.push_str(text);
+    }
+    Some(title)
+}
+
+/// Notion REST adapter. The credential is injected by the Firm-secret
+/// resolver; there is no environment fallback or ambient provider login.
+pub struct NotionClient {
+    http: reqwest::Client,
+    base_url: String,
+    token: String,
+    parent_database_id: String,
+}
+
+impl std::fmt::Debug for NotionClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NotionClient")
+            .field("base_url", &self.base_url)
+            .field("parent_database_id", &self.parent_database_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl NotionClient {
+    /// The production client. The credential is the Firm's resolved provider
+    /// token, so there is no environment fallback to read here.
+    #[must_use]
+    pub fn new(token: impl Into<String>, parent_database_id: impl Into<String>) -> Self {
+        Self::with_base_url(token, parent_database_id, NOTION_BASE_URL)
+    }
+
+    #[must_use]
+    pub fn with_base_url(
+        token: impl Into<String>,
+        parent_database_id: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            token: token.into(),
+            parent_database_id: parent_database_id.into(),
+        }
+    }
+
+    async fn checked(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, NotionError> {
+        let response = request
+            .bearer_auth(&self.token)
+            .header("Notion-Version", NOTION_VERSION)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .send()
+            .await
+            .map_err(|_| NotionError::Transport)?;
+        if response.status().is_success() {
+            Ok(response)
+        } else {
+            Err(NotionError::HttpStatus(response.status().as_u16()))
+        }
+    }
+}
+
+#[async_trait]
+impl NotionService for NotionClient {
+    async fn find_private_page(
+        &self,
+        project_code: &str,
+    ) -> Result<Option<NotionPage>, NotionError> {
+        Ok(self
+            .list_private_pages(project_code)
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    async fn list_private_pages(&self, project_code: &str) -> Result<Vec<NotionPage>, NotionError> {
+        let mut matches = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_SEARCH_PAGES {
+            let mut body = json!({
+                "query": project_code,
+                "page_size": SEARCH_PAGE_SIZE,
+                "filter": { "property": "object", "value": "page" },
+            });
+            if let Some(cursor) = &cursor {
+                body["start_cursor"] = json!(cursor);
+            }
+            let response = self
+                .checked(
+                    self.http
+                        .post(format!("{}/search", self.base_url))
+                        .json(&body),
+                )
+                .await?;
+            let page = response
+                .json::<SearchResponse>()
+                .await
+                .map_err(|_| NotionError::Transport)?;
+            matches.extend(page.results.into_iter().filter_map(|result| {
+                (project_code_title(&result.properties).as_deref() == Some(project_code)).then_some(
+                    NotionPage {
+                        id: result.id,
+                        url: result.url,
+                        project_code: project_code.to_string(),
+                        archived: result.archived,
+                        parent_database_id: result.parent.and_then(|parent| parent.database_id),
+                    },
+                )
+            }));
+            match (page.has_more, page.next_cursor) {
+                (true, Some(next)) => cursor = Some(next),
+                _ => return Ok(matches),
+            }
+        }
+        Ok(matches)
+    }
+
+    async fn create_private_page(&self, project_code: &str) -> Result<NotionPage, NotionError> {
+        let response = self
+            .checked(self.http.post(format!("{}/pages", self.base_url)).json(&json!({
+                "parent": { "database_id": self.parent_database_id },
+                "properties": { PROJECT_CODE_PROPERTY: { "title": [{ "text": { "content": project_code } }] } }
+            })))
+            .await?;
+        let page = response
+            .json::<PageResponse>()
+            .await
+            .map_err(|_| NotionError::Transport)?;
+        let page = NotionPage {
+            id: page.id,
+            url: page.url,
+            project_code: project_code.to_string(),
+            archived: page.archived,
+            parent_database_id: page.parent.and_then(|parent| parent.database_id),
+        };
+        if !self.is_expected_parent(&page) {
+            return Err(NotionError::WrongParent);
+        }
+        Ok(page)
+    }
+
+    async fn update_private_page(
+        &self,
+        page_id: &str,
+        project_code: &str,
+    ) -> Result<NotionPage, NotionError> {
+        let response = self
+            .checked(self.http.patch(format!("{}/pages/{page_id}", self.base_url)).json(&json!({
+                "properties": { PROJECT_CODE_PROPERTY: { "title": [{ "text": { "content": project_code } }] } }
+            })))
+            .await?;
+        let page = response
+            .json::<PageResponse>()
+            .await
+            .map_err(|_| NotionError::Transport)?;
+        let page = NotionPage {
+            id: page.id,
+            url: page.url,
+            project_code: project_code.to_string(),
+            archived: page.archived,
+            parent_database_id: page.parent.and_then(|parent| parent.database_id),
+        };
+        if !self.is_expected_parent(&page) {
+            return Err(NotionError::WrongParent);
+        }
+        Ok(page)
+    }
+
+    /// `GET /pages/{page_id}` — the direct lookup [`NotionService::get_page`]
+    /// promises. A 404 means the id no longer resolves to anything and maps
+    /// to `Ok(None)` rather than an error, since "gone" is an answer this
+    /// call is specifically meant to give; every other non-success status is
+    /// a real transport/API failure.
+    async fn get_page(&self, page_id: &str) -> Result<Option<NotionPage>, NotionError> {
+        let response = self
+            .http
+            .get(format!("{}/pages/{page_id}", self.base_url))
+            .bearer_auth(&self.token)
+            .header("Notion-Version", NOTION_VERSION)
+            .send()
+            .await
+            .map_err(|_| NotionError::Transport)?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(NotionError::HttpStatus(response.status().as_u16()));
+        }
+        let page = response
+            .json::<PageResponse>()
+            .await
+            .map_err(|_| NotionError::Transport)?;
+        Ok(Some(NotionPage {
+            project_code: project_code_title(&page.properties).unwrap_or_default(),
+            id: page.id,
+            url: page.url,
+            archived: page.archived,
+            parent_database_id: page.parent.and_then(|parent| parent.database_id),
+        }))
+    }
+
+    fn is_expected_parent(&self, page: &NotionPage) -> bool {
+        page.parent_database_id.as_deref() == Some(self.parent_database_id.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ensure_private_page, project_code_title, FakeNotion, NotionError, NotionService,
+        PROJECT_CODE_PROPERTY,
+    };
+    use serde_json::json;
+
+    fn properties(title: &str) -> serde_json::Value {
+        json!({
+            PROJECT_CODE_PROPERTY: {
+                "type": "title",
+                "title": [{ "type": "text", "plain_text": title }]
+            },
+            "Notes": { "rich_text": [{ "plain_text": "sample-project overview" }] }
+        })
+    }
+
+    #[test]
+    fn a_page_matches_only_its_whole_project_code_title() {
+        assert_eq!(
+            project_code_title(&properties("sample-project")).as_deref(),
+            Some("sample-project")
+        );
+        // Both of these contain `sample-project` somewhere in their
+        // properties, and neither is that Project's page.
+        assert_eq!(
+            project_code_title(&properties("sample-project-two")).as_deref(),
+            Some("sample-project-two")
+        );
+        assert_eq!(
+            project_code_title(&json!({ "Notes": { "rich_text": [] } })),
+            None
+        );
+    }
+
+    /// The reconciler reports a duplicate only if the search saw both pages,
+    /// and Notion caps a page of results. The second copy lives on the second
+    /// page here, so a client that read one page and stopped would report the
+    /// Firm's workspace as clean.
+    #[tokio::test]
+    async fn the_search_follows_the_cursor_so_a_duplicate_is_visible() {
+        use super::{NotionClient, PROJECT_CODE_PROPERTY};
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn result(id: &str, title: &str) -> serde_json::Value {
+            json!({
+                "id": id,
+                "url": format!("https://notion.example/{id}"),
+                "properties": { PROJECT_CODE_PROPERTY: { "title": [{ "plain_text": title }] } }
+            })
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/search"))
+            .and(body_string_contains("start_cursor"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [result("page-2", "sample-project")],
+                "has_more": false,
+                "next_cursor": null
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [
+                    result("page-1", "sample-project"),
+                    result("page-9", "sample-project-two")
+                ],
+                "has_more": true,
+                "next_cursor": "cursor-2"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = NotionClient::with_base_url("test-token", "db-1", server.uri());
+        let pages = client.list_private_pages("sample-project").await.unwrap();
+        assert_eq!(
+            pages
+                .iter()
+                .map(|page| page.id.as_str())
+                .collect::<Vec<_>>(),
+            ["page-1", "page-2"],
+            "both copies are seen, and the prefix match is not"
+        );
+    }
+
+    #[test]
+    fn a_split_title_is_joined_before_the_comparison() {
+        let split = json!({
+            PROJECT_CODE_PROPERTY: {
+                "title": [
+                    { "plain_text": "sample-" },
+                    { "plain_text": "project" }
+                ]
+            }
+        });
+        assert_eq!(
+            project_code_title(&split).as_deref(),
+            Some("sample-project")
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_adopts_without_duplicate_creation() {
+        let notion = FakeNotion::new();
+        let (first, created) = ensure_private_page(&notion, "sample-project")
+            .await
+            .unwrap();
+        let (second, created_again) = ensure_private_page(&notion, "sample-project")
+            .await
+            .unwrap();
+        assert!(created);
+        assert!(!created_again);
+        assert_eq!(first, second);
+        assert_eq!(notion.create_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn unavailable_lookup_does_not_create_a_duplicate() {
+        let notion = FakeNotion::new();
+        notion.set_unavailable(true);
+        assert!(matches!(
+            ensure_private_page(&notion, "sample-project").await,
+            Err(NotionError::Transport)
+        ));
+        assert_eq!(notion.create_calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_page_outside_the_projects_database_is_refused() {
+        let notion = FakeNotion::new();
+        notion.set_wrong_parent(true);
+        assert!(matches!(
+            ensure_private_page(&notion, "sample-project").await,
+            Err(NotionError::WrongParent)
+        ));
+    }
+
+    #[tokio::test]
+    async fn updates_preserve_the_internal_page_coordinate() {
+        let notion = FakeNotion::new();
+        let page = notion
+            .update_private_page("page-1", "sample-project")
+            .await
+            .unwrap();
+        assert_eq!(page.id, "page-1");
+        assert_eq!(notion.page("sample-project"), Some(page));
+    }
+
+    #[test]
+    fn extract_page_id_reads_the_trailing_32_hex_characters() {
+        assert_eq!(
+            super::extract_page_id(
+                "https://notion.example/My-Page-0123456789abcdef0123456789abcdef"
+            ),
+            Some("0123456789abcdef0123456789abcdef".to_string())
+        );
+        assert_eq!(
+            super::extract_page_id("https://notion.example/no-id-here"),
+            None
+        );
+        assert_eq!(super::extract_page_id(""), None);
+    }
+
+    /// A title search can never see an archived or renamed page — Notion's
+    /// own `/search` excludes archived pages, and a rename means the title no
+    /// longer matches the query. `get_page` is the only lookup that still
+    /// finds either, by going straight to the recorded id.
+    #[tokio::test]
+    async fn get_page_sees_an_archived_or_renamed_page_a_search_would_miss() {
+        let notion = FakeNotion::new();
+        let (page, _) = ensure_private_page(&notion, "sample-project")
+            .await
+            .unwrap();
+
+        notion.archive(&page.id);
+        assert_eq!(
+            notion.find_private_page("sample-project").await.unwrap(),
+            None
+        );
+        let looked_up = notion
+            .get_page(&page.id)
+            .await
+            .unwrap()
+            .expect("still resolves by id");
+        assert!(looked_up.archived);
+        assert_eq!(looked_up.project_code, "sample-project");
+
+        let notion = FakeNotion::new();
+        let (page, _) = ensure_private_page(&notion, "renamed-project")
+            .await
+            .unwrap();
+        notion.rename(&page.id, "someone-renamed-this");
+        assert_eq!(
+            notion.find_private_page("renamed-project").await.unwrap(),
+            None
+        );
+        let looked_up = notion
+            .get_page(&page.id)
+            .await
+            .unwrap()
+            .expect("still resolves by id");
+        assert!(!looked_up.archived);
+        assert_eq!(looked_up.project_code, "someone-renamed-this");
+    }
+
+    #[tokio::test]
+    async fn get_page_returns_none_for_an_id_that_was_never_created() {
+        let notion = FakeNotion::new();
+        assert_eq!(notion.get_page("never-created").await.unwrap(), None);
+    }
+}

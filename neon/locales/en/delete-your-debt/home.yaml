@@ -1,0 +1,50 @@
+head_title: "{site_name} | Debt relief with PandA Law"
+meta_description: >-
+  Work with PandA Law on debt relief in Nevada, Washington, New York, or
+  California. A team across the country, with in-person meetings in Brooklyn.
+  Attorney advertisement. No result is promised.
+heading: A next step beyond debt.
+lead: >-
+  Work with PandA Law on debt relief in Nevada, Washington, New York, or
+  California. Our team works across the country. Meet remotely, or arrange
+  an in-person conversation in Brooklyn.
+contact_label: Talk to PandA Law
+service:
+  heading: A conversation comes first.
+  body:
+    - - text: >-
+          You do not need to have every answer before reaching out. Start
+          with your state, the kind of debt, and any upcoming deadline.
+          PandA Law already provides debt relief; this is a way to begin
+          working with that team.
+    - - text: >-
+          DeleteYourDebt.com is operated by Shook Law PC. The lawyers
+          handling your matter, the scope of work, and the fees will be
+          identified in a written engagement before representation begins.
+    - - text: "Prefer to meet in Brooklyn? "
+      - text: Ask our team for an in-person meeting.
+        href: https://www.pandalawfirm.com/contact/
+    - - text: >-
+          Contacting us does not create an attorney-client relationship.
+          The name DeleteYourDebt.com does not guarantee that a debt will be
+          reduced or eliminated. Attorney advertisement. No result is promised.
+practices_heading: Support that fits where you are.
+practices:
+  - mark: scales
+    heading: Nevada & Washington
+    body: >-
+      Start a conversation about working with PandA Law on debt relief in
+      Nevada or Washington.
+    href: /services#states
+  - mark: scales
+    heading: New York & California
+    body: >-
+      Explore debt relief with our team in New York or California, with
+      representation agreed in writing.
+    href: /services#states
+  - mark: gavel
+    heading: Across the country. Together.
+    body: >-
+      Our team works across the country. Remote conversations keep you
+      connected; in-person meetings are available in Brooklyn.
+    href: /services#meet

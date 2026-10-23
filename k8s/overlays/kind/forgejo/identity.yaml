@@ -1,0 +1,31 @@
+# KIND-only identity wiring for Forgejo. The client below is `navigator-forgejo`
+# in `../rauthy/local-fixture.yaml`; its committed secret is safe only because
+# KIND binds Rauthy to the developer machine. Every other environment supplies
+# the `navigator-forgejo-oidc` Secret through
+# `navigator ops secrets apply --service forgejo`.
+# `navigator dev forgejo up` aligns `discovery_url` to the tier's Rauthy port.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: navigator-forgejo-oidc
+data:
+  name: rauthy
+  discovery_url: http://localhost:30080/auth/v1/.well-known/openid-configuration
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: navigator-forgejo-oidc
+type: Opaque
+stringData:
+  client_id: navigator-forgejo
+  client_secret: navigatorforgejosecretnavigatorforgejosecretnavigatorforgejosecr
+---
+# The email-domain allowlist seam. Empty means no external account creation.
+# A later sync from the database's Brand domains owns this key.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: navigator-forgejo-admission
+data:
+  email_domain_allowlist: ""

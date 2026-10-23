@@ -1,0 +1,45 @@
+# The shared public marketing catalog.
+#
+# Every sentence here is published by more than one page or brand. Page
+# catalogs reference a key with `{shared:<key>}` rather than repeating the
+# words.
+#
+# Rules, enforced by `views::locales::shared` through `navigator project gate`
+# (`Y002`): the version is explicit, every key in `REQUIRED_KEYS` must be
+# present, a value is one line with no double quote, and the only placeholders
+# are `{site_name}` and `{firm_email}`.
+#
+# Copy that differs between the two renderers today is deliberately *not*
+# here. This catalog removes duplication; it does not decide wording.
+catalog_version: 1
+
+entries:
+  # `/` — the question the home page opens on.
+  home.need_prompt: What does your technology company need?
+  home.mission_heading: Everyone deserves access to justice.
+  home.mission_north_star: Our north star is improving access to justice.
+  home.mission_promise: You deserve a lawyer who listens, explains your options, and tells you what help will cost.
+
+  # `/services`
+  services.eyebrow: One-time services
+  services.title: Find the help you need.
+  services.lede: Start with your business, your family, or the next step in your life. Explore our brands or choose an individual service below. We confirm the lawyers, scope, and fees in your written engagement.
+  services.catalog_heading: Need help with one thing?
+
+  # `/business` — the Business plan.
+  fractional_gc.eyebrow: Business plan
+  fractional_gc.title: The legal library for your business.
+  fractional_gc.lede: Use our contract library and name Neon Law as your counsel for work we agree to handle.
+  fractional_gc.price: From $50
+
+  # `/disputes`
+  litigation.eyebrow: Help with a dispute
+  litigation.title: Your story deserves to be heard.
+  litigation.lede: Start with a free consultation. Tell us what happened, what you need, and whether you have a deadline.
+  litigation.cta: Request a free consultation
+  litigation.cases_help_others: We care about cases that can make life better for you and for others facing the same problem.
+
+  # Lead capture
+  lead.consent: By sending this, you agree that {site_name} may email you about this inquiry. Sending it does not make you a client, and nothing on this page is legal advice. See our Privacy Policy.
+  lead.phone_helper: Optional. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Our Privacy Policy and texting terms explain how we text and what we keep.
+  lead.sms_label: Yes, {site_name} may send me text messages about this inquiry at this number, including automated texts. Texting is not a condition of hiring the firm.

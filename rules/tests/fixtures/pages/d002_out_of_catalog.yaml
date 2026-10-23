@@ -1,0 +1,6 @@
+pages:
+  - slug: package
+    kind: deliverable_package
+    title: Closing package
+    lenses:
+      lawyer: [package_manifest, discovery_pairs, boundary_note, provenance_statement]

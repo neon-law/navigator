@@ -1,0 +1,701 @@
+name: release-deploy
+
+# Roll a published release onto the configured staging and production deployments.
+#
+# `deploy.yml` owns proving the workspace, building every image, cutting the
+# immutable tag, and publishing the CLI and LSP archives. Its last job,
+# `release-deploy`, dispatches this workflow on `main` with the tag once every
+# publish job has succeeded — see docs/release-automation.md. This workflow
+# never rebuilds service images: it extracts the signed CLI image and promotes
+# the exact signed image digests `deploy.yml` published for the release tag.
+#
+# The dispatch runs on `main` rather than on the tag ref. The workflow file
+# and the `slack-progress` action come from `main`, and `slack-progress`
+# posts only from `refs/heads/main`. No deployment tree is checked out: each
+# ship reads its row's published configuration from the row's own project
+# (`--project-id`), and `ops ship` fetches its own cluster credentials.
+#
+# WHO GETS WHAT.
+#   - Every publishable tag rolls to staging.
+#   - A tag `ops release check` reports as a prerelease (`-rc.N`, `-hotfix.N`)
+#     stops there: `hold-production` posts that it was held, and no
+#     production Deployment is recorded.
+#   - Every other tag rolls to production once staging's health checks pass.
+#
+# THE GATE. `preflight` reports `proceed=true` only when this is the configured
+# repository and the run is on `main`.
+# `deploy.yml` dispatches only while its `DEPLOY_AUTOMATION_ENABLED` variable is
+# `true`; a manual dispatch is how an operator rehearses, re-rolls, or rolls
+# back. `gh workflow disable release-deploy.yml` stops every run at once.
+#
+# Each ship job authenticates as the identity configured in its GitHub
+# Environment. Those environments hold the only deployment credentials used.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published tag to roll, e.g. 26.9.30 or 26.9.30-rc.1."
+        required: true
+        type: string
+      rollback:
+        description: "Roll back to `tag`, which must be a recorded successful production deployment."
+        required: false
+        type: boolean
+        default: false
+      image-digests:
+        description: "JSON map of immutable image refs to SHA-256 digests."
+        required: true
+        type: string
+
+concurrency:
+  # One group for every run: two tags must never roll onto the same clusters
+  # at once, and production must never start while another tag's staging run
+  # is in flight.
+  group: release-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NAVIGATOR_IMAGE_REGISTRY: ${{ secrets.NAVIGATOR_IMAGE_REGISTRY }}
+
+jobs:
+  preflight:
+    name: verify this pipeline may run
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      prerelease: ${{ steps.verify.outputs.prerelease }}
+      proceed: ${{ steps.gate.outputs.proceed }}
+    steps:
+      - name: resolve the tag from the dispatch input
+        id: resolve
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+          DISPATCH_IMAGE_DIGESTS: ${{ github.event.inputs['image-digests'] }}
+        run: |
+          set -euo pipefail
+          tag="${DISPATCH_TAG}"
+          if [ -z "${tag}" ]; then
+              echo "::error::no tag resolved — workflow_dispatch requires 'tag'"
+              exit 1
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          jq -e 'type == "object" and length > 0 and all(.[]; type == "string" and test("^sha256:[0-9a-f]{64}$"))' <<< "${DISPATCH_IMAGE_DIGESTS}" >/dev/null
+
+      # The Release's `prerelease` flag is what `deploy.yml` set from
+      # `ops release check`'s `prerelease` output. A semver prerelease suffix
+      # on the tag holds production too, so either signal alone keeps a tag
+      # at staging.
+      - name: verify the release exists and read back its commit
+        id: verify
+        if: github.repository == vars.DEPLOY_EXPECTED_REPOSITORY && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" 2>/dev/null || true)"
+          if [ -z "${release}" ]; then
+              echo "::error::no published GitHub Release named ${TAG} — refusing to guess"
+              exit 1
+          fi
+          sha="$(echo "${release}" | jq -r '.target_commitish')"
+          assets="$(echo "${release}" | jq -r '.assets | length')"
+          prerelease="$(echo "${release}" | jq -r '.prerelease')"
+          case "${TAG}" in
+              *-*) prerelease=true ;;
+          esac
+          echo "verified release ${TAG} at ${sha} with ${assets} attached assets (prerelease=${prerelease})"
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+
+      - name: gate on every precondition
+        id: gate
+        env:
+          EXPECTED_REPOSITORY: ${{ vars.DEPLOY_EXPECTED_REPOSITORY }}
+          ACTUAL_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          proceed=false
+          if [ -n "${EXPECTED_REPOSITORY}" ] \
+              && [ "${ACTUAL_REPOSITORY}" = "${EXPECTED_REPOSITORY}" ] \
+              && [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+              proceed=true
+          fi
+          echo "proceed=${proceed}" >> "${GITHUB_OUTPUT}"
+
+      - name: report why this run ships nothing
+        if: steps.gate.outputs.proceed != 'true'
+        run: |
+          echo "::notice::release-deploy runs only on main in the configured repository (ref ${GITHUB_REF}). This run ships nothing."
+
+  dedup:
+    name: check for an existing successful production deployment of this tag
+    needs: preflight
+    if: needs.preflight.outputs.proceed == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      deployments: read
+    outputs:
+      already-deployed: ${{ steps.check.outputs.already-deployed }}
+    steps:
+      # A re-run for a tag production already serves is a no-op, not a
+      # second roll.
+      - name: query the last successful production deployment
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          ROLLBACK: ${{ inputs.rollback }}
+        run: |
+          set -euo pipefail
+          already="false"
+          latest="$(gh api "repos/${GITHUB_REPOSITORY}/deployments?environment=production&per_page=1" --jq '.[0] // empty')"
+          if [ -n "${latest}" ] && [ "${ROLLBACK}" != "true" ]; then
+              ref="$(echo "${latest}" | jq -r '.ref')"
+              id="$(echo "${latest}" | jq -r '.id')"
+              state="$(gh api "repos/${GITHUB_REPOSITORY}/deployments/${id}/statuses?per_page=1" --jq '.[0].state // "unknown"')"
+              if [ "${ref}" = "${TAG}" ] && [ "${state}" = "success" ]; then
+                  already="true"
+                  echo "${TAG} is already the last successful production deployment — this run is a duplicate"
+              fi
+          fi
+          echo "already-deployed=${already}" >> "${GITHUB_OUTPUT}"
+
+  resolve-rollback:
+    name: confirm the rollback target is a last-known-good tag
+    needs: preflight
+    # Always runs, and only its lookup step is gated on `inputs.rollback`. A
+    # skipped job here would make the implicit `success()` of `ship-production`
+    # false — GitHub checks every ancestor, not only direct `needs` — so no
+    # ordinary roll could ever reach production.
+    if: needs.preflight.outputs.proceed == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      deployments: read
+    outputs:
+      tag: ${{ steps.lkg.outputs.tag }}
+    steps:
+      # A rollback target is a tag GitHub's Deployments API records as a
+      # successful production deployment — the same record `ship-production`
+      # writes. There is no second, hand-maintained "last good" value.
+      - name: find the tag among successful production deployments
+        id: lkg
+        if: inputs.rollback == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          found=""
+          for row in $(gh api "repos/${GITHUB_REPOSITORY}/deployments?environment=production&per_page=30" --jq '.[] | "\(.id)|\(.ref)"'); do
+              id="${row%%|*}"
+              ref="${row##*|}"
+              [ "${ref}" = "${TAG}" ] || continue
+              state="$(gh api "repos/${GITHUB_REPOSITORY}/deployments/${id}/statuses?per_page=1" --jq '.[0].state // "unknown"')"
+              if [ "${state}" = "success" ]; then
+                  found="${ref}"
+                  break
+              fi
+          done
+          if [ -z "${found}" ]; then
+              echo "::error::no successful production deployment is recorded for ${TAG} — there is nothing to roll back to"
+              exit 1
+          fi
+          echo "tag=${found}" >> "${GITHUB_OUTPUT}"
+          echo "rolling back to the last-known-good tag ${found}"
+
+  ship-staging:
+    name: ship staging
+    needs: [preflight, dedup, resolve-rollback]
+    # `resolve-rollback` is skipped on an ordinary roll, so this job opts in
+    # with `always()` and tests each result itself.
+    if: |
+      always() && needs.preflight.outputs.proceed == 'true' &&
+      needs.dedup.result == 'success' &&
+      needs.dedup.outputs.already-deployed != 'true' &&
+      (needs.resolve-rollback.result == 'success' || needs.resolve-rollback.result == 'skipped')
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    environment: staging-deploy
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
+    outputs:
+      tag: ${{ env.TAG }}
+    env:
+      TAG: ${{ needs.resolve-rollback.outputs.tag || needs.preflight.outputs.tag }}
+      DEPLOYMENT: ${{ secrets.STAGING_DEPLOYMENT }}
+      SHIP_LOG_SINK: ${{ secrets.STAGING_SHIP_LOG_SINK }}
+      # The project holding the row's published configuration
+      # (`ops deployments --publish`); the runner checks out no deployment tree.
+      GCP_PROJECT_ID: ${{ secrets.STAGING_GCP_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: "post progress to #navigator"
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: ship-staging
+          step: recording the GitHub Deployment
+          tag: ${{ env.TAG }}
+
+      - name: record a GitHub Deployment for staging
+        id: deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          id="$(jq -n --arg ref "${TAG}" \
+              '{ref: $ref, environment: "staging", auto_merge: false, required_contexts: []}' \
+              | gh api -X POST "repos/${GITHUB_REPOSITORY}/deployments" --input - --jq .id)"
+          echo "id=${id}" >> "${GITHUB_OUTPUT}"
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/deployments/${id}/statuses" -f state=in_progress --silent
+
+      - name: "post progress to #navigator"
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: ship-staging
+          step: authenticating the scoped ship identity
+          tag: ${{ env.TAG }}
+
+      # The configured staging identity holds exactly what the full `ops ship` uses:
+      # cluster credentials, `apply` on the rendered manifest's kinds in one
+      # namespace, image-tag reads on the registry, object reads on the row's
+      # assets bucket, Secret Manager version metadata on this deployment's
+      # secrets, access to the row's published configuration secret, and a
+      # read of the web service account's IAM policy. It decrypts nothing and
+      # writes no IAM.
+      # Without a service account the auth action falls back to the bare federated
+      # principal, which holds no registry grant, and the failure surfaces later as an
+      # opaque image-pull denial. Refuse here instead.
+      - name: require the scoped staging ship identity
+        env:
+          SHIP_SERVICE_ACCOUNT: ${{ secrets.STAGING_SHIP_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "${SHIP_SERVICE_ACCOUNT}" ]; then
+            echo "::error::STAGING_SHIP_SERVICE_ACCOUNT is unset in the staging-deploy environment; the ship would run as the bare federated principal"
+            exit 1
+          fi
+
+      # `ops ship --quiet` requires a sink for the transcript it keeps off the console. An unset
+      # secret reaches the CLI as an empty `--log-sink` and dies as "unsupported --log-sink".
+      - name: require the staging ship log sink
+        env:
+          SHIP_LOG_SINK: ${{ secrets.STAGING_SHIP_LOG_SINK }}
+        run: |
+          if [ -z "${SHIP_LOG_SINK}" ]; then
+            echo "::error::STAGING_SHIP_LOG_SINK is unset in the staging-deploy environment; set it to gs://BUCKET; transcripts land under ship/ on their own"
+            exit 1
+          fi
+
+      - name: require the staging project id
+        run: |
+          if [ -z "${GCP_PROJECT_ID}" ]; then
+            echo "::error::STAGING_GCP_PROJECT_ID is unset in the staging-deploy environment; ops ship reads the row's configuration from that project"
+            exit 1
+          fi
+
+      - name: authenticate to the staging project
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ secrets.STAGING_SHIP_WIF_PROVIDER }}
+          service_account: ${{ secrets.STAGING_SHIP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+        with:
+          install_components: gke-gcloud-auth-plugin, kubectl
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: install the released navigator CLI image
+        env:
+          IMAGE_DIGESTS: ${{ inputs['image-digests'] }}
+        run: |
+          set -euo pipefail
+          cli_ref="${NAVIGATOR_IMAGE_REGISTRY}/navigator-cli"
+          if [ -z "${IMAGE_DIGESTS}" ]; then echo "::error::the image-digests dispatch input is empty"; exit 1; fi
+          cli_digest="$(jq -r --arg ref "${cli_ref}" '.["navigator-cli"] // .[$ref] // empty' <<< "${IMAGE_DIGESTS}")"
+          if [ -z "${cli_digest}" ]; then echo "::error::release digest manifest has no navigator-cli entry"; exit 1; fi
+          registry_host="${NAVIGATOR_IMAGE_REGISTRY%%/*}"
+          gcloud auth configure-docker "${registry_host}" --quiet
+          docker pull "${cli_ref}@${cli_digest}"
+          container="$(docker create "${cli_ref}@${cli_digest}" --version)"
+          docker cp "${container}:/navigator" /tmp/navigator
+          docker rm "${container}" >/dev/null
+          sudo install -m 0755 /tmp/navigator /usr/local/bin/navigator
+          reported="$(navigator --version)"
+          case "${reported}" in
+              *"${TAG}"*) echo "navigator reports ${reported}" ;;
+              *)
+                  echo "::error::navigator CLI image reports '${reported}', not ${TAG}"
+                  exit 1
+              ;;
+          esac
+
+      - name: "post progress to #navigator"
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: ship-staging
+          step: "ops ship --deployment staging"
+          tag: ${{ env.TAG }}
+
+      - name: ops ship (full — manifests, secrets, Restate)
+        env:
+          IMAGE_DIGESTS: ${{ inputs['image-digests'] }}
+          RESTATE_ADMIN_URL: ${{ vars.STAGING_RESTATE_ADMIN_URL }}
+          RESTATE_ADMIN_TOKEN: ${{ secrets.STAGING_RESTATE_ADMIN_TOKEN }}
+          SHIP_LOG_SINK: ${{ secrets.STAGING_SHIP_LOG_SINK }}
+        run: |
+          set -euo pipefail
+          # `--project-id` arrived in 26.10.20; a rollback to an older tag needs a hand roll.
+          if ! navigator ops ship --help | grep -q -- '--project-id'; then
+              echo "::error::navigator ${TAG} cannot read published configuration; roll it by hand (docs/manual-roll.md)"
+              exit 1
+          fi
+          printf '%s' "${IMAGE_DIGESTS}" > /tmp/image-digests.json
+          # `ops ship` fetches its own cluster credentials and registry login.
+          navigator ops ship --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}" --tag "${TAG}" --image-digests /tmp/image-digests.json --assert-signing-iam --quiet --log-sink "${SHIP_LOG_SINK}"
+
+      - name: "health check: brand readiness"
+        id: brand-readiness
+        run: |
+          set -euo pipefail
+          # The CLI is the tag being rolled; a tag older than this check's flag
+          # leaves the smoke check `ops ship` already ran to stand in.
+          if ! navigator ops brand-readiness --help | grep -q -- '--project-id'; then
+              echo "::warning::navigator ${TAG} predates \`ops brand-readiness --project-id\`; relying on the smoke check in ops ship"
+              exit 0
+          fi
+          navigator ops brand-readiness --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
+
+      - name: "post the brand readiness result to #navigator"
+        if: always() && steps.brand-readiness.outcome != 'skipped'
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: ship-staging
+          step: "health check brand-readiness: ${{ steps.brand-readiness.outcome == 'success' && 'pass' || 'fail' }}"
+          tag: ${{ env.TAG }}
+
+      # `ops ship` re-registers the worker itself; this re-asserts it as a
+      # health check of its own rather than trusting `ops ship`'s exit code.
+      # It runs outside `ops ship`, so it reads the row's own worker URL from
+      # the published configuration; the brand's production default is one
+      # staging's Restate env cannot sign for, and the CLI refuses it.
+      - name: "health check: Restate registration"
+        id: restate-registration
+        env:
+          RESTATE_ADMIN_URL: ${{ vars.STAGING_RESTATE_ADMIN_URL }}
+          RESTATE_ADMIN_TOKEN: ${{ secrets.STAGING_RESTATE_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! navigator ops restate register --help | grep -q -- '--project-id'; then
+              echo "::warning::navigator ${TAG} predates \`ops restate register --project-id\`; relying on the registration in ops ship"
+              exit 0
+          fi
+          navigator ops restate register --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
+
+      - name: "post the Restate registration result to #navigator"
+        if: always() && steps.restate-registration.outcome != 'skipped'
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: ship-staging
+          step: "health check restate-registration: ${{ steps.restate-registration.outcome == 'success' && 'pass' || 'fail' }}"
+          tag: ${{ env.TAG }}
+
+      - name: record the staging deployment outcome
+        if: always() && steps.deployment.outputs.id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ID: ${{ steps.deployment.outputs.id }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          state="failure"; [ "${JOB_STATUS}" = "success" ] && state="success"
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/deployments/${DEPLOYMENT_ID}/statuses" \
+              -f state="${state}" --silent
+
+      - name: "page #navigator on a failed staging roll"
+        if: failure()
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: ship-staging
+          step: "FAILED — production is blocked, staging must not be bypassed"
+          tag: ${{ env.TAG }}
+
+  hold-production:
+    name: hold a prerelease at staging
+    needs: [preflight, ship-staging]
+    if: needs.preflight.outputs.prerelease == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: "post the hold to #navigator"
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: hold-production
+          step: "prerelease held at staging — production not rolled"
+          tag: ${{ needs.ship-staging.outputs.tag }}
+
+  ship-production:
+    name: ship production
+    # Staging blocks production unconditionally: no status function in this
+    # `if:`, so a failed, cancelled, or skipped `ship-staging` skips this job.
+    needs: [preflight, ship-staging]
+    if: needs.preflight.outputs.prerelease != 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    environment: production-deploy
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
+    env:
+      # Exactly the tag staging just served, rollback target included.
+      TAG: ${{ needs.ship-staging.outputs.tag }}
+      DEPLOYMENT: ${{ secrets.PRODUCTION_DEPLOYMENT }}
+      SHIP_LOG_SINK: ${{ secrets.PRODUCTION_SHIP_LOG_SINK }}
+      # The project holding the row's published configuration
+      # (`ops deployments --publish`); the runner checks out no deployment tree.
+      GCP_PROJECT_ID: ${{ secrets.PRODUCTION_GCP_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: "post progress to #navigator"
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: ship-production
+          step: "staging passed its health checks — production begins"
+          tag: ${{ env.TAG }}
+
+      - name: record a GitHub Deployment for production
+        id: deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          id="$(jq -n --arg ref "${TAG}" \
+              '{ref: $ref, environment: "production", auto_merge: false, required_contexts: []}' \
+              | gh api -X POST "repos/${GITHUB_REPOSITORY}/deployments" --input - --jq .id)"
+          echo "id=${id}" >> "${GITHUB_OUTPUT}"
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/deployments/${id}/statuses" -f state=in_progress --silent
+
+      - name: "post progress to #navigator"
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: ship-production
+          step: authenticating the scoped ship identity
+          tag: ${{ env.TAG }}
+
+      # Without a service account the auth action falls back to the bare federated
+      # principal, which holds no registry grant, and the failure surfaces later as an
+      # opaque image-pull denial. Refuse here instead.
+      - name: require the scoped production ship identity
+        env:
+          SHIP_SERVICE_ACCOUNT: ${{ secrets.PRODUCTION_SHIP_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "${SHIP_SERVICE_ACCOUNT}" ]; then
+            echo "::error::PRODUCTION_SHIP_SERVICE_ACCOUNT is unset in the production-deploy environment; the ship would run as the bare federated principal"
+            exit 1
+          fi
+
+      # `ops ship --quiet` requires a sink for the transcript it keeps off the console. An unset
+      # secret reaches the CLI as an empty `--log-sink` and dies as "unsupported --log-sink".
+      - name: require the production ship log sink
+        env:
+          SHIP_LOG_SINK: ${{ secrets.PRODUCTION_SHIP_LOG_SINK }}
+        run: |
+          if [ -z "${SHIP_LOG_SINK}" ]; then
+            echo "::error::PRODUCTION_SHIP_LOG_SINK is unset in the production-deploy environment; set it to gs://BUCKET; transcripts land under ship/ on their own"
+            exit 1
+          fi
+
+      - name: require the production project id
+        run: |
+          if [ -z "${GCP_PROJECT_ID}" ]; then
+            echo "::error::PRODUCTION_GCP_PROJECT_ID is unset in the production-deploy environment; ops ship reads the row's configuration from that project"
+            exit 1
+          fi
+
+      - name: authenticate to the production project
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ secrets.PRODUCTION_SHIP_WIF_PROVIDER }}
+          service_account: ${{ secrets.PRODUCTION_SHIP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+        with:
+          install_components: gke-gcloud-auth-plugin, kubectl
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: install the released navigator CLI image
+        env:
+          IMAGE_DIGESTS: ${{ inputs['image-digests'] }}
+        run: |
+          set -euo pipefail
+          cli_ref="${NAVIGATOR_IMAGE_REGISTRY}/navigator-cli"
+          if [ -z "${IMAGE_DIGESTS}" ]; then echo "::error::the image-digests dispatch input is empty"; exit 1; fi
+          cli_digest="$(jq -r --arg ref "${cli_ref}" '.["navigator-cli"] // .[$ref] // empty' <<< "${IMAGE_DIGESTS}")"
+          if [ -z "${cli_digest}" ]; then echo "::error::release digest manifest has no navigator-cli entry"; exit 1; fi
+          registry_host="${NAVIGATOR_IMAGE_REGISTRY%%/*}"
+          gcloud auth configure-docker "${registry_host}" --quiet
+          docker pull "${cli_ref}@${cli_digest}"
+          container="$(docker create "${cli_ref}@${cli_digest}" --version)"
+          docker cp "${container}:/navigator" /tmp/navigator
+          docker rm "${container}" >/dev/null
+          sudo install -m 0755 /tmp/navigator /usr/local/bin/navigator
+          reported="$(navigator --version)"
+          case "${reported}" in
+              *"${TAG}"*) echo "navigator reports ${reported}" ;;
+              *)
+                  echo "::error::navigator CLI image reports '${reported}', not ${TAG}"
+                  exit 1
+              ;;
+          esac
+
+      - name: "post progress to #navigator"
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: ship-production
+          step: "ops ship --deployment production"
+          tag: ${{ env.TAG }}
+
+      - name: ops ship (full — manifests, secrets, Restate)
+        env:
+          IMAGE_DIGESTS: ${{ inputs['image-digests'] }}
+          RESTATE_ADMIN_URL: ${{ vars.PRODUCTION_RESTATE_ADMIN_URL }}
+          RESTATE_ADMIN_TOKEN: ${{ secrets.PRODUCTION_RESTATE_ADMIN_TOKEN }}
+          SHIP_LOG_SINK: ${{ secrets.PRODUCTION_SHIP_LOG_SINK }}
+        run: |
+          set -euo pipefail
+          # `--project-id` arrived in 26.10.20; a rollback to an older tag needs a hand roll.
+          if ! navigator ops ship --help | grep -q -- '--project-id'; then
+              echo "::error::navigator ${TAG} cannot read published configuration; roll it by hand (docs/manual-roll.md)"
+              exit 1
+          fi
+          printf '%s' "${IMAGE_DIGESTS}" > /tmp/image-digests.json
+          # `ops ship` fetches its own cluster credentials and registry login.
+          navigator ops ship --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}" --tag "${TAG}" --image-digests /tmp/image-digests.json --assert-signing-iam --quiet --log-sink "${SHIP_LOG_SINK}"
+
+      - name: "health check: brand readiness"
+        id: brand-readiness
+        run: |
+          set -euo pipefail
+          # The CLI is the tag being rolled; a tag older than this check's flag
+          # leaves the smoke check `ops ship` already ran to stand in.
+          if ! navigator ops brand-readiness --help | grep -q -- '--project-id'; then
+              echo "::warning::navigator ${TAG} predates \`ops brand-readiness --project-id\`; relying on the smoke check in ops ship"
+              exit 0
+          fi
+          navigator ops brand-readiness --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
+
+      - name: "post the brand readiness result to #navigator"
+        if: always() && steps.brand-readiness.outcome != 'skipped'
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: ship-production
+          step: "health check brand-readiness: ${{ steps.brand-readiness.outcome == 'success' && 'pass' || 'fail' }}"
+          tag: ${{ env.TAG }}
+
+      - name: "health check: Restate registration"
+        id: restate-registration
+        env:
+          RESTATE_ADMIN_URL: ${{ vars.PRODUCTION_RESTATE_ADMIN_URL }}
+          RESTATE_ADMIN_TOKEN: ${{ secrets.PRODUCTION_RESTATE_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! navigator ops restate register --help | grep -q -- '--project-id'; then
+              echo "::warning::navigator ${TAG} predates \`ops restate register --project-id\`; relying on the registration in ops ship"
+              exit 0
+          fi
+          navigator ops restate register --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
+
+      - name: "post the Restate registration result to #navigator"
+        if: always() && steps.restate-registration.outcome != 'skipped'
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: ship-production
+          step: "health check restate-registration: ${{ steps.restate-registration.outcome == 'success' && 'pass' || 'fail' }}"
+          tag: ${{ env.TAG }}
+
+      # The durable last-known-good record: a `success` status here is what
+      # `dedup` and `resolve-rollback` read back on every later run.
+      - name: record the production deployment outcome
+        if: always() && steps.deployment.outputs.id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ID: ${{ steps.deployment.outputs.id }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          state="failure"; [ "${JOB_STATUS}" = "success" ] && state="success"
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/deployments/${DEPLOYMENT_ID}/statuses" \
+              -f state="${state}" --silent
+
+      - name: "page #navigator on a failed production roll"
+        if: failure()
+        uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: ship-production
+          step: "FAILED — roll back with workflow_dispatch rollback=true and the last-known-good tag"
+          tag: ${{ env.TAG }}
+
+  notify:
+    name: report the finished rollout
+    needs: [preflight, ship-staging, hold-production, ship-production]
+    if: always() && needs.preflight.outputs.proceed == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: "post the outcome to #navigator"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          STAGING: ${{ needs.ship-staging.result }}
+          HOLD: ${{ needs.hold-production.result }}
+          PRODUCTION: ${{ needs.ship-production.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SLACK_WEBHOOK_URL}" ]; then
+              echo "::notice::SLACK_WEBHOOK_URL is unset — skipping the #navigator report"
+              exit 0
+          fi
+          if [ "${HOLD}" = "success" ]; then
+              production="held at staging (prerelease)"
+          else
+              production="${PRODUCTION}"
+          fi
+          text="release-deploy ${TAG}: staging ${STAGING}, production ${production}
+          Run: ${RUN_URL}"
+          curl -sS --max-time 15 -X POST "${SLACK_WEBHOOK_URL}" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n --arg text "${text}" '{ text: $text }')" || true

@@ -1,0 +1,2023 @@
+/* Home layouts. Brand-specific sections are scoped to their page variant. */
+
+/* Original house graphics: a poster-like shield and a French red doorway. */
+.home-statement.home-statement--aegis {
+  max-width: none;
+  border-bottom: 2px solid #f4cf24;
+  background: url("/public/brand/aegis/mark.svg") right center / 30% auto no-repeat;
+}
+
+.home-statement--aegis .home-statement__heading {
+  max-width: 70%;
+  font-family: var(--brand-font-display, "Barlow Condensed", Impact, sans-serif);
+  font-weight: 800;
+  text-transform: uppercase;
+  line-height: 0.95;
+  letter-spacing: -0.02em;
+}
+
+.home-statement--aegis .home-statement__lead {
+  max-width: 62%;
+}
+
+.home-statement--aegis .nav-btn {
+  border-radius: 0;
+}
+
+.home-statement.home-statement--groundwork {
+  max-width: none;
+  min-height: 36rem;
+  box-sizing: border-box;
+  padding-right: 46%;
+  background: url("/public/brand/groundwork/door.svg") right center / 40% auto no-repeat;
+}
+
+.home-statement--groundwork .home-statement__heading {
+  font-size: clamp(2.6rem, 4.3vw, 4.75rem);
+  line-height: 1.08;
+}
+
+@media (max-width: 48rem) {
+  .home-statement.home-statement--aegis {
+    background: none;
+  }
+
+  .home-statement--aegis .home-statement__heading,
+  .home-statement--aegis .home-statement__lead {
+    max-width: 100%;
+  }
+
+  .home-statement.home-statement--groundwork {
+    padding-right: 0;
+    padding-bottom: 30rem;
+    background-position: center bottom;
+    background-size: auto 27rem;
+  }
+}
+
+.home-lead {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 44rem;
+  margin: 3rem auto;
+  padding: clamp(1rem, 4vw, 2rem);
+  text-align: left;
+}
+
+.home-lead h2 {
+  margin: 0 0 1.5rem;
+}
+
+/* ---- The question --------------------------------------------------- */
+
+.home-photo {
+  margin: 0 0 3rem;
+}
+
+.home-photo img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 7;
+  object-fit: cover;
+  object-position: center 60%;
+  border-radius: 0.5rem;
+}
+
+.home-photo figcaption {
+  margin-top: 0.75rem;
+  color: var(--nav-color-text-muted);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.home-booking {
+  padding: 0 0 3rem;
+}
+
+@media (max-width: 40rem) {
+  .home-photo img {
+    aspect-ratio: 4 / 3;
+  }
+}
+
+/* The question is the page. With no photograph above it, it is the first
+   thing under the header, so it takes the room a hero used to: a wider column
+   than the lead, a larger serif, and generous space above. The lead keeps its
+   own reading measure below. */
+.home-statement {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1.5rem;
+  max-width: 60rem;
+  padding: clamp(3rem, 10vw, 7rem) 0 clamp(2rem, 5vw, 3rem);
+}
+
+.home-statement__heading,
+.home-statement__lead,
+.home-statement__cta {
+  position: relative;
+  z-index: 1;
+}
+
+.home-statement__heading {
+  margin: 0;
+  font-family: var(--firm-serif);
+  font-size: clamp(2.75rem, 8vw, 5rem);
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.home-statement__lead {
+  margin: 0;
+  max-width: 44rem;
+  font-size: 1.25rem;
+  line-height: 1.6;
+  color: var(--nav-color-text-muted);
+}
+
+.home-statement__cta {
+  margin-top: 0.5rem;
+}
+
+.home-statement__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.home-statement__actions .home-statement__cta {
+  margin-top: 0;
+}
+
+/* The second CTA is a normal link until lead-capture-modal.js enhances it. */
+.home-lead-modal__trigger {
+  text-decoration: none;
+}
+
+.home-lead-modal {
+  width: min(36rem, calc(100% - 2rem));
+  max-width: none;
+  max-height: calc(100vh - 2rem);
+  margin: auto;
+  overflow: auto;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 0.5rem;
+  padding: clamp(1.25rem, 3vw, 2rem);
+  background: var(--nav-color-surface);
+  color: var(--nav-color-text);
+  box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 0.28);
+}
+
+.home-lead-modal:not([open]) {
+  display: none;
+}
+
+.home-lead-modal::backdrop {
+  background: rgb(0 0 0 / 0.58);
+}
+
+.home-lead-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.home-lead-modal__title {
+  margin: 0;
+  font-family: var(--firm-serif);
+  font-size: clamp(1.5rem, 4vw, 2.25rem);
+  line-height: 1.1;
+}
+
+.home-lead-modal__close {
+  flex: 0 0 auto;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 50%;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  background: transparent;
+  color: var(--nav-color-text);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.home-lead-modal__close:hover,
+.home-lead-modal__close:focus-visible {
+  border-color: var(--firm-brand);
+  color: var(--firm-brand-strong);
+}
+
+.home-lead-modal .nav-form-card {
+  margin: 0;
+  border: 0;
+  box-shadow: none;
+}
+
+@media (max-width: 40rem) {
+  .home-lead-modal {
+    width: calc(100% - 1rem);
+    padding: 1rem;
+  }
+}
+
+/* The shared button is themed Navigator cyan; on the firm's own surface it
+   carries the firm's colour instead, so the one call to action on the page is
+   not the one element that is off-brand. `theme.css` sets the primary button
+   through `.nav-theme a.nav-btn--primary`, so this has to match that
+   specificity to win. */
+.nav-theme a.nav-btn--primary.home-statement__cta,
+.nav-theme a.nav-btn--primary.home-statement__cta:hover,
+.nav-theme a.nav-btn--primary.home-statement__cta:focus-visible {
+  border-color: var(--firm-brand);
+  background: var(--firm-brand);
+  color: var(--firm-on-brand);
+}
+
+.nav-theme a.nav-btn--primary.home-statement__cta:hover,
+.nav-theme a.nav-btn--primary.home-statement__cta:focus-visible {
+  border-color: var(--firm-brand-strong);
+  background: var(--firm-brand-strong);
+}
+
+/* ---- The one service --------------------------------------------------- */
+
+/* A full-bleed band, not a card. The heading has to share the statement's
+   left edge; a `.neon-card` padded that edge inward. The wash paints to the
+   viewport the way `.site-footer` does — the footer never enters the 72rem
+   column — while the words stay on the column the shell already measures.
+   `100vw` on the section itself overflows by the reserved scrollbar, so the
+   wash is a positioned layer and the home page clips the leftover. Scoped to
+   a shell that holds this band: this sheet is also hoisted by the marketing
+   pages with a downloads band and by the catalog slide, and `theme.css` leaves
+   the shell's overflow to each band on purpose. */
+.public-shell:has(.home-service) {
+  overflow-x: clip;
+}
+
+.home-service {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1.25rem;
+  margin: clamp(1.5rem, 4vw, 2.5rem) 0 0;
+  padding-block: clamp(2.5rem, 6vw, 4.5rem);
+}
+
+.home-service::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline: calc(50% - 50vw);
+  z-index: -1;
+  background: var(--nav-public-wash);
+  box-shadow:
+    inset 0 1px var(--nav-color-border),
+    inset 0 -1px var(--nav-color-border);
+}
+
+.home-service::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto auto 50%;
+  z-index: 0;
+  width: min(72rem, calc(100% + 2rem));
+  height: 1px;
+  transform: translateX(-50%);
+  background: var(--nav-public-hairline);
+  opacity: 0.7;
+}
+
+.home-service__heading,
+.home-service__paragraph {
+  position: relative;
+  z-index: 1;
+}
+
+.home-service__heading {
+  margin: 0;
+  font-family: var(--firm-serif);
+  font-size: clamp(1.5rem, 3.5vw, 2.25rem);
+  font-weight: 600;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.home-service__paragraph {
+  margin: 0;
+  max-width: 68ch;
+  line-height: 1.65;
+  color: var(--nav-color-text);
+  text-wrap: pretty;
+}
+
+.home-service__paragraph strong {
+  font-weight: 600;
+}
+
+/* ---- The other practices ------------------------------------------------ */
+
+/* Three boxes at the foot of the page. The page leads with one offering; these
+   say the firm practices law too, and hand the reader to the page for each. */
+.home-practices {
+  margin-top: clamp(2.5rem, 6vw, 4rem);
+}
+
+.home-practices__heading {
+  margin: 0 0 1.5rem;
+  font-family: var(--firm-serif);
+  font-size: clamp(1.5rem, 3.5vw, 2.25rem);
+  font-weight: 600;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+/* Two by two on a tablet, three across on desktop, stacked on a phone. */
+.home-practices__grid {
+  display: grid;
+  gap: 1.5rem;
+}
+
+@media (min-width: 48rem) {
+  .home-practices__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 60rem) {
+  .home-practices__grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Each box is a link. `.neon-card` spaces itself from the block above; inside
+   the grid the gap does that instead.
+
+   `isolation` and `overflow` are what keep the hover wash inside the rounded
+   corner: the wave is a pseudo-element scaled well past the box, and without a
+   clip it would paint over the boxes beside it. */
+.home-practices__grid > .home-practice {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  color: inherit;
+  text-decoration: none;
+  transition:
+    border-color 240ms ease,
+    transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* `.nav-theme a:hover` underlines every link and recolours it, which on a card
+   whose whole surface is the anchor underlined the heading and both lines of
+   prose — the box read as a wall of link text. The selector matches that rule's
+   specificity to keep the box a box; the heading alone takes the brand colour,
+   which is the affordance that says it is clickable. */
+.nav-theme a.home-practice:hover,
+.nav-theme a.home-practice:focus-visible {
+  border-color: var(--practice-brand, var(--firm-brand));
+  color: inherit;
+  text-decoration: none;
+  transform: translateY(-2px);
+}
+
+.home-practice:hover .home-practice__heading,
+.home-practice:focus-visible .home-practice__heading {
+  color: var(--practice-brand, var(--firm-brand-strong));
+}
+
+/* The wave. A circle anchored off the box's bottom-left corner, scaled from
+   nothing to well past the top-right on hover, so the wash reads as a swell
+   crossing the card on the diagonal rather than a panel fading in.
+
+   `transform-origin` at the bottom-left corner is what sets the direction; the
+   long, decelerating curve is what makes it read as a wave rather than a flash.
+   It sits at `z-index: -1` under the card's own text, which is why the card
+   isolates a stacking context. */
+.home-practice::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset-inline-start: -25%;
+  inset-block-end: -55%;
+  inline-size: 150%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 30% 70%,
+    var(--practice-brand, var(--firm-brand)) 0%,
+    color-mix(in srgb, var(--practice-brand, var(--firm-brand)) 45%, transparent) 45%,
+    transparent 72%
+  );
+  opacity: 0;
+  transform: scale(0.2);
+  transform-origin: 0% 100%;
+  transition:
+    transform 720ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 320ms ease;
+}
+
+.home-practice:hover::after,
+.home-practice:focus-visible::after {
+  opacity: 0.22;
+  transform: scale(1.5);
+}
+
+/* The wave is decoration. Suppressed, the border and the lift still answer the
+   pointer, so the box never stops responding — it just stops swelling. */
+@media (prefers-reduced-motion: reduce) {
+  .home-practices__grid > .home-practice,
+  .home-practice::after {
+    transition-duration: 1ms;
+  }
+
+  .home-practice:hover,
+  .home-practice:focus-visible {
+    transform: none;
+  }
+
+  .home-practice:hover::after,
+  .home-practice:focus-visible::after {
+    transform: scale(1.5);
+  }
+}
+
+/* The mark the box opens on, centred over the heading.
+
+   Stroked in `currentColor`, so it is white wherever the card's text is white
+   and dark wherever the text is dark — one rule serving both themes. That is
+   the thing a colour emoji could not do: `color` does not reach a colour glyph,
+   and flattening one with a filter turns a handshake into a blot. */
+.home-practice__mark {
+  align-self: center;
+  inline-size: 2.75rem;
+  block-size: 2.75rem;
+  color: var(--nav-color-text);
+}
+
+.home-practice__logo {
+  align-self: center;
+  inline-size: min(100%, 12rem);
+  block-size: 2.75rem;
+  object-fit: contain;
+}
+
+.home-practice__heading {
+  margin: 0;
+  font-family: inherit;
+  font-size: clamp(1.25rem, 2.5vw, 1.5rem);
+  font-weight: 600;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.home-practice__body {
+  margin: 0;
+  line-height: 1.6;
+  color: var(--nav-color-text-muted);
+  text-wrap: pretty;
+}
+
+/* ---- The record ---------------------------------------------------------- */
+
+/* How a request becomes a record. One card, in three movements: the flow on a
+   rail (request, attorney, chain), the ledger beside it, and the tiles under
+   both. It borrows the stage from a chain's own front page — a dark ground, a
+   glow, a two-tone display heading — but every colour is the brand's token, so
+   on DeleteYourData it burns red and on any other brand it would wear that
+   brand's stop. Nothing here is a literal colour.
+
+   Every animation is decoration: the copy reads the same with the motion off,
+   and the `prefers-reduced-motion` block at the end pins each element at its
+   final frame. */
+.home-provenance {
+  --home-provenance-ink: var(--nav-color-text);
+  --home-provenance-muted: var(--nav-color-text-muted);
+  --home-provenance-rail: var(--firm-brand-edge);
+  --home-provenance-fill: var(--firm-brand);
+  --home-provenance-fill-strong: var(--firm-brand-strong);
+  --home-provenance-tint: var(--firm-brand-tint);
+  --home-provenance-panel: color-mix(in oklab, var(--nav-color-surface-subtle) 55%, transparent);
+  --home-provenance-ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(1.75rem, 4vw, 2.75rem);
+  margin-top: clamp(2.5rem, 6vw, 4rem);
+  color: var(--home-provenance-ink);
+}
+
+/* The glow. A brand-coloured wash anchored off the top-right corner that
+   breathes slowly. It is clipped by the card — the statement's glow was
+   retired because it bled past the hero into the margin, and this one cannot:
+   the card isolates it and hides its overflow. */
+.home-provenance__glow {
+  position: absolute;
+  z-index: -1;
+  inset-block-start: -35%;
+  inset-inline-end: -20%;
+  inline-size: 70%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    var(--firm-brand-glow) 0%,
+    color-mix(in oklab, var(--firm-brand-glow) 40%, transparent) 40%,
+    transparent 70%
+  );
+  filter: blur(24px);
+  opacity: 0.7;
+  animation: home-provenance-breathe 14s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes home-provenance-breathe {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+    opacity: 0.55;
+  }
+
+  50% {
+    transform: translate(-6%, 8%) scale(1.12);
+    opacity: 0.85;
+  }
+}
+
+.home-provenance__header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 44rem;
+}
+
+.home-provenance__overline {
+  margin: 0;
+}
+
+/* Two-tone display heading: the first line in the ink, the second in the
+   brand gradient. One `<h2>`, so the page's outline still reads one heading
+   for the section. */
+.home-provenance__heading {
+  margin: 0;
+  font-family: var(--firm-serif);
+  font-size: clamp(1.75rem, 4.5vw, 2.75rem);
+  font-weight: 600;
+  line-height: 1.1;
+  text-wrap: balance;
+}
+
+.home-provenance__heading-accent {
+  display: block;
+  font-weight: 400;
+  background: linear-gradient(
+    90deg,
+    var(--home-provenance-fill) 0%,
+    var(--home-provenance-fill-strong) 60%,
+    var(--home-provenance-fill) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: home-provenance-sheen 9s ease-in-out infinite;
+}
+
+@keyframes home-provenance-sheen {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.home-provenance__lead {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: var(--home-provenance-muted);
+  text-wrap: pretty;
+}
+
+/* The flow and the ledger, side by side where there is room. */
+.home-provenance__grid {
+  display: grid;
+  gap: clamp(1.5rem, 4vw, 2.5rem);
+}
+
+@media (min-width: 56rem) {
+  .home-provenance__grid {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+/* -- The flow -- */
+
+/* Three nodes on a rail. On a phone the rail runs down the left edge and the
+   nodes stack; from 40rem up it turns and runs across the top. The rail is a
+   pseudo-element that draws itself in — `scale` from nothing along its own
+   axis — so the eye is led from the request to the chain in order. */
+.home-provenance__steps {
+  --home-provenance-node: 3rem;
+
+  position: relative;
+  display: grid;
+  gap: 1.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.home-provenance__steps::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset-block: calc(var(--home-provenance-node) / 2) calc(var(--home-provenance-node) / 2);
+  inset-inline-start: calc(var(--home-provenance-node) / 2 - 1px);
+  inline-size: 2px;
+  background: linear-gradient(
+    180deg,
+    var(--home-provenance-rail),
+    var(--home-provenance-fill) 60%,
+    var(--home-provenance-fill-strong)
+  );
+  transform-origin: top;
+  animation: home-provenance-rail-draw 1400ms var(--home-provenance-ease) 200ms backwards;
+}
+
+@keyframes home-provenance-rail-draw {
+  from {
+    transform: scaleY(0);
+  }
+
+  to {
+    transform: scaleY(1);
+  }
+}
+
+.home-provenance__step {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: var(--home-provenance-node) minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 1rem;
+  row-gap: 0.25rem;
+  align-items: start;
+  animation: home-provenance-step-in 700ms var(--home-provenance-ease) backwards;
+  animation-delay: calc(350ms + var(--home-provenance-index, 0) * 320ms);
+}
+
+@keyframes home-provenance-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* The node: a ring on the rail holding the glyph. The card's own background
+   sits behind it so the rail does not show through the ring. */
+.home-provenance__mark {
+  grid-row: 1 / span 2;
+  position: relative;
+  display: grid;
+  place-items: center;
+  inline-size: var(--home-provenance-node);
+  block-size: var(--home-provenance-node);
+  border: 1.5px solid var(--home-provenance-rail);
+  border-radius: 50%;
+  background: var(--nav-color-surface);
+  color: var(--home-provenance-ink);
+  box-shadow: 0 0 0 4px var(--home-provenance-tint);
+}
+
+.home-provenance__glyph {
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+}
+
+/* The attorney's node carries the brand: verification is the step the page is
+   about. The chain's node pulses — a ring expanding from it and fading, the
+   one continuous motion on the page — because the record is what persists. */
+.home-provenance__mark--attorney {
+  border-color: var(--home-provenance-fill);
+  color: var(--home-provenance-fill);
+}
+
+.home-provenance__mark--chain {
+  border-color: var(--home-provenance-fill);
+  background: var(--home-provenance-fill);
+  color: var(--firm-on-brand);
+}
+
+.home-provenance__mark--chain::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border: 2px solid var(--home-provenance-fill);
+  border-radius: 50%;
+  opacity: 0;
+  animation: home-provenance-pulse 2800ms ease-out 1600ms infinite;
+  pointer-events: none;
+}
+
+@keyframes home-provenance-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+
+  70%,
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+.home-provenance__step-label {
+  margin: 0;
+  align-self: center;
+  font-family: var(--firm-serif);
+  font-size: clamp(1.125rem, 2vw, 1.25rem);
+  font-weight: 600;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+.home-provenance__step-detail {
+  margin: 0;
+  line-height: 1.55;
+  color: var(--home-provenance-muted);
+  text-wrap: pretty;
+}
+
+@media (min-width: 40rem) and (max-width: 55.98rem), (min-width: 72rem) {
+  .home-provenance__steps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.25rem;
+  }
+
+  .home-provenance__steps::before {
+    inset-block: calc(var(--home-provenance-node) / 2 - 1px) auto;
+    inset-inline: calc(var(--home-provenance-node) / 2) 16.666%;
+    block-size: 2px;
+    inline-size: auto;
+    background: linear-gradient(
+      90deg,
+      var(--home-provenance-rail),
+      var(--home-provenance-fill) 60%,
+      var(--home-provenance-fill-strong)
+    );
+    transform-origin: left;
+    animation-name: home-provenance-rail-draw-across;
+  }
+
+  .home-provenance__step {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    row-gap: 0.5rem;
+  }
+
+  .home-provenance__mark {
+    grid-row: auto;
+    margin-block-end: 0.5rem;
+  }
+
+  .home-provenance__step-label {
+    align-self: start;
+  }
+}
+
+@keyframes home-provenance-rail-draw-across {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* -- The ledger -- */
+
+/* A panel of rows, each a place a request went and the record that followed.
+   The bars fill left to right in sequence and the status appears when each
+   is full: a ledger being written, which is the claim the section makes. The
+   caption under the heading says in words that it is an illustration. */
+.home-provenance__ledger {
+  margin: 0;
+  padding: clamp(1.25rem, 3vw, 1.75rem);
+  border: 1px solid var(--home-provenance-rail);
+  border-radius: calc(var(--neon-card-radius) - 0.25rem);
+  background:
+    linear-gradient(
+      160deg,
+      var(--home-provenance-tint),
+      transparent 55%
+    ),
+    var(--home-provenance-panel);
+}
+
+.home-provenance__ledger-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0 0 1.25rem;
+}
+
+.home-provenance__ledger-heading {
+  margin: 0;
+  font-family: var(--firm-serif);
+  font-size: clamp(1.125rem, 2vw, 1.25rem);
+  font-weight: 600;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+.home-provenance__ledger-note {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--home-provenance-muted);
+  text-wrap: pretty;
+}
+
+.home-provenance__rows {
+  display: grid;
+  gap: 0.85rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: home-provenance-row;
+}
+
+.home-provenance__row {
+  --home-provenance-row-delay: calc(900ms + var(--home-provenance-index, 0) * 520ms);
+
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "label status"
+    "bar bar";
+  column-gap: 0.75rem;
+  row-gap: 0.4rem;
+  align-items: center;
+  counter-increment: home-provenance-row;
+}
+
+.home-provenance__row-label {
+  grid-area: label;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+
+/* The row number, so the panel reads as a ledger rather than a list. */
+.home-provenance__row-label::before {
+  content: counter(home-provenance-row) " ";
+  font-variant-numeric: tabular-nums;
+  color: var(--home-provenance-fill);
+}
+
+/* The bar: a track with a fill that scales in from the left. */
+.home-provenance__bar {
+  grid-area: bar;
+  position: relative;
+  display: block;
+  block-size: 0.5rem;
+  border-radius: 999px;
+  background: var(--home-provenance-tint);
+  overflow: hidden;
+}
+
+.home-provenance__bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    var(--home-provenance-fill),
+    var(--home-provenance-fill-strong)
+  );
+  transform-origin: left;
+  animation: home-provenance-bar-fill 1100ms var(--home-provenance-ease) var(--home-provenance-row-delay) backwards;
+}
+
+@keyframes home-provenance-bar-fill {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* The status chip lands as the bar completes. */
+.home-provenance__status {
+  grid-area: status;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--home-provenance-fill);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--home-provenance-fill);
+  background: var(--nav-color-surface);
+  animation: home-provenance-status-in 500ms var(--home-provenance-ease) calc(var(--home-provenance-row-delay) + 900ms) backwards;
+}
+
+.home-provenance__status::before {
+  content: "";
+  inline-size: 0.45rem;
+  block-size: 0.45rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+@keyframes home-provenance-status-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.35rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* -- The tiles -- */
+
+.home-provenance__pillars {
+  display: grid;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 48rem) {
+  .home-provenance__pillars {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* A tile with a brand hairline along its top edge that brightens on hover.
+   The tiles rise in after the flow has drawn. */
+.home-provenance__pillar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.25rem 1.25rem 1.25rem;
+  border: 1px solid var(--home-provenance-rail);
+  border-radius: calc(var(--neon-card-radius) - 0.25rem);
+  background: var(--home-provenance-panel);
+  transition: border-color 240ms ease, transform 240ms var(--home-provenance-ease);
+  animation: home-provenance-step-in 700ms var(--home-provenance-ease) backwards;
+  animation-delay: calc(1200ms + var(--home-provenance-index, 0) * 160ms);
+}
+
+.home-provenance__pillar::before {
+  content: "";
+  position: absolute;
+  inset-block-start: -1px;
+  inset-inline: 1.25rem;
+  block-size: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--home-provenance-fill), transparent);
+  opacity: 0.8;
+  transition: opacity 240ms ease, inset-inline 320ms var(--home-provenance-ease);
+}
+
+.home-provenance__pillar:hover {
+  border-color: var(--home-provenance-fill);
+  transform: translateY(-2px);
+}
+
+.home-provenance__pillar:hover::before {
+  inset-inline: 0.5rem;
+  opacity: 1;
+}
+
+.home-provenance__pillar-heading {
+  margin: 0;
+  font-family: var(--firm-serif);
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.home-provenance__pillar-body {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--home-provenance-muted);
+  text-wrap: pretty;
+}
+
+/* -- The notes -- */
+
+.home-provenance__notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding-block-start: 1.25rem;
+  border-block-start: 1px solid var(--home-provenance-rail);
+}
+
+.home-provenance__note {
+  margin: 0;
+  max-width: 68ch;
+  line-height: 1.6;
+  color: var(--home-provenance-ink);
+  text-wrap: pretty;
+}
+
+.home-provenance__note strong {
+  font-weight: 600;
+}
+
+/* Everything above is decoration. With motion reduced, each element sits at
+   its final frame: the rail drawn, the bars full, the chips shown, the glow
+   still, and the chain's ring gone. */
+@media (prefers-reduced-motion: reduce) {
+  .home-provenance__glow,
+  .home-provenance__heading-accent,
+  .home-provenance__steps::before,
+  .home-provenance__step,
+  .home-provenance__bar::before,
+  .home-provenance__status,
+  .home-provenance__pillar {
+    animation: none;
+  }
+
+  .home-provenance__mark--chain::after {
+    display: none;
+  }
+
+  .home-provenance__pillar,
+  .home-provenance__pillar::before {
+    transition-duration: 1ms;
+  }
+
+  .home-provenance__pillar:hover {
+    transform: none;
+  }
+}
+
+/* ---- The bare holding page ---------------------------------------------- */
+
+/* A house brand that is a bare legal notice rather than an active marketing
+   site (Lawyer Shook): no hero, no CTA, no practice grid — just a title and
+   a short statement, centred in the same column the rest of this page uses.
+   `PublicShell` is not in the tree here (there is no header or footer to
+   wrap), so this owns its own top padding instead of inheriting the shell's.
+   The heading deliberately does not set its own `font-family`: unlike
+   `--firm-serif` above (the display face), inheriting `body`'s `--nav-font-family`
+   from `theme.css` is what actually picks up the resolved brand's own
+   typeface — Tinos for Lawyer Shook. */
+.holding-page {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: clamp(4rem, 12vw, 8rem) 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.holding-page__heading {
+  margin: 0;
+  font-size: clamp(2rem, 5.5vw, 3.25rem);
+  font-weight: 600;
+  line-height: 1.1;
+  text-wrap: balance;
+}
+
+.holding-page__paragraph {
+  margin: 0;
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--nav-color-text-muted);
+  text-wrap: pretty;
+}
+
+.holding-page__link {
+  color: var(--firm-brand-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+}
+
+/* Independent company counsel. GORP and the brand tokens carry the identity. */
+.public-shell:has(.company-home) .public-shell__main {
+  width: min(100%, 80rem);
+  padding: 0 3rem;
+}
+
+.company-home {
+  --company-line: var(--nav-color-border);
+  --company-accent: var(--nav-color-primary);
+}
+
+.company-home h1, .company-home h2, .company-home h3, .company-price {
+  font-family: var(--nav-font-family);
+  font-weight: 400;
+  letter-spacing: -.045em;
+}
+
+.company-home h2 {
+  font-size: clamp(2.3rem, 4vw, 3.8rem);
+  line-height: 1.1;
+  margin: 0 0 1.5rem;
+  text-wrap: balance;
+}
+
+.company-home h3 {
+  font-size: 1.5rem;
+  line-height: 1.25;
+  margin: 1rem 0;
+}
+
+.company-home p {
+  line-height: 1.65;
+}
+
+.company-hero {
+  padding: clamp(5rem, 10vw, 9rem) 0 7rem;
+  max-width: 62rem;
+}
+
+.company-hero h1 {
+  font-size: clamp(4rem, 9vw, 8rem);
+  line-height: .98;
+  margin: 2rem 0;
+  max-width: 10ch;
+}
+
+.company-hero__lead {
+  font-size: clamp(1.2rem, 2vw, 1.6rem);
+  max-width: 32rem;
+  margin: 0 0 2.5rem;
+}
+
+.company-actions {
+  display: flex;
+  align-items: center;
+  gap: 1.6rem;
+  flex-wrap: wrap;
+}
+
+.company-home .nav-btn {
+  border-radius: 2px;
+  padding: 1rem 1.4rem;
+}
+
+.nav-theme .company-home a.company-text-link {
+  color: var(--nav-color-text);
+  text-decoration: underline;
+  text-underline-offset: .35em;
+}
+
+.nav-theme .company-home a.company-text-link:hover {
+  color: var(--company-accent);
+}
+
+.deal-exhibition {
+  position: relative;
+  margin: 0 0 6rem;
+}
+
+.deal-exhibition__scene {
+  position: relative;
+  height: 410px;
+  overflow: hidden;
+  isolation: isolate;
+  background: color-mix(in oklab, var(--company-accent) 9%, var(--nav-color-surface));
+  border: 1px solid var(--company-line);
+}
+
+.deal-exhibition__grid {
+  position: absolute;
+  inset: -80%;
+  opacity: 0.4;
+  background-image: linear-gradient(var(--firm-brand-edge) 1px, transparent 1px), linear-gradient(90deg, var(--firm-brand-edge) 1px, transparent 1px);
+  background-size: 54px 54px;
+  transform: perspective(800px) rotateX(58deg) rotateZ(-14deg);
+}
+
+.deal-exhibition__belt {
+  position: absolute;
+  width: 150%;
+  left: -25%;
+  height: 76px;
+  transform: rotate(-7deg);
+  background: repeating-linear-gradient(90deg, var(--firm-brand-edge) 0 1px, transparent 1px 19px);
+  border-block: 1px solid var(--company-accent);
+}
+
+.deal-exhibition__belt--back { top: 155px; opacity: 0.3; }
+.deal-exhibition__belt--front { top: 287px; height: 55px; background-color: color-mix(in oklab, var(--company-accent) 7%, var(--nav-color-surface)); box-shadow: 0 17px 0 var(--firm-brand-tint), 0 18px 0 var(--firm-brand-edge); }
+
+.deal-exhibition__track {
+  display: flex;
+  gap: 86px;
+  width: max-content;
+  position: absolute;
+  left: 0;
+  top: 175px;
+  transform-origin: 0 0;
+}
+
+.deal-package {
+  position: relative;
+  width: 190px;
+  height: 185px;
+  flex: 0 0 190px;
+  transform: rotate(7deg);
+  filter: drop-shadow(15px 22px 10px color-mix(in oklab, var(--nav-color-text) 8%, transparent));
+}
+
+.deal-package__face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 20px;
+  border: 1px solid var(--company-accent);
+  background: var(--nav-color-surface);
+  box-sizing: border-box;
+}
+
+.deal-package:nth-child(3n + 1) .deal-package__face { background: var(--company-accent); color: var(--nav-color-on-brand); }
+
+.deal-package__top {
+  position: absolute;
+  top: -25px;
+  left: 0;
+  width: 100%;
+  height: 25px;
+  transform: skewX(-48deg);
+  transform-origin: bottom;
+  background: color-mix(in oklab, var(--company-accent) 25%, var(--nav-color-surface));
+  border: 1px solid var(--company-accent);
+  box-sizing: border-box;
+}
+
+.deal-package__side {
+  position: absolute;
+  top: 0;
+  right: -28px;
+  width: 28px;
+  height: 100%;
+  transform: skewY(-42deg);
+  transform-origin: left;
+  background: color-mix(in oklab, var(--company-accent) 18%, var(--nav-color-surface));
+  border: 1px solid var(--company-accent);
+  box-sizing: border-box;
+}
+
+.deal-package strong {
+  margin-top: 22px;
+  font: 700 1.6rem/1.1 var(--nav-font-family);
+  letter-spacing: -0.045em;
+}
+
+.deal-package__lines {
+  width: 48px;
+  height: 15px;
+  margin-top: 15px;
+  background: repeating-linear-gradient(0deg, currentColor 0 1px, transparent 1px 5px);
+  opacity: 0.4;
+}
+
+.deal-package__seal {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  padding: 7px 5px;
+}
+
+.deal-package__seal img {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.deal-exhibition__scanner {
+  position: absolute;
+  left: 57%;
+  top: 35px;
+  width: 115px;
+  height: 300px;
+  border: 2px solid var(--company-accent);
+  border-radius: 48% 48% 0 0;
+  box-shadow: 10px -5px 0 var(--firm-brand-edge);
+  pointer-events: none;
+}
+
+.deal-exhibition__scanner span:first-child {
+  position: absolute;
+  left: 50%;
+  top: 8%;
+  bottom: 0;
+  width: 1px;
+  background: var(--company-accent);
+  box-shadow: 0 0 25px 9px var(--firm-brand-glow);
+}
+
+.deal-exhibition__scanner span:last-child {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  top: 8px;
+  left: 50%;
+  border-radius: 50%;
+  background: var(--company-accent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .deal-exhibition__track { animation: deal-conveyor 21s linear infinite; }
+  .deal-exhibition__scanner span:first-child { animation: deal-scan 3s ease-in-out infinite; }
+}
+
+@keyframes deal-conveyor {
+  from { transform: rotate(-7deg) translateX(0); }
+  to { transform: rotate(-7deg) translateX(-828px); }
+}
+
+@keyframes deal-scan {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.85; }
+}
+
+.company-principles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-top: 1px solid var(--company-line);
+  padding: 2.5rem 0 6rem;
+  gap: 3rem;
+}
+
+.company-principles h2 {
+  font-size: 1.7rem;
+  margin: 1.5rem 0 1rem;
+}
+
+.company-principles p, .company-services p {
+  color: var(--nav-color-text-muted);
+}
+
+.company-experience {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5rem;
+  align-items: center;
+  padding: 5rem 0 8rem;
+}
+
+.company-experience .home-service {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.company-experience .home-service::before, .company-experience .home-service::after {
+  content: none;
+}
+
+.company-experience .home-service__paragraph {
+  font-size: 1rem;
+}
+
+.company-services__intro {
+  max-width: 42rem;
+  margin: 0 0 2.5rem;
+}
+
+.company-services__intro p {
+  color: var(--nav-color-text-muted);
+}
+
+.company-video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  object-fit: contain;
+}
+
+.company-pricing {
+  padding: 4rem 3rem;
+  margin: 0 -3rem 7rem;
+  background: color-mix(in oklab, var(--company-accent) 12%, var(--nav-color-surface));
+}
+
+.company-pricing__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 3rem 0 2rem;
+}
+
+.company-pricing__grid article {
+  padding: 0 2rem;
+  border-left: 1px solid var(--company-line);
+}
+
+.company-pricing__grid article:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.company-pricing__grid article:last-child {
+  padding-right: 0;
+}
+
+.company-home .company-price {
+  font-size: clamp(3rem, 5vw, 4.6rem);
+  line-height: 1;
+  margin: 2rem 0 1.5rem;
+  white-space: nowrap;
+}
+
+.company-price .company-price__prefix {
+  display: block;
+  font-size: .8rem;
+  letter-spacing: 0;
+  margin-bottom: .5rem;
+}
+
+.company-price span {
+  display: block;
+  font-size: .8rem;
+  letter-spacing: 0;
+  margin-top: .75rem;
+}
+
+.company-membership ul {
+  padding-left: 1rem;
+  font-size: .9rem;
+  line-height: 1.8;
+}
+
+.company-note, .company-pricing__terms {
+  font-size: .8rem;
+  color: var(--nav-color-text-muted);
+  line-height: 1.6;
+  max-width: 65rem;
+}
+
+.company-pricing__terms {
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--company-line);
+}
+
+.company-services {
+  padding-bottom: 6rem;
+}
+
+.company-services > h2 {
+  max-width: 14ch;
+}
+
+.company-services__grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0 4rem;
+  margin-top: 3rem;
+}
+
+.company-services article {
+  border-top: 1px solid var(--company-line);
+  padding: 2rem 0;
+}
+
+.company-services article h3 {
+  margin-top: .5rem;
+}
+
+.company-litigation {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  gap: 5rem;
+  border-block: 1px solid var(--company-line);
+  padding: 3.5rem 0;
+}
+
+.company-litigation .company-text-link {
+  display: inline-block;
+  margin-top: 1rem;
+}
+
+.company-navigator {
+  display: grid;
+  grid-template-columns: 1fr 1.1fr;
+  gap: 6rem;
+  align-items: center;
+  padding: 8rem 0;
+}
+
+.company-engineering {
+  min-height: 24rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 0;
+  padding-bottom: 1.5rem;
+  border: 1px solid var(--company-line);
+  background: color-mix(in oklab, var(--company-accent) 6%, var(--nav-color-surface));
+}
+
+.company-network {
+  position: relative;
+  width: min(100%, 340px);
+  aspect-ratio: 1;
+}
+
+.company-network__orbit {
+  position: absolute;
+  inset: 7.35%;
+  border: 1px solid var(--firm-brand-edge);
+  border-radius: 50%;
+}
+
+.company-network__orbit::after {
+  content: '';
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  left: calc(50% - 4px);
+  top: -4px;
+  background: var(--company-accent);
+  border-radius: 50%;
+}
+
+.company-network__orbit--inner {
+  inset: 22%;
+}
+
+.company-network__center {
+  position: absolute;
+  width: 47%;
+  height: auto;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .company-network__orbit {
+    animation: deal-orbit 18s linear infinite;
+  }
+  .company-network__orbit--inner {
+    animation-direction: reverse;
+    animation-duration: 12s;
+  }
+}
+
+@keyframes deal-orbit {
+  to { rotate: 360deg; }
+}
+
+.company-source {
+  margin-top: 2rem;
+}
+
+.company-community {
+  display: grid;
+  grid-template-columns: 1fr 1.1fr;
+  gap: 6rem;
+  border-top: 1px solid var(--company-line);
+  padding: 5rem 0;
+}
+
+.company-community p {
+  margin-top: 0;
+}
+
+.company-library {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4rem;
+  align-items: center;
+  padding: 5rem 0;
+}
+
+.company-library__folios {
+  height: 22rem;
+  position: relative;
+}
+
+.company-folio {
+  position: absolute;
+  width: 48%;
+  height: 16rem;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  border: 1px solid var(--company-line);
+  background: var(--nav-color-surface);
+  color: var(--nav-color-text);
+  box-shadow: 0 1rem 2rem #0000000a;
+}
+
+.company-folio:first-child {
+  left: 2%;
+  top: 3rem;
+  transform: rotate(-12deg);
+}
+
+.company-folio:nth-child(2) {
+  left: 24%;
+  top: 1rem;
+  transform: rotate(-2deg);
+}
+
+.company-folio:last-child {
+  right: 0;
+  top: 4rem;
+  transform: rotate(9deg);
+  background: var(--company-accent);
+  color: var(--nav-color-on-brand);
+}
+
+.company-folio strong {
+  font-size: 1.4rem;
+  font-weight: 400;
+}
+
+.company-folio__lines {
+  height: 2.5rem;
+  opacity: .3;
+  background: repeating-linear-gradient(transparent 0 11px, currentColor 11px 12px);
+}
+
+.company-closing {
+  padding: 6rem 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 2rem;
+}
+
+.company-closing h2 span {
+  display: block;
+}
+
+@media (max-width: 760px) {
+  .deal-exhibition {
+    margin-bottom: 3rem;
+  }
+  .deal-exhibition__scene {
+    height: 330px;
+  }
+  .deal-exhibition__track {
+    top: 145px;
+  }
+  .deal-exhibition__belt--back {
+    top: 155px;
+  }
+  .deal-exhibition__belt--front {
+    top: 260px;
+  }
+  .deal-exhibition__scanner {
+    top: 30px;
+    height: 260px;
+  }
+  .public-shell:has(.company-home) .public-shell__main {
+    padding-inline: 1.25rem;
+  }
+  .company-hero {
+    padding: 4rem 0;
+  }
+  .company-principles, .company-experience, .company-pricing__grid, .company-litigation, .company-navigator, .company-community, .company-library {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+  .company-principles, .company-experience, .company-services {
+    padding-bottom: 4rem;
+  }
+  .company-pricing {
+    padding: 3rem 1.25rem;
+    margin: 0 -1.25rem 4rem;
+  }
+  .company-pricing__grid article {
+    border-left: 0;
+    border-top: 1px solid var(--company-line);
+    padding: 1rem 0 0;
+  }
+  .company-navigator, .company-community, .company-library {
+    padding: 3rem 0;
+  }
+  .company-services__grid {
+    grid-template-columns: 1fr;
+  }
+  .company-engineering {
+    min-height: 20rem;
+  }
+  .company-library__folios {
+    margin-right: 1rem;
+  }
+  .company-folio {
+    padding: 1rem;
+  }
+  .company-closing {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 4rem 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html:has(.company-home) {
+    scroll-behavior: smooth;
+  }
+}
+
+/* Trust deposit allocation: controls work without client-side JavaScript. */
+.company-simulator {
+  margin: 3rem 0 0;
+  padding: 3rem 0 0;
+  border-top: 1px solid var(--company-line);
+}
+.company-simulator__body {
+  margin: -.5rem 0 1.5rem;
+}
+.company-simulator fieldset {
+  min-width: 0;
+  margin: 0 0 1.25rem;
+  padding: 0;
+  border: 0;
+}
+.company-simulator legend {
+  margin-bottom: .55rem;
+  font-size: .8rem;
+  font-weight: 600;
+}
+.company-simulator__hint {
+  margin: -.25rem 0 .7rem;
+  color: var(--nav-color-text-muted);
+  font-size: .75rem;
+}
+.company-simulator__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+.company-simulator__option {
+  position: relative;
+  display: inline-flex;
+  min-height: 2.6rem;
+  align-items: center;
+  padding: .55rem .8rem;
+  border: 1px solid var(--company-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--nav-color-text);
+  font: 600 .8rem var(--nav-font-family);
+  cursor: pointer;
+}
+.company-simulator__radio {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  margin: 0;
+  opacity: 0;
+}
+.company-simulator__option:hover, .company-simulator__option:has(input:checked) {
+  border-color: var(--company-accent);
+  background: color-mix(in srgb, var(--company-accent) 12%, var(--nav-color-surface));
+}
+.company-simulator__option:has(input:checked) {
+  box-shadow: inset 0 0 0 1px var(--company-accent);
+}
+.company-simulator__option:has(input:focus-visible) {
+  outline: 2px solid var(--company-accent);
+  outline-offset: 3px;
+}
+.company-simulator__scenario {
+  display: none;
+  margin: 1.5rem 0 1rem;
+}
+.company-simulator:has(#company-plan-days-10:checked):has(#company-review-count-0:checked) .company-simulator__summary-case--10-0,
+.company-simulator:has(#company-plan-days-10:checked):has(#company-review-count-1:checked) .company-simulator__summary-case--10-1,
+.company-simulator:has(#company-plan-days-30:checked):has(#company-review-count-0:checked) .company-simulator__summary-case--30-0,
+.company-simulator:has(#company-plan-days-30:checked):has(#company-review-count-1:checked) .company-simulator__summary-case--30-1 {
+  display: block;
+}
+.company-simulator__summary-case {
+  margin: 0 0 1rem;
+}
+.company-simulator__summary-case > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .75rem;
+  align-items: center;
+  padding: .75rem 0;
+  border-bottom: 1px solid var(--company-line);
+}
+.company-simulator__summary-case dt {
+  font-size: .8rem;
+}
+.company-simulator__summary-case dd {
+  margin: 0;
+  text-align: right;
+  font-size: .9rem;
+  font-variant-numeric: tabular-nums;
+}
+.company-simulator__summary-case dd span {
+  display: block;
+  margin-top: .2rem;
+  color: var(--nav-color-text-muted);
+  font-size: .7rem;
+}
+.company-simulator__allocation {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  margin: 1.25rem 0;
+}
+.company-simulator__chart {
+  position: relative;
+  display: grid;
+  flex: 0 0 7rem;
+  place-items: center;
+  inline-size: 7rem;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: conic-gradient(var(--company-accent) 0 var(--earned-share), var(--company-line) var(--earned-share) 100%);
+}
+.company-simulator__chart::before {
+  position: absolute;
+  inset: 19%;
+  border-radius: 50%;
+  background: var(--nav-color-surface);
+  content: '';
+}
+.company-simulator__chart-center {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  text-align: center;
+  line-height: 1.1;
+}
+.company-simulator__chart-center strong {
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+.company-simulator__chart-center span {
+  margin-top: .2rem;
+  color: var(--nav-color-text-muted);
+  font-size: .65rem;
+}
+.company-simulator__legend {
+  display: grid;
+  flex: 1;
+  gap: .7rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.company-simulator__legend li {
+  display: grid;
+  grid-template-columns: .65rem minmax(0, 1fr) auto;
+  gap: .45rem;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  font-size: .74rem;
+}
+.company-simulator__legend li::before {
+  content: none;
+}
+.company-simulator__legend strong {
+  font-size: .8rem;
+  font-variant-numeric: tabular-nums;
+}
+.company-simulator__swatch {
+  inline-size: .65rem;
+  block-size: .65rem;
+  border-radius: 50%;
+  background: var(--company-accent);
+}
+.company-simulator__swatch--trust {
+  background: var(--company-line);
+}
+
+@property --trust-earned-progress {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: 0%;
+}
+.company-simulator__chart {
+  --trust-earned-progress: var(--earned-share);
+  background: conic-gradient(var(--company-accent) 0 var(--trust-earned-progress), var(--company-line) var(--trust-earned-progress) 100%);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .company-simulator__chart {
+    animation: trust-allocation 900ms ease-out both;
+  }
+}
+@keyframes trust-allocation {
+  from { --trust-earned-progress: 0%; }
+  to { --trust-earned-progress: var(--earned-share); }
+}
+@media (max-width: 480px) {
+  .company-simulator__allocation { flex-direction: column; align-items: stretch; }
+  .company-simulator__chart { align-self: center; }
+  .company-simulator__summary-case > div { grid-template-columns: 1fr; gap: .25rem; }
+  .company-simulator__summary-case dd { text-align: left; }
+}
+
+/* Debt relief: a clear introduction beside the first-conversation guide. */
+.debt-home {
+  padding-block: clamp(2rem, 6vw, 5rem);
+}
+
+.debt-home__intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  align-items: start;
+  gap: clamp(2rem, 5vw, 5rem);
+  padding-bottom: 3rem;
+  border-bottom: 1px solid var(--nav-color-border);
+}
+
+.debt-home .home-statement {
+  padding-block: 1rem;
+}
+
+.debt-home .home-statement__heading {
+  max-width: 10ch;
+  font-family: var(--nav-font-family);
+  font-size: clamp(3rem, 6vw, 5.5rem);
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  color: var(--nav-color-primary);
+}
+
+.debt-home .home-statement__lead {
+  font-size: 1.125rem;
+  max-width: 40ch;
+}
+
+.debt-home__conversation {
+  padding: clamp(1.5rem, 3vw, 2.5rem);
+  border: 1px solid var(--nav-color-border);
+  border-top: 0.3rem solid var(--nav-color-primary);
+  border-radius: 0.75rem;
+  background: var(--nav-color-surface);
+}
+
+.debt-home__conversation .home-service {
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+
+@media (max-width: 52rem) {
+  .debt-home__intro {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.debt-home__conversation .home-service::before,
+.debt-home__conversation .home-service::after {
+  display: none;
+}

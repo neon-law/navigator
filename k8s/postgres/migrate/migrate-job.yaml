@@ -1,0 +1,92 @@
+# Apply the application's PostgreSQL migrations before `web` rolls.
+#
+# It runs the migration entrypoint from the same release image `web` runs,
+# connected as the `navigator_owner` migration login with verify-full TLS. The
+# image is the placeholder `navigator-migrate`; the operator pins it to the
+# release being rolled (see docs/postgres-kubernetes.md). A failed migration
+# is not retried: it needs a person.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: navigator-migrate
+  labels:
+    app: navigator-migrate
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app: navigator-migrate
+        navigator.neonlaw.org/postgres-client: "true"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: navigator-migrate # pin-exempt: placeholder the operator replaces with the release image
+          imagePullPolicy: IfNotPresent
+          # The one place the migration command lives.
+          command:
+            - /app/navigator-migrate
+          env:
+            - name: NAVIGATOR_POSTGRES_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: host
+            - name: NAVIGATOR_POSTGRES_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: port
+            - name: NAVIGATOR_POSTGRES_DATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: database
+            - name: NAVIGATOR_POSTGRES_SSLMODE
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: sslmode
+            - name: NAVIGATOR_POSTGRES_ROOT_CERT
+              value: /etc/navigator/postgres/ca.crt
+            - name: NAVIGATOR_POSTGRES_USER
+              value: navigator_owner
+            - name: NAVIGATOR_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-postgres-migrator
+                  key: password
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: ca
+              mountPath: /etc/navigator/postgres
+              readOnly: true
+      volumes:
+        - name: ca
+          secret:
+            secretName: navigator-postgres-migrator
+            items:
+              - key: ca.crt
+                path: ca.crt
+            defaultMode: 0444

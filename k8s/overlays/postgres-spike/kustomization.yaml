@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: navigator
+resources:
+  - postgres.yaml
+images:
+  - name: neon-law-postgres
+    newName: ghcr.io/neon-law-source-code/neon-law-postgres
+    digest: sha256:4cc70fee3aa9e53455bd1612d0a5be1f06962f5bcdcda4c6bff47e2b46db969e

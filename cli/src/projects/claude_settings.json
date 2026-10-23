@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "deny": [
+      "mcp__*__send_message",
+      "mcp__*__send_draft",
+      "mcp__*__reply",
+      "mcp__*__forward",
+      "mcp__codex_apps__gmail_send*",
+      "mcp__codex_apps__gmail_reply*",
+      "mcp__codex_apps__gmail_forward*"
+    ]
+  }
+}

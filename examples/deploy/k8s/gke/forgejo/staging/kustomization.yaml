@@ -1,0 +1,39 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: navigator
+resources:
+  - ../../../../../../k8s/forgejo
+  - ../../../../../../k8s/forgejo/database
+configMapGenerator:
+  - name: navigator-forgejo-oidc
+    literals:
+      - name=YOUR_FORGEJO_OIDC_NAME
+      - discovery_url=YOUR_FORGEJO_OIDC_DISCOVERY_URL
+    options:
+      disableNameSuffixHash: true
+  - name: navigator-forgejo-admission
+    literals:
+      - email_domain_allowlist=YOUR_FORGEJO_ADMISSION_DOMAINS
+    options:
+      disableNameSuffixHash: true
+patches:
+  - target:
+      kind: StatefulSet
+      name: navigator-forgejo
+    patch: |-
+      - op: add
+        path: /spec/volumeClaimTemplates/0/spec/storageClassName
+        value: navigator-postgres-retain
+  # The shared GKE Ingress (`ingress/ingress.yaml` in the application
+  # overlay) routes the Forgejo host here. A ClusterIP Service is only a
+  # valid GCE Ingress backend as a NEG; its health check comes from the
+  # `navigator-forgejo` BackendConfig beside that Ingress.
+  - target:
+      kind: Service
+      name: navigator-forgejo
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          cloud.google.com/backend-config: '{"default": "navigator-forgejo"}'
+          cloud.google.com/neg: '{"ingress": true}'

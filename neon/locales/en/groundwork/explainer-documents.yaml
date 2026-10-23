@@ -1,0 +1,54 @@
+head_title: "{site_name} | Preparing for a property dispute"
+meta_description: >-
+  Preparing for a property dispute. A plain-language explainer from {site_name}. General information;
+  individual advice requires an engagement.
+title: "Preparing for a property dispute"
+tagline: Plain-language explainers
+hero_lines:
+  - text: "Preparing for a property dispute"
+    accent_words: 0
+hero_lead: >-
+  A useful first review begins with the documents and a clear timeline. Identify the property, the people
+  involved, and what you want to resolve.
+hero_cta:
+  href: "https://calendar.notion.so/meet/nick-shook/or15n4yy7"
+  label: Request a conversation
+skin: practice
+bands:
+  - kind: steps
+    anchor: guide
+    overline: Getting oriented
+    heading: Read the guide
+    items:
+      - title: "Organize the documents"
+        body:
+          - - text: >-
+                Keep the deed, survey, lease, purchase agreement, relevant notices, and correspondence together
+                where applicable. Preserve originals and record which version of an agreement each person signed.
+      - title: "Separate events from questions"
+        body:
+          - - text: >-
+                List what happened in date order and identify the source for each event. Then list the questions:
+                for example, the meaning of an access provision, a repair obligation, or a claimed boundary.
+      - title: "Flag the immediate decision"
+        body:
+          - - text: >-
+                Identify any hearing, closing, response request, or other scheduled date. A lawyer must assess the
+                documents and jurisdiction before advising on a response. A contact request does not confirm that a
+                deadline will be handled.
+  - kind: cards
+    overline: Continue reading
+    heading: More explainers
+    items:
+      - title: "Before buying or selling property"
+        href: /explainers/first-steps
+        href_label: Read the explainer
+      - title: "Reading a lease before signing"
+        href: /explainers/process
+        href_label: Read the explainer
+  - kind: statement
+    heading: About this guide
+    body:
+      - - text: >-
+            General information, not advice about your matter. We confirm jurisdiction, conflicts, scope, and
+            fees before accepting work. Attorney advertisement.
