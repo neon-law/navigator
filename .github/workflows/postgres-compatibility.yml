@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'images/postgres/**'
+      - 'scripts/postgres-image-pin.sh'
       - 'k8s/overlays/postgres-spike/**'
       - 'k8s/overlays/kind-postgres-spike/**'
       - 'store/postgres/**'
@@ -24,6 +25,7 @@ on:
     branches: [main]
     paths:
       - 'images/postgres/**'
+      - 'scripts/postgres-image-pin.sh'
       - 'k8s/overlays/postgres-spike/**'
       - 'k8s/overlays/kind-postgres-spike/**'
       - 'store/postgres/**'
@@ -56,13 +58,8 @@ jobs:
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          repository: neon-law-source-code/neon-law-postgres
-          ref: 155a38bbec5d0cfcec0035c65b0c5c79012ab223
-          path: .postgres-smoke
-      - name: Keep the test application outside Navigator's Cargo workspace
-        run: mv .postgres-smoke "$RUNNER_TEMP/postgres-smoke"
+      - name: Collect evidence outside the checkout
+        run: mkdir -p "$RUNNER_TEMP/postgres-smoke"
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: '1.98.0'
@@ -73,24 +70,21 @@ jobs:
         run: |
           kubectl kustomize k8s/overlays/postgres-spike > /tmp/postgres-spike.yaml
           image=$(awk '/^[[:space:]]*image:/ {print $2}' /tmp/postgres-spike.yaml)
-          [[ "$image" =~ ^ghcr.io/neon-law-source-code/neon-law-postgres@sha256:[a-f0-9]{64}$ ]]
+          [[ "$image" =~ ^ghcr\.io/[a-z0-9-]+/neon-law-postgres@sha256:[a-f0-9]{64}$ ]]
           echo "POSTGRES_IMAGE=$image" >> "$GITHUB_ENV"
           echo "$image" >> "$GITHUB_STEP_SUMMARY"
       - name: Build and test the included recipe
         run: |
-          for file in Containerfile LICENSE NOTICE; do
-            cmp "images/postgres/$file" "$RUNNER_TEMP/postgres-smoke/$file"
-          done
           docker build -f images/postgres/Containerfile -t neon-law-postgres:local images/postgres
-          cd "$RUNNER_TEMP/postgres-smoke"
-          bash tests/run.sh neon-law-postgres:local 2>&1 | tee navigator-recipe-smoke.log
+          cd images/postgres
+          bash tests/run.sh neon-law-postgres:local 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/navigator-recipe-smoke.log"
       - name: Anonymous pull and pinned SDK recovery smoke
-        working-directory: ${{ runner.temp }}/postgres-smoke
+        working-directory: images/postgres
         run: |
           mkdir -p /tmp/postgres-anonymous-docker
           export DOCKER_CONFIG=/tmp/postgres-anonymous-docker
           docker pull "$POSTGRES_IMAGE"
-          bash tests/run.sh "$POSTGRES_IMAGE" 2>&1 | tee navigator-smoke.log
+          bash tests/run.sh "$POSTGRES_IMAGE" 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/navigator-smoke.log"
       - name: Install pinned KIND
         run: |
           curl -fsSL https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 -o /tmp/kind
@@ -109,7 +103,7 @@ jobs:
           actual=$(kubectl -n navigator get pod postgres-spike-0 -o jsonpath='{.spec.containers[0].image}')
           [[ "$actual" == "$POSTGRES_IMAGE" ]]
           kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
-            < "$RUNNER_TEMP/postgres-smoke/tests/extensions.sql" 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/kind-extensions.log"
+            < "images/postgres/tests/extensions.sql" 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/kind-extensions.log"
           cargo test -p store postgres_schema::tests --lib
           cargo run -p store --example postgres_schema -- source-erd
           cargo run -p store --example postgres_schema -- erd
@@ -127,7 +121,7 @@ jobs:
           after=$(kubectl -n navigator get pod postgres-spike-0 -o jsonpath='{.metadata.uid}')
           [[ "$before" != "$after" ]]
           kubectl -n navigator exec -i postgres-spike-0 -- psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
-            < "$RUNNER_TEMP/postgres-smoke/tests/persistence.sql" 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/kind-persistence.log"
+            < "images/postgres/tests/persistence.sql" 2>&1 | tee "$RUNNER_TEMP/postgres-smoke/kind-persistence.log"
       - name: Journal commands and startup migration against PostgreSQL
         env:
           KUBECONFIG: /tmp/postgres-kind.config
@@ -146,9 +140,9 @@ jobs:
         env:
           KUBECONFIG: /tmp/postgres-kind.config
         run: |
-          cargo build --manifest-path "$RUNNER_TEMP/postgres-smoke/tests/dbos/Cargo.toml" --locked
+          cargo build --manifest-path images/postgres/tests/dbos/Cargo.toml --locked
           bash store/postgres/tests/integrated_recovery.sh kind-postgres-compatibility \
-            "$RUNNER_TEMP/postgres-smoke/tests/dbos/target/debug/dbos-image-smoke" 25433 \
+            "$PWD/images/postgres/tests/dbos/target/debug/dbos-image-smoke" 25433 \
             2>&1 | tee "$RUNNER_TEMP/postgres-smoke/integrated-recovery.log"
       - name: Capture Kubernetes evidence
         if: always()

@@ -2,9 +2,9 @@
 name: postgres
 description: >
   PostgreSQL is replacing SurrealDB as Navigator's store. Use this skill for the image we run
-  (`ghcr.io/neon-law-source-code/neon-law-postgres`: PostgreSQL 16.15 + Apache AGE 1.6.0 + pgvector 0.8.2), its digest
-  pin, the retained GKE StatefulSet, the local KIND overlays, and the CI gates. Trigger when the user mentions Postgres,
-  the Surreal swap, AGE, pgvector, DBOS, or `images/postgres/`; when a change edits `k8s/postgres/`,
+  (`ghcr.io/neon-law/neon-law-postgres`: PostgreSQL 16.15 + Apache AGE 1.6.0 + pgvector 0.8.2), its digest pin, the
+  retained GKE StatefulSet, the local KIND overlays, and the CI gates. Trigger when the user mentions Postgres, the
+  Surreal swap, AGE, pgvector, DBOS, or `images/postgres/`; when a change edits `k8s/postgres/`,
   `k8s/overlays/*postgres*`, or `examples/deploy/k8s/gke/postgres/`; or before designing a new table or store client.
 ---
 
@@ -22,14 +22,17 @@ importer performs no DDL. No deployment's `web` reads PostgreSQL until its `conf
 
 ## The image
 
-- **Published image:** `ghcr.io/neon-law-source-code/neon-law-postgres`, pinned by digest.
+- **Published image:** `ghcr.io/neon-law/neon-law-postgres`, built from this repository every week and pinned by digest.
 - **Digest pins (keep identical):** [`k8s/postgres/kustomization.yaml`](../../../k8s/postgres/kustomization.yaml),
   its `access/`, `backup/`, and `restore-drill/` kustomizations,
   [`k8s/forgejo/database/kustomization.yaml`](../../../k8s/forgejo/database/kustomization.yaml), and
   [`k8s/overlays/postgres-spike/kustomization.yaml`](../../../k8s/overlays/postgres-spike/kustomization.yaml).
   `cli/tests/staging_manifests.rs` fails when they drift.
-- **Recipe (build context):** [`images/postgres/`](../../../images/postgres/README.md).
-- **Upstream source:** `neon-law-source-code/neon-law-postgres` at commit `155a38bb`.
+- **Recipe, tests, and build context:** [`images/postgres/`](../../../images/postgres/README.md). This repository is the
+  image's source; `neon-law/neon-law-postgres` is superseded.
+- **Weekly publish:** [`postgres-image.yml`](../../../.github/workflows/postgres-image.yml) builds, tests, signs, and
+  publishes, then opens a pull request moving every pin with
+  [`scripts/postgres-image-pin.sh`](../../../scripts/postgres-image-pin.sh).
 - **CI gates:** [`postgres-compatibility.yml`](../../../.github/workflows/postgres-compatibility.yml) and
   [`postgres-persistence.yml`](../../../.github/workflows/postgres-persistence.yml).
 - **Retained StatefulSet (GKE):** [`docs/postgres-kubernetes.md`](../../../docs/postgres-kubernetes.md).
@@ -46,12 +49,12 @@ application dependency, not part of the image.
 
 ## Rules
 
-- **Pin by digest, in both places.** `k8s/postgres/` (the retained `navigator-postgres` StatefulSet) and
+- **Pin by digest, everywhere at once.** `k8s/postgres/` (the retained `navigator-postgres` StatefulSet) and
   `k8s/overlays/postgres-spike/` (the disposable `postgres-spike`) each carry the digest. Move them together. Never use
   a tag or `latest` in a shared environment.
-- **The recipe mirrors upstream.** `Containerfile`, `LICENSE`, and `NOTICE` under `images/postgres/` must stay
-  byte-identical to the pinned upstream commit. CI runs `cmp` on all three. To change the recipe, change upstream first,
-  then move the commit pin in the workflow and the README together.
+- **Change the recipe here.** Edit `images/postgres/` in a pull request; `postgres-image.yml` builds and smoke-tests
+  both architectures on it, and publishes on merge. Move pins only with `scripts/postgres-image-pin.sh`, never by hand
+  editing one file.
 - **No committed credentials.** The spike's `POSTGRES_PASSWORD: synthetic` is a disposable local/CI fixture. The
   retained StatefulSet reads `navigator-postgres-auth` and `navigator-postgres-tls`, which a Deployment Operator
   provisions through the environment's secret path. Clients use `sslmode=verify-full`, carry the

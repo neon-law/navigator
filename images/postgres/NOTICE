@@ -5,4 +5,4 @@ Bundled software retains its upstream licenses:
 PostgreSQL: PostgreSQL License; Apache AGE: Apache-2.0;
 pgvector: PostgreSQL License; DBOS Rust: MIT (test application only).
 Debian packages retain their distribution copyright notices.
-No Navigator source or private history is included.
+Maintained in the Navigator repository under images/postgres; no other Navigator source is included.
