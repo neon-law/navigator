@@ -6,15 +6,11 @@ isolated DocuSign attachment. Local sandbox values use a gitignored `.env`; clou
 `deployments/<name>/secrets.enc.yaml` per [`deployment-secrets.md`](deployment-secrets.md). The environment-variable
 convention is in [`third-party-integrations.md`](third-party-integrations.md). This page is the DocuSign specifics.
 
-The signature seam lives under `portal/src/`:
-[`signature.rs`](https://github.com/neon-law-source-code/navigator/blob/main/portal/src/signature.rs) (the
-`SignatureProvider` trait + the DocuSign and stub impls), JWT-grant auth in
-[`docusign_auth.rs`](https://github.com/neon-law-source-code/navigator/blob/main/portal/src/docusign_auth.rs), the
-embedded signing routes in
-[`esign_view.rs`](https://github.com/neon-law-source-code/navigator/blob/main/portal/src/esign_view.rs), and the
-completion [webhook
-source](https://github.com/neon-law-source-code/navigator/blob/main/portal/src/esignature_webhook.rs). An unconfigured
-vendor falls back to the in-process stub, so a fresh checkout boots and self-tests without a DocuSign account.
+The signature seam lives under `portal/src/`: [`signature.rs`](../portal/src/signature.rs) (the `SignatureProvider`
+trait + the DocuSign and stub impls), JWT-grant auth in [`docusign_auth.rs`](../portal/src/docusign_auth.rs), the
+embedded signing routes in [`esign_view.rs`](../portal/src/esign_view.rs), and the completion [webhook
+source](../portal/src/esignature_webhook.rs). An unconfigured vendor falls back to the in-process stub, so a fresh
+checkout boots and self-tests without a DocuSign account.
 
 ## One attachment per deployment
 
@@ -64,13 +60,13 @@ user, RSA keypair, consent, and HMAC key. Treat the shared GUID as an identifier
 ## Which templates are signed (template-agnostic send path)
 
 The send path is keyed off the notation's **template code**, not the retainer. `drive_post_questionnaire_workflow`
-([`portal::retainer_walk`](https://github.com/neon-law-source-code/navigator/blob/main/portal/src/retainer_walk.rs))
-resolves the workflow spec via `workflows::bundled_spec_yaml(code)`, rendering to the generic per-notation storage keys
-(`notations/{id}/document.pdf`, `signed-document.pdf`, `certificate-of-completion.pdf`), and resolves the captive signer
-from the questionnaire answers when present and otherwise from the notation's bound Person row. Recipients follow the
-template's `signers:` list (default `[client, firm]`) in declaration order. Adding a signed template is a template +
-spec, not a new handler — the spec just needs the retainer's shape: an `intake_persisted__*` → `lawyer_review` →
-`generate_pdf__*_pdf` → `sent_for_signature__pending` chain.
+([`portal::retainer_walk`](../portal/src/retainer_walk.rs)) resolves the workflow spec via
+`workflows::bundled_spec_yaml(code)`, rendering to the generic per-notation storage keys (`notations/{id}/document.pdf`,
+`signed-document.pdf`, `certificate-of-completion.pdf`), and resolves the captive signer from the questionnaire answers
+when present and otherwise from the notation's bound Person row. Recipients follow the template's `signers:` list
+(default `[client, firm]`) in declaration order. Adding a signed template is a template + spec, not a new handler — the
+spec just needs the retainer's shape: an `intake_persisted__*` → `lawyer_review` → `generate_pdf__*_pdf` →
+`sent_for_signature__pending` chain.
 
 Signed templates today:
 
@@ -119,10 +115,10 @@ the API Account ID, the Account Base URI, and your apps with their Integration K
 `DOCUSIGN_PRIVATE_KEY` (or register your existing public key so the key already in `.env` matches). 3. Add a **Redirect
 URI** to the app — needed only to land the one-time consent click. Use a dedicated, app-controlled path,
 `https://www.neonlaw.com/docusign/consent-callback`, kept **distinct from** the OIDC `/auth/callback`
-([`portal::oauth`](https://github.com/neon-law-source-code/navigator/blob/main/portal/src/oauth.rs)): JWT grant never
-sends an auth code back, so this URI is ceremonial and must not collide with the Google-login callback. `web` serves it
-as a small "Consent recorded" confirmation page so the operator lands on a confirmation rather than a 404. 4. From **My
-Account Information** copy the **API Account ID** → `DOCUSIGN_ACCOUNT_ID` and the **User ID** GUID → `DOCUSIGN_USER_ID`.
+([`portal::oauth`](../portal/src/oauth.rs)): JWT grant never sends an auth code back, so this URI is ceremonial and must
+not collide with the Google-login callback. `web` serves it as a small "Consent recorded" confirmation page so the
+operator lands on a confirmation rather than a 404. 4. From **My Account Information** copy the **API Account ID** →
+`DOCUSIGN_ACCOUNT_ID` and the **User ID** GUID → `DOCUSIGN_USER_ID`.
 
 5. **Grant one-time consent** — open this in a browser logged into the sandbox and click **Allow** (substitute the
 integration key + a registered redirect):
@@ -140,10 +136,9 @@ integration key + a registered redirect):
 
 ## Running the live test (Phase 0 grounding)
 
-The `#[ignore]` [sandbox
-test](https://github.com/neon-law-source-code/navigator/blob/main/server/tests/docusign_sandbox.rs) mints a JWT token,
-creates a real sandbox envelope with an anchored signature tab, and requests an embedded recipient-view URL. It
-self-skips when the env is absent, so it is safe in the default suite.
+The `#[ignore]` [sandbox test](../server/tests/docusign_sandbox.rs) mints a JWT token, creates a real sandbox envelope
+with an anchored signature tab, and requests an embedded recipient-view URL. It self-skips when the env is absent, so it
+is safe in the default suite.
 
 ```bash
 set -a && source .env && set +a
@@ -170,12 +165,11 @@ emailed link — regardless of `delivery`.
 - **`embedded`** (the default; the standalone retainer walk) — the client is a **captive** recipient: the manifest sets
   `client_user_id` (derived from the notation), so DocuSign suppresses the signing email. Because no email goes out, a
   recipient-view URL is the only door. `GET /app/notations/:id/sign` and `GET /app/lawyer/notations/:id/sign`
-  ([`portal::esign_view`](https://github.com/neon-law-source-code/navigator/blob/main/portal/src/esign_view.rs)) mint
-  one via `SignatureProvider::create_recipient_view`, which POSTs `envelopes/{id}/views/recipient` and matches the
-  recipient on the email, userName, and clientUserId triple. It **redirects the browser to it**. The ceremony runs on
-  DocuSign's own site; Navigator does not frame it. The URL expires in minutes, so it is minted fresh per request. The
-  stub returns a deterministic URL in dev/KIND. The firm path fits an in-office signing; the client path is the signer's
-  own door.
+  ([`portal::esign_view`](../portal/src/esign_view.rs)) mint one via `SignatureProvider::create_recipient_view`, which
+  POSTs `envelopes/{id}/views/recipient` and matches the recipient on the email, userName, and clientUserId triple. It
+  **redirects the browser to it**. The ceremony runs on DocuSign's own site; Navigator does not frame it. The URL
+  expires in minutes, so it is minted fresh per request. The stub returns a deterministic URL in dev/KIND. The firm path
+  fits an in-office signing; the client path is the signer's own door.
 
   The signer may never come back — they close the tab, or finish on their phone — so **nothing depends on the return
   trip**. The completion webhook below is the authoritative path; the redirect's `return_url` only decides where a
@@ -226,9 +220,8 @@ recorded on a live envelope, the matter page reads "You have signed. Awaiting th
 offering **Review and sign**.
 
 > **Production readiness gate.** The prod `DOCUSIGN_HMAC_KEY` is currently a generated placeholder (a boot invariant in
-  [`portal/src/config.rs`](https://github.com/neon-law-source-code/navigator/blob/main/portal/src/config.rs)). E-sign is
-  safe to run, but **not client-ready** until DocuSign Connect on the production account is configured with an HMAC key
-  and the matching value is set in the prod Secret.
+  [`portal/src/config.rs`](../portal/src/config.rs)). E-sign is safe to run, but **not client-ready** until DocuSign
+  Connect on the production account is configured with an HMAC key and the matching value is set in the prod Secret.
 
 ## Production cutover (Phase 2)
 
@@ -250,5 +243,4 @@ Go-Live. Configuration does not copy; set up and prove the production attachment
 ## Related
 
 - [`third-party-integrations.md`](third-party-integrations.md) — the per-deployment provider convention this follows.
-  [`.env`](https://github.com/neon-law-source-code/navigator/blob/main/.env.example) is the canonical per-variable
-  reference (JWT-grant preferred, static fallback).
+  [`.env`](../.env.example) is the canonical per-variable reference (JWT-grant preferred, static fallback).

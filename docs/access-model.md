@@ -619,8 +619,7 @@ collapsed matter path. A failed handler-level Project ACL returns `404` so unrel
 
 The schema carries `PERMISSIONS NONE`, so everything above this heading describes authorization that lives *outside* the
 database. SurrealDB is not neutral that way: every table carries a `PERMISSIONS` clause and the engine evaluates it per
-row against the authenticated session. Adopting it (#1093) therefore forced a choice, settled in
-[#1145](https://github.com/neon-law-source-code/navigator/issues/1145).
+row against the authenticated session.
 
 **Decision: authorization stays above the database.** Every Navigator process signs in to Surreal as root, and every
 table in `store/src/schema/navigator.surql` is defined with an explicit `PERMISSIONS NONE` clause. The tier and scope
