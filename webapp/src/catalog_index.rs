@@ -653,7 +653,7 @@ mod tests {
                         ..CatalogMaterial::default()
                     },
                     CatalogMaterial {
-                        href: "https://github.com/neon-law-source-code/navigator/blob/main/templates/notations/forms/united_states/nevada/state/nv__llc_formation.md".to_string(),
+                        href: "https://github.com/neon-law/navigator/blob/main/templates/notations/forms/united_states/nevada/state/nv__llc_formation.md".to_string(),
                         eyebrow: "Form · Nevada".to_string(),
                         title: "Nevada LLC Formation".to_string(),
                         summary: "Articles of organization.".to_string(),

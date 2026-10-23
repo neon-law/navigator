@@ -301,7 +301,7 @@ fn letter_marker(n: u32) -> String {
 /// out-of-sequence letter through. A quoted line that does not lead with a
 /// bold single-letter marker is a pull quote, not a subsection.
 ///
-/// [`docs/notation-authoring.md`]: https://github.com/neon-law-source-code/navigator/blob/main/docs/notation-authoring.md
+/// [`docs/notation-authoring.md`]: https://github.com/neon-law/navigator/blob/main/docs/notation-authoring.md
 fn quoted_subsection_marker(line: &str) -> Option<(u32, &str)> {
     let rest = line.trim_start().strip_prefix('>')?.trim_start();
     let rest = rest.strip_prefix("**")?;

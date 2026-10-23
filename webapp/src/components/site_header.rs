@@ -377,14 +377,14 @@ mod tests {
                     destinations: vec![SiteNavLink::new("Blog", "/blog")],
                     utility: vec![SiteNavLink::new(
                         "Source",
-                        "https://github.com/neon-law-source-code/navigator",
+                        "https://github.com/neon-law/navigator",
                     )],
                 }
             }
         }
         let out = ssr(app);
         assert!(
-            out.contains(r#"href="https://github.com/neon-law-source-code/navigator""#),
+            out.contains(r#"href="https://github.com/neon-law/navigator""#),
             "the off-site destination renders: {out}"
         );
         assert!(out.contains(r#"target="_blank""#), "opens a new tab: {out}");

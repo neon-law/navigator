@@ -1881,13 +1881,13 @@ fn NavigationShowcase() -> Element {
                  second is the ordinary one before the first refresh lands:"
             }
             GitHubStars {
-                href: "https://github.com/neon-law-source-code/navigator".to_string(),
-                repo: "neon-law-source-code/navigator".to_string(),
+                href: "https://github.com/neon-law/navigator".to_string(),
+                repo: "neon-law/navigator".to_string(),
                 stars: 1234u64,
             }
             GitHubStars {
-                href: "https://github.com/neon-law-source-code/navigator".to_string(),
-                repo: "neon-law-source-code/navigator".to_string(),
+                href: "https://github.com/neon-law/navigator".to_string(),
+                repo: "neon-law/navigator".to_string(),
             }
         }
     }
