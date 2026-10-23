@@ -9,8 +9,8 @@
 //!
 //! A host alone is not a boundary on a public forge: a host check there admits
 //! any repository on GitHub whose checkout happens to be the working directory.
-//! The organization set closes that. It includes the current and destination
-//! source organizations, plus the deployment's own
+//! The organization set closes that. It includes the source organizations —
+//! `neon-law` and the former `neon-law-source-code` — plus the deployment's own
 //! [`cloud::workspace::NAVIGATOR_GITHUB_ORG`] when configured. The source
 //! organizations come from checked-in slugs, never a caller-supplied list.
 //!
@@ -20,7 +20,8 @@
 //! command. A governance write aimed at a host nobody chose is caught by the
 //! organization half.
 //!
-//! Policy is explicit and forks by organization: see [`policy_for`].
+//! Policy is explicit and forks by organization, narrowed by live visibility:
+//! see [`policy_for`] and [`posture_for_live_visibility`].
 
 use std::collections::HashMap;
 use std::env;
@@ -51,8 +52,8 @@ struct GovernedForge {
     host: String,
     /// The organizations whose repositories this run may reconcile.
     ///
-    /// The current and destination source organizations, plus the deployment's
-    /// own organization when configured. Never a list from the caller.
+    /// The source organizations, plus the deployment's own organization when
+    /// configured. Never a list from the caller.
     organizations: Vec<String>,
 }
 
@@ -125,20 +126,25 @@ impl GovernedForge {
 }
 
 /// The one repository carrying more than [`COMMON_POLICY`].
-const NAVIGATOR_SLUG: &str = "neon-law-source-code/navigator";
-/// The destination slug is governed before transfer without changing the
-/// current repository's public policy or any repository's live visibility.
-const PRIVATE_NAVIGATOR_SLUG: &str = "neon-law/navigator";
+const NAVIGATOR_SLUG: &str = "neon-law/navigator";
+
+/// The organization Navigator lived in before it moved to `neon-law`.
+///
+/// It now holds only `navigator-ux`, which is published, so it keeps the public
+/// default. Any repository there that is still private is held to its live
+/// visibility by [`posture_for_live_visibility`], never published by this run.
+const FORMER_SOURCE_ORGANIZATION: &str = "neon-law-source-code";
 
 fn source_organizations() -> Vec<String> {
-    vec![
-        public_organization().to_string(),
-        PRIVATE_NAVIGATOR_SLUG
-            .split('/')
-            .next()
-            .expect("PRIVATE_NAVIGATOR_SLUG is an owner/name slug")
-            .to_string(),
-    ]
+    public_organizations()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+/// The organizations whose repositories default to public.
+fn public_organizations() -> [&'static str; 2] {
+    [public_organization(), FORMER_SOURCE_ORGANIZATION]
 }
 
 /// The organization Navigator itself lives in, and the one organization
@@ -157,7 +163,7 @@ fn public_organization() -> &'static str {
 /// The Homebrew tap, the one administered repository outside the merge gate.
 ///
 /// See [`TAP_POLICY`] for why a publication surface cannot carry one.
-const TAP_SLUG: &str = "neon-law-source-code/homebrew-navigator";
+const TAP_SLUG: &str = "neon-law/homebrew-navigator";
 
 const REPOSITORY_ENV: &str = "GITHUB_REPOSITORY";
 const API_BASE_ENV: &str = "NAVIGATOR_GITHUB_API_BASE";
@@ -249,10 +255,10 @@ pub(crate) const REQUIRED_CHECK: &str = "ci";
 /// job.
 const CI_WORKFLOW_PATHS: &[&str] = &[".github/workflows/ci.yml", ".github/workflows/gate.yml"];
 
-/// The merge gate every repository the Firm *develops in* carries, with the
-/// public organization's posture.
+/// The merge gate every repository the Firm *develops in* carries, with a
+/// published repository's posture.
 ///
-/// The gate half of this constant is common to both organizations; see
+/// The gate half of this constant is common to every repository; see
 /// [`CLIENT_POLICY`] for the same gate under client-confidential defaults.
 ///
 /// There is one lighter tier and one repository in it — the Homebrew tap, whose
@@ -273,10 +279,10 @@ const COMMON_POLICY: RepositoryPolicy = RepositoryPolicy {
     branch_protections: true,
 };
 
-/// The same gate, with client-confidential defaults: what a repository in the
-/// deployment's own organization carries.
+/// The same gate, with client-confidential defaults: what every repository
+/// outside the public organizations carries.
 ///
-/// The gate does not change with the organization — a client matter's source is
+/// The gate does not change with publication — a client matter's source is
 /// a repository the Firm develops in, and it is held to the same integrity rules
 /// and the same code-owner review as anything else. What changes is everything
 /// about *publication*, and the two fields that differ are the two the fork
@@ -300,16 +306,6 @@ const CLIENT_POLICY: RepositoryPolicy = RepositoryPolicy {
 const NAVIGATOR_POLICY: RepositoryPolicy = RepositoryPolicy {
     default_visibility: Visibility::Public,
     open_source_governance: true,
-    release_tags: true,
-    labels: &[],
-    assert_codeowners: true,
-    branch_protections: true,
-};
-
-/// The same release protections after the source moves into the private org.
-const PRIVATE_NAVIGATOR_POLICY: RepositoryPolicy = RepositoryPolicy {
-    default_visibility: Visibility::Private,
-    open_source_governance: false,
     release_tags: true,
     labels: &[],
     assert_codeowners: true,
@@ -349,20 +345,17 @@ const TAP_POLICY: RepositoryPolicy = RepositoryPolicy {
 /// The policy a repository is reconciled against, forked by organization first.
 ///
 /// The organization is the question that decides publication, so it is asked
-/// first: a repository in the public organization carries [`COMMON_POLICY`], and
-/// one in the deployment's own carries [`CLIENT_POLICY`]. Navigator's source
-/// slugs (before and after transfer) also carry release-tag protection, while
-/// the public tap has its own mechanical publication policy.
+/// first: a repository in a public organization carries [`COMMON_POLICY`], and
+/// one in the deployment's own carries [`CLIENT_POLICY`]. Navigator also
+/// carries release-tag protection, while the tap has its own mechanical
+/// publication policy.
 ///
-/// Splitting on the slug alone was right while one hard-coded slug was the only
-/// thing that differed. With two organizations it would answer the wrong
-/// question: it would give a client matter's repository the posture of a
-/// published one by default, which is the direction that fails badly.
+/// `neon-law` still holds private client-matter repositories while they move
+/// to Forgejo. The organization answer is not trusted for those: the reconcile
+/// narrows it against the live visibility with [`posture_for_live_visibility`].
 fn policy_for(slug: &str) -> RepositoryPolicy {
     if slug.eq_ignore_ascii_case(NAVIGATOR_SLUG) {
         NAVIGATOR_POLICY
-    } else if slug.eq_ignore_ascii_case(PRIVATE_NAVIGATOR_SLUG) {
-        PRIVATE_NAVIGATOR_POLICY
     } else if slug.eq_ignore_ascii_case(TAP_SLUG) {
         TAP_POLICY
     } else if in_public_organization(slug) {
@@ -372,11 +365,39 @@ fn policy_for(slug: &str) -> RepositoryPolicy {
     }
 }
 
-/// Whether a slug names a repository in the public organization.
+/// Whether a slug names a repository in a public organization.
 fn in_public_organization(slug: &str) -> bool {
-    slug.split('/')
-        .next()
-        .is_some_and(|owner| owner.eq_ignore_ascii_case(public_organization()))
+    slug.split('/').next().is_some_and(|owner| {
+        public_organizations()
+            .iter()
+            .any(|org| owner.eq_ignore_ascii_case(org))
+    })
+}
+
+/// The policy's publication half, narrowed to a repository that is private
+/// today.
+///
+/// An interim guard for the migration window, while client matters still sit
+/// in `neon-law` beside the published repositories. A live-private repository
+/// keeps the client-confidential posture whatever its organization's default:
+/// no push-protection payload, which a private repository without GitHub
+/// Advanced Security refuses with a 422, and no open-source governance. The
+/// gate half is untouched, and visibility itself is still never written —
+/// [`report_visibility_finding`] reports the difference against the
+/// organization's default instead.
+fn posture_for_live_visibility(
+    policy: RepositoryPolicy,
+    repository: &Repository,
+) -> RepositoryPolicy {
+    if repository.private == Some(true) {
+        RepositoryPolicy {
+            default_visibility: Visibility::Private,
+            open_source_governance: false,
+            ..policy
+        }
+    } else {
+        policy
+    }
 }
 
 /// A resolved repository inside the governed `(host, organization)` pair, with
@@ -1942,6 +1963,9 @@ async fn set_actions_access(client: &GitHubClient, home: &str) -> Result<()> {
 /// `organization` is the narrowest level that admits them; `user` admits only
 /// the owner's own repositories and `none` admits nobody.
 const ACTIONS_ACCESS_ORGANIZATION: &str = "organization";
+/// GitHub's 422 message for the Actions-access endpoint on a public repository.
+const ACCESS_POLICY_NOT_APPLICABLE: &str =
+    "Access policy only applies to internal and private repositories";
 
 fn actions_access_path(home: &str) -> String {
     format!("/repos/{home}/actions/permissions/access")
@@ -1961,6 +1985,17 @@ impl GitHubClient {
         let response = self.http.get(&url).send().await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
+        }
+        // A public home answers 422 rather than 404: the access policy applies
+        // only to internal and private repositories, because any repository may
+        // already call a public one's reusable workflows. Any other 422 is
+        // still an error.
+        if response.status() == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+            let body = response.text().await.unwrap_or_default();
+            if body.contains(ACCESS_POLICY_NOT_APPLICABLE) {
+                return Ok(None);
+            }
+            bail!("GitHub API {url} returned 422 Unprocessable Entity: {body}");
         }
         let access: ActionsAccess = parse_json(response, &url).await?;
         Ok(Some(access.access_level))
@@ -2117,6 +2152,7 @@ async fn reconcile(
     eprintln!("==> reconciling {}", client.repository);
     let repository: Repository = client.get_json(&client.repo_path("")).await?;
     report_visibility_finding(dry_run, policy, &repository);
+    let settings_policy = posture_for_live_visibility(policy, &repository);
 
     let required_check_context =
         resolve_required_check_context(policy, client, workflow_home).await?;
@@ -2166,8 +2202,8 @@ async fn reconcile(
         &review_bypass_actors,
         &required_check_context,
         create_codeowners,
-        RepositorySettings::from_live(&repository, &client.repository, policy)?
-            == desired_repository_settings(policy),
+        RepositorySettings::from_live(&repository, &client.repository, settings_policy)?
+            == desired_repository_settings(settings_policy),
         &live_rulesets,
         &labels,
     );
@@ -2213,8 +2249,10 @@ async fn reconcile(
         if matches!(action, Action::UpdateWorkflow { .. }) {
             continue;
         }
+        // Rulesets read only the gate half, which the narrowing leaves alone;
+        // the settings write must match the comparison above.
         apply(
-            policy,
+            settings_policy,
             actions_app_id,
             client,
             &ruleset_ids,
@@ -2973,7 +3011,7 @@ mod tests {
             "the tap must resolve to its own policy, not the common gate"
         );
         assert_eq!(
-            policy_for("NEON-LAW-SOURCE-CODE/Homebrew-Navigator"),
+            policy_for("NEON-LAW/Homebrew-Navigator"),
             TAP_POLICY,
             "slugs are matched case-insensitively, as they are for Navigator itself"
         );
@@ -3706,37 +3744,36 @@ mod tests {
         );
     }
 
-    /// Navigator keeps its own policy; every other repository in the public
+    /// Navigator keeps its own policy; every other repository in a public
     /// organization resolves to the common one rather than being refused.
     #[test]
     fn policy_is_navigator_only_for_navigator() {
-        assert_eq!(
-            policy_for("neon-law-source-code/navigator"),
-            NAVIGATOR_POLICY
-        );
-        assert_eq!(
-            policy_for("NEON-LAW-SOURCE-CODE/Navigator"),
-            NAVIGATOR_POLICY
-        );
-        assert_eq!(policy_for(PRIVATE_NAVIGATOR_SLUG), PRIVATE_NAVIGATOR_POLICY);
-        assert_eq!(policy_for("NEON-LAW/Navigator"), PRIVATE_NAVIGATOR_POLICY);
-        for slug in ["neon-law-source-code/other", "NEON-LAW-SOURCE-CODE/ux"] {
+        assert_eq!(policy_for("neon-law/navigator"), NAVIGATOR_POLICY);
+        assert_eq!(policy_for("NEON-LAW/Navigator"), NAVIGATOR_POLICY);
+        for slug in [
+            "neon-law/zed-navigator-lsp",
+            "NEON-LAW/Neon-Law-Postgres",
+            "neon-law-source-code/navigator-ux",
+            // The pre-transfer slug no longer names Navigator: release-tag
+            // protection follows the repository to `neon-law`.
+            "neon-law-source-code/navigator",
+        ] {
             assert_eq!(policy_for(slug), COMMON_POLICY, "{slug}");
         }
     }
 
-    /// The two organizations get different policies, and the client
+    /// The two kinds of organization get different policies, and the client
     /// organization's default is private.
     ///
     /// This is the fork the move to a public forge made necessary. The same host
-    /// now holds the repository whose whole point is to be readable by anyone
-    /// and the repository whose whole point is that it is not, so the
-    /// organization has to be the question that decides publication — and the
-    /// default has to be the safe direction, because the unsafe one publishes a
-    /// client matter.
+    /// holds the repository whose whole point is to be readable by anyone and
+    /// the repository whose whole point is that it is not, so the organization
+    /// has to be the question that decides publication — and the default has
+    /// to be the safe direction, because the unsafe one publishes a client
+    /// matter.
     #[test]
     fn the_two_organizations_get_different_policies() {
-        let public = policy_for("neon-law-source-code/some-repository");
+        let public = policy_for("neon-law/sample-transactional");
         let client = policy_for("a-deployment-org/cruller-v-prine");
 
         assert_ne!(public, client);
@@ -3753,15 +3790,20 @@ mod tests {
         assert!(client.labels.is_empty());
     }
 
-    /// Every repository in the public organization defaults to public, and
-    /// nothing outside it does.
+    /// Every repository in a public organization defaults to public, and
+    /// nothing outside them does.
     ///
     /// The case-insensitive halves matter: GitHub slugs are compared without
-    /// case, and a lookalike owner that merely *starts with* the public
+    /// case, and a lookalike owner that merely *starts with* a public
     /// organization is a different organization.
     #[test]
-    fn only_the_public_organization_defaults_to_public() {
-        for slug in [NAVIGATOR_SLUG, TAP_SLUG, "NEON-LAW-SOURCE-CODE/anything"] {
+    fn only_the_public_organizations_default_to_public() {
+        for slug in [
+            NAVIGATOR_SLUG,
+            TAP_SLUG,
+            "NEON-LAW/anything",
+            "NEON-LAW-SOURCE-CODE/navigator-ux",
+        ] {
             assert_eq!(
                 policy_for(slug).default_visibility,
                 Visibility::Public,
@@ -3769,9 +3811,9 @@ mod tests {
             );
         }
         for slug in [
-            PRIVATE_NAVIGATOR_SLUG,
             "ux/core",
             "a-deployment-org/cruller-v-prine",
+            "neon-law-evil/navigator",
             "neon-law-source-code-evil/navigator",
         ] {
             assert_eq!(
@@ -3780,6 +3822,40 @@ mod tests {
                 "{slug}"
             );
         }
+    }
+
+    /// A client matter still private in `neon-law` keeps the client posture
+    /// until it moves to Forgejo.
+    ///
+    /// The organization defaults to public, so the slug alone resolves to
+    /// [`COMMON_POLICY`]; the live visibility narrows it back to exactly
+    /// [`CLIENT_POLICY`], so the reconcile neither sends push protection (a 422
+    /// without Advanced Security) nor treats the tree as published.
+    #[test]
+    fn a_private_client_repository_in_neon_law_keeps_the_client_policy() {
+        let slug = "neon-law/cruller-v-prine";
+        assert_eq!(policy_for(slug), COMMON_POLICY);
+
+        let mut private = matching_repository();
+        private.private = Some(true);
+        let narrowed = posture_for_live_visibility(policy_for(slug), &private);
+        assert_eq!(narrowed, CLIENT_POLICY);
+        assert!(desired_security_and_analysis(narrowed).is_none());
+        assert!(serde_json::to_value(desired_repository_settings(narrowed))
+            .unwrap()
+            .get("security_and_analysis")
+            .is_none());
+
+        // Narrowing touches only publication: Navigator's release tags and
+        // the gate survive a private live repository.
+        let navigator = posture_for_live_visibility(NAVIGATOR_POLICY, &private);
+        assert!(navigator.release_tags && navigator.branch_protections);
+
+        // A public live repository keeps the organization's answer.
+        assert_eq!(
+            posture_for_live_visibility(COMMON_POLICY, &matching_repository()),
+            COMMON_POLICY
+        );
     }
 
     /// No planned action writes visibility.
@@ -3886,9 +3962,9 @@ mod tests {
     #[test]
     fn origin_remote_off_the_governed_host_is_refused() {
         for remote in [
-            "https://elsewhere.example/neon-law-source-code/navigator.git",
-            "git@elsewhere.example:neon-law-source-code/navigator.git",
-            "https://forge.example.evil.test/neon-law-source-code/navigator.git",
+            "https://elsewhere.example/neon-law/navigator.git",
+            "git@elsewhere.example:neon-law/navigator.git",
+            "https://forge.example.evil.test/neon-law/navigator.git",
         ] {
             let error = slug_from_remote(remote, A_GOVERNED_HOST)
                 .unwrap_err()
@@ -3950,7 +4026,8 @@ mod tests {
         for slug in [
             NAVIGATOR_SLUG,
             TAP_SLUG,
-            "NEON-LAW-SOURCE-CODE/Navigator",
+            "NEON-LAW/Navigator",
+            "neon-law-source-code/navigator-ux",
             "a-deployment-org/cruller-v-prine",
             "A-DEPLOYMENT-ORG/cruller-v-prine",
         ] {
@@ -3960,6 +4037,7 @@ mod tests {
         for slug in [
             "ux/core",
             "some-other-org/navigator",
+            "neon-law-evil/navigator",
             "neon-law-source-code-evil/navigator",
         ] {
             assert!(!forge.admits(slug), "{slug} must be refused");
@@ -3984,8 +4062,8 @@ mod tests {
             organizations: source_organizations(),
         };
         assert!(forge.admits(NAVIGATOR_SLUG));
-        assert!(forge.admits(PRIVATE_NAVIGATOR_SLUG));
         assert!(forge.admits(TAP_SLUG));
+        assert!(forge.admits("neon-law-source-code/navigator-ux"));
         assert!(!forge.admits("a-deployment-org/cruller-v-prine"));
         // Composed from the constant rather than spelled: `forge_coordinate_retired`
         // admits exactly one spelling of a forge host in this tree, and it is
@@ -4054,7 +4132,11 @@ mod tests {
             NAVIGATOR_SLUG,
             format!("{}/navigator", public_organization())
         );
-        assert!(TAP_SLUG.starts_with(public_organization()));
+        assert!(TAP_SLUG.starts_with(&format!("{}/", public_organization())));
+        assert_eq!(
+            source_organizations(),
+            vec!["neon-law".to_string(), "neon-law-source-code".to_string()]
+        );
     }
 
     /// The API base follows the governed host, so a run can only ever talk to
@@ -4949,7 +5031,7 @@ mod tests {
     /// A ruleset already requiring a check this module does not know about is
     /// refused, not quietly rewritten without it.
     ///
-    /// The live case: `neon-law-source-code/navigator`'s `production` requires
+    /// The live case: `neon-law/navigator`'s `production` requires
     /// `ci` and a second scan, and an update writes the whole desired payload, which
     /// names `ci` alone.
     #[test]
@@ -5769,6 +5851,53 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    /// `neon-law/navigator` is public, and GitHub answers its Actions-access
+    /// read with a 422 rather than a 404. The setting does not apply, so the
+    /// home's own reconcile and a Project's both plan nothing and continue.
+    #[tokio::test]
+    async fn a_public_home_answering_422_plans_nothing() {
+        for scope in [WorkflowTemplateScope::Excluded, project_scope()] {
+            let server = MockServer::start().await;
+            let client = test_client(&server);
+            Mock::given(method("GET"))
+                .and(path("/repos/acme/navigator/actions/permissions/access"))
+                .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                    "message": ACCESS_POLICY_NOT_APPLICABLE,
+                    "status": "422"
+                })))
+                .mount(&server)
+                .await;
+            assert_eq!(
+                plan_actions_access(&client, &scope, "acme/navigator")
+                    .await
+                    .unwrap(),
+                None
+            );
+        }
+    }
+
+    /// Any other 422 is not the public-repository answer and still stops the
+    /// reconcile.
+    #[tokio::test]
+    async fn an_unrelated_422_on_actions_access_is_an_error() {
+        let server = MockServer::start().await;
+        let client = test_client(&server);
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/navigator/actions/permissions/access"))
+            .respond_with(
+                ResponseTemplate::new(422)
+                    .set_body_json(serde_json::json!({ "message": "Validation Failed" })),
+            )
+            .mount(&server)
+            .await;
+        let error =
+            plan_actions_access(&client, &WorkflowTemplateScope::Excluded, "acme/navigator")
+                .await
+                .expect_err("an unrelated 422 must not pass as not-applicable")
+                .to_string();
+        assert!(error.contains("Validation Failed"), "{error}");
     }
 
     #[tokio::test]
