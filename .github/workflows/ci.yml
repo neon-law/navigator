@@ -18,9 +18,9 @@ name: ci
 # signal lives in this workflow with no third-party service in the merge path
 # and no status context of its own.
 #
-# Dioxus bundle and browser/accessibility checks live in `deploy.yml`: that
-# workflow path-filters UI pull requests without filtering this required merge
-# gate, and builds the exact bundle the KIND web image serves.
+# Dioxus bundle and browser/accessibility checks run during release verification
+# in `deploy.yml`. UI changes also use the local worktree browser gate before
+# review; the required PR merge gate below remains independent of that workflow.
 #
 # Shell/API coordination jobs use standard GitHub-hosted `ubuntu-24.04`
 # runners, free for public repositories. Build jobs retain Blacksmith cache

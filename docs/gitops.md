@@ -401,7 +401,8 @@ Docker SDK image, then runs the .NET tests on the host.
 `deploy.yml` has no `pull_request` trigger, so no PR depends on the release workflow's script and image builds. UI and
 browser changes are verified locally before opening a PR — see the `web-preview` and
 [`kind-local-dev`](../.agents/skills/kind-local-dev/SKILL.md) skills — and a tagged release (or a `kind-ci/**` branch
-push, below) remains the CI-side KIND proof.
+push, below) remains the CI-side KIND proof. Other path-scoped workflows check quickstart and database compatibility on
+relevant pull requests.
 
 ### One workflow owns publishing — `deploy.yml`
 
