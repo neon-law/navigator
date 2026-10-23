@@ -238,7 +238,7 @@ jobs:
         with:
           toolchain: 1.98.0
       - name: cache the Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: gate-cli
       - name: build navigator CLI
@@ -523,7 +523,7 @@ jobs:
       # lock file, and `CARGO_TARGET_DIR`, so it follows the build directory
       # wherever the step above put it.
       - name: cache the Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           # `shared-key`, NOT `key`. `key` is added to an automatic per-job key
           # (`add-job-id-key` defaults to true), which would scope the entry to
