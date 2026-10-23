@@ -1,6 +1,6 @@
 //! Guard the hand-off from a release to the Zed extension.
 //!
-//! `neon-law-source-code/zed-navigator-lsp` is the dev extension that attaches
+//! `neon-law/zed-navigator-lsp` is the dev extension that attaches
 //! `navigator-lsp` to Markdown buffers in Zed. Its version follows Navigator's
 //! because `deploy.yml` tells it that a release landed, and it tags `v<tag>`,
 //! so the two repositories name one version.
@@ -17,7 +17,7 @@ use std::path::PathBuf;
 const JOB: &str = "release-zed-extension";
 
 /// The extension the version is handed to.
-const EXTENSION_REPO: &str = "neon-law-source-code/zed-navigator-lsp";
+const EXTENSION_REPO: &str = "neon-law/zed-navigator-lsp";
 
 fn deploy_workflow() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

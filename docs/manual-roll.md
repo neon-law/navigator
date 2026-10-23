@@ -208,11 +208,11 @@ every credential the row holds. Grant it only to people you would hand those cre
 ## 1. Choose the tag
 
 Name the tag explicitly; never derive it from the date, because prereleases (`-rc.N`, `-hotfix.N`) are routine. The
-public binaries are attached to the same tag on `neon-law-source-code/homebrew-navigator`:
+public binaries are attached to the same tag on `neon-law/homebrew-navigator`:
 
 ```bash
-gh release list --repo neon-law-source-code/homebrew-navigator --limit 5
-gh release view "$TAG" --repo neon-law-source-code/homebrew-navigator --json assets -q '[.assets[].name]|join(", ")'
+gh release list --repo neon-law/homebrew-navigator --limit 5
+gh release view "$TAG" --repo neon-law/homebrew-navigator --json assets -q '[.assets[].name]|join(", ")'
 ```
 
 Both CLI archives (macOS and Linux) must be listed. Anything less means the release run has not finished or has failed;
@@ -238,7 +238,7 @@ case "$(uname -s)" in
     Linux)  ASSET="navigator-${TAG}-linux.tar.gz" ;;
     *) echo "unsupported platform $(uname -s)" >&2; exit 1 ;;
 esac
-gh release download "$TAG" --repo neon-law-source-code/homebrew-navigator --pattern "$ASSET" --dir "$CLI_DIR"
+gh release download "$TAG" --repo neon-law/homebrew-navigator --pattern "$ASSET" --dir "$CLI_DIR"
 tar -xzf "$CLI_DIR/$ASSET" -C "$CLI_DIR"
 NAVIGATOR_BIN="$CLI_DIR/navigator"
 "$NAVIGATOR_BIN" --version

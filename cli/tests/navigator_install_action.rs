@@ -104,7 +104,7 @@ fn the_action_appends_the_installed_cli_to_path() {
 #[test]
 fn both_installers_default_to_the_public_distribution_host() {
     assert!(
-        action_source().contains(r#"repo="neon-law-source-code/homebrew-navigator""#),
+        action_source().contains(r#"repo="neon-law/homebrew-navigator""#),
         "the action must default to the public distribution host",
     );
     assert!(
@@ -115,7 +115,7 @@ fn both_installers_default_to_the_public_distribution_host() {
     );
     assert!(
         install_script_source().contains(
-            r#"repo="${NAVIGATOR_INSTALL_REPO:-neon-law-source-code/homebrew-navigator}""#
+            r#"repo="${NAVIGATOR_INSTALL_REPO:-neon-law/homebrew-navigator}""#
         ),
         "install.sh must default to the public distribution host",
     );
