@@ -153,6 +153,7 @@ pub async fn stars() -> Option<u64> {
 
 /// Read the last known count without initiating a network request.
 #[cfg(feature = "server")]
+#[must_use]
 pub fn known_stars() -> Option<u64> {
     cache::known_stars()
 }
