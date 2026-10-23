@@ -84,8 +84,8 @@ Setup verifies CODEOWNERS entries as repository content, independently of whethe
 
 #### The Homebrew tap carries no gate
 
-`neon-law-source-code/homebrew-navigator` receives `TAP_POLICY`: no `production` ruleset, no review ruleset, and no
-CODEOWNERS assertion. It still receives the merge settings, which govern its occasional human pull request.
+`neon-law/homebrew-navigator` receives `TAP_POLICY`: no `production` ruleset, no review ruleset, and no CODEOWNERS
+assertion. It still receives the merge settings, which govern its occasional human pull request.
 
 A tap is the published output of a release rather than a repository the Firm develops in. Its `main` holds one
 mechanical file and grows by one commit per release, written by the tap's own `bump` workflow *after* that workflow has
@@ -141,13 +141,12 @@ The pin defaults to this binary's own confirmed release, refusing `main`, `lates
 accepts an `--action-version` override.
 
 The `uses:` lines themselves default to this repository (`gate_workflow_prefix`/`publish_workflow_prefix` at
-`DEFAULT_WORKFLOW_HOME`, `cli/src/projects/repository.rs`), and accept a `--workflow-home <owner>/<repo>` override —
-ENG-931 ("Keep Project CI/CD working"): once this repository is private, a public Project repository cannot call a
-reusable workflow hosted here at all, so the eventual cutover relocates `project-gate.yml`/`project-publish.yml` and the
-composite actions they depend on to an always-public home and repoints the fleet at it through this same flag, sweeping
-the same way an `--action-version` bump does. Proven so far only against the cross-organization Project fixture in
-`cli/src/devx/github_setup.rs`'s tests; do not pass a real `--workflow-home` override until that alternate home actually
-exists and a live gate and publish have been proven from both `neon-law-source-code` and `neon-law-staging`.
+`DEFAULT_WORKFLOW_HOME`, `cli/src/projects/repository.rs`), and accept a `--workflow-home <owner>/<repo>` override. This
+repository is public, so any Project repository, public or private, can call `project-gate.yml`, `project-publish.yml`,
+and the composite actions they use. The override is for a fork that hosts its own copies; it sweeps the fleet the same
+way an `--action-version` bump does. It is proven only against the cross-organization Project fixture in
+`cli/src/devx/github_setup.rs`'s tests, so prove a live gate and publish from the fork's home before repointing real
+repositories.
 
 **A drifted file becomes a pull request, never a direct commit to `main`.** Every other reconciled artifact in this
 command — a ruleset, a label, repository settings — is API-visible state with no review history of its own, so writing
@@ -678,12 +677,12 @@ which is exactly the kind of failure worth stating in prose, because no test her
 
 ### The Homebrew tap
 
-`brew install neon-law-source-code/navigator/navigator` installs the CLI, and
-[`neon-law-source-code/homebrew-navigator`](https://github.com/neon-law-source-code/homebrew-navigator) is the tap it
-resolves. On a Mac it is the **recommended** path, not a convenience: the released binary is unsigned and unnotarized,
-and Gatekeeper blocks an unsigned Mach-O downloaded through a browser outright. Homebrew fetches with `curl`, which sets
-no `com.apple.quarantine` attribute, so the same bytes run. Signing remains the right fix; the tap is what stands in
-until it lands.
+`brew install neon-law/navigator/navigator` installs the CLI, and
+[`neon-law/homebrew-navigator`](https://github.com/neon-law/homebrew-navigator) is the tap it resolves. On a Mac it is
+the **recommended** path, not a convenience: the released binary is unsigned and unnotarized, and Gatekeeper blocks an
+unsigned Mach-O downloaded through a browser outright. Homebrew fetches with `curl`, which sets no
+`com.apple.quarantine` attribute, so the same bytes run. Signing remains the right fix; the tap is what stands in until
+it lands.
 
 **ENG-115: `release-cli-build-macos` already carries the signing steps; only the Apple enrollment is missing.** The
 job's `apple-signing` step checks six repository secrets — `APPLE_DEVELOPER_ID_CERTIFICATE_P12`,
@@ -775,11 +774,11 @@ because nobody notices a *missing* Slack line.
 
 ### The Zed extension
 
-[`zed-navigator-lsp`](https://github.com/neon-law-source-code/zed-navigator-lsp) is the dev extension that attaches
-`navigator-lsp` to Markdown in Zed. `release-zed-extension` hands it each release the way `release-homebrew-tap` hands
-the tap one: the same `navigator-release` dispatch, naming the tag and nothing else, once the Release carries its
-archives. The extension's `bump.yml` sets its version to the tag, builds it, and pushes `v<tag>`, so the two
-repositories name one version, and the release waits for that tag.
+[`zed-navigator-lsp`](https://github.com/neon-law/zed-navigator-lsp) is the dev extension that attaches `navigator-lsp`
+to Markdown in Zed. `release-zed-extension` hands it each release the way `release-homebrew-tap` hands the tap one: the
+same `navigator-release` dispatch, naming the tag and nothing else, once the Release carries its archives. The
+extension's `bump.yml` sets its version to the tag, builds it, and pushes `v<tag>`, so the two repositories name one
+version, and the release waits for that tag.
 
 The dispatch authenticates with `ZED_EXTENSION_TOKEN`, a fine-grained token scoped to `contents: write` on the extension
 and nothing else, and a missing token fails the release as the tap's does. It carries the version only: the extension
@@ -978,7 +977,7 @@ failure there is evidence about the version rather than about real people's matt
 ### The deploy pipeline
 
 1. `deploy.yml` publishes every image, every CLI and LSP archive, and the mirror to
-   `neon-law-source-code/homebrew-navigator`.
+   `neon-law/homebrew-navigator`.
 2. Its `release-deploy` job needs every one of those jobs. When `DEPLOY_AUTOMATION_ENABLED` is `true`, it runs
    `gh workflow run release-deploy.yml --ref main -f tag=<tag> \
    -f image-digests=<release-map-json>` with `actions: write`; otherwise it dispatches nothing.

@@ -8,6 +8,9 @@ files deleted long ago, can reach the public repository through it.
 The command writes only its `--out` directory. It never fetches, pushes, adds a remote, or changes a hosted repository.
 Archiving the private repository and pointing a public remote at the snapshot are the manual steps below.
 
+This was done in October 2026: [neon-law/navigator](https://github.com/neon-law/navigator) is public and starts from one
+root commit. The procedure stays here for a fork that keeps a private history and publishes the same way.
+
 ## What the command enforces
 
 Before it writes anything, the command refuses (exit 2) unless:

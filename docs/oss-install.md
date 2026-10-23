@@ -83,7 +83,7 @@ one, so this can wait until you need it.
 ## 1. Clone and build
 
 ```bash
-git clone <your-fork-url> navigator
+git clone https://github.com/neon-law/navigator.git   # or your fork
 cd navigator
 cargo build --workspace          # pulls dependencies + compiles every crate
 cargo nextest run --workspace    # each test opens its own embedded store

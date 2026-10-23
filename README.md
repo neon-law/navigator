@@ -18,7 +18,7 @@ Windows build, release archive, or CI job.
 ## Run it on your machine
 
 ```bash
-brew install neon-law-source-code/navigator/navigator
+brew install neon-law/navigator/navigator
 navigator quickstart
 ```
 
@@ -32,8 +32,9 @@ You can see the omnichannel inbox, social scheduling, case management, notations
 `.env.example` to `.env` to add your own Meta, TikTok, or other provider keys, and use your own brand. To have Navigator
 skinned for your firm, [contact us](https://www.neonlaw.com/contact). We help you write token-efficient prompts.
 
-The three sample matters are cloned from public, read-only `neon-law/sample-*` snapshots. Until this repository is
-public, quickstart needs read access to `neon-law/navigator`.
+The source and the three sample matters are cloned anonymously from public GitHub repositories:
+[`neon-law/navigator`](https://github.com/neon-law/navigator) and the read-only `neon-law/sample-*` snapshots. No GitHub
+account or token is needed.
 
 You can also start an agentic session and prompt "spin up the server".
 
@@ -57,11 +58,13 @@ include warranty disclaimers and limits on liability. Third-party components and
 [licensing](docs/licensing.md). See [contributor terms](CONTRIBUTORS.md) for accepted contribution terms and [security
 reporting](SECURITY.md) for private vulnerability reports.
 
-The source repository remains private until Forgejo is created. Per-project repositories are planned to move off GitHub.
-The planned public source repository is [neon-law/navigator](https://github.com/neon-law/navigator). What is public is
-the CLI: its archives, checksums, and install script are attached to the Releases of
-[`neon-law-source-code/homebrew-navigator`](https://github.com/neon-law-source-code/homebrew-navigator), which holds the
-Homebrew formula and no source. Container images live in a private Artifact Registry repository.
+The source is public at [neon-law/navigator](https://github.com/neon-law/navigator). The CLI's archives, checksums, and
+install script are attached to the Releases of
+[`neon-law/homebrew-navigator`](https://github.com/neon-law/homebrew-navigator), which holds the Homebrew formula and no
+source. The [Zed extension](https://github.com/neon-law/zed-navigator-lsp) attaches the Navigator language server. The
+PostgreSQL image is built from [`images/postgres`](images/postgres/README.md) and published weekly to
+`ghcr.io/neon-law/neon-law-postgres`. Navigator's service images live in a private Artifact Registry repository and are
+mirrored to GHCR; see [self-hosting](docs/self-hosting.md#images).
 
 Font licensing is separate: see the [GORP Serif notice](server/public/fonts/gorp-serif/LICENSE.txt) and the [Tinos
 OFL](pdf/assets/fonts/Tinos/OFL.txt).

@@ -6,9 +6,10 @@ description: Stand up and operate your own Neon Law Navigator instance on Google
 
 # Operating Neon Law Navigator
 
-Our firm runs Neon Law Navigator on Google Cloud. This workshop is for **admin** users with access to the private source
-repository: the people who own billing, secrets, OIDC, runtime configuration, and release verification. It stands up
-your **own** instance — the same Rust stack our attorneys use, on your own Google Cloud project, for your own community.
+Our firm runs Neon Law Navigator on Google Cloud. This workshop is for **admin** users with a clone of the public source
+repository, [neon-law/navigator](https://github.com/neon-law/navigator): the people who own billing, secrets, OIDC,
+runtime configuration, and release verification. It stands up your **own** instance — the same Rust stack our attorneys
+use, on your own Google Cloud project, for your own community.
 
 One command does most of the work: `navigator ops gcp setup`, a provisioner written in Rust that talks to Google's REST
 APIs directly and ships with a dry-run so you can read the whole plan before a single packet leaves your laptop.
