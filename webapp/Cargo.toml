@@ -88,14 +88,14 @@ serde_yaml = { workspace = true, optional = true }
 # `#[server]` bodies that are its only callers.
 tracing = { workspace = true, optional = true }
 # Server-only: the footer's source-repository line reads a star count that one
-# request refreshes from GitHub's REST API at most once an hour (see
+# background refresh fetches from GitHub's REST API at most once an hour (see
 # `source_repository`). `reqwest` does not compile to `wasm32-unknown-unknown`,
 # and the wasm client never needs it — it reads the count out of the
 # server-resolved chrome — so it is gated behind `server` like `store`.
 reqwest = { workspace = true, optional = true }
 # Server-only: the GitHub count request has a bounded timeout. `time` is
 # explicit because that timeout is this crate's own requirement. The mutex
-# serializes refreshes so concurrent pages share one GitHub request.
+# protects short cache updates; pages never await the GitHub request.
 tokio = { workspace = true, features = ["time", "sync"], optional = true }
 # Renders a `VirtualDom` to a string. A dev-dependency until #1009: the error
 # pages are returned inline from handlers rather than served by a router, so
