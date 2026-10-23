@@ -28,8 +28,8 @@ operator a deliberate rollout. This flow supports the actions in [`agent-workflo
 Navigator is at [`neon-law/navigator`](https://github.com/neon-law/navigator) on github.com. Nothing here names a host,
 sets `GH_HOST`, or repoints `NAVIGATOR_GITHUB_API_BASE`: `gh` and every Action default to the right place.
 
-A public repository gets GitHub-hosted runners at no cost, so CI runs on `ubuntu-latest` rather than on
-organization-hosted capacity, and the Marketplace is available.
+Standard GitHub-hosted runners are free for public repositories. Shell and API coordination jobs use `ubuntu-24.04`;
+build jobs retain Blacksmith where their disk, memory, or cache requirements need it. The Marketplace is available.
 
 **Confirm an App id against a live check run before trusting it.** A required status check registered under the wrong id
 still *reads* as present in the API while matching an App that never posts a check, so the gate silently enforces
@@ -366,27 +366,37 @@ gh pr view <n> --json statusCheckRollup \
 
 ### PR flow — `ci.yml`
 
-`ci.yml` runs for PRs to `main`, never pushes. The `validate` job always runs: it builds the `navigator` CLI and walks
-the tree with `navigator project gate` (Markdown, YAML syntax, seed documents, locale catalogs, consumed mutable tags).
-The `rust` job runs formatting, clippy with warnings denied, and `cargo test --workspace`. It runs only when the PR
-touches Rust sources or the files that job is the proof for (`.rs`, `.surql`, `.feature`, Cargo manifests, the
-toolchain, nextest config, or `ci.yml` itself). A locale or Markdown edit therefore still validates and does not spend a
-Blacksmith runner on the workspace suite.
+`ci.yml` runs for PRs to `main`, never pushes. The `gate` job always runs: it builds the `navigator` CLI and walks the
+tree with `navigator project gate` (Markdown, YAML syntax, seed documents, locale catalogs, consumed mutable tags), then
+runs Presidio and secret scans. The `rust` job runs formatting, clippy with warnings denied, and the workspace tests
+with coverage. It runs only when the PR touches Rust sources or the files that job is the proof for (`.rs`, `.surql`,
+`.feature`, Cargo manifests, the toolchain, nextest config, or `ci.yml` itself). A locale or Markdown edit therefore
+still validates and does not spend a Blacksmith runner on the workspace suite.
 
-The rust job runs on `blacksmith-4vcpu-ubuntu-2404`, and every other job on the pull-request path stays on stock
-`ubuntu-latest`, which is free for a public repository. Four vCPU is a measured choice rather than a default: Blacksmith
-bills linearly in cores, more than half of this job is test execution bounded by `--test-threads 4` rather than by
-cores, and the workflow's own header comment carries the two-arm measurement and the arithmetic. The Rust tests need no
-database service — each opens its own embedded engine. `ci.yml` is the only workflow that runs on `pull_request`, and it
-carries no KIND, Docker, or browser coverage — that proof happens on the release train (and locally, see below), never
-on a PR. The workflow is the source of truth for commands, caches, and pinned tool versions.
+The `changes`, required `ci` result, and auto-merge jobs use standard GitHub-hosted `ubuntu-24.04` runners. The
+release-cut merge job and release-deploy preflight, deduplication, rollback lookup, prerelease hold, and final report
+also use these runners. In `deploy.yml`, tag creation, Homebrew and Zed dispatches, success and failure reports, and
+rollout dispatch also move to GitHub. These jobs run shell commands and API calls without compiling Rust or building
+images.
+
+The content gate, managed Word adapter, and Rust suite retain `blacksmith-4vcpu-ubuntu-2404`, as do release builds, KIND
+checks, and deployment jobs that build the CLI. Public GitHub Linux runners provide four CPUs, 16 GB RAM, and 14 GB SSD
+storage; private repositories get two CPUs and 8 GB RAM with the same label. Free usage depends on actual repository
+visibility. See [GitHub's runner
+specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+
+The Rust workflow records a measured peak of 142 GB disk use, so CPU count alone does not make a standard runner a
+suitable replacement. Its header preserves the four-versus-eight-core timing and memory measurements. Before moving any
+remaining build job, measure peak disk and memory, cold and warm cache behavior, and elapsed time on the candidate
+runner. The workflow remains the source of truth for commands, caches, and pinned tool versions.
 
 The `ci` job is the required status check — see [One required check, named `ci`
-everywhere](#one-required-check-named-ci-everywhere). It runs nothing, `needs:` the classify, validate, and rust jobs,
-and fails unless classify and validate succeeded and rust succeeded or was skipped. It tests each dependency's result
-explicitly rather than relying on a bare `needs:`, because a skipped required check is not a red one: GitHub reports no
-result at all, so the gate would quietly stop blocking exactly when the job it guards had failed. A skipped rust job is
-the one skip it treats as success, so a copy-only PR still posts `ci`.
+everywhere](#one-required-check-named-ci-everywhere). It aggregates `changes`, `gate`, `rust`, and `word-adapter`, and
+fails unless `changes` and `gate` succeeded and the two scoped test jobs succeeded or were skipped. It tests each
+dependency's result explicitly rather than relying on a bare `needs:`, because a skipped required check is not a red
+one: GitHub reports no result at all, so the gate would quietly stop blocking exactly when the job it guards had failed.
+A copy-only PR can skip the scoped tests and still post `ci`. The `word-adapter` job verifies its locked restore in a
+Docker SDK image, then runs the .NET tests on the host.
 
 `deploy.yml` has no `pull_request` trigger, so no PR depends on the release workflow's script and image builds. UI and
 browser changes are verified locally before opening a PR — see the `web-preview` and
@@ -668,12 +678,12 @@ release instead of only the images. It also stops occupying runners on every rel
 either, because `release-cli-publish` needs both publish jobs as well as the two archives — the Release is the first
 fetchable artifact of the run. This is not only for human downloads: the `.github/actions/gate` composite action, the
 gate **every** Project repository runs, downloads `navigator-<version>-<platform>` from the public distribution host
-these jobs mirror onto (see below) — not from this repository's own Release, which is private. If the archive jobs or
-the mirror step stop running, Project CI breaks everywhere with a download 404 and nothing in this repository goes red —
-which is exactly the kind of failure worth stating in prose, because no test here will catch it.
+these jobs mirror onto (see below). Navigator's source repository and its Releases are public; Project CI uses the
+distribution host configured in the composite action. If the archive jobs or the mirror step stop running, Project CI
+breaks everywhere with a download 404 and nothing in this repository goes red — which is exactly the kind of failure
+worth stating in prose, because no test here will catch it.
 
-**The Linux archive job runs on `blacksmith-4vcpu-ubuntu-2404`, like every Linux job; the macOS job runs on
-`macos-latest`.**
+**The Linux archive job runs on `blacksmith-4vcpu-ubuntu-2404`; the macOS job runs on `macos-latest`.**
 
 ### The Homebrew tap
 

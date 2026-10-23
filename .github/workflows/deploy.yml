@@ -1589,7 +1589,7 @@ jobs:
     name: tag ${{ needs.release-version.outputs.tag }}
     needs: [integration, release-version]
     if: needs.release-version.outputs.publishable == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # THE ONLY JOB IN THIS FILE THAT WRITES A GIT REF, and it only ever creates
     # one. `release-cli-publish` also holds `contents: write`, to create
     # the GitHub Release that hangs off this tag. Nothing here can move a ref:
@@ -2153,11 +2153,11 @@ jobs:
     # make `ci.yml`'s workspace job genuinely disk-bound — so it does not need
     # the 16-core pool, which bills per minute with no included quota.
     #
-    # The six triggers run on `blacksmith-4vcpu-ubuntu-2404`. Stock
-    # `ubuntu-latest` is 2 vCPU, measured — `nproc: 2` in run 144427521 — and
-    # these legs took 11-17 min on sixteen cores, so two cores risked the
-    # 90-minute cap below. Four keeps most of the saving without betting the
-    # release on it.
+    # Trigger images retain `blacksmith-4vcpu-ubuntu-2404` pending a measured
+    # build on standard public runners (four CPUs, 16 GB RAM, 14 GB SSD).
+    # Run 144427521 observed two CPUs while the repository was private;
+    # that CPU comparison no longer describes the public runner. Disk, cache,
+    # memory, and cold-build timing still need measurement before switching.
     runs-on: ${{ matrix.runner }}
     # `contents: read` to check out, `id-token: write` to federate — the same
     # keyless grant `publish-service` holds.
@@ -3312,7 +3312,7 @@ jobs:
     # lesson is here: a gate that narrows below `publishable` must earn its
     # place, because its failure mode is a silent skip rather than a red run.
     if: needs.release-version.outputs.publishable == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # Outlasts the confirmation wait below, which is the long pole. A job that
     # dies on its own clock reports a timeout rather than the stale formula that
     # caused it.
@@ -3473,7 +3473,7 @@ jobs:
     name: hand the release to the Zed extension
     needs: [release-cli-publish, release-version]
     if: needs.release-version.outputs.publishable == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # Outlasts the confirmation wait below.
     timeout-minutes: 15
     # No `contents: write`. The cross-repository grant is the
@@ -3587,7 +3587,7 @@ jobs:
       && needs.publish-service.result == 'success'
       && needs.publish-triggers.result == 'success'
       && needs.release-cli-publish.result == 'success'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # Two webhook POSTs — should be seconds; cap it so a hung HTTP request
     # can't keep the workflow open.
     timeout-minutes: 10
@@ -3816,7 +3816,7 @@ jobs:
         publish-cli-image,
       ]
     if: needs.release-version.outputs.publishable == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       actions: write
@@ -3898,7 +3898,7 @@ jobs:
     # webhook is configured. GitHub's run conclusion remains the source of truth
     # either way; see docs/gitops.md § "What detects a broken pipeline".
     if: failure() && github.ref_name == 'main'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # A single webhook POST — cap it so a hung request can't keep the run open.
     timeout-minutes: 10
     steps:

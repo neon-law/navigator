@@ -22,9 +22,10 @@ name: ci
 # workflow path-filters UI pull requests without filtering this required merge
 # gate, and builds the exact bundle the KIND web image serves.
 #
-# Every job runs on `blacksmith-4vcpu-ubuntu-2404` for consistent runner,
-# cache, and disk capacity. The macOS legs in `deploy.yml` stay on
-# GitHub-hosted runners.
+# Shell/API coordination jobs use standard GitHub-hosted `ubuntu-24.04`
+# runners, free for public repositories. Build jobs retain Blacksmith cache
+# and disk capacity; the workspace suite peaks at 142 GB (see below).
+# The macOS legs in `deploy.yml` stay on GitHub-hosted runners.
 #
 # The history matters, because the previous label cost a full CI cycle to
 # diagnose. This workflow used to name `neon-law-medium`, a GitHub-hosted
@@ -153,7 +154,7 @@ jobs:
   # wait forever on a context nothing posts.
   changes:
     name: classify the pull request
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       rust: ${{ steps.scope.outputs.rust }}
@@ -1008,7 +1009,7 @@ jobs:
     name: ci
     needs: [changes, gate, rust, word-adapter]
     if: always()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: report the gate result
@@ -1065,7 +1066,7 @@ jobs:
       (github.event.action == 'opened' || github.event.action == 'ready_for_review' || github.event.action == 'synchronize') &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # The App ID lives in a secret (not a variable) because the repo keeps
     # every workflow credential in GitHub Actions *secrets* —
     # this repo has no Actions *variables*. Hoisted to
