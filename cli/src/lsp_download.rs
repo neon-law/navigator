@@ -29,13 +29,13 @@ use views::lsp::{lsp_release_archive_for_host, lsp_release_asset_name, LspReleas
 /// anonymous `navigator lsp` keeps resolving once the source repository stops
 /// being public. Never point this back at the source tree — that is exactly
 /// the coupling this module exists to remove.
-const RELEASES_REPO: &str = "neon-law-source-code/homebrew-navigator";
+const RELEASES_REPO: &str = "neon-law/homebrew-navigator";
 
 /// [`RELEASES_REPO`]'s anonymous release-download base, for a consumer that
 /// fetches an archive by URL rather than through the API: the generated
 /// Forgejo gate (`projects::repository::forgejo_gate_workflow`).
 pub(crate) const RELEASE_DOWNLOAD_BASE: &str =
-    "https://github.com/neon-law-source-code/homebrew-navigator/releases/download";
+    "https://github.com/neon-law/homebrew-navigator/releases/download";
 
 /// `api.github.com`'s own base. A test overrides this with a `wiremock`
 /// server's address so no test makes a live network call.
@@ -234,7 +234,7 @@ mod tests {
     /// distribution host, never the source tree that is going private.
     #[test]
     fn releases_repo_names_the_tap_not_the_source_tree() {
-        assert_eq!(RELEASES_REPO, "neon-law-source-code/homebrew-navigator");
+        assert_eq!(RELEASES_REPO, "neon-law/homebrew-navigator");
         assert_eq!(
             super::RELEASE_DOWNLOAD_BASE,
             format!("https://github.com/{RELEASES_REPO}/releases/download")

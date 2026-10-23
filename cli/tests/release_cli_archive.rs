@@ -236,7 +236,7 @@ fn the_slack_message_offers_a_download_for_every_published_archive() {
         workflow.contains("Intel macOS and arm64 Linux have no prebuilt Navigator archive or Homebrew install path."),
         "the message must identify platforms without a published binary"
     );
-    assert!(workflow.contains("brew install neon-law-source-code/navigator/navigator"));
+    assert!(workflow.contains("brew install neon-law/navigator/navigator"));
     assert!(!workflow.contains("git clone --depth 1 --branch"));
 }
 
@@ -545,7 +545,7 @@ fn the_release_is_cut_only_after_the_images_publish() {
 /// `gh release create` behind a check-then-act `if ! gh release view` guard and
 /// race on the same tag — but only within the SAME repository. ENG-931 added a
 /// second `gh release create` in this job that targets
-/// `neon-law-source-code/homebrew-navigator` rather than `${GITHUB_REPOSITORY}`,
+/// `neon-law/homebrew-navigator` rather than `${GITHUB_REPOSITORY}`,
 /// which is a distinct Release under a distinct check-then-act guard, not a
 /// second racer on this one.
 #[test]

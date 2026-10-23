@@ -6,7 +6,7 @@
 //! script — has to resolve the CLI and LSP archives from a host that outlives
 //! that change, so `release-cli-publish` mirrors the same tag-exact
 //! bytes it attaches to this repository's own Release onto
-//! `neon-law-source-code/homebrew-navigator`'s Release as well.
+//! `neon-law/homebrew-navigator`'s Release as well.
 //!
 //! This is the same invisible-breakage shape `cli/tests/homebrew_tap_dispatch.rs`
 //! guards for the formula bump: the mirror step and every public reader live in
@@ -22,7 +22,7 @@ use std::path::PathBuf;
 const JOB: &str = "release-cli-publish";
 
 /// The public distribution host.
-const PUBLIC_REPO: &str = "neon-law-source-code/homebrew-navigator";
+const PUBLIC_REPO: &str = "neon-law/homebrew-navigator";
 
 fn deploy_workflow() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

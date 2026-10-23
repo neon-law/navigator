@@ -231,8 +231,8 @@ its newest archived WAL object.
 
 ### PostgreSQL image updates
 
-Use the [image publication procedure](../images/postgres/README.md#update-the-published-image) to obtain a tested digest
-and propagate every pin before rollout. Apply the candidate in staging first. Record the PVC UID, server and extension
+Use the [image publication procedure](../images/postgres/README.md#weekly-publication) to obtain a tested digest and
+propagate every pin before rollout. Apply the candidate in staging first. Record the PVC UID, server and extension
 versions, and SQL and AGE aggregate counts before applying; wait for readiness and compare the same checks afterwards.
 Verify recent WAL objects and a completed base backup, then run the scratch restore drill and compare both databases.
 Only a verified staging result supports a later production rollout. Preserve the StatefulSet's retained claim; never

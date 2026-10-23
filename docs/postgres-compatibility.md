@@ -1,8 +1,9 @@
 # PostgreSQL compatibility evidence
 
 The compatibility workflow uses the same immutable PostgreSQL image as the KIND overlay. The matrix is PostgreSQL 16.15,
-Apache AGE 1.6.0, pgvector 0.8.2, SQLx 0.9.0, and the native DBOS 0.5.0 synthetic test application at upstream commit
-`155a38bbec5d0cfcec0035c65b0c5c79012ab223`.
+Apache AGE 1.6.0, pgvector 0.8.2, SQLx 0.9.0, and the native DBOS 0.5.0 synthetic test application in
+[`images/postgres/tests/dbos`](../images/postgres/tests/dbos). The image is built and published weekly from
+[`images/postgres`](../images/postgres/README.md).
 
 | Boundary | Evidence |
 | --- | --- |
@@ -24,11 +25,12 @@ The image pins are read from the recipe and overlay:
 - Target digest: `sha256:4cc70fee3aa9e53455bd1612d0a5be1f06962f5bcdcda4c6bff47e2b46db969e`
 
 Run the focused Rust tests with `NAVIGATOR_TEST_POSTGRES_PORT` set to the isolated fixture's loopback port and
-`NAV_REQUIRE_POSTGRES=1`. Build the upstream test application at the pinned commit, then run:
+`NAV_REQUIRE_POSTGRES=1`. Build the test application, then run:
 
 ```bash
+cargo build --locked --manifest-path images/postgres/tests/dbos/Cargo.toml
 KUBECONFIG=.devx/kubeconfig bash store/postgres/tests/integrated_recovery.sh \
-  kind-YOUR_TASK /path/to/pinned/tests/dbos/target/debug/dbos-image-smoke 25433
+  kind-YOUR_TASK "$PWD/images/postgres/tests/dbos/target/debug/dbos-image-smoke" 25433
 ```
 
 The script requires an explicitly named KIND context and uses only the `postgres-spike` fixture. It creates two

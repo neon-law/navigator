@@ -22,7 +22,8 @@ component that ships today and is scheduled to retire. The table distinguishes d
 To build and test:
 
 - [`rustup`](https://rustup.rs). It reads the toolchain pin in `rust-toolchain.toml`.
-- A C/C++ toolchain and linker: Xcode command line tools, `build-essential`, or Microsoft C++ Build Tools.
+- A C/C++ toolchain and linker: Xcode command line tools on macOS, or `build-essential` on Linux. Windows is not
+  supported.
 - `cmake` and `git`.
 
 To run the local tier, also:
@@ -36,7 +37,7 @@ To run the local tier, also:
 ## Fresh clone to a running web
 
 ```bash
-git clone <navigator-repository-url> navigator
+git clone https://github.com/neon-law/navigator.git
 cd navigator
 cargo run -p cli -- dev up --path "$PWD"
 set -a; source .devx/env; set +a
@@ -52,10 +53,10 @@ with fake email and signature providers. The website listens on `PORT` from `.de
 No `.env` is needed. When one exists it loads before `.devx/env` and wins on any shared key; copy
 [`.env.example`](../.env.example) to start one with your own provider credentials.
 
-The dev profile seeds the public firm facts and three synthetic sample matters. `dev up` also tries to stage each sample
-matter's application bundle from its Project repository. Those repositories are private for now; when one is
-unreachable, `dev up` prints which matters keep their previously staged source and continues, and `web` boots without
-that bundle.
+The dev profile seeds the public firm facts and three synthetic sample matters. `dev up` also stages each sample
+matter's application bundle from its public, read-only `neon-law/sample-*` snapshot. When one is unreachable, for
+example offline, `dev up` prints which matters keep their previously staged source and continues, and `web` boots
+without that bundle.
 
 Check the running web from another terminal after sourcing `.devx/env`:
 
@@ -114,8 +115,8 @@ own images.
 
 ### PostgreSQL and Apache AGE image
 
-`ghcr.io/neon-law-source-code/neon-law-postgres:16.15-age1.6.0-vector0.8.2` is PostgreSQL 16.15 with Apache AGE 1.6.0
-and pgvector 0.8.2, built from `images/postgres/Containerfile`. The manifests under `k8s/postgres/` pin it by digest.
+`ghcr.io/neon-law/neon-law-postgres:16.15-age1.6.0-vector0.8.2` is PostgreSQL 16.15 with Apache AGE 1.6.0 and pgvector
+0.8.2, built from `images/postgres/Containerfile`. The manifests under `k8s/postgres/` pin it by digest.
 [`postgres-compatibility.md`](postgres-compatibility.md) lists the tested matrix.
 
 ## PostgreSQL and SQL migrations

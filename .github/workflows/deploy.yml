@@ -3104,7 +3104,7 @@ jobs:
       # install script, and every Project repository's gate — has to resolve
       # against a host that outlives that change, so this step attaches the
       # SAME bytes this job just uploaded above onto
-      # `neon-law-source-code/homebrew-navigator`'s own Release for the same
+      # `neon-law/homebrew-navigator`'s own Release for the same
       # tag. Not a second build: every asset here is a file already sitting in
       # `dist/` or checked out above.
       #
@@ -3134,7 +3134,7 @@ jobs:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           TAG: ${{ needs.release-version.outputs.tag }}
           PRERELEASE: ${{ needs.release-version.outputs.prerelease }}
-          PUBLIC_REPO: neon-law-source-code/homebrew-navigator
+          PUBLIC_REPO: neon-law/homebrew-navigator
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN}" ]; then
@@ -3198,7 +3198,7 @@ jobs:
           gh release upload "${TAG}" "${RUNNER_TEMP}/navigator-image-digests.json" --repo "${GITHUB_REPOSITORY}" --clobber
 
   # ---------- Stage 3b: hand the release to the Homebrew tap ----------
-  # `brew install neon-law-source-code/navigator/navigator` is the macOS install
+  # `brew install neon-law/navigator/navigator` is the macOS install
   # path, and this job is what keeps it current.
   #
   # IT SENDS A TAG AND NOTHING ELSE. The tap computes every sha256 itself, from
@@ -3341,13 +3341,13 @@ jobs:
         id: dispatch
         env:
           # A fine-grained token with `contents: write` on
-          # `neon-law-source-code/homebrew-navigator` and nothing else. The
+          # `neon-law/homebrew-navigator` and nothing else. The
           # run's own GITHUB_TOKEN cannot reach another repository, and
           # widening it to one that could would hand every job in this
           # workflow that reach.
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           TAG: ${{ needs.release-version.outputs.tag }}
-          TAP_REPO: neon-law-source-code/homebrew-navigator
+          TAP_REPO: neon-law/homebrew-navigator
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN}" ]; then
@@ -3392,7 +3392,7 @@ jobs:
           # `actions: read`.
           PUBLIC_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release-version.outputs.tag }}
-          TAP_REPO: neon-law-source-code/homebrew-navigator
+          TAP_REPO: neon-law/homebrew-navigator
           SINCE: ${{ steps.dispatch.outputs.since }}
           # A CEILING, NOT A PLAN. The bump answers in well under a minute, and
           # a bump that FAILS is now reported the moment it fails rather than at
@@ -3457,7 +3457,7 @@ jobs:
           done
 
   # THE ZED EXTENSION FOLLOWS EVERY RELEASE TOO, by the same hand-off the tap
-  # gets. `neon-law-source-code/zed-navigator-lsp` is the dev extension that
+  # gets. `neon-law/zed-navigator-lsp` is the dev extension that
   # attaches `navigator-lsp` to Markdown in Zed; its `bump.yml` sets the
   # extension's version to this tag and pushes `v<tag>`, so the two
   # repositories name one version.
@@ -3498,7 +3498,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ZED_EXTENSION_TOKEN }}
           TAG: ${{ needs.release-version.outputs.tag }}
-          EXTENSION_REPO: neon-law-source-code/zed-navigator-lsp
+          EXTENSION_REPO: neon-law/zed-navigator-lsp
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN}" ]; then
@@ -3525,7 +3525,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release-version.outputs.tag }}
-          EXTENSION_REPO: neon-law-source-code/zed-navigator-lsp
+          EXTENSION_REPO: neon-law/zed-navigator-lsp
           BUMP_BUDGET_MINUTES: "10"
         run: |
           set -euo pipefail
@@ -3661,11 +3661,11 @@ jobs:
           # dispatched for both (see `release-homebrew-tap`), so naming `brew`
           # here resolves to the tag in this heading rather than to whatever the
           # tap last saw. There is no `PRERELEASE` branch to make.
-          BREW_LINE="• Apple silicon macOS and x86_64 Linux: \`brew install neon-law-source-code/navigator/navigator\` (or \`brew upgrade navigator\` if you already have it). This is the recommended path on a supported Mac — the released binary is unsigned, and Gatekeeper blocks an unsigned Mach-O downloaded through a browser but not one brew fetched with curl."
+          BREW_LINE="• Apple silicon macOS and x86_64 Linux: \`brew install neon-law/navigator/navigator\` (or \`brew upgrade navigator\` if you already have it). This is the recommended path on a supported Mac — the released binary is unsigned, and Gatekeeper blocks an unsigned Mach-O downloaded through a browser but not one brew fetched with curl."
           TEXT="*CLI installation for ${TAG}*
 
           ${BREW_LINE}
-          • macOS (Apple silicon): download \`navigator-${TAG}-macos.tar.gz\` from the \`${TAG}\` Release at https://github.com/neon-law-source-code/homebrew-navigator/releases, then \`tar -xzf navigator-${TAG}-macos.tar.gz navigator && install -m 0755 navigator /usr/local/bin/navigator && navigator --version\`.
+          • macOS (Apple silicon): download \`navigator-${TAG}-macos.tar.gz\` from the \`${TAG}\` Release at https://github.com/neon-law/homebrew-navigator/releases, then \`tar -xzf navigator-${TAG}-macos.tar.gz navigator && install -m 0755 navigator /usr/local/bin/navigator && navigator --version\`.
           • Linux: download \`navigator-${TAG}-linux.tar.gz\` from the same Release, then \`tar -xzf navigator-${TAG}-linux.tar.gz navigator && install -m 0755 navigator /usr/local/bin/navigator && navigator --version\`.
 
           Intel macOS and arm64 Linux have no prebuilt Navigator archive or Homebrew install path.
@@ -3798,7 +3798,7 @@ jobs:
   # workflow from an event `github.token` caused, and the Release exists before
   # the images and archives finish. So this job needs every publish job — both
   # image matrices, every CLI and LSP archive build, and the attach job that
-  # also mirrors the archives to `neon-law-source-code/homebrew-navigator` —
+  # also mirrors the archives to `neon-law/homebrew-navigator` —
   # and dispatches only once all of them succeeded.
   #
   # `vars.DEPLOY_AUTOMATION_ENABLED` is the on switch for the unattended path.

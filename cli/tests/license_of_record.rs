@@ -8,6 +8,11 @@ use std::path::{Path, PathBuf};
 const LICENSE: &str = "MIT OR Apache-2.0";
 const LICENSE_FILES: &[&str] = &["LICENSE", "LICENSE-APACHE-2", "LICENSE-MIT"];
 const NOTICE_FILE: &str = "NOTICE";
+/// Directories that carry their own `LICENSE` and license their manifests
+/// under it instead of the workspace license of record. `images/postgres` is
+/// the Apache-2.0 PostgreSQL image, whose DBOS smoke application is a
+/// standalone Cargo project outside the workspace.
+const SEPARATELY_LICENSED: &[(&str, &str)] = &[("images/postgres/", "Apache-2.0")];
 const OWNER: &str = "Neon Law IP LLC";
 const REGISTRANT: &str = "Neon Law IP LLC";
 
@@ -156,6 +161,20 @@ fn every_crate_declares_or_inherits_the_license_of_record() {
             .and_then(toml::Value::as_bool)
             .unwrap_or(false);
         if inherits {
+            continue;
+        }
+        let relative = repository_relative_path(path);
+        if let Some((dir, expected)) = SEPARATELY_LICENSED
+            .iter()
+            .find(|(dir, _)| relative.starts_with(dir))
+        {
+            if license.as_str() != Some(expected) {
+                offenders.push(format!(
+                    "{}: license is {:?}, expected {expected:?}, the license of {dir}",
+                    path.display(),
+                    license.as_str()
+                ));
+            }
             continue;
         }
         match license.as_str() {

@@ -1,8 +1,9 @@
 # Contributing
 
-Neon Law Navigator is licensed under `MIT OR Apache-2.0`. Outside contributions are closed for now; write to
-[support@neonlaw.com](mailto:support@neonlaw.com) with a bug report, contribution inquiry, or question. Report suspected
-vulnerabilities through [security reporting](SECURITY.md), privately rather than in a public issue.
+Neon Law Navigator is open source under `MIT OR Apache-2.0`, and anyone may clone, build, run, and fork
+[neon-law/navigator](https://github.com/neon-law/navigator). Outside pull requests and GitHub issues are closed for now;
+write to [support@neonlaw.com](mailto:support@neonlaw.com) with a bug report, contribution inquiry, or question. Report
+suspected vulnerabilities through [security reporting](SECURITY.md), privately rather than in a public issue.
 
 Accepted contributions use the project's MIT OR Apache-2.0 license. Contributors retain their copyright; no separate CLA
 is required. Read [contributor terms](CONTRIBUTORS.md) for the contribution terms, recommended provenance checks, and

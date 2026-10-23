@@ -1399,3 +1399,59 @@ fn seaweedfs_pins_authenticated_s3_and_keeps_internal_services_on_loopback() {
     assert_eq!(secret["secretName"], "navigator-seaweedfs-s3");
     assert_eq!(secret["items"][0]["key"], "s3.json");
 }
+
+/// The PostgreSQL image is built here, published weekly, and dogfooded: the
+/// publish is followed by a pull request moving every pin to the new digest,
+/// and the compatibility gate tests this directory rather than another
+/// repository's checkout.
+#[test]
+fn postgres_image_is_published_weekly_from_this_repository_and_pinned_back() {
+    let read = |path: &str| {
+        std::fs::read_to_string(workspace().join(path))
+            .unwrap_or_else(|error| panic!("read {path}: {error}"))
+    };
+    let publish = read(".github/workflows/postgres-image.yml");
+    let workflow: Value = serde_yaml::from_str(&publish).expect("postgres-image.yml is YAML");
+    let schedule = workflow["on"]["schedule"][0]["cron"]
+        .as_str()
+        .expect("postgres-image.yml runs on a schedule");
+    let fields: Vec<&str> = schedule.split_whitespace().collect();
+    assert_eq!(fields.len(), 5, "cron {schedule}");
+    assert_eq!(&fields[2..4], ["*", "*"], "weekly, not monthly: {schedule}");
+    assert!(fields[4].parse::<u8>().is_ok(), "one weekday: {schedule}");
+    for required in [
+        "context: images/postgres",
+        "REGISTRY: ghcr.io/${{ github.repository_owner }}/neon-law-postgres",
+        "bash tests/run.sh",
+        "cosign sign --yes",
+        "scripts/postgres-image-pin.sh \"$REFERENCE\"",
+        "actions/create-github-app-token",
+    ] {
+        assert!(
+            publish.contains(required),
+            "postgres-image.yml lost `{required}`"
+        );
+    }
+
+    let compatibility = read(".github/workflows/postgres-compatibility.yml");
+    assert!(
+        !compatibility.contains("repository:"),
+        "the compatibility gate must test images/postgres, not another repository's checkout"
+    );
+    assert!(compatibility.contains("images/postgres/tests/dbos/Cargo.toml"));
+
+    let tests = workspace().join("images/postgres/tests");
+    for file in [
+        "run.sh",
+        "extensions.sql",
+        "persistence.sql",
+        "dbos/Cargo.lock",
+    ] {
+        assert!(tests.join(file).is_file(), "images/postgres/tests/{file}");
+    }
+    assert!(
+        read("images/postgres/Containerfile")
+            .contains("org.opencontainers.image.source=\"https://github.com/neon-law/navigator\""),
+        "the published image must link back to this repository"
+    );
+}

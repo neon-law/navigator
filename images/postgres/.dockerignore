@@ -1,0 +1,3 @@
+.git
+tests/dbos/target
+*.log

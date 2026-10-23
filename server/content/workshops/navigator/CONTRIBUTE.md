@@ -26,8 +26,9 @@ mappings, tests, and the shared corpus. Accepted contributions use the same lice
 no separate CLA is required. AI-assisted contributions have no mandatory human-review gate; see CONTRIBUTORS.md for
 recommended practices.
 
-Outside pull requests are closed for now, so the ways below run through issues, conversation, and use rather than the
-merge queue. Anyone may write to <contact@neonlaw.org>.
+The source is public at [neon-law/navigator](https://github.com/neon-law/navigator), so anyone can read, run, and fork
+it. Outside pull requests are closed for now, so the ways below run through conversation and use rather than the merge
+queue. Anyone may write to <contact@neonlaw.org>.
 
 ## Improve the Corpus
 
@@ -62,8 +63,8 @@ stack still comes up locally.
 That rule is what keeps production portable. In production, persistent state lives on managed services — a hosted
 SurrealDB, Cloud Storage for documents — and each one has a cloud-agnostic stand-in inside KIND, so the topology you
 test locally is the topology a firm deploys. And because the full stack runs on a laptop, you never need a cloud account
-or someone else's cloud bill to verify your work: with repository access, run `dev up` and prove the change against the
-running stack. An authorized lawyer then opens the pull request.
+or someone else's cloud bill to verify your work: in any clone, run `dev up` and prove the change against the running
+stack. An authorized lawyer then opens the pull request.
 
 ### View content images locally
 

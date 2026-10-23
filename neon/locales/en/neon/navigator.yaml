@@ -179,8 +179,8 @@ bands:
       heading: Install with Homebrew
       body:
         - - text: "The formula lives in our own tap, "
-          - text: neon-law-source-code/homebrew-navigator
-            href: https://github.com/neon-law-source-code/homebrew-navigator
+          - text: neon-law/homebrew-navigator
+            href: https://github.com/neon-law/homebrew-navigator
           - text: ", which is updated by every release."
         - - text: "Install with the command below, then run "
           - text: navigator quickstart

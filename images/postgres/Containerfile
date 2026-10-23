@@ -12,7 +12,14 @@ RUN curl -fLsS https://github.com/pgvector/pgvector/archive/refs/tags/v0.8.2.tar
  && make -C vector PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config OPTFLAGS='' -j2 \
  && make -C vector PG_CONFIG=/usr/lib/postgresql/16/bin/pg_config DESTDIR=/out install
 FROM postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4
-LABEL org.opencontainers.image.source="https://github.com/neon-law-source-code/neon-law-postgres"
+LABEL org.opencontainers.image.source="https://github.com/neon-law/navigator"
+LABEL org.opencontainers.image.description="PostgreSQL 16.15 with Apache AGE 1.6.0 and pgvector 0.8.2, rebuilt weekly with Debian security updates"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+# The weekly rebuild exists for this layer: the base digest is pinned, so
+# only an upgrade here carries Debian security fixes into a new image. The
+# PostgreSQL packages are held so the server stays at the tagged 16.15.
+RUN apt-mark hold $(dpkg-query -W -f '${db:Status-Abbrev}${Package}\n' 'postgresql*' 'libpq*' | sed -n 's/^ii *//p') \
+ && apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/ /
 COPY --from=build /src/age/LICENSE /src/age/NOTICE /usr/share/doc/apache-age/
 COPY --from=build /src/vector/LICENSE /usr/share/doc/pgvector/LICENSE
