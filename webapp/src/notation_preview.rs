@@ -310,11 +310,15 @@ mod tests {
     }
 
     #[test]
-    fn published_preview_does_not_link_to_private_source() {
+    fn published_preview_links_the_repository_without_a_template_source_action() {
         let out = html();
         assert!(
-            !out.contains("github.com/neon-law/navigator"),
-            "private source link: {out}"
+            out.contains(r#"href="https://github.com/neon-law/navigator""#),
+            "public footer repository link: {out}"
+        );
+        assert!(
+            !out.contains(&letter_content().source_href),
+            "no template-specific source action: {out}"
         );
         assert!(!out.contains("View on GitHub"), "link label: {out}");
         assert!(

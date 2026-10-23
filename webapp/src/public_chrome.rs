@@ -169,6 +169,9 @@ pub struct PublicChrome {
     /// a white-label deployment wears its own wordmark but runs this
     /// software, developed here.
     pub navigator_href: String,
+    /// Last known public GitHub star count; absent until GitHub responds.
+    #[serde(default)]
+    pub github_stars: Option<u64>,
     /// The resolved brand's tokens stylesheet href — `/public/css/brand-
     /// <key>-tokens.css`. Resolved from [`views::brand::brand_key`], the same
     /// registry key that produced the rest of this chrome, so the palette
@@ -280,6 +283,7 @@ pub fn PublicFooter(chrome: PublicChrome) -> Element {
                 .collect(),
             navigator_version: chrome.navigator_version.clone(),
             navigator_href: chrome.navigator_href.clone(),
+            github_stars: chrome.github_stars,
             brands: chrome
                 .brands
                 .iter()
@@ -414,6 +418,7 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         // rather than ever rendering a bare, unstamped line.
         navigator_version: crate::cli_release::release_version(),
         navigator_href: crate::source_repository::NAVIGATOR_HREF.to_string(),
+        github_stars: crate::source_repository::known_stars(),
         tokens_href: crate::brand_style::brand_tokens_href(views::brand::brand_key().as_str()),
         is_practice: views::brand::BrandKey::LIVE.contains(&views::brand::brand_key()),
         // The compiled family — every house brand the firm trades under, the
@@ -493,16 +498,19 @@ pub async fn firm_public_chrome_from_context() -> PublicChrome {
     // runs on a task that does not inherit it, so building the chrome here would
     // read the default brand under a mounted white-label bundle. Fall back to
     // building it from context if the extension is absent.
-    if let Ok(axum::Extension(chrome)) =
+    if let Ok(axum::Extension(mut chrome)) =
         dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<PublicChrome>, _>().await
     {
+        chrome.github_stars = crate::source_repository::stars().await;
         return chrome;
     }
     let utility =
         dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<PublicUtility>, _>()
             .await
             .map_or_else(|_| Vec::new(), |axum::Extension(utility)| utility.0);
-    firm_public_chrome(utility)
+    let mut chrome = firm_public_chrome(utility);
+    chrome.github_stars = crate::source_repository::stars().await;
+    chrome
 }
 
 /// Prefer a value the portal pre-layer injected on the request, then the

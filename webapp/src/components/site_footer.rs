@@ -361,6 +361,9 @@ pub fn SiteFooterLegal(
     /// href="">` that reloads whatever page it sits on.
     #[props(default)]
     navigator_href: String,
+    /// Last known star count for Navigator's public source repository.
+    #[props(default)]
+    github_stars: Option<u64>,
     /// The firm's own profiles, drawn under the wordmark. Empty renders no
     /// row — a deploy that renamed the firm publishes none, because the
     /// accounts belong to this firm.
@@ -763,7 +766,7 @@ pub fn SiteFooterLegal(
                     // One line names the software this page runs and, right
                     // after it, the release serving here: "Powered by", the
                     // linked product name, and the version as plain text —
-                    // one line, no attribution prose, no second link.
+                    // one line, with the public source repository below.
                     //
                     // `navigator_href` empty renders the name unlinked rather
                     // than an `<a href="">` that reloads the page; the version
@@ -783,6 +786,13 @@ pub fn SiteFooterLegal(
                             if !navigator_version.is_empty() {
                                 " {navigator_version}"
                             }
+                        }
+                    }
+                    p { class: "site-footer__source",
+                        crate::components::GitHubStars {
+                            href: crate::source_repository::SOURCE_HREF.to_string(),
+                            repo: crate::source_repository::SOURCE_REPO.to_string(),
+                            stars: github_stars,
                         }
                     }
                     p { class: "site-footer__tagline", "{FOOTER_TAGLINE}" }
@@ -835,6 +845,7 @@ mod tests {
                     trademark_registration: "6,325,650".to_string(),
                     trademark_record_url:
                         "https://tmsearch.uspto.gov/search/search-results/90039224".to_string(),
+                    github_stars: 1234u64,
                     navigator_version: "26.8.20".to_string(),
                     navigator_href: "https://www.neonlaw.com/navigator".to_string(),
                 }
@@ -982,8 +993,10 @@ mod tests {
             "the running release reads right after the product name: {out}"
         );
         assert!(
-            !out.contains("github.com"),
-            "the footer links no source repository: {out}"
+            out.contains("https://github.com/neon-law/navigator")
+                && out.contains("1,234")
+                && out.contains("<title>GitHub stars</title>"),
+            "the shared footer links the public source and names its star count: {out}"
         );
         let disclaimer = out.find("Attorney advertisement").expect("the disclaimer");
         let platform = out.find("site-footer__powered").expect("the platform line");
