@@ -66,6 +66,8 @@ pub enum MailAction {
         #[arg(long = "attach", value_name = "PATH")]
         attach: Vec<PathBuf>,
     },
+    /// Check draft-only Gmail setup and print the fix for anything missing.
+    Setup,
     /// File every message in a Gmail thread as a matter Communication.
     File {
         thread: String,
@@ -796,6 +798,82 @@ fn setup_from(account: Option<String>, client_id: Option<String>) -> Result<(Str
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KeychainState {
+    AccountUnknown,
+    Present,
+    Missing,
+}
+
+struct SetupReport {
+    text: String,
+    ready: bool,
+}
+
+/// Checklist for the draft-only Gmail path. Built from booleans only, so it never carries a secret
+/// or a value read from the environment.
+fn setup_report(account_set: bool, client_id_set: bool, keychain: KeychainState) -> SetupReport {
+    let mark = |ok: bool| if ok { "ok     " } else { "MISSING" };
+    let keychain_ok = keychain == KeychainState::Present;
+    let mut text = String::from("Gmail draft-only setup for navigator mail\n");
+    let _ = writeln!(
+        text,
+        "  [{}] NAVIGATOR_GMAIL_ACCOUNT (the Gmail address)",
+        mark(account_set)
+    );
+    let _ = writeln!(
+        text,
+        "  [{}] NAVIGATOR_GMAIL_CLIENT_ID (your Google OAuth client id)",
+        mark(client_id_set)
+    );
+    let _ = writeln!(
+        text,
+        "  [{}] refresh token in the macOS Keychain, service com.neonlaw.navigator.gmail.refresh-token",
+        mark(keychain_ok)
+    );
+    if !account_set {
+        text.push_str("\nexport NAVIGATOR_GMAIL_ACCOUNT=<gmail address>\n");
+    }
+    if !client_id_set {
+        text.push_str("export NAVIGATOR_GMAIL_CLIENT_ID=<Google OAuth client id>\n");
+    }
+    if keychain == KeychainState::Missing {
+        text.push_str(
+            "\nStore the refresh token without echoing it (the command prompts for the value):\n  security add-generic-password -s com.neonlaw.navigator.gmail.refresh-token -a \"$NAVIGATOR_GMAIL_ACCOUNT\" -w\n",
+        );
+    }
+    text.push_str(
+        "\nScopes: authorize the refresh token for gmail.readonly and gmail.compose only. Gmail has no narrower \
+scope that creates drafts. navigator mail never sends, replies, or forwards: it has no send verb and calls no send \
+endpoint. Never print, paste, or log the token. See docs/mail-cli.md.\n",
+    );
+    let ready = account_set && client_id_set && keychain_ok;
+    if ready {
+        text.push_str("\nReady: navigator mail draft can create unsent drafts.\n");
+    }
+    SetupReport { text, ready }
+}
+
+fn setup_command() -> Result<()> {
+    let account = std::env::var("NAVIGATOR_GMAIL_ACCOUNT")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let client_id_set =
+        std::env::var("NAVIGATOR_GMAIL_CLIENT_ID").is_ok_and(|value| !value.trim().is_empty());
+    let keychain = match &account {
+        None => KeychainState::AccountUnknown,
+        Some(account) if keychain_refresh_token(account).is_ok() => KeychainState::Present,
+        Some(_) => KeychainState::Missing,
+    };
+    let report = setup_report(account.is_some(), client_id_set, keychain);
+    print!("{}", report.text);
+    if report.ready {
+        Ok(())
+    } else {
+        Err(anyhow!("Gmail draft-only setup is incomplete"))
+    }
+}
+
 async fn client() -> Result<GmailClient> {
     let (account, client_id) = setup_from(
         std::env::var("NAVIGATOR_GMAIL_ACCOUNT").ok(),
@@ -911,6 +989,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
             );
             Ok(())
         }
+        MailAction::Setup => setup_command(),
         MailAction::File {
             thread,
             project,
@@ -2016,5 +2095,38 @@ mod tests {
             panic!("draft subcommand");
         };
         assert_eq!(attach, vec![PathBuf::from("a.pdf"), PathBuf::from("b.png")]);
+    }
+
+    #[test]
+    fn setup_report_names_each_gap_and_never_claims_send_access() {
+        let report = setup_report(false, false, KeychainState::AccountUnknown);
+        assert!(!report.ready);
+        for expected in [
+            "NAVIGATOR_GMAIL_ACCOUNT",
+            "NAVIGATOR_GMAIL_CLIENT_ID",
+            "com.neonlaw.navigator.gmail.refresh-token",
+            "gmail.readonly",
+            "gmail.compose",
+            "never sends",
+        ] {
+            assert!(report.text.contains(expected), "missing `{expected}`");
+        }
+
+        let missing = setup_report(true, true, KeychainState::Missing);
+        assert!(!missing.ready);
+        assert!(missing.text.contains("security add-generic-password"));
+
+        let ready = setup_report(true, true, KeychainState::Present);
+        assert!(ready.ready);
+        assert!(!ready.text.contains("security add-generic-password"));
+    }
+
+    #[test]
+    fn setup_command_prints_only_the_fixed_report() {
+        let source = include_str!("mail.rs");
+        let body = source.split("fn setup_command()").nth(1).unwrap();
+        let body = body.split("async fn client()").next().unwrap();
+        assert!(body.contains("print!(\"{}\", report.text)"));
+        assert!(!body.contains("eprintln!") && !body.contains("println!(\"{account"));
     }
 }
