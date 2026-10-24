@@ -4490,10 +4490,10 @@ async fn upload_document_door(
             }
         }
     };
-    if bytes.len() > store::documents::MAX_DOCUMENT_UPLOAD_BYTES {
+    if bytes.len() > store::documents::max_document_upload_bytes(kind) {
         return Ok(bad_request(
             "document_too_large",
-            &store::documents::document_upload_size_message(bytes.len()),
+            &store::documents::document_upload_size_message_for_kind(kind, bytes.len()),
         ));
     }
     let visibility = if input.visibility.as_deref() == Some(store::documents::visibility::CLIENT) {

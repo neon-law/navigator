@@ -1328,7 +1328,7 @@ impl DocumentClient {
         transcript_quality: Option<&str>,
         execution: &DocumentExecution,
     ) -> Result<store::document_pointers::DocumentPointer> {
-        validate_document_upload_size_in_bytes(bytes.len())?;
+        validate_document_upload_size_in_bytes(kind, bytes.len())?;
         let effective_slug = slug
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -1705,16 +1705,16 @@ pub(crate) struct MailFileResponse {
 /// set out to replace.
 ///
 /// [`MAX_DOCUMENT_UPLOAD_REQUEST_BYTES`]: store::documents::MAX_DOCUMENT_UPLOAD_REQUEST_BYTES
-fn validate_document_upload_size_in_bytes(actual: usize) -> Result<()> {
-    if actual > store::documents::MAX_DOCUMENT_UPLOAD_BYTES {
-        return Err(anyhow!(store::documents::document_upload_size_message(
-            actual
-        )));
+fn validate_document_upload_size_in_bytes(kind: &str, actual: usize) -> Result<()> {
+    if actual > store::documents::max_document_upload_bytes(kind) {
+        return Err(anyhow!(
+            store::documents::document_upload_size_message_for_kind(kind, actual)
+        ));
     }
     Ok(())
 }
 
-fn validate_document_upload_size(file: &Path) -> Result<()> {
+fn validate_document_upload_size(kind: &str, file: &Path) -> Result<()> {
     // Reject locally so an oversized file never opens a remote upload.
     let actual = usize::try_from(
         file.metadata()
@@ -1722,7 +1722,7 @@ fn validate_document_upload_size(file: &Path) -> Result<()> {
             .len(),
     )
     .context("document size does not fit in memory")?;
-    validate_document_upload_size_in_bytes(actual)
+    validate_document_upload_size_in_bytes(kind, actual)
 }
 
 /// `navigator site document upload --project <code> --file … --kind …`
@@ -1785,7 +1785,7 @@ async fn document_upload_from(
             target.file.as_path(),
             target.slug.as_deref(),
         );
-        validate_document_upload_size(file)?;
+        validate_document_upload_size(kind, file)?;
         let client = DocumentClient::connect(host, project_code).await?;
         if let Some(notice) = &target.notice {
             eprintln!("{notice}");

@@ -52,6 +52,26 @@ use crate::surreal::{record_id, SurrealDb};
 /// Keep this limit here so every document-ingest caller shares one contract.
 pub const MAX_DOCUMENT_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 
+/// Maximum size of one transcript document, the kind that carries court
+/// hearing audio (LAW-172).
+///
+/// A two-hour hearing recording docketed as a PDF wrapper runs about 60 MB, and
+/// the bytes of a one-time court free look cannot be re-encoded or re-fetched.
+/// One hundred MiB leaves room for longer hearings while keeping the buffered
+/// base64 request bounded (about 134 MB). Larger media needs the streaming or
+/// signed-URL lane, which does not exist yet.
+pub const MAX_MEDIA_DOCUMENT_UPLOAD_BYTES: usize = 100 * 1024 * 1024;
+
+/// The document-size limit that applies to a document `kind`.
+#[must_use]
+pub fn max_document_upload_bytes(kind: &str) -> usize {
+    if kind == "transcript" {
+        MAX_MEDIA_DOCUMENT_UPLOAD_BYTES
+    } else {
+        MAX_DOCUMENT_UPLOAD_BYTES
+    }
+}
+
 /// Maximum REST request size needed to carry the document limit as base64 JSON.
 ///
 /// The request body is larger than the document bytes because the REST door
@@ -59,7 +79,7 @@ pub const MAX_DOCUMENT_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 /// uses `div_ceil` so a maximum-size document does not spend JSON allowance
 /// on the encoding.
 pub const MAX_DOCUMENT_UPLOAD_REQUEST_BYTES: usize =
-    MAX_DOCUMENT_UPLOAD_BYTES.div_ceil(3) * 4 + MAX_DOCUMENT_UPLOAD_JSON_BYTES;
+    MAX_MEDIA_DOCUMENT_UPLOAD_BYTES.div_ceil(3) * 4 + MAX_DOCUMENT_UPLOAD_JSON_BYTES;
 
 /// Room the request cap leaves for the upload's own JSON fields.
 ///
@@ -68,12 +88,17 @@ pub const MAX_DOCUMENT_UPLOAD_REQUEST_BYTES: usize =
 /// the caller passes through verbatim.
 pub const MAX_DOCUMENT_UPLOAD_JSON_BYTES: usize = 4096;
 
-/// Explain a document-size rejection with the configured maximum and actual size.
+/// Explain a document-size rejection for `kind`: the limit that applies, the
+/// actual size, and where an oversized file should go instead.
 #[must_use]
-pub fn document_upload_size_message(actual: usize) -> String {
-    format!(
-        "Document upload exceeds the maximum of {MAX_DOCUMENT_UPLOAD_BYTES} bytes; received {actual} bytes."
-    )
+pub fn document_upload_size_message_for_kind(kind: &str, actual: usize) -> String {
+    let max = max_document_upload_bytes(kind);
+    let next = if kind == "transcript" {
+        "Files over this limit need a streaming upload, which is not available yet; keep the original bytes and ask a lawyer to file them."
+    } else {
+        "Court hearing audio and similar recordings may be filed with `--kind transcript`, up to 104857600 bytes."
+    };
+    format!("Document upload exceeds the maximum of {max} bytes; received {actual} bytes. {next}")
 }
 
 /// The repository pointer path must retain the uploaded filename's extension.
@@ -881,6 +906,31 @@ mod tests {
             MAX_DOCUMENT_UPLOAD_REQUEST_BYTES
                 >= MAX_DOCUMENT_UPLOAD_BYTES.div_ceil(3) * 4 + MAX_DOCUMENT_UPLOAD_JSON_BYTES
         );
+    }
+
+    #[test]
+    fn transcript_documents_may_carry_court_audio_past_the_general_limit() {
+        assert_eq!(max_document_upload_bytes("memo"), MAX_DOCUMENT_UPLOAD_BYTES);
+        assert_eq!(
+            max_document_upload_bytes("transcript"),
+            MAX_MEDIA_DOCUMENT_UPLOAD_BYTES
+        );
+        // A two-hour hearing recording of 59,931,843 bytes fits.
+        assert!(59_931_843 <= max_document_upload_bytes("transcript"));
+        assert!(
+            MAX_DOCUMENT_UPLOAD_REQUEST_BYTES
+                >= MAX_MEDIA_DOCUMENT_UPLOAD_BYTES.div_ceil(3) * 4 + MAX_DOCUMENT_UPLOAD_JSON_BYTES
+        );
+    }
+
+    #[test]
+    fn oversize_message_names_the_limit_for_the_kind_and_where_larger_files_go() {
+        let message = document_upload_size_message_for_kind("memo", 30_000_000);
+        assert!(message.contains(&MAX_DOCUMENT_UPLOAD_BYTES.to_string()));
+        assert!(message.contains("30000000"));
+        assert!(message.contains("--kind transcript"));
+        let message = document_upload_size_message_for_kind("transcript", 200_000_000);
+        assert!(message.contains(&MAX_MEDIA_DOCUMENT_UPLOAD_BYTES.to_string()));
     }
 
     #[test]
