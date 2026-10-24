@@ -1718,6 +1718,7 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/projects/{id}/deadlines/{deadline_id}/reopen": {
           "post": {
             "summary": "Reopen a cancelled deadline",
+            "x-mcp-tool": "reopen_deadline",
             "description": "Restore a cancelled deadline to open and return the same stored row. An open row is unchanged; a complete row is refused.",
             "parameters": [
               { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },

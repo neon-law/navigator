@@ -339,6 +339,7 @@ mod tests {
             "update_deadline",
             "complete_deadline",
             "cancel_deadline",
+            "reopen_deadline",
             "create_project",
             "close_project",
             "list_projects",
@@ -354,7 +355,7 @@ mod tests {
             );
         }
 
-        assert_eq!(names.len(), 19, "got {names:?}");
+        assert_eq!(names.len(), 20, "got {names:?}");
         for name in &names {
             assert!(
                 !name.starts_with("aida_"),
