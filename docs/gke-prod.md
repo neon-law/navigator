@@ -50,7 +50,7 @@ Deployment decisions are summarized here and in [`cloud-operations.md`](cloud-op
 | Workflows | Restate Cloud | (out-of-cluster; bearer-token auth) |
 | Per-Project git repos | Per-pod `emptyDir` scratch | `k8s/base/web/web.yaml` |
 | Secrets | Secret Manager + CSI | `examples/deploy/k8s/gke/secrets/` |
-| Image registry | Artifact Registry (`neon-law-registry`) | `examples/deploy/k8s/gke/patches/web-image.yaml` |
+| Image registry | Artifact Registry (`<registry-project>`) | `examples/deploy/k8s/gke/patches/web-image.yaml` |
 | Delivery | `ship` renders + applies the embedded tree | [Manifest delivery](#manifest-delivery) |
 | Logs / metrics / traces | Cloud Logging + GMP + Cloud Trace | (auto, no manifest) |
 | Long-term log archive | Cloud Logging sink → GCS | (gcloud-provisioned; see below) |
