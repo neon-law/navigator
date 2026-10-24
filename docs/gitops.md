@@ -903,11 +903,12 @@ access token minted by exchanging the run's GitHub OIDC token through Workload I
 holds a credential. A tag is mutable, so a hijacked `v3` would run with the job's OIDC token and registry access; a SHA
 cannot move. Dependabot's `github-actions` ecosystem bumps the SHA and the comment together.
 
-**The identity is one service account and one provider.** `navigator-publisher` lives in the `<registry-project>` project
-and holds `roles/artifactregistry.writer` on the `navigator` repository only. The Workload Identity provider trusts this
-GitHub repository alone (`assertion.repository`), and only that repository may impersonate the service account. The
-provider resource name carries the project number, so it is stored as the secret `NAVIGATOR_PUBLISHER_WIF_PROVIDER`; it
-names no credential. If it is unset the exchange fails the job, so it is not a toggle.
+**The identity is one service account and one provider.** `navigator-publisher` lives in the `<registry-project>`
+project and holds `roles/artifactregistry.writer` on the `navigator` repository only. The Workload Identity provider
+trusts this GitHub repository alone (`assertion.repository`), and only that repository may impersonate the service
+account. The provider resource name carries the project number, so it is stored as the secret
+`NAVIGATOR_PUBLISHER_WIF_PROVIDER`; it names no credential. If it is unset the exchange fails the job, so it is not a
+toggle.
 
 These commands create all of it:
 
