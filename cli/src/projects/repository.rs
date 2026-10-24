@@ -3729,8 +3729,10 @@ jobs:
     fn synced_skills_resolve_relative_links_outside_navigator() {
         use rules::{M057RelativeLinkResolves, Rule, SourceFile};
 
+        // Every synced skill lands together, so a link from one synced skill
+        // to a sibling resolves; only a path outside the set is Navigator-only.
+        let root = tempfile::tempdir().unwrap();
         for (name, contents) in SYNCED_SKILLS {
-            let root = tempfile::tempdir().unwrap();
             let path = root
                 .path()
                 .join(".agents/skills")
@@ -3738,6 +3740,13 @@ jobs:
                 .join("SKILL.md");
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, contents).unwrap();
+        }
+        for (name, contents) in SYNCED_SKILLS {
+            let path = root
+                .path()
+                .join(".agents/skills")
+                .join(name)
+                .join("SKILL.md");
             let violations = M057RelativeLinkResolves.lint(&SourceFile {
                 path: path.clone(),
                 contents: (*contents).to_string(),
