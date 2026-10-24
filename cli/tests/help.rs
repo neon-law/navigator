@@ -125,12 +125,12 @@ fn top_level_help_keeps_orchestration_nested_under_groups() {
 }
 
 #[test]
-fn mail_help_exposes_only_read_draft_and_file_actions() {
+fn mail_help_exposes_only_read_draft_file_and_setup_actions() {
     let output = help(&["mail", "--help"]);
 
     assert_eq!(
         command_names(&output),
-        vec!["draft", "file", "read", "search", "help"]
+        vec!["draft", "file", "read", "search", "setup", "help"]
     );
     assert!(!command_names(&output).contains(&"send"));
     assert!(!command_names(&output).contains(&"forward"));

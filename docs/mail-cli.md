@@ -1,8 +1,8 @@
 # Mail CLI
 
-`navigator mail search|read|draft|file` is a local Gmail workflow. Search and read use Gmail's read endpoints; draft
-creates or updates an unsent Gmail draft. The CLI has no message-send, reply-send, or forward operation. Filing records
-each message as a Project-scoped Communication. `file` refuses a thread containing attachments before it writes
+`navigator mail setup|search|read|draft|file` is a local Gmail workflow. Search and read use Gmail's read endpoints;
+draft creates or updates an unsent Gmail draft. The CLI has no message-send, reply-send, or forward operation. Filing
+records each message as a Project-scoped Communication. `file` refuses a thread containing attachments before it writes
 anything; `read` prints their names and marks them as not downloaded.
 
 The CLI reads the refresh token from the macOS Keychain item whose service is
@@ -11,6 +11,18 @@ Google's token endpoint using `NAVIGATOR_GMAIL_CLIENT_ID`. This implementation d
 the Keychain item. This code uses the macOS Security framework Keychain API. It does not prove that a shell agent cannot
 invoke another process that can use the same account's authorized helper. Deployment still requires a signed-app/
 keychain ACL threat model and a managed-host test.
+
+## Draft-only setup
+
+`navigator mail setup` checks the draft-only path and prints the fix for each gap. It reports `ok` or `MISSING` for
+`NAVIGATOR_GMAIL_ACCOUNT`, `NAVIGATOR_GMAIL_CLIENT_ID`, and the Keychain refresh token, and exits non-zero until all
+three are present. It prints fixed text only, never the account, client id, or token. To store the token, run `security
+add-generic-password -s com.neonlaw.navigator.gmail.refresh-token -a "$NAVIGATOR_GMAIL_ACCOUNT" -w`, which prompts for
+the value so it stays out of shell history.
+
+Authorize the refresh token for `gmail.readonly` and `gmail.compose` only. Gmail offers no narrower scope that creates
+drafts, and `gmail.compose` can send at Google's level; the guard is that this CLI has no send verb and calls no send
+endpoint (a test pins the endpoint list). The CLI never requests scopes itself; the token carries what you authorized.
 
 Search adds the current Project client's email to the Gmail query when `navigator.yaml` provides `client_dri`. This is a
 search convenience, not an authorization boundary. Filing compares the message participants with that contact and warns
