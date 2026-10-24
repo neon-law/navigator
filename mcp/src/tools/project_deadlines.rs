@@ -61,7 +61,7 @@ pub fn create_descriptor() -> Value {
 pub fn update_descriptor() -> Value {
     json!({
         "name": "update_deadline",
-        "description": "Change a stored deadline and return the written row. Status changes only through complete_deadline and cancel_deadline.",
+        "description": "Change a stored deadline and return the written row. Status changes only through complete_deadline, cancel_deadline, and reopen_deadline.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -95,7 +95,15 @@ pub fn complete_descriptor() -> Value {
 pub fn cancel_descriptor() -> Value {
     transition_descriptor(
         "cancel_deadline",
-        "Set a deadline's status to cancelled and return the stored row. This is not a delete.",
+        "Set a deadline's status to cancelled and return the stored row. This is not a delete. Use reopen_deadline to restore it.",
+    )
+}
+
+#[must_use]
+pub fn reopen_descriptor() -> Value {
+    transition_descriptor(
+        "reopen_deadline",
+        "Restore a cancelled deadline to open and return the same stored row. An open row is unchanged; a complete row is refused.",
     )
 }
 
@@ -283,7 +291,7 @@ pub async fn complete_call(
     role: Role,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
-    transition(surreal, person_id, role, arguments, true).await
+    transition(surreal, person_id, role, arguments, Transition::Complete).await
 }
 
 pub async fn cancel_call(
@@ -292,7 +300,23 @@ pub async fn cancel_call(
     role: Role,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
-    transition(surreal, person_id, role, arguments, false).await
+    transition(surreal, person_id, role, arguments, Transition::Cancel).await
+}
+
+pub async fn reopen_call(
+    surreal: &store::surreal::SurrealDb,
+    person_id: Uuid,
+    role: Role,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
+    transition(surreal, person_id, role, arguments, Transition::Reopen).await
+}
+
+#[derive(Clone, Copy)]
+enum Transition {
+    Complete,
+    Cancel,
+    Reopen,
 }
 
 async fn transition(
@@ -300,14 +324,20 @@ async fn transition(
     person_id: Uuid,
     role: Role,
     arguments: &Value,
-    complete: bool,
+    which: Transition,
 ) -> Result<Value, ToolError> {
     let args: IdArgs = super::decode_args(arguments)?;
     require_participant(surreal, person_id, role, args.project_id).await?;
-    let deadline = if complete {
-        store::project_deadlines::complete(surreal, args.project_id, args.deadline_id).await
-    } else {
-        store::project_deadlines::cancel(surreal, args.project_id, args.deadline_id).await
+    let deadline = match which {
+        Transition::Complete => {
+            store::project_deadlines::complete(surreal, args.project_id, args.deadline_id).await
+        }
+        Transition::Cancel => {
+            store::project_deadlines::cancel(surreal, args.project_id, args.deadline_id).await
+        }
+        Transition::Reopen => {
+            store::project_deadlines::reopen(surreal, args.project_id, args.deadline_id).await
+        }
     }
     .map_err(map_deadline)?;
     Ok(row_result(
@@ -433,6 +463,46 @@ mod tests {
             completed["structuredContent"]["deadline"]["status"],
             "complete"
         );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_deadline_can_be_reopened() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let person_id = lawyer(&surreal, Some(project_id)).await;
+        let created = create_call(
+            &surreal,
+            person_id,
+            Role::Lawyer,
+            &create_args(project_id, "15 U.S.C. § 1"),
+        )
+        .await
+        .unwrap();
+        let deadline_id = created["structuredContent"]["deadline"]["id"].clone();
+        let ids = json!({ "project_id": project_id, "deadline_id": deadline_id });
+        let cancelled = cancel_call(&surreal, person_id, Role::Lawyer, &ids)
+            .await
+            .unwrap();
+        assert_eq!(
+            cancelled["structuredContent"]["deadline"]["status"],
+            "cancelled"
+        );
+        let reopened = reopen_call(&surreal, person_id, Role::Lawyer, &ids)
+            .await
+            .unwrap();
+        assert_eq!(reopened["structuredContent"]["deadline"]["status"], "open");
+        assert_eq!(reopened["structuredContent"]["deadline"]["id"], deadline_id);
+    }
+
+    #[test]
+    fn descriptors_point_cancelled_rows_at_reopen() {
+        assert_eq!(reopen_descriptor()["name"], "reopen_deadline");
+        for d in [update_descriptor(), cancel_descriptor()] {
+            assert!(d["description"]
+                .as_str()
+                .unwrap()
+                .contains("reopen_deadline"));
+        }
     }
 
     #[tokio::test]

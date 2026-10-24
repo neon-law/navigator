@@ -58,6 +58,7 @@ pub fn list_tools() -> Vec<Value> {
         project_deadlines::update_descriptor(),
         project_deadlines::complete_descriptor(),
         project_deadlines::cancel_descriptor(),
+        project_deadlines::reopen_descriptor(),
         list_projects::descriptor(),
         project_status::descriptor(),
         link_person_project::descriptor(),
@@ -185,6 +186,7 @@ const CONFIRMATION_EXEMPT_TOOLS: &[&str] = &[
     "update_deadline",
     "complete_deadline",
     "cancel_deadline",
+    "reopen_deadline",
 ];
 
 /// Whether running `tool_name` requires an explicit human approval —
@@ -279,7 +281,8 @@ pub async fn call_tool(
         | "create_deadline"
         | "update_deadline"
         | "complete_deadline"
-        | "cancel_deadline" => {
+        | "cancel_deadline"
+        | "reopen_deadline" => {
             let (person_id, role) = caller.deadline_actor()?;
             match name {
                 "list_project_deadlines" => {
@@ -296,6 +299,9 @@ pub async fn call_tool(
                 }
                 "cancel_deadline" => {
                     project_deadlines::cancel_call(surreal, person_id, role, arguments).await
+                }
+                "reopen_deadline" => {
+                    project_deadlines::reopen_call(surreal, person_id, role, arguments).await
                 }
                 _ => Err(ToolError::Unknown(name.to_string())),
             }
@@ -779,6 +785,7 @@ mod tests {
         assert!(names.contains(&"update_deadline"));
         assert!(names.contains(&"complete_deadline"));
         assert!(names.contains(&"cancel_deadline"));
+        assert!(names.contains(&"reopen_deadline"));
         assert!(names.contains(&"list_projects"));
         assert!(names.contains(&"project_status"));
         assert!(names.contains(&"link_person_project"));
