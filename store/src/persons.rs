@@ -752,6 +752,85 @@ pub async fn find_by_email_ci(db: &SurrealDb, email: &str) -> Result<Option<Pers
     one(response)
 }
 
+/// The person who answers to `email`: the row whose primary address it is,
+/// or else the row holding it as an alias (LAW-169).
+///
+/// An alias is a second `person_mailbox` claim, so it is exactly as unique
+/// as a primary address and is read by the same direct record read. An
+/// attorney who changes firms is found by either address.
+///
+/// # Errors
+///
+/// [`PersonError::Db`] if a lookup fails.
+pub async fn find_by_any_email(db: &SurrealDb, email: &str) -> Result<Option<Person>, PersonError> {
+    if let Some(person) = find_by_email_ci(db, email).await? {
+        return Ok(Some(person));
+    }
+    match mailbox_holder(db, &email.trim().to_lowercase()).await? {
+        Some(id) => find_by_id(db, id).await,
+        None => Ok(None),
+    }
+}
+
+/// Every address `id` holds besides its primary one, lowercased and sorted.
+///
+/// # Errors
+///
+/// [`PersonError::Db`] if the lookup fails.
+pub async fn aliases(db: &SurrealDb, id: Uuid) -> Result<Vec<String>, PersonError> {
+    if postgres_authority().await?.is_some() {
+        return Err(alias_unsupported_under_postgres());
+    }
+    let Some(person) = find_by_id(db, id).await? else {
+        return Ok(Vec::new());
+    };
+    let primary = person.email.trim().to_lowercase();
+    let mut response = db
+        .query(format!(
+            "SELECT VALUE <string> meta::id(id) FROM {CLAIM_TABLE} WHERE person_id = $id"
+        ))
+        .bind(("id", record_id(TABLE, id)))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?;
+    let mut held: Vec<String> = response.take(0)?;
+    held.retain(|email| *email != primary);
+    held.sort();
+    Ok(held)
+}
+
+/// Record `email` as another address of `id`, so an import that names it
+/// updates this person instead of creating a second one (LAW-169).
+///
+/// Idempotent: an address `id` already holds is left as it is. An address
+/// another person holds, as primary or alias, is refused, never taken.
+///
+/// # Errors
+///
+/// [`PersonError::EmailTaken`] when another person holds `email`;
+/// [`PersonError::Db`] if a write fails.
+pub async fn add_alias(db: &SurrealDb, id: Uuid, email: &str) -> Result<(), PersonError> {
+    if postgres_authority().await?.is_some() {
+        return Err(alias_unsupported_under_postgres());
+    }
+    let email_lower = email.trim().to_lowercase();
+    if take_mailbox(db, &email_lower, id).await? {
+        crate::postgres_mirror::after_write(db, MirrorKey::PersonMailbox(id)).await;
+        return Ok(());
+    }
+    match mailbox_holder(db, &email_lower).await? {
+        Some(holder) if holder == id => Ok(()),
+        _ => Err(PersonError::EmailTaken),
+    }
+}
+
+fn alias_unsupported_under_postgres() -> PersonError {
+    PersonError::Postgres(
+        "alias emails are written through the SurrealDB mailbox claim; not yet available under \
+         PostgreSQL People authority"
+            .to_string(),
+    )
+}
+
 /// The digits of a phone number, minus a leading US `1` on an eleven-digit
 /// number, so `+1 (510) 800-2090` and `510.800.2090` compare equal.
 fn phone_digits(phone: &str) -> String {
@@ -1350,8 +1429,14 @@ pub async fn edit(
         None => None,
     };
 
+    // A mailbox this row already holds as an alias becomes its primary
+    // without a second claim (LAW-169); only a claim taken here is given
+    // back if the write fails.
+    let mut took_claim = false;
     if let Some((_, next)) = &moving {
-        if !take_mailbox(db, next, id).await? {
+        if take_mailbox(db, next, id).await? {
+            took_claim = true;
+        } else if mailbox_holder(db, next).await? != Some(id) {
             return Err(PersonError::EmailTaken);
         }
     }
@@ -1385,7 +1470,7 @@ pub async fn edit(
         // if it did not.
         if matches!(edited, Ok(Some(_))) {
             release_mailbox(db, previous, id).await;
-        } else {
+        } else if took_claim {
             release_mailbox(db, next, id).await;
         }
         crate::postgres_mirror::after_write(db, MirrorKey::PersonMailbox(id)).await;

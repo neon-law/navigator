@@ -22,5 +22,15 @@ serializes them. It matters here more than elsewhere because `role` is the autho
 human carrying two roles. The claim moves when an edit moves the email and is released when the Person is deleted, so a
 mailbox is reusable rather than locked out.
 
+**One human, several addresses.** A second claim for the same Person is an *alias*: an attorney who changes firms keeps
+the old address, and `store::persons::find_by_any_email` finds the row by either. No new table holds aliases — they are
+more `person_mailbox` rows, so they are exactly as unique as a primary email and are mirrored to PostgreSQL by the same
+`person_mailbox` mirror. `site import person` reads `previous_email:` and `emails:` on a record: a Person who answers to
+any of them is updated to the record's `email` instead of duplicated, and the rest are kept as aliases. When a duplicate
+already exists, `navigator site person merge <keep> <drop>` ([`store::person_merge`](../../store/src/person_merge.rs))
+moves the dropped client Person's relationships — Conflict-Check Graph edges, Project participation, Relationship Log
+rows — to the kept Person in one transaction, hands over both addresses, and deletes the duplicate last. Aliases are
+written through the SurrealDB claim only; they are refused under PostgreSQL People authority until that path lands.
+
 - Schema: [`person` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
   [`store::persons`](../../store/src/persons.rs)

@@ -2118,6 +2118,26 @@ enum NotationCmd {
 }
 
 #[derive(Subcommand)]
+enum SitePersonCmd {
+    /// Merge a duplicate Person into the Person to keep.
+    ///
+    /// An address change imported without `previous_email:` leaves two
+    /// Persons for one human. This moves every relationship the dropped
+    /// Person holds (Conflict-Check Graph edges, Project participation,
+    /// Relationship Log rows) to the kept Person, keeps both email
+    /// addresses on the kept Person as aliases, and deletes the duplicate
+    /// last. Only a client Person can be dropped.
+    Merge {
+        /// Email (primary or alias) of the Person to keep.
+        keep: String,
+        /// Email (primary or alias) of the duplicate to remove.
+        drop: String,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+}
+
+#[derive(Subcommand)]
 enum SiteCmd {
     /// Publish Brand Posts and record social links through a site login.
     Blog {
@@ -2164,6 +2184,11 @@ enum SiteCmd {
         as_ci: bool,
         #[command(flatten)]
         host: HostOpt,
+    },
+    /// Manage Persons through the logged-in deployment.
+    Person {
+        #[command(subcommand)]
+        action: SitePersonCmd,
     },
     /// File, read, and verify a Project's documents — every document is
     /// scoped to one Project, and every Project to one brand deployment
@@ -4352,6 +4377,9 @@ fn run() -> ExitCode {
             }
         },
         Command::Site { action } => match action {
+            SiteCmd::Person {
+                action: SitePersonCmd::Merge { keep, drop, host },
+            } => runtime().block_on(remote::merge_people(host.host, &keep, &drop)),
             SiteCmd::Import {
                 model_name,
                 seed_file,

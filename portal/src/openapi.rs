@@ -441,6 +441,48 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/people/merge": {
+          "post": {
+            "summary": "Merge a duplicate Person into the Person to keep",
+            "description":
+              "Moves every relationship the dropped Person holds (Conflict-Check Graph edges, \
+               Project participation, Relationship Log rows, and the rest) to the kept Person, \
+               keeps both email addresses on the kept Person as aliases, and deletes the \
+               duplicate last. Both Persons are named by an email they answer to. Only a client \
+               Person can be dropped. Authorization: the caller's `persons.role` must be \
+               `lawyer` or `admin`; scoped sessions are refused.",
+            "requestBody": { "required": true, "content": { "application/json": {
+              "schema": { "type": "object", "required": ["keep", "drop"], "properties": {
+                "keep": { "type": "string", "description": "Email of the Person to keep" },
+                "drop": { "type": "string", "description": "Email of the duplicate to remove" }
+              } }
+            } } },
+            "responses": {
+              "200": { "description": "Merged", "content": { "application/json": {
+                "schema": { "type": "object", "properties": {
+                  "kept_id": { "type": "string", "format": "uuid" },
+                  "dropped_id": { "type": "string", "format": "uuid" },
+                  "emails": { "type": "array", "items": { "type": "string" } }
+                } }
+              } } },
+              "400": { "description": "Keep and drop are the same Person", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "403": { "description": "Authenticated caller is not Lawyer/admin, or the session is scoped", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "404": { "description": "No Person answers to one of the emails", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "409": { "description": "The Person to drop is not a client", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
         "/app/api/people/{id}/welcome": {
           "post": {
             "summary": "Send this person the welcome email",

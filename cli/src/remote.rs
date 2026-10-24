@@ -430,6 +430,44 @@ fn parse_seed_counts(body: &str) -> SeedCounts {
     serde_json::from_str(body).unwrap_or_default()
 }
 
+/// `navigator site person merge <keep> <drop>`: one `POST
+/// /app/api/people/merge`, printing the addresses the kept Person answers to.
+pub async fn merge_people(host: Option<String>, keep: &str, drop: &str) -> ExitCode {
+    run(async {
+        let (base, token) = resolve(host.as_deref())?;
+        let response = reqwest::Client::new()
+            .post(format!("{base}/app/api/people/merge"))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "keep": keep, "drop": drop }))
+            .send()
+            .await
+            .context("POST /app/api/people/merge")?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            let message = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|value| value["message"].as_str().map(str::to_string))
+                .unwrap_or_else(|| first_line(&body));
+            return Err(anyhow!("merge refused: {status}: {message}"));
+        }
+        let report: serde_json::Value = serde_json::from_str(&body).context("read merge report")?;
+        let emails = report["emails"]
+            .as_array()
+            .map(|emails| {
+                emails
+                    .iter()
+                    .filter_map(|email| email.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        println!("merged {drop} into {keep}; the kept Person answers to: {emails}");
+        Ok(())
+    })
+    .await
+}
+
 /// One `POST /app/api/seed`, returning the server's JSON report.
 async fn send_seed(
     (base, token): &(String, String),

@@ -914,6 +914,7 @@ async fn authorize_person_project_scope(
     }))
 }
 
+#[allow(clippy::too_many_lines)]
 async fn reconcile_people(
     surreal: &SurrealDb,
     yaml: &str,
@@ -933,7 +934,8 @@ async fn reconcile_people(
     for rec in parse_seed::<PersonRec>(yaml, SeedModel::Person, &["email"])? {
         let key = rec.email.clone();
         let name = rec.name.clone();
-        let existing = crate::persons::find_by_email_ci(surreal, &rec.email).await?;
+        let existing = find_person_for_record(surreal, &rec).await?;
+        let new_aliases = rec.wanted_aliases(&rec.email, None);
         match existing {
             None => {
                 if !actor.dry_run {
@@ -952,6 +954,7 @@ async fn reconcile_people(
                     )
                     .await
                     .map_err(|error| anyhow::anyhow!(error.user_message()))?;
+                    record_aliases(surreal, created.id, &new_aliases).await?;
                     if let Some(project) = scope_project {
                         crate::projects::add_participation(
                             surreal,
@@ -987,7 +990,28 @@ async fn reconcile_people(
                 if let Some(project) = scope_project {
                     authorize_person_project_scope(surreal, existing.id, project).await?;
                 }
-                let changed_fields = person_changed_fields(&existing, &rec);
+                let mut changed_fields = person_changed_fields(&existing, &rec);
+                let moves_primary =
+                    existing.email.trim().to_lowercase() != rec.email.trim().to_lowercase();
+                if moves_primary {
+                    changed_fields.push("email".to_string());
+                }
+                let wanted = rec
+                    .wanted_aliases(&rec.email, moves_primary.then_some(existing.email.as_str()));
+                // Read the held aliases only when a record names some, so a
+                // plain import never depends on the alias store.
+                let missing_aliases: Vec<String> = if wanted.is_empty() {
+                    wanted
+                } else {
+                    let held = crate::persons::aliases(surreal, existing.id).await?;
+                    wanted
+                        .into_iter()
+                        .filter(|email| !held.contains(email))
+                        .collect()
+                };
+                if !missing_aliases.is_empty() {
+                    changed_fields.push("emails".to_string());
+                }
                 if changed_fields.is_empty() {
                     report.unchanged += 1;
                     report.records.push(ReconcileRecord {
@@ -1005,6 +1029,7 @@ async fn reconcile_people(
                     });
                     if !actor.dry_run {
                         update_person_from_seed(surreal, &existing, rec, &update_ctx).await?;
+                        record_aliases(surreal, existing.id, &missing_aliases).await?;
                     }
                 }
             }
@@ -3399,6 +3424,85 @@ struct PersonRec {
     name: String,
     #[serde(default)]
     profile_image_url: Option<String>,
+    /// The address this Person used before `email`. A Person who answers to
+    /// it is updated to `email`, not duplicated (LAW-169).
+    #[serde(default)]
+    previous_email: Option<String>,
+    /// Further addresses the same Person answers to, kept as aliases.
+    #[serde(default)]
+    emails: Vec<String>,
+}
+
+impl PersonRec {
+    /// Every address that may already belong to this Person, `email` first.
+    fn candidate_emails(&self) -> Vec<&str> {
+        std::iter::once(self.email.as_str())
+            .chain(self.previous_email.as_deref())
+            .chain(self.emails.iter().map(String::as_str))
+            .collect()
+    }
+
+    /// Addresses this record wants kept as aliases beside `primary`, lowercased.
+    fn wanted_aliases(&self, primary: &str, old_primary: Option<&str>) -> Vec<String> {
+        let primary = primary.trim().to_lowercase();
+        let mut wanted: Vec<String> = self
+            .previous_email
+            .iter()
+            .chain(self.emails.iter())
+            .map(String::as_str)
+            .chain(old_primary)
+            .map(|email| email.trim().to_lowercase())
+            .filter(|email| *email != primary)
+            .collect();
+        wanted.sort();
+        wanted.dedup();
+        wanted
+    }
+}
+
+/// The one Person any of `rec`'s addresses belongs to, primary or alias.
+/// Addresses split across two Persons are refused: they are one human the
+/// directory holds twice, and `navigator site person merge` is the fix.
+async fn find_person_for_record(
+    surreal: &SurrealDb,
+    rec: &PersonRec,
+) -> anyhow::Result<Option<crate::persons::Person>> {
+    let mut found: Vec<crate::persons::Person> = Vec::new();
+    for email in rec.candidate_emails() {
+        if let Some(person) = crate::persons::find_by_any_email(surreal, email).await? {
+            if !found.iter().any(|known| known.id == person.id) {
+                found.push(person);
+            }
+        }
+    }
+    if found.len() > 1 {
+        anyhow::bail!(
+            "the addresses for `{}` belong to {} different Persons ({}); merge them first with \
+             `navigator site person merge <keep> <drop>`",
+            rec.email,
+            found.len(),
+            found
+                .iter()
+                .map(|person| person.email.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(found.pop())
+}
+
+/// Record every wanted alias on `person_id`.
+async fn record_aliases(
+    surreal: &SurrealDb,
+    person_id: Uuid,
+    wanted: &[String],
+) -> anyhow::Result<()> {
+    for email in wanted {
+        crate::persons::add_alias(surreal, person_id, email)
+            .await
+            .map_err(|error| anyhow::anyhow!("alias `{email}`: {error}"))?;
+    }
+    Ok(())
 }
 
 async fn seed_persons(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
@@ -4383,6 +4487,142 @@ records:
             .await
             .expect("read")
             .is_none());
+    }
+
+    fn moved_person_yaml(extra: &str) -> String {
+        format!(
+            "lookup_fields:\n  - email\nrecords:\n  - email: new.firm@example.com\n    name: Pat Attorney\n{extra}"
+        )
+    }
+
+    #[tokio::test]
+    async fn operator_person_seed_matches_previous_email_so_a_move_updates_one_person() {
+        let surreal = mem_surreal().await;
+        reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &person_yaml("old.firm@example.com", "Pat Attorney"),
+            "Firm",
+            false,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("seed existing person");
+        let before = persons::find_by_email_ci(&surreal, "old.firm@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        let moved = moved_person_yaml("    previous_email: old.firm@example.com\n");
+
+        let dry = ReconcileActor {
+            dry_run: true,
+            ..unrestricted_actor()
+        };
+        let plan = reconcile_yaml(&surreal, SeedModel::Person, &moved, "Firm", true, &dry)
+            .await
+            .expect("plan the move");
+        assert_eq!(plan.records[0].action, ReconcileAction::Changed);
+        assert!(plan.records[0]
+            .changed_fields
+            .contains(&"email".to_string()));
+        assert!(plan.records[0].warnings.is_empty());
+        assert!(persons::find_by_email_ci(&surreal, "new.firm@example.com")
+            .await
+            .unwrap()
+            .is_none());
+
+        let report = reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &moved,
+            "Firm",
+            true,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("apply the move");
+        assert_eq!(report.created, 0);
+        assert_eq!(report.updated, 1);
+        let after = persons::find_by_email_ci(&surreal, "new.firm@example.com")
+            .await
+            .unwrap()
+            .expect("the person now answers to the new primary email");
+        assert_eq!(after.id, before.id);
+        let found = persons::find_by_any_email(&surreal, "old.firm@example.com")
+            .await
+            .unwrap();
+        assert_eq!(found.map(|p| p.id), Some(before.id));
+
+        // Re-running the same document changes nothing.
+        let again = reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &moved,
+            "Firm",
+            true,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("rerun");
+        assert_eq!(again.updated, 0);
+        assert_eq!(again.unchanged, 1);
+    }
+
+    #[tokio::test]
+    async fn operator_person_seed_records_listed_emails_as_aliases() {
+        let surreal = mem_surreal().await;
+        let yaml = moved_person_yaml("    emails:\n      - pat@elsewhere.example\n");
+        reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &yaml,
+            "Firm",
+            false,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("create with an alias");
+        let person = persons::find_by_email_ci(&surreal, "new.firm@example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            persons::aliases(&surreal, person.id).await.unwrap(),
+            vec!["pat@elsewhere.example"]
+        );
+        let found = persons::find_by_any_email(&surreal, "pat@elsewhere.example")
+            .await
+            .unwrap();
+        assert_eq!(found.map(|p| p.id), Some(person.id));
+    }
+
+    #[tokio::test]
+    async fn operator_person_seed_refuses_addresses_that_belong_to_two_people() {
+        let surreal = mem_surreal().await;
+        for (email, name) in [("a@example.com", "Pat A"), ("b@example.com", "Pat B")] {
+            reconcile_yaml(
+                &surreal,
+                SeedModel::Person,
+                &person_yaml(email, name),
+                "Firm",
+                false,
+                &unrestricted_actor(),
+            )
+            .await
+            .expect("seed");
+        }
+        let yaml = "lookup_fields:\n  - email\nrecords:\n  - email: a@example.com\n    name: Pat A\n    previous_email: b@example.com\n";
+        let error = reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            yaml,
+            "Firm",
+            true,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect_err("two people");
+        assert!(error.to_string().contains("site person merge"), "{error}");
     }
 
     #[tokio::test]

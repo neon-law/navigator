@@ -143,6 +143,7 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
     vec![
         ("GET", "/app/api/people", get(list_people)),
         ("POST", "/app/api/people", post(create_person)),
+        ("POST", "/app/api/people/merge", post(merge_people)),
         ("GET", "/app/api/people/{id}", get(get_person)),
         ("PATCH", "/app/api/people/{id}", patch(update_person)),
         ("DELETE", "/app/api/people/{id}", delete(delete_person)),
@@ -1024,6 +1025,52 @@ async fn delete_person(
         Ok(deleted) => Json(deleted).into_response(),
         Err(e) => mutation_error(e),
     }
+}
+
+/// `POST /app/api/people/merge`: fold a duplicate Person into the one to keep
+/// (LAW-169). Both are named by an email they answer to. Scoped sessions
+/// (CI seed or document tokens) never reach it.
+async fn merge_people(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Json(input): Json<MergePeopleRequest>,
+) -> Response {
+    use store::person_merge::PersonMergeError;
+    if session.scope.is_some() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "scope_violation",
+                "message": "a scoped session cannot merge people",
+            })),
+        )
+            .into_response();
+    }
+    match store::person_merge::merge_by_email(&state.surreal, &input.keep, &input.drop).await {
+        Ok(report) => Json(report).into_response(),
+        Err(error) => {
+            let (status, code) = match &error {
+                PersonMergeError::SameRecord => (StatusCode::BAD_REQUEST, "same_person"),
+                PersonMergeError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
+                PersonMergeError::Blocked => (StatusCode::CONFLICT, "blocked"),
+                PersonMergeError::Person(_) | PersonMergeError::Db(_) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "merge_failed")
+                }
+            };
+            (
+                status,
+                Json(serde_json::json!({ "error": code, "message": error.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// The two Persons a merge names, each by an email it answers to.
+#[derive(Debug, Deserialize)]
+struct MergePeopleRequest {
+    keep: String,
+    drop: String,
 }
 
 async fn send_welcome(

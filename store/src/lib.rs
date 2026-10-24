@@ -147,6 +147,7 @@ pub mod notation_sources;
 pub mod notations;
 pub mod participation;
 pub mod people_commands;
+pub mod person_merge;
 pub mod persons;
 pub mod playbooks;
 pub mod postgres;
