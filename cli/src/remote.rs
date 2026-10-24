@@ -431,7 +431,8 @@ fn parse_seed_counts(body: &str) -> SeedCounts {
 }
 
 /// `navigator site person merge <keep> <drop>`: one `POST
-/// /app/api/people/merge`, printing the addresses the kept Person answers to.
+/// /app/api/people/merge`, printing how many addresses the kept Person answers to (never the
+/// parsed `keep`/`drop` arguments, which `CodeQL` treats as secrets).
 pub async fn merge_people(host: Option<String>, keep: &str, drop: &str) -> ExitCode {
     run(async {
         let (base, token) = resolve(host.as_deref())?;
@@ -452,17 +453,8 @@ pub async fn merge_people(host: Option<String>, keep: &str, drop: &str) -> ExitC
             return Err(anyhow!("merge refused: {status}: {message}"));
         }
         let report: serde_json::Value = serde_json::from_str(&body).context("read merge report")?;
-        let emails = report["emails"]
-            .as_array()
-            .map(|emails| {
-                emails
-                    .iter()
-                    .filter_map(|email| email.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default();
-        println!("merged {drop} into {keep}; the kept Person answers to: {emails}");
+        let addresses = report["emails"].as_array().map_or(0, Vec::len);
+        println!("merged the two People; the kept Person answers to {addresses} address(es)");
         Ok(())
     })
     .await
@@ -8878,5 +8870,26 @@ mod tests {
         let probe = probe_upload(&files, "", "ABS:scratch/x.md", None).await;
         assert_eq!(probe.exit, ExitCode::SUCCESS);
         assert_eq!(probe.posted_slugs, vec![None]);
+    }
+
+    /// `CodeQL` treats every value read from the parsed CLI enum as a secret, so
+    /// the merge report line must never interpolate `keep` or `drop`.
+    #[test]
+    fn merge_report_line_never_echoes_parsed_arguments() {
+        let source = include_str!("remote.rs");
+        let start = source
+            .find("pub async fn merge_people")
+            .expect("merge_people");
+        let end = source[start..].find("\n}\n").expect("end of merge_people") + start;
+        let body = &source[start..end];
+        for line in body.lines().filter(|line| line.contains("println!")) {
+            assert!(
+                !line.contains("{keep}")
+                    && !line.contains("{drop}")
+                    && !line.contains("keep,")
+                    && !line.contains("drop,"),
+                "merge output must not echo parsed arguments: {line}"
+            );
+        }
     }
 }
