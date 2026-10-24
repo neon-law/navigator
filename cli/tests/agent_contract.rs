@@ -16,6 +16,8 @@ fn canonical_contract_preserves_project_boundaries_and_current_tool_guidance() {
         "Gmail** — client instructions and correspondence. Read messages and create drafts only; never send, reply to,",
         "Google Drive** — meeting notes, transcripts, and large document intake.",
         "Keep client identities and matter facts out of",
+        "notes/HANDOFF-<topic>.md.local",
+        "never append a contradiction",
         "## Final documents only",
         "Never deliver a fill-in-the-blank document",
         "Matter Pages",
