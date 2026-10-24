@@ -101,6 +101,21 @@ pub(crate) fn resolve(
     })
 }
 
+/// Deterministic, nonrecursive regular-file enumeration. Symlinks are excluded.
+pub(crate) fn directory_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in
+        std::fs::read_dir(dir).with_context(|| format!("read directory {}", dir.display()))?
+    {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            files.push(entry.path());
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
 /// The checkout holding `file`: the nearest ancestor with a `navigator.yaml`
 /// for `project_code`, else `cwd`. Walking up is what lets an upload typed
 /// from a subfolder (or with `..` in the path) read the same slug as one typed
@@ -425,5 +440,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(other.root, std::path::absolute(dir.path()).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    #[test]
+    fn same_stem_and_punctuation_keep_distinct_extension_preserving_identities() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut slugs = std::collections::HashSet::new();
+        for filename in ["a.pdf", "a.PNG", "a (1).pdf", "a-1.pdf"] {
+            let file = dir.path().join(filename);
+            std::fs::write(&file, filename).unwrap();
+            let target = super::resolve(dir.path(), "acme", &file, None).unwrap();
+            let slug = target.slug.as_deref().unwrap_or(filename);
+            assert!(store::documents::validate_document_slug(filename, slug).is_ok());
+            assert!(
+                slugs.insert(slug.to_string()),
+                "filename identities must not collapse"
+            );
+        }
+    }
+
+    #[test]
+    fn enumeration_is_sorted_nonrecursive_and_excludes_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("z.png"), "z").unwrap();
+        std::fs::write(dir.path().join("a.PDF"), "a").unwrap();
+        std::fs::create_dir(dir.path().join("nested")).unwrap();
+        std::fs::write(dir.path().join("nested/x.pdf"), "x").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("z.png"), dir.path().join("link.png")).unwrap();
+        let files = super::directory_files(dir.path()).unwrap();
+        assert_eq!(
+            files,
+            vec![dir.path().join("a.PDF"), dir.path().join("z.png")]
+        );
+        for file in files {
+            let target = super::resolve(dir.path(), "acme", &file, None).unwrap();
+            assert!(target.slug.is_none());
+            let filename = file.file_name().unwrap().to_str().unwrap();
+            assert!(store::documents::validate_document_slug(filename, filename).is_ok());
+        }
     }
 }

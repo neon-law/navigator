@@ -3841,10 +3841,9 @@ impl ExecutionArgs {
 enum DocumentAction {
     /// File a local document into a matter (`POST /app/api/projects/{id}/documents`).
     ///
-    /// Writes no local pointer itself — the door only returns the filed
-    /// revision's record. From inside a Project checkout, follow it with
-    /// `navigator project gate --check`, which writes the missing
-    /// `blobs/<slug>.yaml` pointer for every row this login can see.
+    /// Writes the returned `blobs/<slug>.yaml` pointer when the file belongs
+    /// to a checkout for this Project. `navigator project gate --check`
+    /// reconciles the other pointers this login can see.
     #[command(after_long_help = DOCUMENT_UPLOAD_KIND_HELP)]
     Upload {
         #[command(flatten)]
@@ -3854,8 +3853,11 @@ enum DocumentAction {
         #[arg(long)]
         project: String,
         /// Path to the file to upload.
-        #[arg(long)]
-        file: PathBuf,
+        #[arg(long, required_unless_present = "dir", conflicts_with = "dir")]
+        file: Option<PathBuf>,
+        /// Upload regular files in this directory, sorted by name, without recursing.
+        #[arg(long, required_unless_present = "file", conflicts_with_all = ["file", "slug"])]
+        dir: Option<PathBuf>,
         /// Required asset-lane kind. An invalid value prints the accepted enum.
         #[arg(long, value_parser = parse_asset_kind)]
         kind: String,
@@ -5463,6 +5465,7 @@ async fn run_document(action: DocumentAction) -> ExitCode {
             host,
             project,
             file,
+            dir,
             kind,
             visibility,
             description,
@@ -5472,6 +5475,24 @@ async fn run_document(action: DocumentAction) -> ExitCode {
             quality,
             execution,
         } => {
+            if let Some(dir) = dir {
+                return remote::document_upload_directory(
+                    host.host.as_deref(),
+                    &project,
+                    &dir,
+                    &kind,
+                    Some(&visibility),
+                    description.as_deref(),
+                    content_type.as_deref(),
+                    quality.as_deref(),
+                    &execution.record(),
+                    folder,
+                )
+                .await;
+            }
+            let Some(file) = file else {
+                return ExitCode::from(2);
+            };
             remote::document_upload(
                 host.host.as_deref(),
                 &project,
@@ -7724,4 +7745,29 @@ async fn run_synthetic_portfolio(target: Option<String>, apply: bool) -> ExitCod
         ))
     );
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod batch_upload_args_tests {
+    use super::*;
+    #[test]
+    fn upload_requires_exactly_one_source_and_slug_is_single_file_only() {
+        let base = [
+            "navigator",
+            "site",
+            "document",
+            "upload",
+            "--project",
+            "acme",
+            "--kind",
+            "exhibit",
+        ];
+        let parse =
+            |extra: &[&str]| Cli::try_parse_from(base.iter().copied().chain(extra.iter().copied()));
+        assert!(parse(&["--dir", "exhibits"]).is_ok());
+        assert!(parse(&["--file", "a.pdf"]).is_ok());
+        assert!(parse(&[]).is_err());
+        assert!(parse(&["--file", "a.pdf", "--dir", "exhibits"]).is_err());
+        assert!(parse(&["--dir", "exhibits", "--slug", "a.pdf"]).is_err());
+    }
 }
