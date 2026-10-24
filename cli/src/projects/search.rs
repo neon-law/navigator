@@ -344,10 +344,17 @@ struct Part {
 
 async fn extract(path: &Path, bytes: &[u8]) -> Extracted {
     match extension(path).as_str() {
-        "pdf" => pdf_extract::extract_text_from_mem_by_pages(bytes).map_or_else(
-            |error| Extracted::Error(format!("PDF decode error: {error}")),
-            Extracted::Pages,
-        ),
+        "pdf" => {
+            // The parser can panic on malformed numeric objects. Keep that failure local
+            // to this file and cache it like an ordinary extraction error.
+            match std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem_by_pages(bytes)) {
+                Ok(result) => result.map_or_else(
+                    |error| Extracted::Error(format!("PDF decode error: {error}")),
+                    Extracted::Pages,
+                ),
+                Err(_) => Extracted::Error("PDF extraction panicked; file was not searched".into()),
+            }
+        }
         "eml" => match mail_parser::MessageParser::default().parse(bytes) {
             Some(message) => {
                 let bodies = (0..message.text_body_count())
@@ -545,6 +552,98 @@ mod tests {
         let mut bytes = Vec::new();
         document.save_to(&mut bytes).unwrap();
         bytes
+    }
+
+    fn panicking_pdf() -> Vec<u8> {
+        let mut document = lopdf::Document::load_mem(&two_page_pdf()).unwrap();
+        let page = *document.get_pages().values().next().unwrap();
+        document
+            .get_object_mut(page)
+            .unwrap()
+            .as_dict_mut()
+            .unwrap()
+            .set(
+                "MediaBox",
+                vec![
+                    lopdf::Object::Name(b"invalid-number".to_vec()),
+                    0.into(),
+                    612.into(),
+                    792.into(),
+                ],
+            );
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn synthetic_pdf_reproduces_parser_panic() {
+        let bytes = panicking_pdf();
+        assert!(std::panic::catch_unwind(|| {
+            pdf_extract::extract_text_from_mem_by_pages(&bytes)
+        })
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn pdf_panic_preserves_hits_and_reports_each_failed_file() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("documents")).unwrap();
+        fs::create_dir_all(root.path().join("notes")).unwrap();
+        fs::write(root.path().join("documents/a.txt"), "marker before").unwrap();
+        let bytes = panicking_pdf();
+        for name in ["b.pdf", "c.pdf"] {
+            fs::write(root.path().join("documents").join(name), &bytes).unwrap();
+        }
+        fs::write(root.path().join("documents/d.pdf"), two_page_pdf()).unwrap();
+        fs::write(root.path().join("notes/after.md"), "marker after").unwrap();
+        let report = search("marker", root.path(), true, 1, false).await.unwrap();
+        assert_eq!(
+            report
+                .hits
+                .iter()
+                .map(|hit| hit.path.as_str())
+                .collect::<Vec<_>>(),
+            ["documents/a.txt", "documents/d.pdf", "notes/after.md"]
+        );
+        assert_eq!(report.coverage.searched_by_kind.get("pdf"), Some(&1));
+        for path in ["documents/b.pdf", "documents/c.pdf"] {
+            let missed = report
+                .coverage
+                .not_searched
+                .iter()
+                .find(|missed| missed.path == path)
+                .unwrap();
+            assert_eq!(missed.kind, "pdf");
+            assert_eq!(missed.page, None);
+            assert_eq!(
+                missed.reason,
+                "PDF extraction panicked; file was not searched"
+            );
+        }
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["hits"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            super::run("marker", root.path(), true, 1, true, false).await,
+            std::process::ExitCode::from(2)
+        );
+    }
+
+    #[tokio::test]
+    async fn pdf_decode_error_remains_a_coverage_failure() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("documents")).unwrap();
+        fs::write(root.path().join("documents/broken.pdf"), b"not a PDF").unwrap();
+        let report = search("marker", root.path(), false, 0, false)
+            .await
+            .unwrap();
+        assert!(report.hits.is_empty());
+        assert!(report.coverage.searched_by_kind.is_empty());
+        assert_eq!(report.coverage.not_searched.len(), 1);
+        assert_eq!(report.coverage.not_searched[0].path, "documents/broken.pdf");
+        assert!(report.coverage.not_searched[0]
+            .reason
+            .starts_with("PDF decode error:"));
     }
 
     #[tokio::test]
