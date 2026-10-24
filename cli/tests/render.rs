@@ -211,7 +211,8 @@ fn refuses_an_output_extension_the_command_does_not_support() {
         "an unsupported output extension must be refused"
     );
     assert!(
-        String::from_utf8_lossy(&result.stderr).contains("output file extension does not match the render format"),
+        String::from_utf8_lossy(&result.stderr)
+            .contains("output file extension does not match the render format"),
         "stderr: {}",
         String::from_utf8_lossy(&result.stderr)
     );
