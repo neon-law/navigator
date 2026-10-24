@@ -17,6 +17,41 @@ public links. A profile URL or Business Suite insights URL is not a post permali
 
 ## Publish
 
+### Choose the environment and operation first
+
+- **Staging stores Post records and uploaded media.** Use `site blog record` with an actual publication time no
+  later than now for a website preview. Do not queue social destinations there. A staging Post is independent of the
+  production Post; copying media and records does not copy social authorization.
+- **Production sends to approved social destinations.** Run preflight, verify the intended accounts, then use
+  `site blog publish` or the production calendar. Use `record` in production only for an approved website-only Post or
+  an existing manual publication. It marks the Post public immediately, and `publish` refuses that Post afterward. Do
+  not record first when the intended next step is social scheduling.
+- **A website Post is not a provider receipt.** A published website record proves no Instagram, TikTok, or other
+  social delivery. Report each destination from its confirmed Social Publication receipt.
+
+The production calendar at `/app/social/calendar` schedules one Post per submission. To queue four or five approved
+Posts, repeat the form with distinct slugs, uploaded video keys, verified destinations, and explicit times with UTC
+offsets. Staging previews can use matching slugs because the deployments have separate records. Keep the production
+Posts unpublished until scheduling; do not duplicate a public Post under another slug to bypass the resend guard.
+
+The current calendar and CLI publish API put the shared caption in `description`, whose store limit is 200 characters.
+`body_markdown` is website copy, not the social caption. Preserve longer approved wording in the website body, and
+report the caption limitation before social scheduling; do not silently shorten approved social copy. The store and
+worker support some per-provider captions, but this publish input currently does not expose them.
+
+Scheduling currently uses Restate: `portal/src/blog_api.rs::queue_publication` starts `SocialPublisher`, whose durable
+sleep waits for the publication time in `workflows-service/src/social_publisher.rs`. Its reconciler recovers scheduled
+Posts through the same engine. DBOS does not yet run either social workflow; see
+[`dbos-cutover-matrix.md`](../../../docs/dbos-cutover-matrix.md). Do not claim that enabling DBOS migrates this path.
+Before a cutover, preserve authorization, stable publication identity, receipt reconciliation, and the production-only
+egress gate, and prove restart/replay without duplicate provider sends.
+
+These contracts are grounded in `portal/src/blog_api.rs` (`record`, `prepare`, `queue_publication`),
+`webapp/src/brand_blog_posts.rs::schedule_post_form`, `store/src/posts.rs::validate_copy`, and
+`workflows-service/src/social_publisher.rs` (including its zero-provider-call tests for nonproduction environments).
+
+### Prepare and send
+
 1. Check `navigator site whoami --host <host>`. The caller must be Owner or the Brand Firm's Admin DRI.
 2. Run the read-only preflight before uploading:
 
