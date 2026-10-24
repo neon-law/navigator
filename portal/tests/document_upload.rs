@@ -202,11 +202,15 @@ fn request_body(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn request_body_with_slug(bytes: &[u8], slug: Option<&str>) -> Vec<u8> {
+    request_body_of_kind(bytes, slug, "unclassified")
+}
+
+fn request_body_of_kind(bytes: &[u8], slug: Option<&str>, kind: &str) -> Vec<u8> {
     let mut body = serde_json::json!({
         "filename": "synthetic-document.bin",
         "content_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
         "content_type": "application/octet-stream",
-        "kind": "unclassified",
+        "kind": kind,
         "visibility": "internal"
     });
     if let Some(slug) = slug {
@@ -279,6 +283,31 @@ async fn accepts_a_document_well_over_the_framework_default() {
 
     assert_eq!(result["status"], 201);
     assert_eq!(result["body"]["current_version"]["size_bytes"], bytes.len());
+}
+
+#[tokio::test]
+async fn accepts_court_hearing_audio_over_the_general_limit_as_a_transcript() {
+    let fixture = fixture("upload-limit-transcript").await;
+    let bytes = vec![b'x'; store::documents::MAX_DOCUMENT_UPLOAD_BYTES + 1];
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/app/api/projects/{}/documents",
+                    fixture.project_id
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .extension(fixture.session.clone())
+                .body(Body::from(request_body_of_kind(&bytes, None, "transcript")))
+                .expect("build upload"),
+        )
+        .await
+        .expect("run upload");
+
+    assert_eq!(response.status().as_u16(), 201);
 }
 
 #[tokio::test]
