@@ -44,18 +44,28 @@ gh api repos/neon-law/navigator/commits/<sha>/check-runs \
 Firm administers rather than a checked-in pair. The target resolves in precedence order — the explicit `owner/name`
 argument, then `GITHUB_REPOSITORY`, then the checkout's `origin` remote.
 
-The authorization boundary is a **`(host, organization)` pair**: the public organization holding Navigator, and this
-deployment's own `NAVIGATOR_GITHUB_ORG`, on the host `NAVIGATOR_GIT_HOST` names. A repository in neither organization is
-refused before a token is read, so an incidental checkout of someone else's fork cannot become a write target by being
-the current directory. The host alone was the boundary while every repository the Firm owned sat on a private tenant; on
-a public host it admits any repository on GitHub, which is why the organization came back.
+The authorization boundary is a **`(host, organization)` pair**: the source organizations — `neon-law` and
+`neon-law-source-code` — and this deployment's own `NAVIGATOR_GITHUB_ORG`, on the host `NAVIGATOR_GIT_HOST` names. A
+repository in none of these organizations is refused before a token is read, so an incidental checkout of someone else's
+fork cannot become a write target by being the current directory. The host alone was the boundary while every repository
+the Firm owned sat on a private tenant; on a public host it admits any repository on GitHub, which is why the
+organization came back.
 
-Policy is explicit, and it is not an allowlist. It forks by organization: a repository in the public organization gets
+Policy is explicit, and it is not an allowlist. It forks by organization: a repository in a public organization gets
 `COMMON_POLICY` and one in the deployment's own gets `CLIENT_POLICY`, which is the same gate with client-confidential
 defaults — private visibility, and none of the open-source governance files a published repository carries. That gate,
 in either organization, is the `production` branch protections, the CODEOWNERS assertion, and the merge policy — pull
 requests only, squash only, auto-merge, automatic head-branch deletion, and squash commits titled and described from the
 pull request.
+
+GitHub `neon-law` is Navigator's public organization: Navigator, its Homebrew tap, the Zed LSP extension,
+`neon-law-postgres`, and the three sample matters live there. `neon-law-source-code`, where Navigator used to live, now
+holds only the published `navigator-ux`, so it keeps the public default too.
+
+The private client-matter repositories still in `neon-law` are moving to Forgejo. Until they are gone, an interim guard
+keyed on **live** visibility keeps them private in posture: a repository GitHub reports as private is reconciled with
+the client-confidential publication half — no push-protection payload and no open-source governance — whatever its
+organization's default. The gate half is unchanged. The guard reads visibility and never writes it.
 
 Repository features are reconciled alongside the merge policy, in the same `PATCH`, and all three are off: Issues,
 Projects, and the wiki. Issue tracking is Linear's, so a repository-level tracker is a second inbox nobody reads, and a
@@ -66,14 +76,18 @@ rather than trusting a setting nobody re-checks.
 Secret-scanning **push protection** rides in that same `PATCH`, on a published repository only. A credential pushed to a
 public tree is compromised the moment it lands and deleting the commit does not undo that — the rotation is mandatory
 either way — so refusing the push is the only mitigation that happens before the disclosure. `secret_scanning` itself is
-not asserted: GitHub enables it on every public repository and does not let it be turned off. Non-provider patterns are
-not enabled either, deliberately; generic high-entropy matching against legal prose and rendered PDFs blocks pushes for
-nothing, and a gate that fires on nothing gets bypassed by habit.
+asserted alongside it: a repository made public after the fact can read scanning `disabled`, and GitHub silently drops
+push protection while scanning is off. Non-provider patterns are not enabled either, deliberately; generic high-entropy
+matching against legal prose and rendered PDFs blocks pushes for nothing, and a gate that fires on nothing gets bypassed
+by habit.
 
-The gate is `default_visibility`, so a repository in this deployment's own organization omits the key from the body
+The gate is `default_visibility` after the live-visibility guard, so a private repository omits the key from the body
 entirely rather than sending it as `null`. That is not a courtesy: push protection at a private repository without
-GitHub Advanced Security answers 422, so an unconditional field would fail every reconcile in that organization instead
-of leaving those repositories alone.
+GitHub Advanced Security answers 422, so an unconditional field would fail every client-matter reconcile instead of
+leaving those repositories alone.
+
+Visibility itself is never written. A live visibility that differs from the policy's default is a dry-run finding only:
+flipping it would either publish a client matter or unpublish the product.
 
 `neon-law/navigator` alone adds `NAVIGATOR_POLICY`'s one extra — the release-tag ruleset — because it is the only
 repository that cuts a release.
@@ -126,7 +140,7 @@ skills. Use the target release CLI: an override for a different release updates 
 the matching CLI is required for skill reconciliation. It preserves the rest of the manifest and checks whether the
 repository is in scope:
 
-- `neon-law-source-code/navigator` and the Homebrew tap carry no generated `ci.yml`/`cd.yml` in this shape, so
+- `neon-law/navigator` and the Homebrew tap carry no generated `ci.yml`/`cd.yml` in this shape, so
   this half of the reconcile is a no-op for both, same as before this feature existed.
 - A deploy repository — named by the optional `NAVIGATOR_GITHUB_DEPLOY_REPO` environment variable, never a literal in
   source — carries `ci.yml`/`ship.yml`, not the Project shape, and is excluded the same way.
