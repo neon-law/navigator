@@ -44,6 +44,14 @@ For architecture or process questions, convene the `council` skill; for how a cl
   the client is meant to read that document. Treat every change to `visibility: client` as a deliberate client-release
   decision. Review every change to a `client:` lens under `pages:`; it is what the client sees. For each Deadline,
   choose deliberately whether it is internal or client-visible.
+* "Pull changes" means rebase the current branch onto the latest `origin/main`; never `git pull` into a PR branch,
+  merge `origin/main`, or only fetch. Start from a clean tree (commit work in progress; never stash), then `git fetch
+  origin && git rebase origin/main` (on `main` itself, `git pull --rebase origin main`). Resolve conflicts, `git add`,
+  `git rebase --continue`; if they cannot be resolved cleanly, `git rebase --abort` and report what conflicted. Commits
+  already squash-merged into `main` drop out of the rebase; where they conflict, keep `origin/main`'s version. Run
+  `navigator project gate`, then push with `git push --force-with-lease`, never plain `--force`, and never force-push
+  `main`. A host-side "sync with base branch" tool merges rather than rebases; use it only when the sandbox blocks a
+  rebase, and say so.
 * The required check is `ci`, which runs `navigator project gate`.
 * The forge enforces branch and merge settings; client-visibility decisions remain part of human review. A pre-commit
   hook is a convenience only.
