@@ -22,6 +22,12 @@ trailing signature from `NAVIGATOR_GMAIL_SIGNATURE`. It preserves common sign-of
 undelimited prose as a signature, so this cleanup is not a signature-detection guarantee; an attorney must review the
 complete draft in Gmail before any separate sending action.
 
+## Recipients
+
+`--to`, `--cc`, and `--bcc` each repeat or take a comma-separated list. For two parties, pass `--to a@example.test --to
+b@example.test --cc c@example.test`. An update with `--draft-id` replaces the whole draft, so pass every recipient
+again. When Gmail is not set up, the error lists every missing setting at once.
+
 ## Attachments
 
 `navigator mail draft --attach <path>` adds a file to the draft; repeat the flag for more files. It works with `--to`,

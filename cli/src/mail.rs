@@ -40,9 +40,16 @@ pub enum MailAction {
     /// Create or update an unsent draft. Use --thread to draft a reply.
     #[command(after_long_help = DRAFT_ATTACH_HELP)]
     Draft {
-        /// Recipient. Defaults to the latest sender when replying with --thread.
-        #[arg(long)]
-        to: Option<String>,
+        /// Recipient. Repeat or comma-separate for several. Defaults to the latest sender when
+        /// replying with --thread.
+        #[arg(long, value_delimiter = ',')]
+        to: Vec<String>,
+        /// Cc recipient. Repeat or comma-separate for several.
+        #[arg(long, value_delimiter = ',')]
+        cc: Vec<String>,
+        /// Bcc recipient. Repeat or comma-separate for several.
+        #[arg(long, value_delimiter = ',')]
+        bcc: Vec<String>,
         /// Subject. Defaults to the latest thread subject when replying.
         #[arg(long)]
         subject: Option<String>,
@@ -375,6 +382,18 @@ fn safe_header<'a>(value: &'a str, name: &str) -> Result<&'a str> {
     Ok(value.trim())
 }
 
+/// Joins recipients into one header value, refusing line breaks and blanks.
+fn address_list(values: &[String], name: &str) -> Result<String> {
+    let mut cleaned = Vec::new();
+    for value in values {
+        let value = safe_header(value, name)?;
+        if !value.is_empty() {
+            cleaned.push(value);
+        }
+    }
+    Ok(cleaned.join(", "))
+}
+
 struct Attachment {
     filename: String,
     mime_type: &'static str,
@@ -507,13 +526,17 @@ fn filename_parameters(filename: &str) -> (String, String) {
 }
 
 fn draft_raw(
-    to: &str,
+    to: &[String],
+    cc: &[String],
+    bcc: &[String],
     subject: &str,
     body: &str,
     in_reply_to: Option<&str>,
     attachments: &[Attachment],
 ) -> Result<String> {
-    let to = safe_header(to, "recipient")?;
+    let to = address_list(to, "recipient")?;
+    let cc = address_list(cc, "cc recipient")?;
+    let bcc = address_list(bcc, "bcc recipient")?;
     let subject = safe_header(subject, "subject")?;
     if to.is_empty() || subject.is_empty() {
         return Err(anyhow!("recipient and subject are required"));
@@ -523,7 +546,14 @@ fn draft_raw(
     } else {
         encoded_word(subject)
     };
-    let mut raw = format!("To: {to}\r\nSubject: {subject}\r\nMIME-Version: 1.0\r\n");
+    let mut raw = format!("To: {to}\r\n");
+    if !cc.is_empty() {
+        let _ = write!(raw, "Cc: {cc}\r\n");
+    }
+    if !bcc.is_empty() {
+        let _ = write!(raw, "Bcc: {bcc}\r\n");
+    }
+    let _ = write!(raw, "Subject: {subject}\r\nMIME-Version: 1.0\r\n");
     if let Some(message_id) = in_reply_to {
         let message_id = safe_header(message_id, "reply message id")?;
         if !message_id.is_empty() {
@@ -744,11 +774,33 @@ fn scoped_query(query: &str, project: Option<&str>) -> String {
     format!("({query}) (from:{email} OR to:{email})")
 }
 
+/// Names every missing Gmail setting at once, with the fix for each.
+fn setup_from(account: Option<String>, client_id: Option<String>) -> Result<(String, String)> {
+    let account = account.filter(|value| !value.trim().is_empty());
+    let client_id = client_id.filter(|value| !value.trim().is_empty());
+    let mut steps = Vec::new();
+    if account.is_none() {
+        steps.push(
+            "export NAVIGATOR_GMAIL_ACCOUNT=<gmail address whose refresh token is in the macOS Keychain, service com.neonlaw.navigator.gmail.refresh-token>",
+        );
+    }
+    if client_id.is_none() {
+        steps.push("export NAVIGATOR_GMAIL_CLIENT_ID=<Google OAuth client id>");
+    }
+    match (account, client_id) {
+        (Some(account), Some(client_id)) => Ok((account, client_id)),
+        _ => Err(anyhow!(
+            "Gmail is not set up for navigator mail. Set both before retrying (see docs/mail-cli.md): {}",
+            steps.join("; ")
+        )),
+    }
+}
+
 async fn client() -> Result<GmailClient> {
-    let account = std::env::var("NAVIGATOR_GMAIL_ACCOUNT")
-        .context("set NAVIGATOR_GMAIL_ACCOUNT to the Gmail account stored in Keychain")?;
-    let client_id = std::env::var("NAVIGATOR_GMAIL_CLIENT_ID")
-        .context("set NAVIGATOR_GMAIL_CLIENT_ID to the configured Google OAuth client id")?;
+    let (account, client_id) = setup_from(
+        std::env::var("NAVIGATOR_GMAIL_ACCOUNT").ok(),
+        std::env::var("NAVIGATOR_GMAIL_CLIENT_ID").ok(),
+    )?;
     let refresh_token = keychain_refresh_token(&account)?;
     let response = reqwest::Client::new()
         .post(GOOGLE_TOKEN_API)
@@ -834,6 +886,8 @@ async fn run_inner(action: MailAction) -> Result<()> {
         }
         MailAction::Draft {
             to,
+            cc,
+            bcc,
             subject,
             body_file,
             thread,
@@ -842,6 +896,8 @@ async fn run_inner(action: MailAction) -> Result<()> {
         } => {
             let request = DraftRequest {
                 to,
+                cc,
+                bcc,
                 subject,
                 body_file,
                 thread,
@@ -864,7 +920,9 @@ async fn run_inner(action: MailAction) -> Result<()> {
 }
 
 struct DraftRequest {
-    to: Option<String>,
+    to: Vec<String>,
+    cc: Vec<String>,
+    bcc: Vec<String>,
     subject: Option<String>,
     body_file: PathBuf,
     thread: Option<String>,
@@ -887,6 +945,8 @@ where
 {
     let DraftRequest {
         to,
+        cc,
+        bcc,
         subject,
         body_file,
         thread,
@@ -909,13 +969,14 @@ where
             .messages
             .last()
             .ok_or_else(|| anyhow!("thread has no messages"))?;
-        let to = to
-            .or_else(|| {
-                header(latest, "Reply-To")
-                    .or_else(|| header(latest, "From"))
-                    .map(str::to_owned)
-            })
-            .ok_or_else(|| anyhow!("reply recipient is unavailable; pass --to"))?;
+        let to = if to.is_empty() {
+            vec![header(latest, "Reply-To")
+                .or_else(|| header(latest, "From"))
+                .map(str::to_owned)
+                .ok_or_else(|| anyhow!("reply recipient is unavailable; pass --to"))?]
+        } else {
+            to
+        };
         let subject = subject
             .or_else(|| header(latest, "Subject").map(reply_subject))
             .ok_or_else(|| anyhow!("reply subject is unavailable; pass --subject"))?;
@@ -923,13 +984,24 @@ where
         (to, subject, message_id)
     } else {
         warn_if_project_draft_thread_unverified(project.as_deref(), draft_id.as_deref());
+        if to.is_empty() {
+            return Err(anyhow!("pass --to or --thread"));
+        }
         (
-            to.ok_or_else(|| anyhow!("pass --to or --thread"))?,
+            to,
             subject.ok_or_else(|| anyhow!("pass --subject or --thread"))?,
             None,
         )
     };
-    let raw = draft_raw(&to, &subject, &body, in_reply_to.as_deref(), &attachments)?;
+    let raw = draft_raw(
+        &to,
+        &cc,
+        &bcc,
+        &subject,
+        &body,
+        in_reply_to.as_deref(),
+        &attachments,
+    )?;
     let draft = DraftMessage {
         id: draft_id,
         thread_id: thread,
@@ -1175,7 +1247,9 @@ mod tests {
     #[test]
     fn draft_headers_cannot_inject_a_send_path() {
         assert!(draft_raw(
-            "attacker@example.test\r\nBcc: victim@example.test",
+            &["attacker@example.test\r\nBcc: victim@example.test".into()],
+            &[],
+            &[],
             "Hello",
             "Thanks!",
             None,
@@ -1183,7 +1257,9 @@ mod tests {
         )
         .is_err());
         assert!(draft_raw(
-            "client@example.test",
+            &["client@example.test".into()],
+            &[],
+            &[],
             "Subject\nBcc: victim@example.test",
             "Thanks!",
             None,
@@ -1461,7 +1537,9 @@ mod tests {
             Some("thread does not appear to belong to this Project's client contact")
         );
         let raw = draft_raw(
-            "explicit@example.test",
+            &["explicit@example.test".into()],
+            &[],
+            &[],
             "Re: A question",
             "Synthetic reply",
             Some("<message-1>"),
@@ -1548,7 +1626,9 @@ mod tests {
         ];
         let attachments = load_attachments(&paths, "Synthetic body").unwrap();
         let raw = draft_raw(
-            "client@example.test",
+            &["client@example.test".into()],
+            &[],
+            &[],
             "Letter",
             "Synthetic body",
             Some("<message-1@example.test>"),
@@ -1583,8 +1663,57 @@ mod tests {
     }
 
     #[test]
+    fn draft_carries_every_to_cc_and_bcc_recipient() {
+        let raw = draft_raw(
+            &["a@example.test".into(), "b@example.test".into()],
+            &["c@example.test".into()],
+            &["d@example.test".into()],
+            "Hello",
+            "Body",
+            None,
+            &[],
+        )
+        .unwrap();
+        assert!(raw.starts_with(
+            "To: a@example.test, b@example.test\r\nCc: c@example.test\r\nBcc: d@example.test\r\nSubject: Hello"
+        ));
+        assert!(draft_raw(
+            &["a@example.test".into()],
+            &["x\nBcc: y".into()],
+            &[],
+            "S",
+            "B",
+            None,
+            &[]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn setup_errors_name_every_missing_setting_at_once() {
+        let error = setup_from(None, Some(" ".into())).unwrap_err().to_string();
+        assert!(
+            error.contains("NAVIGATOR_GMAIL_ACCOUNT")
+                && error.contains("NAVIGATOR_GMAIL_CLIENT_ID")
+        );
+        assert_eq!(
+            setup_from(Some("a@example.test".into()), Some("id".into())).unwrap(),
+            ("a@example.test".to_owned(), "id".to_owned())
+        );
+    }
+
+    #[test]
     fn a_draft_without_attachments_stays_single_part_plain_text() {
-        let raw = draft_raw("client@example.test", "Hello", "Body", None, &[]).unwrap();
+        let raw = draft_raw(
+            &["client@example.test".into()],
+            &[],
+            &[],
+            "Hello",
+            "Body",
+            None,
+            &[],
+        )
+        .unwrap();
         assert!(raw.contains("Content-Type: text/plain; charset=UTF-8\r\n\r\nBody"));
         assert!(!raw.contains("multipart"));
     }
@@ -1638,7 +1767,9 @@ mod tests {
             let connected = std::cell::Cell::new(false);
             let error = save_draft_command(
                 DraftRequest {
-                    to: Some("client@example.test".into()),
+                    to: vec!["client@example.test".into()],
+                    cc: Vec::new(),
+                    bcc: Vec::new(),
                     subject: Some("Large".into()),
                     body_file: body_file.clone(),
                     thread: None,
@@ -1715,7 +1846,9 @@ mod tests {
 
         let created = save_draft_command(
             DraftRequest {
-                to: Some("client@example.test".into()),
+                to: vec!["client@example.test".into()],
+                cc: Vec::new(),
+                bcc: Vec::new(),
                 subject: Some("Letter".into()),
                 body_file: body_file.clone(),
                 thread: None,
@@ -1737,7 +1870,9 @@ mod tests {
 
         let updated = save_draft_command(
             DraftRequest {
-                to: None,
+                to: Vec::new(),
+                cc: Vec::new(),
+                bcc: Vec::new(),
                 subject: None,
                 body_file: body_file.clone(),
                 thread: Some("thread-1".into()),
@@ -1752,7 +1887,9 @@ mod tests {
 
         let cleared = save_draft_command(
             DraftRequest {
-                to: None,
+                to: Vec::new(),
+                cc: Vec::new(),
+                bcc: Vec::new(),
                 subject: None,
                 body_file,
                 thread: Some("thread-1".into()),
