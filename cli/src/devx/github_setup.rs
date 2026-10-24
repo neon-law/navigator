@@ -645,14 +645,17 @@ struct FeatureStatus {
 
 /// The `security_and_analysis` block a published repository is reconciled to.
 ///
-/// Only push protection. `secret_scanning` itself is on for every public
-/// repository and cannot be turned off, so asserting it would restate a fact
-/// rather than converge one; and non-provider patterns are deliberately absent,
-/// because generic high-entropy matching against legal prose and rendered PDFs
-/// blocks pushes for nothing, and a gate that fires on nothing gets bypassed by
-/// habit.
+/// Secret scanning and its push protection. Scanning is asserted too, not
+/// assumed: a repository made public after the fact (`neon-law/navigator` on
+/// 2026-10-23) can read `secret_scanning: disabled`, and GitHub silently drops
+/// a push-protection `enabled` while scanning is off, so a reconcile asserting
+/// push protection alone never converges. Non-provider patterns are
+/// deliberately absent, because generic high-entropy matching against legal
+/// prose and rendered PDFs blocks pushes for nothing, and a gate that fires on
+/// nothing gets bypassed by habit.
 #[derive(Debug, PartialEq, Eq, Serialize)]
 struct SecurityAndAnalysis {
+    secret_scanning: FeatureStatus,
     secret_scanning_push_protection: FeatureStatus,
 }
 
@@ -663,6 +666,8 @@ struct SecurityAndAnalysis {
 /// reconcile exists to leave.
 #[derive(Debug, Deserialize)]
 struct LiveSecurityAndAnalysis {
+    #[serde(default)]
+    secret_scanning: Option<FeatureStatus>,
     #[serde(default)]
     secret_scanning_push_protection: Option<FeatureStatus>,
 }
@@ -2414,6 +2419,9 @@ fn desired_repository_settings(policy: RepositoryPolicy) -> RepositorySettings {
 fn desired_security_and_analysis(policy: RepositoryPolicy) -> Option<SecurityAndAnalysis> {
     match policy.default_visibility {
         Visibility::Public => Some(SecurityAndAnalysis {
+            secret_scanning: FeatureStatus {
+                status: "enabled".to_string(),
+            },
             secret_scanning_push_protection: FeatureStatus {
                 status: "enabled".to_string(),
             },
@@ -2477,15 +2485,17 @@ impl RepositorySettings {
             // rather than a match: GitHub omits it for exactly the repository
             // that has never had push protection configured.
             security_and_analysis: desired_security_and_analysis(policy).map(|_| {
+                let live = repository.security_and_analysis.as_ref();
+                let status = |feature: Option<&FeatureStatus>| FeatureStatus {
+                    status: feature
+                        .map_or("disabled", |feature| feature.status.as_str())
+                        .to_string(),
+                };
                 SecurityAndAnalysis {
-                    secret_scanning_push_protection: FeatureStatus {
-                        status: repository
-                            .security_and_analysis
-                            .as_ref()
-                            .and_then(|live| live.secret_scanning_push_protection.as_ref())
-                            .map_or("disabled", |feature| feature.status.as_str())
-                            .to_string(),
-                    },
+                    secret_scanning: status(live.and_then(|live| live.secret_scanning.as_ref())),
+                    secret_scanning_push_protection: status(
+                        live.and_then(|live| live.secret_scanning_push_protection.as_ref()),
+                    ),
                 }
             }),
         })
@@ -2911,6 +2921,9 @@ mod tests {
             has_wiki: false,
             private: Some(false),
             security_and_analysis: Some(LiveSecurityAndAnalysis {
+                secret_scanning: Some(FeatureStatus {
+                    status: "enabled".to_string(),
+                }),
                 secret_scanning_push_protection: Some(FeatureStatus {
                     status: "enabled".to_string(),
                 }),
@@ -4586,6 +4599,7 @@ mod tests {
             "has_projects": false,
             "has_wiki": false,
             "security_and_analysis": {
+                "secret_scanning": {"status": "enabled"},
                 "secret_scanning_push_protection": {"status": push_protection}
             },
         })
@@ -4954,6 +4968,9 @@ mod tests {
         );
         let mut disabled = matching_repository();
         disabled.security_and_analysis = Some(LiveSecurityAndAnalysis {
+            secret_scanning: Some(FeatureStatus {
+                status: "enabled".to_string(),
+            }),
             secret_scanning_push_protection: Some(FeatureStatus {
                 status: "disabled".to_string(),
             }),
@@ -4961,6 +4978,28 @@ mod tests {
         assert!(
             !settings_match(&disabled, COMMON_POLICY),
             "push protection left off must plan an update"
+        );
+        // The live `neon-law/navigator` state after it went public: scanning
+        // itself off. Push protection cannot hold without it, so the desired
+        // payload enables both and the off state reads as drift.
+        let mut unscanned = matching_repository();
+        unscanned.security_and_analysis = Some(LiveSecurityAndAnalysis {
+            secret_scanning: Some(FeatureStatus {
+                status: "disabled".to_string(),
+            }),
+            secret_scanning_push_protection: Some(FeatureStatus {
+                status: "enabled".to_string(),
+            }),
+        });
+        assert!(
+            !settings_match(&unscanned, COMMON_POLICY),
+            "secret scanning left off must plan an update"
+        );
+        let value = serde_json::to_value(desired_repository_settings(COMMON_POLICY)).unwrap();
+        assert_eq!(
+            value["security_and_analysis"]["secret_scanning"]["status"],
+            serde_json::json!("enabled"),
+            "{value}"
         );
     }
 

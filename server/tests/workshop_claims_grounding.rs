@@ -253,13 +253,13 @@ fn the_gitops_deck_states_the_host_and_organization_boundary_the_cli_enforces() 
     );
 
     // The organization holding Navigator, derived from the slug that names
-    // its transferred repository.
-    let slug = source_str_const(&github_setup, "PRIVATE_NAVIGATOR_SLUG")
-        .expect("github_setup.rs must define PRIVATE_NAVIGATOR_SLUG");
+    // its repository.
+    let slug = source_str_const(&github_setup, "NAVIGATOR_SLUG")
+        .expect("github_setup.rs must define NAVIGATOR_SLUG");
     let navigator_organization = slug
         .split('/')
         .next()
-        .expect("PRIVATE_NAVIGATOR_SLUG is an owner/name slug");
+        .expect("NAVIGATOR_SLUG is an owner/name slug");
     assert!(
         section.contains(navigator_organization),
         "the GitOps section must name `{navigator_organization}` as the organization that is \
