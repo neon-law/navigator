@@ -4178,6 +4178,8 @@ jobs:
     fn canonical_contract_requires_deliberate_client_visibility_review() {
         assert!(AGENT_CONTRACT_BASE.contains("## Branches"));
         assert!(AGENT_CONTRACT_BASE.contains("squash-merged"));
+        assert!(AGENT_CONTRACT_BASE.contains("\"Pull changes\" means rebase"));
+        assert!(AGENT_CONTRACT_BASE.contains("--force-with-lease"));
         assert!(AGENT_CONTRACT_BASE.contains("deleted on merge"));
         assert!(AGENT_CONTRACT_BASE.contains("Open pull requests ready for review by default"));
         assert!(AGENT_CONTRACT_BASE.contains("visibility: internal"));
