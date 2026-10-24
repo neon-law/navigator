@@ -6965,25 +6965,13 @@ fn rendered_answers(
         .collect()
 }
 
-fn run_render(
+/// Run the validation gate for a render: print every violation and return
+/// the exit code to stop with, or `None` when rendering may proceed.
+fn render_validation_gate(
     file: &std::path::Path,
-    out: &std::path::Path,
-    answers: &[(String, String)],
-    output_extension: &str,
+    contents: &str,
     preview: bool,
-) -> ExitCode {
-    if !has_extension(out, output_extension) {
-        eprintln!("navigator: output extension must be `.{output_extension}`");
-        return ExitCode::from(2);
-    }
-    let contents = match std::fs::read_to_string(file) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("navigator: read {}: {e}", file.display());
-            return ExitCode::from(2);
-        }
-    };
-
+) -> Option<ExitCode> {
     // Gate on validation: render only when there are no blocking
     // (Error-severity) violations. Use the same DB-free classified rule
     // set as `validate`. Yellow advisories (e.g. N112, "step allowed but
@@ -6991,7 +6979,7 @@ fn run_render(
     // `validate` / `site seed`.
     let source = rules::SourceFile {
         path: file.to_path_buf(),
-        contents: contents.clone(),
+        contents: contents.to_string(),
     };
     let violations: Vec<rules::Violation> =
         rules::navigator_classified_rules_with_codes(&source, &[])
@@ -7013,7 +7001,32 @@ fn run_render(
     }
     if error_count > 0 {
         eprintln!("navigator: {error_count} validation error(s); not rendering");
-        return ExitCode::from(1);
+        return Some(ExitCode::from(1));
+    }
+    None
+}
+
+fn run_render(
+    file: &std::path::Path,
+    out: &std::path::Path,
+    answers: &[(String, String)],
+    output_extension: &str,
+    preview: bool,
+) -> ExitCode {
+    if !has_extension(out, output_extension) {
+        eprintln!("navigator: output extension must be `.{output_extension}`");
+        return ExitCode::from(2);
+    }
+    let contents = match std::fs::read_to_string(file) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("navigator: read {}: {e}", file.display());
+            return ExitCode::from(2);
+        }
+    };
+
+    if let Some(code) = render_validation_gate(file, &contents, preview) {
+        return code;
     }
 
     // Resolve the render frame from the document itself: the template's
