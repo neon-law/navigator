@@ -2361,6 +2361,7 @@ Inline raw-HTML tile: <div>![Team](img/thanks-apple/team-lunch.jpg)</div>\n";
         keys.extend(views::assets::VESTA_UPDATE_VIDEO_KEYS);
         keys.extend(views::assets::VESTA_PHOTOS.iter().map(|(key, _)| *key));
         keys.extend(views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS);
+        keys.extend(views::assets::ARCHITECTURE_PHOTOS);
         keys
     }
 
