@@ -257,7 +257,7 @@ mod tests {
     fn letter_content() -> NotationPreviewContent {
         NotationPreviewContent {
             title: "Onboarding Letter".to_string(),
-            source_href: "https://github.com/neon-law-source-code/navigator/blob/main/templates/notations/neon_law/onboarding__letter.md".to_string(),
+            source_href: "https://github.com/neon-law/navigator/blob/main/templates/notations/neon_law/onboarding__letter.md".to_string(),
             frontmatter: "title: Onboarding Letter\ncode: onboarding__letter".to_string(),
             stage_html: "<article class=\"harvard-stage\" data-harvard-outline>\
                     <section class=\"harvard-unit harvard-unit--depth-1\" data-harvard-path=\"I\">\
@@ -272,7 +272,7 @@ mod tests {
     fn form_content() -> NotationPreviewContent {
         NotationPreviewContent {
             title: "Nevada LLC Formation".to_string(),
-            source_href: "https://github.com/neon-law-source-code/navigator/blob/main/templates/notations/forms/united_states/nevada/state/nv__llc_formation.md".to_string(),
+            source_href: "https://github.com/neon-law/navigator/blob/main/templates/notations/forms/united_states/nevada/state/nv__llc_formation.md".to_string(),
             frontmatter: "title: Nevada LLC Formation\ncode: nv__llc_formation".to_string(),
             stage_html: "<article class=\"harvard-stage\" data-harvard-outline>\
                     <section class=\"harvard-unit harvard-unit--depth-0\" data-harvard-path=\"\">\
@@ -310,11 +310,15 @@ mod tests {
     }
 
     #[test]
-    fn published_preview_does_not_link_to_private_source() {
+    fn published_preview_links_the_repository_without_a_template_source_action() {
         let out = html();
         assert!(
-            !out.contains("github.com/neon-law-source-code/navigator"),
-            "private source link: {out}"
+            out.contains(r#"href="https://github.com/neon-law/navigator""#),
+            "public footer repository link: {out}"
+        );
+        assert!(
+            !out.contains(&letter_content().source_href),
+            "no template-specific source action: {out}"
         );
         assert!(!out.contains("View on GitHub"), "link label: {out}");
         assert!(

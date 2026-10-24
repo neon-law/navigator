@@ -109,13 +109,11 @@ sub-forms, the unsafe field stays unmapped until a lawyer review path can handle
 
 ## The Field-Name = Question-Code Contract
 
-The fill map is not trusted, it is **checked**. Since the question consolidation
-([#233](https://github.com/neon-law-source-code/navigator/issues/233)), a notation's questionnaire states are named
-`<type>__<role>` — `entity__company`, `person__registered_agent`, `people__managing_members`,
-`custom_single_choice__management_structure` — where `<type>` is one of the canonical seeded question codes in
-`store/seeds/Question.yaml`. A field map's answer sources are those same states (directly or by `__role` suffix, exactly
-as `forms::resolve_reauthored` resolves an answer). So a map that fills a real filing must reference only questions the
-questionnaire actually asks, of types the workspace actually seeds.
+The fill map is **checked**. A notation's questionnaire states are named `<type>__<role>` — `entity__company`,
+`person__registered_agent`, `people__managing_members`, `custom_single_choice__management_structure` — where `<type>` is
+one of the canonical seeded question codes in `store/seeds/Question.yaml`. A field map's answer sources are those same
+states (directly or by `__role` suffix, exactly as `forms::resolve_reauthored` resolves an answer). So a map that fills
+a real filing must reference only questions the questionnaire actually asks, of types the workspace actually seeds.
 
 `forms/tests/question_code_contract.rs` is the guard, run offline in `cargo test` with no PDF or network:
 

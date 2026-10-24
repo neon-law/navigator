@@ -1875,19 +1875,19 @@ fn NavigationShowcase() -> Element {
                 "."
             }
             p {
-                "The footer's source-repository line. The count is a prop, read per request from \
-                 a cache a background task refreshes — the component never fetches, which is why \
+                "The footer's source-repository line. The count is a prop, read from \
+                 a cache the server refreshes in the background at most once an hour — the component never fetches, which is why \
                  it renders here with no network at all. Both states are shown, because the \
                  second is the ordinary one before the first refresh lands:"
             }
             GitHubStars {
-                href: "https://github.com/neon-law-source-code/navigator".to_string(),
-                repo: "neon-law-source-code/navigator".to_string(),
+                href: "https://github.com/neon-law/navigator".to_string(),
+                repo: "neon-law/navigator".to_string(),
                 stars: 1234u64,
             }
             GitHubStars {
-                href: "https://github.com/neon-law-source-code/navigator".to_string(),
-                repo: "neon-law-source-code/navigator".to_string(),
+                href: "https://github.com/neon-law/navigator".to_string(),
+                repo: "neon-law/navigator".to_string(),
             }
         }
     }

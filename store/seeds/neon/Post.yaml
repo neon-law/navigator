@@ -103,8 +103,8 @@ records:
     status: published
     publish_at: "2026-06-25T00:00:00Z"
     body_markdown: |
-      **License:** Navigator's first-party source is Apache-2.0; see [current licensing](/glossary/neon-law-navigator)
-      and the repository LICENSE.
+      **Current license:** Navigator's first-party source is MIT OR Apache-2.0, at your option; see
+      [current licensing](https://github.com/neon-law/navigator/blob/main/docs/licensing.md).
 
       ![Ferris trains at sunrise on stone steps.](img/going-all-in-on-rust/ferris-training-hero.png)
 
@@ -476,7 +476,7 @@ records:
                             'facebook_inbound', 'facebook_outbound',
                             'instagram_inbound', 'instagram_outbound',
                             'threads_inbound', 'threads_outbound',
-                            'youtube_inbound', 'youtube_outbound', 'call'];
+                            'youtube_inbound', 'youtube_outbound', 'tiktok_inbound', 'tiktok_outbound', 'call'];
       DEFINE FIELD OVERWRITE direction ON communication TYPE string
           ASSERT $value IN ['inbound', 'outbound', 'internal'];
       DEFINE FIELD OVERWRITE author_person_id ON communication TYPE option<record<person>>;
@@ -582,15 +582,36 @@ records:
 
       ## Implementation notes
 
-      The code above is copied from Navigator at commit `8d63111b`, with comments omitted from the schema excerpt. The
+      The code excerpts above match Navigator’s public source, with comments omitted from the schema excerpt. The
       structured Communication and Inbox foundations correspond to completed issues ENG-160 and ENG-935; the Project
       relationship work to ENG-822; durable summaries to ENG-797 and ENG-944; and structured call notes to LAW-140. These are
       implementation references, not a claim that every integration is activated.
 
       Sources:
 
-      - [communication schema](https://github.com/neon-law/navigator/blob/8d63111b/store/src/schema/navigator.surql#L2393)
-      - [Inbox intake](https://github.com/neon-law/navigator/blob/8d63111b/portal/src/inbox.rs#L55)
-      - [conflict checker](https://github.com/neon-law/navigator/blob/8d63111b/store/src/conflicts.rs#L56)
-      - [summary contract](https://github.com/neon-law/navigator/blob/8d63111b/workflows/src/email_summary.rs#L112)
-      - [sender gate](https://github.com/neon-law/navigator/blob/8d63111b/workflows-service/src/email_summary.rs#L81)
+      - [communication schema](https://github.com/neon-law/navigator/blob/main/store/src/schema/navigator.surql#L2403)
+      - [Inbox intake](https://github.com/neon-law/navigator/blob/main/portal/src/inbox.rs#L54)
+      - [conflict checker](https://github.com/neon-law/navigator/blob/main/store/src/conflicts.rs#L319)
+      - [summary contract](https://github.com/neon-law/navigator/blob/main/workflows/src/email_summary.rs#L112)
+      - [sender gate](https://github.com/neon-law/navigator/blob/main/workflows-service/src/email_summary.rs#L81)
+
+  - brand: neon
+    slug: navigator-is-open-source
+    title: "Navigator is open source"
+    description: "Read, run, and fork Neon Law Navigator under MIT or Apache-2.0."
+    status: published
+    publish_at: "2026-10-23T07:00:00Z"
+    body_markdown: |
+      You can read, run, and fork [Neon Law Navigator](https://github.com/neon-law/navigator). The source is public.
+
+      Navigator brings reusable legal templates, questionnaires, and workflows together in one Rust application.
+      You can explore it locally with three synthetic sample matters, then configure your own deployment.
+
+      First-party code, documentation, and original template material are licensed under MIT OR Apache-2.0, at your
+      option. Third-party components and fonts keep their own terms, and trademarks remain separately protected.
+      The repository's [licensing guide](https://github.com/neon-law/navigator/blob/main/docs/licensing.md) explains
+      the details.
+
+      Start with the [README](https://github.com/neon-law/navigator#readme) for installation and workshops. Keep client
+      information out of public repositories and follow the
+      [contribution guide](https://github.com/neon-law/navigator/blob/main/CONTRIBUTING.md) when sharing changes.

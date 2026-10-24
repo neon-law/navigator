@@ -2,8 +2,7 @@
 
 Every user- and tool-initiated data write — create, update, delete, and workflow actions — travels one shared command.
 The four callers converge on it: the Dioxus runtime (web), the `navigator` CLI, MCP, and A2A. This keeps validation,
-authorization, audit, and durable side effects defined once instead of re-implemented per adapter. The issue of record
-is [navigator#355](https://github.com/neon-law-source-code/navigator/issues/355).
+authorization, audit, and durable side effects defined once instead of re-implemented per adapter.
 
 ## The rule
 

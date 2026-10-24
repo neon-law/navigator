@@ -64,7 +64,7 @@ env:
 jobs:
   preflight:
     name: verify this pipeline may run
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -139,7 +139,7 @@ jobs:
     name: check for an existing successful production deployment of this tag
     needs: preflight
     if: needs.preflight.outputs.proceed == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -178,7 +178,7 @@ jobs:
     # false — GitHub checks every ancestor, not only direct `needs` — so no
     # ordinary roll could ever reach production.
     if: needs.preflight.outputs.proceed == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -443,7 +443,7 @@ jobs:
     name: hold a prerelease at staging
     needs: [preflight, ship-staging]
     if: needs.preflight.outputs.prerelease == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -670,7 +670,7 @@ jobs:
     name: report the finished rollout
     needs: [preflight, ship-staging, hold-production, ship-production]
     if: always() && needs.preflight.outputs.proceed == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read

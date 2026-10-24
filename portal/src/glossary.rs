@@ -315,9 +315,7 @@ mod tests {
 
     #[test]
     fn off_site_is_anything_outside_neonlaw_hosts() {
-        assert!(is_off_site(
-            "https://github.com/neon-law-source-code/navigator"
-        ));
+        assert!(is_off_site("https://github.com/neon-law/navigator"));
         assert!(is_off_site("https://restate.dev"));
         assert!(!is_off_site("https://www.neonlaw.com/glossary"));
         assert!(!is_off_site("https://staging.neonlaw.com/glossary"));

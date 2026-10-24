@@ -5,11 +5,11 @@
 //!
 //! Prop-driven: the count arrives as a plain `Option<u64>` and this renders it.
 //! Nothing here touches the network. The public footer supplies the source link
-//! without a count; a caller can supply a known count independently.
+//! and the server's cached GitHub count.
 //!
 //! **The count is optional and its absence is normal.** The cache is empty
-//! when no count is supplied. So `stars: None` renders the link by itself rather than
-//! a zero, a dash, or a spinner — the repository is the part worth publishing,
+//! before the first successful fetch. So `stars: None` renders the link by
+//! itself rather than a zero, a dash, or a spinner — the repository is the part worth publishing,
 //! and a number we do not have is not worth inventing a placeholder for.
 
 use dioxus::prelude::*;
