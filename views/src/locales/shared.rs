@@ -39,6 +39,20 @@ pub const SUPPORTED_PLACEHOLDERS: &[&str] = &["site_name", "firm_email"];
 /// Absence is a validation failure, not a fallback: a missing headline is a
 /// blank page, and a blank page is worse than a failed build.
 pub const REQUIRED_KEYS: &[&str] = &[
+    "footer.provider_prefix",
+    "footer.provider_name",
+    "footer.provider_href",
+    "footer.ownership",
+    "signup.password_label",
+    "signup.existing",
+    "signup.invalid",
+    "signup.rejected",
+    "signup.signin_required",
+    "signup.title",
+    "signup.body",
+    "signup.action",
+    "signup.dismiss",
+    "signup.notice",
     "fractional_gc.eyebrow",
     "fractional_gc.lede",
     "fractional_gc.price",

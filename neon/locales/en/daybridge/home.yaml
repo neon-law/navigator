@@ -56,3 +56,8 @@ daybridge:
   closing_body: >-
     You have already found common ground. Tell us where you are, what you have
     agreed on, and what you need help finishing.
+
+photo:
+  src: img/architecture/stone-church.jpg
+  alt: A stone church and steeple beside trees.
+  caption: ""

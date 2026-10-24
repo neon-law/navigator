@@ -18,11 +18,12 @@ fn expected_gallery_placeholders() -> usize {
 const EXPECTED_FONT_PLACEHOLDERS: usize = 23;
 
 /// Six fixed house-brand media files, plus the registered Vesta videos and
-/// photos and the Navigator page's Matter Page screenshots.
+/// photos, the Navigator page's Matter Page screenshots, and architecture photos.
 const EXPECTED_BRAND_MEDIA_PLACEHOLDERS: usize = 6
     + views::assets::VESTA_UPDATE_VIDEO_KEYS.len()
     + views::assets::VESTA_PHOTOS.len()
-    + views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS.len();
+    + views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS.len()
+    + views::assets::ARCHITECTURE_PHOTOS.len();
 
 /// Every stubbed face under `out`, so the assertion follows the table instead
 /// of naming families a second time.
@@ -98,6 +99,10 @@ fn stub_referenced_writes_the_gallery_and_licensed_fonts_without_content_images(
         .is_file());
     for key in views::assets::VESTA_UPDATE_VIDEO_KEYS {
         assert!(out.path().join(key).is_file());
+    }
+    for key in views::assets::ARCHITECTURE_PHOTOS {
+        let photo = fs::read(out.path().join(key)).unwrap();
+        assert_eq!(&photo[..2], &[0xff, 0xd8], "{key} must be a JPEG");
     }
     assert!(out
         .path()

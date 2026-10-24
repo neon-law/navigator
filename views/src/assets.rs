@@ -101,6 +101,15 @@ pub const CYBER_INJURY_AD_KEY: &str = "img/cyber-injury-law/canal-street-ad-f9fa
 /// and header logo; this picture lives only in the public asset lane.
 pub const DEATH_AND_DIVORCE_HERO_KEY: &str = "img/death-and-divorce/hero.png";
 
+/// Public architectural photographs supplied for house-brand pages.
+pub const ARCHITECTURE_PHOTOS: [&str; 5] = [
+    "img/architecture/civic-building.jpg",
+    "img/architecture/library-tower.jpg",
+    "img/architecture/library-reading-room.jpg",
+    "img/architecture/white-house.jpg",
+    "img/architecture/stone-church.jpg",
+];
+
 /// Rights-cleared community photograph on Abhaya's home page.
 pub const ABHAYA_COMMUNITY_PHOTO_KEY: &str = "img/abhaya/stadium-community.jpg";
 

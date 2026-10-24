@@ -975,7 +975,7 @@ async fn home_presents_company_counsel_pricing_and_business_library() {
     assert!(body.contains(r#"id="pricing" class="company-pricing""#));
     assert!(body.contains(r#"src="/public/ferris.svg""#));
     assert!(body.contains(r#"href="/notations#templates""#));
-    assert!(body.contains("NEON LAW"));
+    assert!(body.contains("Neon Law is a trademark of Neon Law IP LLC."));
     assert!(!body.contains("NEON LAW /"));
     assert!(!body.contains("Twelve business templates"));
     assert!(body.contains(r#"href="https://calendar.notion.so/meet/nick-shook/or15n4yy7""#));

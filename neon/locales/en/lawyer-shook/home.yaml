@@ -31,3 +31,8 @@ practices:
     heading: Groundwork Real Estate Law
     body: Real estate transactions and property disputes.
     href: https://www.groundworkrealestatelaw.com
+
+photo:
+  src: img/architecture/civic-building.jpg
+  alt: A stone civic building with columns beneath a cloudy sky.
+  caption: ""

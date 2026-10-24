@@ -174,7 +174,7 @@ async fn the_terms_keep_the_trademark_ownership_attribution() {
     let (_, terms) = get(&app, "/terms").await;
     let terms = terms.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        terms.contains("registered trademark of Shook Law PC"),
+        terms.contains("registered trademark of Neon Law IP LLC"),
         "NEON LAW's registrant must survive the firm rename: {terms}"
     );
 }
@@ -195,9 +195,16 @@ async fn the_registration_links_to_the_uspto_record_on_the_page_and_in_the_terms
     let (_, terms) = get(&app, "/terms").await;
     let flat = terms.split_whitespace().collect::<Vec<_>>().join(" ");
 
-    // The footer renders on every page, so this one response carries both.
+    let footer = terms.split("<footer ").nth(1).expect("shared footer");
     assert!(
-        flat.contains("is a registered trademark of Shook Law PC, "),
+        footer.contains("Neon Law is a trademark of Neon Law IP LLC."),
+        "{footer}"
+    );
+    assert!(footer.contains("Legal services prepared by"), "{footer}");
+    assert!(footer.contains("https://www.lextecnica.com/"), "{footer}");
+    // Check the Terms body and footer independently.
+    assert!(
+        flat.contains("is a registered trademark of Neon Law IP LLC, "),
         "the footer notices the mark and names the registrant: {flat}"
     );
     assert!(

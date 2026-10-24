@@ -756,6 +756,11 @@ fn reachable_image_keys(content_root: &Path) -> anyhow::Result<BTreeSet<String>>
     keys.insert(views::assets::DEATH_AND_DIVORCE_HERO_KEY.to_owned());
     keys.insert(views::assets::ABHAYA_COMMUNITY_PHOTO_KEY.to_owned());
     keys.extend(
+        views::assets::ARCHITECTURE_PHOTOS
+            .iter()
+            .map(|key| (*key).to_owned()),
+    );
+    keys.extend(
         views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS
             .iter()
             .map(|key| (*key).to_owned()),
@@ -1239,6 +1244,11 @@ pub(crate) fn embedded_asset_refs() -> BTreeSet<String> {
     refs.insert(views::assets::CYBER_INJURY_AD_KEY.to_owned());
     refs.insert(views::assets::DEATH_AND_DIVORCE_HERO_KEY.to_owned());
     refs.insert(views::assets::ABHAYA_COMMUNITY_PHOTO_KEY.to_owned());
+    refs.extend(
+        views::assets::ARCHITECTURE_PHOTOS
+            .iter()
+            .map(|key| (*key).to_owned()),
+    );
     refs.extend(
         views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS
             .iter()
@@ -2351,6 +2361,7 @@ Inline raw-HTML tile: <div>![Team](img/thanks-apple/team-lunch.jpg)</div>\n";
         keys.extend(views::assets::VESTA_UPDATE_VIDEO_KEYS);
         keys.extend(views::assets::VESTA_PHOTOS.iter().map(|(key, _)| *key));
         keys.extend(views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS);
+        keys.extend(views::assets::ARCHITECTURE_PHOTOS);
         keys
     }
 

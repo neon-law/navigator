@@ -39,6 +39,14 @@ key when replacing the main photograph so existing home-page references continue
 both staging and production through `navigator site asset upload`; its byte-for-byte readback verifies each published
 copy.
 
+## Architectural photographs
+
+Five user-supplied photographs live under `img/architecture/`: `civic-building.jpg`, `library-tower.jpg`,
+`library-reading-room.jpg`, `white-house.jpg`, and `stone-church.jpg`. Published JPEG copies have orientation applied
+and EXIF metadata removed. `views::assets::ARCHITECTURE_PHOTOS` includes them in publication checks and orphan
+protection. The brand home catalogs select contextual images and carry their descriptive alt text. The photographs
+illustrate public architecture and do not imply that a pictured institution provides or endorses the services.
+
 ## Brand uploads
 
 Brand logo and font uploads share one UUID-scoped prefix in the public bucket: `brand-<Brand UUID>/logo.png` or

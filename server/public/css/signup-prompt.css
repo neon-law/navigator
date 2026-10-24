@@ -1,0 +1,14 @@
+.signup-prompt {
+  width: min(30rem, calc(100vw - 3rem));
+  box-sizing: border-box;
+  max-height: calc(100dvh - 3rem);
+  overflow: auto;
+  border: 1px solid var(--nav-border, #777);
+  border-radius: 1rem;
+  padding: clamp(1.25rem, 4vw, 2rem);
+  background: var(--nav-color-surface, #fff);
+  color: var(--nav-color-text, #17212b);
+}
+.signup-prompt::backdrop { background: rgb(0 0 0 / 55%); }
+.signup-prompt .nav-btn { margin: .5rem .5rem .5rem 0; }
+.signup-prompt__notice { font-size: .875rem; }

@@ -165,6 +165,42 @@ impl IdentityAdminConfig {
         )
     }
 
+    /// Create an unverified password account through the administrative API.
+    /// Existing accounts are never updated by this operation.
+    ///
+    /// # Errors
+    /// Returns an upstream error if creation is refused or unavailable.
+    pub async fn create_password_account(
+        &self,
+        email: &str,
+        password: &str,
+    ) -> Result<(), IdentityAdminError> {
+        let token = self.access_token().await?;
+        let url = format!(
+            "{}/v1/projects/{}/accounts",
+            self.endpoint.trim_end_matches('/'),
+            self.project_id
+        );
+        let response = reqwest::Client::new()
+            .post(url)
+            .bearer_auth(token)
+            .timeout(std::time::Duration::from_secs(30))
+            .json(
+                &serde_json::json!({"email": email, "password": password, "emailVerified": false}),
+            )
+            .send()
+            .await
+            .map_err(|_| IdentityAdminError::Upstream)?;
+        if !response.status().is_success() {
+            tracing::warn!(
+                status = response.status().as_u16(),
+                "idp-admin: account creation refused"
+            );
+            return Err(IdentityAdminError::Upstream);
+        }
+        Ok(())
+    }
+
     /// Look up an account by email. Returns `None` when no Identity
     /// Platform account carries the address. The returned
     /// [`AccountInfo::has_password`] tells the caller whether it is a
@@ -291,6 +327,42 @@ mod tests {
             })))
             .mount(server)
             .await;
+    }
+
+    #[tokio::test]
+    async fn signup_creates_an_unverified_account_without_updating_existing_users() {
+        use wiremock::matchers::body_json;
+        let meta = MockServer::start().await;
+        let idp = MockServer::start().await;
+        mock_metadata(&meta).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/projects/demo-project/accounts"))
+            .and(header("authorization", "Bearer ya29.fake"))
+            .and(body_json(serde_json::json!({"email": "new@example.com", "password": "synthetic-password", "emailVerified": false})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"localId":"new-user"})))
+            .expect(1).mount(&idp).await;
+        cfg(idp.uri(), meta.uri())
+            .create_password_account("new@example.com", "synthetic-password")
+            .await
+            .expect("created");
+    }
+
+    #[tokio::test]
+    async fn signup_refusal_does_not_update_an_existing_account() {
+        let meta = MockServer::start().await;
+        let idp = MockServer::start().await;
+        mock_metadata(&meta).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/projects/demo-project/accounts"))
+            .respond_with(ResponseTemplate::new(400))
+            .expect(1)
+            .mount(&idp)
+            .await;
+        assert!(cfg(idp.uri(), meta.uri())
+            .create_password_account("existing@example.com", "synthetic-password")
+            .await
+            .is_err());
+        assert_eq!(idp.received_requests().await.expect("requests").len(), 1);
     }
 
     #[tokio::test]

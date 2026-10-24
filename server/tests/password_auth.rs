@@ -441,3 +441,169 @@ async fn with_the_confirm_flow_an_unverified_address_is_gated_and_links_nothing(
         .unwrap();
     assert_eq!(row.oidc_subject, None, "the unverified subject was linked");
 }
+
+async fn signup_app() -> (axum::Router, MockServer, store::surreal::SurrealDb) {
+    let idp = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/computeMetadata/v1/instance/service-accounts/default/token",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"access_token":"test-admin-token"})),
+        )
+        .mount(&idp)
+        .await;
+    let (mut state, surreal) = state_with_password(Some(idp.uri())).await;
+    state.identity_admin = Some(portal::idp_admin::IdentityAdminConfig {
+        project_id: "demo-project".into(),
+        endpoint: idp.uri(),
+        metadata_endpoint: idp.uri(),
+    });
+    (
+        server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
+        idp,
+        surreal,
+    )
+}
+
+async fn open_signup(app: &axum::Router) -> (String, String) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/auth/signup")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookie = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .find(|v| v.starts_with("navigator_account_csrf="))
+        .expect("csrf cookie")
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let html = body_string(response).await;
+    assert!(html.contains("autocomplete=\"new-password\""));
+    let needle = "name=\"csrf_token\" value=\"";
+    let token = html[html.find(needle).expect("csrf input") + needle.len()..]
+        .split('"')
+        .next()
+        .unwrap()
+        .to_string();
+    (cookie, token)
+}
+
+async fn post_signup(app: &axum::Router, cookie: &str, body: String) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/signup")
+                .header("cookie", cookie)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn signup_requires_csrf_before_any_provider_request() {
+    let (app, idp, _) = signup_app().await;
+    let response = post_signup(
+        &app,
+        "",
+        form_body("new@example.org", &test_password("new-account"), "forged"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(!has_session(&response));
+    assert!(idp.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn signup_always_requires_confirmation_and_cannot_claim_a_lawyer() {
+    let (app, idp, surreal) = signup_app().await;
+    store::persons::create(
+        &surreal,
+        &store::persons::NewPerson::with_role(
+            "Pat Lawyer",
+            "lawyer@example.org",
+            store::persons::Role::Lawyer,
+        ),
+    )
+    .await
+    .unwrap();
+    Mock::given(method("POST"))
+        .and(path("/v1/projects/demo-project/accounts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"localId":"new-user"})))
+        .expect(1)
+        .mount(&idp)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/accounts:signInWithPassword"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"idToken":fake_id_token("new-user","lawyer@example.org")})),
+        )
+        .expect(1)
+        .mount(&idp)
+        .await;
+    let (cookie, csrf) = open_signup(&app).await;
+    let response = post_signup(
+        &app,
+        &cookie,
+        form_body("lawyer@example.org", &test_password("new-account"), &csrf),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!has_session(&response));
+    let row = store::persons::find_by_email_ci(&surreal, "lawyer@example.org")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.role, store::persons::Role::Lawyer);
+    assert_eq!(row.oidc_subject, None);
+    assert!(body_string(response).await.contains("Confirm your email"));
+}
+
+#[tokio::test]
+async fn signup_creates_only_an_unverified_client() {
+    let (app, idp, surreal) = signup_app().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/projects/demo-project/accounts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"localId":"new-client"})))
+        .expect(1)
+        .mount(&idp)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/accounts:signInWithPassword"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"idToken":fake_id_token("new-client","new@example.org")})),
+        )
+        .mount(&idp)
+        .await;
+    let (cookie, csrf) = open_signup(&app).await;
+    let response = post_signup(
+        &app,
+        &cookie,
+        form_body("new@example.org", &test_password("new-account"), &csrf),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!has_session(&response));
+    let row = store::persons::find_by_email_ci(&surreal, "new@example.org")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.role, store::persons::Role::Client);
+}

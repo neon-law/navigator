@@ -54,6 +54,7 @@ pub(super) fn SummonsHome(
         document::Stylesheet { href: crate::brand_style::BRAND_STYLESHEET_HREF }
         document::Stylesheet { href: chrome.tokens_href.clone() }
         document::Stylesheet { href: "/public/css/summons.css" }
+        document::Stylesheet { href: super::HOME_STYLESHEET_HREF }
         div { class: "summons-page",
             a { class: "summons-skip", href: "#summons-main", "Skip to content" }
             div { class: "summons-notice", "{chrome.legal_entity} · Private legal representation · Attorney advertisement" }
@@ -88,6 +89,7 @@ pub(super) fn SummonsHome(
                         p { class: "summons-fee-note", "{copy.fees_note}" }
                     }
                 }
+                if let Some(photo) = content.photo.clone() { div { class: "summons-wrap", super::HomePhotograph { photo } } }
                 section { id: "how-it-works", class: "summons-process", "aria-labelledby": "summons-process-title",
                     div { class: "summons-wrap",
                         div { class: "summons-section-heading", p { class: "summons-eyebrow", "THE PROCESS" } h2 { id: "summons-process-title", "{copy.process_heading}" } }
