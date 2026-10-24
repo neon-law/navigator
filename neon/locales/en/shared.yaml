@@ -15,7 +15,7 @@ catalog_version: 1
 
 entries:
   footer.provider_prefix: Legal services prepared by
-  footer.provider_name: Lex Tecnica
+  footer.provider_name: Lex Tecnica # pii-scan: allow — public legal-services provider name, not a person.
   footer.provider_href: https://www.lextecnica.com/
   footer.ownership: Neon Law is a trademark of Neon Law IP LLC.
   signup.password_label: Password

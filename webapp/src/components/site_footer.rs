@@ -833,7 +833,7 @@ mod tests {
                 trademark: "NEON LAW".to_string(),
                 disclosure: FooterDisclosure {
                     prefix: "Legal services prepared by".into(),
-                    provider: "Lex Tecnica".into(),
+                    provider: "Lex Tecnica".into(), // pii-scan: allow — public provider name, not a person.
                     href: "https://www.lextecnica.com/".into(),
                     ownership: "Neon Law is a trademark of Neon Law IP LLC.".into(),
                 },
