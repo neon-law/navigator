@@ -211,7 +211,7 @@ fn refuses_an_output_extension_the_command_does_not_support() {
         "an unsupported output extension must be refused"
     );
     assert!(
-        String::from_utf8_lossy(&result.stderr).contains("output extension must be `.pdf`"),
+        String::from_utf8_lossy(&result.stderr).contains("output file extension does not match the render format"),
         "stderr: {}",
         String::from_utf8_lossy(&result.stderr)
     );
@@ -1284,4 +1284,15 @@ fn a_resume_renders_on_its_own_frame_to_pdf_and_word() {
         &fs::read(&word_out).expect("DOCX written")[..4],
         b"PK\x03\x04"
     );
+}
+
+/// `CodeQL` treats every value read out of the parsed CLI enum as a secret,
+/// so the render failure messages must not interpolate the template path
+/// or the output extension.
+#[test]
+fn render_failures_do_not_echo_cli_values() {
+    let source = include_str!("../src/main.rs");
+    assert!(source.contains("could not read the template file: {}\", e.kind()"));
+    assert!(!source.contains("navigator: read {}: {e}\", file.display()"));
+    assert!(!source.contains("output extension must be `.{output_extension}`"));
 }

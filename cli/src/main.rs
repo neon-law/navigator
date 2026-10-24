@@ -7014,13 +7014,13 @@ fn run_render(
     preview: bool,
 ) -> ExitCode {
     if !has_extension(out, output_extension) {
-        eprintln!("navigator: output extension must be `.{output_extension}`");
+        eprintln!("navigator: output file extension does not match the render format");
         return ExitCode::from(2);
     }
     let contents = match std::fs::read_to_string(file) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("navigator: read {}: {e}", file.display());
+            eprintln!("navigator: could not read the template file: {}", e.kind());
             return ExitCode::from(2);
         }
     };
