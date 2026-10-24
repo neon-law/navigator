@@ -48,3 +48,8 @@ practices:
       Our team works across the country. Remote conversations keep you
       connected; in-person meetings are available in Brooklyn.
     href: /services#meet
+
+photo:
+  src: img/architecture/library-tower.jpg
+  alt: A brick library tower with a red book-return booth in front.
+  caption: ""

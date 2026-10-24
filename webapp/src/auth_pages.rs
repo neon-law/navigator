@@ -65,6 +65,10 @@ pub const CONTACT_US: &str = "Contact us";
 
 #[derive(Clone, PartialEq, Eq)]
 enum Page {
+    Signup {
+        csrf: String,
+        error: Option<SignupError>,
+    },
     Login {
         return_to: String,
         csrf: String,
@@ -163,6 +167,35 @@ fn login_page(
             error: error.map(str::to_string),
             notice,
             portal,
+        },
+    )
+}
+
+/// Safe public account-creation outcomes, with wording in the shared catalog.
+#[derive(Clone, PartialEq, Eq)]
+pub enum SignupError {
+    Invalid,
+    Rejected,
+    SignInRequired,
+}
+
+impl SignupError {
+    fn message(&self) -> String {
+        crate::public_chrome::marketing_copy(match self {
+            Self::Invalid => "signup.invalid",
+            Self::Rejected => "signup.rejected",
+            Self::SignInRequired => "signup.signin_required",
+        })
+    }
+}
+
+/// Account creation uses the same signed-CSRF and native form conventions as sign-in.
+pub fn signup(csrf: &str, error: Option<SignupError>) -> Html<String> {
+    render(
+        &crate::public_chrome::marketing_copy("signup.title"),
+        Page::Signup {
+            csrf: csrf.into(),
+            error,
         },
     )
 }
@@ -315,6 +348,19 @@ fn AuthPage(props: AuthPageProps) -> Element {
                         if portal.is_some() {
                             p { "Not expecting this? " a { class: "nav-btn nav-btn--secondary", href: "/contact", "{CONTACT_US}" } }
                         }
+                    },
+                    Page::Signup { csrf, error } => rsx! {
+                        h1 { {crate::public_chrome::marketing_copy("signup.title")} }
+                        p { {crate::public_chrome::marketing_copy("signup.body")} }
+                        if let Some(error) = error { p { class: "nav-alert nav-alert--danger", "{error.message()}" } }
+                        form { class: "auth-form", method: "post", action: "/auth/signup",
+                            input { r#type: "hidden", name: "csrf_token", value: "{csrf}" }
+                            {email_field().render()}
+                            {Field::password(crate::public_chrome::marketing_copy("signup.password_label"), "password").required().autocomplete("new-password").render()}
+                            button { r#type: "submit", class: "nav-btn nav-btn--primary", {crate::public_chrome::marketing_copy("signup.action")} }
+                        }
+                        p { {crate::public_chrome::marketing_copy("signup.notice")} }
+                        p { a { href: "/auth/login", {crate::public_chrome::marketing_copy("signup.existing")} } }
                     },
                     Page::ResetRequest { csrf, error } => rsx! {
                         h1 { "Reset your password" }

@@ -174,3 +174,8 @@ summons:
   footer_note: >-
     Summons Defense is a practice of Shook Law PC. A private law firm, not affiliated with the City of New York or
     OATH. Attorney advertisement. No result is guaranteed. Representation begins only after written acceptance.
+
+photo:
+  src: img/architecture/civic-building.jpg
+  alt: A stone civic building with columns beneath a cloudy sky.
+  caption: ""

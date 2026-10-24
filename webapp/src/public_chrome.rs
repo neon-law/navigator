@@ -128,6 +128,8 @@ pub struct PublicChrome {
     /// The legal person the footer's copyright names, resolved from the firm
     /// brand on both faces.
     pub legal_entity: String,
+    #[serde(default)]
+    pub disclosure: crate::components::site_footer::FooterDisclosure,
     /// "A practice of Shook Law PC", when the name on the masthead is not
     /// the name of the legal person behind it. Empty otherwise.
     ///
@@ -142,10 +144,8 @@ pub struct PublicChrome {
     #[serde(default)]
     pub attribution: String,
     pub disclaimer: String,
-    /// The firm's registered word mark, its U.S. registration number, and the
-    /// register's own record for it — the footer's trademark notice. Resolved
-    /// from the firm brand on both faces, like `legal_entity` beside it, since
-    /// the notice names that entity as the registrant.
+    /// Registration metadata resolved from the firm brand. The disclosure
+    /// names the trademark holder independently of the operating legal entity.
     pub trademark: String,
     pub trademark_registration: String,
     pub trademark_record_url: String,
@@ -229,12 +229,11 @@ pub fn PublicFooter(chrome: PublicChrome) -> Element {
             // services, resolved from the firm brand, so it is the same name at
             // the bottom of every page.
             copyright_holder: chrome.legal_entity.clone(),
+            disclosure: chrome.disclosure.clone(),
             attribution: if practice_footer { String::new() } else { chrome.attribution.clone() },
             copyright_href: if practice_footer { "https://www.lawyershook.com".to_string() } else { String::new() },
             disclaimer: chrome.disclaimer.clone(),
-            // The mark notice reads `copyright_holder` as its registrant, so
-            // it is handed in beside that name rather than resolved apart from
-            // it — the registration and its owner are one claim.
+            // Registration metadata accompanies the independently resolved ownership notice.
             trademark: chrome.trademark.clone(),
             trademark_registration: chrome.trademark_registration.clone(),
             trademark_record_url: chrome.trademark_record_url.clone(),
@@ -334,6 +333,22 @@ pub fn firm_public_chrome(utility: Vec<ChromeNavLink>) -> PublicChrome {
     chrome_for(&views::brand::FIRM_BRAND, utility)
 }
 
+/// Resolve validated public English copy without linking the brand application.
+#[cfg(feature = "server")]
+pub(crate) fn marketing_copy(key: &str) -> String {
+    static COPY: std::sync::OnceLock<views::locales::shared::SharedCatalog> =
+        std::sync::OnceLock::new();
+    COPY.get_or_init(|| {
+        views::locales::shared::SharedCatalog::parse(include_str!(
+            "../../neon/locales/en/shared.yaml"
+        ))
+        .expect("invariant: the compiled shared catalog is validated")
+    })
+    .lookup(views::brand::brand_key().as_str(), key)
+    .unwrap_or_default()
+    .to_string()
+}
+
 /// Build the public chrome for `brand`'s header, with the firm's footer data.
 ///
 /// One brand reaches this — the firm's — because the site publishes one
@@ -375,6 +390,16 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         firm_logo_href: FIRM_BRAND.logo_href.to_string(),
         firm_home_href: FIRM_BRAND.home_href.to_string(),
         legal_entity: FIRM_BRAND.legal_entity.to_string(),
+        disclosure: if FIRM_BRAND.legal_entity == "Shook Law PC" {
+            crate::components::site_footer::FooterDisclosure {
+                prefix: marketing_copy("footer.provider_prefix"),
+                provider: marketing_copy("footer.provider_name"),
+                href: marketing_copy("footer.provider_href"),
+                ownership: marketing_copy("footer.ownership"),
+            }
+        } else {
+            crate::components::site_footer::FooterDisclosure::default()
+        },
         attribution: firm_attribution(brand),
         disclaimer: views::brand::firm_disclaimer().to_string(),
         trademark: trademark.to_string(),

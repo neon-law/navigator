@@ -148,6 +148,8 @@ pub struct HomeContent {
     /// Optional public photograph with its resolved asset URL and accessible copy.
     #[serde(default)]
     pub photo: Option<HomePhoto>,
+    #[serde(default)]
+    pub signup: Option<SignupPromptCopy>,
     /// The one service, in prose. `None` leaves the page at the statement.
     pub service: Option<ServiceSection>,
     /// The heading over the practice boxes. Empty when there are no boxes.
@@ -184,6 +186,41 @@ pub struct HomeContent {
     /// OATH hearing practice.
     #[serde(default)]
     pub summons: Option<SummonsContent>,
+}
+
+/// Shared account invitation copy supplied by the public catalog.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct SignupPromptCopy {
+    pub title: String,
+    pub body: String,
+    pub action: String,
+    pub dismiss: String,
+    pub notice: String,
+}
+
+#[component]
+fn SignupPrompt(copy: SignupPromptCopy) -> Element {
+    rsx! {
+        document::Stylesheet { href: "/public/css/signup-prompt.css" }
+        document::Script { src: "/public/js/signup-prompt.js", defer: true }
+        div { class: "nav-theme",
+            dialog { id: "signup-prompt", class: "signup-prompt", "aria-labelledby": "signup-prompt-title",
+                h2 { id: "signup-prompt-title", "{copy.title}" }
+                p { "{copy.body}" }
+                a { class: "nav-btn nav-btn--primary", href: "/auth/signup", "{copy.action}" }
+                button { class: "nav-btn nav-btn--secondary", r#type: "button", "data-signup-dismiss": "true", "{copy.dismiss}" }
+                p { class: "signup-prompt__notice", "{copy.notice}" }
+            }
+        }
+    }
+}
+
+#[component]
+pub(super) fn HomePhotograph(photo: HomePhoto) -> Element {
+    rsx! { figure { class: "home-photo",
+        img { src: "{photo.src}", alt: "{photo.alt}", loading: "lazy", decoding: "async" }
+        if !photo.caption.is_empty() { figcaption { "{photo.caption}" } }
+    } }
 }
 
 /// Public home photo data resolved by the server and safe to pass to the browser.
@@ -404,6 +441,27 @@ pub fn HomePage(
     #[props(default)] testimonials: Vec<TestimonialCard>,
     #[props(default)] video_posts: Vec<HomeVideoPost>,
 ) -> Element {
+    let signup = content.signup.clone().filter(|_| {
+        !chrome
+            .utility
+            .iter()
+            .any(|link| link.href.starts_with("/app"))
+    });
+    rsx! {
+        HomePageBody { chrome, content, lead_capture, lead_context, testimonials, video_posts }
+        if let Some(copy) = signup { SignupPrompt { copy } }
+    }
+}
+
+#[component]
+fn HomePageBody(
+    chrome: PublicChrome,
+    content: HomeContent,
+    #[props(default)] lead_capture: Option<LeadCaptureCopy>,
+    #[props(default)] lead_context: LeadCaptureContext,
+    #[props(default)] testimonials: Vec<TestimonialCard>,
+    #[props(default)] video_posts: Vec<HomeVideoPost>,
+) -> Element {
     if let Some(copy) = content.summons.clone() {
         return rsx! { summons::SummonsHome { chrome, content, copy, lead_capture, lead_context } };
     }
@@ -466,6 +524,7 @@ pub fn HomePage(
                             }
                         }
                     }
+                    if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
                     if !content.practices.is_empty() {
                         PracticeLinks {
                             heading: content.practices_heading.clone(),
@@ -545,6 +604,7 @@ pub fn HomePage(
                     company: company.clone(),
                     lead_capture_enabled: lead_capture.is_some(),
                 }
+                if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
                 TestimonialSection {
                     heading: "Testimonials".to_string(),
                     lead: String::new(),
@@ -564,6 +624,7 @@ pub fn HomePage(
                 }
             } else if let Some(daybridge) = content.daybridge.as_ref() {
                 daybridge::DaybridgeHome { content: content.clone(), daybridge: daybridge.clone() }
+                if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
                 TestimonialSection {
                     heading: "Testimonials".to_string(),
                     lead: String::new(),
@@ -581,6 +642,7 @@ pub fn HomePage(
                 }
             } else if chrome.tokens_href == crate::brand_style::brand_tokens_href("delete-your-debt") {
                 DebtHome { content: content.clone() }
+                if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
             } else {
             // The page opens on the question. No photograph above it and no
             // glow behind it: the question is the page, so it is the first
@@ -612,12 +674,7 @@ pub fn HomePage(
                     }
                 }
             }
-            if let Some(photo) = content.photo.as_ref() {
-                figure { class: "home-photo",
-                    img { src: "{photo.src}", alt: "{photo.alt}", loading: "lazy", decoding: "async" }
-                    figcaption { "{photo.caption}" }
-                }
-            }
+            if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
             if let Some(service) = content.service.as_ref() {
                 ServiceProse { service: service.clone() }
             }
@@ -938,6 +995,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn signed_in_visitors_are_not_prompted_to_create_an_account() {
+        fn page() -> Element {
+            rsx! { HomePage {
+                chrome: PublicChrome { utility: vec![crate::public_chrome::ChromeNavLink { label: "Portal".into(), href: "/app".into() }], ..Default::default() },
+                content: HomeContent { signup: Some(SignupPromptCopy { title: "Create your account".into(), ..Default::default() }), ..Default::default() },
+            } }
+        }
+        let mut dom = VirtualDom::new(page);
+        dom.rebuild_in_place();
+        let html = dioxus_ssr::render(&dom);
+        assert!(!html.contains("id=\"signup-prompt\""));
+    }
+
+    #[test]
     fn public_home_photo_has_alt_text_and_a_caption() {
         fn app() -> Element {
             rsx! {
@@ -1048,6 +1119,7 @@ mod tests {
                 HomePage {
                     chrome: PublicChrome::default(),
                     content: HomeContent {
+                        signup: None,
                         head_title: "Home".to_string(),
                         meta_description: "AI enablement for law firms.".to_string(),
                         og_description: None,
