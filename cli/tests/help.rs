@@ -560,6 +560,7 @@ fn site_help_lists_the_live_deployment_members() {
             "mail",
             "mcp",
             "notation",
+            "person",
             "seed",
             "synthetic-portfolio",
             "whoami",
