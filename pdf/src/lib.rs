@@ -143,12 +143,16 @@ pub struct RenderOptions {
     /// `auto`. The default is the deterministic Unix epoch for inputs with
     /// no source history.
     pub creation_timestamp: DateTime<Utc>,
+    /// A preview: stamp every page "PREVIEW, NOT FOR FILING" so it can
+    /// never be mistaken for, or filed as, a final document.
+    pub preview: bool,
 }
 
 impl Default for RenderOptions {
     fn default() -> Self {
         Self {
             creation_timestamp: DateTime::<Utc>::UNIX_EPOCH,
+            preview: false,
         }
     }
 }
@@ -435,6 +439,7 @@ mod tests {
             .expect("fixed test timestamp");
         let options = RenderOptions {
             creation_timestamp: timestamp,
+            ..RenderOptions::default()
         };
         let first = render_with_options(source, &options).expect("first render");
         let second = render_with_options(source, &options).expect("second render");
@@ -451,6 +456,7 @@ mod tests {
                     .with_ymd_and_hms(2024, 1, 2, 3, 4, 6)
                     .single()
                     .expect("fixed test timestamp"),
+                ..RenderOptions::default()
             },
         )
         .expect("render with changed timestamp");
