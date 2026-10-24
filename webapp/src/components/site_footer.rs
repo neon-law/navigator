@@ -32,6 +32,15 @@ pub const FOOTER_TAGLINE: &str = "Everyone deserves access to justice. Made with
 
 use crate::components::{ExternalLink, Icon, IconName};
 
+/// Provider and property notices, independent of the operating firm.
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FooterDisclosure {
+    pub prefix: String,
+    pub provider: String,
+    pub href: String,
+    pub ownership: String,
+}
+
 /// One published office — the state it sits in and its street address.
 /// Mirrors `views::brand::FirmOffice`.
 #[derive(Clone, PartialEq, Eq)]
@@ -293,6 +302,7 @@ pub(crate) fn tel_href(phone: &str) -> String {
 #[component]
 pub fn SiteFooterLegal(
     copyright_holder: String,
+    #[props(default)] disclosure: FooterDisclosure,
     #[props(default)] copyright_href: String,
     disclaimer: String,
     copyright_year: i32,
@@ -336,14 +346,8 @@ pub fn SiteFooterLegal(
     /// claim there rather than trusting the site's line about itself. That is
     /// the same rule the bar-licence rows below follow.
     ///
-    /// The registrant the notice names is `copyright_holder`, because on this
-    /// deploy they are the same legal person and a fourth prop that could
-    /// disagree with the third is a way to publish the wrong owner of a live
-    /// registration. `views::brand` resolves both from the firm brand.
-    ///
-    /// `trademark` or `trademark_registration` empty renders no line at all,
-    /// which is what a deploy holding no registration should publish; with
-    /// `trademark_record_url` empty the notice renders unlinked.
+    /// A supplied ownership disclosure replaces this generic notice. Without
+    /// one, the generic footer names its copyright holder as the mark owner.
     #[props(default)]
     trademark: String,
     #[props(default)] trademark_registration: String,
@@ -711,7 +715,7 @@ pub fn SiteFooterLegal(
                     // the site rather than regulated attorney copy, and it
                     // links out for the same reason those rows do — a reader
                     // checks the register, not the page's word for it.
-                    if !trademark.is_empty() {
+                    if !trademark.is_empty() && disclosure.ownership.is_empty() {
                         p { class: "site-footer__trademark",
                             "{trademark}"
                             if trademark_registration.is_empty() {
@@ -795,6 +799,20 @@ pub fn SiteFooterLegal(
                             stars: github_stars,
                         }
                     }
+                    if !disclosure.provider.is_empty() {
+                        p { class: "site-footer__provider",
+                            "{disclosure.prefix} "
+                            ExternalLink { href: disclosure.href.clone(), "{disclosure.provider}" }
+                        }
+                    }
+                    if !disclosure.ownership.is_empty() {
+                        p { class: "site-footer__ownership", "{disclosure.ownership}"
+                            if !trademark_registration.is_empty() && !trademark_record_url.is_empty() {
+                                " "
+                                ExternalLink { class: "link-secondary".to_string(), href: trademark_record_url.clone(), "U.S. Reg. No. {trademark_registration}" }
+                            }
+                        }
+                    }
                     p { class: "site-footer__tagline", "{FOOTER_TAGLINE}" }
                 }
             }
@@ -804,6 +822,36 @@ pub fn SiteFooterLegal(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn provider_and_owner_are_independent_of_the_operating_firm() {
+        fn app() -> Element {
+            rsx! { SiteFooterLegal {
+                copyright_holder: "Example Practice PC".to_string(),
+                copyright_year: 2026,
+                disclaimer: String::new(),
+                trademark: "NEON LAW".to_string(),
+                disclosure: FooterDisclosure {
+                    prefix: "Legal services prepared by".into(),
+                    provider: "Lex Tecnica".into(),
+                    href: "https://www.lextecnica.com/".into(),
+                    ownership: "Neon Law is a trademark of Neon Law IP LLC.".into(),
+                },
+            } }
+        }
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        let html = dioxus_ssr::render(&dom);
+        assert!(html.contains("© 2026 Example Practice PC"), "{html}");
+        assert!(html.contains("https://www.lextecnica.com/"), "{html}");
+        let provider = html.find("Legal services prepared by").expect("provider");
+        let owner = html
+            .find("Neon Law is a trademark of Neon Law IP LLC.")
+            .expect("owner");
+        let mission = html.find(FOOTER_TAGLINE).expect("mission");
+        assert!(provider < owner && owner < mission, "{html}");
+        assert!(!html.contains("trademark of Example Practice PC"), "{html}");
+    }
     use super::*;
     use views::brand::JTA_STANDING;
 

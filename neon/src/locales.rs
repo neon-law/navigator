@@ -1454,6 +1454,23 @@ mod tests {
     /// Every catalog page's `<title>` and `og:title` lead with the brand, then a
     /// pipe, then the page: `{site_name} | Home`.
     #[test]
+    fn architectural_photos_cover_the_homepages_without_substantive_art() {
+        for key in [
+            BrandKey::Neon,
+            BrandKey::LawyerShook,
+            BrandKey::Misericordia,
+            BrandKey::DeleteYourDebt,
+            BrandKey::Daybridge,
+            BrandKey::Summons,
+        ] {
+            let content = home(key.resolve_branding(&views::brand::DEFAULT_BRANDING));
+            let photo = content.photo.expect("a catalogued photograph");
+            assert!(photo.src.contains("img/architecture/"));
+            assert!(!photo.alt.is_empty());
+        }
+    }
+
+    #[test]
     fn every_catalog_head_title_reads_brand_pipe_page() {
         for &key in BrandKey::ALL {
             for &page in key.catalog_pages() {
@@ -1629,6 +1646,17 @@ mod tests {
             "lead.phone_helper".to_string(),
             "lead.sms_label".to_string(),
         ]);
+        // Footer and account copy is read directly by the shared SSR components.
+        referenced.extend(
+            [
+                "footer.provider_prefix",
+                "footer.provider_name",
+                "footer.provider_href",
+                "footer.ownership",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        );
         // The versioned `home.*` keys stay required by the shared contract
         // although no page references them: Neon's company offer is authored
         // in its own home catalog.

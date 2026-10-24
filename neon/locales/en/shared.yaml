@@ -14,6 +14,10 @@
 catalog_version: 1
 
 entries:
+  footer.provider_prefix: Legal services prepared by
+  footer.provider_name: Lex Tecnica
+  footer.provider_href: https://www.lextecnica.com/
+  footer.ownership: Neon Law is a trademark of Neon Law IP LLC.
   # `/` — the question the home page opens on.
   home.need_prompt: What does your technology company need?
   home.mission_heading: Everyone deserves access to justice.

@@ -186,6 +186,14 @@ pub struct HomeContent {
     pub summons: Option<SummonsContent>,
 }
 
+#[component]
+pub(super) fn HomePhotograph(photo: HomePhoto) -> Element {
+    rsx! { figure { class: "home-photo",
+        img { src: "{photo.src}", alt: "{photo.alt}", loading: "lazy", decoding: "async" }
+        if !photo.caption.is_empty() { figcaption { "{photo.caption}" } }
+    } }
+}
+
 /// Public home photo data resolved by the server and safe to pass to the browser.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct HomePhoto {
@@ -466,6 +474,7 @@ pub fn HomePage(
                             }
                         }
                     }
+                    if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
                     if !content.practices.is_empty() {
                         PracticeLinks {
                             heading: content.practices_heading.clone(),
@@ -545,6 +554,7 @@ pub fn HomePage(
                     company: company.clone(),
                     lead_capture_enabled: lead_capture.is_some(),
                 }
+                if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
                 TestimonialSection {
                     heading: "Testimonials".to_string(),
                     lead: String::new(),
@@ -564,6 +574,7 @@ pub fn HomePage(
                 }
             } else if let Some(daybridge) = content.daybridge.as_ref() {
                 daybridge::DaybridgeHome { content: content.clone(), daybridge: daybridge.clone() }
+                if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
                 TestimonialSection {
                     heading: "Testimonials".to_string(),
                     lead: String::new(),
@@ -581,6 +592,7 @@ pub fn HomePage(
                 }
             } else if chrome.tokens_href == crate::brand_style::brand_tokens_href("delete-your-debt") {
                 DebtHome { content: content.clone() }
+                if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
             } else {
             // The page opens on the question. No photograph above it and no
             // glow behind it: the question is the page, so it is the first
@@ -612,12 +624,7 @@ pub fn HomePage(
                     }
                 }
             }
-            if let Some(photo) = content.photo.as_ref() {
-                figure { class: "home-photo",
-                    img { src: "{photo.src}", alt: "{photo.alt}", loading: "lazy", decoding: "async" }
-                    figcaption { "{photo.caption}" }
-                }
-            }
+            if let Some(photo) = content.photo.clone() { HomePhotograph { photo } }
             if let Some(service) = content.service.as_ref() {
                 ServiceProse { service: service.clone() }
             }

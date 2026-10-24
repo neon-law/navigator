@@ -54,7 +54,7 @@ are in the [Text Messaging section of our Privacy Policy](/privacy#text-messagin
 
 ## Trademarks
 
-NEON LAW® is a registered trademark of Shook Law PC, [U.S. Reg. No.
+NEON LAW® is a registered trademark of Neon Law IP LLC, [U.S. Reg. No.
 6,325,650](https://tmsearch.uspto.gov/search/search-results/90039224), registered on the Principal Register of the
 United States Patent and Trademark Office in Class 45 for legal services. That link is the register's own record, so you
 can verify the registration and its owner without taking our word for it. The Neon Law name, logo, and related marks
