@@ -138,6 +138,24 @@ fn blank(text: &str) -> bool {
     text.trim().is_empty()
 }
 
+/// The value a matter declares for a department or judicial officer the court
+/// has not yet assigned. It satisfies `Y019` and the caption prints it as
+/// "To be assigned"; a guessed name would be worse than a stated gap.
+pub const PENDING: &str = "pending";
+
+fn is_pending(text: &str) -> bool {
+    text.trim().eq_ignore_ascii_case(PENDING)
+}
+
+/// A department or judge as the caption prints it.
+fn assignment(text: &str) -> &str {
+    if is_pending(text) {
+        "To be assigned"
+    } else {
+        text
+    }
+}
+
 fn single_line(text: &str) -> bool {
     !text.contains('\n') && !text.contains('\r')
 }
@@ -314,8 +332,8 @@ fn party_lines(parties: &[Party]) -> Vec<String> {
 pub fn compose(matter: &Matter, filing: &Filing) -> Caption {
     let mut case = vec![
         format!("Case No. {}", matter.case_number),
-        format!("Dept. {}", matter.department),
-        format!("Judge: {}", matter.judicial_officer),
+        format!("Dept. {}", assignment(&matter.department)),
+        format!("Judge: {}", assignment(&matter.judicial_officer)),
         filing.caption_title.clone(),
     ];
     if filing.has_hearing() {
@@ -402,6 +420,19 @@ mod tests {
         assert_eq!(Matter::default().short_title(), "");
         assert!(Matter::default().is_empty());
         assert!(!matter().is_empty());
+    }
+
+    #[test]
+    fn a_pending_assignment_gates_and_captions_as_to_be_assigned() {
+        let mut m = matter();
+        m.department = "pending".into();
+        m.judicial_officer = " Pending ".into();
+        assert!(m.missing().is_empty());
+        let caption = compose(&m, &filing());
+        assert!(caption.case.contains(&"Dept. To be assigned".to_string()));
+        assert!(caption.case.contains(&"Judge: To be assigned".to_string()));
+        m.department.clear();
+        assert_eq!(m.missing(), vec!["matter.department"]);
     }
 
     #[test]
