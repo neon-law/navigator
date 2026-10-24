@@ -78,3 +78,9 @@ past.
   the real, or what matters.
 - Keep headings plain. Avoid reframe headings ("What actually matters") and rhetorical questions.
 - Use contrast only to correct a specific factual error: a date, number, name, or scope.
+
+## Say less
+
+Write for readers who know the subject, and cut what they know. State the fact or the ask, cite a rule by number without
+explaining it, and end with one ask and a deadline. Correspondence follows the terse standard in
+[legal-writing](../legal-writing/SKILL.md#correspondence-is-terse).
