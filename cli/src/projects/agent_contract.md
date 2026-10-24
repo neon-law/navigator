@@ -85,6 +85,15 @@ For architecture or process questions, convene the `council` skill; for how a cl
   Navigator. A Notation is a database record, never a file here.
 * `seeds/` holds seed data that `navigator site import` creates or updates.
 * `notes/` is git-ignored. Write call notes there for `navigator project communication create --body-file`.
+* Handoff note: work that may outlast the session keeps its state in `notes/HANDOFF-<topic>.md.local`. The gate does
+  not read it, and no matter fact leaves the repository.
+  * Write it before a session ends with work in flight, near compaction, or when the lawyer asks. Rewrite it when the
+    plan changes; never append a contradiction.
+  * Sections, in order: Plan (with the rule behind each computed date), Files (paths, render command, open
+    placeholders), Drafts waiting (unsent drafts and when each goes), Deadlines (Navigator rows), Reminders (scheduled
+    messages; flag stale ones), Open items.
+  * One fact per line, absolute dates with a time zone. Cite message ids, replay keys, and PR numbers; do not retell.
+  * When the work lands, log what belongs in the record as a Navigator Communication, then delete the note.
 
 ## Final documents only
 
