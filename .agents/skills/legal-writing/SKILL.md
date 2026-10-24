@@ -155,6 +155,28 @@ Write for this judge, this record, and this hearing. Before filing, the draft st
 - **The record that has to exist.** Name the declaration, exhibit, or transcript page the argument stands on before
   the hearing. An argument rests on the record actually filed, not the record the draft assumes.
 
+## Correspondence is terse
+
+We are the experts, so we say less. Applies to email and letters to opposing counsel, vendors, and the court clerk.
+
+- State the fact or the ask. Cite the rule by number; do not explain it.
+- No argument, history, reasoning, or strategy to the other side.
+- Confirm a call topic by topic: a bold one- or two-word heading, then a short paragraph. Prefer that to numbered lists.
+- End with one ask and a deadline.
+- Tell a vendor what to do; do not ask its view.
+- Short is not vague. A notice carries what the rule requires. An ex parte notice states the relief, date, time, place,
+  and whether the other side will oppose.
+
+Example, a call confirmation:
+
+> **Service.** We accept service of the amended complaint by email at the address on the docket. No further service is
+> needed.
+>
+> **Schedule.** Initial disclosures are due November 6. We propose a 21-day extension for written discovery responses.
+>
+> **Ex parte notice.** We will apply ex parte on November 9 at 9:00 a.m. in Department 12 to continue the hearing.
+> Please tell us by Friday at noon whether you will oppose. We will stipulate in writing if you agree by that time.
+
 ## Research order
 
 Never source primary law from the open web. In order:
