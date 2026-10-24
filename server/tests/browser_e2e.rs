@@ -4459,3 +4459,93 @@ async fn every_sample_matter_page_renders_in_the_client_and_lawyer_lens() {
     }
     c.close().await.unwrap();
 }
+
+/// A real ten-second invitation can be dismissed without taking the visitor away.
+#[tokio::test]
+async fn homepage_signup_prompt_waits_and_stays_dismissed() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    c.set_window_size(1280, 900).await.unwrap();
+    c.goto(&format!("{}/", base_url())).await.unwrap();
+    c.execute(
+        "sessionStorage.removeItem('navigator.signup.offered');",
+        vec![],
+    )
+    .await
+    .unwrap();
+    c.refresh().await.unwrap();
+    c.wait()
+        .at_most(Duration::from_secs(15))
+        .for_element(Locator::Css("#signup-prompt"))
+        .await
+        .expect("signup dialog markup");
+    assert_eq!(
+        c.execute(
+            "return document.querySelector('#signup-prompt').open;",
+            vec![]
+        )
+        .await
+        .unwrap(),
+        serde_json::json!(false)
+    );
+    let frames = std::path::Path::new("/tmp/navigator-screenshots/signup-walkthrough");
+    std::fs::create_dir_all(frames).unwrap();
+    for frame in 0..12 {
+        std::fs::write(
+            frames.join(format!("{frame:03}.png")),
+            c.screenshot().await.unwrap(),
+        )
+        .unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    assert_eq!(
+        c.execute(
+            "return document.querySelector('#signup-prompt').open;",
+            vec![]
+        )
+        .await
+        .unwrap(),
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        c.find(Locator::Css("#signup-prompt a"))
+            .await
+            .unwrap()
+            .attr("href")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("/auth/signup")
+    );
+    c.find(Locator::Css("[data-signup-dismiss]"))
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    std::fs::write(frames.join("012.png"), c.screenshot().await.unwrap()).unwrap();
+    c.refresh().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(11)).await;
+    assert_eq!(
+        c.execute(
+            "return document.querySelector('#signup-prompt').open;",
+            vec![]
+        )
+        .await
+        .unwrap(),
+        serde_json::json!(false)
+    );
+    c.execute(
+        "document.querySelector('.site-footer__provider').scrollIntoView({block:'center',behavior:'instant'});",
+        vec![],
+    )
+    .await
+    .unwrap();
+    std::fs::write(
+        "/tmp/navigator-screenshots/website-footer.png",
+        c.screenshot().await.unwrap(),
+    )
+    .unwrap();
+    c.close().await.unwrap();
+}

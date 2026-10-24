@@ -1072,6 +1072,22 @@ pub fn home(branding: &views::brand::Branding) -> webapp::home::HomeContent {
     home_for_host(branding, None)
 }
 
+fn signup_prompt(branding: &views::brand::Branding) -> webapp::home::SignupPromptCopy {
+    let word = |key| {
+        shared_catalog()
+            .lookup(branding.brand_key.as_str(), key)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    webapp::home::SignupPromptCopy {
+        title: word("signup.title"),
+        body: word("signup.body"),
+        action: word("signup.action"),
+        dismiss: word("signup.dismiss"),
+        notice: word("signup.notice"),
+    }
+}
+
 /// The firm home page, with cross-brand links matched to this deployment.
 pub fn home_for_host(
     branding: &views::brand::Branding,
@@ -1090,6 +1106,7 @@ pub fn home_for_host(
             _ => branding.consultation_url.to_string(),
         },
         contact_label: copy.contact_label,
+        signup: Some(signup_prompt(branding)),
         photo: copy.photo.map(|photo| webapp::home::HomePhoto {
             src: views::assets::asset_url(&photo.src),
             alt: photo.alt,
@@ -1454,6 +1471,14 @@ mod tests {
     /// Every catalog page's `<title>` and `og:title` lead with the brand, then a
     /// pipe, then the page: `{site_name} | Home`.
     #[test]
+    fn every_brand_home_carries_the_account_invitation() {
+        for key in views::brand::BrandKey::ALL {
+            let content = home(key.resolve_branding(&views::brand::DEFAULT_BRANDING));
+            assert!(content.signup.is_some(), "{}", key.as_str());
+        }
+    }
+
+    #[test]
     fn architectural_photos_cover_the_homepages_without_substantive_art() {
         for key in [
             BrandKey::Neon,
@@ -1653,6 +1678,16 @@ mod tests {
                 "footer.provider_name",
                 "footer.provider_href",
                 "footer.ownership",
+                "signup.title",
+                "signup.body",
+                "signup.action",
+                "signup.dismiss",
+                "signup.notice",
+                "signup.password_label",
+                "signup.existing",
+                "signup.invalid",
+                "signup.rejected",
+                "signup.signin_required",
             ]
             .into_iter()
             .map(str::to_owned),

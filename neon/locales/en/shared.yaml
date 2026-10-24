@@ -18,6 +18,16 @@ entries:
   footer.provider_name: Lex Tecnica
   footer.provider_href: https://www.lextecnica.com/
   footer.ownership: Neon Law is a trademark of Neon Law IP LLC.
+  signup.password_label: Password
+  signup.existing: Sign in to an existing account
+  signup.invalid: Enter a valid email and a password with at least 8 characters.
+  signup.rejected: We could not create this account. Try signing in or resetting your password.
+  signup.signin_required: Your account is created. Sign in to confirm your email.
+  signup.title: Create your account
+  signup.body: Use your email address as your username and choose a password to get started.
+  signup.action: Create an account
+  signup.dismiss: Keep browsing
+  signup.notice: Creating an account does not make you a client.
   # `/` — the question the home page opens on.
   home.need_prompt: What does your technology company need?
   home.mission_heading: Everyone deserves access to justice.

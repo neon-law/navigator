@@ -544,13 +544,21 @@ Platform reports it verified:
   marks the address verified in Identity Platform. While unverified, it never takes over an existing row's subject.
   Without the Identity Platform admin door (`NAVIGATOR_GCP_PROJECT_ID`), the sign-in is refused outright.
 
-### Accounts are created by an administrator
+### Account creation
 
-Self-service sign-up in Identity Platform is **disabled** (`client.permissions.disabledUserSignup`). The browser API key
-can sign people in but cannot create accounts, so nobody can register a lawyer's address and inherit that lawyer's role.
-An administrator adds each account in the Google Cloud console (**Identity Platform → Users → Add user**) or through the
-admin `projects/<project>/accounts` endpoint. The person then signs in, confirms their address if it is not yet
-verified, and can reset the password themselves at `/auth/password/reset`.
+Anonymous visitors can create a password account at `/auth/signup` when the password and admin doors are configured. The
+email address is the username. The native form uses a signed, single-use CSRF cookie and requires at least eight
+password characters. Navigator creates an unverified account through the authenticated Identity Platform admin API, then
+uses the password sign-in flow to send email confirmation. It grants no session before verification and never updates an
+existing account during signup. Existing users can sign in or reset their password.
+
+Direct self-service sign-up through the browser API key stays disabled (`client.permissions.disabledUserSignup`).
+Account creation is mediated by Navigator's rate-limited, CSRF-protected route. Deployments without password/admin
+configuration send `/auth/signup` visitors to the configured sign-in door.
+
+House-brand homepages offer account creation after ten seconds, once per browser session per host. Signed-in visitors
+see no prompt. The dialog waits while the tab is hidden or another dialog is open, supports Escape and dismissal, and
+restores focus. Creating an account does not establish an engagement.
 
 ### Turning the door on for a deployment
 
@@ -571,9 +579,9 @@ Do this one deployment at a time, staging first. `CLOUDSDK_CORE_PROJECT` pins th
    address verified and set a new password.
 6. **Apply and restart:** `navigator ops secrets apply --deployment <name> --deployments-dir .`, then restart
    `navigator-web`.
-7. **Verify** with a synthetic account: self sign-up is refused, a wrong password is refused, an unverified address gets
-   the confirmation page, the confirmed address signs in and out, and a reset replaces the password. Delete the account
-   afterwards.
+7. **Verify** with a synthetic account: direct browser-key signup is refused, Navigator signup creates an unverified
+   account, a wrong password is refused, an unverified address gets the confirmation page, the confirmed address signs
+   in and out, and a reset replaces the password. Delete the account afterwards.
 
 ## Forgejo
 

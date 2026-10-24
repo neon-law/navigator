@@ -1093,6 +1093,7 @@ impl IdentityPasswordConfig {
 pub fn routes(state: AuthState) -> Router {
     let mut router = Router::new()
         .route("/auth/login", get(login))
+        .route("/auth/signup", get(signup_form))
         // The per-provider redirect, always reachable by its own path so a
         // button on the chooser works even when `/auth/login` renders the
         // chooser instead of redirecting. `oidc` is the primary slot's slug,
@@ -1114,6 +1115,9 @@ pub fn routes(state: AuthState) -> Router {
     // to reset and its Google tokens are already `email_verified`. Mount
     // them only then, so those deploys stay byte-identical (the routes are
     // simply absent → 404), mirroring how `/auth/password` itself 404s.
+    if state.identity_password.is_some() && state.identity_admin.is_some() {
+        router = router.route("/auth/signup", post(signup_submit));
+    }
     if state.identity_password.is_some() {
         router = router
             .merge(crate::password_reset::routes())
@@ -1378,6 +1382,75 @@ fn login_chooser_response(
         ),
     };
     (status, page).into_response()
+}
+
+async fn signup_form(State(s): State<AuthState>, cookies: Cookies) -> Response {
+    if s.identity_password.is_none() || s.identity_admin.is_none() {
+        return Redirect::to("/auth/login").into_response();
+    }
+    signup_response(&s, &cookies, None, StatusCode::OK)
+}
+
+fn signup_response(
+    s: &AuthState,
+    cookies: &Cookies,
+    error: Option<webapp::auth_pages::SignupError>,
+    status: StatusCode,
+) -> Response {
+    let csrf = crate::password_reset::mint_csrf(s, cookies);
+    (status, webapp::auth_pages::signup(&csrf, error)).into_response()
+}
+
+async fn signup_submit(
+    State(s): State<AuthState>,
+    cookies: Cookies,
+    Form(form): Form<PasswordLoginForm>,
+) -> Response {
+    if !crate::password_reset::verify_csrf(&s, &cookies, &form.csrf_token) {
+        return (StatusCode::BAD_REQUEST, "invalid or missing CSRF token").into_response();
+    }
+    cookies.add(expired_cookie(
+        crate::password_reset::ACCOUNT_CSRF_COOKIE_NAME,
+    ));
+    let (Some(cfg), Some(admin)) = (&s.identity_password, &s.identity_admin) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if form.password.chars().count() < 8 || form.email.len() > 254 || !form.email.contains('@') {
+        return signup_response(
+            &s,
+            &cookies,
+            Some(webapp::auth_pages::SignupError::Invalid),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    if admin
+        .create_password_account(form.email.trim(), &form.password)
+        .await
+        .is_err()
+    {
+        return signup_response(
+            &s,
+            &cookies,
+            Some(webapp::auth_pages::SignupError::Rejected),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    match verify_password_with_identity_platform(cfg, form.email.trim(), &form.password).await {
+        Ok(token) => {
+            let Some(mut claims) = decode_unverified_payload(&token) else {
+                return StatusCode::BAD_GATEWAY.into_response();
+            };
+            // An account created here must confirm its address before any session or identity link.
+            claims.email_verified = Some(false);
+            complete_sign_in(&s, &cookies, None, claims, "").await
+        }
+        Err(_) => signup_response(
+            &s,
+            &cookies,
+            Some(webapp::auth_pages::SignupError::SignInRequired),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    }
 }
 
 /// Submitted email/password form.
