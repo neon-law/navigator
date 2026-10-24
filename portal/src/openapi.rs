@@ -3926,7 +3926,8 @@ fn canonical_document(base: &str) -> Value {
                   "properties": {
                     "key": { "type": "string" },
                     "action": { "type": "string", "enum": ["new", "unchanged", "changed"] },
-                    "changed_fields": { "type": "array", "items": { "type": "string" } }
+                    "changed_fields": { "type": "array", "items": { "type": "string" } },
+                    "warnings": { "type": "array", "items": { "type": "string" }, "description": "Plan-time cautions on a dry run, such as a new person whose name already belongs to another person." }
                   }
                 }
               }

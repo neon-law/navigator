@@ -256,7 +256,7 @@ fn record_plan(report: &mut ReconcileReport, key: String, plan: &Plan) {
         key,
         action,
         changed_fields,
-        jurisdiction: None,
+        ..ReconcileRecord::default()
     });
 }
 

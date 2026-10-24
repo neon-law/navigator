@@ -552,6 +552,10 @@ pub struct ReconcileRecord {
     /// operator did not choose (ENG-518). `None` for every other seed model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jurisdiction: Option<String>,
+    /// Plan-time cautions that do not stop the write, such as a new Person
+    /// whose name already belongs to another Person (LAW-169). Dry run only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// The result of reconciling one seed document through the operator API.
@@ -928,6 +932,7 @@ async fn reconcile_people(
     };
     for rec in parse_seed::<PersonRec>(yaml, SeedModel::Person, &["email"])? {
         let key = rec.email.clone();
+        let name = rec.name.clone();
         let existing = crate::persons::find_by_email_ci(surreal, &rec.email).await?;
         match existing {
             None => {
@@ -957,10 +962,16 @@ async fn reconcile_people(
                         .await?;
                     }
                 }
+                let warnings = if actor.dry_run {
+                    same_name_warnings(surreal, &name).await?
+                } else {
+                    Vec::new()
+                };
                 report.created += 1;
                 report.records.push(ReconcileRecord {
                     key,
                     action: ReconcileAction::New,
+                    warnings,
                     ..ReconcileRecord::default()
                 });
             }
@@ -990,7 +1001,7 @@ async fn reconcile_people(
                         key,
                         action: ReconcileAction::Changed,
                         changed_fields,
-                        jurisdiction: None,
+                        ..ReconcileRecord::default()
                     });
                     if !actor.dry_run {
                         update_person_from_seed(surreal, &existing, rec, &update_ctx).await?;
@@ -1000,6 +1011,25 @@ async fn reconcile_people(
         }
     }
     Ok(report)
+}
+
+/// One caution per existing Person whose name equals `name`
+/// (case-insensitively). A service-list attorney who changes firms arrives
+/// under a new email, and the email-keyed import would otherwise create a
+/// second Person for the same human without a word (LAW-169).
+async fn same_name_warnings(surreal: &SurrealDb, name: &str) -> anyhow::Result<Vec<String>> {
+    let name = name.trim();
+    let namesakes = crate::persons::search(surreal, Some(name), None, 20).await?;
+    Ok(namesakes
+        .into_iter()
+        .filter(|person| person.name.trim().eq_ignore_ascii_case(name))
+        .map(|person| {
+            format!(
+                "a Person named `{}` already exists ({}); importing this email creates a second Person for the same name",
+                person.name, person.email
+            )
+        })
+        .collect())
 }
 
 async fn update_person_from_seed(
@@ -1128,6 +1158,7 @@ async fn reconcile_entities(
                         action: ReconcileAction::Changed,
                         changed_fields,
                         jurisdiction: Some(jurisdiction_name.to_string()),
+                        ..ReconcileRecord::default()
                     });
                     if !dry_run {
                         update_entity_from_seed(
@@ -4316,6 +4347,42 @@ records:
                 .name,
             "Updated Name"
         );
+    }
+
+    #[tokio::test]
+    async fn operator_person_seed_dry_run_flags_a_new_person_sharing_a_name() {
+        let surreal = mem_surreal().await;
+        reconcile_yaml(
+            &surreal,
+            SeedModel::Person,
+            &person_yaml("old.firm@example.com", "Pat Attorney"),
+            "Firm",
+            false,
+            &unrestricted_actor(),
+        )
+        .await
+        .expect("seed existing person");
+
+        let moved = "lookup_fields:\n  - email\nrecords:\n  - email: new.firm@example.com\n    name: pat attorney\n  - email: other@example.com\n    name: Someone Else\n";
+        let dry = ReconcileActor {
+            dry_run: true,
+            actor_person_id: None,
+            ..unrestricted_actor()
+        };
+        let report = reconcile_yaml(&surreal, SeedModel::Person, moved, "Firm", false, &dry)
+            .await
+            .expect("plan person seed");
+
+        assert_eq!(report.records[0].action, ReconcileAction::New);
+        assert_eq!(report.records[0].warnings.len(), 1);
+        assert!(report.records[0].warnings[0].contains("old.firm@example.com"));
+        assert!(report.records[1].warnings.is_empty());
+
+        // A real write is not annotated, and the planned row is not created.
+        assert!(persons::find_by_email_ci(&surreal, "new.firm@example.com")
+            .await
+            .expect("read")
+            .is_none());
     }
 
     #[tokio::test]
