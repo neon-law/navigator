@@ -903,7 +903,7 @@ access token minted by exchanging the run's GitHub OIDC token through Workload I
 holds a credential. A tag is mutable, so a hijacked `v3` would run with the job's OIDC token and registry access; a SHA
 cannot move. Dependabot's `github-actions` ecosystem bumps the SHA and the comment together.
 
-**The identity is one service account and one provider.** `navigator-publisher` lives in the `neon-law-registry` project
+**The identity is one service account and one provider.** `navigator-publisher` lives in the `<registry-project>` project
 and holds `roles/artifactregistry.writer` on the `navigator` repository only. The Workload Identity provider trusts this
 GitHub repository alone (`assertion.repository`), and only that repository may impersonate the service account. The
 provider resource name carries the project number, so it is stored as the secret `NAVIGATOR_PUBLISHER_WIF_PROVIDER`; it
@@ -912,7 +912,7 @@ names no credential. If it is unset the exchange fails the job, so it is not a t
 These commands create all of it:
 
 ```bash
-PROJECT=neon-law-registry
+PROJECT=<registry-project>
 GITHUB_REPO=neon-law/navigator
 SA=navigator-publisher
 
@@ -971,7 +971,7 @@ against its release tag, verifies the GitHub Actions OIDC identity, then applies
 image comes from the already-built Linux archive, so deploy runners extract it by digest.
 
 **The image-hub commands are separate.** `ops gcp hub setup` provisions its own repository and a `navigator-ci-pusher`
-service account in a hub project. Nothing in the publish path uses it: the `neon-law-registry` repository above is what
+service account in a hub project. Nothing in the publish path uses it: the `<registry-project>` repository above is what
 CI writes and what `ops ship` reads.
 
 ## Pin every consumed image, binary, and action
