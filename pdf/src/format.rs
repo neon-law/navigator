@@ -658,17 +658,49 @@ pub fn render_document_with_options(
         _ => (String::new(), body.to_string()),
     };
     let source = format!(
-        "{}{}{}{}",
+        "{}{}{}{}{}",
         format.preamble(letterhead),
         chrome,
+        if options.preview { PREVIEW_STAMP } else { "" },
         format.document_source(&markdown),
         format.postamble(),
     );
     crate::render_with_options(&source, options)
 }
 
+/// The words every page of a preview carries.
+pub const PREVIEW_LABEL: &str = "PREVIEW, NOT FOR FILING";
+
+/// A foreground stamp on every page. It sets `foreground`, never `footer`, so
+/// it sits beside whatever footer the frame already draws.
+const PREVIEW_STAMP: &str = "#set page(foreground: place(bottom + center, dy: -0.35in, \
+     text(size: 9pt, weight: \"bold\", fill: rgb(\"#b00020\"))[PREVIEW, NOT FOR FILING]))\n";
+
 #[cfg(test)]
 mod tests {
+    /// LAW-183: a preview renders on every frame and differs from the final
+    /// render only by its stamp.
+    #[test]
+    fn a_preview_render_carries_the_stamp_on_every_frame() {
+        let letterhead = Letterhead::default();
+        for format in [OutputFormat::Plain, OutputFormat::Contract] {
+            let render = |preview| {
+                super::render_document_with_options(
+                    "Fee \u{ab}OPEN: amount\u{bb}.",
+                    format.clone(),
+                    &letterhead,
+                    &crate::RenderOptions {
+                        preview,
+                        ..crate::RenderOptions::default()
+                    },
+                )
+                .expect("render")
+            };
+            assert_ne!(render(true), render(false), "{format:?}");
+        }
+        assert!(super::PREVIEW_LABEL.contains("NOT FOR FILING"));
+    }
+
     use super::{Closing, LetterBlocks, Letterhead, OutputFormat};
     use std::fmt::Write as _;
 

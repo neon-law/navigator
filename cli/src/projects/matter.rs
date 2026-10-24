@@ -113,3 +113,72 @@ pub fn caption_for(file: &Path, contents: &str) -> Result<String, String> {
         )),
     }
 }
+
+/// What a preview prints for a judicial officer or department the court has
+/// not yet assigned.
+pub const TO_BE_ASSIGNED: &str = "To be assigned";
+
+/// [`caption_for`] for a preview (LAW-183): a blank department or judicial
+/// officer prints "To be assigned" instead of refusing, since a draft exists
+/// before the court assigns either. Every other missing field still refuses,
+/// and a final render never calls this.
+///
+/// # Errors
+///
+/// The same message [`caption_for`] gives for any other missing field.
+pub fn caption_for_preview(file: &Path, contents: &str) -> Result<String, String> {
+    let filing = filing_from(contents);
+    let mut problems = filing.missing();
+    let matter = find_manifest(file)
+        .ok_or_else(|| {
+            format!(
+                "no {} found above this pleading; add one with a `{KEY}:` block",
+                manifest::FILE
+            )
+        })
+        .and_then(|path| read_assigning(&path));
+    let matter = match matter {
+        Ok(matter) => Some(matter),
+        Err(message) => {
+            problems.insert(0, message);
+            None
+        }
+    };
+    match (matter, problems.is_empty()) {
+        (Some(matter), true) => Ok(word::matter::compose(&matter, &filing).to_fence()),
+        _ => Err(format!(
+            "this pleading cannot be captioned: {}",
+            problems.join("; ")
+        )),
+    }
+}
+
+/// [`read`] with [`TO_BE_ASSIGNED`] standing in for a blank department or
+/// judicial officer.
+fn read_assigning(path: &Path) -> Result<Matter, String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|error| format!("read {}: {error}", manifest::FILE))?;
+    let document: serde_yaml::Value = serde_yaml::from_str(&contents)
+        .map_err(|error| format!("{} is not valid YAML: {error}", manifest::FILE))?;
+    let block = document
+        .get(KEY)
+        .cloned()
+        .ok_or_else(|| format!("a pleading needs a `{KEY}:` block in {}", manifest::FILE))?;
+    let mut matter: Matter = serde_yaml::from_value(block)
+        .map_err(|error| format!("`{KEY}:` in {} is malformed: {error}", manifest::FILE))?;
+    for field in [&mut matter.department, &mut matter.judicial_officer] {
+        if field.trim().is_empty() {
+            *field = TO_BE_ASSIGNED.to_string();
+        }
+    }
+    let missing = matter.missing();
+    if missing.is_empty() {
+        Ok(matter)
+    } else {
+        Err(format!(
+            "{} is missing or has a malformed {}",
+            manifest::FILE,
+            missing.join(", ")
+        ))
+    }
+}

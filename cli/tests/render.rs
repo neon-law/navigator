@@ -1090,21 +1090,104 @@ fn a_declared_signer_box_renders_as_a_rule_in_final_and_preview_alike() {
     assert!(document.contains("1,000"), "{document}");
     assert!(!document.contains("{{"), "{document}");
 
-    // The same template with a `____` typed into the prose is refused
-    // before anything renders, whatever the questionnaire declares.
+    // The same template with a `____` typed into the prose is refused as a
+    // final render, whatever the questionnaire declares. (A preview shows
+    // the draft: LAW-183.)
     let bare = boxed.replace("({{custom_text__initials_l}})", "(____)");
     let src = write(&work, "poa-bare.md", &bare);
     let out = work.path().join("poa-bare.pdf");
+    let refused = render_pdf(&[src.as_os_str(), "--out".as_ref(), out.as_os_str()]);
+    assert_eq!(refused.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&refused.stdout);
+    assert!(stdout.contains("N131"), "{stdout}");
+    assert!(!out.exists());
+}
+
+/// LAW-183: a preview renders a draft that still carries a drafting marker,
+/// reporting N131 without refusing, while the final render of the same file
+/// keeps refusing it and writes nothing.
+#[test]
+fn a_preview_renders_a_drafting_marker_and_a_final_render_refuses_it() {
+    let work = TempDir::new().unwrap();
+    let marked = VALID.replace(
+        "- Second point\n",
+        "- Second point\n\nThe fee is [CONFIRM: amount and purpose].\n",
+    );
+    let src = write(&work, "demand.md", &marked);
+    let out = work.path().join("demand.pdf");
+    let answer: [&std::ffi::OsStr; 2] = ["--answer".as_ref(), "amount=5000 USD".as_ref()];
+
+    let preview = render_pdf(&[
+        src.as_os_str(),
+        "--out".as_ref(),
+        out.as_os_str(),
+        answer[0],
+        answer[1],
+        "--preview".as_ref(),
+    ]);
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    assert!(String::from_utf8_lossy(&preview.stdout).contains("N131"));
+    assert!(out.exists());
+    std::fs::remove_file(&out).unwrap();
+
     let refused = render_pdf(&[
+        src.as_os_str(),
+        "--out".as_ref(),
+        out.as_os_str(),
+        answer[0],
+        answer[1],
+    ]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(!out.exists());
+}
+
+/// LAW-183: a preview captions a pleading whose court has not yet assigned a
+/// department or judge ("To be assigned"); a final render still refuses it.
+#[test]
+fn a_preview_captions_an_unassigned_department_and_a_final_render_refuses() {
+    let work = TempDir::new().unwrap();
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/synthetic_matter/navigator.yaml");
+    let unassigned: String = fs::read_to_string(manifest)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            let indent = &line[..line.len() - trimmed.len()];
+            if trimmed.starts_with("department:") || trimmed.starts_with("judicial_officer:") {
+                format!(
+                    "{indent}{}\"\"\n",
+                    trimmed.split(':').next().unwrap().to_owned() + ": "
+                )
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    fs::write(work.path().join("navigator.yaml"), unassigned).unwrap();
+    let src = write(&work, "motion.md", &pleading_fixture("CA"));
+    let out = work.path().join("motion.pdf");
+
+    let refused = render_pdf(&[src.as_os_str(), "--out".as_ref(), out.as_os_str()]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(!out.exists());
+
+    let preview = render_pdf(&[
         src.as_os_str(),
         "--out".as_ref(),
         out.as_os_str(),
         "--preview".as_ref(),
     ]);
-    assert_eq!(refused.status.code(), Some(1));
-    let stdout = String::from_utf8_lossy(&refused.stdout);
-    assert!(stdout.contains("N131"), "{stdout}");
-    assert!(!out.exists());
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    assert!(out.exists());
 }
 
 /// LAW-122: a pleading is final before it is filed. A certificate of service

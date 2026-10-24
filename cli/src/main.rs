@@ -6998,7 +6998,14 @@ fn run_render(
             .iter()
             .flat_map(|r| r.lint(&source))
             .collect();
-    let (error_count, _) = severity_counts(&violations);
+    // A preview exists to show a draft before it is final, so the one rule
+    // that refuses a draft for being a draft, N131 (drafting markers), is
+    // reported but does not block it; the markers render as highlighted
+    // flags instead. A final render keeps the refusal.
+    let blocking = |v: &&rules::Violation| !(preview && v.code == "N131");
+    let blocking_violations: Vec<rules::Violation> =
+        violations.iter().filter(blocking).cloned().collect();
+    let (error_count, _) = severity_counts(&blocking_violations);
     if !violations.is_empty() {
         for v in &violations {
             print_violation(&v.path.display().to_string(), v.line, v.code, &v.message);
@@ -7128,14 +7135,21 @@ fn run_render(
     // rather than to whatever bundle happens to be mounted at render time.
     // Restore the plumbing here, not somewhere new, if that call changes.
     let letterhead = pdf::Letterhead::default();
-    let format_debug = format!("{format:?}");
-    let bytes = match render_notation_artifact(file, &body, output_extension, format, &letterhead) {
-        Ok(bytes) => bytes,
-        Err(_error) => {
-            eprintln!("navigator: render failed");
-            return ExitCode::from(2);
-        }
+    let body = if preview {
+        flag_open_markers(&body)
+    } else {
+        body
     };
+    let format_debug = format!("{format:?}");
+    let bytes =
+        match render_notation_artifact(file, &body, output_extension, format, &letterhead, preview)
+        {
+            Ok(bytes) => bytes,
+            Err(_error) => {
+                eprintln!("navigator: render failed");
+                return ExitCode::from(2);
+            }
+        };
     if let Err(e) = std::fs::write(out, &bytes) {
         eprintln!("navigator: write {}: {e}", out.display());
         return ExitCode::from(2);
@@ -7150,6 +7164,30 @@ fn run_render(
         ))
     );
     ExitCode::SUCCESS
+}
+
+/// A preview's drafting markers, rewritten as visible flags (LAW-183): each
+/// bracketed marker such as `[CONFIRM: amount and purpose]` becomes
+/// `«OPEN: amount and purpose»`, which the PDF render washes yellow.
+fn flag_open_markers(body: &str) -> String {
+    let mut flagged = body.to_string();
+    for finding in rules::final_document::drafting_markers(body) {
+        if let rules::final_document::Marker::Bracket(text) = finding.marker {
+            let inner = text.trim_start_matches('[').trim_end_matches(']').trim();
+            let inner = inner
+                .strip_prefix("CONFIRM:")
+                .map_or(inner, str::trim_start);
+            flagged = flagged.replace(
+                &text,
+                &format!(
+                    "{}OPEN: {inner}{}",
+                    pdf::markdown::OPEN_FLAG_START,
+                    pdf::markdown::OPEN_FLAG_END
+                ),
+            );
+        }
+    }
+    flagged
 }
 
 /// The Signer Box states a template declares, or none: the validation gate
@@ -7187,7 +7225,11 @@ fn pleading_body(
     if profile != PLEADING_PROFILE {
         return Ok(body);
     }
-    let caption = projects::matter::caption_for(file, contents)?;
+    let caption = if preview {
+        projects::matter::caption_for_preview(file, contents)?
+    } else {
+        projects::matter::caption_for(file, contents)?
+    };
     let certificate = projects::service::certificate_for(file, contents, preview)?
         .map(|certificate| format!("\n\n{certificate}"))
         .unwrap_or_default();
@@ -7206,6 +7248,7 @@ fn render_notation_artifact(
     output_extension: &str,
     format: pdf::OutputFormat,
     letterhead: &pdf::Letterhead,
+    preview: bool,
 ) -> Result<Vec<u8>, String> {
     if output_extension == "docx" {
         let word_letterhead =
@@ -7240,6 +7283,7 @@ fn render_notation_artifact(
         letterhead,
         &pdf::RenderOptions {
             creation_timestamp: notation_render_timestamp(file),
+            preview,
         },
     )
     .map_err(|error| format!("render {}: {error}", file.display()))

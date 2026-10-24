@@ -427,13 +427,42 @@ fn escape_text_marking_placeholders(s: &str) -> String {
         let Some(close) = after_open.find("}}") else {
             break;
         };
-        out.push_str(&escape_text(&rest[..open]));
+        out.push_str(&escape_marking_open_flags(&rest[..open]));
         out.push_str("#highlight(fill: rgb(\"");
         out.push_str(PLACEHOLDER_HIGHLIGHT);
         out.push_str("\"))[");
         out.push_str(&escape_text(&rest[open..open + 2 + close + 2]));
         out.push(']');
         rest = &after_open[close + 2..];
+    }
+    out.push_str(&escape_marking_open_flags(rest));
+    out
+}
+
+/// The opening of a preview's inline flag for an open drafting marker.
+pub const OPEN_FLAG_START: char = '\u{ab}';
+/// The close of a preview's inline flag.
+pub const OPEN_FLAG_END: char = '\u{bb}';
+
+/// Escape `s`, washing every `«OPEN: …»` flag yellow. A `notation pdf
+/// --preview` render rewrites each drafting marker into such a flag, so the
+/// lawyer sees exactly what is still open; a final render never carries one.
+fn escape_marking_open_flags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    let prefix = format!("{OPEN_FLAG_START}OPEN:");
+    while let Some(open) = rest.find(&prefix) {
+        let Some(close) = rest[open..].find(OPEN_FLAG_END) else {
+            break;
+        };
+        let end = open + close + OPEN_FLAG_END.len_utf8();
+        out.push_str(&escape_text(&rest[..open]));
+        out.push_str("#highlight(fill: rgb(\"");
+        out.push_str(PLACEHOLDER_HIGHLIGHT);
+        out.push_str("\"))[");
+        out.push_str(&escape_text(&rest[open..end]));
+        out.push(']');
+        rest = &rest[end..];
     }
     out.push_str(&escape_text(rest));
     out
@@ -587,6 +616,17 @@ mod tests {
             to_typst("Signed {{client.signature}}"),
             "Signed #highlight(fill: rgb(\"#fff3a3\"))[{{client.signature}}]"
         );
+    }
+
+    /// LAW-183: a preview's `«OPEN: …»` flag is washed yellow like an
+    /// unanswered placeholder; ordinary guillemets are not.
+    #[test]
+    fn an_open_flag_is_highlighted_and_other_guillemets_are_not() {
+        assert_eq!(
+            to_typst("Fee \u{ab}OPEN: amount\u{bb} due"),
+            "Fee #highlight(fill: rgb(\"#fff3a3\"))[\u{ab}OPEN: amount\u{bb}] due"
+        );
+        assert!(!to_typst("\u{ab}quoted\u{bb}").contains("#highlight"));
     }
 
     #[test]
