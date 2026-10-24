@@ -35,6 +35,11 @@ use crate::credentials::{self, default_credentials_path, HostCredential};
 use crate::login::resolve_base;
 use crate::palette;
 
+/// A definite authentication refusal, before any document was filed.
+#[derive(Debug, thiserror::Error)]
+#[error("the session for {0} has expired — run `navigator site login --host {0}`")]
+struct UploadSessionExpired(String);
+
 /// Resolve `(base_url, bearer_token)` for `host`, erroring clearly when
 /// there's no login or the stored token has expired.
 pub(crate) fn resolve(host: Option<&str>) -> Result<(String, String)> {
@@ -44,9 +49,7 @@ pub(crate) fn resolve(host: Option<&str>) -> Result<(String, String)> {
         .get(&base)
         .ok_or_else(|| anyhow!("not logged in to {base} — run `navigator site login --host …`"))?;
     if cred.is_expired(now_secs()) {
-        return Err(anyhow!(
-            "the stored token for {base} has expired — run `navigator site login --host {base}`"
-        ));
+        return Err(UploadSessionExpired(base).into());
     }
     Ok((base, cred.token.clone()))
 }
@@ -967,6 +970,9 @@ impl DocumentClient {
             .context("GET /app/api/projects")?;
         let status = list.status();
         let body = list.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(UploadSessionExpired(base).into());
+        }
         if !status.is_success() {
             return Err(anyhow!(
                 "list projects failed: {status}: {}",
@@ -1399,16 +1405,19 @@ impl DocumentClient {
             .json(&body)
             .send()
             .await
-            .with_context(|| format!("POST {url}"))?;
+            .with_context(|| format!("POST {url}: upload outcome unknown; reconcile with `navigator project gate --check` before retrying"))?;
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(UploadSessionExpired(self.base.clone()).into());
+        }
         if !matches!(status.as_u16(), 200 | 201) {
             return Err(anyhow!(
                 "document upload failed: {status}: {}",
                 first_line(&text)
             ));
         }
-        serde_json::from_str(&text).context("parse document pointer response")
+        serde_json::from_str(&text).context("parse document pointer response: upload may be filed; reconcile with `navigator project gate --check` before retrying")
     }
 
     /// Reconcile the desired pointer visibility through Navigator's API.
@@ -1810,62 +1819,292 @@ async fn document_upload_from(
             return Err(anyhow!("--quality is valid only with --kind transcript"));
         }
         let target = crate::upload_slug::resolve(root, project_code, file, slug)?;
-        let (root, file, slug) = (
-            target.root.as_path(),
-            target.file.as_path(),
-            target.slug.as_deref(),
-        );
-        validate_document_upload_size(kind, file)?;
+        validate_document_upload_size(kind, &target.file)?;
+        let bytes = std::fs::read(&target.file)
+            .with_context(|| format!("read {}", target.file.display()))?;
         let client = DocumentClient::connect(host, project_code).await?;
-        if let Some(notice) = &target.notice {
-            eprintln!("{notice}");
-        }
-        // The matter folder the bytes are kept in: `--folder`, else the one
-        // `--file` already sits in (LAW-189).
-        let folder = folder.or_else(|| {
-            let documents =
-                std::fs::canonicalize(root.join(crate::document_sync::DOCUMENT_DIRECTORY)).ok()?;
-            let canonical = std::fs::canonicalize(file).ok()?;
-            crate::document_layout::matter_folder_of(canonical.strip_prefix(documents).ok()?)
-        });
-        let mut pointer = client
-            .upload(
-                file,
-                kind,
-                visibility,
-                description,
-                content_type,
-                slug,
-                transcript_quality,
-                execution,
-            )
-            .await?;
-        if let Some(folder) = folder {
-            pointer.folder = crate::document_layout::recorded_folder(&pointer.kind, folder);
-        }
-        if let Some(notice) = visibility_mismatch_notice(
+        file_upload_target(
+            &client,
+            project_code,
+            &target,
+            &bytes,
+            kind,
             visibility,
-            &pointer.visibility,
-            pointer.current_version.asset_id,
-        ) {
-            eprintln!("{notice}");
-        }
-        if crate::projects::manifest::read(root)
-            .and_then(|manifest| manifest.project)
-            .as_deref()
-            == Some(project_code)
-        {
-            let filename = file
-                .file_name()
+            description,
+            content_type,
+            transcript_quality,
+            execution,
+            folder,
+        )
+        .await
+    })
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn file_upload_target(
+    client: &DocumentClient,
+    project_code: &str,
+    target: &crate::upload_slug::UploadTarget,
+    bytes: &[u8],
+    kind: &str,
+    visibility: Option<&str>,
+    description: Option<&str>,
+    content_type: Option<&str>,
+    transcript_quality: Option<&str>,
+    execution: &DocumentExecution,
+    folder: Option<store::document_pointers::MatterFolder>,
+) -> Result<()> {
+    if transcript_quality.is_some() && kind != "transcript" {
+        return Err(anyhow!("--quality is valid only with --kind transcript"));
+    }
+    let (root, file, slug) = (
+        target.root.as_path(),
+        target.file.as_path(),
+        target.slug.as_deref(),
+    );
+    if let Some(notice) = &target.notice {
+        eprintln!("{notice}");
+    }
+    // The matter folder the bytes are kept in: `--folder`, else the one
+    // `--file` already sits in (LAW-189).
+    let folder = folder.or_else(|| {
+        let documents =
+            std::fs::canonicalize(root.join(crate::document_sync::DOCUMENT_DIRECTORY)).ok()?;
+        let canonical = std::fs::canonicalize(file).ok()?;
+        crate::document_layout::matter_folder_of(canonical.strip_prefix(documents).ok()?)
+    });
+    let mut pointer = client
+        .upload_bytes_with_details(
+            file.file_name()
                 .and_then(|name| name.to_str())
-                .filter(|name| !name.is_empty())
-                .ok_or_else(|| anyhow!("file path has no filename"))?;
-            let document_slug = slug.unwrap_or(filename);
-            let pointer_path =
-                crate::document_sync::write_uploaded_pointer(root, document_slug, &pointer)?;
-            println!("staged {}", pointer_path.display());
+                .ok_or_else(|| anyhow!("file path has no UTF-8 filename"))?,
+            bytes,
+            kind,
+            visibility,
+            description,
+            content_type,
+            slug,
+            None,
+            None,
+            transcript_quality,
+            execution,
+        )
+        .await?;
+    if let Some(folder) = folder {
+        pointer.folder = crate::document_layout::recorded_folder(&pointer.kind, folder);
+    }
+    if let Some(notice) = visibility_mismatch_notice(
+        visibility,
+        &pointer.visibility,
+        pointer.current_version.asset_id,
+    ) {
+        eprintln!("{notice}");
+    }
+    if crate::projects::manifest::read(root)
+        .and_then(|manifest| manifest.project)
+        .as_deref()
+        == Some(project_code)
+    {
+        let filename = file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| anyhow!("file path has no filename"))?;
+        let document_slug = slug.unwrap_or(filename);
+        let pointer_path =
+            crate::document_sync::write_uploaded_pointer(root, document_slug, &pointer)?;
+        println!("staged {}", pointer_path.display());
+    }
+    print!("{}", pointer.to_yaml()?);
+    Ok(())
+}
+
+/// Upload a directory using the supported browser login once if the session expires.
+#[allow(clippy::too_many_arguments)]
+pub async fn document_upload_directory(
+    host: Option<&str>,
+    project_code: &str,
+    dir: &Path,
+    kind: &str,
+    visibility: Option<&str>,
+    description: Option<&str>,
+    content_type: Option<&str>,
+    transcript_quality: Option<&str>,
+    execution: &DocumentExecution,
+    folder: Option<store::document_pointers::MatterFolder>,
+) -> ExitCode {
+    document_upload_directory_from(
+        Path::new("."),
+        host,
+        project_code,
+        dir,
+        kind,
+        visibility,
+        description,
+        content_type,
+        transcript_quality,
+        execution,
+        folder,
+        |base| async move {
+            eprintln!("Session expired; pausing the batch for sign-in once.");
+            if crate::login::run_login(&base, false).await != ExitCode::SUCCESS {
+                return Err(anyhow!(
+                    "sign-in did not complete; remaining files are unfiled"
+                ));
+            }
+            Ok(())
+        },
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn document_upload_directory_from<F, Fut>(
+    root: &Path,
+    host: Option<&str>,
+    project_code: &str,
+    dir: &Path,
+    kind: &str,
+    visibility: Option<&str>,
+    description: Option<&str>,
+    content_type: Option<&str>,
+    transcript_quality: Option<&str>,
+    execution: &DocumentExecution,
+    folder: Option<store::document_pointers::MatterFolder>,
+    mut login: F,
+) -> ExitCode
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    run(async {
+        let dir = if dir.is_absolute() {
+            dir.to_path_buf()
+        } else {
+            root.join(dir)
+        };
+        let files = crate::upload_slug::directory_files(&dir)?;
+        let mut table = Table::new();
+        table.set_header(["File", "Outcome"]);
+        let mut completed = std::collections::HashMap::<String, std::path::PathBuf>::new();
+        let mut uncertain = std::collections::HashMap::<String, std::path::PathBuf>::new();
+        let mut slugs = std::collections::HashSet::new();
+        let mut login_attempted = false;
+        let mut auth_stopped = false;
+        let mut failed = 0usize;
+        for file in files {
+            let prepared = (|| -> Result<_> {
+                let mut target = crate::upload_slug::resolve(root, project_code, &file, None)?;
+                let filename = target
+                    .file
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| anyhow!("file path has no UTF-8 filename"))?;
+                let slug = target.slug.get_or_insert_with(|| filename.to_string());
+                // The upload door trims an explicit slug. Detect identities on that same spelling.
+                if target.notice.is_some() && slug.trim() != slug {
+                    return Err(anyhow!(
+                        "pointer slug has surrounding whitespace; reslug before uploading"
+                    ));
+                }
+                *slug = slug.trim().to_string();
+                store::documents::validate_document_slug(filename, slug)?;
+                validate_document_upload_size(kind, &target.file)?;
+                let bytes = std::fs::read(&target.file)
+                    .with_context(|| format!("read {}", target.file.display()))?;
+                Ok((target, bytes))
+            })();
+            let (target, bytes) = match prepared {
+                Ok(value) => value,
+                Err(error) => {
+                    failed += 1;
+                    table.add_row([file.display().to_string(), format!("unfiled: {error:#}")]);
+                    continue;
+                }
+            };
+            let digest = store::assets::sha256_hex(&bytes);
+            if let Some(original) = completed.get(&digest) {
+                table.add_row([
+                    file.display().to_string(),
+                    format!("duplicate of {}", original.display()),
+                ]);
+                continue;
+            }
+            if let Some(original) = uncertain.get(&digest) {
+                failed += 1;
+                table.add_row([
+                    file.display().to_string(),
+                    format!(
+                        "unfiled: same bytes as unsuccessful {}; reconcile before retrying",
+                        original.display()
+                    ),
+                ]);
+                continue;
+            }
+            if !slugs.insert(target.slug.clone()) {
+                failed += 1;
+                table.add_row([file.display().to_string(), "unfiled: slug collision".into()]);
+                continue;
+            }
+            let result = loop {
+                if auth_stopped {
+                    break Err(anyhow!("sign-in required; batch paused"));
+                }
+                let result = async {
+                    // Reload on every file and after login; never reuse an expired bearer.
+                    let client = DocumentClient::connect(host, project_code).await?;
+                    file_upload_target(
+                        &client,
+                        project_code,
+                        &target,
+                        &bytes,
+                        kind,
+                        visibility,
+                        description,
+                        content_type,
+                        transcript_quality,
+                        execution,
+                        folder,
+                    )
+                    .await
+                }
+                .await;
+                let Some(expired) = result
+                    .as_ref()
+                    .err()
+                    .and_then(|e| e.downcast_ref::<UploadSessionExpired>())
+                else {
+                    break result;
+                };
+                if login_attempted {
+                    auth_stopped = true;
+                    break result;
+                }
+                login_attempted = true;
+                if let Err(error) = Box::pin(login(expired.0.clone())).await {
+                    auth_stopped = true;
+                    break Err(error);
+                }
+            };
+            match result {
+                Ok(()) => {
+                    completed.insert(digest, file.clone());
+                    table.add_row([file.display().to_string(), "filed".into()]);
+                }
+                Err(error) => {
+                    uncertain.insert(digest, file.clone());
+                    failed += 1;
+                    table.add_row([file.display().to_string(), format!("unfiled: {error:#}")]);
+                }
+            }
         }
-        print!("{}", pointer.to_yaml()?);
+        println!("{table}");
+        if failed != 0 {
+            return Err(anyhow!(
+                "{failed} file(s) remain unfiled; successful uploads are preserved"
+            ));
+        }
         Ok(())
     })
     .await
@@ -2043,6 +2282,14 @@ fn visibility_mismatch_notice(
     asset_id: Uuid,
 ) -> Option<String> {
     let requested = requested.filter(|requested| *requested != filed)?;
+    // Diagnostics contain only the closed visibility vocabulary, never caller-supplied text.
+    let label = |value| match value {
+        "client" => "client",
+        "internal" => "internal",
+        _ => "unrecognized",
+    };
+    let requested = label(requested);
+    let filed = label(filed);
     Some(format!(
         "warning: the document is filed as `{filed}`, not `{requested}`: identical bytes under          this slug file no new revision, so the existing visibility stays; change it with          `navigator site document visibility {asset_id} --visibility {requested}`"
     ))
@@ -6134,6 +6381,22 @@ mod tests {
     }
 
     #[test]
+    fn upload_visibility_notice_never_echoes_arbitrary_values() {
+        for (requested, filed) in [
+            ("synthetic-private-value", "internal"),
+            ("client", "synthetic-private-value"),
+        ] {
+            let notice = super::visibility_mismatch_notice(Some(requested), filed, Uuid::nil())
+                .expect("mismatched visibility is reported");
+            assert!(
+                !notice.contains("synthetic-private-value"),
+                "visibility diagnostics must use closed labels"
+            );
+            assert!(notice.contains("unrecognized"));
+        }
+    }
+
+    #[test]
     fn upload_visibility_notice_names_the_verb_when_the_filed_row_differs() {
         let notice = super::visibility_mismatch_notice(Some("client"), "internal", Uuid::nil())
             .expect("a differing visibility is reported");
@@ -8692,6 +8955,200 @@ mod tests {
             posted_slugs,
             dir,
         }
+    }
+
+    async fn batch_probe(
+        statuses: Vec<u16>,
+        expired: bool,
+        login_ok: bool,
+    ) -> (ExitCode, usize, Vec<String>, bool) {
+        batch_probe_files(
+            statuses,
+            expired,
+            login_ok,
+            &[("a.pdf", "a"), ("b.pdf", "a"), ("c.PNG", "c")],
+            "documents/exhibits",
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn batch_probe_files(
+        statuses: Vec<u16>,
+        expired: bool,
+        login_ok: bool,
+        files: &[(&str, &str)],
+        directory: &str,
+    ) -> (ExitCode, usize, Vec<String>, bool) {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let base = server.uri();
+        let _env = CredentialsEnv::new(&base);
+        if expired {
+            let path = credentials::default_credentials_path();
+            let mut creds = credentials::load(&path).unwrap();
+            creds.hosts.get_mut(&base).unwrap().expires_at = 0;
+            credentials::save(&path, &creds).unwrap();
+        }
+        let project_id = Uuid::now_v7();
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": project_id, "code": "acme"}
+            ])))
+            .mount(&server)
+            .await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        Mock::given(method("POST"))
+            .respond_with(move |request: &wiremock::Request| {
+                let index = count.fetch_add(1, Ordering::SeqCst);
+                if expired || (index > 0 && statuses.get(index - 1) == Some(&401)) {
+                    assert_eq!(request.headers.get("authorization").unwrap(), "Bearer renewed-token");
+                }
+                let status = statuses.get(index).copied().unwrap_or(201);
+                if status == 202 { return ResponseTemplate::new(201).set_body_string("invalid pointer"); }
+                ResponseTemplate::new(status).set_body_json(serde_json::json!({
+                    "kind": "exhibit", "visibility": "internal",
+                    "current_version": {"version": 1, "asset_id": Uuid::now_v7(),
+                        "created_at": "2026-09-06T12:00:00Z",
+                        "sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+                        "size_bytes": 1}
+                }))
+            }).mount(&server).await;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("navigator.yaml"),
+            "project:\n  host: navigator.example.com\n  name: acme\n",
+        )
+        .unwrap();
+        let uploads = dir.path().join(directory);
+        std::fs::create_dir_all(&uploads).unwrap();
+        for (name, bytes) in files {
+            std::fs::write(uploads.join(name), bytes).unwrap();
+        }
+        let logins = Arc::new(AtomicUsize::new(0));
+        let login_count = logins.clone();
+        let exit = super::document_upload_directory_from(
+            dir.path(),
+            Some(&base),
+            "acme",
+            &uploads,
+            "exhibit",
+            Some("internal"),
+            None,
+            None,
+            None,
+            &DocumentExecution::default(),
+            None,
+            move |base| {
+                login_count.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if !login_ok {
+                        return Err(anyhow::anyhow!("login cancelled"));
+                    }
+                    let path = credentials::default_credentials_path();
+                    let mut creds = credentials::load(&path)?;
+                    let credential = creds.hosts.get_mut(&base).unwrap();
+                    credential.token = "renewed-token".into();
+                    credential.expires_at = super::now_secs() + 3600;
+                    credentials::save(&path, &creds)
+                }
+            },
+        )
+        .await;
+        let posted = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method.as_str() == "POST")
+            .map(|r| {
+                serde_json::from_slice::<serde_json::Value>(&r.body).unwrap()["slug"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        (
+            exit,
+            logins.load(Ordering::SeqCst),
+            posted,
+            dir.path().join("blobs/exhibits/a.pdf.yaml").exists(),
+        )
+    }
+
+    #[tokio::test]
+    async fn batch_upload_refuses_colliding_slugs_instead_of_filing_a_second_revision() {
+        let (exit, logins, posted, _) = batch_probe_files(
+            vec![],
+            false,
+            true,
+            &[(" a.pdf", "first"), ("a.pdf", "different")],
+            "incoming",
+        )
+        .await;
+        assert_ne!(exit, ExitCode::SUCCESS);
+        assert_eq!(logins, 0);
+        assert_eq!(posted, ["a.pdf"]);
+    }
+
+    #[tokio::test]
+    async fn batch_upload_skips_identical_bytes_and_preserves_extensions_and_pointers() {
+        let (exit, logins, posted, pointer) = batch_probe(vec![], false, true).await;
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert_eq!(logins, 0);
+        assert_eq!(posted, ["exhibits/a.pdf", "exhibits/c.PNG"]);
+        assert!(pointer);
+    }
+
+    #[tokio::test]
+    async fn batch_upload_does_not_resend_failed_duplicate_bytes_or_reauthenticate_forbidden() {
+        for status in [202, 403, 500] {
+            let (exit, logins, posted, pointer) = batch_probe(vec![status, 201], false, true).await;
+            assert_ne!(exit, ExitCode::SUCCESS);
+            assert_eq!(logins, 0);
+            assert_eq!(posted, ["exhibits/a.pdf", "exhibits/c.PNG"]);
+            assert!(!pointer);
+        }
+    }
+
+    #[tokio::test]
+    async fn batch_upload_recovers_expiry_before_or_during_batch_once() {
+        for (statuses, expired, expected) in [
+            (vec![], true, vec!["exhibits/a.pdf", "exhibits/c.PNG"]),
+            (
+                vec![201, 401, 201],
+                false,
+                vec!["exhibits/a.pdf", "exhibits/c.PNG", "exhibits/c.PNG"],
+            ),
+        ] {
+            let (exit, logins, posted, pointer) = batch_probe(statuses, expired, true).await;
+            assert_eq!(exit, ExitCode::SUCCESS);
+            assert_eq!(logins, 1);
+            assert_eq!(posted, expected);
+            assert!(pointer);
+        }
+    }
+
+    #[tokio::test]
+    async fn batch_upload_preserves_progress_and_fails_on_unfiled_files_without_retrying_ambiguous_success(
+    ) {
+        for statuses in [vec![201, 500], vec![201, 202], vec![201, 401, 401]] {
+            let (exit, logins, posted, pointer) = batch_probe(statuses.clone(), false, true).await;
+            assert_ne!(exit, ExitCode::SUCCESS);
+            assert_eq!(logins, usize::from(statuses.contains(&401)));
+            assert_eq!(posted.len(), statuses.len());
+            assert!(pointer);
+        }
+        let (exit, logins, posted, _) = batch_probe(vec![], true, false).await;
+        assert_ne!(exit, ExitCode::SUCCESS);
+        assert_eq!(logins, 1);
+        assert!(posted.is_empty());
     }
 
     const DRAFTS_CHECKOUT: [(&str, &str); 2] = [
