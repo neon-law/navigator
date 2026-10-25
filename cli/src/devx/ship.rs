@@ -7324,6 +7324,7 @@ mod tests {
                 "www.cyberinjurylaw.com",
                 "www.aegiscriminaldefense.com",
                 "www.groundworkrealestatelaw.com",
+                "www.guiebandshook.com",
             ],
             "a production public host pulls in every other registered brand's production host — \
              ENG-808: the full registry, not only the launched ones"
@@ -7343,6 +7344,7 @@ mod tests {
                 "staging.cyberinjurylaw.com",
                 "staging.aegiscriminaldefense.com",
                 "staging.groundworkrealestatelaw.com",
+                "staging.guiebandshook.com",
             ],
             "a staging public host pulls in only the other brands' staging hosts"
         );

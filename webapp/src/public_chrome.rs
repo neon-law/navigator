@@ -904,7 +904,8 @@ mod tests {
                 "Death & Divorce",
                 "CyberInjuryLaw",
                 "Aegis Criminal Defense",
-                "Groundwork Real Estate Law"
+                "Groundwork Real Estate Law",
+                "Guieb & Shook"
             ]
         );
         assert!(chrome.brands[0].current, "the default brand is current");
@@ -1020,7 +1021,7 @@ mod tests {
                 "{name}'s page must carry its service disclosure: {out}"
             );
             assert!(
-                out.contains(branding.firm.legal_entity),
+                out.contains(&branding.firm.legal_entity.replace('&', "&#38;")),
                 "{name}'s page must name {}: {out}",
                 branding.firm.legal_entity
             );
@@ -1079,7 +1080,8 @@ mod tests {
                 _ => {}
             }
         }
-        text.trim().to_string()
+        // Dioxus writes a firm name's ampersand ("Guieb & Shook PC") as `&#38;`.
+        text.trim().replace("&#38;", "&")
     }
 
     /// The attribution line is derived, not listed.

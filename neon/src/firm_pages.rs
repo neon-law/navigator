@@ -923,6 +923,10 @@ fn resolve_firm_contact_content(
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
         ),
+        BrandKey::GuiebShook => format!(
+            "Reach {firm_name}, attorneys at law. Attorney advertisement. Nothing here is legal \
+             advice without a signed retainer for an active project."
+        ),
         BrandKey::Neon => format!(
             "Reach {firm_name} for estate planning, corporate formation, litigation, and ongoing \
              legal services."
@@ -961,6 +965,7 @@ pub(crate) fn resolve_firm_home_content(
 ) -> webapp::home::HomeContent {
     match branding.brand_key {
         BrandKey::LawyerShook => lawyer_shook_holding_content(branding),
+        BrandKey::GuiebShook => guieb_shook_holding_content(branding),
         BrandKey::Neon
         | BrandKey::DeleteYourData
         | BrandKey::Vesta
@@ -1031,6 +1036,21 @@ fn lawyer_shook_holding_content(branding: &views::brand::Branding) -> webapp::ho
     content
 }
 
+/// Guieb & Shook's whole page: the firm's legal name, "Attorneys at Law.",
+/// and the sign-in line — no practice cards, no catalog copy.
+fn guieb_shook_holding_content(branding: &views::brand::Branding) -> webapp::home::HomeContent {
+    let mut content = lawyer_shook_holding_content(branding);
+    let legal_entity = branding.firm.legal_entity;
+    let paragraph = format!("Attorneys at Law. {legal_entity} is an American law firm.");
+    content.meta_description = paragraph.clone();
+    if let Some(bare) = content.bare.as_mut() {
+        bare.paragraph = paragraph;
+    }
+    content.practices_heading = String::new();
+    content.practices = Vec::new();
+    content
+}
+
 /// The parent firm's directory is derived from the compiled registry so a
 /// newly registered brand cannot silently disappear from the holding page.
 /// Every registered house brand appears here, including practices whose
@@ -1045,7 +1065,7 @@ fn portfolio_practices(copy: Vec<webapp::home::PracticeLink>) -> Vec<webapp::hom
     let mut practices: Vec<webapp::home::PracticeLink> = views::brand::BrandKey::ALL
         .iter()
         .copied()
-        .filter(|key| *key != BrandKey::LawyerShook)
+        .filter(|key| !matches!(key, BrandKey::LawyerShook | BrandKey::GuiebShook))
         .map(|key| {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
             webapp::home::PracticeLink {

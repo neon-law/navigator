@@ -611,6 +611,7 @@ pub fn font_head(key: views::brand::BrandKey) -> &'static str {
         views::brand::BrandKey::Neon => &GORP_HEAD,
         views::brand::BrandKey::DeleteYourData => &PLUS_JAKARTA_SANS_HEAD,
         views::brand::BrandKey::LawyerShook => &LAWYER_SHOOK_HEAD,
+        views::brand::BrandKey::GuiebShook => &TINOS_HEAD,
         views::brand::BrandKey::Vesta => &VESTA_HEAD,
         views::brand::BrandKey::Misericordia => &MISERICORDIA_HEAD,
         views::brand::BrandKey::Abhaya => &ABHAYA_HEAD,

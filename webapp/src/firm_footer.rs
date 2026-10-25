@@ -401,7 +401,8 @@ mod tests {
                 "Death & Divorce",
                 "CyberInjuryLaw",
                 "Aegis Criminal Defense",
-                "Groundwork Real Estate Law"
+                "Groundwork Real Estate Law",
+                "Guieb & Shook"
             ]
         );
         let current: Vec<bool> = model.brands.iter().map(|b| b.current).collect();
@@ -409,7 +410,7 @@ mod tests {
             current,
             [
                 false, true, false, false, false, false, false, false, false, false, false, false,
-                false
+                false, false
             ]
         );
         assert_eq!(model.brands[0].href, "https://www.neonlaw.com");

@@ -82,6 +82,11 @@ const COMPILED_SITES: &[CompiledSite] = &[
         www: "www.cyberinjurylaw.com",
         live: true,
     },
+    CompiledSite {
+        key: "guieb-shook",
+        www: "www.guiebandshook.com",
+        live: true,
+    },
 ];
 
 /// One brand key as `/app` listings should print it.
@@ -207,6 +212,7 @@ mod tests {
                 "aegis",
                 "groundwork",
                 "cyber-injury-law",
+                "guieb-shook",
             ],
             "the live listing set is the launched house brands"
         );

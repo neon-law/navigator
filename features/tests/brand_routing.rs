@@ -111,8 +111,21 @@ async fn status(world: &mut BrandWorld, code: u16) {
 /// needle keeps the brand's closing quote, which is what stops "Neon Law" from
 /// matching a longer site-name tag as a prefix.
 fn declares_brand(body: &str, brand: &str) -> bool {
-    body.contains(&format!("og:site_name\" content=\"{brand}\""))
-        || body.contains(&format!("content=\"{brand}\" property=\"og:site_name\""))
+    html_forms(brand).iter().any(|brand| {
+        body.contains(&format!("og:site_name\" content=\"{brand}\""))
+            || body.contains(&format!("content=\"{brand}\" property=\"og:site_name\""))
+    })
+}
+
+/// `text` as it may appear in rendered HTML: a brand name such as
+/// "Guieb & Shook" reaches the page with its ampersand escaped, as `&amp;` or
+/// Dioxus's `&#38;`.
+fn html_forms(text: &str) -> [String; 3] {
+    [
+        text.to_string(),
+        text.replace('&', "&amp;"),
+        text.replace('&', "&#38;"),
+    ]
 }
 
 #[then(regex = r#"^the page is branded "([^"]+)"$"#)]
@@ -161,7 +174,9 @@ async fn body_contains(world: &mut BrandWorld, needle: String) {
     // so the assertion matches the actual HTML output.
     let needle = needle.replace("\\\"", "\"");
     assert!(
-        world.last_body.contains(&needle),
+        html_forms(&needle)
+            .iter()
+            .any(|form| world.last_body.contains(form.as_str())),
         "expected response body to contain {needle:?}",
     );
 }

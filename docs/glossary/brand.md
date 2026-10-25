@@ -5,8 +5,8 @@ description: "A Brand is a registered house identity with its own branding confi
 
 A closed key naming a house brand — [`views::brand::BrandKey`](../../views/src/brand.rs): (`neon`, `delete-your-data`,
 `lawyer-shook`, `vesta`, `misericordia`, `abhaya`, `delete-your-debt`, `summons`, `daybridge`, `death-and-divorce`,
-`cyber-injury-law`, `aegis`, `groundwork`). **A brand is a registry entry, not a binary.** Each key resolves its own
-[`Branding`](../../views/src/brand.rs). One `neon-server` process serves every compiled key; its
+`cyber-injury-law`, `aegis`, `groundwork`, `guieb-shook`). **A brand is a registry entry, not a binary.** Each key
+resolves its own [`Branding`](../../views/src/brand.rs). One `neon-server` process serves every compiled key; its
 [`registered_brand_key`](../../views/src/brand.rs) resolver maps each request's `Host:` header to a key. One repository,
 one running process, N house brands — adding one is a code change to the registry (a new key, its hosts, its `Branding`)
 with a covering test, which is the right cost for a legal identity, and there is no runtime flag that can move a page

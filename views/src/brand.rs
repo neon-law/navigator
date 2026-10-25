@@ -618,6 +618,49 @@ pub static LAWYER_SHOOK_BRANDING: Branding = Branding {
     brand_key: BrandKey::LawyerShook,
 };
 
+/// The Guieb & Shook house brand: a bare holding page for Guieb & Shook PC,
+/// the firm's name and nothing more. `/` renders the firm's name, "Attorneys
+/// at Law", and a sign-in line for an existing client — see
+/// `neon::firm_pages::guieb_shook_holding_content`. Its web face is selected
+/// by the per-brand asset head and token stylesheet (Tinos), like Lawyer
+/// Shook's.
+pub static GUIEB_SHOOK_BRANDING: Branding = Branding {
+    firm: SiteBrand {
+        site_name: "Guieb & Shook",
+        home_href: "/",
+        tagline: "Attorneys at Law.",
+        postal_address: "5150 Mae Anne Ave Ste 405-9002, Reno, NV 89523",
+        logo_href: "/public/brand/guieb-shook/logo.svg",
+        social_image: "/public/brand/guieb-shook/logo.png",
+        nav: &[],
+        is_law_firm: true,
+        legal_entity: "Guieb & Shook PC",
+    },
+    firm_email: "contact@guiebandshook.com",
+    support_domain: "guiebandshook.com",
+    firm_phone: "+1 510 800 2090",
+    firm_offices: FIRM_OFFICES,
+    firm_attorneys: &[],
+    firm_memberships: FIRM_MEMBERSHIPS,
+    firm_social: SHARED_SOCIAL,
+    firm_family: BrandKey::ALL,
+    firm_trademark: "",
+    firm_trademark_registration: "",
+    firm_trademark_record_url: "",
+    consultation_url: SHOOK_CONSULTATION_URL,
+    terms_url: "/terms",
+    privacy_url: "/privacy",
+    base_url: "",
+    primary_domain: "guiebandshook.com",
+    firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
+    // Unused by the rendered page, which reads
+    // `neon::firm_pages::guieb_shook_holding_content`; kept accurate anyway.
+    mission_description: "Guieb & Shook PC, Attorneys at Law.",
+    service_description: "Guieb & Shook publishes no services or fee schedule here; it is the holding page for Guieb & Shook PC.",
+    portal_only: false,
+    brand_key: BrandKey::GuiebShook,
+};
+
 /// The `vesta` house brand. Page copy lives in `neon/locales/en/vesta/`;
 /// the strings here are the chrome and crawler descriptions for the same
 /// practice. Trademark fields stay empty until that brand's registration
@@ -1003,6 +1046,8 @@ pub enum BrandKey {
     Aegis,
     /// Real estate transactions and property disputes.
     Groundwork,
+    /// The Guieb & Shook PC holding page.
+    GuiebShook,
 }
 
 impl BrandKey {
@@ -1021,6 +1066,7 @@ impl BrandKey {
         Self::CyberInjuryLaw,
         Self::Aegis,
         Self::Groundwork,
+        Self::GuiebShook,
     ];
 
     /// The compiled keys whose hosts currently serve a public site. The
@@ -1040,6 +1086,7 @@ impl BrandKey {
         Self::CyberInjuryLaw,
         Self::Aegis,
         Self::Groundwork,
+        Self::GuiebShook,
     ];
 
     #[must_use]
@@ -1057,6 +1104,7 @@ impl BrandKey {
             Self::DeathAndDivorce => "death-and-divorce",
             Self::Aegis => "aegis",
             Self::Groundwork => "groundwork",
+            Self::GuiebShook => "guieb-shook",
             Self::CyberInjuryLaw => "cyber-injury-law",
         }
     }
@@ -1084,6 +1132,7 @@ impl BrandKey {
             Self::DeathAndDivorce => "divorce and probate",
             Self::Aegis => "criminal defense",
             Self::Groundwork => "real estate transactions and property disputes",
+            Self::GuiebShook => "attorneys at law",
             Self::CyberInjuryLaw => "injury claims and cybercrime",
         }
     }
@@ -1155,6 +1204,7 @@ impl BrandKey {
             // first-request panic.
             Self::CyberInjuryLaw
             | Self::LawyerShook
+            | Self::GuiebShook
             | Self::DeleteYourData
             | Self::Misericordia
             | Self::Abhaya
@@ -1199,7 +1249,7 @@ impl BrandKey {
         match self {
             Self::Neon => !matches!(path.trim_end_matches('/'), "/business" | "/disputes"),
             Self::DeleteYourData => matches!(path, "/" | "/contact" | "/testimonials"),
-            Self::LawyerShook => matches!(path, "/" | "/testimonials"),
+            Self::LawyerShook | Self::GuiebShook => matches!(path, "/" | "/testimonials"),
             Self::CyberInjuryLaw => {
                 matches!(path, "/" | "/contact" | "/consultation" | "/testimonials")
             }
@@ -1259,6 +1309,7 @@ impl BrandKey {
             Self::DeathAndDivorce => "deathanddivorcelaw.com",
             Self::Aegis => "aegiscriminaldefense.com",
             Self::Groundwork => "groundworkrealestatelaw.com",
+            Self::GuiebShook => "guiebandshook.com",
             Self::CyberInjuryLaw => "cyberinjurylaw.com",
         }
     }
@@ -1328,6 +1379,7 @@ impl BrandKey {
                 "staging.groundworkrealestatelaw.com",
             ],
             Self::CyberInjuryLaw => &["www.cyberinjurylaw.com", "staging.cyberinjurylaw.com"],
+            Self::GuiebShook => &["www.guiebandshook.com", "staging.guiebandshook.com"],
         }
     }
 
@@ -1351,6 +1403,7 @@ impl BrandKey {
             Self::DeathAndDivorce => &DEATH_AND_DIVORCE_BRANDING,
             Self::Aegis => &AEGIS_BRANDING,
             Self::Groundwork => &GROUNDWORK_BRANDING,
+            Self::GuiebShook => &GUIEB_SHOOK_BRANDING,
             Self::CyberInjuryLaw => &CYBER_INJURY_BRANDING,
         }
     }
@@ -1383,6 +1436,7 @@ impl BrandKey {
             Self::DeathAndDivorce => Some("NAVIGATOR_LOCAL_DEATH_AND_DIVORCE_PORT"),
             Self::Aegis => Some("NAVIGATOR_LOCAL_AEGIS_PORT"),
             Self::Groundwork => Some("NAVIGATOR_LOCAL_GROUNDWORK_PORT"),
+            Self::GuiebShook => Some("NAVIGATOR_LOCAL_GUIEB_SHOOK_PORT"),
             Self::CyberInjuryLaw => Some("NAVIGATOR_LOCAL_CYBER_INJURY_LAW_PORT"),
         }
     }

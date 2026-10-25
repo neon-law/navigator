@@ -55,6 +55,12 @@ Lawyer Shook (`lawyer-shook/`):
 | `neon/locales/en/lawyer-shook/home.yaml` | `/` practice cards beneath the firm's notice |
 | `neon/locales/en/lawyer-shook/services.yaml` | `/services` (kept valid; the route is not published on that host) |
 
+Guieb & Shook (`guieb-shook/`):
+
+| File | Page |
+| --- | --- |
+| `neon/locales/en/guieb-shook/home.yaml` | `/` page-shell defaults; the statement itself is `neon::firm_pages::guieb_shook_holding_content` |
+
 Daybridge Divorce Law (`daybridge/`):
 
 | File | Page |

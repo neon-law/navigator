@@ -3253,6 +3253,13 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
         typeface: "source-serif-4",
         primary_hex: "#8C252B",
     },
+    CompiledBrand {
+        key: "guieb-shook",
+        website_url: "https://www.guiebandshook.com",
+        name: "Guieb & Shook",
+        typeface: "tinos",
+        primary_hex: "#1f3a5f",
+    },
 ];
 
 /// The website URL [`COMPILED_BRANDS`] seeds for `key`, if it names a

@@ -1665,6 +1665,8 @@ assets retain their upstream notice review separately; the synthetic PDF needs e
 | favicon-32x32.png | B31 | Unverified | A; D | Owner/release/counsel |
 | google-oauth-browser-client-form.jpg | B32 | Unverified | U | Owner/release/counsel |
 | synthetic-initial-case-assessment.pdf | B33 | Unverified | R; U | Owner/release/counsel |
+| logo.png | B34 | Unverified | R; U; F | Owner/release/counsel |
+| logo.svg | B35 | Unverified | R; U; F | Owner/release/counsel |
 
 B1: [logo-neon-law.png](../../pdf/assets/brand/logo-neon-law.png)
 
@@ -1731,6 +1733,11 @@ B31: [favicon-32x32.png](../../server/public/swagger-ui/favicon-32x32.png)
 B32: [workshop screenshot](../../server/public/workshops/navigator/google-oauth-browser-client-form.jpg)
 
 B33: [synthetic-initial-case-assessment.pdf](../../cli/testdata/synthetic-initial-case-assessment.pdf)
+
+B34: [logo.png](../../server/public/brand/guieb-shook/logo.png) — rendered from B35.
+
+B35: [logo.svg](../../server/public/brand/guieb-shook/logo.svg) — glyph outlines drawn from the tracked Tinos Regular
+WOFF2 (E32), so its font notice follows Tinos web Regular/Bold.
 
 ## Detailed matrix evidence
 

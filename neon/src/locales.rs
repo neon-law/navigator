@@ -81,6 +81,7 @@ const CYBER_INJURY_SERVICES_YAML: &str =
 const CYBER_INJURY_HOME_YAML: &str = include_str!("../locales/en/cyber-injury-law/home.yaml");
 const AEGIS_HOME_YAML: &str = include_str!("../locales/en/aegis/home.yaml");
 const AEGIS_SERVICES_YAML: &str = include_str!("../locales/en/aegis/services.yaml");
+const GUIEB_SHOOK_HOME_YAML: &str = include_str!("../locales/en/guieb-shook/home.yaml");
 const GROUNDWORK_HOME_YAML: &str = include_str!("../locales/en/groundwork/home.yaml");
 const GROUNDWORK_SERVICES_YAML: &str = include_str!("../locales/en/groundwork/services.yaml");
 const DAYBRIDGE_HOME_YAML: &str = include_str!("../locales/en/daybridge/home.yaml");
@@ -156,6 +157,10 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Aegis, "home") => Some(AEGIS_HOME_YAML),
         (BrandKey::Aegis, "services") => Some(AEGIS_SERVICES_YAML),
         (BrandKey::Groundwork, "home") => Some(GROUNDWORK_HOME_YAML),
+        (BrandKey::GuiebShook, "home") => Some(GUIEB_SHOOK_HOME_YAML),
+        (BrandKey::GuiebShook, "services") => Some(include_str!(
+            "../locales/en/guieb-shook/services.yaml"
+        )),
         (BrandKey::Groundwork, "services") => Some(GROUNDWORK_SERVICES_YAML),
         (BrandKey::Daybridge, "home") => Some(DAYBRIDGE_HOME_YAML),
         (BrandKey::Daybridge, "services") => Some(DAYBRIDGE_SERVICES_YAML),
@@ -1602,11 +1607,17 @@ mod tests {
             })
             .expect("brand directory");
         // Neon Law's own site needs no Neon Law card, and the Lawyer Shook
-        // holding page is a mark, not a service, so it is not listed.
+        // and Guieb & Shook holding pages are firm marks, not services, so
+        // neither is listed.
         let brands: Vec<BrandKey> = BrandKey::ALL
             .iter()
             .copied()
-            .filter(|key| !matches!(key, BrandKey::Neon | BrandKey::LawyerShook))
+            .filter(|key| {
+                !matches!(
+                    key,
+                    BrandKey::Neon | BrandKey::LawyerShook | BrandKey::GuiebShook
+                )
+            })
             .collect();
         assert_eq!(cards.len(), brands.len());
         for key in brands {
@@ -3181,9 +3192,14 @@ mod tests {
     fn every_public_brand_names_the_firm_behind_it() {
         for key in views::brand::BrandKey::ALL {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
+            let firm = if *key == BrandKey::GuiebShook {
+                "Guieb & Shook PC"
+            } else {
+                "Shook Law PC"
+            };
             assert_eq!(
                 branding.firm.legal_entity,
-                "Shook Law PC",
+                firm,
                 "{} names the firm",
                 key.as_str()
             );

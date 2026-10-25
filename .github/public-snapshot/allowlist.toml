@@ -14,7 +14,7 @@
 
 [[allow]]
 class = "email"
-match = '''(?i)[^@]+@(?:[a-z0-9-]+\.)*(?:neonlaw\.com|neonlaw\.org|lawyershook\.com|cyberinjurylaw\.com|deleteyourdata\.com|deleteyourdebt\.com|daybridgedivorce\.com|vestaestateplanning\.com|summonsdefense\.nyc|misericordialaw\.com|deathanddivorcelaw\.com|abhayaimmigration\.com)'''
+match = '''(?i)[^@]+@(?:[a-z0-9-]+\.)*(?:neonlaw\.com|neonlaw\.org|lawyershook\.com|guiebandshook\.com|cyberinjurylaw\.com|deleteyourdata\.com|deleteyourdebt\.com|daybridgedivorce\.com|vestaestateplanning\.com|summonsdefense\.nyc|misericordialaw\.com|deathanddivorcelaw\.com|abhayaimmigration\.com)'''
 reason = "The firm's own domains and its brands' public contact domains. Published contacts and synthetic fixture users on a firm domain reach no third party."
 
 [[allow]]
