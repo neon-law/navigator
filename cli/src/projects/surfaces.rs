@@ -39,20 +39,7 @@ fn first_line(body: &str) -> &str {
 /// takes an id, not a code, because a Project code is not guaranteed unique
 /// across the id space at the route layer the way it is at the store layer.
 pub(crate) async fn list_visible_projects(base: &str, token: &str) -> Result<Vec<VisibleProject>> {
-    let response = reqwest::Client::new()
-        .get(format!("{base}/app/api/projects"))
-        .bearer_auth(token)
-        .send()
-        .await
-        .context("GET /app/api/projects")?;
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(anyhow!(
-            "list projects failed: {status}: {}",
-            first_line(&body)
-        ));
-    }
+    let body = crate::remote::fetch_project_list(&reqwest::Client::new(), base, token).await?;
     serde_json::from_str(&body).context("parse GET /app/api/projects")
 }
 
