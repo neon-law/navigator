@@ -22,6 +22,7 @@ pub mod drift;
 pub mod efiling;
 pub mod finance;
 pub mod gate;
+pub mod ics;
 pub mod lifecycle;
 pub mod local_bytes;
 pub mod manifest;

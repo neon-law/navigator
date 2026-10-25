@@ -1784,6 +1784,14 @@ enum DeadlineCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Print every deadline on the Project as one RFC 5545 calendar.
+    Ics {
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Reopen a cancelled deadline and print the stored row.
     Reopen {
         /// Deadline id from project deadline list.
@@ -5028,6 +5036,9 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             }
             DeadlineCmd::Cancel { host, project, id } => {
                 projects::deadline::cancel(host.host.as_deref(), project.as_deref(), id).await
+            }
+            DeadlineCmd::Ics { host, project } => {
+                projects::deadline::ics(host.host.as_deref(), project.as_deref()).await
             }
             DeadlineCmd::Reopen { host, project, id } => {
                 projects::deadline::reopen(host.host.as_deref(), project.as_deref(), id).await

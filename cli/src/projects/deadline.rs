@@ -1,6 +1,6 @@
 //! `navigator project deadline` — list, create, update, complete, cancel, and reopen
 //! a Project Deadline through the portal API. Each write prints the row the
-//! store read back.
+//! store read back. `ics` prints the whole Project as one calendar.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -11,11 +11,19 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::{
-    projects::{manifest, surfaces},
+    projects::{ics, manifest, surfaces},
     remote,
 };
 
 async fn coordinates(host: Option<&str>, project: Option<&str>) -> Result<(String, String, Uuid)> {
+    let (base, token, id, _) = coordinates_with_code(host, project).await?;
+    Ok((base, token, id))
+}
+
+async fn coordinates_with_code(
+    host: Option<&str>,
+    project: Option<&str>,
+) -> Result<(String, String, Uuid, String)> {
     let local = manifest::read(Path::new("."));
     let project = project
         .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
@@ -23,7 +31,7 @@ async fn coordinates(host: Option<&str>, project: Option<&str>) -> Result<(Strin
     let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
     let (base, token) = remote::resolve(host)?;
     let id = surfaces::resolve_project_id(&base, &token, project).await?;
-    Ok((base, token, id))
+    Ok((base, token, id, project.to_string()))
 }
 
 async fn call(request: reqwest::RequestBuilder, action: &str) -> Result<Value> {
@@ -67,6 +75,48 @@ pub async fn list(host: Option<&str>, project: Option<&str>) -> ExitCode {
         }
         .await,
     )
+}
+
+/// Print the Project's Deadlines as one RFC 5545 `VCALENDAR`. Nothing is
+/// written: the calendar is rendered from the rows the portal returns.
+pub async fn ics(host: Option<&str>, project: Option<&str>) -> ExitCode {
+    let rendered = async {
+        let (base, token, id, code) = coordinates_with_code(host, project).await?;
+        let rows = call(
+            reqwest::Client::new()
+                .get(format!("{base}/app/api/projects/{id}/deadlines"))
+                .bearer_auth(token),
+            "list",
+        )
+        .await?;
+        let rows = rows
+            .as_array()
+            .ok_or_else(|| anyhow!("deadline list is not an array"))?;
+        let uid_host = reqwest::Url::parse(&base)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_string))
+            .unwrap_or_else(|| "navigator".into());
+        ics::render(
+            &ics::Calendar {
+                host: &uid_host,
+                base_url: &base,
+                project_code: &code,
+            },
+            rows,
+        )
+        .map_err(|error| anyhow!(error))
+    }
+    .await;
+    match rendered {
+        Ok(calendar) => {
+            print!("{calendar}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("navigator project deadline: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

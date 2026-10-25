@@ -187,6 +187,75 @@ async fn deadline_create_list_update_and_complete_print_the_stored_row() {
     server.verify().await;
 }
 
+#[tokio::test]
+async fn deadline_ics_prints_one_calendar_event_per_row() {
+    let server = MockServer::start().await;
+    let root = TempDir::new().unwrap();
+    let host = server.uri();
+    let project_id = Uuid::now_v7();
+    let deadline_id = Uuid::now_v7();
+    let credentials = root.path().join("credentials.json");
+    std::fs::write(
+        &credentials,
+        json!({"hosts":{host.clone():{
+            "token":"test-token", "person_email":"lawyer@example.com", "role":"lawyer",
+            "expires_at":i64::MAX
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+    Mock::given(method("GET"))
+        .and(path("/app/api/projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id": project_id, "code": "acme"}
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/app/api/projects/{project_id}/deadlines")))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+            "id": deadline_id,
+            "due_at": "2026-11-02T17:00:00-08:00",
+            "authority_kind": "statute",
+            "authority": "15 U.S.C. § 1",
+            "status": "open",
+            "calendar_role": "firm",
+            "internal_lead_days": 14,
+            "updated_at": "2026-10-06T00:00:00+00:00"
+        }])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let stdout = Command::cargo_bin("navigator")
+        .unwrap()
+        .current_dir(root.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+        .args([
+            "project",
+            "deadline",
+            "ics",
+            "--project",
+            "acme",
+            "--host",
+            &host,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let calendar = String::from_utf8(stdout).unwrap();
+    assert!(calendar.starts_with("BEGIN:VCALENDAR\r\n"));
+    assert!(calendar.ends_with("END:VCALENDAR\r\n"));
+    assert_eq!(calendar.matches("BEGIN:VEVENT").count(), 1);
+    assert!(calendar.contains(&format!("UID:{deadline_id}@127.0.0.1\r\n")));
+    assert!(calendar.contains("SUMMARY:Statutory deadline - acme\r\n"));
+    assert!(calendar.contains("TRIGGER:-P14D\r\n"));
+    server.verify().await;
+}
+
 /// The CLI reaches real API handlers and persistence over HTTP. Only session
 /// establishment is supplied by the fixture; the API enforces Project scoping.
 #[allow(clippy::too_many_lines)]
