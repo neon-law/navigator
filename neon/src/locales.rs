@@ -660,6 +660,7 @@ fn band(copy: BandCopy, catalog: Option<&views::locales::services::ServicesCatal
                  `the_services_band_only_ships_where_a_catalog_does` is the gate",
             ),
         ),
+        copy @ BandCopy::AppPreview { .. } => app_preview_band(copy),
         BandCopy::Cta {
             heading,
             body,
@@ -698,6 +699,50 @@ fn enrollment_band(copy: BandCopy) -> Band {
         booking_label,
         booking_body,
         booking_href: String::new(),
+    }
+}
+
+fn app_preview_band(copy: BandCopy) -> Band {
+    let BandCopy::AppPreview {
+        anchor,
+        overline,
+        heading,
+        description,
+        app_name,
+        app_subtitle,
+        price,
+        install_ios_label,
+        install_android_label,
+        checks_heading,
+        checks,
+        app_store_label,
+        play_store_label,
+        availability,
+    } = copy
+    else {
+        unreachable!("app preview helper receives only app preview copy")
+    };
+    Band::AppPreview {
+        anchor,
+        overline,
+        heading,
+        description,
+        app_name,
+        app_subtitle,
+        price,
+        install_ios_label,
+        install_android_label,
+        checks_heading,
+        checks: checks
+            .into_iter()
+            .map(|check| webapp::marketing_page::AppCheck {
+                title: check.title,
+                detail: check.detail,
+            })
+            .collect(),
+        app_store_label,
+        play_store_label,
+        availability,
     }
 }
 
@@ -1375,6 +1420,11 @@ pub fn nautilus(branding: &views::brand::Branding, _deployment_host: Option<&str
                         card.chips = vec![price.clone()];
                         card.cadence = (!term.is_empty()).then(|| term.clone());
                     }
+                }
+            }
+            Band::AppPreview { price, .. } if price.is_empty() => {
+                if let Some(privacy) = privacy.as_ref() {
+                    price.clone_from(&privacy.price);
                 }
             }
             Band::Enrollment { booking_href, .. } => {
@@ -2318,6 +2368,12 @@ mod tests {
                 "{name}"
             );
             for retired in ["$30", "$300", "$20", "$200", "additional member"] {
+                // Nautilus prices a lawyer review "From $20"; the retired
+                // $20 offer was a subscription price, which carries a cadence.
+                if name == "Nautilus" && retired == "$20" {
+                    assert!(!text.contains("$20/"), "{name}: retired offer {retired}");
+                    continue;
+                }
                 assert!(!text.contains(retired), "{name}: retired offer {retired}");
             }
         }
@@ -2411,14 +2467,32 @@ mod tests {
                 "$29/mo",
                 "$290/year",
                 "forming an LLC",
-                "unclaimed property",
-                "Legal fees are excluded",
+                "Data removal",
+                "Privacy protection",
+                "Credit monitoring",
+                "Dark web monitoring",
+                "Identity theft insurance",
+                "Unclaimed property",
+                "Estate planning",
+                "From $20",
+                "Lex Tecnica",
+                "App Store",
+                "Google Play",
+                "legal fees are excluded",
                 "must be prepaid",
-                "death check",
-                "688A.140",
-                "Patronis",
             ] {
                 assert!(text.contains(required), "{host}: missing {required}");
+            }
+            // One product name, plainly: no themed card names, and no sibling
+            // brand drawing attention to a single check.
+            for retired in [
+                "Neon Law Nautilus",
+                "The Reef",
+                "The Cove",
+                "Vesta",
+                "DeleteYourData",
+            ] {
+                assert!(!text.contains(retired), "{host}: {retired} survives");
             }
             assert!(!text.contains("$50"), "{host}: the retired price survives");
         }
@@ -2443,7 +2517,7 @@ mod tests {
             })
             .expect("pricing cards");
         assert_eq!(cards.len(), 2);
-        assert_eq!(cards[0].chips, vec![privacy.price]);
+        assert_eq!(cards[0].chips, vec![privacy.price.clone()]);
         assert_eq!(
             cards[0].cadence.as_deref(),
             (!privacy.price_term.is_empty()).then_some(privacy.price_term.as_str())
@@ -2453,6 +2527,15 @@ mod tests {
             cards[1].cadence.as_deref(),
             (!privacy.annual_term.is_empty()).then_some(privacy.annual_term.as_str())
         );
+        let listing_price = content
+            .bands
+            .iter()
+            .find_map(|band| match band {
+                Band::AppPreview { price, .. } => Some(price),
+                _ => None,
+            })
+            .expect("app preview");
+        assert_eq!(listing_price, &privacy.price);
         let text = serde_yaml::to_string(&content).expect("serialize");
         assert!(text.contains("does not") || text.contains("do not"));
         assert!(text.contains("non-legal service"));

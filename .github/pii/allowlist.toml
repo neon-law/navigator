@@ -131,6 +131,10 @@ values = [
   "Davis Polk",
 ]
 
+[[names]]
+reason = "A public firm named on /nautilus as the provider of à la carte sandbox pricing."
+values = ["Lex Tecnica"]
+
 [[name_tokens]]
 reason = "Synthetic fixture names: zodiac personas, placeholder people, and the sample matters."
 values = [

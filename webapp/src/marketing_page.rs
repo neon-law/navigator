@@ -172,6 +172,13 @@ pub struct PackageInstall {
     pub commands: Vec<String>,
 }
 
+/// One check a subscription runs, as its phone app lists it.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct AppCheck {
+    pub title: String,
+    pub detail: String,
+}
+
 /// One horizontal band of a marketing page.
 ///
 /// A page is an ordered list of these. Adding a band shape here is the only
@@ -274,6 +281,28 @@ pub enum Band {
     /// carries the whole schedule, which would otherwise make every `Band` —
     /// and so every `Vec<Band>` — as large as the largest one.
     Services(Box<ServicesBand>),
+    /// A subscription's phone app: an iPhone and an Android phone each showing
+    /// its store listing and the checks it runs, beside the two store badges.
+    ///
+    /// The iPhone carries the checks as the band's real list; the Android
+    /// phone repeats them for the eye and is hidden from assistive technology,
+    /// so a screen reader hears the list once.
+    AppPreview {
+        anchor: String,
+        overline: String,
+        heading: String,
+        description: Option<String>,
+        app_name: String,
+        app_subtitle: String,
+        price: String,
+        install_ios_label: String,
+        install_android_label: String,
+        checks_heading: String,
+        checks: Vec<AppCheck>,
+        app_store_label: String,
+        play_store_label: String,
+        availability: String,
+    },
     /// The closing call to action: an explicit action, or the firm's inquiry form.
     Cta {
         heading: String,
@@ -1027,6 +1056,86 @@ pub(crate) fn Bands(
                         }
                     }
                 },
+                Band::AppPreview {
+                    anchor,
+                    overline,
+                    heading,
+                    description,
+                    app_name,
+                    app_subtitle,
+                    price,
+                    install_ios_label,
+                    install_android_label,
+                    checks_heading,
+                    checks,
+                    app_store_label,
+                    play_store_label,
+                    availability,
+                } => rsx! {
+                    section { class: "fm-band fm-band--app", id: "{anchor}",
+                        div { class: "fm-band__inner fm-app",
+                            div { class: "fm-app__copy",
+                                BandHeading {
+                                    overline: overline.clone(),
+                                    heading: heading.clone(),
+                                    description: description.clone(),
+                                }
+                                ul { class: "fm-app__stores",
+                                    li { class: "fm-store-badge", "data-store": "ios",
+                                        span { class: "fm-store-badge__availability", "{availability}" }
+                                        span { class: "fm-store-badge__label", "{app_store_label}" }
+                                    }
+                                    li { class: "fm-store-badge", "data-store": "android",
+                                        span { class: "fm-store-badge__availability", "{availability}" }
+                                        span { class: "fm-store-badge__label", "{play_store_label}" }
+                                    }
+                                }
+                            }
+                            div { class: "fm-app__phones",
+                                for (platform, install_label) in [("ios", install_ios_label), ("android", install_android_label)] {
+                                    div {
+                                        class: "fm-phone",
+                                        "data-phone": platform,
+                                        "aria-hidden": if platform == "android" { "true" } else { "false" },
+                                        div { class: "fm-phone__screen",
+                                            div { class: "fm-phone__status",
+                                                span { "9:41" }
+                                                span { class: "fm-phone__camera" }
+                                            }
+                                            div { class: "fm-phone__listing",
+                                                img { class: "fm-phone__icon", src: "/public/images/nautilus-shell.svg", alt: "", width: "56", height: "56" }
+                                                div { class: "fm-phone__name",
+                                                    p { class: "fm-phone__app", "{app_name}" }
+                                                    p { class: "fm-phone__subtitle", "{app_subtitle}" }
+                                                }
+                                                span { class: "fm-phone__install", "{install_label}" }
+                                            }
+                                            p { class: "fm-phone__price", "{price}" }
+                                            if platform == "ios" {
+                                                h3 { class: "fm-phone__heading", "{checks_heading}" }
+                                            } else {
+                                                p { class: "fm-phone__heading", "{checks_heading}" }
+                                            }
+                                            ul { class: "fm-phone__checks",
+                                                for check in checks.iter() {
+                                                    li { class: "fm-phone__check",
+                                                        span { class: "fm-phone__tick" }
+                                                        span { class: "fm-phone__check-text",
+                                                            strong { "{check.title}" }
+                                                            if !check.detail.is_empty() {
+                                                                span { "{check.detail}" }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
                 Band::Cta { heading, body, email, action } => rsx! {
                     section { class: "fm-band fm-band--cta",
                         div { class: "fm-band__inner",
@@ -1206,6 +1315,47 @@ mod tests {
         assert!(!signed_in.contains(r#"action="/leads""#));
         assert!(signed_in.contains("https://booking.example.test/"));
         assert!(signed_in.contains("Confirm before signing"));
+    }
+
+    /// Both phones list every check, but a screen reader hears the list once:
+    /// the Android phone repeats the iPhone's for the eye alone.
+    #[test]
+    fn app_preview_draws_both_phones_and_announces_the_checks_once() {
+        let band = Band::AppPreview {
+            anchor: "app".into(),
+            overline: "Coming soon".into(),
+            heading: "In your pocket".into(),
+            description: None,
+            app_name: "Nautilus".into(),
+            app_subtitle: "Checks".into(),
+            price: "$29/mo".into(),
+            install_ios_label: "Get".into(),
+            install_android_label: "Install".into(),
+            checks_heading: "Your checks".into(),
+            checks: vec![AppCheck {
+                title: "Data removal".into(),
+                detail: "Requests".into(),
+            }],
+            app_store_label: "App Store".into(),
+            play_store_label: "Google Play".into(),
+            availability: "Coming soon to".into(),
+        };
+        let html = dioxus_ssr::render_element(rsx! { Bands { items: vec![band] } });
+        assert_eq!(html.matches("Data removal").count(), 2, "{html}");
+        assert_eq!(html.matches("<h3").count(), 1, "{html}");
+        assert!(
+            html.contains(r#"data-phone="ios" aria-hidden="false""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"data-phone="android" aria-hidden="true""#),
+            "{html}"
+        );
+        assert!(html.contains(r#"data-store="ios""#) && html.contains(r#"data-store="android""#));
+        assert!(
+            !html.contains("<a "),
+            "unpublished apps link nowhere: {html}"
+        );
     }
 
     /// Each box is one anchor at the version's real GitHub Release asset, in

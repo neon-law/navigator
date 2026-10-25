@@ -388,6 +388,14 @@ pub struct PackageInstallCopy {
     pub body: Vec<Paragraph>,
 }
 
+/// One check a subscription runs, as its app lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AppCheckCopy {
+    pub title: String,
+    #[serde(default)]
+    pub detail: String,
+}
+
 /// One horizontal band of a marketing page.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -519,6 +527,30 @@ pub enum BandCopy {
         archive_label: String,
         #[serde(default)]
         package: Option<PackageInstallCopy>,
+    },
+    /// A subscription's phone app, drawn as an iPhone and an Android phone
+    /// listing the checks it runs, beside the two store badges.
+    AppPreview {
+        #[serde(default)]
+        anchor: String,
+        overline: String,
+        heading: String,
+        #[serde(default)]
+        description: Option<String>,
+        app_name: String,
+        app_subtitle: String,
+        /// The price the listing shows. Empty lets the page fill it from the
+        /// subscription's own catalog.
+        #[serde(default)]
+        price: String,
+        install_ios_label: String,
+        install_android_label: String,
+        checks_heading: String,
+        checks: Vec<AppCheckCopy>,
+        app_store_label: String,
+        play_store_label: String,
+        /// Shown on both badges while the apps are not yet published.
+        availability: String,
     },
     Cta {
         heading: String,
