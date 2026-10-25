@@ -14,9 +14,9 @@ record links the evidence that send left: an outgoing [Letter](letter.md) or a s
 **A certificate of service is composed, never typed.** A pleading's proof or certificate of service is rendered from
 these records the way its caption is rendered from the Project's `matter:` block: the pleading's frontmatter names the
 served document as `served_document:` (its slug: the bytes' path below `documents/`), and the renderer reads the
-`service:` list on that document's committed [Blob](blob.md). With no record, the certificate is omitted from a preview
-and a final render refuses, naming the records that are missing. It is never rendered blank, and it never carries a
-fill-in line for a date, a method, or a recipient.
+`service:` list on that document's committed [Pointer](pointer.md). With no record, the certificate is omitted from a
+preview and a final render refuses, naming the records that are missing. It is never rendered blank, and it never
+carries a fill-in line for a date, a method, or a recipient.
 
 **It survives sync.** `navigator project service add|list|show` records and reads a Service through `GET`/`POST
 /app/api/projects/{id}/service`, at Lawyer tier and scoped to a participant. `navigator project sync` writes the live

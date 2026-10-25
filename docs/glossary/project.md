@@ -40,14 +40,15 @@ own.
 
 Each Project has **one** deployment-scoped source repository, named for its `code`, holding that Project's notation
 templates under `templates/`, client [Portal](portal.md) under `apps/portal/`, and source-side document pointers
-([Blobs](blob.md)) under `blobs/`. The root `documents/` directory is Git-ignored and only holds the bytes those
-pointers name, staged for or pulled down by `navigator project sync`; neither folder is portal content or a document
-store. Legal files, client material, answers, and produced documents remain in the deployment's private documents bucket
-(prefix `projects/<code>/documents`) and Navigator [Assets](asset.md). Google Drive stays as a per-Project ingest
-dropbox — Workspace users drop files in; Navigator copies them into the documents bucket and never treats the folder as
-a live store. [`project-repositories`](../project-repositories.md) is the canonical deployment map and source boundary.
-On the installation's Forgejo the repository is `<firm-slug>/<project-code>`: the owning [Firm](firm.md)'s organization,
-named by its immutable `firm.slug`, holds it under the Project's `code` (`store::firms::forgejo::repository_path`).
+([Pointers](pointer.md)) under `blobs/`. The root `documents/` directory is Git-ignored and only holds the
+[Blobs](blob.md) those pointers name, staged for or pulled down by `navigator project sync`; neither folder is portal
+content or a document store. Legal files, client material, answers, and produced documents remain in the deployment's
+private documents bucket (prefix `projects/<code>/documents`) and Navigator [Assets](asset.md). Google Drive stays as a
+per-Project ingest dropbox — Workspace users drop files in; Navigator copies them into the documents bucket and never
+treats the folder as a live store. [`project-repositories`](../project-repositories.md) is the canonical deployment map
+and source boundary. On the installation's Forgejo the repository is `<firm-slug>/<project-code>`: the owning
+[Firm](firm.md)'s organization, named by its immutable `firm.slug`, holds it under the Project's `code`
+(`store::firms::forgejo::repository_path`).
 
 `project.code` is **lowercase letters, digits, and single hyphens**, alphanumeric at both ends, at most 80 characters —
 enforced by [`store::projects::is_valid_code`](../../store/src/projects.rs) and the SurrealDB `project_code` unique

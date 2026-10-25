@@ -18,10 +18,10 @@ transcribe <pointer>` renders and OCRs each PDF page locally.
 > **Source of truth = object storage plus the assets row.** When the application generates or proxies a document (a
 > rendered retainer PDF, a raw inbound email body), the bytes land in object storage via
 > [`cloud::StorageService`](../../cloud/) and the `assets` row is the canonical pointer. A Project repository carries
-> the source-side document contract in two root folders: `blobs/` holds each document's committed [Blob](blob.md), and
-> `documents/` holds the Git-ignored bytes staged for, or pulled down by, `navigator project sync`. Sync uploads each
-> staged file, writes its Blob, and keeps the local copy. Neither folder is part of the portal bundle or a second
-> document store. Raw legal-document bytes never enter Project Git.
+> the source-side document contract in two root folders: `blobs/` holds each document's committed
+> [Pointer](pointer.md), and `documents/` holds the Git-ignored [Blobs](blob.md) staged for, or pulled down by,
+> `navigator project sync`. Sync uploads each staged file, writes its Pointer, and keeps the local copy. Neither folder
+> is part of the portal bundle or a second document store. Raw legal-document bytes never enter Project Git.
 
 - Schema: [`asset` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
   [`store::assets`](../../store/src/assets.rs) Lives in: the `asset` table in SurrealDB (document-shaped rows)
