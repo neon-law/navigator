@@ -188,7 +188,7 @@ spec:
             # time. Unset/empty fails that workflow as a terminal error.
             - name: SLACK_GENERAL_CHANNEL_ID
               value: YOUR_SLACK_GENERAL_CHANNEL_ID
-            # `#finance`'s channel ID, where AIDA reads out the nightly Xero
+            # `#finance`'s channel ID, where Navigator reads out the nightly Xero
             # and IOLTA mirror (`ReconcileInvoices`). The same Slack app as
             # `#general` — invite it to the channel; no second token and no
             # incoming webhook. Not a secret; substitute the real ID at
