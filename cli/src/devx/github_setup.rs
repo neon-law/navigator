@@ -242,7 +242,7 @@ const ACTIONS_APP_SLUG: &str = "github-actions";
 /// ruleset to — two constants for one convention is a rename waiting to leave
 /// one of them stale.
 pub(crate) const REQUIRED_CHECK: &str = "ci";
-/// The status check GitHub's code-scanning App posts for CodeQL results.
+/// The status check GitHub's code-scanning App posts for `CodeQL` results.
 ///
 /// It is distinct from the `Analyze (<language>)` jobs in `codeql.yml`, which
 /// pass whenever the analysis ran. This check fails only on new alerts in code a
@@ -608,7 +608,7 @@ struct RepositoryPolicy {
     /// write instead of reviewing it.
     branch_protections: bool,
     /// Whether `main` also waits on the `CodeQL` code-scanning check. True only
-    /// where the repository carries the CodeQL workflow that posts it.
+    /// where the repository carries the `CodeQL` workflow that posts it.
     code_scanning: bool,
 }
 
@@ -3496,7 +3496,7 @@ mod tests {
     /// Navigator's own `main` also waits on code scanning: the `CodeQL` check
     /// the GitHub code-scanning App posts, which counts only the alerts a pull
     /// request introduces. Every other repository keeps the `ci` check alone,
-    /// because none of them is promised a CodeQL workflow.
+    /// because none of them is promised a `CodeQL` workflow.
     #[test]
     fn only_navigator_also_requires_the_codeql_check() {
         let checks = |policy| {

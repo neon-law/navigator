@@ -1,4 +1,4 @@
-//! CodeQL's `actions/unpinned-tag` query is filtered out in
+//! The `CodeQL` `actions/unpinned-tag` query is filtered out in
 //! `.github/codeql/codeql-config.yml` because the release flow pins this
 //! repository's own actions to a tag that does not exist until `deploy.yml`
 //! creates it. This test is the narrower rule that replaces it: every other
