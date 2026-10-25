@@ -140,6 +140,11 @@ fn the_arming_step_runs_under_the_minted_app_token() {
         Some("${{ steps.app-token.outputs.token }}"),
         "auto-merge must be armed with the minted App installation token, with no alternative"
     );
+    assert_eq!(
+        request["env"]["PR_HEAD_SHA"].as_str(),
+        Some("${{ github.event.pull_request.head.sha }}"),
+        "the App must merge the head authorized by this event"
+    );
 }
 
 /// `deploy.yml` is not where this lives, and saying so keeps the next guard
@@ -154,8 +159,8 @@ fn the_arming_step_lives_in_ci_not_deploy() {
         "auto-merge is armed by `ci.yml`; a guard reading `deploy.yml` would pass vacuously"
     );
     assert!(
-        ci_workflow().contains("enablePullRequestAutoMerge"),
-        "ci.yml must keep the mutation this guard is written against"
+        ci_workflow().contains("gh pr merge --auto --squash"),
+        "automerge.yml must keep the explicit squash auto-merge request"
     );
 }
 
@@ -219,4 +224,78 @@ fn quickstart_and_stress_test_use_standard_runners() {
             "{file} must run on ubuntu-24.04"
         );
     }
+}
+
+/// Exercise the workflow shell instead of only checking its spelling. The CLI
+/// selects immediate merge for UNSTABLE and auto-merge for BLOCKED; both paths
+/// must reach it under the same exact-head request.
+fn run_merge_request(state: &str, fail: bool) -> (std::process::Output, String) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let gh = dir.path().join("gh");
+    let log = dir.path().join("calls");
+    std::fs::write(&gh, r#"#!/bin/sh
+case "$1 $2" in
+  "pr view") printf '%s\n' false ;;
+  "pr merge")
+    test "$*" = "pr merge --auto --squash --match-head-commit synthetic-head https://github.com/example/sample/pull/7" || exit 31
+    printf '%s\n' "$MERGE_STATE" >> "$MERGE_LOG"
+    if [ "$MERGE_FAIL" = true ]; then
+      echo 'merge request refused' >&2
+      exit 17
+    fi
+    ;;
+  *) echo 'Pull request is in unstable status' >&2; exit 23 ;;
+esac
+"#).unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let workflow = ci_yaml();
+    let step = workflow["jobs"]["enable-automerge"]["steps"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|step| step["name"].as_str() == Some("request auto-merge"))
+        .unwrap();
+    let output = std::process::Command::new("bash")
+        .args(["-e", "-c", step["run"].as_str().unwrap()])
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                dir.path().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
+        .env("GITHUB_SERVER_URL", "https://github.com")
+        .env("PR_URL", "https://github.com/example/sample/pull/7")
+        .env("PR_HEAD_SHA", "synthetic-head")
+        .env("MERGE_STATE", state)
+        .env("MERGE_FAIL", if fail { "true" } else { "false" })
+        .env("MERGE_LOG", &log)
+        .output()
+        .unwrap();
+    let calls = std::fs::read_to_string(log).unwrap_or_default();
+    (output, calls)
+}
+
+#[test]
+fn already_ready_and_pending_pull_requests_use_the_exact_head_cli_path() {
+    for state in ["UNSTABLE", "BLOCKED"] {
+        let (output, calls) = run_merge_request(state, false);
+        assert!(
+            output.status.success(),
+            "{state}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(calls.trim(), state);
+    }
+}
+
+#[test]
+fn an_unexpected_merge_refusal_fails_the_workflow() {
+    let (output, calls) = run_merge_request("UNSTABLE", true);
+    assert!(!output.status.success());
+    assert_eq!(calls.trim(), "UNSTABLE");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("merge request refused"));
 }
