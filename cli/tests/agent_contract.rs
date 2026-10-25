@@ -58,6 +58,21 @@ fn canonical_contract_makes_all_email_draft_only() {
     }
 }
 
+/// Feedback filed in an outside tracker is scrubbed locally first.
+#[test]
+fn contract_requires_pii_removal_before_filing_feedback() {
+    for required in [
+        "Remove personal and matter identifiers",
+        "`<claim number>`",
+        "navigator project feedback-check",
+    ] {
+        assert!(
+            AGENT_CONTRACT.contains(required),
+            "AGENTS.md missing {required:?}"
+        );
+    }
+}
+
 /// The per-Project branch contract, stated in the canonical `AGENTS.md` every
 /// Project repository syncs and in the repository contract doc. The forge
 /// enforces it; a hook is a convenience, so neither surface names one as the

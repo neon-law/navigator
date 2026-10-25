@@ -4,6 +4,7 @@
 //! crate llvm-cov measures, rather than a second `#[path]` copy that the
 //! coverage report ignores.
 
+pub mod feedback_scan;
 pub mod import;
 pub mod pii_audit;
 pub mod snapshot_audit;
