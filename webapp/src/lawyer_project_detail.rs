@@ -217,7 +217,15 @@ async fn project_repository_templates(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "Project not found".to_string())?;
-    let repo = repos::RepoStore::from_env().map_err(|error| error.to_string())?;
+    let repo = match repos::RepoStore::from_env() {
+        Ok(repo) => repo,
+        // Deployments without a configured bare repository still serve their
+        // persisted Template inventory. Configured source failures remain errors.
+        Err(repos::RepoError::RootUnset) => {
+            return Ok(std::collections::BTreeMap::default());
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     let tree = tokio::task::spawn_blocking(move || repo.read_head_tree_code(&project.code))
         .await
         .map_err(|error| error.to_string())?
