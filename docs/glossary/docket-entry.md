@@ -12,6 +12,8 @@ never a migration.
 The entry number is **text, not an integer**. Real dockets use attachment sub-numbers such as `29-1`, and an entry list
 has to reference them exactly.
 
+A filed document is named for the entry's [DKT Number](dkt-number.md).
+
 An entry with **no document attached is a meaningful state**, not an error: it renders as *source pending*.
 Staged-versus-pending is derived from whether the document link exists, never from hand-maintained copy.
 

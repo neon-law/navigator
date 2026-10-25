@@ -86,6 +86,39 @@ fn safe_title(title: &str) -> String {
     }
 }
 
+/// The longest title, in characters, a filing name carries. Four bytes per
+/// character plus `DKT NNNN-NN - ` and an extension stay under a 255-byte
+/// file name.
+const TITLE_MAX_CHARS: usize = 120;
+
+/// `DKT NNNN[-att] - <title>.<ext>`: the name of a Docket Filings document.
+/// The title is [`safe_title`]d (so `:` and `/`, which macOS forbids in a
+/// file name, read `-`) and cut to [`TITLE_MAX_CHARS`] characters.
+pub(crate) fn filing_name(entry_number: &str, title: &str, ext: &str) -> Result<String, String> {
+    let number = dkt_number(entry_number.trim())?;
+    let safe = safe_title(title);
+    let cut: String = safe.chars().take(TITLE_MAX_CHARS).collect();
+    let cut = cut.trim_end_matches(['.', ' ']);
+    Ok(format!("DKT {number} - {cut}.{ext}"))
+}
+
+/// The `(entry number, attachment)` a `DKT NNNN[-att] - …` file name names,
+/// with the entry number's leading zeros dropped (`0029` reads `29`).
+pub(crate) fn parse_filing_name(file_name: &str) -> Option<(String, Option<u32>)> {
+    let rest = file_name.strip_prefix("DKT ")?;
+    let (number, _) = rest.split_once(" - ")?;
+    let (lead, attachment) = match number.split_once('-') {
+        Some((lead, att)) => (lead, Some(att.parse().ok()?)),
+        None => (number, None),
+    };
+    if lead.is_empty() || !lead.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let trimmed = lead.trim_start_matches('0');
+    let entry = if trimmed.is_empty() { "0" } else { trimmed };
+    Some((entry.to_string(), attachment))
+}
+
 /// Render one Docket Entry row into its Case Timeline file.
 pub fn render(row: &Value) -> Result<Record, String> {
     let entry_number = text(row, "entry_number").ok_or("entry has no entry_number")?;
@@ -189,6 +222,40 @@ mod tests {
         assert!(record
             .yaml
             .contains("title: 'Motion re: A/B \"Stay\"?  Pending...'\n"));
+    }
+
+    #[test]
+    fn a_filing_is_named_dkt_number_dash_title_with_its_extension() {
+        assert_eq!(
+            filing_name("4", "Notice of Hearing", "pdf").unwrap(),
+            "DKT 0004 - Notice of Hearing.pdf"
+        );
+        assert_eq!(
+            filing_name("29-1", "Exhibit A: Supply/Agreement", "pdf").unwrap(),
+            "DKT 0029-1 - Exhibit A- Supply-Agreement.pdf"
+        );
+        assert!(filing_name("x", "t", "pdf").is_err());
+    }
+
+    #[test]
+    fn a_long_title_is_cut_on_a_character_boundary() {
+        let name = filing_name("1", &"é".repeat(300), "pdf").unwrap();
+        assert!(name.len() <= 255, "{}", name.len());
+        assert!(name.contains(".pdf") && name.len() <= 255);
+    }
+
+    #[test]
+    fn a_filing_name_reads_back_to_its_entry_and_attachment() {
+        assert_eq!(
+            parse_filing_name("DKT 0029-1 - Exhibit A.pdf"),
+            Some(("29".to_string(), Some(1)))
+        );
+        assert_eq!(
+            parse_filing_name("DKT 0004 - Notice.pdf"),
+            Some(("4".to_string(), None))
+        );
+        assert_eq!(parse_filing_name("di-4-notice.pdf"), None);
+        assert_eq!(parse_filing_name("DKT 00x4 - Notice.pdf"), None);
     }
 
     #[test]

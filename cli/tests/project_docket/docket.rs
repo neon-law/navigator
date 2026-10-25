@@ -83,7 +83,7 @@ fn a_dry_run_prints_the_plan_and_writes_nothing() {
     let out = stdout(&output);
     assert!(
         out.contains(
-            "D.I. 12 · pleading · docket/9-26-cv-00042/di-12-motion-to-dismiss-for-failure-to.pdf"
+            "D.I. 12 · pleading · DKT 0012 - MOTION to Dismiss for Failure to State a Claim by Defendant"
         ),
         "{out}"
     );
@@ -187,13 +187,10 @@ async fn apply_mode_downloads_once_files_the_document_and_stages_its_pointer() {
     .await
     .unwrap();
     assert!(first.status.success(), "{first:?}");
-    let folder = dir.path().join("documents/Docket Filings/docket/26-10042");
-    let bytes = folder.join("di-29-transfer-of-claim-transfer-agreement-3001.pdf");
+    let filed = "DKT 0029 - Transfer of Claim. Transfer Agreement 3001 (e) 2 Transferor- Acme Lending Co (Claim No. 7) To Harbor Recovery Fund. File.pdf";
+    let bytes = dir.path().join("documents/Docket Filings").join(filed);
     assert_eq!(std::fs::read(&bytes).unwrap(), b"%PDF-1.7 synthetic");
-    assert!(dir
-        .path()
-        .join("blobs/docket/26-10042/di-29-transfer-of-claim-transfer-agreement-3001.pdf.yaml")
-        .is_file());
+    assert!(dir.path().join(format!("blobs/{filed}.yaml")).is_file());
     assert!(!dir.path().join("documents/.gitignore").exists());
     assert!(std::fs::read_to_string(dir.path().join(".gitignore"))
         .unwrap()
@@ -231,10 +228,7 @@ async fn apply_mode_downloads_once_files_the_document_and_stages_its_pointer() {
         .collect();
     assert_eq!(entries.len(), 2, "one docket entry per notice per run");
     assert_eq!(entries[0]["entry_number"], "29");
-    assert_eq!(
-        entries[0]["slug"],
-        "docket/26-10042/di-29-transfer-of-claim-transfer-agreement-3001.pdf"
-    );
+    assert_eq!(entries[0]["slug"], filed);
     assert!(
         stdout(&first).contains("recorded docket entry D.I. 29"),
         "{first:?}"
@@ -247,7 +241,7 @@ async fn apply_mode_downloads_once_files_the_document_and_stages_its_pointer() {
     );
     assert!(seeds.iter().all(|seed| seed["overwrite"] == false));
     assert!(
-        stdout(&second).contains("already filed as docket/26-10042/"),
+        stdout(&second).contains(&format!("already filed as {filed}")),
         "{second:?}"
     );
 }

@@ -20,6 +20,7 @@ use std::process::ExitCode;
 use anyhow::{anyhow, Context, Result};
 use sha2::{Digest, Sha256};
 
+use super::case_timeline;
 use super::nef::{self, Notice};
 use crate::projects::manifest;
 
@@ -282,16 +283,38 @@ fn text_slug(text: &str) -> String {
     }
 }
 
-/// `di-<n>[-<att>]-<slug>.pdf`.
+/// `DKT NNNN[-<att>] - <title>.pdf` (see [`case_timeline::filing_name`]). A
+/// docket entry number that is not digits cannot be a DKT Number, so it keeps
+/// the older `di-<n>[-<att>]-<slug>.pdf` form.
 fn document_filename(doc_no: &str, attachment: Option<u32>, text: &str) -> String {
-    match attachment {
+    let entry = match attachment {
+        Some(number) => format!("{doc_no}-{number}"),
+        None => doc_no.to_string(),
+    };
+    case_timeline::filing_name(&entry, text, "pdf").unwrap_or_else(|_| match attachment {
         Some(number) => format!("di-{doc_no}-{number}-{}.pdf", text_slug(text)),
         None => format!("di-{doc_no}-{}.pdf", text_slug(text)),
+    })
+}
+
+/// The slug of a filing: its flat `DKT` name, which sits directly in Docket
+/// Filings, or the older `docket/<case>/di-…` path.
+fn filing_slug(case_folder: &str, filename: &str) -> String {
+    if case_timeline::parse_filing_name(filename).is_some() {
+        filename.to_string()
+    } else {
+        format!("{DOCKET_FOLDER}/{case_folder}/{filename}")
     }
 }
 
+/// An entry number without leading zeros, so `0029` and `29` compare equal.
+fn unpadded(doc_no: &str) -> String {
+    let trimmed = doc_no.trim_start_matches('0');
+    if trimmed.is_empty() { "0" } else { trimmed }.to_string()
+}
+
 /// The `(docket entry, attachment)` a docket filename names.
-fn docket_key(filename: &str) -> Option<(String, Option<u32>)> {
+pub(super) fn docket_key(filename: &str) -> Option<(String, Option<u32>)> {
     let rest = filename.strip_prefix("di-")?;
     let (doc_no, rest) = rest.split_once('-')?;
     if doc_no.is_empty() || !doc_no.chars().all(|c| c.is_ascii_digit()) {
@@ -326,7 +349,9 @@ fn suggested_kind(docket_text: &str, attachment_description: Option<&str>) -> &'
 #[derive(Default)]
 struct Filed {
     /// `(case folder, entry, attachment)` → slug.
-    keyed: BTreeMap<(String, String, Option<u32>), String>,
+    /// The case folder is `None` for a flat `DKT NNNN - <title>` filing,
+    /// whose name carries no case.
+    keyed: BTreeMap<(Option<String>, String, Option<u32>), String>,
     /// Lowercased document filename → slug, for a filing uploaded from the
     /// drafts lane under its own name.
     named: BTreeMap<String, String>,
@@ -365,18 +390,30 @@ impl Filed {
             .or_insert_with(|| slug.to_string());
         let folder = parts.next();
         let docket_root = parts.next();
-        if let (Some(folder), Some(DOCKET_FOLDER), None) = (folder, docket_root, parts.next()) {
-            if let Some((doc_no, attachment)) = docket_key(filename) {
-                self.keyed
-                    .entry((folder.to_string(), doc_no, attachment))
-                    .or_insert_with(|| slug.to_string());
+        match (folder, docket_root, parts.next()) {
+            (None, _, _) => {
+                if let Some((doc_no, attachment)) = case_timeline::parse_filing_name(filename) {
+                    self.keyed
+                        .entry((None, doc_no, attachment))
+                        .or_insert_with(|| slug.to_string());
+                }
             }
+            (Some(folder), Some(DOCKET_FOLDER), None) => {
+                if let Some((doc_no, attachment)) = docket_key(filename) {
+                    self.keyed
+                        .entry((Some(folder.to_string()), unpadded(&doc_no), attachment))
+                        .or_insert_with(|| slug.to_string());
+                }
+            }
+            _ => {}
         }
     }
 
     fn existing(&self, item: &Item) -> Option<&str> {
+        let doc_no = unpadded(&item.doc_no);
         self.keyed
-            .get(&(item.folder.clone(), item.doc_no.clone(), item.attachment))
+            .get(&(Some(item.folder.clone()), doc_no.clone(), item.attachment))
+            .or_else(|| self.keyed.get(&(None, doc_no, item.attachment)))
             .or_else(|| {
                 item.original_filename
                     .as_ref()
@@ -402,7 +439,7 @@ struct Item {
 
 impl Item {
     fn slug(&self) -> String {
-        format!("{DOCKET_FOLDER}/{}/{}", self.folder, self.filename)
+        filing_slug(&self.folder, &self.filename)
     }
 
     fn label(&self) -> String {
@@ -672,10 +709,9 @@ fn docket_entry_body(notice: &Notice, docket: &str) -> Option<serde_json::Value>
         "entry_number": doc_no,
         "kind": entry_kind(&notice.docket_text),
         "title": truncate(&notice.docket_text, 400),
-        "slug": format!(
-            "{DOCKET_FOLDER}/{}/{}",
-            case_folder(docket),
-            document_filename(doc_no, None, &notice.docket_text)
+        "slug": filing_slug(
+            &case_folder(docket),
+            &document_filename(doc_no, None, &notice.docket_text),
         ),
     });
     if let Some(caption) = notice.case_name.as_deref().filter(|name| !name.is_empty()) {
@@ -1001,7 +1037,7 @@ async fn file_one(
 mod tests {
     use super::{
         case_folder, docket_for, docket_key, document_filename, embedded_document, entry_kind,
-        ingest, suggested_kind, text_slug, FreeLook, Options, Report,
+        filing_slug, ingest, suggested_kind, text_slug, FreeLook, Options, Report,
     };
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1011,6 +1047,9 @@ mod tests {
     use uuid::Uuid;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// The flat Docket Filings name the bankruptcy fixture files under.
+    const FILED: &str = "DKT 0029 - Transfer of Claim. Transfer Agreement 3001 (e) 2 Transferor- Acme Lending Co (Claim No. 7) To Harbor Recovery Fund. File.pdf";
 
     /// Serves fixed bytes for any link and counts how often it was asked.
     struct FakeFreeLook {
@@ -1089,11 +1128,24 @@ mod tests {
     fn a_document_is_named_by_its_entry_attachment_and_text() {
         assert_eq!(
             document_filename("12", None, "MOTION to Dismiss for Failure to State a Claim"),
-            "di-12-motion-to-dismiss-for-failure-to.pdf"
+            "DKT 0012 - MOTION to Dismiss for Failure to State a Claim.pdf"
         );
         assert_eq!(
-            document_filename("12", Some(1), "Exhibit A - Supply Agreement"),
-            "di-12-1-exhibit-a-supply-agreement.pdf"
+            document_filename("12", Some(1), "Exhibit A: Supply/Agreement"),
+            "DKT 0012-1 - Exhibit A- Supply-Agreement.pdf"
+        );
+        assert_eq!(
+            document_filename("x", None, "Motion"),
+            "di-x-motion.pdf",
+            "a non-numeric entry keeps the older form"
+        );
+        assert_eq!(
+            filing_slug("9-26-cv-1", "DKT 0012 - A.pdf"),
+            "DKT 0012 - A.pdf"
+        );
+        assert_eq!(
+            filing_slug("9-26-cv-1", "di-12-a.pdf"),
+            "docket/9-26-cv-1/di-12-a.pdf"
         );
         assert_eq!(text_slug("3 (three) copies"), "three-copies");
         assert_eq!(text_slug("12 34"), "entry");
@@ -1322,22 +1374,14 @@ mod tests {
         assert_eq!(entries[0]["kind"], "other");
         assert_eq!(entries[0]["party"], "Harbor Recovery Fund");
         assert_eq!(entries[0]["filed_or_served_on"], "2026-03-05");
-        assert_eq!(
-            entries[0]["slug"],
-            "docket/26-10042/di-29-transfer-of-claim-transfer-agreement-3001.pdf"
-        );
+        assert_eq!(entries[0]["slug"], FILED);
         assert!(entries[0]["title"]
             .as_str()
             .unwrap()
             .starts_with("Transfer of Claim"));
-        let bytes = dir
-            .path()
-            .join("documents/Docket Filings/docket/26-10042/di-29-transfer-of-claim-transfer-agreement-3001.pdf");
+        let bytes = dir.path().join(format!("documents/Docket Filings/{FILED}"));
         assert!(std::fs::read(&bytes).unwrap().starts_with(b"%PDF"));
-        assert!(dir
-            .path()
-            .join("blobs/docket/26-10042/di-29-transfer-of-claim-transfer-agreement-3001.pdf.yaml")
-            .is_file());
+        assert!(dir.path().join(format!("blobs/{FILED}.yaml")).is_file());
         let uploads: Vec<serde_json::Value> = server
             .received_requests()
             .await
@@ -1348,10 +1392,7 @@ mod tests {
             .collect();
         assert_eq!(uploads.len(), 1);
         assert_eq!(uploads[0]["kind"], "pleading");
-        assert_eq!(
-            uploads[0]["slug"],
-            "docket/26-10042/di-29-transfer-of-claim-transfer-agreement-3001.pdf"
-        );
+        assert_eq!(uploads[0]["slug"], FILED);
         assert_eq!(uploads[0]["content_type"], "application/pdf");
 
         let posted = seeds(&server).await;
@@ -1388,13 +1429,9 @@ mod tests {
         let dir = checkout("host: navigator.example.com\nproject: acme\ndockets:\n  - 26-10042\n");
         let _lock = CREDENTIALS_ENV_LOCK.lock().await;
         let _env = CredentialsEnv::logged_in(&server.uri());
-        let folder = dir.path().join("documents/docket/26-10042");
+        let folder = dir.path().join("documents");
         std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(
-            folder.join("di-29-transfer-of-claim-transfer-agreement-3001.pdf"),
-            b"%PDF-1.7 left behind",
-        )
-        .unwrap();
+        std::fs::write(folder.join(FILED), b"%PDF-1.7 left behind").unwrap();
         let free_look = FakeFreeLook {
             calls: AtomicUsize::new(0),
         };
@@ -1460,5 +1497,61 @@ mod tests {
         .unwrap();
         assert_eq!(report.duplicates, 1);
         assert_eq!(free_look.calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// A pointer filed under either name for entry 29 stops a re-filing.
+    async fn a_filing_under_this_name_is_not_filed_again(slug: &str) {
+        let dir = checkout("host: navigator.example.com\nproject: acme\ndockets:\n  - 26-10042\n");
+        let pointer = store::document_pointers::DocumentPointer {
+            kind: "pleading".into(),
+            visibility: "internal".into(),
+            folder: None,
+            current_version: store::document_pointers::PointerVersion {
+                version: 1,
+                asset_id: Uuid::now_v7(),
+                created_at: "2026-03-05T12:00:00Z".into(),
+                sha256: "2".repeat(64),
+                size_bytes: 10,
+                canonical_url: None,
+                checked_on: None,
+            },
+            previous_version: None,
+            authority_id: None,
+            docusign_envelope_id: None,
+            xero_invoice_id: None,
+            signing: None,
+            notarization: Vec::new(),
+            service: Vec::new(),
+        };
+        crate::document_sync::write_uploaded_pointer(dir.path(), slug, &pointer).unwrap();
+        let free_look = FakeFreeLook {
+            calls: AtomicUsize::new(0),
+        };
+        let report = ingest(
+            dir.path(),
+            &Options {
+                notices: vec![fixture("bankruptcy-transfer.eml")],
+                ..Options::default()
+            },
+            &free_look,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.duplicates, 1, "{slug}: {report:?}");
+        assert_eq!(report.filed, 0);
+        assert_eq!(free_look.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_filing_made_under_the_older_di_name_is_recognised() {
+        a_filing_under_this_name_is_not_filed_again(
+            "docket/26-10042/di-29-transfer-of-claim-transfer-agreement-3001.pdf",
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_filing_made_under_a_dkt_name_is_recognised_whatever_its_title() {
+        a_filing_under_this_name_is_not_filed_again("DKT 0029 - Retitled by hand.pdf").await;
     }
 }
