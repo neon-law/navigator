@@ -2046,7 +2046,6 @@ jobs:
           step: "mirror the same digest to public GHCR"
       - name: mirror the same digest to public GHCR
         timeout-minutes: 5
-        continue-on-error: true
         env:
           GHCR_REGISTRY: ghcr.io/${{ github.repository_owner }}/navigator
           GHCR_TOKEN: ${{ github.token }}
@@ -2056,13 +2055,10 @@ jobs:
           RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
         run: |
           set -euo pipefail
-          if ! echo "${GHCR_TOKEN}" | docker login ghcr.io --username "${GHCR_USER}" --password-stdin; then
-              echo "::warning::GHCR login unavailable; private Artifact Registry remains authoritative"
-              exit 0
-          fi
+          echo "${GHCR_TOKEN}" | docker login ghcr.io --username "${GHCR_USER}" --password-stdin
           target="${GHCR_REGISTRY}/${{ matrix.image }}"
           for attempt in 1 2 3 4 5; do
-              if docker buildx imagetools create --tag "${target}:${RELEASE_TAG}" "${IMAGE_REF}@${IMAGE_DIGEST}" \
+              if docker buildx imagetools create --tag "${target}:${RELEASE_TAG}" --tag "${target}:latest" "${IMAGE_REF}@${IMAGE_DIGEST}" \
                   && source_digest="$(docker buildx imagetools inspect --raw "${IMAGE_REF}@${IMAGE_DIGEST}" | sha256sum | cut -d' ' -f1)" \
                   && target_digest="$(docker buildx imagetools inspect --raw "${target}:${RELEASE_TAG}" | sha256sum | cut -d' ' -f1)" \
                   && [ "${source_digest}" = "${target_digest}" ] \
@@ -2071,7 +2067,8 @@ jobs:
               fi
               sleep "$((attempt * 2))"
           done
-          echo "::warning::GHCR mirror failed after retries; private Artifact Registry remains authoritative"
+          echo "::error::GHCR mirror of ${target}:${RELEASE_TAG} failed after retries"
+          exit 1
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         if: matrix.alias != ''
@@ -2405,7 +2402,6 @@ jobs:
           step: "mirror the same digest to public GHCR"
       - name: mirror the same digest to public GHCR
         timeout-minutes: 5
-        continue-on-error: true
         env:
           GHCR_REGISTRY: ghcr.io/${{ github.repository_owner }}/navigator
           GHCR_TOKEN: ${{ github.token }}
@@ -2415,13 +2411,10 @@ jobs:
           RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
         run: |
           set -euo pipefail
-          if ! echo "${GHCR_TOKEN}" | docker login ghcr.io --username "${GHCR_USER}" --password-stdin; then
-              echo "::warning::GHCR login unavailable; private Artifact Registry remains authoritative"
-              exit 0
-          fi
+          echo "${GHCR_TOKEN}" | docker login ghcr.io --username "${GHCR_USER}" --password-stdin
           target="${GHCR_REGISTRY}/${{ matrix.image }}"
           for attempt in 1 2 3 4 5; do
-              if docker buildx imagetools create --tag "${target}:${RELEASE_TAG}" "${IMAGE_REF}@${IMAGE_DIGEST}" \
+              if docker buildx imagetools create --tag "${target}:${RELEASE_TAG}" --tag "${target}:latest" "${IMAGE_REF}@${IMAGE_DIGEST}" \
                   && source_digest="$(docker buildx imagetools inspect --raw "${IMAGE_REF}@${IMAGE_DIGEST}" | sha256sum | cut -d' ' -f1)" \
                   && target_digest="$(docker buildx imagetools inspect --raw "${target}:${RELEASE_TAG}" | sha256sum | cut -d' ' -f1)" \
                   && [ "${source_digest}" = "${target_digest}" ] \
@@ -2430,7 +2423,8 @@ jobs:
               fi
               sleep "$((attempt * 2))"
           done
-          echo "::warning::GHCR mirror failed after retries; private Artifact Registry remains authoritative"
+          echo "::error::GHCR mirror of ${target}:${RELEASE_TAG} failed after retries"
+          exit 1
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -3738,6 +3732,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -3786,6 +3781,31 @@ jobs:
           set -euo pipefail
           cosign sign --yes "${IMAGE_REF}@${IMAGE_DIGEST}"
           jq -n --arg image "navigator-cli" --arg digest "${IMAGE_DIGEST}" '{($image): $digest}' > image-digest.json
+      - name: mirror the same digest to public GHCR
+        timeout-minutes: 5
+        env:
+          GHCR_REGISTRY: ghcr.io/${{ github.repository_owner }}/navigator
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+          IMAGE_REF: ${{ env.NAVIGATOR_IMAGE_REGISTRY }}/navigator-cli
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+          RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "${GHCR_TOKEN}" | docker login ghcr.io --username "${GHCR_USER}" --password-stdin
+          target="${GHCR_REGISTRY}/navigator-cli"
+          for attempt in 1 2 3 4 5; do
+              if docker buildx imagetools create --tag "${target}:${RELEASE_TAG}" --tag "${target}:latest" "${IMAGE_REF}@${IMAGE_DIGEST}" \
+                  && source_digest="$(docker buildx imagetools inspect --raw "${IMAGE_REF}@${IMAGE_DIGEST}" | sha256sum | cut -d' ' -f1)" \
+                  && target_digest="$(docker buildx imagetools inspect --raw "${target}:${RELEASE_TAG}" | sha256sum | cut -d' ' -f1)" \
+                  && [ "${source_digest}" = "${target_digest}" ] \
+                  && cosign sign --yes "${target}@sha256:${target_digest}"; then
+                  exit 0
+              fi
+              sleep "$((attempt * 2))"
+          done
+          echo "::error::GHCR mirror of ${target}:${RELEASE_TAG} failed after retries"
+          exit 1
       - uses: actions/upload-artifact@v7
         with:
           name: image-digest-navigator-cli

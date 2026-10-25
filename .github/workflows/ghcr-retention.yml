@@ -1,0 +1,61 @@
+name: GHCR retention
+# Deletes Navigator's public GHCR image versions seven days after they were
+# pushed, matching the private Artifact Registry's cleanup policy. `deploy.yml`
+# mirrors every release image to ghcr.io/<owner>/navigator/<image>; without this
+# the public registry would keep every release forever.
+#
+# Two versions are never deleted: one tagged `latest`, which is the pointer a
+# stranger pulls, and nothing newer than the cutoff. Cosign signatures are
+# versions of their own and age out with the image they sign. Packages outside
+# the `navigator/` prefix (the Postgres image, for one) are not touched.
+#
+# A manual run defaults to a dry run that only lists what it would delete.
+on:
+  schedule:
+    - cron: '41 8 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: List stale versions without deleting them
+        type: boolean
+        default: true
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: ghcr-retention
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+env:
+  RETENTION_DAYS: '7'
+jobs:
+  prune:
+    name: delete image versions older than seven days
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: prune stale versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          cutoff="$(date -u -d "${RETENTION_DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ)"
+          echo "cutoff ${cutoff} (dry run: ${DRY_RUN})"
+          deleted=0
+          while IFS= read -r package; do
+              encoded="${package//\//%2F}"
+              while IFS=$'\t' read -r id created; do
+                  echo "stale ${package} version ${id} pushed ${created}"
+                  if [ "${DRY_RUN}" != "true" ]; then
+                      gh api -X DELETE "/orgs/${OWNER}/packages/container/${encoded}/versions/${id}"
+                  fi
+                  deleted=$((deleted + 1))
+              done < <(gh api --paginate "/orgs/${OWNER}/packages/container/${encoded}/versions?per_page=100" \
+                  --jq ".[] | select(.created_at < \"${cutoff}\") | select(((.metadata.container.tags // []) | index(\"latest\")) | not) | [.id, .created_at] | @tsv")
+          done < <(gh api --paginate "/orgs/${OWNER}/packages?package_type=container&per_page=100" \
+              --jq '.[] | select(.name | startswith("navigator/")) | .name')
+          echo "${deleted} version(s) $([ "${DRY_RUN}" = "true" ] && echo 'would be deleted' || echo 'deleted')"
