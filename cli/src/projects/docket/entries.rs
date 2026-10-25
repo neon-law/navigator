@@ -29,7 +29,7 @@ pub(crate) struct Coordinates {
     pub(crate) project_id: Uuid,
 }
 
-async fn coordinates(host: Option<&str>, project: Option<&str>) -> Result<Coordinates> {
+pub(crate) async fn coordinates(host: Option<&str>, project: Option<&str>) -> Result<Coordinates> {
     let local = manifest::read(Path::new("."));
     let project = project
         .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
@@ -191,6 +191,25 @@ pub async fn list(host: Option<&str>, project: Option<&str>) -> ExitCode {
         }
         .await,
     )
+}
+
+/// The Docket Entry rows of a Project, from `GET …/docket`.
+pub(crate) async fn list_rows(c: &Coordinates) -> Result<Vec<Value>> {
+    let body = call(
+        reqwest::Client::new()
+            .get(format!(
+                "{}/app/api/projects/{}/docket",
+                c.base, c.project_id
+            ))
+            .bearer_auth(&c.token),
+        "list",
+    )
+    .await?;
+    Ok(body
+        .get("entries")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
 }
 
 /// What `navigator project docket add` records.

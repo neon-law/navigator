@@ -1420,7 +1420,7 @@ enum DocketCmd {
     /// Run from the root of a Project repository. The Project and host come
     /// from navigator.yaml, and only notices for the case numbers it lists
     /// under `dockets:` (or `matter.case_number`) are read. Each document's
-    /// bytes are written under documents/docket/ before anything else,
+    /// bytes are written under documents/Docket Filings/ before anything else,
     /// because a free-look link is single-use.
     Ingest {
         /// One or more `.eml` notices.
@@ -1444,6 +1444,18 @@ enum DocketCmd {
     },
     /// List the cases and docket entries stored on a Project.
     List {
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// List every older `di-` filing beside the `DKT NNNN - <title>` name its
+    /// docket entry gives it. Renames nothing.
+    ///
+    /// A filing no entry links, or two that would share a name, are listed
+    /// as UNRESOLVED for a lawyer to settle.
+    Renumber {
         /// Project code. Defaults to project.name in navigator.yaml.
         #[arg(long)]
         project: Option<String>,
@@ -4807,6 +4819,9 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             })
             .await
         }
+        ProjectsCmd::Docket {
+            action: DocketCmd::Renumber { host, project },
+        } => projects::docket::renumber::run(host.host.as_deref(), project.as_deref()).await,
         ProjectsCmd::Docket {
             action: DocketCmd::List { host, project },
         } => projects::docket::entries::list(host.host.as_deref(), project.as_deref()).await,

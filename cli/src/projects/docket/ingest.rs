@@ -314,7 +314,7 @@ fn unpadded(doc_no: &str) -> String {
 }
 
 /// The `(docket entry, attachment)` a docket filename names.
-fn docket_key(filename: &str) -> Option<(String, Option<u32>)> {
+pub(super) fn docket_key(filename: &str) -> Option<(String, Option<u32>)> {
     let rest = filename.strip_prefix("di-")?;
     let (doc_no, rest) = rest.split_once('-')?;
     if doc_no.is_empty() || !doc_no.chars().all(|c| c.is_ascii_digit()) {
