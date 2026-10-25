@@ -233,8 +233,18 @@ fn template_stub(kind: &str) -> String {
     } else {
         ("Offboarding letter", "offboard")
     };
+    // An onboarding letter always carries the engagement-arbitration Clause and
+    // the two questions it binds; an offboarding letter has none.
+    let (clauses, placement) = if kind == ONBOARDING {
+        (
+            "questionnaire:\n  BEGIN:\n    _: jurisdiction__governing_law\n  jurisdiction__governing_law:\n    _: jurisdiction__arbitration_seat\n  jurisdiction__arbitration_seat:\n    _: END\nclauses:\n  arbitration:\n    source: engagement_arbitration@1\n    inputs:\n      law: jurisdiction__governing_law\n      seat: jurisdiction__arbitration_seat\nworkflow:\n  BEGIN:\n    created: lawyer_review\n  lawyer_review:\n    approved: END\n",
+            "{{> arbitration}}\n\n",
+        )
+    } else {
+        ("", "")
+    };
     format!(
-        "---\nkind: {kind}\ntitle: {title}\nrespondent_type: person_and_entity\nconfidential: true\n---\n\nDraft this letter before running `navigator project {command}` again.\n"
+        "---\nkind: {kind}\ntitle: {title}\nrespondent_type: person_and_entity\nconfidential: true\n{clauses}---\n\n{placement}Draft this letter before running `navigator project {command}` again.\n"
     )
 }
 
@@ -544,6 +554,20 @@ mod tests {
             assert!(body.contains(&format!("title: {expected_title}")));
             assert!(body.contains(&format!("navigator project {expected_command}")));
         }
+    }
+
+    #[test]
+    fn the_onboarding_stub_starts_compliant_with_the_engagement_arbitration_clause() {
+        use rules::Rule;
+        let (_, stub) = scaffold_draft(ONBOARDING);
+        let violations = rules::clauses::ClauseReferences.lint(&rules::SourceFile {
+            path: "drafts/onboarding__letter.md".into(),
+            contents: stub.clone(),
+        });
+        assert!(violations.is_empty(), "{violations:?}");
+        assert!(stub.contains("jurisdiction__governing_law"));
+        assert!(stub.contains("jurisdiction__arbitration_seat"));
+        assert!(rules::clauses::compile(&stub).is_ok());
     }
 
     #[test]

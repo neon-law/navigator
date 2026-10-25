@@ -375,7 +375,7 @@ pub fn description_for_code(code: &str) -> &'static str {
         "N128" => "Only a form notation may declare `origin_url:`",
         "N129" => "A notation's `audiences:` may only narrow its `custom_*` questions",
         "N130" => "A pleading body carries no caption markup; its caption comes from `matter:` and its frontmatter",
-        "N132" => "Clause references name a pinned version and bind its required questionnaire inputs",
+        "N132" => "Clause references name a pinned version and bind its required inputs; an onboarding includes `engagement_arbitration`",
         "N131" => "A notation template carries no drafting markers: brackets, fill-in blanks outside a signature block, notes, or the render's Signer Box marker",
         "E001" => "Event must declare both a `starts_at` timestamp and a `timezone`",
         "E002" => "A file is either an event or a notation template, never both",
