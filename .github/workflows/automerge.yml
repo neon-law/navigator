@@ -88,6 +88,7 @@ jobs:
           # The App installation token, and nothing else.
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           # `gh` targets github.com unless told otherwise, which is where this
           # repository lives — so the default is right here and was not on the
@@ -106,14 +107,11 @@ jobs:
               echo "auto-merge already enabled; nothing to do."
               exit 0
           fi
-          # Enable auto-merge via the GraphQL mutation rather than
-          # `gh pr merge --auto`: a current `gh pr merge --auto` (no method)
-          # hard-errors non-interactively ("--merge, --rebase, or --squash
-          # required"). `enablePullRequestAutoMerge` needs an explicit
-          # `mergeMethod` — omitting it defaults to MERGE, which this repo
-          # disallows ("Merge method merge commits are not allowed"). SQUASH is
-          # the repo's only allowed method, so it is accepted.
-          pr_id="$(gh pr view "${PR_URL}" --json id --jq '.id')"
+          # The CLI enables auto-merge while required gates are pending, and
+          # performs the governed squash merge when they already pass. GitHub
+          # rejects enablePullRequestAutoMerge for an immediately mergeable PR,
+          # including UNSTABLE when only an optional check failed. The App owns
+          # both paths; GitHub still enforces branch policy and the event's head.
           # A defensive soft pass, not the expected path. Arming auto-merge is
           # a mutation on the pull request rather than a write of workflow
           # content, and a PR editing `.github/workflows/*` does arm and merge
@@ -122,12 +120,8 @@ jobs:
           # to create or update workflow ... without `workflows` permission",
           # which no CI change can fix, so that one refusal is reported and
           # passed over. Every other failure is real and fails the job.
-          if ! result="$(gh api graphql -f pr="${pr_id}" -f query='
-              mutation($pr: ID!) {
-                enablePullRequestAutoMerge(input: { pullRequestId: $pr, mergeMethod: SQUASH }) {
-                  pullRequest { number }
-                }
-              }' 2>&1)"; then
+          if ! result="$(gh pr merge --auto --squash \
+              --match-head-commit "${PR_HEAD_SHA}" "${PR_URL}" 2>&1)"; then
               if printf '%s' "${result}" | grep -q 'refusing to allow a GitHub App to create or update workflow'; then
                   echo "::warning::the App was refused for lack of the \`workflows\` permission on a PR that edits workflow files. Merge this PR manually."
                   printf '%s\n' "${result}"
