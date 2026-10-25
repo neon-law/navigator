@@ -332,6 +332,56 @@ fn bind_inputs(prose: &str, inputs: &BTreeMap<String, String>) -> String {
     bound
 }
 
+/// The Clause every `kind: onboarding` template must include.
+pub const ENGAGEMENT_ARBITRATION: &str = "engagement_arbitration";
+
+/// The highest pinned version of library Clause `code`, as `code@version`.
+///
+/// # Errors
+/// Returns a malformed bundled library error, or an unknown code.
+pub fn current_source(code: &str) -> Result<String, String> {
+    library_clauses()?
+        .into_iter()
+        .filter(|clause| clause.code == code)
+        .map(|clause| clause.version)
+        .max()
+        .map(|version| format!("{code}@{version}"))
+        .ok_or_else(|| format!("unknown Clause `{code}`"))
+}
+
+/// Why an onboarding template fails the engagement-arbitration requirement,
+/// or `None` when it includes the current Clause (or is not an onboarding).
+/// A compiled snapshot pins the Clause under `clause_sources:` and has already
+/// expanded its references.
+fn missing_engagement_arbitration(markdown: &str) -> Option<String> {
+    let (yaml, body) = crate::frontmatter::split(markdown)?;
+    let doc: Value = serde_yaml::from_str(yaml).ok()?;
+    if doc.get("kind").and_then(Value::as_str) != Some("onboarding") {
+        return None;
+    }
+    let current = current_source(ENGAGEMENT_ARBITRATION).ok()?;
+    let sources = |key: &str| {
+        doc.get(key)
+            .and_then(|value| {
+                serde_yaml::from_value::<BTreeMap<String, Reference>>(value.clone()).ok()
+            })
+            .unwrap_or_default()
+    };
+    let compiled = sources("clause_sources")
+        .values()
+        .any(|reference| reference.source == current);
+    let referenced = sources("clauses")
+        .into_iter()
+        .filter(|(_, reference)| reference.source == current)
+        .any(|(alias, _)| body.contains(&format!("{{{{> {alias}}}}}")));
+    (!compiled && !referenced).then(|| {
+        format!(
+            "an onboarding template must declare `{current}` under `clauses:` and reference it in \
+             the body with `{{{{> name}}}}`"
+        )
+    })
+}
+
 /// Validate Clause composition and the expanded body's existing notation rules.
 pub struct ClauseReferences;
 
@@ -341,6 +391,15 @@ impl crate::Rule for ClauseReferences {
     }
 
     fn lint(&self, file: &crate::SourceFile) -> Vec<crate::Violation> {
+        if let Some(message) = missing_engagement_arbitration(&file.contents) {
+            return vec![crate::Violation {
+                code: "N132",
+                path: file.path.clone(),
+                line: 1,
+                range: crate::line_byte_range(&file.contents, 1),
+                message,
+            }];
+        }
         let compiled = match compile(&file.contents) {
             Ok(compiled) => compiled,
             Err(message) => {
@@ -488,6 +547,52 @@ mod tests {
             assert_eq!(violations.len(), 1);
             assert_eq!(violations[0].code, "N132");
         }
+    }
+
+    fn onboarding(clauses: &str, body: &str) -> crate::SourceFile {
+        crate::SourceFile {
+            path: "onboarding__letter.md".into(),
+            contents: format!(
+                "---\nkind: onboarding\nquestionnaire: [jurisdiction__governing_law, jurisdiction__arbitration_seat]\n{clauses}---\n{body}"
+            ),
+        }
+    }
+
+    const ARBITRATION: &str = "clauses:\n  arbitration:\n    source: engagement_arbitration@1\n    inputs:\n      law: jurisdiction__governing_law\n      seat: jurisdiction__arbitration_seat\n";
+
+    #[test]
+    fn an_onboarding_template_must_include_the_current_engagement_arbitration() {
+        use crate::Rule;
+        let lint = |file: crate::SourceFile| super::ClauseReferences.lint(&file);
+        assert!(lint(onboarding(ARBITRATION, "{{> arbitration}}\n")).is_empty());
+        for file in [
+            onboarding("", "Letter.\n"),
+            onboarding(&ARBITRATION.replace("@1", "@0"), "{{> arbitration}}\n"),
+        ] {
+            let violations = lint(file);
+            assert_eq!(violations.len(), 1, "{violations:?}");
+            assert_eq!(violations[0].code, "N132");
+            assert!(violations[0].message.contains("engagement_arbitration@"));
+        }
+        // Declared but never placed in the body.
+        assert_eq!(lint(onboarding(ARBITRATION, "Letter.\n")).len(), 1);
+        // Other kinds are unaffected.
+        assert!(lint(crate::SourceFile {
+            path: "offboarding__letter.md".into(),
+            contents: "---\nkind: offboarding\n---\nLetter.\n".into()
+        })
+        .is_empty());
+    }
+
+    #[test]
+    fn a_compiled_onboarding_snapshot_satisfies_the_requirement() {
+        use crate::Rule;
+        let compiled = compile(&onboarding(ARBITRATION, "{{> arbitration}}\n").contents).unwrap();
+        let violations = super::ClauseReferences.lint(&crate::SourceFile {
+            path: "onboarding__letter.md".into(),
+            contents: compiled,
+        });
+        assert!(violations.is_empty(), "{violations:?}");
     }
 
     #[test]

@@ -52,6 +52,11 @@ clauses:
       seat: jurisdiction__arbitration_seat
 ```
 
+Every `kind: onboarding` template must declare the highest pinned version of `engagement_arbitration` under `clauses:`
+and place it in the body with `{{> name}}`; `N132` (and so `navigator project gate`) fails the template otherwise. The
+onboarding scaffold stub starts with the clause, its `clauses:` block, and the two jurisdiction states. An offboarding
+letter ends an engagement already governed by the signed onboarding letter, so the requirement does not apply to it.
+
 The body references `{{> arbitration}}`. Governing law, arbitration seat, court forum, and administrator are distinct
 decisions. The Clause accepts a jurisdiction state or an existing single-choice state for its law and seat. A
 single-choice binding still needs the notation's explicit choices. Dispute resolution is always American Arbitration
