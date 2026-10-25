@@ -62,7 +62,7 @@ the test that uses it, never in `store/seeds/`.
 Re-verify a fact against its source before changing a row; a fact with no public source is removed or supplied
 privately.
 
-- Shook Law PC, a California Professional Corporation (`Entity.yaml`): the firm website footer and `LICENSE`.
+- Guieb & Shook PC, a California Professional Corporation (`Entity.yaml`): the firm website footer and `LICENSE`.
 - Nick Shook, name (`Person.yaml`): the California, Nevada, and Washington bar directories.
 - Nevada Bar No. 13400 (`Credential.yaml`): [nvbar.org](https://nvbar.org/find-a-lawyer/?usearch=13400), verified
   active 2026-10-14.

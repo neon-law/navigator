@@ -41,7 +41,7 @@ spec:
             - name: NAVIGATOR_CI_HARNESS
               value: "1"
             - name: NAVIGATOR_BOOTSTRAP_COMPANY
-              value: Shook Law PC
+              value: Guieb & Shook PC
             # Object storage. Production uses GCS/Workload Identity;
             # KIND uses SeaweedFS through the same S3-compatible contract.
             - name: NAVIGATOR_STORAGE_BACKEND

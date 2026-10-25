@@ -1950,8 +1950,8 @@ async fn owner_lists_the_seeded_practice_and_its_brands() {
     assert_eq!(resp.status(), StatusCode::OK);
     let html = body_string(resp).await;
     assert!(html.contains("<title>Navigator | Owner</title>"), "{html}");
-    assert!(html.contains("Shook Law PC"), "{html}");
-    assert!(html.contains("Entity: Shook Law PC"), "{html}");
+    assert!(html.contains("Guieb &#38; Shook PC"), "{html}");
+    assert!(html.contains("Entity: Guieb &#38; Shook PC"), "{html}");
     assert!(
         html.contains("neon (www.neonlaw.com)")
             && html.contains("delete-your-data (www.deleteyourdata.com)")
@@ -1997,7 +1997,7 @@ async fn the_app_and_public_footers_name_the_seeded_firm() {
         team_html.contains(r#"class="app-footer__copyright""#),
         "{team_html}"
     );
-    assert!(team_html.contains("Shook Law PC"), "{team_html}");
+    assert!(team_html.contains("Guieb &#38; Shook PC"), "{team_html}");
 
     let home = app
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
@@ -2005,7 +2005,7 @@ async fn the_app_and_public_footers_name_the_seeded_firm() {
         .unwrap();
     assert_eq!(home.status(), StatusCode::OK);
     let home_html = body_string(home).await;
-    assert!(home_html.contains("Shook Law PC"), "{home_html}");
+    assert!(home_html.contains("Guieb &#38; Shook PC"), "{home_html}");
 }
 
 /// `/app/admin/brands` admits Owner and Admin. A hidden link is not an
@@ -4097,7 +4097,10 @@ async fn api_entities_lists_seeded_rows() {
     let resp = get_signed_in(app, "/app/api/entities").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp).await;
-    assert!(body.contains("\"name\":\"Shook Law PC\""), "got: {body}");
+    assert!(
+        body.contains("\"name\":\"Guieb & Shook PC\""),
+        "got: {body}"
+    );
     assert!(!body.contains("shook.family"), "got: {body}");
 }
 
@@ -8317,7 +8320,7 @@ async fn a_case_variant_rename_cannot_fork_the_bootstrap_company() {
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
     let (cookie, csrf) = session_cookie_and_csrf_for_role(store::persons::Role::Admin);
 
-    for variant in ["SHOOK%20LAW%20PC", "%20Shook%20Law%20PC%20"] {
+    for variant in ["GUIEB%20%26%20SHOOK%20PC", "%20Guieb%20%26%20Shook%20PC%20"] {
         let response = app
             .clone()
             .oneshot(
@@ -8476,7 +8479,7 @@ async fn lawyer_entity_update_reloads_edit_form_on_conflict() {
                 .header(header::COOKIE, &cookie)
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(format!(
-                    "name=Shook%20Law%20PC&entity_type_id={}&jurisdiction_id={}&_csrf={csrf}",
+                    "name=Guieb%20%26%20Shook%20PC&entity_type_id={}&jurisdiction_id={}&_csrf={csrf}",
                     firm.entity_type_id, firm.jurisdiction_id,
                 )))
                 .unwrap(),
@@ -8745,7 +8748,10 @@ async fn admin_entities_list_hides_delete_for_the_bootstrap_company() {
     let resp = get_with_role(app, "/app/admin/entities", store::persons::Role::Lawyer).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp).await;
-    assert!(body.contains("Regular Co") && body.contains(store::seed::FIRM_ENTITY_NAME));
+    assert!(
+        body.contains("Regular Co")
+            && body.contains(&store::seed::FIRM_ENTITY_NAME.replace('&', "&#38;"))
+    );
     // The regular entity offers a delete form; the firm anchor does not, so at
     // most one delete action renders here.
     let deletes = body.matches("/delete").count();
@@ -10337,7 +10343,7 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
         views::brand::BrandKey::LawyerShook,
         LiveHomeContract::Holding {
             title: "<title>Lawyer Shook | Home</title>",
-            marker: "Shook Law PC is an American law firm",
+            marker: "Guieb &#38; Shook PC is an American law firm",
         },
     ),
     (
@@ -10380,6 +10386,13 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
         LiveHomeContract::Authored {
             title: "<title>Groundwork Real Estate Law | Home</title>",
             copy: "Before you sign, know where you stand.",
+        },
+    ),
+    (
+        views::brand::BrandKey::GuiebShook,
+        LiveHomeContract::Holding {
+            title: "<title>Guieb & Shook | Home</title>",
+            marker: "Attorneys at Law.",
         },
     ),
 ];
@@ -10552,7 +10565,7 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
         "{delete_your_data_body}"
     );
     assert!(
-        delete_your_data_body.contains("Shook Law PC"),
+        delete_your_data_body.contains("Guieb &#38; Shook PC"),
         "{delete_your_data_body}"
     );
     assert!(
@@ -21350,7 +21363,7 @@ async fn lawyer_cannot_fork_the_bootstrap_company_within_its_jurisdiction() {
                 .header(header::COOKIE, &cookie)
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(format!(
-                    "name=shook%20law%20pc&entity_type_id={}&jurisdiction_id={}&_csrf={csrf}",
+                    "name=guieb%20%26%20shook%20pc&entity_type_id={}&jurisdiction_id={}&_csrf={csrf}",
                     firm.entity_type_id, firm.jurisdiction_id,
                 )))
                 .unwrap(),
@@ -21406,7 +21419,7 @@ async fn lawyer_cannot_fork_the_bootstrap_company_into_another_jurisdiction() {
                 .header(header::COOKIE, &cookie)
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(format!(
-                    "name=Shook%20Law%20PC&entity_type_id={}&jurisdiction_id={}&_csrf={csrf}",
+                    "name=Guieb%20%26%20Shook%20PC&entity_type_id={}&jurisdiction_id={}&_csrf={csrf}",
                     firm.entity_type_id, elsewhere.id,
                 )))
                 .unwrap(),
@@ -21470,7 +21483,7 @@ async fn renaming_another_entity_into_the_firm_name_is_refused() {
     // create guard refuses: the row becomes protected on arrival, so nothing
     // could delete or rename it afterwards, and `store::seed` would then find
     // two rows under the exact name it looks the firm up by.
-    for variant in ["Shook%20Law%20PC", "shook%20law%20pc"] {
+    for variant in ["Guieb%20%26%20Shook%20PC", "guieb%20%26%20shook%20pc"] {
         let rename = app
             .clone()
             .oneshot(
@@ -21542,7 +21555,7 @@ async fn the_firm_anchor_stays_freely_editable_apart_from_its_name() {
                 .header(header::COOKIE, &cookie)
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(format!(
-                    "name=Shook%20Law%20PC&entity_type_id={}&jurisdiction_id={}&_csrf={csrf}",
+                    "name=Guieb%20%26%20Shook%20PC&entity_type_id={}&jurisdiction_id={}&_csrf={csrf}",
                     firm.entity_type_id, elsewhere.id,
                 )))
                 .unwrap(),
@@ -21643,7 +21656,7 @@ async fn concurrent_creates_cannot_fork_the_firm_anchor() {
                     .header(header::COOKIE, &cookie)
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                     .body(Body::from(format!(
-                        "name=Shook%20Law%20PC&entity_type_id={type_id}&jurisdiction_id={jur_id}&_csrf={csrf}"
+                        "name=Guieb%20%26%20Shook%20PC&entity_type_id={type_id}&jurisdiction_id={jur_id}&_csrf={csrf}"
                     )))
                     .unwrap(),
             )
@@ -21762,7 +21775,7 @@ async fn a_delete_racing_a_rename_into_the_firm_name_never_removes_the_anchor() 
                         .header(header::COOKIE, &cookie)
                         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                         .body(Body::from(format!(
-                            "name=Shook%20Law%20PC&entity_type_id={type_id}&jurisdiction_id={jur_id}&_csrf={csrf}"
+                            "name=Guieb%20%26%20Shook%20PC&entity_type_id={type_id}&jurisdiction_id={jur_id}&_csrf={csrf}"
                         )))
                         .unwrap(),
                 )
@@ -21855,7 +21868,7 @@ async fn a_rename_racing_a_rename_into_the_firm_name_never_loses_the_anchor() {
                         .header(header::COOKIE, &cookie)
                         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                         .body(Body::from(format!(
-                            "name=Shook%20Law%20PC&entity_type_id={type_id}&jurisdiction_id={jur_id}&_csrf={csrf}"
+                            "name=Guieb%20%26%20Shook%20PC&entity_type_id={type_id}&jurisdiction_id={jur_id}&_csrf={csrf}"
                         )))
                         .unwrap(),
                 )

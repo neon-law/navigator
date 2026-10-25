@@ -1525,7 +1525,7 @@ mod tests {
             rsx! {
                 HomePage {
                     chrome: PublicChrome {
-                        legal_entity: "Shook Law PC".to_string(),
+                        legal_entity: "Guieb & Shook PC".to_string(),
                         disclaimer: "Attorney advertisement.".to_string(),
                         copyright_year: 2026,
                         ..PublicChrome::default()
@@ -1553,7 +1553,7 @@ mod tests {
             .find(r#"role="contentinfo""#)
             .expect("the shared footer");
         assert!(statement < footer, "statement, then footer: {out}");
-        assert!(out.contains("© 2026 Shook Law PC"), "{out}");
+        assert!(out.contains("© 2026 Guieb &#38; Shook PC"), "{out}");
         assert!(!out.contains(r#"class="site-header""#), "no header: {out}");
         assert!(
             !out.contains(crate::components::PUBLIC_SHELL_MARKER),

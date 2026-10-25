@@ -596,7 +596,7 @@ fn FirmFooterShowcase() -> Element {
             }
             FirmFooter {
                 model: crate::firm_footer::FirmFooterModel {
-                    legal_entity: "Shook Law PC".to_string(),
+                    legal_entity: "Guieb & Shook PC".to_string(),
                     brands: Vec::new(),
                     copyright_year: 2026,
                 },
@@ -2186,7 +2186,7 @@ mod tests {
         dom.rebuild_in_place();
         let html = dioxus_ssr::render(&dom);
         assert!(
-            html.contains("© 2026 Shook Law PC"),
+            html.contains("© 2026 Guieb &#38; Shook PC"),
             "the copyright line renders: {html}"
         );
         assert!(

@@ -13,7 +13,7 @@ The rows below are the attachment records — one per deployment directory:
 | a second production row | `www.neonlaw.com` | `neon-law` | its own organization | production |
 
 All three organizations and private Apps exist on GitHub Free. Each organization was created for the controlling
-business `Shook Law PC`, uses `engineering@neonlaw.com` as its contact address, and began with the authenticated
+business `Guieb & Shook PC`, uses `engineering@neonlaw.com` as its contact address, and began with the authenticated
 operator as its sole owner; the bootstrap intentionally sent no invitations. Each App is installed only on its matching
 organization. It selects all current and future repositories, grants repository Administration and Contents read/write,
 and has no active webhook. Each deployment's `config.toml` carries the exact organization slug, App ID, and installation
@@ -72,7 +72,7 @@ case, path, and trailing slash. Never place two deployments' callback URIs on on
 
 An organization owner must sign up for or create all three organizations in the matrix. For each organization:
 
-1. Confirm GitHub Free, `engineering@neonlaw.com`, `Shook Law PC`, and the authenticated owner. Send no bootstrap
+1. Confirm GitHub Free, `engineering@neonlaw.com`, `Guieb & Shook PC`, and the authenticated owner. Send no bootstrap
    invitations. Before production launch, run a separate access review, enable two-factor authentication, and record any
    approved recovery owner.
 2. Confirm the **private**, organization-owned GitHub App in the matrix remains installed only in that organization.

@@ -56,7 +56,7 @@ Feature: Public routing on the firm's own host
 
     Examples:
       | host                       | brand           | title                    | marker                                  |
-      | staging.lawyershook.com    | Lawyer Shook    | Lawyer Shook \| Home     | Shook Law PC is an American law firm  |
+      | staging.lawyershook.com    | Lawyer Shook    | Lawyer Shook \| Home     | Guieb & Shook PC is an American law firm  |
       | staging.summonsdefense.nyc | Summons Defense | Summons Defense \| Home  | A city summons. A clear next step.      |
       | staging.guiebandshook.com  | Guieb & Shook   | Guieb & Shook PC \| Home | Attorneys at Law.                       |
 

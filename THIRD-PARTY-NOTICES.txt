@@ -21,11 +21,11 @@ public API is first-party work under the licence above. A provider's own SDKs,
 documentation, assets, and terms are not part of this project, are not reproduced in it,
 and stay under that provider's terms.
 
-The Lawyer Shook family. lawyershook.com presents these practice names used by Shook Law
+The Lawyer Shook family. lawyershook.com presents these practice names used by Guieb & Shook
 PC: Abhaya Immigration, Aegis Criminal Defense, CyberInjuryLaw, Daybridge Divorce Law,
 Death & Divorce, DeleteYourData.com, DeleteYourDebt.com, Groundwork Real Estate Law,
 Lawyer Shook, Misericordia Injury Law, Summons Defense, and Vesta Estate Planning. Whatever
-rights Shook Law PC or its affiliates hold in those names are reserved, and this project
+rights Guieb & Shook PC or its affiliates hold in those names are reserved, and this project
 grants none. NEON LAW is addressed in NOTICE.
 
 Other organizations. Justice Technology Association appears as a membership badge, and

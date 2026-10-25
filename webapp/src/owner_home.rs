@@ -167,13 +167,13 @@ mod tests {
     fn lists_a_firm_with_its_entity_and_brands() {
         let html = render(vec![FirmCard {
             id: "firm-1".to_string(),
-            name: "Shook Law PC".to_string(),
+            name: "Guieb & Shook PC".to_string(),
             status: "active".to_string(),
-            entity_name: "Shook Law PC".to_string(),
+            entity_name: "Guieb & Shook PC".to_string(),
             brand_keys: vec!["neon".to_string(), "delete-your-data".to_string()],
         }]);
-        assert!(html.contains("Shook Law PC"), "{html}");
-        assert!(html.contains("Entity: Shook Law PC"), "{html}");
+        assert!(html.contains("Guieb &#38; Shook PC"), "{html}");
+        assert!(html.contains("Entity: Guieb &#38; Shook PC"), "{html}");
         assert!(
             html.contains("neon (www.neonlaw.com), delete-your-data (www.deleteyourdata.com)"),
             "{html}"

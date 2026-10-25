@@ -1420,7 +1420,7 @@ mod render_tests {
             code: "abhaya-case".into(),
             name: "Sample Matter".into(),
             brand_name: "Abhaya Immigration".into(),
-            legal_entity: "Shook Law PC".into(),
+            legal_entity: "Guieb & Shook PC".into(),
             copyright_year: 2026,
             logo: Some(crate::components::AppLogo {
                 src: "/public/brand/abhaya/logo.svg".into(),
@@ -1432,7 +1432,7 @@ mod render_tests {
         assert!(html.contains("/public/brand/abhaya/logo.svg"), "{html}");
         assert!(
             html.contains(
-                "Abhaya Immigration is powered by Neon Law Navigator. © 2026 Shook Law PC"
+                "Abhaya Immigration is powered by Neon Law Navigator. © 2026 Guieb &#38; Shook PC"
             ),
             "{html}"
         );
@@ -1565,7 +1565,7 @@ mod tests {
         let entity = store::entities::create(
             &surreal,
             &store::entities::NewEntity {
-                name: "Shook Law PC".to_string(),
+                name: "Guieb & Shook PC".to_string(),
                 entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
                 jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
                 phone: None,
@@ -1613,7 +1613,7 @@ mod tests {
 
         let (logo, name, legal_entity) = project_brand_chrome(&surreal, key).await;
         assert_eq!(name, "Project Practice");
-        assert_eq!(legal_entity, "Shook Law PC");
+        assert_eq!(legal_entity, "Guieb & Shook PC");
         assert!(logo.is_none());
     }
 

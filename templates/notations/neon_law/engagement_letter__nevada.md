@@ -172,6 +172,6 @@ Agreed and accepted:
 
 By: ______________________________  Date: ____________
 
-Shook Law PC
+Guieb & Shook PC
 
 By: ______________________________  Date: ____________

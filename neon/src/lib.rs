@@ -6,7 +6,7 @@
 //! to its own [`views::brand::BrandKey`], so the same running process renders
 //! Neon Law's chrome on its own hosts and a second house brand's on its own,
 //! from the one composed router this crate declares. Neon Law is the practice
-//! of Shook Law PC, and every page this crate serves is the firm's or a
+//! of Guieb & Shook PC, and every page this crate serves is the firm's or a
 //! house brand the firm operates.
 //!
 //! This crate owns the public surface outright: its marketing copy, its page
@@ -289,7 +289,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
                         title: "Contact".to_string(),
                         path: "/contact".to_string(),
                         description: format!(
-                            "How to reach {mark}, a practice of Shook Law PC, about a \
+                            "How to reach {mark}, a practice of Guieb & Shook PC, about a \
                              data-deletion request."
                         ),
                     },

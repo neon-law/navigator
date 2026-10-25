@@ -65,7 +65,7 @@ async fn vesta_shows_starting_price_and_shared_booking_calendar() {
         "trustee appointment",
         "https://calendar.notion.so/meet/nick-shook/or15n4yy7",
         "/public/brand/vesta.svg",
-        "Shook Law PC",
+        "Guieb &#38; Shook PC",
         "site-footer",
     ] {
         assert!(html.contains(expected), "missing {expected}");
@@ -83,7 +83,7 @@ async fn lawyer_shook_lists_the_launched_family_and_keeps_the_firm_notice() {
     let html = page("staging.lawyershook.com", "/").await;
     for expected in [
         "holding-page",
-        "Shook Law PC is an American law firm",
+        "Guieb &#38; Shook PC is an American law firm",
         "home-practice",
         "Neon Law",
         "DeleteYourData.com",
@@ -203,7 +203,7 @@ async fn vesta_and_lawyer_shook_omit_the_lawyer_shook_trademark_notice() {
         assert!(footer.contains("Everyone deserves access to justice."));
         assert!(!footer.contains("Our family"));
         assert!(!footer.contains("LAWYER SHOOK"));
-        assert!(!footer.contains("common-law mark of Shook Law PC"));
+        assert!(!footer.contains("common-law mark of Guieb &#38; Shook PC"));
     }
 }
 

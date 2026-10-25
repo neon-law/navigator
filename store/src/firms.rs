@@ -1660,8 +1660,8 @@ mod tests {
     #[tokio::test]
     async fn create_round_trips_a_firm() {
         let db = mem_surreal().await;
-        let created = practice(&db, "Shook Law PC").await;
-        assert_eq!(created.name, "Shook Law PC");
+        let created = practice(&db, "Guieb & Shook PC").await;
+        assert_eq!(created.name, "Guieb & Shook PC");
         assert_eq!(created.status, "active");
         assert!(created.entity_id.is_some());
         let reloaded = find_by_id(&db, created.id).await.unwrap().unwrap();

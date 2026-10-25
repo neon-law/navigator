@@ -37,7 +37,13 @@ async fn assert_brand_pages(
     tokens_css: &str,
 ) {
     let home = page(host, "/").await;
-    for expected in [title, home_copy, "site-footer", tokens_css, "Shook Law PC"] {
+    for expected in [
+        title,
+        home_copy,
+        "site-footer",
+        tokens_css,
+        "Guieb &#38; Shook PC",
+    ] {
         assert!(
             home.contains(expected),
             "{host} home is missing {expected:?}"

@@ -3,7 +3,7 @@ the choices you have.
 
 ## Who We Are
 
-**Neon Law** (Shook Law PC) or its affiliate lawyers are legal providers that render services through this site.
+**Neon Law** (Guieb & Shook PC) or its affiliate lawyers are legal providers that render services through this site.
 
 ## Information We Collect
 
@@ -21,8 +21,8 @@ we do not share it with third parties for their own marketing.
 
 ## Text Messaging (SMS)
 
-Neon Law (Shook Law PC) runs a text-messaging program so that people who contact us, and clients, can reach the firm and
-hear back from it by text. This section is the complete terms of that program.
+Neon Law (Guieb & Shook PC) runs a text-messaging program so that people who contact us, and clients, can reach the firm
+and hear back from it by text. This section is the complete terms of that program.
 
 **How you join.** You agree to receive texts from us in one of three ways: by checking the text-message box on a contact
 form on one of our sites, which covers texts about that inquiry; by texting us first at +1 (510) 800-2090, which covers

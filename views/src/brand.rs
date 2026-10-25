@@ -217,7 +217,7 @@ pub struct FirmOffice {
 
 /// The firm's published offices, rendered in the public footer.
 ///
-/// This is Shook Law PC's address — the entity of record behind the Neon Law
+/// This is Guieb & Shook PC's address — the entity of record behind the Neon Law
 /// mark, the legal person a client actually engages — kept in step with its row
 /// in `store/seeds/neon/Address.yaml`.
 ///
@@ -353,7 +353,7 @@ const FIRM_SOCIAL: &[FirmSocial] = &[
 /// site so a reader can check the relationship against the association's
 /// published guidance rather than trusting this page's word for it.
 ///
-/// An affiliation belongs to the firm, not to a brand: Shook Law PC is the
+/// An affiliation belongs to the firm, not to a brand: Guieb & Shook PC is the
 /// organization represented here, so every house brand it trades under carries
 /// the same line. A bundle that renames the firm publishes none — see
 /// [`Branding::firm_memberships`].
@@ -402,7 +402,7 @@ pub struct Branding {
     /// The associations the firm has a public affiliation with, rendered as
     /// the footer's standing line on every page. See [`FIRM_MEMBERSHIPS`]. Empty on a
     /// bundle that renames the firm, for the same reason the trademark
-    /// notice is: the affiliation is Shook Law PC's, and a renamed firm is a
+    /// notice is: the affiliation is Guieb & Shook PC's, and a renamed firm is a
     /// different firm whose affiliations this repository cannot vouch for.
     pub firm_memberships: &'static [FirmMembership],
     /// This Brand's verified public profiles and the shared `YouTube` channel.
@@ -459,7 +459,7 @@ pub static DEFAULT_BRANDING: Branding = Branding {
         // practice is bigger than any single name on the door, and a client
         // hires the firm rather than whoever happens to be listed first.
         //
-        // Deliberately NOT [`SiteBrand::legal_entity`], which is Shook Law
+        // Deliberately NOT [`SiteBrand::legal_entity`], which is Guieb & Shook
         // PC. One is the signature the site is presented under; the other is
         // the legal person the footer's copyright and the retainer must name.
         // A law firm may trade under a mark, but it may not obscure who the
@@ -467,7 +467,7 @@ pub static DEFAULT_BRANDING: Branding = Branding {
         site_name: "Neon Law",
         home_href: "/",
         tagline: "Flat-fee legal services for emerging technology companies, with every price on the page.",
-        // Shook Law PC's own box, the entity of record.
+        // Guieb & Shook PC's own box, the entity of record.
         postal_address: "5150 Mae Anne Ave Ste 405-9002, Reno, NV 89523",
         // The NL mark, in teal.
         //
@@ -486,7 +486,7 @@ pub static DEFAULT_BRANDING: Branding = Branding {
         // matching it, what `store::seed::FIRM_ENTITY_NAME` protects as the
         // firm's Entity row. Never equal to `site_name` here: the site trades
         // as Neon Law, and a copyright notice has to name a legal person.
-        legal_entity: "Shook Law PC",
+        legal_entity: "Guieb & Shook PC",
     },
     // The address the public site publishes, on the host `support_domain` names
     // below. The local part is `contact@`, not `support@`, which is the second
@@ -541,17 +541,17 @@ pub static DELETE_YOUR_DATA_BRANDING: Branding = Branding {
         social_image: "/public/brand/delete-your-data/logo.png",
         nav: &[],
         is_law_firm: true,
-        legal_entity: "Shook Law PC",
+        legal_entity: "Guieb & Shook PC",
     },
     firm_email: "contact@deleteyourdata.com",
     support_domain: "deleteyourdata.com",
     firm_phone: "+1 510 800 2090",
     // The firm's one office, on this practice's pages as on the firm's own:
-    // the address is Shook Law PC's, and a reader on any house brand is
+    // the address is Guieb & Shook PC's, and a reader on any house brand is
     // reading the same firm.
     firm_offices: FIRM_OFFICES,
     firm_attorneys: &[],
-    // The affiliated organization is Shook Law PC and the family is its
+    // The affiliated organization is Guieb & Shook PC and the family is its
     // brands, on this practice's pages as on the firm's own.
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
@@ -571,7 +571,7 @@ pub static DELETE_YOUR_DATA_BRANDING: Branding = Branding {
     brand_key: BrandKey::DeleteYourData,
 };
 
-/// The Lawyer Shook house brand: a bare holding page for Shook Law PC, not
+/// The Lawyer Shook house brand: a bare holding page for Guieb & Shook PC, not
 /// an active marketing site. `/` renders only the firm's name, one statement
 /// of what it is, and a sign-in line for an existing client — see
 /// `neon::firm_pages::lawyer_shook_holding_content`. Its web face is still
@@ -583,13 +583,13 @@ pub static LAWYER_SHOOK_BRANDING: Branding = Branding {
     firm: SiteBrand {
         site_name: "Lawyer Shook",
         home_href: "/",
-        tagline: "The Shook Law PC holding page.",
+        tagline: "The Guieb & Shook PC holding page.",
         postal_address: "5150 Mae Anne Ave Ste 405-9002, Reno, NV 89523",
         logo_href: "/public/brand/lawyer-shook/logo.svg",
         social_image: "/public/brand/lawyer-shook/logo.png",
         nav: &[],
         is_law_firm: true,
-        legal_entity: "Shook Law PC",
+        legal_entity: "Guieb & Shook PC",
     },
     firm_email: "contact@lawyershook.com",
     support_domain: "lawyershook.com",
@@ -612,8 +612,8 @@ pub static LAWYER_SHOOK_BRANDING: Branding = Branding {
     // is the single source of that statement) and by `llms_txt`, which reuses
     // that same function rather than reading these two fields. Kept accurate
     // anyway, since a `Branding` value should not carry a stale claim.
-    mission_description: "Lawyer Shook is the holding page for Shook Law PC's LAWYER SHOOK mark, not an active practice. Shook Law PC is an American law firm. We build brands that put the customer not the lawyer first.",
-    service_description: "Lawyer Shook publishes no services or fee schedule here; it is a holding page for Shook Law PC only.",
+    mission_description: "Lawyer Shook is the holding page for Guieb & Shook PC's LAWYER SHOOK mark, not an active practice. Guieb & Shook PC is an American law firm. We build brands that put the customer not the lawyer first.",
+    service_description: "Lawyer Shook publishes no services or fee schedule here; it is a holding page for Guieb & Shook PC only.",
     portal_only: false,
     brand_key: BrandKey::LawyerShook,
 };
@@ -679,7 +679,7 @@ pub static VESTA_BRANDING: Branding = Branding {
             NavLink::leaf("Probate", "/probate"),
         ],
         is_law_firm: true,
-        legal_entity: "Shook Law PC",
+        legal_entity: "Guieb & Shook PC",
     },
     firm_email: "contact@vestaestateplanning.com",
     support_domain: "vestaestateplanning.com",
@@ -698,8 +698,8 @@ pub static VESTA_BRANDING: Branding = Branding {
     base_url: "",
     primary_domain: "vestaestateplanning.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Vesta Estate Planning is a practice of Shook Law PC. We create estate plans tailored to your life and assess whether Nevada asset protection planning fits. A licensed attorney prepares and reviews the work. Trust administration has separate written terms. Attorney advertisement.",
-    service_description: "Estate planning tailored to you from Vesta Estate Planning, a practice of Shook Law PC. We assess whether a Nevada asset protection trust fits your circumstances and applicable law. Contact us for trust administration; scope and fees are agreed separately in writing.",
+    mission_description: "Vesta Estate Planning is a practice of Guieb & Shook PC. We create estate plans tailored to your life and assess whether Nevada asset protection planning fits. A licensed attorney prepares and reviews the work. Trust administration has separate written terms. Attorney advertisement.",
+    service_description: "Estate planning tailored to you from Vesta Estate Planning, a practice of Guieb & Shook PC. We assess whether a Nevada asset protection trust fits your circumstances and applicable law. Contact us for trust administration; scope and fees are agreed separately in writing.",
     portal_only: false,
     brand_key: BrandKey::Vesta,
 };
@@ -718,7 +718,7 @@ pub static MISERICORDIA_BRANDING: Branding = Branding {
         social_image: "",
         nav: &[],
         is_law_firm: true,
-        legal_entity: "Shook Law PC",
+        legal_entity: "Guieb & Shook PC",
     },
     firm_email: "contact@misericordialaw.com",
     support_domain: "misericordialaw.com",
@@ -737,8 +737,8 @@ pub static MISERICORDIA_BRANDING: Branding = Branding {
     base_url: "",
     primary_domain: "misericordialaw.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Misericordia Injury Law is a practice of Shook Law PC. A licensed attorney handles car, truck, motorcycle, pedestrian, premises, and wrongful death claims. The first conversation is free, and the fee is a percentage of what is recovered, agreed in writing beforehand. This is an attorney advertisement, not a promise about a result.",
-    service_description: "Injury claims from Misericordia Injury Law, a practice of Shook Law PC. Free consultation, contingency fee agreed in writing before work begins.",
+    mission_description: "Misericordia Injury Law is a practice of Guieb & Shook PC. A licensed attorney handles car, truck, motorcycle, pedestrian, premises, and wrongful death claims. The first conversation is free, and the fee is a percentage of what is recovered, agreed in writing beforehand. This is an attorney advertisement, not a promise about a result.",
+    service_description: "Injury claims from Misericordia Injury Law, a practice of Guieb & Shook PC. Free consultation, contingency fee agreed in writing before work begins.",
     portal_only: false,
     brand_key: BrandKey::Misericordia,
 };
@@ -757,7 +757,7 @@ pub static ABHAYA_BRANDING: Branding = Branding {
         social_image: "",
         nav: FIRM_NAV,
         is_law_firm: true,
-        legal_entity: "Shook Law PC",
+        legal_entity: "Guieb & Shook PC",
     },
     firm_email: "contact@abhayaimmigration.com",
     support_domain: "abhayaimmigration.com",
@@ -776,8 +776,8 @@ pub static ABHAYA_BRANDING: Branding = Branding {
     base_url: "",
     primary_domain: "abhayaimmigration.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Abhaya Immigration is a practice of Shook Law PC. A licensed attorney handles work visas, family petitions, green cards, naturalization, consular processing, employer sponsorship, and USCIS notice responses for a flat fee quoted before work begins. Government filing fees are separate. We cannot promise approval or a government timeline; the relevant agency decides. This is an attorney advertisement.",
-    service_description: "Immigration work from Abhaya Immigration, a practice of Shook Law PC. Flat fees quoted before work begins, with USCIS filing fees separate and government-set.",
+    mission_description: "Abhaya Immigration is a practice of Guieb & Shook PC. A licensed attorney handles work visas, family petitions, green cards, naturalization, consular processing, employer sponsorship, and USCIS notice responses for a flat fee quoted before work begins. Government filing fees are separate. We cannot promise approval or a government timeline; the relevant agency decides. This is an attorney advertisement.",
+    service_description: "Immigration work from Abhaya Immigration, a practice of Guieb & Shook PC. Flat fees quoted before work begins, with USCIS filing fees separate and government-set.",
     portal_only: false,
     brand_key: BrandKey::Abhaya,
 };
@@ -796,7 +796,7 @@ pub static DELETE_YOUR_DEBT_BRANDING: Branding = Branding {
         social_image: "",
         nav: &[NavLink::leaf("How it works", "/services"), NavLink::leaf("Talk to PandA Law", "https://www.pandalawfirm.com/contact/")],
         is_law_firm: true,
-        legal_entity: "Shook Law PC",
+        legal_entity: "Guieb & Shook PC",
     },
     firm_email: "contact@deleteyourdebt.com",
     support_domain: "deleteyourdebt.com",
@@ -815,7 +815,7 @@ pub static DELETE_YOUR_DEBT_BRANDING: Branding = Branding {
     base_url: "",
     primary_domain: "deleteyourdebt.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "DeleteYourDebt.com is operated by Shook Law PC and connects people with PandA Law for debt relief in Nevada, Washington, New York, and California. Our team works across the country, with in-person meetings in Brooklyn. Attorney advertisement. No result is promised.",
+    mission_description: "DeleteYourDebt.com is operated by Guieb & Shook PC and connects people with PandA Law for debt relief in Nevada, Washington, New York, and California. Our team works across the country, with in-person meetings in Brooklyn. Attorney advertisement. No result is promised.",
     service_description: "Work with PandA Law on debt relief in Nevada, Washington, New York, and California. Remote conversations and in-person meetings in Brooklyn. Scope and fees are agreed in writing before representation begins.",
     portal_only: false,
     brand_key: BrandKey::DeleteYourDebt,
@@ -827,7 +827,7 @@ pub static DELETE_YOUR_DEBT_BRANDING: Branding = Branding {
 /// status is decided.
 ///
 /// The public masthead and domain use the Summons Defense brand. The legal
-/// entity remains Shook Law PC in the legal footer and required notices.
+/// entity remains Guieb & Shook PC in the legal footer and required notices.
 pub static SUMMONS_BRANDING: Branding = Branding {
     firm: SiteBrand {
         site_name: "Summons Defense",
@@ -838,7 +838,7 @@ pub static SUMMONS_BRANDING: Branding = Branding {
         social_image: "",
         nav: &[],
         is_law_firm: true,
-        legal_entity: "Shook Law PC",
+        legal_entity: "Guieb & Shook PC",
     },
     firm_email: "contact@summonsdefense.nyc",
     support_domain: "summonsdefense.nyc",
@@ -875,7 +875,7 @@ pub static DAYBRIDGE_BRANDING: Branding = Branding {
         social_image: "",
         nav: &[],
         is_law_firm: true,
-        legal_entity: "Shook Law PC",
+        legal_entity: "Guieb & Shook PC",
     },
     firm_email: "contact@daybridgedivorce.com",
     support_domain: "daybridgedivorce.com",
@@ -903,8 +903,8 @@ pub static DAYBRIDGE_BRANDING: Branding = Branding {
     base_url: "",
     primary_domain: "daybridgedivorce.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Daybridge Divorce Law is operated by Shook Law PC for couples who agree. Joint representation is subject to applicable rules, conflict review, and informed written consent. A one-time $5,000 fee covers a mutual split within the written retainer. Contested work is outside the joint engagement. Attorney advertisement; no result is promised.",
-    service_description: "Agreed divorce for couples through Daybridge Divorce Law, operated by Shook Law PC. Joint representation where permitted after conflict review and informed written consent. A one-time $5,000 fee for a mutual split. The written retainer defines the work.",
+    mission_description: "Daybridge Divorce Law is operated by Guieb & Shook PC for couples who agree. Joint representation is subject to applicable rules, conflict review, and informed written consent. A one-time $5,000 fee covers a mutual split within the written retainer. Contested work is outside the joint engagement. Attorney advertisement; no result is promised.",
+    service_description: "Agreed divorce for couples through Daybridge Divorce Law, operated by Guieb & Shook PC. Joint representation where permitted after conflict review and informed written consent. A one-time $5,000 fee for a mutual split. The written retainer defines the work.",
     portal_only: false,
     brand_key: BrandKey::Daybridge,
 };
@@ -921,7 +921,7 @@ pub static DEATH_AND_DIVORCE_BRANDING: Branding = Branding {
         social_image: "/public/brand/death-and-divorce/mark.svg",
         nav: &[],
         is_law_firm: true,
-        legal_entity: "Shook Law PC",
+        legal_entity: "Guieb & Shook PC",
     },
     firm_email: "contact@deathanddivorcelaw.com",
     support_domain: "deathanddivorcelaw.com",
@@ -940,8 +940,8 @@ pub static DEATH_AND_DIVORCE_BRANDING: Branding = Branding {
     base_url: "",
     primary_domain: "deathanddivorcelaw.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Death & Divorce is a practice of Shook Law PC for divorce and probate. Estate planning is offered through Vesta Estate Planning. We help people move through endings, transitions, and what comes after. This is an attorney advertisement, not a promise about a result.",
-    service_description: "Divorce and probate from Death & Divorce, a practice of Shook Law PC. Scope and fees are set out in writing before work begins.",
+    mission_description: "Death & Divorce is a practice of Guieb & Shook PC for divorce and probate. Estate planning is offered through Vesta Estate Planning. We help people move through endings, transitions, and what comes after. This is an attorney advertisement, not a promise about a result.",
+    service_description: "Divorce and probate from Death & Divorce, a practice of Guieb & Shook PC. Scope and fees are set out in writing before work begins.",
     portal_only: false,
     brand_key: BrandKey::DeathAndDivorce,
 };
@@ -980,7 +980,7 @@ pub const AEGIS_BRANDING: Branding = Branding {
     },
     primary_domain: "aegiscriminaldefense.com",
     support_domain: "aegiscriminaldefense.com",
-    mission_description: "Aegis Criminal Defense is a practice of Shook Law PC. Criminal defense. Scope, fees, and jurisdiction are confirmed before an engagement.",
+    mission_description: "Aegis Criminal Defense is a practice of Guieb & Shook PC. Criminal defense. Scope, fees, and jurisdiction are confirmed before an engagement.",
     service_description: "Criminal defense. Scope, fees, and jurisdiction are confirmed before an engagement.",
     firm_social: SHARED_SOCIAL,
     firm_family: BrandKey::ALL,
@@ -1007,7 +1007,7 @@ pub const GROUNDWORK_BRANDING: Branding = Branding {
     },
     primary_domain: "groundworkrealestatelaw.com",
     support_domain: "groundworkrealestatelaw.com",
-    mission_description: "Groundwork Real Estate Law is a practice of Shook Law PC. Real estate legal services. Scope, fees, and jurisdiction are confirmed before an engagement.",
+    mission_description: "Groundwork Real Estate Law is a practice of Guieb & Shook PC. Real estate legal services. Scope, fees, and jurisdiction are confirmed before an engagement.",
     service_description: "Real estate legal services. Scope, fees, and jurisdiction are confirmed before an engagement.",
     firm_social: SHARED_SOCIAL,
     firm_family: BrandKey::ALL,
@@ -1693,7 +1693,7 @@ impl Branding {
                 )
             };
         // The same rule for the firm's affiliations: the association
-        // affiliation and the house-brand family are Shook Law PC's, so a
+        // affiliation and the house-brand family are Guieb & Shook PC's, so a
         // bundle that renames the firm publishes neither — a footer claiming
         // another firm's affiliation, or listing its brands as "Our Family",
         // is the wrong claim under the wrong name. The social profiles follow
@@ -2303,7 +2303,7 @@ mod tests {
         })
         .await;
         // The compiled default is unchanged.
-        assert_eq!(DEFAULT_BRANDING.firm.legal_entity, "Shook Law PC");
+        assert_eq!(DEFAULT_BRANDING.firm.legal_entity, "Guieb & Shook PC");
     }
 
     /// The compiled default notices the live registration, spelled the way the
@@ -2326,7 +2326,7 @@ mod tests {
             "https://tmsearch.uspto.gov/search/search-results/90039224"
         );
         assert_eq!(
-            DEFAULT_BRANDING.firm.legal_entity, "Shook Law PC",
+            DEFAULT_BRANDING.firm.legal_entity, "Guieb & Shook PC",
             "the notice names this entity as the registrant"
         );
     }
@@ -2363,7 +2363,7 @@ mod tests {
 
     /// The firm's affiliations follow the trademark rule: a bundle that
     /// renames the firm publishes no association affiliation and lists no
-    /// house-brand family, because both are Shook Law PC's; a bundle that
+    /// house-brand family, because both are Guieb & Shook PC's; a bundle that
     /// changes anything else keeps them. Every house brand carries the same
     /// two, since the affiliated organization and the family are the firm, not
     /// the brand.
@@ -2526,7 +2526,7 @@ mod tests {
     /// This is the load-bearing assertion of the whole rename. A firm may trade
     /// under a mark, but a client has to be able to see which legal person they
     /// are engaging — the copyright, the retainer, and the delete-guarded
-    /// Entity row all name `Shook Law PC` while the header reads `Neon Law`.
+    /// Entity row all name `Guieb & Shook PC` while the header reads `Neon Law`.
     /// Collapsing the two would either put a trade name on a binding instrument
     /// or put a lawyer's name back on the door the mark exists to replace.
     #[test]
@@ -2535,7 +2535,7 @@ mod tests {
         // The firm ALONE. The rendered copyright line is "© {year}
         // {copyright_holder}", composed straight from this field, so this
         // one must stay the single legal person the mark's registrant is.
-        assert_eq!(FIRM_BRAND.legal_entity, "Shook Law PC");
+        assert_eq!(FIRM_BRAND.legal_entity, "Guieb & Shook PC");
         assert_ne!(
             FIRM_BRAND.site_name, FIRM_BRAND.legal_entity,
             "the mark is not the legal person; the footer must publish both"
@@ -2630,7 +2630,7 @@ mod tests {
         let branding = Branding::from_manifest(&manifest);
         scope(branding, async {
             assert_eq!(FIRM_BRAND.legal_entity, "Acme Law");
-            assert!(!FIRM_BRAND.legal_entity.contains("Shook Law PC"));
+            assert!(!FIRM_BRAND.legal_entity.contains("Guieb & Shook PC"));
         })
         .await;
     }
@@ -2643,7 +2643,7 @@ mod tests {
             serde_yaml::from_str("version: 1\nbrand:\n  firm_phone: +1 555 0100\n").unwrap();
         let branding = Branding::from_manifest(&manifest);
         scope(branding, async {
-            assert_eq!(FIRM_BRAND.legal_entity, "Shook Law PC");
+            assert_eq!(FIRM_BRAND.legal_entity, "Guieb & Shook PC");
         })
         .await;
     }
@@ -2694,7 +2694,7 @@ mod tests {
     fn the_only_built_in_brand_is_the_firms() {
         assert_eq!(FIRM_BRAND.site_name, "Neon Law");
         assert!(FIRM_BRAND.is_law_firm);
-        assert_eq!(FIRM_BRAND.legal_entity, "Shook Law PC");
+        assert_eq!(FIRM_BRAND.legal_entity, "Guieb & Shook PC");
         assert!(
             !FIRM_BRAND.site_name.contains("Foundation"),
             "the retired nonprofit wordmark is not the firm's: {}",
@@ -3329,7 +3329,7 @@ mod tests {
             LAWYER_SHOOK_BRANDING.firm.social_image,
             "/public/brand/lawyer-shook/logo.png"
         );
-        assert_eq!(LAWYER_SHOOK_BRANDING.firm.legal_entity, "Shook Law PC");
+        assert_eq!(LAWYER_SHOOK_BRANDING.firm.legal_entity, "Guieb & Shook PC");
         assert_eq!(LAWYER_SHOOK_BRANDING.support_domain, "lawyershook.com");
         assert!(LAWYER_SHOOK_BRANDING.firm_trademark.is_empty());
         assert!(LAWYER_SHOOK_BRANDING.firm_trademark_registration.is_empty());
@@ -3356,7 +3356,7 @@ mod tests {
         assert!(!branding.firm.tagline.contains("Placeholder"));
         assert!(!branding.mission_description.contains("Placeholder"));
         assert!(!branding.service_description.contains("Placeholder"));
-        assert!(!branding.firm.tagline.contains("Shook Law PC practice"));
+        assert!(!branding.firm.tagline.contains("Guieb & Shook PC practice"));
         assert!(branding.mission_description.contains("non-legal service"));
         assert!(branding
             .service_description

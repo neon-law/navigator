@@ -20,7 +20,7 @@ so the row is on every page from first boot without advertising an unopened host
 (`webapp::firm_footer::FirmFooter`) and the public chrome's footer draw from this one resolved model rather than
 duplicating the lookup or rendering a second Firm's brands. Both also carry the firm's association memberships
 (`views::brand::firm_memberships`) as one "Proud member of the …" line each, linking the association's own site; a
-white-label bundle that renames the firm publishes neither row, because the family and the membership are Shook Law
+white-label bundle that renames the firm publishes neither row, because the family and the membership are Guieb & Shook
 PC's.
 
 - Schema: [`firm_brand` in `navigator.surql`](../../store/src/schema/navigator.surql) ·

@@ -158,9 +158,9 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Aegis, "services") => Some(AEGIS_SERVICES_YAML),
         (BrandKey::Groundwork, "home") => Some(GROUNDWORK_HOME_YAML),
         (BrandKey::GuiebShook, "home") => Some(GUIEB_SHOOK_HOME_YAML),
-        (BrandKey::GuiebShook, "services") => Some(include_str!(
-            "../locales/en/guieb-shook/services.yaml"
-        )),
+        (BrandKey::GuiebShook, "services") => {
+            Some(include_str!("../locales/en/guieb-shook/services.yaml"))
+        }
         (BrandKey::Groundwork, "services") => Some(GROUNDWORK_SERVICES_YAML),
         (BrandKey::Daybridge, "home") => Some(DAYBRIDGE_HOME_YAML),
         (BrandKey::Daybridge, "services") => Some(DAYBRIDGE_SERVICES_YAML),
@@ -2200,7 +2200,7 @@ mod tests {
     fn lawyer_shook_services_catalog_is_brand_keyed_and_attributed() {
         let branding = &views::brand::LAWYER_SHOOK_BRANDING;
         let services_content = legal_services(branding);
-        assert!(services_content.hero_lead.contains("Shook Law PC"));
+        assert!(services_content.hero_lead.contains("Guieb & Shook PC"));
         assert!(!services_content.meta_description.contains("flat-fee"));
     }
 
@@ -2589,7 +2589,7 @@ mod tests {
             .expect("Neon home has the company section");
         let text = serde_yaml::to_string(&company).expect("company copy serializes");
         assert!(!text.contains("For life outside the company."));
-        assert!(!text.contains("Neon Law also helps you find the right Shook Law PC practice"));
+        assert!(!text.contains("Neon Law also helps you find the right Guieb & Shook PC practice"));
         for retired in [
             "Debt-collection defense",
             "/delete-your-debt",
@@ -3192,14 +3192,9 @@ mod tests {
     fn every_public_brand_names_the_firm_behind_it() {
         for key in views::brand::BrandKey::ALL {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
-            let firm = if *key == BrandKey::GuiebShook {
-                "Guieb & Shook PC"
-            } else {
-                "Shook Law PC"
-            };
             assert_eq!(
                 branding.firm.legal_entity,
-                firm,
+                "Guieb & Shook PC",
                 "{} names the firm",
                 key.as_str()
             );

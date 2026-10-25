@@ -5101,7 +5101,7 @@ mod tests {
             2026,
         );
         let footer = webapp::firm_footer::render_firm_footer(model);
-        assert!(footer.contains("Shook Law PC"), "{footer}");
+        assert!(footer.contains("Guieb &#38; Shook PC"), "{footer}");
         assert!(footer.contains('©'), "{footer}");
     }
 
@@ -5581,10 +5581,10 @@ mod tests {
         let holding = stamp_document_title(
             "<html><head><title>Old title</title></head><body></body></html>",
             "/",
-            "Shook Law PC",
+            "Guieb & Shook PC",
         );
         assert!(
-            holding.contains("<title>Shook Law PC | Home</title>"),
+            holding.contains("<title>Guieb & Shook PC | Home</title>"),
             "{holding}"
         );
     }

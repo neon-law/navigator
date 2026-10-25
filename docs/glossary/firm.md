@@ -6,7 +6,7 @@ description: "A Firm is an owning legal practice."
 An owning practice. The `firm` table is the tenancy boundary for [Projects](project.md) and for the people who work
 them: `project.firm_id` points at the practice that owns the matter, and [`Person–Firm Role`](personfirm-role.md)
 records who belongs to that practice. A Firm **is** an [Entity](entity.md): `firm.entity_id` is the legal person that
-practice is (the seeded practice is `Shook Law PC`). A Firm is not a [Brand](brand.md). Brand is the storefront a
+practice is (the seeded practice is `Guieb & Shook PC`). A Firm is not a [Brand](brand.md). Brand is the storefront a
 request resolved to; Firm is which practice owns the matter. `firm_brand` records which closed house-brand keys that
 practice wears.
 

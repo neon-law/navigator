@@ -7,11 +7,11 @@ fn clause_extraction_preserves_the_existing_body_bytes() {
     for (source, expected) in [
         (
             include_str!("../../templates/notations/neon_law/onboarding__letter.md"),
-            "d8fadb1429497ed95d54093b0289620e3a69c12a87bb4e62aab3c9fa3ee7538a",
+            "4adb979a33d124ae916e99ad6501c414b15dba2eb7845049e7e5169f8775c82a",
         ),
         (
             include_str!("../../templates/notations/neon_law/engagement_letter__nevada.md"),
-            "d6c9a0d6e5567dba9fb6c1773c8db140b8616223e99bea49ff0c1a5a473d110e",
+            "85724fe43756ef26739a5d304da3f6ae52955fc2f28708a63cdb248725ea03d2",
         ),
         (
             include_str!("../../templates/notations/neon_law/mutual_nda.md"),
@@ -165,12 +165,14 @@ fn nevada_engagement_uses_aaa_and_keeps_the_fee_rights() {
 }
 
 #[test]
-fn nevada_engagement_signature_line_names_shook_law_pc_alone() {
+fn nevada_engagement_signature_line_names_the_firm_alone() {
     let source = include_str!("../../templates/notations/neon_law/engagement_letter__nevada.md");
     let (_, body) = rules::frontmatter::split(source).unwrap();
     let signature = body.split("## IX. Signatures").nth(1).unwrap();
     assert!(
-        signature.lines().any(|line| line.trim() == "Shook Law PC"),
+        signature
+            .lines()
+            .any(|line| line.trim() == "Guieb & Shook PC"),
         "{signature}"
     );
     assert!(!body.contains("Neon Law, by"));

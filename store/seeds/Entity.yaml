@@ -4,7 +4,7 @@ lookup_fields:
   - name
   - entity_type_id
 records:
-  - name: Shook Law PC
+  - name: Guieb & Shook PC
     entity_type:
       name: Professional Corporation
       jurisdiction:

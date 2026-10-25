@@ -1101,7 +1101,7 @@ async fn home_does_not_restore_retired_home_surfaces() {
         "justice-banner",
         "company-people",
         "For life outside the company.",
-        "Neon Law also helps you find the right Shook Law PC practice",
+        "Neon Law also helps you find the right Guieb &#38; Shook PC practice",
         r#"href="/delete-your-debt""#,
         r#"href="/immigration""#,
         r#"href="/delete-your-data""#,

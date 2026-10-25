@@ -28,7 +28,7 @@ pub(super) fn SiblingPractices(cards: Vec<SiblingPractice>) -> Element {
         return rsx! {};
     }
     rsx! {
-        section { class: "sibling-practices", "aria-label": "Also from Shook Law PC",
+        section { class: "sibling-practices", "aria-label": "Also from Guieb & Shook PC",
             for card in cards {
                 article { class: "sibling-practice",
                     p { class: "sibling-practice__eyebrow", "{card.eyebrow}" }

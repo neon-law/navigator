@@ -74,8 +74,8 @@ Re: Engagement for legal services — {{project__engagement.name}}
 
 Dear {{person__client.name}}:
 
-Thank you for choosing Shook Law PC. This letter sets out what we do for you, what we charge, and how either of us ends
-the engagement.
+Thank you for choosing Guieb & Shook PC. This letter sets out what we do for you, what we charge, and how either of us
+ends the engagement.
 
 We charge flat, pre-approved fees. We do not bill by the hour.
 
@@ -229,7 +229,7 @@ acceptable.
 
 Sincerely,
 
-Shook Law PC
+Guieb & Shook PC
 
 By: {{firm.signature}}\
 Nick Shook, Attorney at Law\

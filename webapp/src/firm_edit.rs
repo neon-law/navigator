@@ -350,12 +350,12 @@ mod tests {
             firm_name: "Neon Law".to_string(),
             found: true,
             id: "firm-1".to_string(),
-            name: "Shook Law PC".to_string(),
+            name: "Guieb & Shook PC".to_string(),
             status: "active".to_string(),
             entity_id: Some(ENTITY_ID.to_string()),
             entities: vec![FirmEntityOption {
                 id: ENTITY_ID.to_string(),
-                name: "Shook Law PC".to_string(),
+                name: "Guieb & Shook PC".to_string(),
             }],
             can_appoint_dri: true,
             admin_dri_person_id: Some(ADMIN_ID.to_string()),
@@ -410,7 +410,7 @@ mod tests {
             html.contains(r#"action="/app/admin/firms/firm-1/edit""#),
             "{html}"
         );
-        assert!(html.contains(r#"value="Shook Law PC""#), "{html}");
+        assert!(html.contains(r#"value="Guieb &#38; Shook PC""#), "{html}");
         assert!(
             html.contains(&format!(r#"<option value="{ENTITY_ID}" selected"#)),
             "{html}"

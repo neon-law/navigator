@@ -280,11 +280,11 @@ pub fn render(notices: &Notices) -> String {
          documentation, assets, and terms are not part of this project, are not reproduced in it,\n\
          and stay under that provider's terms.\n\
          \n\
-         The Lawyer Shook family. lawyershook.com presents these practice names used by Shook Law\n\
+         The Lawyer Shook family. lawyershook.com presents these practice names used by Guieb & Shook\n\
          PC: Abhaya Immigration, Aegis Criminal Defense, CyberInjuryLaw, Daybridge Divorce Law,\n\
          Death & Divorce, DeleteYourData.com, DeleteYourDebt.com, Groundwork Real Estate Law,\n\
          Lawyer Shook, Misericordia Injury Law, Summons Defense, and Vesta Estate Planning. Whatever\n\
-         rights Shook Law PC or its affiliates hold in those names are reserved, and this project\n\
+         rights Guieb & Shook PC or its affiliates hold in those names are reserved, and this project\n\
          grants none. NEON LAW is addressed in NOTICE.\n\
          \n\
          Other organizations. Justice Technology Association appears as a membership badge, and\n\

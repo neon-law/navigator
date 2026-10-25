@@ -71,7 +71,7 @@ async fn prepared_practice_pages_render_their_own_identity_and_contact_form() {
                 html.contains(branding.firm.site_name),
                 "own identity: {key:?} {path}"
             );
-            assert!(html.contains("Shook Law PC"), "engagement identity");
+            assert!(html.contains("Guieb &#38; Shook PC"), "engagement identity");
             assert!(
                 html.contains(views::brand::SHOOK_CONSULTATION_URL),
                 "shared Notion booking link"

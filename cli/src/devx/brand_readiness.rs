@@ -571,7 +571,7 @@ mod tests {
             &mut runner,
             BrandKey::Summons,
             "www.summonsdefense.nyc",
-            "Shook Law PC",
+            "Guieb & Shook PC",
             10,
         );
         assert_eq!(report.verdict, Verdict::WrongBrandContent);
@@ -581,13 +581,13 @@ mod tests {
     fn summons_answering_200_in_its_own_brand_is_ready() {
         let mut runner = ScriptedRunner::new(vec![ok_headers_and_body(
             200,
-            r#"<meta property="og:site_name" content="Shook Law PC">"#,
+            r#"<meta property="og:site_name" content="Guieb & Shook PC">"#,
         )]);
         let report = check_host(
             &mut runner,
             BrandKey::Summons,
             "www.summonsdefense.nyc",
-            "Shook Law PC",
+            "Guieb & Shook PC",
             10,
         );
         assert_eq!(report.verdict, Verdict::Ready);
@@ -600,7 +600,7 @@ mod tests {
             &mut runner,
             BrandKey::Summons,
             "www.summonsdefense.nyc",
-            "Shook Law PC",
+            "Guieb & Shook PC",
             10,
         );
         assert_eq!(report.verdict, Verdict::WrongBrandContent);

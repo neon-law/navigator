@@ -262,7 +262,7 @@ pub(crate) fn tel_href(phone: &str) -> String {
 /// handed in per request, so the component itself is pure presentation.
 ///
 /// - `copyright_holder`: the legal person that owns the site and the words on
-///   it — `Shook Law PC` on the firm's deploy. It heads the legal strip, and
+///   it — `Guieb & Shook PC` on the firm's deploy. It heads the legal strip, and
 ///   it is the only line naming the entity behind the site. Deliberately a
 ///   separate dial from the wordmark the page trades under, even where a
 ///   deploy sets both to the same words: a copyright notice has to name an
@@ -312,7 +312,7 @@ pub fn SiteFooterLegal(
     #[props(default)] offices: Vec<FooterOffice>,
     #[props(default)] attorneys: Vec<FooterAttorney>,
     #[props(default)] brand_name: String,
-    /// "A practice of Shook Law PC", rendered above the legal strip on a
+    /// "A practice of Guieb & Shook PC", rendered above the legal strip on a
     /// brand site.
     ///
     /// This is what keeps a trade name from being misleading. Nevada permits
@@ -990,7 +990,7 @@ mod tests {
         fn common_law() -> Element {
             rsx! {
                 SiteFooterLegal {
-                    copyright_holder: "Shook Law PC".to_string(),
+                    copyright_holder: "Guieb & Shook PC".to_string(),
                     disclaimer: "This is an attorney advertisement.".to_string(),
                     copyright_year: 2026,
                     trademark: "LAWYER SHOOK".to_string(),
@@ -1016,7 +1016,10 @@ mod tests {
 
         let out = ssr(common_law);
         assert!(out.contains("LAWYER SHOOK") && out.contains("™"), "{out}");
-        assert!(out.contains("common-law mark of Shook Law PC"), "{out}");
+        assert!(
+            out.contains("common-law mark of Guieb &#38; Shook PC"),
+            "{out}"
+        );
         assert!(!out.contains("®") && !out.contains("U.S. Reg."), "{out}");
     }
 
@@ -1660,7 +1663,7 @@ mod tests {
         fn app() -> Element {
             rsx! {
                 SiteFooterLegal {
-                    copyright_holder: "Shook Law PC".to_string(),
+                    copyright_holder: "Guieb & Shook PC".to_string(),
                     disclaimer: "This is an attorney advertisement.".to_string(),
                     copyright_year: 2026,
                     brand_name: "Neon Law".to_string(),
@@ -2188,7 +2191,7 @@ mod tests {
         fn app() -> Element {
             rsx! {
                 SiteFooterLegal {
-                    copyright_holder: "Shook Law PC".to_string(),
+                    copyright_holder: "Guieb & Shook PC".to_string(),
                     disclaimer: "This is an attorney advertisement.".to_string(),
                     copyright_year: 2026,
                     brands: vec![
@@ -2233,7 +2236,7 @@ mod tests {
         );
     }
 
-    /// "A practice of Shook Law PC" is what keeps a trade name from being
+    /// "A practice of Guieb & Shook PC" is what keeps a trade name from being
     /// misleading — disclosed affiliation is the thing Nevada's rule turns
     /// on — so it renders on a brand host, above the legal strip.
     #[test]
@@ -2241,16 +2244,18 @@ mod tests {
         fn app() -> Element {
             rsx! {
                 SiteFooterLegal {
-                    copyright_holder: "Shook Law PC".to_string(),
+                    copyright_holder: "Guieb & Shook PC".to_string(),
                     disclaimer: "This is an attorney advertisement.".to_string(),
                     copyright_year: 2026,
-                    attribution: "A practice of Shook Law PC".to_string(),
+                    attribution: "A practice of Guieb & Shook PC".to_string(),
                 }
             }
         }
         let out = ssr(app);
         assert!(
-            out.contains(r#"<p class="site-footer__attribution">A practice of Shook Law PC</p>"#),
+            out.contains(
+                r#"<p class="site-footer__attribution">A practice of Guieb &#38; Shook PC</p>"#
+            ),
             "{out}"
         );
         let attribution = out.find("site-footer__attribution").expect("renders");
@@ -2268,7 +2273,7 @@ mod tests {
         fn app() -> Element {
             rsx! {
                 SiteFooterLegal {
-                    copyright_holder: "Shook Law PC".to_string(),
+                    copyright_holder: "Guieb & Shook PC".to_string(),
                     disclaimer: "This is an attorney advertisement.".to_string(),
                     copyright_year: 2026,
                 }

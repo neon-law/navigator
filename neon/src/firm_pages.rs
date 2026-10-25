@@ -904,7 +904,7 @@ fn resolve_firm_contact_content(
     let page_title = "Contact";
     let meta_description = match branding.brand_key {
         BrandKey::DeleteYourData => format!(
-            "Reach {firm_name}, a practice of Shook Law PC, about a data-deletion request. \
+            "Reach {firm_name}, a practice of Guieb & Shook PC, about a data-deletion request. \
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
         ),
@@ -919,7 +919,7 @@ fn resolve_firm_contact_content(
         | BrandKey::Aegis
         | BrandKey::Groundwork
         | BrandKey::DeathAndDivorce => format!(
-            "Reach {firm_name}, a practice of Shook Law PC, about legal services. \
+            "Reach {firm_name}, a practice of Guieb & Shook PC, about legal services. \
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
         ),
@@ -1042,10 +1042,10 @@ fn guieb_shook_holding_content(branding: &views::brand::Branding) -> webapp::hom
     let mut content = lawyer_shook_holding_content(branding);
     let legal_entity = branding.firm.legal_entity;
     let paragraph = format!("Attorneys at Law. {legal_entity} is an American law firm.");
-    content.meta_description = paragraph.clone();
     if let Some(bare) = content.bare.as_mut() {
-        bare.paragraph = paragraph;
+        bare.paragraph.clone_from(&paragraph);
     }
+    content.meta_description = paragraph;
     content.practices_heading = String::new();
     content.practices = Vec::new();
     content
@@ -1180,16 +1180,16 @@ mod lawyer_shook_holding_page_tests {
     use super::lawyer_shook_holding_content;
 
     #[test]
-    fn the_home_page_is_a_bare_statement_naming_shook_law_pc() {
+    fn the_home_page_is_a_bare_statement_naming_the_firm() {
         let content = lawyer_shook_holding_content(&views::brand::LAWYER_SHOOK_BRANDING);
         let bare = content
             .bare
             .expect("Lawyer Shook's home page is the bare-statement variant");
-        assert_eq!(bare.heading, "Shook Law PC");
-        assert_eq!(content.head_title, "Shook Law PC | Home");
+        assert_eq!(bare.heading, "Guieb & Shook PC");
+        assert_eq!(content.head_title, "Guieb & Shook PC | Home");
         assert!(bare
             .paragraph
-            .contains("Shook Law PC is an American law firm"));
+            .contains("Guieb & Shook PC is an American law firm"));
         assert!(bare
             .paragraph
             .contains("We build brands that put the customer not the lawyer first."));
@@ -1199,7 +1199,7 @@ mod lawyer_shook_holding_page_tests {
             bare.paragraph
         );
         // The footer names the firm, not this brand's own "Lawyer Shook" mark.
-        assert_eq!(bare.footer_wordmark, "Shook Law PC");
+        assert_eq!(bare.footer_wordmark, "Guieb & Shook PC");
         // The firm's notice leads into every admitted brand door.
         assert!(content.service.is_none());
         let headings: Vec<&str> = content

@@ -58,7 +58,7 @@ jobs:
         run: |
           set -a; source .devx/env; set +a
           curl -fsS "http://localhost:$PORT/app/readyz"
-          curl -fsS "http://localhost:$PORT/" | grep -q 'Shook Law PC'
+          curl -fsS "http://localhost:$PORT/" | grep -q 'Shook PC'
           curl -fsS "http://localhost:$NAVIGATOR_KIND_FORGEJO_PORT/api/healthz"
           timeout 5 bash -c "</dev/tcp/127.0.0.1/$NAVIGATOR_KIND_POSTGRES_PORT"
       - name: Diagnose
