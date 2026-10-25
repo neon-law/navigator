@@ -385,12 +385,14 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
              does not promise every piece of personal information can be removed.",
         ),
         indexed_page(
-            "Neon Law Nautilus",
+            "Nautilus",
             "/nautilus",
-            "Neon Law Nautilus, the subscription sold as DeleteYourData.com: data removal \
-             and non-legal privacy protection for $29/mo or $290/year prepaid. Unclaimed property searches and claims and basic form filings, such as forming an LLC, are included. Government fees are separate. Legal fees are excluded and must be prepaid. With a Vesta Estate Planning estate plan, an optional death \
-             check sets the plan's agreed triggers in motion, such as a life insurance \
-             claim. No insurance, probate, or tax outcome is promised.",
+            "Nautilus, one subscription of privacy and paperwork checks for $29/mo or \
+             $290/year prepaid: data removal, privacy protection, credit monitoring, dark web \
+             monitoring, identity theft insurance, unclaimed property, estate planning, and basic \
+             form filings such as forming an LLC. Government fees are separate. Legal fees are \
+             excluded and must be prepaid; a lawyer review starts at $20. Coming to iPhone and \
+             Android.",
         ),
         indexed_page(
             "Immigration",

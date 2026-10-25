@@ -1,168 +1,118 @@
 head_title: "{site_name} | Nautilus"
 meta_description: >-
-  Neon Law Nautilus is the DeleteYourData.com subscription from Shook Law PC:
-  a non-legal service for data removal, privacy protection, unclaimed property
-  searches and claims, and basic form filings such as an LLC, for $29/mo or
-  $290/year prepaid. Legal fees are excluded and must be prepaid. With a Vesta estate plan, an optional
-  death check sets your plan's triggers in motion on your behalf. Attorney
-  advertisement.
-title: Neon Law Nautilus
+  Nautilus is one subscription of privacy and paperwork checks: data removal,
+  privacy protection, credit monitoring, dark web monitoring, identity theft
+  insurance, unclaimed property, estate planning, and basic form filings, for
+  $29/mo or $290/year prepaid. A lawyer can review your work from $20. Coming
+  to iPhone and Android. Attorney advertisement.
+title: Nautilus
 hero_mark: helm
 tagline: Your shell in a connected world.
 hero_lead: >-
-  Be bold. Keep your personal life protected. Data removal, privacy protection,
-  unclaimed property searches and claims, and optional privacy and credit
-  monitoring in one non-legal subscription. Basic form filings, such as forming
-  an LLC, are included. $29/mo or $290/year prepaid. Government fees are
-  separate. Legal fees are excluded from both plans and must be prepaid. The
-  same offer as DeleteYourData.com.
+  One subscription for the checks that keep your personal life protected.
+  $29/mo or $290/year prepaid. When you want a lawyer to look at your work, a
+  review starts at $20.
 hero_cta:
   href: "#enrollment"
-  label: Find your shell
+  label: Get started
 skin: nautilus
 bands:
-  - kind: cards
-    anchor: protection
-    overline: Inside your shell
-    heading: More room for you. Less exposure.
-    items:
-      - title: The Shell · Data removal
-        body:
-          - - text: Ask companies to delete the personal data they hold about you. Keep a record of your requests.
-      - title: The Reef · Privacy protection
-        body:
-          - - text: Make privacy part of your routine, with optional privacy monitoring you choose at enrollment.
-      - title: The Lookout · Credit monitoring
-        body:
-          - - text: Opt in to credit monitoring when you enroll. We confirm coverage before activation.
-      - title: The Deep · Dark web monitoring
-        chips: [Confirm availability]
-        body:
-          - - text: Ask about dark web monitoring at enrollment. Availability and coverage must be confirmed before activation.
-      - title: The Treasure · Unclaimed property
-        body:
-          - - text: >-
-                We search government unclaimed property databases for money and
-                property held in your name, such as forgotten account balances,
-                deposits, and refunds, and process the claims on your behalf.
-      - title: The Vessel · Your estate plan
-        body:
-          - - text: With a separate Vesta estate plan, choose an optional Death Check to set your agreed triggers in motion.
-      - title: The Cove · Self-help
-        body:
-          - - text: Explore public legal resources, and ask about private self-help tools at enrollment. Nautilus does not provide legal advice or representation.
-        href: /notations
-        href_label: Explore legal resources
+  - kind: app_preview
+    anchor: app
+    overline: Coming to iPhone and Android
+    heading: Every check, in your pocket.
+    description: >-
+      Download Nautilus from the App Store or Google Play and subscribe for
+      $29/mo. Each check runs for you and reports back in the app.
+    app_name: Nautilus
+    app_subtitle: Privacy checks
+    install_ios_label: Get
+    install_android_label: Install
+    checks_heading: Your checks
+    checks:
+      - title: Data removal
+        detail: Requests that companies delete your personal data, with a record of each.
+      - title: Privacy protection
+        detail: Privacy monitoring you choose at enrollment.
+      - title: Credit monitoring
+        detail: Opt in at enrollment. We confirm coverage before activation.
+      - title: Dark web monitoring
+        detail: Availability and coverage are confirmed before activation.
+      - title: Identity theft insurance
+        detail: Policy terms and limits are confirmed before activation.
+      - title: Unclaimed property
+        detail: We search government databases and file claims for you.
+      - title: Estate planning
+        detail: A yearly check-in on your will, beneficiaries, and plan documents.
+      - title: Basic form filings
+        detail: Simple filings, such as forming an LLC. Government fees are separate.
+    app_store_label: App Store
+    play_store_label: Google Play
+    availability: Coming soon to
   - kind: cards
     anchor: pricing
     overline: Pricing
-    heading: One shell. Two ways to pay.
+    heading: One subscription. Two ways to pay.
     description: >-
-      Privacy and credit monitoring are optional. Choose whether to opt in when
-      you enroll. Unclaimed property searches and claims and basic form filings,
-      such as forming an LLC, are included in either price. Government fees are
-      separate. Nautilus is a non-legal service: legal fees are excluded from
-      both plans and must be prepaid before any legal work begins. We confirm
-      the work included before you enroll.
+      Every check is included in either price. Government fees are separate.
+      Nautilus is a non-legal service: legal fees are excluded from both plans
+      and must be prepaid before any legal work begins.
     pricing_style: true
     items:
-      - title: Neon Law Nautilus
-        chips: ["$29/mo"]
+      - title: Monthly
         body:
-          - - text: >-
-                Non-legal data removal, privacy protection, and unclaimed
-                property claims for $29/mo. Basic form filings, such as forming
-                an LLC, are included. Government fees are separate. Legal fees
-                are excluded and must be prepaid. The optional death check is
-                included when you also hold a Vesta estate plan.
+          - - text: Every check, billed each month.
         href: "#enrollment"
-        href_label: Start your intake
-      - title: Prepaid annual subscription
-        chips: ["$290/year"]
+        href_label: Get started
+      - title: Annual
         body:
-          - - text: >-
-                Prepay $290/year for the same privacy protection, unclaimed
-                property claims, and basic form filings, such as forming an
-                LLC. Government fees are separate. Legal fees are excluded and
-                must be prepaid. No promotional or alternative discount tiers.
+          - - text: Every check, prepaid for the year.
         href: "#enrollment"
-        href_label: Start your intake
-  - kind: steps
-    anchor: death-check
-    overline: The optional death check
-    heading: Triggers you write once, set in motion when they are needed
+        href_label: Get started
+  - kind: cards
+    anchor: lawyer-review
+    overline: When you want a lawyer
+    heading: Have a lawyer review your work.
     description: >-
-      The death check runs only while your Nautilus subscription is active, and
-      only if you turn it on.
+      Draft it yourself, then ask a lawyer to check it. A review is legal work
+      under its own engagement, priced before it starts and prepaid.
     items:
-      - title: Make your estate plan with Vesta
-        body:
-          - - text: "Start with an estate plan from "
-            - text: Vesta Estate Planning
-              href: /estate-planning
-            - text: "."
-      - title: Write your triggers together
+      - title: Lawyer review
+        chips: ["From $20"]
         body:
           - - text: >-
-                We decide with you who to tell, which claims to file, such as a
-                life insurance claim, and which accounts to close.
-      - title: Keep Nautilus active
+                A licensed attorney reviews a document or question you prepared.
+                The fee depends on the work and starts at $20.
+      - title: Private legal sandbox
+        chips: ["$5 of usage included monthly"]
         body:
           - - text: >-
-                While your subscription is active, we periodically check whether
-                you have passed away.
-      - title: We act on your behalf
-        body:
-          - - text: >-
-                When a death is confirmed, the death check sets the triggers in
-                your plan in motion, as you directed.
-  - kind: statement
-    heading: Why it matters for life insurance
-    lead: An insurer pays on proof, not on death.
-    body:
-      - - text: "In Nevada, a life insurer settles a death claim once it receives due proof of death ("
-        - text: Nev. Rev. Stat. § 688A.140
-          href: "https://app.midpage.ai/laws/nv-nrs/t57/ch688A/s688A_140-9e5653?utm_source=mcp"
-        - text: "). Insurers must check the federal Death Master File only twice a year, and a benefit whose beneficiary cannot be found is presumed abandoned ("
-        - text: Nev. Rev. Stat. § 688D.090
-          href: "https://app.midpage.ai/laws/nv-nrs/t57/ch688D/s688D_090-b48728?utm_source=mcp"
-        - text: ")."
-      - - text: "A Florida appeals court found that when a death goes unidentified, beneficiaries are not notified or paid ("
-        - text: Patronis v. United Ins. Co. of Am., No. 1D18-2114 (Fla. 1st DCA June 3, 2020)
-          href: "https://app.midpage.ai/document/jimmy-patronis-in-his-official--b7fe6425-201e-44f5-93bb-980abef1299c?utm_source=mcp"
-        - text: "). A trigger in your plan is how your family hears about the claim from us instead."
-  - kind: statement
-    heading: Also available for cyber crimes
-    lead: When a leak has already caused harm.
-    body:
-      - - text: "If a hack, data theft, identity theft, or online abuse has already caused you harm, "
-        - text: Cyber Injury Law
-          href: "https://www.cyberinjurylaw.com"
-        - text: " reviews the facts and whether a separate legal claim may be appropriate."
-      - - text: >-
-            Attorney advertisement. Data removal does not guarantee that a
-            company will comply or prevent a future leak, and the death check
-            does not promise any particular insurance, probate, or tax outcome.
-            Form filing does not promise that an agency will accept the papers,
-            and an unclaimed property search does not promise that property will
-            be found or that a claim will be paid.
-
+                Work with frontier models, such as Claude and ChatGPT, in a
+                private sandbox. Your subscription includes $5 of model usage
+                each month. After that, you pay per token at the exact rate we
+                pay Google Cloud Vertex AI, with no markup.
   - kind: statement
     heading: Privacy and legal advice
     lead: A private space is not an attorney-client relationship.
     body:
       - - text: >-
-            Nautilus is a non-legal service. Enrollment and self-help tools do not
-            make us your attorney or establish attorney-client privilege. Unclaimed property claims and
-            basic form filings, such as forming an LLC, are included in the subscription price. Government
-            fees are separate. Legal fees are excluded from both plans: legal advice, representation beyond
-            those filings, and estate planning require a separate engagement and must be prepaid.
+            Nautilus is a non-legal service. Subscribing, the app, and the
+            sandbox do not make us your attorney or establish attorney-client
+            privilege. Legal advice, representation, and lawyer review require a
+            separate engagement and must be prepaid.
       - - text: >-
-            Do not put Social Security numbers, account passwords, financial records,
-            or confidential legal questions in this public intake. We confirm the
-            appropriate private channel before collecting sensitive information.
+            Attorney advertisement. Data removal does not guarantee that a
+            company will comply or prevent a future leak. Monitoring and
+            insurance coverage are confirmed before activation. Form filing does
+            not promise that an agency will accept the papers, and an unclaimed
+            property search does not promise that property will be found.
+      - - text: >-
+            Do not put Social Security numbers, account passwords, financial
+            records, or confidential legal questions in this public intake. We
+            confirm the appropriate private channel before collecting sensitive
+            information.
   - kind: enrollment
-    heading: Step into your shell.
+    heading: Get started.
     body: >-
       Start here without an account. Share your contact details, choose whether
       we may text you, and review before sending. Then sign in to open the booking

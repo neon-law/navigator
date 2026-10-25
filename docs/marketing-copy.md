@@ -284,15 +284,16 @@ the page and footer. Pricing uses the shared `PricingSection` with the brand pal
 internet grid is decorative; reduced-motion preferences disable animation. The Solana section carries the approved
 request-record and litigation copy. The page uses the same footer treatment as Neon and Vesta. The subscription is also
 called [Neon Law Nautilus](glossary/neon-law-nautilus.md). Neon publishes `/nautilus`
-(`neon/locales/en/neon/nautilus.yaml`) with the same $29/mo and $290/year pricing, unclaimed property searches and
-claims and basic form filings such as forming an LLC included in that price, legal fees excluded and prepaid, a
-non-legal service disclosure, the death-check steps, and the life-insurance statutes and opinion that explain why a
-trigger matters, each linked to its source. Its aquatic presentation uses the shared practice-page bands and pricing
-components, with prices and billing periods resolved from DeleteYourData's home catalog. Its CTA opens a three-step
-public contact intake before sign-in; the signed-in page exposes the configured enrollment booking link. DocuSign
-paperwork follows the enrollment review. Dark web coverage and private self-help tools require confirmation at
-enrollment. The page expressly distinguishes privacy from attorney-client privilege. Every other brand host answers
-`/nautilus` with a 404.
+(`neon/locales/en/neon/nautilus.yaml`) under the one name Nautilus, with no themed card names. An `app_preview` band
+draws the coming iPhone and Android apps in each platform's idiom, listing every check as an equal peer: data removal,
+privacy protection, credit monitoring, dark web monitoring, identity theft insurance, unclaimed property, estate
+planning, and basic form filings. Its listing price, like the $29/mo and $290/year pricing cards, resolves from
+DeleteYourData's home catalog. The store badges read "Coming soon" and link nowhere until the apps are published. A
+lawyer review starts at $20 and is prepaid; the private legal sandbox includes $5 of model usage a month, then bills per
+token at the Vertex AI rate the firm pays. Monitoring and insurance coverage are confirmed before activation. Its CTA
+opens a three-step public contact intake before sign-in; the signed-in page exposes the configured enrollment booking
+link. DocuSign paperwork follows the enrollment review. The page expressly distinguishes privacy from attorney-client
+privilege. Every other brand host answers `/nautilus` with a 404.
 
 The Neon home page presents common employment, NDA, sales, and privacy agreements under a $5,000 one-time contract fee;
 financings are scoped separately. It also presents a $50 daily minimum for questions over Slack and a separate $500

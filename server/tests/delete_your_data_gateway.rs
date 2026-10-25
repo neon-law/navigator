@@ -130,31 +130,30 @@ async fn the_gateway_is_404_on_every_non_neon_brand_host() {
     }
 }
 
-/// `GET /nautilus` on a Neon host describes Neon Law Nautilus — the
-/// DeleteYourData.com subscription — with monthly and prepaid annual pricing, the
-/// optional death check, the cited life-insurance authority, and a CTA that
-/// resolves to this deployment's DeleteYourData.com host.
+/// `GET /nautilus` on a Neon host describes Nautilus plainly: the checks it
+/// runs, drawn as an iPhone and an Android app listing, monthly and prepaid
+/// annual pricing, lawyer review and the private legal sandbox, and the public
+/// intake.
 #[tokio::test]
-async fn the_nautilus_page_renders_on_neon_hosts_with_pricing_death_check_and_sources() {
+async fn the_nautilus_page_renders_on_neon_hosts_with_the_app_checks_and_pricing() {
     let app = app(state().await);
     for host in [None, Some("www.neonlaw.com")] {
         let (status, body) = get_on_host(&app, "/nautilus", host).await;
         assert_eq!(status, StatusCode::OK, "{host:?}: {body}");
         for expected in [
             "<title>Neon Law | Nautilus</title>",
-            "Neon Law Nautilus",
+            r#"data-phone="ios""#,
+            r#"data-phone="android""#,
+            r#"data-store="ios""#,
+            r#"data-store="android""#,
+            "Identity theft insurance",
+            "Dark web monitoring",
+            "Estate planning",
             "$29/mo",
             "$290/year",
             "forming an LLC",
-            "Write your triggers together",
-            "life insurance claim",
-            r#"href="/estate-planning""#,
-            "Nev. Rev. Stat. § 688A.140",
-            "Nev. Rev. Stat. § 688D.090",
-            "Patronis v. United Ins. Co. of Am.",
-            "https://app.midpage.ai/laws/nv-nrs/t57/ch688A/s688A_140-9e5653",
-            "Also available for cyber crimes",
-            r#"href="https://www.cyberinjurylaw.com""#,
+            "From $20",
+            "Google Cloud Vertex AI",
             r##"href="#enrollment""##,
             r#"action="/leads""#,
             r#"data-nautilus-intake="true""#,
@@ -165,6 +164,9 @@ async fn the_nautilus_page_renders_on_neon_hosts_with_pricing_death_check_and_so
             "site-footer",
         ] {
             assert!(body.contains(expected), "{host:?} is missing {expected:?}");
+        }
+        for retired in ["The Reef", "The Cove", "Write your triggers together"] {
+            assert!(!body.contains(retired), "{host:?} still carries {retired:?}");
         }
     }
 }
