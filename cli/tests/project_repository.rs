@@ -114,6 +114,7 @@ const SYNCED_SKILL_NAMES: &[&str] = &[
     "case-timeline",
     "opposing-communication-review",
     "record-search",
+    "pull-changes",
 ];
 
 fn workspace_root() -> PathBuf {
