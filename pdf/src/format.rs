@@ -73,6 +73,66 @@ impl Default for Letterhead {
     }
 }
 
+/// A host that cannot name a registrable domain: empty, a single label,
+/// or not a plain hostname.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("host is empty or not a valid hostname")]
+pub struct InvalidHost;
+
+/// The registrable domain of `host`: its last two labels.
+///
+/// This is deliberately naive: it does not consult the public-suffix
+/// list, so a multi-label suffix such as `co.uk` would yield `co.uk`
+/// rather than the owner's domain. The brand hosts Navigator serves are
+/// two-label registrable domains; revisit if one is not.
+///
+/// # Errors
+/// [`InvalidHost`] for an empty host, a single label, an empty label
+/// (`a..test`, a leading or trailing dot), a label that is not letters,
+/// digits, or interior hyphens, or any scheme, path, port, or whitespace.
+pub fn registrable_domain(host: &str) -> Result<String, InvalidHost> {
+    let labels: Vec<&str> = host.trim().split('.').collect();
+    let valid_label = |l: &str| {
+        !l.is_empty()
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+            && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    };
+    if labels.len() < 2 || !labels.iter().all(|l| valid_label(l)) {
+        return Err(InvalidHost);
+    }
+    Ok(labels[labels.len() - 2..].join("."))
+}
+
+impl Letterhead {
+    /// The letterhead a Brand wears: the wordmark is its display name,
+    /// the web line is its `host`, and the mailbox is always `contact@`
+    /// the host's registrable domain. The phone is the Brand's, falling
+    /// back to the Firm's; an empty field prints nothing.
+    ///
+    /// # Errors
+    /// [`InvalidHost`] when `host` is empty or invalid.
+    pub fn from_brand(
+        display_name: &str,
+        host: &str,
+        brand_phone: &str,
+        firm_phone: &str,
+    ) -> Result<Self, InvalidHost> {
+        let domain = registrable_domain(host)?;
+        let phone = [brand_phone, firm_phone]
+            .into_iter()
+            .map(str::trim)
+            .find(|p| !p.is_empty())
+            .unwrap_or_default();
+        Ok(Self {
+            name: display_name.trim().to_string(),
+            phone: phone.to_string(),
+            email: format!("contact@{domain}"),
+            web: host.trim().to_string(),
+        })
+    }
+}
+
 /// The signed closing of a letter: valediction, then the signer, printed
 /// under blank space for a pen signature — a letter is signed by one
 /// person and never routes to e-signature (contrast
@@ -1604,5 +1664,75 @@ mod tests {
             0,
             "an absent recipient/date must not leave a stray separator before the page number"
         );
+    }
+
+    mod from_brand {
+        use super::super::{registrable_domain, InvalidHost, Letterhead};
+
+        #[test]
+        fn the_neon_law_host_wears_the_neon_law_identity() {
+            let lh = Letterhead::from_brand("Neon Law", "www.neonlaw.com", "", "+1 510 800 2090")
+                .unwrap();
+            assert_eq!(lh.name, "Neon Law");
+            assert_eq!(lh.email, "contact@neonlaw.com");
+            assert_eq!(lh.web, "www.neonlaw.com");
+            assert_eq!(lh.phone, "+1 510 800 2090");
+        }
+
+        #[test]
+        fn a_firm_host_reads_its_own_domain_and_its_brand_phone() {
+            let lh = Letterhead::from_brand(
+                "Example Firm",
+                "examplefirm.test",
+                "+1 555 010 0000",
+                "+1 510 800 2090",
+            )
+            .unwrap();
+            assert_eq!(lh.name, "Example Firm");
+            assert_eq!(lh.email, "contact@examplefirm.test");
+            assert_eq!(lh.web, "examplefirm.test");
+            assert_eq!(lh.phone, "+1 555 010 0000");
+        }
+
+        #[test]
+        fn a_subdomain_host_mails_the_registrable_domain_and_prints_the_host() {
+            let lh =
+                Letterhead::from_brand("Example Firm", "portal.examplefirm.test", "", "").unwrap();
+            assert_eq!(lh.email, "contact@examplefirm.test");
+            assert_eq!(lh.web, "portal.examplefirm.test");
+            assert_eq!(
+                registrable_domain("a.b.examplefirm.test"),
+                Ok("examplefirm.test".to_string())
+            );
+        }
+
+        #[test]
+        fn a_missing_brand_phone_falls_back_and_no_phone_drops_cleanly() {
+            let fallback = Letterhead::from_brand("X", "x.test", "  ", "+1 555 010 0001").unwrap();
+            assert_eq!(fallback.phone, "+1 555 010 0001");
+            let none = Letterhead::from_brand("X", "x.test", "", " ").unwrap();
+            assert_eq!(none.phone, "");
+        }
+
+        #[test]
+        fn an_empty_or_invalid_host_is_refused() {
+            for bad in [
+                "",
+                "  ",
+                "localhost",
+                "a..test",
+                ".test",
+                "x.test.",
+                "a b.test",
+                "http://x.test",
+                "x.test/path",
+                "x@x.test",
+                "-x.test",
+                "x_y.test",
+            ] {
+                assert_eq!(registrable_domain(bad), Err(InvalidHost), "{bad:?}");
+                assert!(Letterhead::from_brand("X", bad, "", "").is_err(), "{bad:?}");
+            }
+        }
     }
 }
