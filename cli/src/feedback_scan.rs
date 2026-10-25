@@ -52,6 +52,7 @@ const PATTERNS: &[(&str, &str, &str)] = &[
 /// Scan `text` for personal or matter identifiers. `terms` are exact names the
 /// caller knows to be private (Project codes, client and counterparty names);
 /// they match case-insensitively on word boundaries.
+#[must_use]
 pub fn scan(text: &str, terms: &[String]) -> Vec<Finding> {
     let mut found = Vec::new();
     let generic: Vec<(&str, &str, Regex)> = PATTERNS
