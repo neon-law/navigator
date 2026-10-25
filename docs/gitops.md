@@ -19,17 +19,18 @@ operator a deliberate rollout. This flow supports the actions in [`agent-workflo
    [`agent-workflows.md`](agent-workflows.md#create-a-pr) for the stop condition when a task did not start in New
    Worktree.
 2. **Push + open a PR.** `git push -u origin <branch>` then `gh pr create`.
-3. **Let auto-merge land it.** `ci.yml` enables auto-merge on open and each push. Squash fires once the required gate is
-   green and review threads are resolved. No approving review is required. Use draft status to hold a PR. The PR title
-   becomes the Conventional Commit subject on `main`.
+3. **Let auto-merge land it.** `automerge.yml` enables auto-merge on a PR labelled `automerge`, on label and each push.
+   Squash fires once the required gate is green and review threads are resolved. No approving review is required. Remove
+   the label or use draft status to hold a PR. The PR title becomes the Conventional Commit subject on `main`.
 
 ### Codified merge gate
 
 Navigator is at [`neon-law/navigator`](https://github.com/neon-law/navigator) on github.com. Nothing here names a host,
 sets `GH_HOST`, or repoints `NAVIGATOR_GITHUB_API_BASE`: `gh` and every Action default to the right place.
 
-Standard GitHub-hosted runners are free for public repositories. Shell and API coordination jobs use `ubuntu-24.04`;
-build jobs retain Blacksmith where their disk, memory, or cache requirements need it. The Marketplace is available.
+Standard GitHub-hosted runners are free for public repositories. Coordination jobs, auto-merge, CodeQL, Dependabot, the
+KIND quickstart, and the nightly stress test use `ubuntu-24.04`. CI and deploy build jobs retain Blacksmith where disk,
+memory, or cache need it. The Marketplace is available.
 
 **Confirm an App id against a live check run before trusting it.** A required status check registered under the wrong id
 still *reads* as present in the API while matching an App that never posts a check, so the gate silently enforces
@@ -248,8 +249,8 @@ control the squash.
 
 **Once the Project gate-pin rollout reaches a repository, its pinned `navigator project gate` runs inside the required
 `ci` check.** It validates the manifest key set and value shapes, document pointers, the origin scan over the built
-bundle, and the no-client-data pass. Auto-merge is armed on every pull request opened non-draft; required checks and
-thread resolution gate the merge.
+bundle, and the no-client-data pass. Auto-merge is armed on a non-draft pull request labelled `automerge`; required
+checks and thread resolution gate the merge.
 
 #### CODEOWNERS owners must resolve
 
@@ -266,7 +267,8 @@ fails closed before writing anything. Email owners are retained as commit-author
 All assertions run before the first write, so a repository that cannot satisfy the policy is left exactly as it was
 rather than half-reconciled.
 
-> **Auto-merge identity.** `enable-automerge` arms auto-merge as a GitHub App with `contents: write` and
+> **Auto-merge identity.** `enable-automerge` in `automerge.yml` arms auto-merge as a GitHub App with
+> `contents: write` and
 > `pull_requests: write`, and as nothing else. It needs `AUTOMERGE_APP_ID` and `AUTOMERGE_APP_PRIVATE_KEY` as Actions
 > secrets, **and the same pair in the Dependabot secret store**, which is separate — without them there, Dependabot's
 > bumps arm nothing. There is no fallback to `GITHUB_TOKEN`: an absent secret skips arming and leaves the pull request
@@ -401,11 +403,10 @@ also use these runners. In `deploy.yml`, tag creation, Homebrew and Zed dispatch
 rollout dispatch also move to GitHub. These jobs run shell commands and API calls without compiling Rust or building
 images.
 
-The content gate, managed Word adapter, and Rust suite retain `blacksmith-4vcpu-ubuntu-2404`, as do release builds, KIND
-checks, and deployment jobs that build the CLI. Public GitHub Linux runners provide four CPUs, 16 GB RAM, and 14 GB SSD
-storage; private repositories get two CPUs and 8 GB RAM with the same label. Free usage depends on actual repository
-visibility. See [GitHub's runner
-specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+The content gate, managed Word adapter, and Rust suite retain `blacksmith-4vcpu-ubuntu-2404`, as do release builds and
+deployment jobs that build the CLI. Public GitHub Linux runners provide four CPUs, 16 GB RAM, and 14 GB SSD storage;
+private repositories get two CPUs and 8 GB RAM with the same label. Free usage depends on actual repository visibility.
+See [GitHub's runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 
 The Rust workflow records a measured peak of 142 GB disk use, so CPU count alone does not make a standard runner a
 suitable replacement. Its header preserves the four-versus-eight-core timing and memory measurements. Before moving any

@@ -15,7 +15,7 @@ The required input is a positive GitHub pull-request number. Resolve the reposit
 assume a repository slug.
 
 **A review of a colleague's pull request ends by landing the fix and approving it, not by requesting changes and
-waiting.** `ci.yml` arms auto-merge when a pull request opens and on every push, so the queue moves once the required
+waiting.** A pull request labelled `automerge` arms auto-merge (`automerge.yml`), so the queue moves once the required
 gate is green, the threads resolve, and the review gate is satisfied (see [The branch → PR → auto-merge
 flow](../../../docs/gitops.md#the-branch--pr--auto-merge-flow)). Every finding you can fix without a design decision
 becomes a commit on the PR branch, and the review is an approval at the head those commits produced. Request changes
