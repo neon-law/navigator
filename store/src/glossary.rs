@@ -623,6 +623,19 @@ mod tests {
         assert!(find("not a real term").is_none());
     }
 
+    /// The assistant's chat names its own terms: `Conversation` and
+    /// `Message` already mean an exchange with an external account.
+    #[test]
+    fn the_assistant_chat_has_its_own_terms() {
+        for title in ["Assistant Chat", "Assistant Turn"] {
+            let term = find(title).unwrap_or_else(|| panic!("{title} is a glossary term"));
+            assert!(
+                term.body.contains("conversation.md"),
+                "{title} must name how it differs from a Conversation"
+            );
+        }
+    }
+
     #[test]
     fn every_term_has_a_plain_one_sentence_description() {
         assert!(terms().iter().all(|term| {

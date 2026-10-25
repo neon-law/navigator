@@ -19,6 +19,8 @@ Navigator MCP is **LLM-agnostic** by design — the router behind A2A is one imp
 swapped for Claude (direct or via Vertex AI Model Garden), a local model, or even a rules engine without touching the
 tool catalog or the A2A wire format.
 
+The same catalog's read-only tools are what an [Assistant Chat](assistant-chat.md) may call while it answers.
+
 Skill names are mirrored across both protocols by [`mcp::tools::list_tools()`](../../mcp/src/tools/mod.rs): the MCP tool
 name and the A2A skill id are one bare string (`create_person`). The server names itself in `serverInfo`, so a client
 that flattens several MCP servers into one list groups these by the server rather than by a prefix on every tool.
