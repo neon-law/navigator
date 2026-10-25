@@ -787,10 +787,7 @@ async fn dispatch_single(
         // under this `taskId`; Path 0 in `handle_message_send` picks it
         // back up.
         if confirmation_required {
-            let pending_call = RoutedCall {
-                tool_name: skill.to_string(),
-                arguments: arguments.clone(),
-            };
+            let pending_call = RoutedCall::named(skill, arguments.clone());
             let prompt = confirmation_prompt(&pending_call, &[]);
             tracing::info!(
                 target: "audit",
@@ -997,18 +994,13 @@ async fn drive_loop(
                     .expect("Task is always serializable"),
                 );
             }
-            Step::Call(RoutedCall {
-                tool_name,
-                arguments,
-            }) => {
+            Step::Call(call) => {
+                let tool_name = call.tool_name.clone();
                 // Confirmation gate: a side-effecting call pauses the
                 // loop and asks the user before anything is written or
                 // sent. Read-only lookups fall through and run inline.
                 if tools::is_side_effecting(&tool_name) {
-                    let pending_call = RoutedCall {
-                        tool_name: tool_name.clone(),
-                        arguments,
-                    };
+                    let pending_call = call;
                     let prompt = confirmation_prompt(&pending_call, &history);
                     let proposer = approver_person(&state.mcp.surreal, principal_email).await;
                     let proposer = audit_actor(proposer.as_ref());
@@ -1060,16 +1052,10 @@ async fn drive_loop(
                     routed_via_llm = true,
                     "a2a: router step → read-only tool call"
                 );
-                match tools::call_tool(&state.mcp, principal, &mcp_tool_name, &arguments).await {
+                match tools::call_tool(&state.mcp, principal, &mcp_tool_name, &call.arguments).await
+                {
                     Ok(result) => {
-                        history.push(Turn::Call {
-                            tool_name: tool_name.clone(),
-                            arguments,
-                        });
-                        history.push(Turn::Result {
-                            tool_name: tool_name.clone(),
-                            content: result.clone(),
-                        });
+                        history.extend(Turn::exchange(call, result.clone()));
                         last_action = Some((tool_name, result));
                     }
                     Err(err) => {
@@ -1081,14 +1067,10 @@ async fn drive_loop(
                         // raw DB error never reaches the LLM (and thence
                         // the client); the detail is logged.
                         tracing::warn!(skill = %tool_name, error = err.kind(), "a2a: router tool call failed");
-                        history.push(Turn::Call {
-                            tool_name: tool_name.clone(),
-                            arguments,
-                        });
-                        history.push(Turn::Result {
-                            tool_name,
-                            content: json!({ "error": tool_error_text(&err) }),
-                        });
+                        history.extend(Turn::exchange(
+                            call,
+                            json!({ "error": tool_error_text(&err) }),
+                        ));
                     }
                 }
             }
@@ -1217,10 +1199,8 @@ async fn resume_after_confirmation(
                 &task_id,
                 &pending,
             );
-            let RoutedCall {
-                tool_name,
-                arguments,
-            } = pending.pending_call;
+            let call = pending.pending_call;
+            let tool_name = call.tool_name.clone();
             let mcp_tool_name = tool_name.clone();
 
             // A direct skill was the entire request, so the approved
@@ -1243,34 +1223,23 @@ async fn resume_after_confirmation(
                     timestamp,
                     &tool_name,
                     &mcp_tool_name,
-                    &arguments,
+                    &call.arguments,
                 )
                 .await;
             };
 
             let mut last_action: Option<(String, Value)> = None;
-            match tools::call_tool(&state.mcp, principal, &mcp_tool_name, &arguments).await {
+            match tools::call_tool(&state.mcp, principal, &mcp_tool_name, &call.arguments).await {
                 Ok(result) => {
-                    history.push(Turn::Call {
-                        tool_name: tool_name.clone(),
-                        arguments,
-                    });
-                    history.push(Turn::Result {
-                        tool_name: tool_name.clone(),
-                        content: result.clone(),
-                    });
+                    history.extend(Turn::exchange(call, result.clone()));
                     last_action = Some((tool_name, result));
                 }
                 Err(err) => {
                     tracing::warn!(skill = %tool_name, error = err.kind(), "a2a: resumed tool call failed");
-                    history.push(Turn::Call {
-                        tool_name: tool_name.clone(),
-                        arguments,
-                    });
-                    history.push(Turn::Result {
-                        tool_name,
-                        content: json!({ "error": tool_error_text(&err) }),
-                    });
+                    history.extend(Turn::exchange(
+                        call,
+                        json!({ "error": tool_error_text(&err) }),
+                    ));
                 }
             }
             // Resume the loop for any remaining steps — which may pause
@@ -2454,10 +2423,10 @@ mod tests {
                 Ok(crate::agent_router::Step::Done(String::new()))
             } else {
                 Ok(crate::agent_router::Step::Call(
-                    crate::agent_router::RoutedCall {
-                        tool_name: self.tool_name.clone(),
-                        arguments: self.arguments.clone(),
-                    },
+                    crate::agent_router::RoutedCall::named(
+                        self.tool_name.clone(),
+                        self.arguments.clone(),
+                    ),
                 ))
             }
         }
@@ -2484,24 +2453,26 @@ mod tests {
             use crate::agent_router::{RoutedCall, Step, Turn};
             // Find the most recent tool result, if any.
             let last_result = history.iter().rev().find_map(|t| match t {
-                Turn::Result { tool_name, content } => Some((tool_name.as_str(), content)),
+                Turn::Result {
+                    tool_name, content, ..
+                } => Some((tool_name.as_str(), content)),
                 _ => None,
             });
             match last_result {
                 // No tool has run yet → look the person up by email.
-                None => Ok(Step::Call(RoutedCall {
-                    tool_name: "show_person".to_string(),
-                    arguments: json!({ "email": self.email }),
-                })),
+                None => Ok(Step::Call(RoutedCall::named(
+                    "show_person",
+                    json!({ "email": self.email }),
+                ))),
                 // The lookup came back → pull the id out and send.
                 Some(("show_person", content)) => {
                     let person_id = content["structuredContent"]["persons"][0]["id"]
                         .as_str()
                         .expect("show_person result must carry a match id");
-                    Ok(Step::Call(RoutedCall {
-                        tool_name: "send_welcome_email".to_string(),
-                        arguments: json!({ "person_id": person_id }),
-                    }))
+                    Ok(Step::Call(RoutedCall::named(
+                        "send_welcome_email",
+                        json!({ "person_id": person_id }),
+                    )))
                 }
                 // The welcome was sent → done.
                 Some(("send_welcome_email", _)) => {

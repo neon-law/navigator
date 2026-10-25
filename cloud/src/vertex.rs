@@ -466,6 +466,9 @@ pub struct ClaudeChatRequest {
     pub messages: Vec<ClaudeMessage>,
     pub tools: Vec<serde_json::Value>,
     pub max_tokens: u32,
+    /// Ask for at most one tool call per reply, for a loop that runs and
+    /// answers calls one at a time.
+    pub one_tool_per_turn: bool,
 }
 
 /// A tool the model asked to run.
@@ -566,6 +569,10 @@ impl ClaudeVertexAdapter {
         });
         if !request.tools.is_empty() {
             body["tools"] = serde_json::Value::Array(request.tools.clone());
+            if request.one_tool_per_turn {
+                body["tool_choice"] =
+                    serde_json::json!({ "type": "auto", "disable_parallel_tool_use": true });
+            }
         }
         let started = Instant::now();
         let value = post_json(&self.client, &url, &token, &body).await?;
@@ -595,7 +602,7 @@ struct MetadataToken {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::matchers::{body_json, body_partial_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn request(location: &str, model: &str) -> VertexRequest {
@@ -821,6 +828,7 @@ mod tests {
             messages,
             tools: vec![glossary_tool()],
             max_tokens: 256,
+            one_tool_per_turn: false,
         }
     }
 
@@ -973,6 +981,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reply.text(), "Done.");
+    }
+
+    #[tokio::test]
+    async fn one_tool_per_turn_disables_parallel_tool_use() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(serde_json::json!({
+                "tool_choice": { "type": "auto", "disable_parallel_tool_use": true }
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [{ "type": "text", "text": "ok" }], "stop_reason": "end_turn"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut request = chat("global", vec![ClaudeMessage::user_text("hi")]);
+        request.one_tool_per_turn = true;
+        claude(&server).send(&request).await.unwrap();
     }
 
     #[tokio::test]

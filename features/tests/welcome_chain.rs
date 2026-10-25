@@ -44,7 +44,9 @@ struct WelcomeChainRouter;
 impl AgentRouter for WelcomeChainRouter {
     async fn next_step(&self, history: &[Turn], _skills: &[Value]) -> Result<Step, RouterError> {
         let last_result = history.iter().rev().find_map(|t| match t {
-            Turn::Result { tool_name, content } => Some((tool_name.as_str(), content)),
+            Turn::Result {
+                tool_name, content, ..
+            } => Some((tool_name.as_str(), content)),
             _ => None,
         });
         match last_result {
@@ -60,19 +62,19 @@ impl AgentRouter for WelcomeChainRouter {
                     .split_whitespace()
                     .find(|word| word.contains('@'))
                     .unwrap_or_default();
-                Ok(Step::Call(RoutedCall {
-                    tool_name: "show_person".to_string(),
-                    arguments: json!({ "email": email }),
-                }))
+                Ok(Step::Call(RoutedCall::named(
+                    "show_person",
+                    json!({ "email": email }),
+                )))
             }
             Some(("show_person", content)) => {
                 let person_id = content["structuredContent"]["persons"][0]["id"]
                     .as_str()
                     .expect("show_person must return a match for the seeded person");
-                Ok(Step::Call(RoutedCall {
-                    tool_name: "send_welcome_email".to_string(),
-                    arguments: json!({ "person_id": person_id }),
-                }))
+                Ok(Step::Call(RoutedCall::named(
+                    "send_welcome_email",
+                    json!({ "person_id": person_id }),
+                )))
             }
             Some(("send_welcome_email", _)) => {
                 Ok(Step::Done("Sent the welcome email.".to_string()))

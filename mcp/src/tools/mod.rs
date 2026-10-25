@@ -110,6 +110,25 @@ pub fn advertised_catalog() -> Vec<Value> {
         .collect()
 }
 
+/// The tools an Assistant Chat may call: read-only lookups only, the
+/// CLI's verbs as tools. A tool joins this list on purpose, and
+/// `the_assistant_catalog_is_the_read_only_glossary_tools` holds every
+/// entry to [`READ_ONLY_TOOLS`].
+const ASSISTANT_TOOLS: &[&str] = &["glossary_list", "glossary_show"];
+
+/// The descriptors an Assistant Chat offers its model, in catalog order.
+#[must_use]
+pub fn assistant_catalog() -> Vec<Value> {
+    list_tools()
+        .into_iter()
+        .filter(|d| {
+            d.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|n| ASSISTANT_TOOLS.contains(&n))
+        })
+        .collect()
+}
+
 /// Whether `tool_name` (prefixed or unprefixed) is in
 /// [`advertised_catalog`]. False for an unknown name as well as a gated
 /// one, so a caller that wants to tell those apart checks
@@ -1258,6 +1277,19 @@ mod tests {
     // Glossary. The CLI's `glossary list` / `glossary show`, read from
     // the same embedded terms, as tools any signed-in caller may run.
     // -----------------------------------------------------------------
+
+    /// The Assistant Chat is never offered a tool that writes.
+    #[test]
+    fn the_assistant_catalog_is_the_read_only_glossary_tools() {
+        let names: Vec<String> = super::assistant_catalog()
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(String::from))
+            .collect();
+        assert_eq!(names, ["glossary_list", "glossary_show"]);
+        for name in &names {
+            assert!(!super::is_side_effecting(name), "{name} must only read");
+        }
+    }
 
     #[test]
     fn the_glossary_tools_are_read_only_and_advertised() {
