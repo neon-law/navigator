@@ -601,6 +601,7 @@ fn schedule_post_form(page: &BlogCatalogPage) -> Element {
         section { aria_label: "Schedule a Post",
             h2 { "Schedule a Post" }
             p { "Choose connected destinations and approve the copy before scheduling. A blank time queues publication now. Times must include the UTC offset." }
+            p { "Provider captions are optional and preserve longer copy separately from the website description. TikTok, LinkedIn and X currently use the website description as their caption." }
             p { a { href: "/app/inbox", "Answer comments and questions in the inbox" }
                 ". Facebook and Instagram comments and messages require configured provider permissions and verified webhook subscriptions. TikTok public comment replies require comment permissions and a verified webhook subscription." }
             for brand in brands {
@@ -610,7 +611,11 @@ fn schedule_post_form(page: &BlogCatalogPage) -> Element {
                         Field::select("Brand", "brand", vec![Choice::new(brand, brand)], Some(brand.clone())).required(),
                         Field::text("Slug", "slug", "").required(),
                         Field::text("Title", "title", "").required(),
-                        Field::text("Caption", "description", "").required(),
+                        Field::text("Website description", "description", "").help("Maximum 200 characters. Used as the social caption when no provider caption is supplied.").required(),
+                        Field::textarea("Facebook caption", "facebook_caption", "", 4),
+                        Field::textarea("Instagram caption", "instagram_caption", "", 4),
+                        Field::textarea("Threads caption", "threads_caption", "", 4),
+                        Field::textarea("YouTube caption", "youtube_caption", "", 4),
                         Field::textarea("Website Post", "body_markdown", "", 5).required(),
                         Field::text("Publication time (with UTC offset)", "publish_at", "").help("For example: 2026-10-19T09:00:00-05:00. Leave blank to publish now."),
                         Field::text("Uploaded video asset", "video_asset", page.uploaded_video.as_ref().filter(|video| video.key.starts_with(&format!("img/{brand}/"))).map_or("", |video| video.key.as_str())),
@@ -956,6 +961,15 @@ mod tests {
         assert!(html.contains("brand_key=neon"), "{html}");
         assert!(html.contains("brand_key=vesta"), "{html}");
         assert!(html.contains("Back to social"), "{html}");
+        for field in [
+            "facebook_caption",
+            "instagram_caption",
+            "threads_caption",
+            "youtube_caption",
+        ] {
+            assert!(html.contains(&format!("name=\"{field}\"")), "{html}");
+        }
+        assert!(html.contains("Maximum 200 characters"), "{html}");
     }
 
     #[test]

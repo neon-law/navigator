@@ -18,6 +18,10 @@ pub(crate) struct PublishPost {
     slug: String,
     title: String,
     description: String,
+    facebook_caption: Option<String>,
+    instagram_caption: Option<String>,
+    threads_caption: Option<String>,
+    youtube_caption: Option<String>,
     body_markdown: String,
     providers: Vec<SocialProvider>,
     account_ids: std::collections::BTreeMap<String, String>,
@@ -96,6 +100,10 @@ pub(crate) struct SchedulePost {
     slug: String,
     title: String,
     description: String,
+    facebook_caption: Option<String>,
+    instagram_caption: Option<String>,
+    threads_caption: Option<String>,
+    youtube_caption: Option<String>,
     body_markdown: String,
     publish_at: String,
     video_asset: String,
@@ -144,6 +152,18 @@ impl SchedulePost {
             slug: self.slug,
             title: self.title,
             description: self.description,
+            facebook_caption: self
+                .facebook_caption
+                .filter(|value| !value.trim().is_empty()),
+            instagram_caption: self
+                .instagram_caption
+                .filter(|value| !value.trim().is_empty()),
+            threads_caption: self
+                .threads_caption
+                .filter(|value| !value.trim().is_empty()),
+            youtube_caption: self
+                .youtube_caption
+                .filter(|value| !value.trim().is_empty()),
             body_markdown: self.body_markdown,
             providers,
             account_ids,
@@ -190,7 +210,11 @@ fn schedule_refusal(input: &SchedulePost, message: &str) -> String {
         ("brand", "Brand", input.brand.as_str()),
         ("slug", "Slug", &input.slug),
         ("title", "Title", &input.title),
-        ("description", "Caption", &input.description),
+        (
+            "description",
+            "Website description (200 characters maximum)",
+            &input.description,
+        ),
         ("body_markdown", "Website Post", &input.body_markdown),
         (
             "publish_at",
@@ -209,6 +233,27 @@ fn schedule_refusal(input: &SchedulePost, message: &str) -> String {
         } else {
             webapp::components::Field::text(label, name, value)
         });
+    }
+    for (name, label, value) in [
+        (
+            "facebook_caption",
+            "Facebook caption",
+            &input.facebook_caption,
+        ),
+        (
+            "instagram_caption",
+            "Instagram caption",
+            &input.instagram_caption,
+        ),
+        ("threads_caption", "Threads caption", &input.threads_caption),
+        ("youtube_caption", "YouTube caption", &input.youtube_caption),
+    ] {
+        fields.push(webapp::components::Field::textarea(
+            label,
+            name,
+            value.as_deref().unwrap_or(""),
+            4,
+        ));
     }
     for (provider, value) in [
         ("facebook", &input.facebook),
@@ -490,7 +535,12 @@ async fn prepare(
         video_asset: input.video_asset.as_deref(),
         vertical_video,
         tiktok_ai_generated: input.tiktok_ai_generated,
-        captions: SourceCaptions::default(),
+        captions: SourceCaptions {
+            facebook: input.facebook_caption.as_deref(),
+            instagram: input.instagram_caption.as_deref(),
+            threads: input.threads_caption.as_deref(),
+            youtube: input.youtube_caption.as_deref(),
+        },
         accounts: &accounts,
         social_links: existing
             .as_ref()
@@ -812,6 +862,28 @@ mod tests {
     }
 
     #[test]
+    fn website_schedule_preserves_long_provider_captions_and_refused_copy() {
+        let caption = "Synthetic approved caption. ".repeat(12);
+        let form: SchedulePost = serde_json::from_value(json!({
+            "brand":"example", "slug":"example", "title":"Example",
+            "description":"Short website summary", "body_markdown":"Article",
+            "publish_at":"2030-10-25T13:11:00Z", "video_asset":"", "tiktok_ai_generated":"",
+            "facebook_caption":caption, "instagram_caption":caption,
+            "threads_caption":"", "youtube_caption":"Video caption"
+        }))
+        .unwrap();
+        let html = schedule_refusal(&form, "Connect an account");
+        assert!(html.contains(&caption));
+        assert!(html.contains("name=\"instagram_caption\""));
+        let input = form.into_publish().unwrap();
+        assert_eq!(input.facebook_caption.as_deref(), Some(caption.as_str()));
+        assert_eq!(input.instagram_caption.as_deref(), Some(caption.as_str()));
+        assert_eq!(input.threads_caption, None);
+        assert_eq!(input.youtube_caption.as_deref(), Some("Video caption"));
+        assert_eq!(input.description, "Short website summary");
+    }
+
+    #[test]
     fn refused_website_schedule_keeps_copy_and_escapes_markup() {
         let input: SchedulePost = serde_json::from_value(json!({
             "_csrf":"csrf-safe", "brand":"example", "slug":"legacy", "title":"Legacy",
@@ -856,11 +928,12 @@ mod tests {
             .mount(&broker)
             .await;
         let publish_at = Utc::now() + chrono::Duration::days(2);
+        let caption = "Approved synthetic provider caption. ".repeat(12);
         let form: SchedulePost = serde_json::from_value(json!({
             "brand":"publication-test", "slug":"website-schedule", "title":"Website schedule",
             "description":"Approved caption", "body_markdown":"Approved article",
             "publish_at":publish_at.to_rfc3339(), "video_asset":"", "tiktok_ai_generated":"",
-            "threads":"synthetic-threads"
+            "threads":"synthetic-threads", "threads_caption":caption
         }))
         .unwrap();
         let command = form.into_publish().unwrap();
@@ -879,6 +952,7 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(post.status, "scheduled");
+        assert_eq!(post.threads_caption.as_deref(), Some(caption.as_str()));
         assert_eq!(
             post.publish_at.unwrap().to_rfc3339(),
             publish_at.to_rfc3339()
