@@ -410,6 +410,19 @@ names the Project, whether or not a Blob exists, so a first upload typed from an
 extension (a chain filed as `summons`, pointed at by `blobs/summons.pdf.yaml`) is named by its path, as `project sync`
 and the gate already name it; `reslug` makes the chain's slug match.
 
+**Upload a directory as a batch.** `navigator site document upload --project acme --dir exhibits --kind exhibit` files
+regular files in filename order without recursing or following file symlinks. Choose exactly one of `--dir` and
+`--file`; `--slug` applies only to `--file`. Each file uses the same Blob resolver, folder, visibility, and extension
+rules as a single upload. SHA-256 matches within a batch are skipped only after the first copy is successfully filed.
+The summary reports every file, including duplicates and failures. A failed or uncertain upload also blocks later copies
+of its bytes from being sent again. Successful uploads and their pointers remain when another file fails, and any
+unfiled file makes the command fail.
+
+An expired session pauses the batch once for the supported browser sign-in, reloads the stored credentials, and resumes
+with the remaining files. Only a definite authentication refusal permits retrying the current upload. A transport error
+or an unreadable success receipt requires reconciliation with `navigator project gate --check` before retrying; the CLI
+never silently repeats that write. `--description` applies the same optional description to every file.
+
 **A document identity moves with its chain.** `navigator site document reslug <asset_id> --project <code> --slug <slug>`
 moves a document to another slug valid for its filename, such as `notes/a.pdf` to `filed/forms/a.pdf`. Every revision
 moves together, in the same order, with `sha256`, the storage key, byte size, and kind unchanged. The server refuses a
