@@ -25,9 +25,14 @@ const KEY: &str = "api-reads-test-key";
 const PRIVATE_NOTION: &str = "https://notion.example/private-workup";
 const INTERNAL_SLACK_ID: &str = "C0FIRMONLY1";
 
+// Serialize repository-backed fixture lifetimes to avoid Git spawn descriptor races on macOS.
+static REPO_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 struct Fixture {
+    _repo_guard: tokio::sync::MutexGuard<'static, ()>,
     app: axum::Router,
     surreal: store::surreal::SurrealDb,
+    storage: std::sync::Arc<dyn cloud::StorageService>,
     project_id: Uuid,
     project_code: String,
     notation_id: Uuid,
@@ -150,7 +155,21 @@ async fn seed_matter_content(
     notation_id
 }
 
+fn repo_store() -> repos::RepoStore {
+    static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    let root = ROOT.get_or_init(|| {
+        let root =
+            std::env::temp_dir().join(format!("navigator-api-reads-repos-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::env::set_var(repos::REPO_ROOT_ENV, &root);
+        root
+    });
+    repos::RepoStore::new(root)
+}
+
 async fn build_fixture() -> Fixture {
+    let repo_guard = REPO_ENV_LOCK.lock().await;
+    repo_store();
     let surreal = mem_surreal().await;
     let entity_id = store::test_support::seed_entity(&surreal).await;
     let project = store::projects::create(
@@ -205,7 +224,10 @@ async fn build_fixture() -> Fixture {
         sessions: SessionStore::new(KEY),
         ..portal::test_support::app_state(surreal.clone()).await
     };
+    let storage = state.storage.clone();
     Fixture {
+        _repo_guard: repo_guard,
+        storage,
         app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
         surreal,
         project_id: project.id,
@@ -498,6 +520,206 @@ async fn finance_run_is_lawyer_tier_and_matter_scoped() {
     assert_eq!(
         post(&fx, &path, None).await.status(),
         StatusCode::UNAUTHORIZED
+    );
+}
+
+fn commit_board_sources(fx: &Fixture, files: &[(&str, &[u8])]) {
+    repo_store()
+        .commit_as_code(
+            &fx.project_code,
+            repos::Author {
+                name: "Synthetic Lawyer",
+                email: "lawyer@example.com",
+            },
+            "update synthetic blueprints",
+            files,
+        )
+        .unwrap();
+}
+
+async fn inventory_json(fx: &Fixture) -> serde_json::Value {
+    let path = format!("/app/api/projects/{}/notation-inventory", fx.project_id);
+    let response = get(fx, &path, Some(&fx.lawyer)).await;
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn notation_inventory_lists_unpersisted_repository_blueprints_and_current_workflows() {
+    let fx = build_fixture().await;
+    let body = b"---\nkind: memo\nworkflow:\n  BEGIN:\n    created: lawyer_review\n  lawyer_review:\n    approved: END\n  END: {}\n---\n\nSynthetic draft.\n";
+    commit_board_sources(
+        &fx,
+        &[
+            ("drafts/alpha.md", body),
+            ("drafts/beta.md", body),
+            ("drafts/gamma.md", body),
+        ],
+    );
+    let templates_before = store::templates::list_for_project(&fx.surreal, fx.project_id)
+        .await
+        .unwrap();
+    let inventory = inventory_json(&fx).await;
+    let rows = inventory.as_array().unwrap();
+    for code in ["alpha", "beta", "gamma"] {
+        let row = rows
+            .iter()
+            .find(|row| row["template_code"] == code)
+            .expect("repository blueprint is visible before a run");
+        assert!(row["notation_id"].is_null());
+        assert_eq!(
+            row["workflow_states"],
+            serde_json::json!(["BEGIN", "lawyer_review", "END"])
+        );
+    }
+    assert_eq!(
+        rows.len(),
+        4,
+        "three repository blueprints plus the fixture run"
+    );
+    assert_eq!(
+        store::templates::list_for_project(&fx.surreal, fx.project_id)
+            .await
+            .unwrap(),
+        templates_before,
+        "listing must not persist templates"
+    );
+    assert_eq!(
+        store::notations::list_by_project(&fx.surreal, fx.project_id)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "listing must not create a run"
+    );
+
+    let revised = String::from_utf8(body.to_vec()).unwrap().replace(
+        "    approved: END",
+        "    approved: generate_pdf__memo\n  generate_pdf__memo:\n    pdf_persisted: END",
+    );
+    commit_board_sources(&fx, &[("drafts/beta.md", revised.as_bytes())]);
+    let refreshed = inventory_json(&fx).await;
+    let beta = refreshed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["template_code"] == "beta")
+        .unwrap();
+    assert_eq!(
+        beta["workflow_states"],
+        serde_json::json!(["BEGIN", "lawyer_review", "generate_pdf__memo", "END"])
+    );
+}
+
+#[tokio::test]
+async fn notation_inventory_keeps_started_workflows_pinned_when_repository_main_changes() {
+    let fx = build_fixture().await;
+    let body = include_str!("../../templates/notations/neon_law/onboarding__letter.md");
+    commit_board_sources(&fx, &[("drafts/onboarding__letter.md", body.as_bytes())]);
+    let pinned = store::template_source::persist_from_repo(
+        &fx.surreal,
+        &fx.storage,
+        &repo_store(),
+        fx.project_id,
+        "onboarding__letter",
+    )
+    .await
+    .unwrap()
+    .template;
+    let respondent = store::notations::find_by_id(&fx.surreal, fx.notation_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .person_id;
+    let run = store::notations::create(
+        &fx.surreal,
+        &store::notations::NewNotation::new(pinned.id, respondent, fx.project_id, "lawyer_review"),
+    )
+    .await
+    .unwrap();
+    let inventory = inventory_json(&fx).await;
+    let same: Vec<_> = inventory
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["template_code"] == "onboarding__letter")
+        .collect();
+    assert_eq!(
+        same.len(),
+        1,
+        "an already started source version must not gain a duplicate no-run row"
+    );
+    assert_eq!(same[0]["notation_id"], run.id.to_string());
+
+    let revised = body.replace("generate_pdf__retainer_pdf", "generate_pdf__engagement_pdf");
+    commit_board_sources(&fx, &[("drafts/onboarding__letter.md", revised.as_bytes())]);
+    let inventory = inventory_json(&fx).await;
+    let same: Vec<_> = inventory
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["template_code"] == "onboarding__letter")
+        .collect();
+    assert_eq!(same.len(), 2);
+    let started = same
+        .iter()
+        .find(|row| row["notation_id"] == run.id.to_string())
+        .unwrap();
+    let current = same
+        .iter()
+        .find(|row| row["notation_id"].is_null())
+        .unwrap();
+    assert!(started["workflow_states"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("generate_pdf__retainer_pdf")));
+    assert!(current["workflow_states"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("generate_pdf__engagement_pdf")));
+    assert_eq!(
+        store::templates::resolve(&fx.surreal, Some(fx.project_id), "onboarding__letter")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        pinned.id,
+        "reading main must not replace the persisted version"
+    );
+}
+
+#[tokio::test]
+async fn notation_inventory_refuses_an_unreadable_repository_instead_of_showing_an_empty_board() {
+    let fx = build_fixture().await;
+    std::fs::write(
+        repo_store().path_for_code(&fx.project_code),
+        "not a repository",
+    )
+    .unwrap();
+    let path = format!("/app/api/projects/{}/notation-inventory", fx.project_id);
+    assert_eq!(
+        get(&fx, &path, Some(&fx.lawyer)).await.status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    std::fs::remove_file(repo_store().path_for_code(&fx.project_code)).unwrap();
+    commit_board_sources(
+        &fx,
+        &[(
+            "drafts/broken.md",
+            b"---\nkind: memo\nworkflow: invalid\n---\n\nSynthetic draft.\n",
+        )],
+    );
+    assert_eq!(
+        get(&fx, &path, Some(&fx.lawyer)).await.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "a malformed workflow must not appear as an empty workflow"
     );
 }
 
