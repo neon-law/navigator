@@ -797,6 +797,17 @@ mod help_tests {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
+    /// Check a draft issue for client or matter identifiers before filing it
+    /// in an outside tracker. Runs locally; the text is never sent anywhere.
+    /// Exits non-zero and names each placeholder to use when it finds any.
+    FeedbackCheck {
+        /// Draft title and body; reads stdin when omitted.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// A private name or Project code to refuse; repeat for each.
+        #[arg(long = "term")]
+        terms: Vec<String>,
+    },
     /// Scan tracked repository text for personal data with a local Presidio analyzer.
     Pii {
         /// Repository root containing .github/pii/allowlist.toml.
@@ -4337,6 +4348,29 @@ fn run() -> ExitCode {
         return ExitCode::from(2);
     };
     match cli_command {
+        Command::FeedbackCheck { file, terms } => {
+            let text = match file {
+                Some(path) => std::fs::read_to_string(path),
+                None => std::io::read_to_string(std::io::stdin()),
+            };
+            let Ok(text) = text else {
+                eprintln!("navigator: could not read the draft");
+                return ExitCode::from(2);
+            };
+            let findings = cli::feedback_scan::scan(&text, &terms);
+            for f in &findings {
+                eprintln!(
+                    "line {}: {} found; write {} instead",
+                    f.line, f.kind, f.placeholder
+                );
+            }
+            if findings.is_empty() {
+                println!("feedback check: clean");
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
         Command::Pii { dir, analyzer_url } => {
             let Ok(findings) = runtime().block_on(cli::pii_audit::audit_tree(&dir, &analyzer_url))
             else {

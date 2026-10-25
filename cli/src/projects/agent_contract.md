@@ -122,7 +122,11 @@ substitute browser or native-app automation for a server that is available.
 * **Google Calendar** — meetings and deadlines.
 * **Google Drive** — meeting notes, transcripts, and large document intake.
 * **Slack** — private channel for updates.
-* **Linear** — CLI feedback, named by mechanism and never by matter.
+* **Linear** — CLI feedback, named by mechanism and never by matter. Remove personal and matter identifiers before
+  filing: write `<client>`, `<claim number>`, `<email>`, `<phone>`, `<address>`, `<identifier>` in their place, and
+  never quote matter text. Run `navigator feedback-check --term <Project code> --term <client name>` on the draft
+  (repeat `--term` for each private name); it runs locally and refuses a draft that still carries one. Show the checked
+  text to the lawyer before filing.
 * **CourtListener** — dockets, filings, parties, and judges.
 * **Midpage** — statutes and rules.
 * **Descrybe** — case law.
