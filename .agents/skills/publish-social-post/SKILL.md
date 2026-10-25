@@ -34,10 +34,11 @@ Posts, repeat the form with distinct slugs, uploaded video keys, verified destin
 offsets. Staging previews can use matching slugs because the deployments have separate records. Keep the production
 Posts unpublished until scheduling; do not duplicate a public Post under another slug to bypass the resend guard.
 
-The current calendar and CLI publish API put the shared caption in `description`, whose store limit is 200 characters.
-`body_markdown` is website copy, not the social caption. Preserve longer approved wording in the website body, and
-report the caption limitation before social scheduling; do not silently shorten approved social copy. The store and
-worker support some per-provider captions, but this publish input currently does not expose them.
+The calendar and CLI publish API accept optional `facebook_caption`, `instagram_caption`, `threads_caption`, and
+`youtube_caption` fields. They preserve longer approved copy separately from `description`, whose store limit is 200
+characters. An omitted provider caption falls back to `description`. TikTok, LinkedIn and X still use `description`;
+report that limit before scheduling those destinations and never silently shorten approved wording. `body_markdown` is
+website copy, not the social caption. Verify the deployment accepts caption fields before claiming they are saved.
 
 Scheduling currently uses Restate: `portal/src/blog_api.rs::queue_publication` starts `SocialPublisher`, whose durable
 sleep waits for the publication time in `workflows-service/src/social_publisher.rs`. Its reconciler recovers scheduled
@@ -98,7 +99,8 @@ These contracts are grounded in `portal/src/blog_api.rs` (`record`, `prepare`, `
    brand: example
    slug: video-update
    title: A video update
-   description: The approved caption.
+   description: A short website summary and fallback caption.
+   instagram_caption: The full approved Instagram caption.
    body_markdown: The approved website Post text.
    video_asset: img/example/video-update.mp4
    providers: [instagram, threads, tiktok]
