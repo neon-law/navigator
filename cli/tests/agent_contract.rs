@@ -64,7 +64,7 @@ fn contract_requires_pii_removal_before_filing_feedback() {
     for required in [
         "Remove personal and matter identifiers",
         "`<claim number>`",
-        "navigator feedback-check",
+        "navigator project feedback-check",
     ] {
         assert!(
             AGENT_CONTRACT.contains(required),
