@@ -35,8 +35,7 @@ use crate::components::PlatformMark;
 /// A GitHub Release asset URL is `…/releases/download/{tag}/{filename}`, and the
 /// tag is the version — so a reader who mistrusts the page can check the link
 /// against the Releases page and see the same two strings.
-pub const RELEASE_DOWNLOAD_BASE: &str =
-    "https://github.com/neon-law/navigator/releases/download";
+pub const RELEASE_DOWNLOAD_BASE: &str = "https://github.com/neon-law/navigator/releases/download";
 
 /// The Releases index, for a reader who wants an older version or the notes.
 pub const RELEASES_HREF: &str = "https://github.com/neon-law/navigator/releases";

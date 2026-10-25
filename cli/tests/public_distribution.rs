@@ -25,8 +25,9 @@ fn repo_file(relative: &str) -> String {
 }
 
 fn publish_run_script() -> String {
-    let workflow: serde_yaml::Value = serde_yaml::from_str(&repo_file(".github/workflows/deploy.yml"))
-        .expect("deploy.yml parses as YAML");
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&repo_file(".github/workflows/deploy.yml"))
+            .expect("deploy.yml parses as YAML");
     workflow["jobs"][JOB]["steps"]
         .as_sequence()
         .unwrap_or_else(|| panic!("`{JOB}` declares steps"))
@@ -61,8 +62,9 @@ fn the_release_carries_every_archive_checksum_and_supporting_file() {
 /// The sparse checkout must name the files the standalone uploads read.
 #[test]
 fn license_and_notice_are_checked_out_for_the_release_to_upload() {
-    let workflow: serde_yaml::Value = serde_yaml::from_str(&repo_file(".github/workflows/deploy.yml"))
-        .expect("deploy.yml parses as YAML");
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&repo_file(".github/workflows/deploy.yml"))
+            .expect("deploy.yml parses as YAML");
     let checkout = workflow["jobs"][JOB]["steps"]
         .as_sequence()
         .expect("steps")

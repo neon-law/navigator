@@ -706,10 +706,9 @@ release instead of only the images. It also stops occupying runners on every rel
 — the archives they produce have no possible consumer once the Release is never cut. Nothing reaches a stranger early
 either, because `release-cli-publish` needs both publish jobs as well as the two archives — the Release is the first
 fetchable artifact of the run. This is not only for human downloads: the `.github/actions/gate` composite action, the
-gate **every** Project repository runs, downloads `navigator-<version>-<platform>` from this repository's public
-Release (see below). If the archive jobs stop running, Project CI
-breaks everywhere with a download 404 and nothing in this repository goes red — which is exactly the kind of failure
-worth stating in prose, because no test here will catch it.
+gate **every** Project repository runs, downloads `navigator-<version>-<platform>` from this repository's public Release
+(see below). If the archive jobs stop running, Project CI breaks everywhere with a download 404 and nothing in this
+repository goes red — which is exactly the kind of failure worth stating in prose, because no test here will catch it.
 
 **The Linux archive job runs on `blacksmith-4vcpu-ubuntu-2404`; the macOS job runs on `macos-latest`.**
 
@@ -742,12 +741,12 @@ Homebrew tap's Slack pitch (`cli/tests/homebrew_tap_dispatch.rs`) only in the re
 `.github/actions/navigator-install`, and `.github/actions/navigator-install/install.sh`'s default all read that Release,
 as does the formula's `url`. `cli/tests/public_distribution.rs` holds that contract.
 
-`release-homebrew-tap` is the formula hand-off: it needs `release-cli-publish` and sends a `repository_dispatch` naming the tag **and nothing else**. The tap
-computes every `sha256` itself by downloading the artifacts it will then tell readers to download, from this repository's Release. A payload
-carrying digests would let a malformed dispatch pin the formula to bytes nobody verified, and would leave the tap unable
-to repair a bad bump from a bare tag — which matters, because `YY.M.D` admits no second ordinary release the same UTC
-day, so a bump that went wrong cannot be fixed by re-cutting the release it came from. The tap covers that with a
-`workflow_dispatch` that re-runs any tag by hand.
+`release-homebrew-tap` is the formula hand-off: it needs `release-cli-publish` and sends a `repository_dispatch` naming
+the tag **and nothing else**. The tap computes every `sha256` itself by downloading the artifacts it will then tell
+readers to download, from this repository's Release. A payload carrying digests would let a malformed dispatch pin the
+formula to bytes nobody verified, and would leave the tap unable to repair a bad bump from a bare tag — which matters,
+because `YY.M.D` admits no second ordinary release the same UTC day, so a bump that went wrong cannot be fixed by
+re-cutting the release it came from. The tap covers that with a `workflow_dispatch` that re-runs any tag by hand.
 
 **The formula does not support Intel macOS or arm64 Linux.** No prebuilt archive exists for either, and the formula does
 not compile from source. It `odie`s on both with a message naming the supported alternatives, and the tap's

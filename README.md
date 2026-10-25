@@ -59,9 +59,10 @@ include warranty disclaimers and limits on liability. Third-party components and
 reporting](SECURITY.md) for private vulnerability reports.
 
 The source is public at [neon-law/navigator](https://github.com/neon-law/navigator). The CLI's archives, checksums, and
-install script are attached to this repository's [Releases](https://github.com/neon-law/navigator/releases).
-`brew install neon-law/navigator/navigator` resolves the formula in
-[`neon-law/homebrew-navigator`](https://github.com/neon-law/homebrew-navigator), which holds no binaries and no source. The [Zed extension](https://github.com/neon-law/zed-navigator-lsp) attaches the Navigator language server. The
+install script are attached to this repository's [Releases](https://github.com/neon-law/navigator/releases). `brew
+install neon-law/navigator/navigator` resolves the formula in
+[`neon-law/homebrew-navigator`](https://github.com/neon-law/homebrew-navigator), which holds no binaries and no source.
+The [Zed extension](https://github.com/neon-law/zed-navigator-lsp) attaches the Navigator language server. The
 PostgreSQL image is built from [`images/postgres`](images/postgres/README.md) and published weekly to
 `ghcr.io/neon-law/neon-law-postgres`. Navigator's service images live in a private Artifact Registry repository and are
 mirrored to GHCR; see [self-hosting](docs/self-hosting.md#images).

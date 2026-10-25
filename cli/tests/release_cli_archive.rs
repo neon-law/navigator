@@ -570,9 +570,7 @@ fn one_publish_job_attaches_every_cli_archive() {
             !trimmed.starts_with('#') && trimmed.starts_with("gh release create")
         })
         .collect();
-    for (repo, label) in [
-        ("${GITHUB_REPOSITORY}", "this repository"),
-    ] {
+    for (repo, label) in [("${GITHUB_REPOSITORY}", "this repository")] {
         let matching = creates.iter().filter(|line| line.contains(repo)).count();
         assert_eq!(
             matching, 1,
