@@ -9,8 +9,8 @@
 //! operation in the vendored SendGrid OpenAPI contract.
 //!
 //! The upstream contract is recorded in `vendor/sendgrid/tsg_mail_v3.json`;
-//! `OPENAPI_SPEC_SHA256` and `GENERATOR_VERSION` are checked by the CLI drift
-//! command so a provider-schema update is explicit and reproducible.
+//! the CLI drift command checks its hash and generator version so a
+//! provider-schema update is explicit and reproducible.
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -19,15 +19,7 @@ use serde::Serialize;
 
 use super::OutboundEmail;
 
-#[allow(dead_code)]
-pub const OPENAPI_SPEC_SHA256: &str =
-    "4ba24d0feb8a6b347f60528161d1cf0e7591987d2b3a64a6533685dc2b39d19f";
-#[allow(dead_code)]
-pub const GENERATOR_VERSION: &str = "navigator-openapi-rust-1";
-#[allow(dead_code)]
-pub const SEND_MAIL_OPERATION_PATH: &str = "/v3/mail/send";
-#[allow(dead_code)]
-pub const SEND_MAIL_REQUIRED_FIELDS: &[&str] = &["from", "personalizations"];
+const SEND_MAIL_OPERATION_PATH: &str = "/v3/mail/send";
 
 #[derive(Debug, Serialize)]
 pub(crate) struct SendMailRequest {

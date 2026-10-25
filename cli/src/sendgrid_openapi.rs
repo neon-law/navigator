@@ -4,7 +4,6 @@
 //! generator. The explicit regeneration command renders the checked-in
 //! adapter template from the pinned `OpenAPI` operation and writes the result.
 
-use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -16,12 +15,11 @@ const EXPECTED_SHA256: &str = "4ba24d0feb8a6b347f60528161d1cf0e7591987d2b3a64a65
 const ADAPTER_PATH: &str = "workflows/src/email/sendgrid_openapi.rs";
 const TEMPLATE_PATH: &str = "vendor/sendgrid/sendgrid_openapi.rs.template";
 const EXPECTED_ADAPTER_SHA256: &str =
-    "2e7453284f2ac7765ac57e2d2c8fe975dd7c9d4b283e0377c294dd334572f47b";
+    "b1eabe037dc320e2f41b9cde3b357f89c31e20712a37c4a915a9f453ba295d98";
 const GENERATOR_VERSION: &str = "navigator-openapi-rust-1";
 
 struct SendMailContract {
     operation_path: String,
-    required_fields: Vec<String>,
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -77,38 +75,26 @@ fn read_contract(root: &Path) -> Result<(Vec<u8>, SendMailContract)> {
         .get("required")
         .and_then(serde_json::Value::as_array)
         .context("SendGrid SendMail request schema has no required fields")?;
-    let mut required_fields = BTreeSet::new();
     for field in required {
-        let field = field
+        field
             .as_str()
             .context("SendGrid SendMail required fields must be strings")?;
-        required_fields.insert(field.to_owned());
     }
 
     Ok((
         bytes,
         SendMailContract {
             operation_path: operation_path.to_owned(),
-            required_fields: required_fields.into_iter().collect(),
         },
     ))
 }
 
 fn render_adapter(root: &Path) -> Result<Vec<u8>> {
-    let (spec_bytes, contract) = read_contract(root)?;
+    let (_, contract) = read_contract(root)?;
     let template_path = root.join(TEMPLATE_PATH);
     let template = std::fs::read_to_string(&template_path)
         .with_context(|| format!("read adapter template {}", template_path.display()))?;
-    let required_fields = contract
-        .required_fields
-        .iter()
-        .map(|field| serde_json::to_string(field).expect("field names are strings"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let rendered = template
-        .replace("{{SPEC_SHA256}}", &sha256(&spec_bytes))
-        .replace("{{OPERATION_PATH}}", &contract.operation_path)
-        .replace("{{REQUIRED_FIELDS}}", &required_fields);
+    let rendered = template.replace("{{OPERATION_PATH}}", &contract.operation_path);
     if rendered.contains("{{") || rendered.contains("}}") {
         bail!("SendGrid adapter template contains an unreplaced placeholder");
     }
