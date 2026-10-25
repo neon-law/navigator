@@ -272,10 +272,12 @@ access-token renewal. A signed-in YouTube website or a public channel handle doe
 Run `blog preflight` with `--providers youtube`, compare the returned destination with the channel, then upload an MP4
 under `img/<brand>/`. Navigator limits the asset to 64 MiB and accepts either orientation for YouTube. The Post title
 becomes the video title; its YouTube caption override, or otherwise its description, becomes the video description. The
-publisher requests public visibility and retains the upload receipt. Check actual processing and visibility in YouTube
-before treating the stored watch link as public: the current uploader constructs that link from the receipt without a
-visibility readback. Reconcile the existing upload after an uncertain result; do not create another Post to retry it.
-Publishing requires approved content and destination, as with every provider.
+publisher requests public visibility and retains the upload receipt. Navigator records a public watch link only after
+reading back the exact video ID, selected channel, public visibility, and successful processing. Until then the receipt
+remains confirmed with its link pending; check processing and visibility in YouTube if it stays pending. The periodic
+reconciler revisits pending YouTube receipts after the initial polling window, including Posts already published on the
+website. It uses the Post's selected account and never uploads again to resolve a link. Publishing requires approved
+content and destination, as with every provider.
 
 For an upload made through YouTube Studio, verify its public watch URL and use the existing manual Post record and link
 commands above. Recording a link never grants OAuth access or sends another video.
