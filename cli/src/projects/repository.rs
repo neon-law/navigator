@@ -297,7 +297,8 @@ const FORBIDDEN_DOCUMENT_EXTENSIONS: &[&str] = &["doc", "docx", "odt", "pdf"];
 /// `case-timeline` (LAW-133) keeps a litigation case record as Docket Entries
 /// through `navigator project docket`, never as a hand-edited memo.
 /// `opposing-communication-review` gives every Project the recipient-side
-/// review discipline for opposing-party correspondence.
+/// review discipline for opposing-party correspondence. `pull-changes` is the
+/// one meaning of "pull changes": rebase the branch onto the latest `origin/main`.
 pub(crate) const SYNCED_SKILLS: &[(&str, &str)] = &[
     (
         "council",
@@ -350,6 +351,10 @@ pub(crate) const SYNCED_SKILLS: &[(&str, &str)] = &[
     (
         "record-search",
         include_str!("../../../.agents/skills/record-search/SKILL.md"),
+    ),
+    (
+        "pull-changes",
+        include_str!("../../../.agents/skills/pull-changes/SKILL.md"),
     ),
 ];
 
@@ -4189,6 +4194,7 @@ jobs:
         assert!(AGENT_CONTRACT_BASE.contains("squash-merged"));
         assert!(AGENT_CONTRACT_BASE.contains("\"Pull changes\" means rebase"));
         assert!(AGENT_CONTRACT_BASE.contains("--force-with-lease"));
+        assert!(AGENT_CONTRACT_BASE.contains(".agents/skills/pull-changes/SKILL.md"));
         assert!(AGENT_CONTRACT_BASE.contains("deleted on merge"));
         assert!(AGENT_CONTRACT_BASE.contains("Open pull requests ready for review by default"));
         assert!(AGENT_CONTRACT_BASE.contains("visibility: internal"));

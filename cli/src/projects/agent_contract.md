@@ -51,7 +51,7 @@ For architecture or process questions, convene the `council` skill; for how a cl
   already squash-merged into `main` drop out of the rebase; where they conflict, keep `origin/main`'s version. Run
   `navigator project gate`, then push with `git push --force-with-lease`, never plain `--force`, and never force-push
   `main`. A host-side "sync with base branch" tool merges rather than rebases; use it only when the sandbox blocks a
-  rebase, and say so.
+  rebase, and say so. The steps live in `.agents/skills/pull-changes/SKILL.md`.
 * The required check is `ci`, which runs `navigator project gate`.
 * The forge enforces branch and merge settings; client-visibility decisions remain part of human review. A pre-commit
   hook is a convenience only.
