@@ -1,6 +1,6 @@
 //! Guard the identity that arms auto-merge.
 //!
-//! `ci.yml`'s `enable-automerge` job turns on GitHub auto-merge for a green
+//! `automerge.yml`'s `enable-automerge` job turns on GitHub auto-merge for a green
 //! pull request. WHICH CREDENTIAL IT USES IS NOT COSMETIC: GitHub's
 //! workflow-recursion guard creates no workflow runs for a push attributed to
 //! `GITHUB_TOKEN`, and in this repository a landed version bump in
@@ -34,17 +34,17 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Deliberately `ci.yml`. `cli/tests/deploy_workflow.rs` reads `deploy.yml`,
+/// Deliberately `automerge.yml`. `cli/tests/deploy_workflow.rs` reads `deploy.yml`,
 /// which does not carry the arming step — a guard pointed at the wrong file
 /// would pass vacuously forever.
 fn ci_workflow() -> String {
-    let path = repo_root().join(".github/workflows/ci.yml");
+    let path = repo_root().join(".github/workflows/automerge.yml");
     std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
 fn ci_yaml() -> serde_yaml::Value {
-    serde_yaml::from_str(&ci_workflow()).expect("ci.yml parses as YAML")
+    serde_yaml::from_str(&ci_workflow()).expect("automerge.yml parses as YAML")
 }
 
 /// The `enable-automerge` job's CONFIGURATION, re-serialised from the parsed
@@ -163,12 +163,12 @@ fn the_arming_step_lives_in_ci_not_deploy() {
 #[test]
 fn the_guarded_workflow_exists() {
     assert!(
-        Path::new(&repo_root().join(".github/workflows/ci.yml")).is_file(),
-        "ci.yml must exist at the path this guard reads"
+        Path::new(&repo_root().join(".github/workflows/automerge.yml")).is_file(),
+        "automerge.yml must exist at the path this guard reads"
     );
     assert!(
         ci_workflow().contains("enable-automerge:"),
-        "ci.yml must carry the `enable-automerge` job"
+        "automerge.yml must carry the `enable-automerge` job"
     );
 }
 
@@ -184,4 +184,39 @@ fn project_gate_does_not_own_auto_merge_or_inherit_secrets() {
         source.contains("navigator project gate --ci"),
         "project-gate.yml must run the live-status door"
     );
+}
+
+/// Auto-merge is opt-in: the job runs only for a pull request carrying the
+/// `automerge` label, and `ci.yml` no longer arms anything.
+#[test]
+fn auto_merge_is_opt_in_by_label() {
+    let workflow = ci_yaml();
+    let condition = workflow["jobs"]["enable-automerge"]["if"]
+        .as_str()
+        .expect("enable-automerge has an `if`");
+    assert!(
+        condition.contains("contains(github.event.pull_request.labels.*.name, 'automerge')"),
+        "enable-automerge must require the `automerge` label"
+    );
+    let ci =
+        std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).expect("read ci.yml");
+    let ci: serde_yaml::Value = serde_yaml::from_str(&ci).expect("ci.yml parses");
+    assert!(ci["jobs"]["enable-automerge"].is_null());
+}
+
+/// Blacksmith is for CI and deploy build jobs only.
+#[test]
+fn quickstart_and_stress_test_use_standard_runners() {
+    for file in ["quickstart.yml", "firm-anchor-stress-test.yml"] {
+        let source = std::fs::read_to_string(repo_root().join(".github/workflows").join(file))
+            .unwrap_or_else(|error| panic!("read {file}: {error}"));
+        assert!(
+            !source.contains("blacksmith"),
+            "{file} must not use Blacksmith"
+        );
+        assert!(
+            source.contains("runs-on: ubuntu-24.04"),
+            "{file} must run on ubuntu-24.04"
+        );
+    }
 }

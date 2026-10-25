@@ -57,8 +57,8 @@ acceptance, and verify the commits remain one per issue.
 
 Follow `create-pr` for screenshots of user-visible behavior, safe public prose, push, and one non-draft pull request
 against `main`. Include one closing trailer per issue actually completed by that pull request; use a non-closing
-reference for work that remains blocked or pending. Confirm auto-merge is armed. Attach the pull request to the task and
-report its URL, issue-to-commit mapping, verification, shipped issues excluded, and any unresolved blockers.
+reference for work that remains blocked or pending. Report whether auto-merge is armed. Attach the pull request to the
+task and report its URL, issue-to-commit mapping, verification, shipped issues excluded, and any unresolved blockers.
 
 Never publish Linear project or issue titles, project names, or Linear URLs in branch names, commits, screenshots, or
 pull request prose. Keep roadmap details in Linear and identify issues publicly by their bare identifiers only.

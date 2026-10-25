@@ -9,7 +9,7 @@ defaults:
     shell: bash
 jobs:
   quickstart:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       CARGO_INCREMENTAL: "0"

@@ -80,9 +80,9 @@ record the exact failing suite and assertion, and distinguish failures in change
 failures. Do not report the gate as green if a suite fails.
 
 Before pushing, run the repository's required `navigator validate` command (or `cargo run -p cli --quiet -- validate`)
-and `git diff --check`. Follow `create-pr` for commit grouping, visual proof, PR creation, and auto-merge requirements.
-Store local screenshots under `/tmp/navigator-screenshots/`, never in the repository, unless the PR workflow
-specifically requires uploading them as attachments.
+and `git diff --check`. Follow `create-pr` for commit grouping, visual proof, PR creation, and auto-merge. Store local
+screenshots under `/tmp/navigator-screenshots/`, never in the repository, unless the PR workflow specifically requires
+uploading them as attachments.
 
 When a task needs a product video or animated walkthrough, record the actual running Navigator page in the task-owned
 browser. Capture the browser screen and real interaction states; do not create or substitute an AI-generated video,
