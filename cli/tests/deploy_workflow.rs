@@ -1575,22 +1575,17 @@ fn the_rollout_is_dispatched_only_after_every_publish_job() {
 }
 
 #[test]
-fn image_publishers_sign_digest_and_mirror_the_same_oci_index_best_effort() {
+fn image_publishers_sign_digest_and_mirror_the_same_oci_index_to_ghcr() {
     let workflow = deploy_workflow();
     for job in ["publish-service", "publish-triggers"] {
         let text = job_text(&workflow, job);
         assert!(text.contains("steps.build-push.outputs.digest"));
         assert!(text.contains("cosign sign --yes \"${IMAGE_REF}@${IMAGE_DIGEST}\""));
         assert!(text.contains(
-            "imagetools create --tag \"${target}:${RELEASE_TAG}\" \"${IMAGE_REF}@${IMAGE_DIGEST}\""
+            "imagetools create --tag \"${target}:${RELEASE_TAG}\" --tag \"${target}:latest\" \"${IMAGE_REF}@${IMAGE_DIGEST}\""
         ));
         assert!(text.contains("source_digest") && text.contains("target_digest"));
-        assert!(text.contains("GHCR mirror failed after retries"));
-        assert!(
-            text.contains("exit 0")
-                || text.contains("private Artifact Registry remains authoritative")
-        );
-        assert!(text.contains("continue-on-error: true"));
+        assert!(text.contains("failed after retries"));
         assert!(text.contains("timeout-minutes: 5"));
         assert!(text.contains("actions/upload-artifact@v7"));
     }
