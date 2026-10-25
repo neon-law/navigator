@@ -7290,7 +7290,7 @@ fn pleading_body(
     let caption = if preview {
         projects::matter::caption_for_preview(file, contents)?
     } else {
-        projects::matter::caption_for(file, contents)?
+        projects::matter::caption_for_final(file, contents)?
     };
     let certificate = projects::service::certificate_for(file, contents, preview)?
         .map(|certificate| format!("\n\n{certificate}"))
