@@ -6,19 +6,34 @@ records each message as a Project-scoped Communication. `file` refuses a thread 
 anything; `read` prints their names and marks them as not downloaded.
 
 The CLI reads the refresh token from the macOS Keychain item whose service is
-`com.neonlaw.navigator.gmail.refresh-token` and whose account is `NAVIGATOR_GMAIL_ACCOUNT`. It exchanges that token at
-Google's token endpoint using `NAVIGATOR_GMAIL_CLIENT_ID`. This implementation does not enroll an account or provision
-the Keychain item. This code uses the macOS Security framework Keychain API. It does not prove that a shell agent cannot
-invoke another process that can use the same account's authorized helper. Deployment still requires a signed-app/
-keychain ACL threat model and a managed-host test.
+`com.neonlaw.navigator.gmail.refresh-token` and whose account is the configured Gmail address. It exchanges that token
+at Google's token endpoint using the configured OAuth client id. The macOS Security framework reads the token. This
+implementation does not enroll an account or provision the Keychain item. Deployment requires a signed-app/Keychain ACL
+threat model and a managed-host test.
 
 ## Draft-only setup
 
-`navigator mail setup` checks the draft-only path and prints the fix for each gap. It reports `ok` or `MISSING` for
-`NAVIGATOR_GMAIL_ACCOUNT`, `NAVIGATOR_GMAIL_CLIENT_ID`, and the Keychain refresh token, and exits non-zero until all
-three are present. It prints fixed text only, never the account, client id, or token. To store the token, run `security
-add-generic-password -s com.neonlaw.navigator.gmail.refresh-token -a "$NAVIGATOR_GMAIL_ACCOUNT" -w`, which prompts for
-the value so it stays out of shell history.
+Save the Gmail address and OAuth client id once:
+
+```bash
+navigator mail setup --account lawyer@example.test --client-id <oauth-client-id>
+```
+
+Both flags are required together. The command saves these settings, then checks the draft-only path. Settings are
+written atomically with owner-only permissions to `~/.navigator.mail.json`. The file contains no refresh token. The
+location follows the credential-path overrides: `NAVIGATOR_CREDENTIALS_FILE` first, then `NAVIGATOR_CONFIG_DIR`, with
+the credential file's extension replaced by `.mail.json`. Nonblank `NAVIGATOR_GMAIL_ACCOUNT` and
+`NAVIGATOR_GMAIL_CLIENT_ID` override the saved values independently.
+
+`navigator mail setup` checks the saved settings and environment overrides and prints the fix for each gap. It reports
+`ok` or `MISSING` for the account, client id, and Keychain refresh token, and fails until all three are present. Saved
+settings remain available even when the token check fails. Output contains fixed text only, never the account, client
+id, or token. To store the token, run the following with your configured Gmail address. The command prompts for the
+token so it stays out of shell history:
+
+```bash
+security add-generic-password -s com.neonlaw.navigator.gmail.refresh-token -a "<gmail-address>" -w
+```
 
 Authorize the refresh token for `gmail.readonly` and `gmail.compose` only. Gmail offers no narrower scope that creates
 drafts, and `gmail.compose` can send at Google's level; the guard is that this CLI has no send verb and calls no send
