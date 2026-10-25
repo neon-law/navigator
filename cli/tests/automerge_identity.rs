@@ -198,8 +198,8 @@ fn auto_merge_is_opt_in_by_label() {
         condition.contains("contains(github.event.pull_request.labels.*.name, 'automerge')"),
         "enable-automerge must require the `automerge` label"
     );
-    let ci = std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml"))
-        .expect("read ci.yml");
+    let ci =
+        std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).expect("read ci.yml");
     let ci: serde_yaml::Value = serde_yaml::from_str(&ci).expect("ci.yml parses");
     assert!(ci["jobs"]["enable-automerge"].is_null());
 }
@@ -210,7 +210,13 @@ fn quickstart_and_stress_test_use_standard_runners() {
     for file in ["quickstart.yml", "firm-anchor-stress-test.yml"] {
         let source = std::fs::read_to_string(repo_root().join(".github/workflows").join(file))
             .unwrap_or_else(|error| panic!("read {file}: {error}"));
-        assert!(!source.contains("blacksmith"), "{file} must not use Blacksmith");
-        assert!(source.contains("runs-on: ubuntu-24.04"), "{file} must run on ubuntu-24.04");
+        assert!(
+            !source.contains("blacksmith"),
+            "{file} must not use Blacksmith"
+        );
+        assert!(
+            source.contains("runs-on: ubuntu-24.04"),
+            "{file} must run on ubuntu-24.04"
+        );
     }
 }
