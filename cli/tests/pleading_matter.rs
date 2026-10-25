@@ -201,6 +201,79 @@ fn a_missing_matter_field_is_named_and_nothing_is_written() {
 }
 
 #[test]
+fn pending_assignments_are_refused_by_final_pdf_and_word_without_writing() {
+    for (field, original) in [
+        ("department", "  department: \"12\""),
+        (
+            "judicial_officer",
+            "  judicial_officer: Hon. Sample Q. Jurist",
+        ),
+    ] {
+        let work = matter_tree();
+        edit(
+            work.path().join("navigator.yaml"),
+            original,
+            &format!("  {field}: PeNdInG"),
+        );
+        for format in ["pdf", "word"] {
+            let out = work.path().join(if format == "pdf" {
+                "final.pdf"
+            } else {
+                "final.docx"
+            });
+            let result = render(
+                format,
+                &work.path().join("templates/rfa_responses.md"),
+                &out,
+            );
+            assert!(
+                !result.status.success(),
+                "pending {field}: {format} must refuse"
+            );
+            assert!(
+                stderr(&result).contains(&format!("matter.{field}")),
+                "{}",
+                stderr(&result)
+            );
+            assert!(!out.exists(), "refusal must not write an artifact");
+        }
+    }
+}
+
+#[test]
+fn explicit_pending_assignments_still_preview() {
+    let work = matter_tree();
+    edit(
+        work.path().join("navigator.yaml"),
+        "  department: \"12\"",
+        "  department: pending",
+    );
+    edit(
+        work.path().join("navigator.yaml"),
+        "  judicial_officer: Hon. Sample Q. Jurist",
+        "  judicial_officer: pending",
+    );
+    let out = work.path().join("preview.pdf");
+    let result = Command::new(cargo_bin("navigator"))
+        .args(["notation", "pdf"])
+        .arg(work.path().join("templates/rfa_responses.md"))
+        .args(["--preview", "--out"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", stderr(&result));
+    let bytes = fs::read(out).unwrap();
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "Dept. To be assigned").unwrap(),
+        1
+    );
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "Judge: To be assigned").unwrap(),
+        1
+    );
+}
+
+#[test]
 fn a_missing_document_field_is_named() {
     let work = matter_tree();
     edit(

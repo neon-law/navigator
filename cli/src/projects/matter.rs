@@ -87,6 +87,10 @@ pub fn filing_from(contents: &str) -> Filing {
 ///
 /// A message naming every missing manifest or frontmatter field.
 pub fn caption_for(file: &Path, contents: &str) -> Result<String, String> {
+    caption_for_export(file, contents, false)
+}
+
+fn caption_for_export(file: &Path, contents: &str, final_export: bool) -> Result<String, String> {
     let filing = filing_from(contents);
     let mut problems = filing.missing();
     let matter = match find_manifest(file).ok_or_else(|| {
@@ -106,11 +110,49 @@ pub fn caption_for(file: &Path, contents: &str) -> Result<String, String> {
         }
     };
     match (matter, problems.is_empty()) {
-        (Some(matter), true) => Ok(word::matter::compose(&matter, &filing).to_fence()),
+        (Some(matter), true) => {
+            if final_export {
+                require_assigned(&matter)?;
+            }
+            Ok(word::matter::compose(&matter, &filing).to_fence())
+        }
         _ => Err(format!(
             "this pleading cannot be captioned: {}",
             problems.join("; ")
         )),
+    }
+}
+
+/// A final export requires the court's assignments, even when a draft
+/// explicitly declares them pending.
+///
+/// # Errors
+///
+/// Names each pending assignment, or a missing caption field.
+pub fn caption_for_final(file: &Path, contents: &str) -> Result<String, String> {
+    caption_for_export(file, contents, true)
+}
+
+fn require_assigned(matter: &Matter) -> Result<(), String> {
+    let pending: Vec<_> = [
+        ("matter.department", matter.department.as_str()),
+        ("matter.judicial_officer", matter.judicial_officer.as_str()),
+    ]
+    .into_iter()
+    .filter_map(|(field, value)| {
+        value
+            .trim()
+            .eq_ignore_ascii_case(word::matter::PENDING)
+            .then_some(field)
+    })
+    .collect();
+    if pending.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "this pleading cannot be exported: {} pending; record the court's assignment or use --preview",
+            pending.join(", ")
+        ))
     }
 }
 

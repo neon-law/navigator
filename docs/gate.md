@@ -445,8 +445,9 @@ See [Pleading paper](notation-authoring.md#pleading-paper). `navigator project s
 Project as its [Matter Caption](glossary/matter-caption.md), which the `case_caption` and `party_roster` sections prefer
 over the stored case row. Until the court assigns a department or judicial officer, declare `department: pending` and
 `judicial_officer: pending`: `Y019` accepts it and the caption prints "To be assigned", so a draft gates and previews
-without a guessed name. Replace it before filing. A manifest with no `matter:` key leaves the stored caption alone;
-`matter: {}` clears it.
+without a guessed name. Final `notation pdf` and `notation word` exports refuse either pending assignment; use
+`--preview` to inspect a draft. Record the court's assignments before final export and filing. A manifest with no
+`matter:` key leaves the stored caption alone; `matter: {}` clears it.
 
 `Y017` applies only to `kind: onboarding` and `kind: offboarding` templates. It rejects wording that identifies Neon Law
 as the Firm's trade name or contracting party. References to the Neon Law contact channel and portal remain valid.
