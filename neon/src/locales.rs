@@ -2467,7 +2467,7 @@ mod tests {
                 "Unclaimed property",
                 "Estate planning",
                 "From $20",
-                "Google Cloud Vertex AI",
+                "Lex Tecnica",
                 "App Store",
                 "Google Play",
                 "legal fees are excluded",

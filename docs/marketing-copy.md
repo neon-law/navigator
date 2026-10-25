@@ -289,11 +289,11 @@ draws the coming iPhone and Android apps in each platform's idiom, listing every
 privacy protection, credit monitoring, dark web monitoring, identity theft insurance, unclaimed property, estate
 planning, and basic form filings. Its listing price, like the $29/mo and $290/year pricing cards, resolves from
 DeleteYourData's home catalog. The store badges read "Coming soon" and link nowhere until the apps are published. A
-lawyer review starts at $20 and is prepaid; the private legal sandbox includes $5 of model usage a month, then bills per
-token at the Vertex AI rate the firm pays. Monitoring and insurance coverage are confirmed before activation. Its CTA
-opens a three-step public contact intake before sign-in; the signed-in page exposes the configured enrollment booking
-link. DocuSign paperwork follows the enrollment review. The page expressly distinguishes privacy from attorney-client
-privilege. Every other brand host answers `/nautilus` with a 404.
+lawyer review starts at $20 and is prepaid; the private legal sandbox includes $5 of model usage a month, then is priced
+à la carte by Lex Tecnica. Monitoring and insurance coverage are confirmed before activation. Its CTA opens a three-step
+public contact intake before sign-in; the signed-in page exposes the configured enrollment booking link. DocuSign
+paperwork follows the enrollment review. The page expressly distinguishes privacy from attorney-client privilege. Every
+other brand host answers `/nautilus` with a 404.
 
 The Neon home page presents common employment, NDA, sales, and privacy agreements under a $5,000 one-time contract fee;
 financings are scoped separately. It also presents a $50 daily minimum for questions over Slack and a separate $500

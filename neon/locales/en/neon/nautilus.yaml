@@ -87,10 +87,10 @@ bands:
         chips: ["$5 of usage included monthly"]
         body:
           - - text: >-
-                Work with frontier models, such as Claude and ChatGPT, in a
-                private sandbox. Your subscription includes $5 of model usage
-                each month. After that, you pay per token at the exact rate we
-                pay Google Cloud Vertex AI, with no markup.
+                Work with Claude Sonnet, a frontier model, in a private
+                sandbox. Your subscription includes $5 of model usage each
+                month. After that, usage is priced à la carte, with pricing
+                provided by Lex Tecnica.
   - kind: statement
     heading: Privacy and legal advice
     lead: A private space is not an attorney-client relationship.
