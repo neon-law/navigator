@@ -63,6 +63,7 @@ pub fn render(calendar: &Calendar<'_>, rows: &[Value]) -> Result<String, String>
 
 struct Event {
     id: String,
+    title: String,
     due: DateTime<FixedOffset>,
     stamp: DateTime<Utc>,
     sequence: i64,
@@ -90,6 +91,7 @@ impl Event {
         };
         Ok(Self {
             id,
+            title: text("title").trim().to_string(),
             due,
             stamp,
             sequence,
@@ -103,7 +105,9 @@ impl Event {
     }
 
     fn summary(&self, project_code: &str) -> String {
-        let action = if self.calendar_role == "hearing" {
+        let action = if !self.title.is_empty() {
+            self.title.clone()
+        } else if self.calendar_role == "hearing" {
             "Hearing".to_string()
         } else {
             let kind = match self.authority_kind.as_str() {
@@ -392,5 +396,17 @@ mod tests {
         hearing["calendar_role"] = json!("hearing");
         let text = render(&calendar(), &[hearing]).unwrap();
         assert!(text.contains("SUMMARY:Hearing - acme\r\n"));
+    }
+
+    #[test]
+    fn a_title_names_the_event_and_a_row_without_one_keeps_the_kind() {
+        let mut titled = row();
+        titled["title"] = json!("Answer to the complaint");
+        let text = render(&calendar(), &[titled]).unwrap();
+        assert!(text.contains("SUMMARY:Answer to the complaint - acme\r\n"));
+        let mut untitled = row();
+        untitled["title"] = json!(null);
+        let text = render(&calendar(), &[untitled]).unwrap();
+        assert!(text.contains("SUMMARY:Court order deadline - acme\r\n"));
     }
 }
