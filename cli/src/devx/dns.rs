@@ -35,7 +35,7 @@
 //! redirect serves HTTPS only once a certificate exists for the apex —
 //! DNSimple does not auto-issue one for a `URL` record — so
 //! `--redirect-apex-to-www` also reconciles a Let's Encrypt certificate
-//! for the bare domain through [`ensure_apex_certificate`]: order it when
+//! for the bare domain through [`plan_apex_certificate`] and [`apply_apex_certificate`]: order it when
 //! none exists, request issuance when domain-control validation may have
 //! completed, and report the certificate's actual state either way. This
 //! replaced an earlier version that only printed a reminder to run the
@@ -331,7 +331,7 @@ pub trait CertificateProvider: Send + Sync {
 /// records). A hard `Err` means the DNSimple API call itself failed —
 /// network, auth, or an unexpected response — not that the certificate is
 /// merely unready.
-#[allow(dead_code)]
+#[cfg(test)]
 pub async fn ensure_apex_certificate(
     provider: &dyn CertificateProvider,
     zone: &str,
@@ -656,7 +656,7 @@ pub async fn apply_setup(
 /// This convenience combines [`plan_setup`] and [`apply_setup`]. Commands
 /// that need to display the planned changes first should call those two
 /// functions separately.
-#[allow(dead_code)]
+#[cfg(test)]
 pub async fn run_setup(
     provider: &dyn DnsProvider,
     zone: &str,

@@ -187,13 +187,13 @@ certificate for the bare apex (`name: ""`, never `www` — GKE's own `ManagedCer
   state) → report the exact remediation, never a bare exit code.
 
 Without `--apply`, the command prints the certificate operation in its plan and makes no changes. This is
-`cli::devx::dns::ensure_apex_certificate`, and it is idempotent and safe to rerun exactly like the record reconciliation
-above — use `ops dns setup --redirect-apex-to-www --apply` to request issuance for a pending certificate. It never
-issues an ECDSA/RSA choice or an alternate name on your behalf: it orders and checks a certificate, it does not invent
-settings you did not ask for. Issuance is asynchronous — Let's Encrypt validates through the DNSimple-delegated zone,
-and a certificate's own state moves from `new` through `requesting` to `issued`. If the automated order/issue exhausts
-what it can do from your account's own state (a plan without Teams, or a certificate parked in an unexpected state), the
-command names the manual fallback:
+`cli::devx::dns::plan_apex_certificate` then `apply_apex_certificate`, and it is idempotent and safe to rerun exactly
+like the record reconciliation above — use `ops dns setup --redirect-apex-to-www --apply` to request issuance for a
+pending certificate. It never issues an ECDSA/RSA choice or an alternate name on your behalf: it orders and checks a
+certificate, it does not invent settings you did not ask for. Issuance is asynchronous — Let's Encrypt validates through
+the DNSimple-delegated zone, and a certificate's own state moves from `new` through `requesting` to `issued`. If the
+automated order/issue exhausts what it can do from your account's own state (a plan without Teams, or a certificate
+parked in an unexpected state), the command names the manual fallback:
 
 ```bash
 # order → note the returned certificate id → issue it
