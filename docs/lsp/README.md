@@ -16,9 +16,7 @@ in the [`lsp` crate](../../lsp/README.md); editor-specific configuration belongs
 The normal way a human gets `navigator-lsp` locally is `navigator lsp`: it resolves the platform-matching
 `navigator-lsp-<tag>-<platform>` archive for **the running `navigator` binary's own version** (the same tag `navigator
 --version` reports), downloads it from the public distribution host's GitHub Releases
-([`neon-law/homebrew-navigator`](https://github.com/neon-law/homebrew-navigator/releases) — this repository's
-`deploy.yml` mirrors every archive it attaches to its own Release there too, tag for tag, so the download keeps
-resolving anonymously independent of this repository's own visibility), and writes a working `navigator-lsp` executable
+([`neon-law/navigator`](https://github.com/neon-law/navigator/releases), where `deploy.yml` attaches every archive), and writes a working `navigator-lsp` executable
 to the Downloads directory. A version mismatch or missing release asset is a clear error naming the tag it looked for —
 never a silent fallback to "latest".
 
@@ -26,8 +24,8 @@ never a silent fallback to "latest".
 navigator lsp
 ```
 
-Every tagged release attaches a `navigator-lsp-<tag>-<platform>` archive to its own GitHub Release and mirrors it onto
-[`neon-law/homebrew-navigator`'s Release](https://github.com/neon-law/homebrew-navigator/releases), alongside the
+Every tagged release attaches a `navigator-lsp-<tag>-<platform>` archive to
+[`neon-law/navigator`'s Release](https://github.com/neon-law/navigator/releases), alongside the
 `navigator` CLI archives — `navigator-lsp-<tag>-macos.tar.gz` and `-linux.tar.gz`. Each carries the executable beside
 `LICENSE`. `navigator lsp` downloads directly from these archives. They are also the source an editor extension should
 resolve against, since each is a per-version asset on an immutable tag; `navigator ops lsp publish` instead mirrors the

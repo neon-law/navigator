@@ -3,7 +3,7 @@
 # Actions runner — a developer box, a bare container, a Cloud Build step.
 # macOS already has the Homebrew tap; this covers Linux with curl and tar.
 #
-#   curl -fsSL https://github.com/neon-law/homebrew-navigator/releases/download/26.9.13/navigator-26.9.13-install.sh \
+#   curl -fsSL https://github.com/neon-law/navigator/releases/download/26.9.13/navigator-26.9.13-install.sh \
 #       | sh -s -- --version 26.9.13
 #
 # `deploy.yml` attaches this script to every release as `navigator-<tag>-install.sh`,
@@ -22,7 +22,7 @@
 
 set -eu
 
-repo="${NAVIGATOR_INSTALL_REPO:-neon-law/homebrew-navigator}"
+repo="${NAVIGATOR_INSTALL_REPO:-neon-law/navigator}"
 install_dir="${NAVIGATOR_INSTALL_DIR:-${HOME:-/tmp}/.local/bin}"
 version=""
 

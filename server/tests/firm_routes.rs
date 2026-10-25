@@ -750,7 +750,7 @@ async fn the_navigator_page_maps_a_connected_project() {
 /// naming one release and linking another is worse than one naming none.
 #[tokio::test]
 async fn the_navigator_page_publishes_the_cli_at_the_release_it_runs() {
-    const DOWNLOAD_BASE: &str = "https://github.com/neon-law/homebrew-navigator/releases/download/";
+    const DOWNLOAD_BASE: &str = "https://github.com/neon-law/navigator/releases/download/";
 
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/navigator").await).await;
@@ -792,7 +792,7 @@ async fn the_navigator_page_publishes_the_cli_at_the_release_it_runs() {
     for (slug, extension) in [("macos", "tar.gz"), ("linux", "tar.gz")] {
         let filename = format!("navigator-{version}-{slug}.{extension}");
         let href = format!(
-            "https://github.com/neon-law/homebrew-navigator/releases/download/\
+            "https://github.com/neon-law/navigator/releases/download/\
              {version}/{filename}"
         )
         .replace(char::is_whitespace, "");

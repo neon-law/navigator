@@ -1,13 +1,8 @@
 //! Where the public reads the `navigator` CLI from, and at which version.
 //!
 //! Every release attaches its archives to a **public GitHub Release on
-//! `neon-law/homebrew-navigator`**, so `/navigator` links those
-//! bytes directly. That repository is the public distribution host, not the
-//! source tree: `deploy.yml` mirrors the same archives it attaches to its own
-//! (eventually private) Release onto the tap's, tag for tag, so this link
-//! keeps resolving anonymously after the source repository stops being public.
-//! MIT OR Apache-2.0 permits redistribution under either license, so the archives are
-//! downloadable independently of which repository hosts them.
+//! `neon-law/navigator`**, so `/navigator` links those bytes directly.
+//! MIT OR Apache-2.0 permits redistribution under either license.
 //!
 //! # The version is the deployment's own release tag
 //!
@@ -39,19 +34,16 @@ use crate::components::PlatformMark;
 ///
 /// A GitHub Release asset URL is `…/releases/download/{tag}/{filename}`, and the
 /// tag is the version — so a reader who mistrusts the page can check the link
-/// against the Releases page and see the same two strings. This names the
-/// Homebrew tap repository rather than the source tree: the tap stays public
-/// once the source repository does not, and `deploy.yml` attaches the same
-/// tag-exact archives there as it does to its own Release.
+/// against the Releases page and see the same two strings.
 pub const RELEASE_DOWNLOAD_BASE: &str =
-    "https://github.com/neon-law/homebrew-navigator/releases/download";
+    "https://github.com/neon-law/navigator/releases/download";
 
 /// The Releases index, for a reader who wants an older version or the notes.
-pub const RELEASES_HREF: &str = "https://github.com/neon-law/homebrew-navigator/releases";
+pub const RELEASES_HREF: &str = "https://github.com/neon-law/navigator/releases";
 
-/// The tap-qualified formula. `neon-law-source-code/navigator` is a **separate
-/// repository** (`homebrew-navigator`), which is why the formula is named with
-/// its tap rather than bare: `brew` resolves the tap on first install.
+/// The tap-qualified formula. The tap is a **separate repository**
+/// (`neon-law/homebrew-navigator`), which is why the formula is named with its
+/// tap rather than bare: `brew` resolves the tap on first install.
 macro_rules! homebrew_formula {
     () => {
         "neon-law/navigator/navigator"
@@ -171,8 +163,8 @@ mod tests {
         assert_eq!(
             hrefs,
             vec![
-                "https://github.com/neon-law/homebrew-navigator/releases/download/26.8.20/navigator-26.8.20-macos.tar.gz",
-                "https://github.com/neon-law/homebrew-navigator/releases/download/26.8.20/navigator-26.8.20-linux.tar.gz",
+                "https://github.com/neon-law/navigator/releases/download/26.8.20/navigator-26.8.20-macos.tar.gz",
+                "https://github.com/neon-law/navigator/releases/download/26.8.20/navigator-26.8.20-linux.tar.gz",
             ]
         );
     }
@@ -184,11 +176,11 @@ mod tests {
     fn the_download_root_names_the_tap_not_the_source_tree() {
         assert_eq!(
             RELEASE_DOWNLOAD_BASE,
-            "https://github.com/neon-law/homebrew-navigator/releases/download"
+            "https://github.com/neon-law/navigator/releases/download"
         );
         assert_eq!(
             RELEASES_HREF,
-            "https://github.com/neon-law/homebrew-navigator/releases"
+            "https://github.com/neon-law/navigator/releases"
         );
     }
 

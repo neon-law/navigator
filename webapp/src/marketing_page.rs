@@ -1145,7 +1145,7 @@ mod tests {
             heading: "Run Navigator yourself".to_string(),
             description: Some("Pick your platform.".to_string()),
             version: "26.8.20".to_string(),
-            archive_href: "https://github.com/neon-law/homebrew-navigator/releases".to_string(),
+            archive_href: "https://github.com/neon-law/navigator/releases".to_string(),
             archive_label: "every release".to_string(),
             items: crate::cli_release::PLATFORMS
                 .iter()
@@ -1221,7 +1221,7 @@ mod tests {
             .iter()
             .map(|slug| {
                 let href = format!(
-                    "https://github.com/neon-law/homebrew-navigator/releases/download/26.8.20/\
+                    "https://github.com/neon-law/navigator/releases/download/26.8.20/\
                      navigator-26.8.20-{slug}."
                 )
                 .replace(char::is_whitespace, "");

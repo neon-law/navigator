@@ -149,7 +149,7 @@ A person bumps the version and lands it — the merge is the publish
                   ├─ create the immutable YY.M.D tag at the merged commit
                   ├─ build + push service images to Artifact Registry tagged YY.M.D + latest
                   ├─ attach the macOS + Linux CLI archives to the tag's GitHub Release
-                  ├─ dispatch the tag to the homebrew-navigator tap, which
+                  ├─ dispatch the tag to the homebrew-navigator tap (formula only), which
                   │    digests those archives and bumps its own formula
                   ├─ post the release reports to the engineering Slack channel
                   └─ dispatch release-deploy.yml with the tag
