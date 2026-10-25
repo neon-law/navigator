@@ -962,23 +962,7 @@ impl DocumentClient {
         token: String,
         project_code: &str,
     ) -> Result<Self> {
-        let list = client
-            .get(format!("{base}/app/api/projects"))
-            .bearer_auth(&token)
-            .send()
-            .await
-            .context("GET /app/api/projects")?;
-        let status = list.status();
-        let body = list.text().await.unwrap_or_default();
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(UploadSessionExpired(base).into());
-        }
-        if !status.is_success() {
-            return Err(anyhow!(
-                "list projects failed: {status}: {}",
-                first_line(&body)
-            ));
-        }
+        let body = fetch_project_list(&client, &base, &token).await?;
         let projects: Vec<VisibleProject> =
             serde_json::from_str(&body).context("parse GET /app/api/projects")?;
         let project_id = projects
@@ -3132,20 +3116,7 @@ pub async fn matter_close(
     run(async {
         let (base, token) = resolve(host)?;
         let client = reqwest::Client::new();
-        let list = client
-            .get(format!("{base}/app/api/projects"))
-            .bearer_auth(&token)
-            .send()
-            .await
-            .context("GET /app/api/projects")?;
-        let list_status = list.status();
-        let list_body = list.text().await.unwrap_or_default();
-        if !list_status.is_success() {
-            return Err(anyhow!(
-                "list projects failed: {list_status}: {}",
-                first_line(&list_body)
-            ));
-        }
+        let list_body = fetch_project_list(&client, &base, &token).await?;
         let projects: Vec<VisibleProject> =
             serde_json::from_str(&list_body).context("parse GET /app/api/projects")?;
         let project = projects
@@ -5096,6 +5067,94 @@ fn first_line(body: &str) -> String {
         .collect()
 }
 
+/// Tries before the project lookup gives up on a gateway error.
+const PROJECT_LOOKUP_ATTEMPTS: u32 = 4;
+const PROJECT_LOOKUP_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// `GET /app/api/projects` with the retry every project-code lookup shares.
+/// The read is idempotent, so a 502, 503, 504, connect failure, or timeout is
+/// retried with a growing delay; any other status (401, 404, ...) returns at
+/// once. A 401 is a [`UploadSessionExpired`]. Returns the response body.
+pub(crate) async fn fetch_project_list(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+) -> Result<String> {
+    fetch_project_list_with(
+        client,
+        base,
+        token,
+        PROJECT_LOOKUP_ATTEMPTS,
+        PROJECT_LOOKUP_RETRY_DELAY,
+    )
+    .await
+}
+
+async fn fetch_project_list_with(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    attempts: u32,
+    delay: std::time::Duration,
+) -> Result<String> {
+    for attempt in 1..=attempts {
+        let failure;
+        let retryable = match client
+            .get(format!("{base}/app/api/projects"))
+            .bearer_auth(token)
+            .send()
+            .await
+        {
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                if status.is_success() {
+                    return Ok(body);
+                }
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    return Err(UploadSessionExpired(base.to_string()).into());
+                }
+                failure = format!("{status}: {}", trimmed_body(&body));
+                matches!(status.as_u16(), 502..=504)
+            }
+            Err(error) => {
+                failure = error.to_string();
+                error.is_timeout() || error.is_connect()
+            }
+        };
+        if !retryable || attempt == attempts {
+            return Err(anyhow!(
+                "list projects failed: {failure} (attempt {attempt} of {attempts})"
+            ));
+        }
+        tokio::time::sleep(delay * attempt).await;
+    }
+    unreachable!("the final attempt returns")
+}
+
+/// A response body as one short line: markup tags dropped, whitespace
+/// collapsed, capped at 200 characters.
+fn trimmed_body(body: &str) -> String {
+    let mut text = String::new();
+    let mut in_tag = false;
+    for c in body.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => {
+                in_tag = false;
+                text.push(' ');
+            }
+            _ if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty() {
+        return "(empty response)".to_string();
+    }
+    line.chars().take(200).collect()
+}
+
 /// Drive an async fallible command to an `ExitCode`, printing any error.
 /// [`exit_code_for`] distinguishes a CI mint refusal (exit `3`) from every
 /// other failure (the ordinary gate-failure exit `2`).
@@ -5144,6 +5203,7 @@ mod tests {
         exit_code_for, fetch_step, first_line, integrity_failure, json_reason,
         mint_refusal_annotation, server_error,
     };
+    use super::{fetch_project_list_with, trimmed_body, UploadSessionExpired};
     use crate::credentials::{self, Credentials, HostCredential};
     use uuid::Uuid;
     use wiremock::matchers::{body_json, method, path, query_param};
@@ -8344,6 +8404,91 @@ mod tests {
         assert!(json_reason(r#"{"reason":404}"#).is_none());
         assert!(json_reason("<html>not json at all</html>").is_none());
         assert!(json_reason("").is_none());
+    }
+
+    #[test]
+    fn trimmed_body_drops_markup_and_collapses_whitespace() {
+        assert_eq!(
+            trimmed_body("<html><head><title>502 Bad Gateway</title></head>\n<body>\n  upstream  down\n</body></html>"),
+            "502 Bad Gateway upstream down"
+        );
+        assert_eq!(trimmed_body("  \n"), "(empty response)");
+        assert_eq!(trimmed_body(&"x".repeat(500)).len(), 200);
+    }
+
+    async fn lookup(server: &MockServer) -> anyhow::Result<String> {
+        fetch_project_list_with(
+            &reqwest::Client::new(),
+            &server.uri(),
+            "t",
+            3,
+            std::time::Duration::ZERO,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn project_lookup_retries_502_and_503_then_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(502).set_body_string("<html><head>"))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
+            .mount(&server)
+            .await;
+        assert_eq!(lookup(&server).await.expect("third try succeeds"), "[]");
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn project_lookup_gives_up_at_the_cap_with_status_and_trimmed_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(
+                ResponseTemplate::new(502)
+                    .set_body_string("<html><body><h1>502 Bad Gateway</h1></body></html>"),
+            )
+            .mount(&server)
+            .await;
+        let error = format!("{:#}", lookup(&server).await.unwrap_err());
+        assert!(
+            error.contains("502 Bad Gateway: 502 Bad Gateway"),
+            "{error}"
+        );
+        assert!(error.contains("attempt 3 of 3"), "{error}");
+        assert!(!error.contains('<'), "{error}");
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn project_lookup_does_not_retry_401_or_404() {
+        for status in [401u16, 404] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/app/api/projects"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+            let error = lookup(&server).await.unwrap_err();
+            if status == 401 {
+                assert!(error.downcast_ref::<UploadSessionExpired>().is_some());
+            } else {
+                assert!(format!("{error:#}").contains("404"));
+            }
+            assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        }
     }
 
     #[test]
