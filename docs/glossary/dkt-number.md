@@ -1,6 +1,8 @@
 ---
 title: "DKT Number"
-description: "The four-digit, zero-padded court entry number that prefixes a Docket Filings document's name; it equals its Docket Entry's number."
+description: >-
+  The four-digit, zero-padded court entry number that prefixes a Docket Filings document's name; it equals its Docket
+  Entry's number.
 ---
 
 The four-digit, zero-padded court entry number that prefixes a [Docket Filings](docket-filings.md) document's name; it
