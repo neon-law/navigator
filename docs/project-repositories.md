@@ -923,6 +923,12 @@ refuses a Project version without either. A Notation copies both when it opens, 
 stored bytes still match that digest. Moving identical bytes from `templates/` to `drafts/` preserves the existing
 Template version and its first source commit.
 
+The Project workflow board also reads the chosen blueprint directory from Navigator's configured bare repository at
+current `main`. A blueprint appears before its first run, with its workflow states and a never-started row. Reading the
+board does not import a Template or open a Notation. Existing runs keep the workflow of their pinned Template version; a
+revised blueprint appears beside them as a new never-started row. Repository read failures fail the board request
+instead of presenting an empty board.
+
 A Project references a shared catalog template by its existing `code`, without carrying a local copy. When no matching
 `<code>.md` exists in the chosen Project blueprint directory, notation creation resolves the workspace-shared catalog
 row and pins that exact template version on the Notation. A local file intentionally overrides the catalog for that

@@ -15382,6 +15382,7 @@ dependencies = [
  "futures",
  "hmac 0.13.0",
  "percent-encoding",
+ "repos",
  "reqwest 0.13.5",
  "rules",
  "serde",

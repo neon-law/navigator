@@ -81,6 +81,8 @@ cloud = { workspace = true, optional = true }
 # The Project workflow board reads workflow-state labels from template YAML.
 # This parser stays server-only; the browser receives the ordered state list.
 serde_yaml = { workspace = true, optional = true }
+# Server-only: the workflow board reads current Project blueprints through the shared repository store.
+repos = { workspace = true, optional = true }
 # Server-only: the filed-document page logs a refused read (an access-policy
 # denial, a client-lens visibility guard, a failed query) consistently, so a
 # probe for internal work product is queryable.
@@ -169,7 +171,7 @@ web = ["dioxus/web", "dep:dioxus-fullstack-core"]
 # Selected transitively by `web`; pulls the server-side renderer so
 # `dioxus-server`'s `render_handler` can SSR `App`, plus the `store` query
 # layer the server functions run against and the request-extraction helper.
-server = ["dioxus/server", "dep:store", "dep:dioxus-fullstack-core", "dep:axum", "dep:views", "dep:cloud", "dep:tracing", "dep:dioxus-ssr", "dep:reqwest", "dep:tokio", "dep:rules", "dep:workflows", "dep:chrono", "dep:futures", "dep:word", "dep:serde_yaml", "dep:base64", "dep:hmac", "dep:sha2"]
+server = ["dioxus/server", "dep:store", "dep:dioxus-fullstack-core", "dep:axum", "dep:views", "dep:cloud", "dep:tracing", "dep:dioxus-ssr", "dep:reqwest", "dep:tokio", "dep:rules", "dep:workflows", "dep:chrono", "dep:futures", "dep:word", "dep:serde_yaml", "dep:base64", "dep:hmac", "dep:sha2", "dep:repos"]
 
 [lints]
 workspace = true

@@ -107,7 +107,10 @@ pub async fn project_notation_board(
     let notations = store::notations::list_by_project(surreal, project_id)
         .await
         .map_err(|error| error.to_string())?;
-    let mut rows = Vec::with_capacity(templates.len() + notations.len());
+    let repository_templates = project_repository_templates(surreal, project_id).await?;
+    let mut rows =
+        Vec::with_capacity(templates.len() + notations.len() + repository_templates.len());
+    let mut started_sources = std::collections::BTreeSet::new();
     let mut started = std::collections::BTreeSet::new();
 
     for notation in notations {
@@ -115,6 +118,9 @@ pub async fn project_notation_board(
             .await
             .map_err(|error| error.to_string())?;
         let Some(template) = template else { continue };
+        if let Some(hash) = &template.body_sha256 {
+            started_sources.insert((template.code.clone(), hash.clone()));
+        }
         let workflow_states = match store::templates::body(surreal, storage, &template).await {
             Ok(markdown) => workflow_state_order(&markdown),
             // Template registrations can exist before their source body is
@@ -163,7 +169,7 @@ pub async fn project_notation_board(
     }
 
     for template in templates {
-        if started.contains(&template.id) {
+        if started.contains(&template.id) || repository_templates.contains_key(&template.code) {
             continue;
         }
         let workflow_states = match store::templates::body(surreal, storage, &template).await {
@@ -177,12 +183,103 @@ pub async fn project_notation_board(
             ..ProjectNotationRow::default()
         });
     }
+    for (code, source) in repository_templates {
+        if started_sources.contains(&(code.clone(), source.body_sha256)) {
+            continue;
+        }
+        rows.push(ProjectNotationRow {
+            template_code: code,
+            workflow_states: source.workflow_states,
+            ..ProjectNotationRow::default()
+        });
+    }
     rows.sort_by(|a, b| {
         a.template_code
             .cmp(&b.template_code)
             .then(a.notation_id.cmp(&b.notation_id))
     });
     Ok(rows)
+}
+
+#[cfg(feature = "server")]
+struct RepositoryTemplate {
+    body_sha256: String,
+    workflow_states: Vec<String>,
+}
+
+/// Read current blueprint definitions without importing versions or opening runs.
+#[cfg(feature = "server")]
+async fn project_repository_templates(
+    surreal: &store::surreal::SurrealDb,
+    project_id: uuid::Uuid,
+) -> Result<std::collections::BTreeMap<String, RepositoryTemplate>, String> {
+    let project = store::projects::find_by_id(surreal, project_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Project not found".to_string())?;
+    let repo = match repos::RepoStore::from_env() {
+        Ok(repo) => repo,
+        // Deployments without a configured bare repository still serve their
+        // persisted Template inventory. Configured source failures remain errors.
+        Err(repos::RepoError::RootUnset) => {
+            return Ok(std::collections::BTreeMap::default());
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    let tree = tokio::task::spawn_blocking(move || repo.read_head_tree_code(&project.code))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+    repository_templates_from_tree(tree)
+}
+
+#[cfg(feature = "server")]
+fn repository_templates_from_tree(
+    tree: Vec<(String, Vec<u8>)>,
+) -> Result<std::collections::BTreeMap<String, RepositoryTemplate>, String> {
+    use rules::project_blueprints::{select, BlueprintSelection};
+
+    let directory = match select(
+        tree.iter().any(|(path, _)| path.starts_with("templates/")),
+        tree.iter().any(|(path, _)| path.starts_with("drafts/")),
+    ) {
+        BlueprintSelection::Selected(directory) => directory,
+        BlueprintSelection::Absent => return Ok(std::collections::BTreeMap::new()),
+        BlueprintSelection::Ambiguous => {
+            return Err("Project repository has both drafts/ and templates/".into())
+        }
+    };
+    let prefix = format!("{}/", directory.as_str());
+    let mut templates = std::collections::BTreeMap::new();
+    for (path, bytes) in tree {
+        let Some(relative) = path.strip_prefix(&prefix) else {
+            continue;
+        };
+        let code = relative
+            .strip_suffix(".md")
+            .filter(|code| !code.is_empty() && !code.contains('/'))
+            .ok_or_else(|| "Project blueprints must be direct Markdown files".to_string())?;
+        let source =
+            String::from_utf8(bytes).map_err(|_| "Project blueprint is not UTF-8".to_string())?;
+        let compiled = rules::clauses::compile(&source)
+            .map_err(|_| "Project blueprint clauses could not be composed".to_string())?;
+        let frontmatter = rules::frontmatter::extract(&compiled)
+            .ok_or_else(|| "Project blueprint has no frontmatter".to_string())?;
+        let document = serde_yaml::from_str::<serde_yaml::Value>(frontmatter)
+            .map_err(|_| "Project blueprint frontmatter is malformed".to_string())?;
+        if document.get("workflow").is_some() {
+            workflows::workflow_spec_from_template(&compiled)
+                .map_err(|_| "Project blueprint workflow is malformed".to_string())?;
+        }
+        templates.insert(
+            code.to_string(),
+            RepositoryTemplate {
+                body_sha256: store::assets::sha256_hex(compiled.as_bytes()),
+                workflow_states: workflow_state_order(&compiled),
+            },
+        );
+    }
+    Ok(templates)
 }
 
 #[cfg(feature = "server")]
