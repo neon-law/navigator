@@ -1,7 +1,7 @@
 # Social account onboarding
 
 How an operator connects a [Brand](glossary/brand.md)'s own Facebook Page, Instagram professional account, Threads
-profile, LinkedIn Company Page, X account, and TikTok profile, and how each connection is proven. A [Social
+profile, YouTube channel, LinkedIn Company Page, X account, and TikTok profile. Each connection needs proof. A [Social
 Account](glossary/social-account.md) belongs to exactly one Brand; Brands never share one.
 
 This page covers the existing Brands `vesta`, `cyber-injury-law`, and `neon`. All are already compiled keys in
@@ -45,11 +45,11 @@ unrevoked consent, or delivery. Verify those through the checklist and actual pu
 Nothing below is verified until the evidence record says so. Every row starts `pending`, and stays `pending` until an
 operator completes the checklist for it. Committing this table does not mean a profile exists.
 
-| Brand key | Facebook Page | Instagram | Threads | LinkedIn | TikTok | X |
-| --- | --- | --- | --- | --- | --- | --- |
-| `vesta` | pending | pending | pending | pending | pending | pending |
-| `cyber-injury-law` | pending | pending | pending | pending | pending | pending |
-| `neon` | pending | pending | pending | pending | pending | pending |
+| Brand key | Facebook Page | Instagram | Threads | YouTube | LinkedIn | TikTok | X |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `vesta` | pending | pending | pending | pending | pending | pending | pending |
+| `cyber-injury-law` | pending | pending | pending | pending | pending | pending | pending |
+| `neon` | pending | pending | pending | pending | pending | pending | pending |
 
 Provider app configuration is deployment state. Check the preflight's `connection_setup` status fields through
 `navigator site blog status <brand> <slug> --host <host>` and configure the app ids and secrets in
@@ -73,12 +73,15 @@ verified public social links. A provider post still under review is pending.
 
 ## Platform capabilities
 
-| Capability | Facebook Page | Instagram | Threads | LinkedIn Page | TikTok | X |
-| --- | --- | --- | --- | --- | --- | --- |
-| Connect in Navigator | Meta OAuth | Meta via Page | Threads OAuth | LinkedIn OAuth | Business OAuth | X PKCE |
-| Recorded account id | Page id | Instagram business id | Threads user id | organization id | app open id | user id |
-| Publish | text or video | portrait video | text or video | text, 3000 chars | measured portrait MP4 | bounded text |
-| Inbound interactions | receiver | receiver | receiver | not implemented | public text comments | not implemented |
+| Provider | Connect | Account id | Publish | Inbound interactions |
+| --- | --- | --- | --- | --- |
+| Facebook | Meta OAuth | Page id | text or video | receiver |
+| Instagram | Meta via Page | business id | portrait video | receiver |
+| Threads | Threads OAuth | user id | text or video | receiver |
+| YouTube | Google OAuth | channel id | video, any orientation | public comment replies |
+| LinkedIn | LinkedIn OAuth | organization id | text, 3000 chars | not implemented |
+| TikTok | Business OAuth | app open id | measured portrait MP4 | public text comments |
+| X | X PKCE | user id | bounded text | not implemented |
 
 Required publishing and account identity scopes verified before Navigator stores a connection:
 
@@ -86,6 +89,8 @@ Required publishing and account identity scopes verified before Navigator stores
 - Instagram with Facebook Login: `pages_show_list`, `pages_read_engagement`, `instagram_basic`,
   `instagram_content_publish`, `instagram_manage_comments`, `instagram_manage_messages`.
 - Threads: `threads_basic`, `threads_content_publish`, `threads_manage_replies`.
+- YouTube: `https://www.googleapis.com/auth/youtube.force-ssl`,
+  `https://www.googleapis.com/auth/youtube.upload`.
 - LinkedIn: `r_organization_admin`, `w_organization_social`.
 - TikTok Business publishing: `video.publish`, `video.list`, `user.info.basic`, `user.info.username`.
 - X: `tweet.read`, `tweet.write`, `users.read`, `offline.access`.
@@ -131,8 +136,9 @@ Do each row separately. Never reuse one Brand's Page, profile, or Business portf
 5. **Scopes.** A stored connection already proves every required scope was granted. Record the scope list from the
    capability table above as verified.
 6. **Expiry.** Record the actual expiry. Threads refreshes within its last seven days when used; Meta Page tokens have
-   no scheduled expiry but can be invalidated. LinkedIn authorization expires and requires a new OAuth connection; no
-   programmatic refresh is assumed. Record a reminder before a dated expiry.
+   no scheduled expiry but can be invalidated. YouTube access tokens refresh from the encrypted refresh token with the
+   configured OAuth client. LinkedIn authorization expires and requires a new OAuth connection; no programmatic refresh
+   is assumed. Record a reminder before a dated expiry.
 7. **Reconnect check.** Disconnect and connect again once. The same account id must come back, and the Brand page
    must show it `connected`.
 8. **Record the evidence** below, then have the second person review it.
@@ -158,7 +164,7 @@ repository, because a filled record carries production account ids. Never put sc
 | Field | Meaning |
 | --- | --- |
 | `brand_key` | `vesta`, `cyber-injury-law`, or `neon` |
-| `platform` | `facebook`, `instagram`, `threads`, `linkedin`, `tiktok`, or `x` |
+| `platform` | `facebook`, `instagram`, `threads`, `youtube`, `linkedin`, `tiktok`, or `x` |
 | `status` | `pending`, `verified`, or `blocked` |
 | `owner` | Who owns the provider account |
 | `connected_by` | The Admin DRI or Owner who connected it |
@@ -249,6 +255,34 @@ collections are additional primary examples. Recheck the console's actual grante
 - [LinkedIn API versioning](https://learn.microsoft.com/en-us/linkedin/marketing/versioning)
 - [TikTok Business Accounts API](https://business-api.tiktok.com/portal/docs/accounts-api-overview/v1.3)
 - [TikTok general Content Posting API guidelines](https://developers.tiktok.com/doc/content-sharing-guidelines)
+
+## YouTube production connection
+
+Enable YouTube Data API v3 in the [Google Cloud
+console](https://console.cloud.google.com/apis/library/youtube.googleapis.com) and configure a web OAuth client with the
+exact deployment `/social/oauth/callback` URI. Supply `NAVIGATOR_YOUTUBE_CLIENT_ID` and
+`NAVIGATOR_YOUTUBE_CLIENT_SECRET` through the existing [secret entry
+flow](deployment-secrets.md#secure-social-secret-entry). Verify the Google consent screen's publishing status, permitted
+users, granted scopes, and quota before connecting the intended channel.
+
+Save the exact Channel ID on the Brand edit page, then connect YouTube. Navigator requests offline access and consent,
+reads the authenticated user's channels, and stores only the selected identity. The encrypted refresh token allows
+access-token renewal. A signed-in YouTube website or a public channel handle does not authorize Navigator.
+
+Run `blog preflight` with `--providers youtube`, compare the returned destination with the channel, then upload an MP4
+under `img/<brand>/`. Navigator limits the asset to 64 MiB and accepts either orientation for YouTube. The Post title
+becomes the video title; its YouTube caption override, or otherwise its description, becomes the video description. The
+publisher requests public visibility and retains the upload receipt. Check actual processing and visibility in YouTube
+before treating the stored watch link as public: the current uploader constructs that link from the receipt without a
+visibility readback. Reconcile the existing upload after an uncertain result; do not create another Post to retry it.
+Publishing requires approved content and destination, as with every provider.
+
+For an upload made through YouTube Studio, verify its public watch URL and use the existing manual Post record and link
+commands above. Recording a link never grants OAuth access or sends another video.
+
+Official contracts: [Google web OAuth](https://developers.google.com/identity/protocols/oauth2/web-server), [channel
+discovery](https://developers.google.com/youtube/v3/docs/channels/list), and [video
+upload](https://developers.google.com/youtube/v3/docs/videos/insert).
 
 ## X production connection
 
