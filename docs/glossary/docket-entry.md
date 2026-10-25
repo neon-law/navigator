@@ -32,11 +32,11 @@ docket ingest` records one entry per court notice through the same door. The mat
 with the Project's open Deadlines in date order. The synced `case-timeline` Agent Skill is how a Project keeps its
 timeline here rather than in a memo.
 
-**On a Matter Page.** The `docket_timeline` [Section](section.md) renders the entries with their documents and the open
-Deadlines in date order, beside `case_caption` and `fact_strip`. Each item's side (ours, the other side's, or the
-court's) is derived from the filer, the client Entity and participants, and the case's recorded posture, never typed; a
-stipulation counts for both sides and an entry with no filer stays unattributed. A client's lens shows an entry only
-when its document is client-visible.
+**On a Matter Page.** The [Case Timeline](case-timeline.md) (`docket_timeline`) [Section](section.md) renders the
+entries with their documents and the open Deadlines in date order, beside `case_caption` and `fact_strip`. Each item's
+side (ours, the other side's, or the court's) is derived from the filer, the client Entity and participants, and the
+case's recorded posture, never typed; a stipulation counts for both sides and an entry with no filer stays unattributed.
+A client's lens shows an entry only when its document is client-visible.
 
 - Commands: [`store::cases`](../../store/src/cases.rs) · Schema:
   [`case_docket_entry`](../../store/src/schema/navigator.surql)
