@@ -1,6 +1,6 @@
 //! `navigator project pages init` — propose a Project's `pages:` block.
 //!
-//! Run in a Project checkout, the verb reads three things and composes the
+//! Run in a Project checkout, the verb reads four things and composes the
 //! [Matter Pages](../../../docs/glossary/matter-page.md) they suggest:
 //!
 //! - the pinned Project Skills (`skills:`): a practice area names the pages
@@ -9,6 +9,9 @@
 //! - the Drafts under `drafts/` (or `templates/`): an engagement Draft
 //!   suggests the engagement and billing records page, with the Draft as
 //!   its `draft:`;
+//! - the `matter:` block and pleading Drafts: a litigation Project gets an
+//!   overview, a docket page, and a document workbench per pleading Draft,
+//!   each for the lawyer lens only;
 //! - with a stored login for the manifest's host, the live matter's data:
 //!   each source `Y023` can count that holds rows suggests the sections that
 //!   render it. Without a login this input is skipped silently.
@@ -51,11 +54,18 @@ pub enum PagesCmd {
         #[arg(long, requires = "write")]
         force: bool,
     },
+    /// List every page `kind:` with the sections it requires, may carry, and
+    /// reserves to the lawyer lens.
+    Kinds,
 }
 
 /// Run one `navigator project pages` verb.
 pub async fn run(cmd: PagesCmd) -> ExitCode {
     match cmd {
+        PagesCmd::Kinds => {
+            print!("{}", render_kinds());
+            ExitCode::SUCCESS
+        }
         PagesCmd::Init { dir, write, force } => match init(&dir, write, force).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(message) => {
@@ -64,6 +74,40 @@ pub async fn run(cmd: PagesCmd) -> ExitCode {
             }
         },
     }
+}
+
+/// The listing `navigator project pages kinds` prints, read from the same
+/// skeletons `Y021` and `D001` through `D005` check a `pages:` block against.
+#[must_use]
+pub fn render_kinds() -> String {
+    use std::fmt::Write as _;
+    let names = |sections: &[Section]| -> String {
+        if sections.is_empty() {
+            "none".to_string()
+        } else {
+            sections
+                .iter()
+                .map(|section| section.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    };
+    let mut out = String::from("page kind: values for a `pages:` entry\n");
+    for kind in Kind::ALL.iter().copied() {
+        let Some(skeleton) = skeleton(kind) else {
+            continue;
+        };
+        let _ = write!(
+            out,
+            "\n{}\n  required:    {}\n  optional:    {}\n  lawyer only: {}\n",
+            kind.as_str(),
+            names(skeleton.required),
+            names(skeleton.optional),
+            names(skeleton.lawyer_only),
+        );
+    }
+    let _ = write!(out, "\nevery lens also carries: {}\n", names(UNIVERSAL));
+    out
 }
 
 async fn init(dir: &Path, write: bool, force: bool) -> Result<(), String> {
@@ -82,7 +126,9 @@ async fn init(dir: &Path, write: bool, force: bool) -> Result<(), String> {
         .collect();
     let drafts = scan_drafts(dir);
     let populated = live_sections(&parsed).await;
-    let pages = propose(&practice_areas, &drafts, &populated);
+    let matter = serde_yaml::from_str::<serde_yaml::Value>(&contents)
+        .is_ok_and(|doc| doc.get(super::matter::KEY).is_some());
+    let pages = propose(&practice_areas, &drafts, &populated, matter);
     if pages.is_empty() {
         return Err(
             "nothing to propose: no pinned Project Skill, engagement Draft, or live data \
@@ -122,6 +168,8 @@ pub struct ProposedPage {
     pub title: String,
     pub draft: Option<String>,
     pub sections: Vec<Section>,
+    /// Declare only the lawyer lens; the client face is the lawyer's to add.
+    pub lawyer_only: bool,
 }
 
 /// A Draft file found under `drafts/` (or `templates/`).
@@ -142,6 +190,26 @@ impl DraftFile {
             || stem.to_ascii_lowercase().contains("engagement")
     }
 }
+
+impl DraftFile {
+    /// Whether this Draft is a court paper: `kind: pleading`.
+    fn is_pleading(&self) -> bool {
+        self.kind.as_deref() == Some(Kind::Pleading.as_str())
+    }
+
+    /// The file name without its extension.
+    fn stem(&self) -> &str {
+        let name = self.path.rsplit('/').next().unwrap_or(&self.path);
+        name.strip_suffix(".md").unwrap_or(name)
+    }
+}
+
+/// The sections a matter's docket page carries beyond the board's spine.
+const DOCKET_SECTIONS: [Section; 3] = [
+    Section::CaseCaption,
+    Section::DocketTimeline,
+    Section::PartyRoster,
+];
 
 /// A page a practice area suggests.
 struct Seed {
@@ -239,12 +307,15 @@ fn default_seed(kind: Kind) -> Option<(&'static str, &'static str)> {
 /// Compose the proposed pages: the pinned practice areas' pages first, an
 /// engagement page for the first engagement Draft, then whatever the live
 /// matter's populated sources add. One page per kind; the first source to
-/// suggest a kind names it.
+/// suggest a kind names it. A Project with a `matter:` block or a pleading
+/// Draft also gets an overview, a docket page, and a document workbench per
+/// pleading Draft, each declared for the lawyer lens only.
 #[must_use]
 pub fn propose(
     practice_areas: &[String],
     drafts: &[DraftFile],
     populated: &[&str],
+    matter: bool,
 ) -> Vec<ProposedPage> {
     let mut pages: Vec<ProposedPage> = Vec::new();
     for area in practice_areas {
@@ -259,6 +330,9 @@ pub fn propose(
         } else if let Some((slug, title)) = default_seed(kind) {
             push_page(&mut pages, kind, slug, title, Some(draft.path.clone()));
         }
+    }
+    if matter || drafts.iter().any(DraftFile::is_pleading) {
+        push_matter_pages(&mut pages, drafts);
     }
     let live: Vec<Section> = populated.iter().filter_map(|s| Section::parse(s)).collect();
     // A populated section that is some kind's spine suggests that page.
@@ -286,6 +360,84 @@ pub fn propose(
         }
     }
     pages
+}
+
+/// The litigation dashboard: an overview, a docket page, and a workbench
+/// for each pleading Draft. A kind a practice area already proposed keeps
+/// its slug and gains the docket sections.
+fn push_matter_pages(pages: &mut Vec<ProposedPage>, drafts: &[DraftFile]) {
+    push_lawyer_page(
+        pages,
+        Kind::MatterStatusConsole,
+        "status",
+        "Matter status",
+        &[],
+    );
+    push_lawyer_page(
+        pages,
+        Kind::DocketDeadlineBoard,
+        "docket",
+        "Docket",
+        &DOCKET_SECTIONS,
+    );
+    for draft in drafts.iter().filter(|draft| draft.is_pleading()) {
+        let slug: String = format!("draft-{}", draft.stem())
+            .to_ascii_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let slug = slug
+            .split('-')
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+        let slug: String = slug.chars().take(rules::pages::MAX_SLUG_LEN).collect();
+        let slug = slug.trim_end_matches('-');
+        if pages
+            .iter()
+            .any(|page| page.draft.as_deref() == Some(&draft.path))
+        {
+            continue;
+        }
+        let mut unique = slug.to_string();
+        let mut n = 2;
+        while pages.iter().any(|page| page.slug == unique) {
+            unique = format!("{slug}-{n}");
+            n += 1;
+        }
+        pages.push(ProposedPage {
+            slug: unique,
+            kind: Kind::DocumentWorkbench,
+            title: format!("Draft {}", draft.stem()),
+            draft: Some(draft.path.clone()),
+            sections: vec![Section::DocumentBody],
+            lawyer_only: true,
+        });
+    }
+}
+
+/// Add a lawyer-only page of `kind`, or widen the one already proposed.
+fn push_lawyer_page(
+    pages: &mut Vec<ProposedPage>,
+    kind: Kind,
+    slug: &str,
+    title: &str,
+    extra: &[Section],
+) {
+    let before = pages.len();
+    push_page(pages, kind, slug, title, None);
+    if pages.len() > before {
+        if let Some(page) = pages.last_mut() {
+            page.lawyer_only = true;
+        }
+    }
+    if let Some(page) = pages.iter_mut().find(|page| page.kind == kind) {
+        for section in extra {
+            if !page.sections.contains(section) {
+                page.sections.push(*section);
+            }
+        }
+    }
 }
 
 fn catalogs(kind: Kind, section: Section) -> bool {
@@ -317,6 +469,7 @@ fn push_page(
         title: title.to_string(),
         draft,
         sections: skeleton.required.to_vec(),
+        lawyer_only: false,
     });
 }
 
@@ -352,7 +505,12 @@ pub fn render(pages: &[ProposedPage]) -> String {
             let _ = writeln!(out, "    draft: {draft}");
         }
         let _ = writeln!(out, "    lenses:");
-        for lens in [Lens::Lawyer, Lens::Client] {
+        let lenses: &[Lens] = if page.lawyer_only {
+            &[Lens::Lawyer]
+        } else {
+            &[Lens::Lawyer, Lens::Client]
+        };
+        for lens in lenses.iter().copied() {
             let _ = writeln!(
                 out,
                 "      {}: [{}]",
@@ -544,7 +702,7 @@ mod tests {
 
     #[test]
     fn a_litigation_pin_proposes_a_deadline_board_and_a_discovery_cockpit() {
-        let pages = propose(&areas(&["litigation"]), &[], &[]);
+        let pages = propose(&areas(&["litigation"]), &[], &[], false);
         assert_eq!(
             kinds(&pages),
             [Kind::DocketDeadlineBoard, Kind::DiscoveryCockpit]
@@ -558,7 +716,7 @@ mod tests {
 
     #[test]
     fn an_estate_pin_proposes_the_estate_plan_console() {
-        let pages = propose(&areas(&["estates"]), &[], &[]);
+        let pages = propose(&areas(&["estates"]), &[], &[], false);
         assert_eq!(kinds(&pages), [Kind::EstatePlanConsole]);
         assert_eq!(pages[0].slug, "estate-plan");
         assert_eq!(pages[0].sections, [Section::InstrumentSet]);
@@ -567,7 +725,7 @@ mod tests {
             block.contains("client: [instrument_set, boundary_note, provenance_statement]"),
             "{block}"
         );
-        let probate = propose(&areas(&["probate"]), &[], &[]);
+        let probate = propose(&areas(&["probate"]), &[], &[], false);
         assert_eq!(
             kinds(&probate),
             [Kind::DocketDeadlineBoard, Kind::DeliverablePackage]
@@ -578,7 +736,7 @@ mod tests {
 
     #[test]
     fn a_corporate_pin_proposes_the_closing_room_without_the_firm_comparison_on_client() {
-        let mut pages = propose(&areas(&["corporate"]), &[], &[]);
+        let mut pages = propose(&areas(&["corporate"]), &[], &[], false);
         assert_eq!(kinds(&pages), [Kind::ClosingRoom]);
         assert_eq!(pages[0].slug, "closing");
         pages[0].sections.push(Section::TermComparison);
@@ -614,7 +772,7 @@ mod tests {
                 kind: Some("onboarding".to_string()),
             }]
         );
-        let pages = propose(&[], &drafts, &[]);
+        let pages = propose(&[], &drafts, &[], false);
         assert_eq!(kinds(&pages), [Kind::EngagementBillingRecords]);
         assert_eq!(pages[0].draft.as_deref(), Some("drafts/opening.md"));
         let block = render(&pages);
@@ -625,7 +783,7 @@ mod tests {
             path: "templates/engagement-letter.md".to_string(),
             kind: None,
         };
-        let mut page = propose(&[], &[named], &[]).remove(0);
+        let mut page = propose(&[], &[named], &[], false).remove(0);
         page.sections.push(Section::PrebillReview);
         let block = render(&[page]);
         assert!(
@@ -645,7 +803,7 @@ mod tests {
 
     #[test]
     fn the_client_lens_drops_lawyer_only_sections() {
-        let mut pages = propose(&areas(&["litigation"]), &[], &[]);
+        let mut pages = propose(&areas(&["litigation"]), &[], &[], false);
         pages[1].sections.push(Section::ItemStatusSetter);
         let block = render(&pages);
         assert!(
@@ -674,7 +832,7 @@ mod tests {
             "key_dates_strip",
             "download_list",
         ];
-        let pages = propose(&areas(&["estates"]), &[], &populated);
+        let pages = propose(&areas(&["estates"]), &[], &populated, false);
         assert_eq!(
             kinds(&pages),
             [Kind::EstatePlanConsole, Kind::DocketDeadlineBoard]
@@ -689,7 +847,93 @@ mod tests {
         );
         assert!(pages[0].sections.contains(&Section::DownloadList));
         assert_gate_clean(&render(&pages));
-        assert!(propose(&[], &[], &[]).is_empty());
+        assert!(propose(&[], &[], &[], false).is_empty());
+    }
+
+    fn pleading(path: &str) -> DraftFile {
+        DraftFile {
+            path: path.to_string(),
+            kind: Some("pleading".to_string()),
+        }
+    }
+
+    #[test]
+    fn kinds_lists_every_page_kind_with_its_sections() {
+        let text = super::render_kinds();
+        for kind in Kind::ALL {
+            if let Some(skeleton) = rules::dashboard::skeleton(*kind) {
+                assert!(text.contains(kind.as_str()), "{} missing", kind.as_str());
+                for section in skeleton.required.iter().chain(skeleton.optional) {
+                    assert!(text.contains(section.as_str()), "{}", section.as_str());
+                }
+            }
+        }
+        assert!(!text.contains("\npleading\n"), "{text}");
+        assert!(
+            text.contains("document_workbench\n  required:    document_body"),
+            "{text}"
+        );
+        assert!(text.contains("every lens also carries: boundary_note, provenance_statement"));
+    }
+
+    #[test]
+    fn a_matter_block_proposes_overview_docket_and_a_workbench_per_pleading_for_the_lawyer() {
+        let drafts = [
+            pleading("drafts/answer.md"),
+            pleading("drafts/Motion to Dismiss.md"),
+        ];
+        let pages = propose(&[], &drafts, &[], true);
+        assert_eq!(
+            kinds(&pages),
+            [
+                Kind::MatterStatusConsole,
+                Kind::DocketDeadlineBoard,
+                Kind::DocumentWorkbench,
+                Kind::DocumentWorkbench
+            ]
+        );
+        assert_eq!(pages[1].slug, "docket");
+        assert_eq!(
+            pages[1].sections,
+            [
+                Section::DeadlineBoard,
+                Section::CaseCaption,
+                Section::DocketTimeline,
+                Section::PartyRoster
+            ]
+        );
+        assert_eq!(pages[2].draft.as_deref(), Some("drafts/answer.md"));
+        assert_eq!(pages[3].slug, "draft-motion-to-dismiss");
+        let block = render(&pages);
+        assert!(!block.contains("client:"), "{block}");
+        assert_eq!(block.matches("lawyer:").count(), 4, "{block}");
+        validate(&block).expect("passes the page rules");
+        assert_gate_clean(&block);
+    }
+
+    #[test]
+    fn a_pleading_draft_alone_triggers_the_matter_pages_and_no_matter_means_none() {
+        let pages = propose(&[], &[pleading("drafts/complaint.md")], &[], false);
+        assert_eq!(pages.len(), 3);
+        assert!(propose(&[], &[], &[], false).is_empty());
+        let matter_only = propose(&[], &[], &[], true);
+        assert_eq!(
+            kinds(&matter_only),
+            [Kind::MatterStatusConsole, Kind::DocketDeadlineBoard]
+        );
+    }
+
+    #[test]
+    fn a_pinned_litigation_board_gains_the_docket_sections_and_keeps_its_client_lens() {
+        let pages = propose(&areas(&["litigation"]), &[], &[], true);
+        let board = pages
+            .iter()
+            .find(|page| page.kind == Kind::DocketDeadlineBoard)
+            .unwrap();
+        assert_eq!(board.slug, "deadlines");
+        assert!(!board.lawyer_only);
+        assert!(board.sections.contains(&Section::PartyRoster));
+        assert_gate_clean(&render(&pages));
     }
 
     #[test]
@@ -697,7 +941,7 @@ mod tests {
         let contents = format!(
             "{NESTED}dockets:\n  - \"A-26-000001-C\"\nallowed_hosts:\n  example.org: synthetic reason\n"
         );
-        let block = render(&propose(&areas(&["litigation"]), &[], &[]));
+        let block = render(&propose(&areas(&["litigation"]), &[], &[], false));
         let updated = apply(&contents, &block, false).expect("appends");
         assert!(updated.starts_with(&contents), "{updated}");
         assert!(updated.ends_with(&block));
@@ -712,7 +956,7 @@ mod tests {
         let existing = "pages:\n  - slug: old\n    kind: authority_library\n    title: Old\n    \
 lenses:\n      lawyer: [authority_table, boundary_note, provenance_statement]\n\n";
         let contents = format!("{NESTED}{existing}dockets:\n  - \"A-26-000001-C\"\n");
-        let block = render(&propose(&areas(&["litigation"]), &[], &[]));
+        let block = render(&propose(&areas(&["litigation"]), &[], &[], false));
         let refusal = apply(&contents, &block, false).unwrap_err();
         assert!(refusal.contains("--force"), "{refusal}");
         let replaced = apply(&contents, &block, true).expect("replaces");
