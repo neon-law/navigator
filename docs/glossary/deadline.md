@@ -11,6 +11,10 @@ construction, and [Filing](filing.md) names a workflow step that runs, not a dat
 The table is `project_deadlines`. [Matter](matter.md) is client-English for the same row, and lawyer-facing copy may say
 "matter deadline", but the schema speaks `project` without exception — every other table already does.
 
+**Title.** `title` is an optional short name for what is due — an answer, a reply brief — of at most 200 characters. A
+row recorded without one reads back with no title. The matter page, the `deadline_board`, and the Project's ICS calendar
+show the title when a row has one. Clearing it returns the row to untitled.
+
 **Authority.** Every deadline records *why the date binds*: a closed `authority_kind` vocabulary — `statute`,
 `court_rule`, `court_order`, `contract`, or `internal` — beside a free-text `authority` citation such as `15 U.S.C. §
 1681i(a)(1)` or a court-order reference. "Statutory" stays a queryable distinction rather than collapsing into a general
