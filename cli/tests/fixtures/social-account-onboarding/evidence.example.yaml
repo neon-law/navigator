@@ -170,3 +170,15 @@ records:
     reconnect_checked: ""
     reviewed_by: ""
     notes: ""
+  - brand_key: vesta
+    platform: youtube
+    status: pending
+    owner: ""
+  - brand_key: cyber-injury-law
+    platform: youtube
+    status: pending
+    owner: ""
+  - brand_key: neon
+    platform: youtube
+    status: pending
+    owner: ""

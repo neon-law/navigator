@@ -128,12 +128,18 @@ pub struct SocialPublisherService {
 #[derive(Clone)]
 pub struct SocialPublishReconcilerService {
     surreal: SurrealDb,
+    publisher: Publisher,
 }
 
 impl SocialPublishReconcilerService {
     #[must_use]
-    pub fn new(surreal: SurrealDb) -> Self {
-        Self { surreal }
+    pub fn new(
+        surreal: SurrealDb,
+        kms: Arc<dyn cloud::RuntimeKms>,
+        storage: Arc<dyn cloud::StorageService>,
+    ) -> Self {
+        let publisher = SocialPublisherService::new(surreal.clone(), kms, storage).publisher;
+        Self { surreal, publisher }
     }
 }
 
@@ -232,6 +238,10 @@ impl SocialPublishReconcilerService {
             .name("recover-inbound-message-notice")
             .await?;
         }
+        let publisher = self.publisher.clone();
+        ctx.run(move || async move { publisher.reconcile_youtube_links().await.map(Json) })
+            .name("reconcile-youtube-public-links")
+            .await?;
         Ok(Json(ReconcileReport {
             started: scheduled.len() + alerts.len(),
         }))
@@ -416,7 +426,7 @@ impl SocialPublisherService {
             let recorded = ctx
                 .run(move || async move {
                     publisher
-                        .read_permalink(post_id, &snapshot, &target, &receipt)
+                        .read_permalink(post_id, &snapshot.brand_key, &target, &receipt)
                         .await
                         .map(Json)
                 })
@@ -1864,10 +1874,101 @@ impl Publisher {
             .map_err(HandlerError::from)
     }
 
+    /// Revisit retained uploads after the initial polling window. This path only reads providers.
+    async fn reconcile_youtube_links(&self) -> Result<usize, HandlerError> {
+        if self.egress.check().is_err() {
+            return Ok(0);
+        }
+        let pending = store::social_publications::pending_links(&self.surreal, "youtube", 100)
+            .await
+            .map_err(HandlerError::from)?;
+        let mut recorded = 0;
+        for publication in pending {
+            let Some(receipt) = publication.provider_post_id.as_deref() else {
+                continue;
+            };
+            let Some(post) = store::posts::find_by_id(&self.surreal, publication.post_id)
+                .await
+                .map_err(HandlerError::from)?
+            else {
+                continue;
+            };
+            let accounts = store::social_accounts::selected_for_brand(
+                &self.surreal,
+                &post.brand_key,
+                &post.selected_social_accounts,
+            )
+            .await
+            .map_err(HandlerError::from)?;
+            let Some(account) = accounts
+                .into_iter()
+                .find(|account| account.provider == SocialProvider::Youtube)
+            else {
+                continue;
+            };
+            let target = Destination {
+                provider: SocialProvider::Youtube,
+                account_id: account.provider_account_id,
+            };
+            if self
+                .read_permalink(publication.post_id, &post.brand_key, &target, receipt)
+                .await?
+            {
+                recorded += 1;
+            }
+        }
+        Ok(recorded)
+    }
+
+    async fn read_youtube_permalink(
+        &self,
+        post_id: Uuid,
+        destination: &Destination,
+        receipt: &str,
+        credential: &SendCredential,
+    ) -> Result<bool, HandlerError> {
+        let response = self
+            .http
+            .get(format!("{}/videos", self.endpoints.youtube_api))
+            .query(&[
+                ("id", receipt),
+                ("part", "snippet,status,processingDetails"),
+            ])
+            .bearer_auth(credential.access_token())
+            .send()
+            .await;
+        let Ok(response) = response else {
+            return Ok(false);
+        };
+        if !response.status().is_success() {
+            return Ok(false);
+        }
+        let Ok(videos) = response.json::<YoutubeVideos>().await else {
+            return Ok(false);
+        };
+        if !videos.items.iter().any(|video| {
+            video.id == receipt
+                && video.snippet.channel_id == destination.account_id
+                && video.status.privacy_status == "public"
+                && video.status.upload_status == "processed"
+                && video.processing_details.processing_status == "succeeded"
+        }) {
+            return Ok(false);
+        }
+        Ok(store::social_publications::record_permalink(
+            &self.surreal,
+            post_id,
+            "youtube",
+            &format!("https://www.youtube.com/watch?v={receipt}"),
+        )
+        .await
+        .is_ok())
+    }
+
     async fn read_permalink(
         &self,
         post_id: Uuid,
-        post: &PostSnapshot,
+        brand_key: &str,
         destination: &Destination,
         receipt: &str,
     ) -> Result<bool, HandlerError> {
@@ -1880,7 +1981,7 @@ impl Publisher {
             self.kms.as_ref(),
             &self.http,
             &self.refresh,
-            &post.brand_key,
+            brand_key,
             provider,
             &destination.account_id,
         )
@@ -1891,6 +1992,11 @@ impl Publisher {
         if provider == SocialProvider::Tiktok {
             return self
                 .read_tiktok_permalink(post_id, destination, receipt, &credential)
+                .await;
+        }
+        if provider == SocialProvider::Youtube {
+            return self
+                .read_youtube_permalink(post_id, destination, receipt, &credential)
                 .await;
         }
         if provider == SocialProvider::X {
@@ -2009,9 +2115,8 @@ impl Publisher {
 ///
 /// Facebook names it `permalink_url` and may return a video's as a path on
 /// `www.facebook.com`; Instagram and Threads name it `permalink`. A provider
-/// receipt ID is never turned into a link. A video upload's response carries
-/// no link field, and the video service addresses every video as
-/// `https://www.youtube.com/watch?v=<id>`, so that documented form is its link.
+/// receipt alone is never turned into a public link. `YouTube` and X links
+/// require a separate readback of the receipt and its account identity.
 fn provider_permalink(provider: SocialProvider, body: &serde_json::Value) -> Option<String> {
     let text = |field: &str| {
         body.get(field)
@@ -2030,10 +2135,10 @@ fn provider_permalink(provider: SocialProvider, body: &serde_json::Value) -> Opt
         SocialProvider::Instagram | SocialProvider::Threads => {
             text("permalink").map(str::to_string)
         }
-        SocialProvider::Linkedin | SocialProvider::X | SocialProvider::Tiktok => None,
-        SocialProvider::Youtube => {
-            text("id").map(|id| format!("https://www.youtube.com/watch?v={id}"))
-        }
+        SocialProvider::Linkedin
+        | SocialProvider::X
+        | SocialProvider::Tiktok
+        | SocialProvider::Youtube => None,
     }?;
     link.starts_with("https://").then_some(link)
 }
@@ -2234,11 +2339,45 @@ fn caption(post: &PostSnapshot, provider: SocialProvider) -> String {
     .to_string()
 }
 
+#[derive(Deserialize)]
+struct YoutubeVideos {
+    items: Vec<YoutubeVideo>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct YoutubeVideo {
+    id: String,
+    snippet: YoutubeSnippet,
+    status: YoutubeStatus,
+    processing_details: YoutubeProcessing,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct YoutubeSnippet {
+    channel_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct YoutubeStatus {
+    privacy_status: String,
+    upload_status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct YoutubeProcessing {
+    processing_status: String,
+}
+
 #[derive(Clone)]
 struct ProviderEndpoints {
     facebook_graph: String,
     threads: String,
     youtube_upload: String,
+    youtube_api: String,
     x_api: String,
     tiktok: String,
     linkedin_rest: String,
@@ -2250,6 +2389,7 @@ impl Default for ProviderEndpoints {
             facebook_graph: "https://graph.facebook.com/v26.0".into(),
             threads: "https://graph.threads.net/v1.0".into(),
             youtube_upload: "https://www.googleapis.com/upload/youtube/v3".into(),
+            youtube_api: "https://www.googleapis.com/youtube/v3".into(),
             x_api: "https://api.x.com/2".into(),
             tiktok: "https://business-api.tiktok.com/open_api/v1.3".into(),
             linkedin_rest: "https://api.linkedin.com/rest".into(),
@@ -2430,7 +2570,7 @@ mod tests {
         Mock::given(matchers::method("GET")).and(matchers::path("/tiktok/business/video/list/"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":{"videos":[{"item_id":"synthetic-public","share_url":"https://www.tiktok.com/@synthetic/video/123","media_type":"VIDEO","is_ad":false}]}}))).mount(&server).await;
         assert!(publisher
-            .read_permalink(id, &snapshot, &target, "synthetic-public")
+            .read_permalink(id, &snapshot.brand_key, &target, "synthetic-public")
             .await
             .unwrap());
         assert!(
@@ -2710,6 +2850,7 @@ mod tests {
                     facebook_graph: server.uri(),
                     threads: server.uri(),
                     youtube_upload: server.uri(),
+                    youtube_api: server.uri(),
                     x_api: server.uri(),
                     tiktok: format!("{}/tiktok", server.uri()),
                     linkedin_rest: server.uri(),
@@ -2773,7 +2914,7 @@ mod tests {
         let outcome = send(publisher, post_id, post, destination).await;
         if let Some(receipt) = outcome.link_pending.as_deref() {
             publisher
-                .read_permalink(post_id, post, destination, receipt)
+                .read_permalink(post_id, &post.brand_key, destination, receipt)
                 .await
                 .unwrap();
         }
@@ -3206,11 +3347,7 @@ mod tests {
         server.verify().await;
     }
 
-    #[tokio::test]
-    async fn youtube_resumable_upload_returns_confirmed_video_id() {
-        let fixture = Fixture::new("youtube").await;
-        fixture.connect_all().await;
-        let server = MockServer::start().await;
+    async fn mount_youtube_upload(server: &MockServer) {
         Mock::given(matchers::method("POST"))
             .and(matchers::path("/videos"))
             .respond_with(
@@ -3218,15 +3355,167 @@ mod tests {
                     .insert_header("location", format!("{}/upload/session", server.uri())),
             )
             .expect(1)
-            .mount(&server)
+            .mount(server)
             .await;
         Mock::given(matchers::method("PUT"))
             .and(matchers::path("/upload/session"))
             .and(matchers::body_bytes(b"synthetic video".to_vec()))
             .respond_with(json(serde_json::json!({"id": "youtube-video-1"})))
             .expect(1)
-            .mount(&server)
+            .mount(server)
             .await;
+    }
+
+    fn youtube_public_video() -> serde_json::Value {
+        serde_json::json!({"items": [{
+            "id": "youtube-video-1",
+            "snippet": {"channelId": "youtube-channel"},
+            "status": {"privacyStatus": "public", "uploadStatus": "processed"},
+            "processingDetails": {"processingStatus": "succeeded"}
+        }]})
+    }
+
+    async fn mount_youtube_read(
+        server: &MockServer,
+        body: serde_json::Value,
+        status: u16,
+        reads: u64,
+    ) {
+        Mock::given(matchers::method("GET"))
+            .and(matchers::path("/videos"))
+            .and(matchers::query_param("id", "youtube-video-1"))
+            .and(matchers::query_param(
+                "part",
+                "snippet,status,processingDetails",
+            ))
+            .and(matchers::header(
+                "authorization",
+                "Bearer synthetic-access-token",
+            ))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .up_to_n_times(reads)
+            .expect(reads)
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn youtube_unverified_video_stays_pending_and_reconciles_without_another_upload() {
+        let fixture = Fixture::new("youtube-pending").await;
+        fixture.connect_all().await;
+        let mut cases = vec![
+            (serde_json::json!({"items": []}), 200),
+            (serde_json::json!({"items": null}), 200),
+            (serde_json::json!({"error": "unavailable"}), 503),
+        ];
+        for (pointer, value) in [
+            ("/items/0/id", "another-video"),
+            ("/items/0/snippet/channelId", "another-channel"),
+            ("/items/0/status/privacyStatus", "private"),
+            ("/items/0/status/privacyStatus", "unlisted"),
+            ("/items/0/status/uploadStatus", "uploaded"),
+            ("/items/0/status/uploadStatus", "rejected"),
+            ("/items/0/processingDetails/processingStatus", "processing"),
+            ("/items/0/processingDetails/processingStatus", "failed"),
+        ] {
+            let mut body = youtube_public_video();
+            *body.pointer_mut(pointer).unwrap() = value.into();
+            cases.push((body, 200));
+        }
+        for (body, status) in cases {
+            let server = MockServer::start().await;
+            mount_youtube_upload(&server).await;
+            mount_youtube_read(&server, body.clone(), status, 2).await;
+            mount_youtube_read(&server, youtube_public_video(), 200, 1).await;
+            let publisher = fixture.publisher(&server, allowed());
+            let id = fixture.blog_post().await;
+            let target = destination(SocialProvider::Youtube);
+            for _ in 0..2 {
+                let outcome = drive(&publisher, id, &post(true), &target).await;
+                assert_eq!(outcome.state, "confirmed");
+                let row = fixture.publication(id).await;
+                assert_eq!(row.provider_post_id.as_deref(), Some("youtube-video-1"));
+                assert_eq!(row.permalink, None, "unverified response: {body}");
+                assert_eq!(
+                    row.last_error.as_deref(),
+                    Some(store::social_publications::PERMALINK_PENDING)
+                );
+            }
+            drive(&publisher, id, &post(true), &target).await;
+            let row = fixture.publication(id).await;
+            assert_eq!(
+                row.permalink.as_deref(),
+                Some("https://www.youtube.com/watch?v=youtube-video-1")
+            );
+            assert_eq!(row.last_error, None);
+            server.verify().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn youtube_periodic_readback_recovers_a_published_post_without_resending() {
+        let fixture = Fixture::new("youtube-periodic").await;
+        fixture.connect_all().await;
+        let server = MockServer::start().await;
+        mount_youtube_upload(&server).await;
+        mount_youtube_read(&server, youtube_public_video(), 200, 1).await;
+        let publisher = fixture.publisher(&server, allowed());
+        let id = fixture.blog_post().await;
+        let target = destination(SocialProvider::Youtube);
+        let sent = send(&publisher, id, &post(true), &target).await;
+        assert_eq!(sent.link_pending.as_deref(), Some("youtube-video-1"));
+        fixture
+            .db
+            .query("UPDATE $id SET status = 'published'")
+            .bind(("id", store::surreal::record_id("post", id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        // No frozen account selection means the reconciler cannot borrow another connection.
+        assert_eq!(publisher.reconcile_youtube_links().await.unwrap(), 0);
+        let account = store::social_accounts::connected_account(
+            &fixture.db,
+            "synthetic-brand",
+            SocialProvider::Youtube,
+            "youtube-channel",
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        fixture
+            .db
+            .query("UPDATE $id SET selected_social_accounts = $accounts")
+            .bind(("id", store::surreal::record_id("post", id)))
+            .bind(("accounts", vec![account.id]))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        assert_eq!(
+            fixture
+                .publisher(&server, denied_by(Some("dev"), None))
+                .reconcile_youtube_links()
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(publisher.reconcile_youtube_links().await.unwrap(), 1);
+        assert_eq!(publisher.reconcile_youtube_links().await.unwrap(), 0);
+        assert_eq!(
+            fixture.publication(id).await.permalink.as_deref(),
+            Some("https://www.youtube.com/watch?v=youtube-video-1")
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn youtube_resumable_upload_returns_confirmed_video_id() {
+        let fixture = Fixture::new("youtube").await;
+        fixture.connect_all().await;
+        let server = MockServer::start().await;
+        mount_youtube_upload(&server).await;
+        mount_youtube_read(&server, youtube_public_video(), 200, 1).await;
         let post_id = fixture.blog_post().await;
         let outcome = drive(
             &fixture.publisher(&server, allowed()),
@@ -3244,6 +3533,11 @@ mod tests {
                 .as_deref(),
             Some("youtube-video-1")
         );
+        assert_eq!(
+            fixture.publication(post_id).await.permalink.as_deref(),
+            Some("https://www.youtube.com/watch?v=youtube-video-1")
+        );
+        server.verify().await;
     }
 
     #[tokio::test]

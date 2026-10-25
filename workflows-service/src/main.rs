@@ -53,10 +53,14 @@ macro_rules! bind_common_services {
             ))
             .bind(SocialPublisherService::new(
                 $surreal.clone(),
+                $kms.clone(),
+                $assets_storage.clone(),
+            ))
+            .bind(SocialPublishReconcilerService::new(
+                $surreal.clone(),
                 $kms,
                 $assets_storage,
             ))
-            .bind(SocialPublishReconcilerService::new($surreal.clone()))
             .bind($email_summary)
             .bind(InboundMessageAlertService::new(
                 $surreal.clone(),

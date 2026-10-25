@@ -232,7 +232,8 @@ pub const AWAITING_PROVIDER: &str = "awaiting the provider's response";
 
 /// The reason a confirmed publication carries until its public link is read
 /// back from the provider.
-pub const PERMALINK_PENDING: &str = "Published; its public link is pending verification";
+pub const PERMALINK_PENDING: &str =
+    "Receipt recorded; public link pending verification. Check provider processing and visibility.";
 
 /// Settle a publication the provider confirmed. A claimed write
 /// ([`begin_provider_write`]) settles from `unknown`.
@@ -513,6 +514,33 @@ pub async fn find(
     read_by_id(db, &id).await
 }
 
+/// Confirmed receipts whose public links still need provider verification.
+///
+/// # Errors
+///
+/// A database failure.
+pub async fn pending_links(
+    db: &SurrealDb,
+    provider: &str,
+    limit: usize,
+) -> Result<Vec<SocialPublication>, SocialPublicationError> {
+    let mut response = db
+        .query(format!(
+            "SELECT {SELECT} FROM {TABLE} WHERE provider = $provider AND state = $confirmed \
+             AND provider_post_id IS NOT NONE AND permalink IS NONE ORDER BY updated_at ASC LIMIT $limit"
+        ))
+        .bind(("provider", provider.to_string()))
+        .bind(("confirmed", CONFIRMED.to_string()))
+        .bind(("limit", limit.min(100)))
+        .await?
+        .check()?;
+    let rows: Vec<PublicationRow> = response.take(0)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(PublicationRow::into_publication)
+        .collect())
+}
+
 /// Every publication, for the PostgreSQL parity check.
 pub(crate) async fn all(db: &SurrealDb) -> Result<Vec<SocialPublication>, SocialPublicationError> {
     let mut response = db
@@ -544,6 +572,45 @@ mod tests {
     use super::{admit, for_posts, mark_confirmed, mark_failed, mark_unknown, Admission};
     use crate::surreal::{record_id, SurrealDb};
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn pending_links_selects_only_retained_unlinked_receipts_for_the_provider() {
+        let db = crate::test_support::mem_surreal().await;
+        let pending = post(&db).await;
+        let linked = post(&db).await;
+        let unknown = post(&db).await;
+        let other_provider = post(&db).await;
+        for id in [pending, linked, unknown] {
+            admit(&db, id, "youtube").await.unwrap();
+        }
+        admit(&db, other_provider, "instagram").await.unwrap();
+        mark_confirmed(&db, pending, "youtube", "synthetic-video", None)
+            .await
+            .unwrap();
+        mark_confirmed(
+            &db,
+            linked,
+            "youtube",
+            "synthetic-linked",
+            Some("https://www.youtube.com/watch?v=synthetic-linked"),
+        )
+        .await
+        .unwrap();
+        mark_unknown(&db, unknown, "youtube", "uncertain upload")
+            .await
+            .unwrap();
+        mark_confirmed(&db, other_provider, "instagram", "synthetic-reel", None)
+            .await
+            .unwrap();
+        let rows = super::pending_links(&db, "youtube", 100).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].post_id, pending);
+        assert_eq!(rows[0].provider_post_id.as_deref(), Some("synthetic-video"));
+        assert!(super::pending_links(&db, "youtube", 0)
+            .await
+            .unwrap()
+            .is_empty());
+    }
 
     #[tokio::test]
     async fn accepted_task_receipt_is_historical_safe_and_prevents_resending() {

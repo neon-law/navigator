@@ -14,6 +14,7 @@ const PLATFORMS: &[&str] = &[
     "facebook",
     "instagram",
     "threads",
+    "youtube",
     "linkedin",
     "tiktok",
     "x",
