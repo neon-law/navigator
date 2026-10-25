@@ -172,6 +172,6 @@ Agreed and accepted:
 
 By: ______________________________  Date: ____________
 
-Neon Law, by {{person__lawyer_dri}}
+Shook Law PC
 
 By: ______________________________  Date: ____________

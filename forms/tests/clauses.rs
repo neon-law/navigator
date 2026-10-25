@@ -11,7 +11,7 @@ fn clause_extraction_preserves_the_existing_body_bytes() {
         ),
         (
             include_str!("../../templates/notations/neon_law/engagement_letter__nevada.md"),
-            "3b7dd8ce4309188d62c4691a7f90b43cf1de58c8217349b74341ecbc016b1b67",
+            "d6c9a0d6e5567dba9fb6c1773c8db140b8616223e99bea49ff0c1a5a473d110e",
         ),
         (
             include_str!("../../templates/notations/neon_law/mutual_nda.md"),
@@ -162,6 +162,18 @@ fn nevada_engagement_uses_aaa_and_keeps_the_fee_rights() {
         assert!(rendered.contains("fee-dispute program of the State Bar of Nevada"));
         assert!(rendered.contains("consult independent counsel"));
     }
+}
+
+#[test]
+fn nevada_engagement_signature_line_names_shook_law_pc_alone() {
+    let source = include_str!("../../templates/notations/neon_law/engagement_letter__nevada.md");
+    let (_, body) = rules::frontmatter::split(source).unwrap();
+    let signature = body.split("## IX. Signatures").nth(1).unwrap();
+    assert!(
+        signature.lines().any(|line| line.trim() == "Shook Law PC"),
+        "{signature}"
+    );
+    assert!(!body.contains("Neon Law, by"));
 }
 
 #[test]
