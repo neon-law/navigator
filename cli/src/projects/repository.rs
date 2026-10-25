@@ -17,7 +17,7 @@
 //! ├── blobs/             # *.yaml Blobs only, one per document; bytes stay in the store
 //! ├── documents/         # Git-ignored; the bytes each Blob names, staged or pulled down
 //! ├── seeds/             # lookup_fields / records YAML for `navigator site import`
-//! ├── .gitignore         # ignores documents/ and notes/, the local working folders
+//! ├── .gitignore         # ignores documents/, notes/, and mail/, the local working folders
 //! ├── AGENTS.md
 //! ├── README.md
 //! └── navigator.yaml     # the Project this repository declares
@@ -76,6 +76,9 @@ const TEMPLATE_DIRECTORY: &str = "templates";
 const DRAFT_DIRECTORY: &str = "drafts";
 /// The git-ignored working folder for Communication bodies; see [`ROOT_GITIGNORE`].
 const NOTES_DIRECTORY: &str = "notes";
+/// The git-ignored working folder for email bodies, drafts, and sent copies;
+/// see [`ROOT_GITIGNORE`].
+const MAIL_DIRECTORY: &str = "mail";
 /// The root `.gitignore` the scaffold writes. `notes/` holds call notes and
 /// memos fed to `navigator project communication create --body-file`; the
 /// Communication is the record and its body lives in the store, never in Git.
@@ -93,7 +96,7 @@ const NOTES_DIRECTORY: &str = "notes";
 /// `Y024` reports a present root `.gitignore` that lacks any of these lines
 /// and never rewrites it; `navigator project repository sync-skills` restores
 /// them ([`repair_root_gitignore`]).
-pub(crate) const ROOT_GITIGNORE: &str = "# Document bytes staged for or pulled down by `navigator project sync`.\n# Each document's pointer is committed under blobs/; its bytes never are.\n/documents/\n\n# Legal files and handoff notes never enter a Project repository.\n*.pdf\n*.docx\n*.local\n\n# Call notes and memos for `navigator project communication create --body-file`.\n# The Communication's body lives in Navigator's store, never in Git.\nnotes/\n\n# Per-machine agent and operating-system state.\n.claude/settings.local.json\n.claude/worktrees/\n.agents/settings.local.json\n.agents/worktrees/\n.DS_Store\n";
+pub(crate) const ROOT_GITIGNORE: &str = "# Document bytes staged for or pulled down by `navigator project sync`.\n# Each document's pointer is committed under blobs/; its bytes never are.\n/documents/\n\n# Legal files and handoff notes never enter a Project repository.\n*.pdf\n*.docx\n*.local\n\n# Call notes and memos for `navigator project communication create --body-file`.\n# The Communication's body lives in Navigator's store, never in Git.\nnotes/\n\n# Email bodies, drafts, and saved copies of sent mail. Matter facts, never Git.\nmail/\n\n# Per-machine agent and operating-system state.\n.claude/settings.local.json\n.claude/worktrees/\n.agents/settings.local.json\n.agents/worktrees/\n.DS_Store\n";
 /// The [`ROOT_GITIGNORE`] lines whose absence is an error rather than drift:
 /// without them a document's bytes, a rendered pleading, a downloaded
 /// exhibit, or a handoff note can be committed (LAW-181).
@@ -1295,6 +1298,7 @@ fn validate_layout_entry(
     if !mirrored
         && !tooling_root
         && first != NOTES_DIRECTORY
+        && first != MAIL_DIRECTORY
         && !ALLOWED_ROOTS.contains(&first.as_str())
     {
         unlisted_root(root, path, components, &mut seen.unlisted_roots, errors);
@@ -1309,6 +1313,12 @@ fn validate_layout_entry(
         errors.push(Finding::at(
             path,
             "`notes/` must stay git-ignored; a note feeds `navigator project communication create --body-file`, and the Communication's body lives in Navigator's store, never in Git",
+        ));
+    }
+    if first == MAIL_DIRECTORY {
+        errors.push(Finding::at(
+            path,
+            "`mail/` must stay git-ignored; email bodies, drafts, and saved copies of sent mail are matter facts and never enter Git",
         ));
     }
     // A tracked path already gone from the working tree is a removal waiting
@@ -4554,6 +4564,27 @@ jobs:
         assert_eq!(layout_findings(root.path()), Vec::<String>::new());
     }
 
+    #[test]
+    fn ignored_mail_stays_out_of_the_layout_and_unignored_mail_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        scaffold_minimal(root.path());
+        fs::create_dir(root.path().join("mail")).unwrap();
+        fs::write(
+            root.path().join("mail/2026-01-01-outbound-synthetic.eml"),
+            "Subject: Synthetic\n",
+        )
+        .unwrap();
+        assert_eq!(
+            layout_findings(root.path()),
+            vec!["`mail/` must stay git-ignored; email bodies, drafts, and saved copies of sent mail are matter facts and never enter Git".to_string()],
+            "an unignored mail/ file must not reach Git"
+        );
+
+        fs::write(root.path().join(".gitignore"), ROOT_GITIGNORE).unwrap();
+        assert_eq!(layout_findings(root.path()), Vec::<String>::new());
+        assert!(ROOT_GITIGNORE.lines().any(|line| line == "mail/"));
+    }
+
     /// An unknown key, including a retired exemption key, is refused and names
     /// the accepted set. There is no per-repository exemption mechanism.
     #[test]
@@ -4921,6 +4952,7 @@ jobs:
         assert!(contents.starts_with(ROOT_GITIGNORE), "{contents}");
         assert!(contents.ends_with("node_modules\ndist\n"), "{contents}");
         assert_eq!(contents.matches("notes/").count(), 1, "{contents}");
+        assert_eq!(contents.matches("mail/").count(), 1, "{contents}");
         assert!(missing_root_gitignore_lines(&contents).is_empty());
 
         let mut again = Vec::new();
