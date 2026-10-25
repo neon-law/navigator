@@ -198,6 +198,23 @@ AGE ships in the PostgreSQL image. No application code queries it yet, and no ap
 The restore drill and the compatibility tests verify graph data survives a restore. Treat AGE's internal IDs as the
 extension's own, not as application keys.
 
+## Forgejo
+
+The opt-in `k8s/forgejo/` StatefulSet runs Forgejo beside Navigator, with its own `forgejo` database and login on the
+same PostgreSQL server. [`forgejo-deployment.md`](forgejo-deployment.md) is the operator guide. It covers:
+
+- **Sign-in.** Forgejo uses the installation's existing OIDC issuer with its own client and callback, requires a TOTP
+  second factor, and keeps registration closed until the email-domain allowlist is synced.
+- **The Project gate.** `navigator project scaffold` writes `.forgejo/workflows/gate.yml` for a Forgejo-backed Project.
+- **Git bundle archive and restore.** `navigator ops forgejo archive` and `navigator ops forgejo restore` prove one Git
+  bundle round trip per invocation.
+
+Locally, `cargo run -p cli -- dev forgejo up` starts it; see [`forgejo-kind.md`](forgejo-kind.md).
+
+The Iceberg export covers the databases only; it does not cover Git repositories, LFS objects, or attachments. Those
+live on Forgejo's retained `/var/lib/gitea` claim and need their own backup, restored to a matching recovery point. See
+[`iceberg-archive.md`](iceberg-archive.md) for the export.
+
 ## Kubernetes layers
 
 | Path | Holds |

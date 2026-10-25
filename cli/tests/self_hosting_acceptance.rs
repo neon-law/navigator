@@ -75,3 +75,22 @@ fn documented_upgrade_plan_renders_without_credentials_or_external_tools() {
         .expect("rendered manifest count");
     assert!(count > 0, "{report}");
 }
+
+#[test]
+fn guide_points_at_the_forgejo_deployment_and_archive_boundary() {
+    assert!(GUIDE.contains("\n## Forgejo\n"));
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("CLI is in the repository");
+    assert!(
+        GUIDE.contains("(forgejo-deployment.md)"),
+        "the Forgejo section links the deployment guide"
+    );
+    assert!(root.join("docs/forgejo-deployment.md").is_file());
+    assert!(
+        GUIDE.contains(
+            "The Iceberg export covers the databases only; it does not cover Git repositories, LFS objects, or attachments."
+        ),
+        "the guide states the archive boundary"
+    );
+}
