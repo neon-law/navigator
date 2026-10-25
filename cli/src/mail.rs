@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
 use clap::Subcommand;
 use reqwest::{Method, Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use url::Url;
 use uuid::Uuid;
@@ -66,8 +66,15 @@ pub enum MailAction {
         #[arg(long = "attach", value_name = "PATH")]
         attach: Vec<PathBuf>,
     },
-    /// Check draft-only Gmail setup and print the fix for anything missing.
-    Setup,
+    /// Save Gmail account/client settings or check draft-only setup.
+    Setup {
+        /// Gmail address whose refresh token is stored in the macOS Keychain.
+        #[arg(long, requires = "client_id")]
+        account: Option<String>,
+        /// Google OAuth client id. Saved with --account; never a client secret.
+        #[arg(long, requires = "account")]
+        client_id: Option<String>,
+    },
     /// File every message in a Gmail thread as a matter Communication.
     File {
         thread: String,
@@ -776,6 +783,72 @@ fn scoped_query(query: &str, project: Option<&str>) -> String {
     format!("({query}) (from:{email} OR to:{email})")
 }
 
+#[derive(Default, Deserialize, Serialize)]
+struct StoredSetup {
+    account: Option<String>,
+    client_id: Option<String>,
+}
+
+fn setup_path() -> PathBuf {
+    crate::credentials::default_credentials_path().with_extension("mail.json")
+}
+
+fn load_setup(path: &Path) -> Result<StoredSetup> {
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).context("parse saved Gmail setup; run navigator mail setup --account <gmail-address> --client-id <oauth-client-id> to replace it"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(StoredSetup::default()),
+        Err(error) => Err(error).context("read saved Gmail setup"),
+    }
+}
+
+fn store_setup(path: &Path, account: &str, client_id: &str) -> Result<()> {
+    let (account, client_id) = setup_from(
+        Some(account.trim().to_owned()),
+        Some(client_id.trim().to_owned()),
+    )?;
+    let settings = StoredSetup {
+        account: Some(account),
+        client_id: Some(client_id),
+    };
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent).context("create Gmail setup directory")?;
+    // NamedTempFile is owner-only on Unix. Rename replaces a permissive destination atomically.
+    let mut file =
+        tempfile::NamedTempFile::new_in(parent).context("create private Gmail setup file")?;
+    serde_json::to_writer_pretty(file.as_file_mut(), &settings).context("write Gmail setup")?;
+    file.persist(path)
+        .map_err(|error| error.error)
+        .context("save Gmail setup")?;
+    Ok(())
+}
+
+fn effective_setup(
+    account: Option<String>,
+    client_id: Option<String>,
+    stored: StoredSetup,
+) -> StoredSetup {
+    StoredSetup {
+        account: account
+            .filter(|value| !value.trim().is_empty())
+            .or(stored.account),
+        client_id: client_id
+            .filter(|value| !value.trim().is_empty())
+            .or(stored.client_id),
+    }
+}
+
+fn resolve_setup(
+    account: Option<String>,
+    client_id: Option<String>,
+    stored: StoredSetup,
+) -> Result<(String, String)> {
+    let settings = effective_setup(account, client_id, stored);
+    setup_from(settings.account, settings.client_id)
+}
+
 /// Names every missing Gmail setting at once, with the fix for each.
 fn setup_from(account: Option<String>, client_id: Option<String>) -> Result<(String, String)> {
     let account = account.filter(|value| !value.trim().is_empty());
@@ -792,7 +865,7 @@ fn setup_from(account: Option<String>, client_id: Option<String>) -> Result<(Str
     match (account, client_id) {
         (Some(account), Some(client_id)) => Ok((account, client_id)),
         _ => Err(anyhow!(
-            "Gmail is not set up for navigator mail. Set both before retrying (see docs/mail-cli.md): {}",
+            "Gmail is not set up. Run navigator mail setup --account <gmail-address> --client-id <oauth-client-id> to save settings, or set environment overrides (see docs/mail-cli.md): {}",
             steps.join("; ")
         )),
     }
@@ -818,12 +891,12 @@ fn setup_report(account_set: bool, client_id_set: bool, keychain: KeychainState)
     let mut text = String::from("Gmail draft-only setup for navigator mail\n");
     let _ = writeln!(
         text,
-        "  [{}] NAVIGATOR_GMAIL_ACCOUNT (the Gmail address)",
+        "  [{}] Gmail account (saved or NAVIGATOR_GMAIL_ACCOUNT)",
         mark(account_set)
     );
     let _ = writeln!(
         text,
-        "  [{}] NAVIGATOR_GMAIL_CLIENT_ID (your Google OAuth client id)",
+        "  [{}] OAuth client id (saved or NAVIGATOR_GMAIL_CLIENT_ID)",
         mark(client_id_set)
     );
     let _ = writeln!(
@@ -831,15 +904,14 @@ fn setup_report(account_set: bool, client_id_set: bool, keychain: KeychainState)
         "  [{}] refresh token in the macOS Keychain, service com.neonlaw.navigator.gmail.refresh-token",
         mark(keychain_ok)
     );
-    if !account_set {
-        text.push_str("\nexport NAVIGATOR_GMAIL_ACCOUNT=<gmail address>\n");
-    }
-    if !client_id_set {
-        text.push_str("export NAVIGATOR_GMAIL_CLIENT_ID=<Google OAuth client id>\n");
+    if !account_set || !client_id_set {
+        text.push_str(
+            "\nnavigator mail setup --account <gmail-address> --client-id <oauth-client-id>\n",
+        );
     }
     if keychain == KeychainState::Missing {
         text.push_str(
-            "\nStore the refresh token without echoing it (the command prompts for the value):\n  security add-generic-password -s com.neonlaw.navigator.gmail.refresh-token -a \"$NAVIGATOR_GMAIL_ACCOUNT\" -w\n",
+            "\nStore the refresh token without echoing it (the command prompts for the value):\n  security add-generic-password -s com.neonlaw.navigator.gmail.refresh-token -a \"<gmail-address>\" -w\n",
         );
     }
     text.push_str(
@@ -854,12 +926,19 @@ endpoint. Never print, paste, or log the token. See docs/mail-cli.md.\n",
     SetupReport { text, ready }
 }
 
-fn setup_command() -> Result<()> {
-    let account = std::env::var("NAVIGATOR_GMAIL_ACCOUNT")
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let client_id_set =
-        std::env::var("NAVIGATOR_GMAIL_CLIENT_ID").is_ok_and(|value| !value.trim().is_empty());
+fn setup_command(account: Option<String>, client_id: Option<String>) -> Result<()> {
+    if let (Some(account), Some(client_id)) = (account, client_id) {
+        store_setup(&setup_path(), &account, &client_id)?;
+    }
+    let settings = effective_setup(
+        std::env::var("NAVIGATOR_GMAIL_ACCOUNT").ok(),
+        std::env::var("NAVIGATOR_GMAIL_CLIENT_ID").ok(),
+        load_setup(&setup_path())?,
+    );
+    let account = settings.account.filter(|value| !value.trim().is_empty());
+    let client_id_set = settings
+        .client_id
+        .is_some_and(|value| !value.trim().is_empty());
     let keychain = match &account {
         None => KeychainState::AccountUnknown,
         Some(account) if keychain_refresh_token(account).is_ok() => KeychainState::Present,
@@ -875,11 +954,14 @@ fn setup_command() -> Result<()> {
 }
 
 async fn client() -> Result<GmailClient> {
-    let (account, client_id) = setup_from(
+    let (account, client_id) = resolve_setup(
         std::env::var("NAVIGATOR_GMAIL_ACCOUNT").ok(),
         std::env::var("NAVIGATOR_GMAIL_CLIENT_ID").ok(),
+        load_setup(&setup_path())?,
     )?;
-    let refresh_token = keychain_refresh_token(&account)?;
+    let refresh_token = keychain_refresh_token(&account).context(
+        "Gmail refresh token unavailable; run navigator mail setup for the Keychain command",
+    )?;
     let response = reqwest::Client::new()
         .post(GOOGLE_TOKEN_API)
         .form(&[
@@ -989,7 +1071,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
             );
             Ok(())
         }
-        MailAction::Setup => setup_command(),
+        MailAction::Setup { account, client_id } => setup_command(account, client_id),
         MailAction::File {
             thread,
             project,
@@ -2098,6 +2180,103 @@ mod tests {
     }
 
     #[test]
+    fn setup_saves_settings_and_loads_them_without_environment() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.json");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(&path, "old settings").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        store_setup(&path, "lawyer@example.test", "test-client-id").unwrap();
+        let stored = load_setup(&path).unwrap();
+        assert_eq!(
+            resolve_setup(None, None, stored).unwrap(),
+            ("lawyer@example.test".into(), "test-client-id".into())
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn setup_missing_file_is_unconfigured_and_malformed_file_is_reported() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.json");
+        assert!(resolve_setup(None, None, load_setup(&path).unwrap()).is_err());
+        std::fs::write(&path, "invalid private setting").unwrap();
+        let error = load_setup(&path).err().unwrap().to_string();
+        assert!(error.contains("Gmail setup"));
+        assert!(!error.contains("invalid private setting"));
+    }
+
+    #[test]
+    fn setup_flags_require_both_settings() {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct Mail {
+            #[command(subcommand)]
+            action: MailAction,
+        }
+        assert!(
+            Mail::try_parse_from(["mail", "setup", "--account", "lawyer@example.test"]).is_err()
+        );
+        assert!(Mail::try_parse_from(["mail", "setup", "--client-id", "test-client-id"]).is_err());
+        assert!(Mail::try_parse_from([
+            "mail",
+            "setup",
+            "--account",
+            "lawyer@example.test",
+            "--client-id",
+            "test-client-id"
+        ])
+        .is_ok());
+        assert!(Mail::try_parse_from(["mail", "setup"]).is_ok());
+    }
+
+    #[test]
+    fn setup_environment_overrides_stored_values() {
+        let stored = StoredSetup {
+            account: Some("stored@example.test".into()),
+            client_id: Some("stored-client".into()),
+        };
+        assert_eq!(
+            resolve_setup(Some("override@example.test".into()), None, stored).unwrap(),
+            ("override@example.test".into(), "stored-client".into())
+        );
+    }
+
+    #[test]
+    fn setup_blank_environment_values_fall_back_to_saved_values() {
+        let stored = StoredSetup {
+            account: Some("stored@example.test".into()),
+            client_id: Some("stored-client".into()),
+        };
+        assert_eq!(
+            resolve_setup(Some(" ".into()), Some(String::new()), stored).unwrap(),
+            ("stored@example.test".into(), "stored-client".into())
+        );
+    }
+
+    #[test]
+    fn setup_rejects_blank_settings_without_overwriting_existing_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mail.json");
+        store_setup(&path, "lawyer@example.test", "test-client-id").unwrap();
+        assert!(store_setup(&path, " ", "client").is_err());
+        assert_eq!(
+            load_setup(&path).unwrap().account.as_deref(),
+            Some("lawyer@example.test")
+        );
+    }
+
+    #[test]
     fn setup_report_names_each_gap_and_never_claims_send_access() {
         let report = setup_report(false, false, KeychainState::AccountUnknown);
         assert!(!report.ready);
@@ -2124,7 +2303,7 @@ mod tests {
     #[test]
     fn setup_command_prints_only_the_fixed_report() {
         let source = include_str!("mail.rs");
-        let body = source.split("fn setup_command()").nth(1).unwrap();
+        let body = source.split("fn setup_command(").nth(1).unwrap();
         let body = body.split("async fn client()").next().unwrap();
         assert!(body.contains("print!(\"{}\", report.text)"));
         assert!(!body.contains("eprintln!") && !body.contains("println!(\"{account"));
