@@ -286,6 +286,7 @@ mod tests {
 
     fn make_fixture(pulls: &[Value]) -> Fixture {
         let mut repo = super::super::Policy::repository();
+        repo["private"] = true.into();
         repo["allow_manual_merge"] = false.into();
         repo["autodetect_manual_merge"] = false.into();
         let branch = super::super::Policy::new("ci").unwrap().branch();

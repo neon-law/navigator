@@ -524,11 +524,12 @@ mod tests {
         let server = MockServer::start().await;
         let api = "/api/v1/repos/acme-law/sample-estate";
         let mut governed = Policy::repository();
+        governed["private"] = true.into();
         governed["allow_manual_merge"] = false.into();
         let main = Policy::new(REQUIRED_CHECK_CONTEXT).unwrap().branch();
         // Drifted on the first read; governed once written.
         for (route, before, after) in [
-            (api.to_string(), json!({}), governed),
+            (api.to_string(), json!({"private": true}), governed),
             (
                 format!("{api}/branch_protections"),
                 json!([]),

@@ -286,6 +286,7 @@ mod tests {
     /// everything `schedule` reads before it asks for a merge.
     async fn governed(server: &MockServer) {
         let mut repo = Policy::repository();
+        repo["private"] = true.into();
         repo["allow_manual_merge"] = false.into();
         let branch = Policy::new(REQUIRED_CHECK_CONTEXT).unwrap().branch();
         Mock::given(method("GET"))
@@ -493,7 +494,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path(API))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"private": true})))
             .mount(&server)
             .await;
         Mock::given(method("GET"))

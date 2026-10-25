@@ -217,6 +217,10 @@ impl Forgejo {
 
     async fn state(&self, repository: &str) -> Result<(Value, Option<Value>)> {
         let repo = self.read(&format!("repos/{repository}")).await?;
+        ensure!(
+            repo["private"].as_bool() == Some(true),
+            "Forgejo Project repository must be private; inspect visibility before retrying"
+        );
         let protections = self
             .read(&format!("repos/{repository}/branch_protections"))
             .await?;
@@ -601,7 +605,7 @@ mod tests {
     impl Default for Fixture {
         fn default() -> Self {
             Self {
-                repo: json!({}),
+                repo: json!({"private": true}),
                 branch: None,
                 pr: json!({
                     "state": "open", "merged": false, "draft": false,
@@ -774,6 +778,64 @@ mod tests {
         }
     }
 
+    fn private_repository() -> Value {
+        let mut repo = Policy::repository();
+        repo["private"] = true.into();
+        repo
+    }
+
+    #[tokio::test]
+    async fn nonprivate_repositories_refuse_reconciliation_without_writes() {
+        for private in [Some(false), None] {
+            for dry_run in [true, false] {
+                let mut repo = Policy::repository();
+                if let Some(private) = private {
+                    repo["private"] = private.into();
+                }
+                let server = serve(Fixture {
+                    repo,
+                    branch: Some(Policy::new("ci").unwrap().branch()),
+                    ..Default::default()
+                })
+                .await;
+                assert!(server
+                    .client
+                    .reconcile("example/sample", "ci", dry_run)
+                    .await
+                    .is_err());
+                assert!(server.state.lock().unwrap().writes.is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn nonprivate_repositories_refuse_verification_and_merge_without_writes() {
+        for private in [Some(false), None] {
+            let mut repo = Policy::repository();
+            if let Some(private) = private {
+                repo["private"] = private.into();
+            }
+            let policy = Policy::new("ci").unwrap();
+            let server = serve(Fixture {
+                repo,
+                branch: Some(policy.branch()),
+                ..Default::default()
+            })
+            .await;
+            assert!(server
+                .client
+                .verify("example/sample", &policy)
+                .await
+                .is_err());
+            assert!(server
+                .client
+                .schedule("example/sample", "ci", 7)
+                .await
+                .is_err());
+            assert!(server.state.lock().unwrap().writes.is_empty());
+        }
+    }
+
     #[tokio::test]
     async fn dry_run_does_not_write_then_apply_and_rerun_converge() {
         let server = serve(Fixture::default()).await;
@@ -793,6 +855,13 @@ mod tests {
             drift
         );
         assert_eq!(server.state.lock().unwrap().writes.len(), 2);
+        assert!(server
+            .state
+            .lock()
+            .unwrap()
+            .writes
+            .iter()
+            .all(|(_, _, body)| body.get("private").is_none()));
         assert!(server
             .client
             .reconcile("example/sample", "ci", false)
@@ -821,7 +890,7 @@ mod tests {
         // The same job on another event posts a different context.
         let other_event = "gate / gate (push)".to_owned();
         let server = serve(Fixture {
-            repo: Policy::repository(),
+            repo: private_repository(),
             branch: Some(Policy::new(&other_event).unwrap().branch()),
             ..Fixture::default()
         })
@@ -864,7 +933,7 @@ mod tests {
         let mut branch = policy.branch();
         branch["block_on_rejected_reviews"] = false.into();
         let server = serve(Fixture {
-            repo: Policy::repository(),
+            repo: private_repository(),
             branch: Some(branch),
             ..Fixture::default()
         })
@@ -917,7 +986,7 @@ mod tests {
     async fn an_apply_disables_write_only_manual_controls_even_without_readable_drift() {
         let policy = Policy::new("ci").unwrap();
         let server = serve(Fixture {
-            repo: Policy::repository(),
+            repo: private_repository(),
             branch: Some(policy.branch()),
             ..Fixture::default()
         })
