@@ -151,7 +151,9 @@ Where Forgejo cannot express a rule directly, fail closed with an explicit teste
 weakening policy. Preserve private Project defaults separately from open-source Navigator governance.
 
 `navigator ops forgejo setup <owner/repository> --url <origin> --check-context <context> --dry-run` reads the repository
-and its `main` protection and lists drift without writing. Remove `--dry-run` to protect `main`, apply squash-only
+and its `main` protection and lists drift without writing. Governance reads require the repository's `private` field to
+be `true`; a public repository or missing privacy metadata stops setup, verification, and merge scheduling for human
+inspection. These commands never change repository visibility. Remove `--dry-run` to protect `main`, apply squash-only
 settings, and verify the readable controls. A second run reports that those controls already match. Additional
 branch-protection rules require review before reconciliation or scheduling, so a wildcard rule cannot silently override
 the checked `main` rule. `FORGEJO_TOKEN` supplies the credential; it travels in an authorization header. Select the
