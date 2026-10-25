@@ -69,7 +69,6 @@ fn surreal_and_postgres_rows_normalize_to_one_image() {
             "display_order": 0,
             "inserted_at": "2026-10-21T01:02:03Z",
             "updated_at": "2026-10-21T01:02:03Z",
-            "unmapped": "dropped",
         }),
     )
     .unwrap();
@@ -104,6 +103,87 @@ fn surreal_and_postgres_rows_normalize_to_one_image() {
         ),
         Err(MirrorError::SourceTimestamp)
     ));
+}
+
+#[tokio::test]
+async fn unmapped_source_fields_cannot_disappear_from_parity() {
+    let surreal = mem_surreal().await;
+    let id = Uuid::new_v4();
+    let table = table("contract_review").unwrap();
+    // Every supplied value needs a destination, including null and empty containers.
+    for payload in [
+        "null",
+        "false",
+        "0",
+        "\"\"",
+        "[]",
+        "{}",
+        "\"Synthetic private payload\"",
+    ] {
+        let row = surreal_value(
+            &surreal,
+            &format!("RETURN {{ id: contract_review:u'{id}', unmapped_fixture: {payload} }}"),
+        )
+        .await;
+        let error = normalize_surreal(table, row)
+            .expect_err("an unmodeled source field must block import and parity");
+        let text = error.to_string();
+        assert!(
+            text.contains("contract_review"),
+            "the registered table is actionable"
+        );
+        assert!(
+            text.contains("1 unmapped field"),
+            "only the unmapped field count is reported"
+        );
+        assert!(!text.contains("unmapped_fixture"));
+        assert!(!text.contains("Synthetic private payload"));
+        assert!(
+            !error.retryable(),
+            "a mapping change is required before retry"
+        );
+    }
+}
+
+#[tokio::test]
+async fn generated_target_identity_metadata_does_not_hide_a_source_field() {
+    let surreal = mem_surreal().await;
+    let row = surreal_value(
+        &surreal,
+        "RETURN { id: firm_anchor:⟨synthetic-source-metadata⟩, id_kind: 'Synthetic source value' }",
+    )
+    .await;
+    let error = normalize_surreal(table("firm_anchor").unwrap(), row)
+        .expect_err("generated target id_kind is not a mapping for a supplied source value");
+    assert!(error.to_string().contains("firm_anchor"));
+    assert!(!error.to_string().contains("Synthetic source value"));
+}
+
+#[tokio::test]
+async fn declared_nested_json_and_target_only_columns_keep_their_contract() {
+    let surreal = mem_surreal().await;
+    let id = Uuid::new_v4();
+    let table = table("contract_review").unwrap();
+    let row = surreal_value(
+        &surreal,
+        &format!("RETURN {{ id: contract_review:u'{id}', findings: {{ unmapped_fixture: 'Synthetic', nested: [false, 0, null, {{}}] }} }}"),
+    ).await;
+    let (_, source) = normalize_surreal(table, row).unwrap();
+    assert_eq!(
+        source["findings"],
+        json!({"unmapped_fixture": "Synthetic", "nested": [false, 0, null, {}]})
+    );
+    assert!(
+        source["asset_id"].is_null(),
+        "absent declared optional values retain the null mapping"
+    );
+    let mut target = source.clone();
+    target["target_only_fixture"] = json!("PostgreSQL-only metadata");
+    let (_, target) = normalize(table, target).unwrap();
+    assert_eq!(
+        source, target,
+        "target-only columns do not count as source loss"
+    );
 }
 
 #[test]

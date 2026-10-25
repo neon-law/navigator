@@ -572,6 +572,52 @@ async fn populated_source_tables_without_mirror_coverage_fail_closed() {
 }
 
 #[tokio::test]
+async fn unmapped_populated_source_fields_block_plan_and_start_before_writes() {
+    let Some((surreal, pg, _, entity)) = history().await else {
+        return;
+    };
+    surreal
+        .query("DEFINE FIELD unmapped_fixture ON firm_anchor TYPE option<string>; CREATE firm_anchor:⟨synthetic-field-coverage⟩ SET entity_id = $entity, unmapped_fixture = 'Synthetic private payload';")
+        .bind(("entity", crate::surreal::record_id("entity", entity)))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    for error in [
+        plan(&surreal, &pg, 2)
+            .await
+            .expect_err("dry-run must not declare incomplete source fields preserved"),
+        start(&surreal, &pg, 2, None)
+            .await
+            .expect_err("write-run must refuse incomplete source field coverage"),
+    ] {
+        let text = error.to_string();
+        assert!(
+            text.contains("firm_anchor"),
+            "the affected table is reported"
+        );
+        assert!(!text.contains("unmapped_fixture"));
+        assert!(!text.contains("Synthetic private payload"));
+    }
+    assert_eq!(rows(&pg, "mirror_backfill_run").await, 0);
+    assert_eq!(rows(&pg, "mirror_backfill_checkpoint").await, 0);
+    assert_eq!(rows(&pg, "person").await, 0);
+    assert_eq!(rows(&pg, "entity").await, 0);
+    assert_eq!(rows(&pg, "firm_anchor").await, 0);
+    // Omitted fields carry no source value; the configured mapping can be planned again.
+    surreal
+        .query("UPDATE firm_anchor:⟨synthetic-field-coverage⟩ UNSET unmapped_fixture;")
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    plan(&surreal, &pg, 2)
+        .await
+        .expect("removing the unmodeled field unblocks the plan");
+    pg.0.close().await;
+}
+
+#[tokio::test]
 async fn source_inventory_counts_uncovered_tables_without_reading_rows() {
     let surreal = mem_surreal().await;
     surreal

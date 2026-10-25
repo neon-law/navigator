@@ -1575,18 +1575,52 @@ fn the_rollout_is_dispatched_only_after_every_publish_job() {
 }
 
 #[test]
-fn image_publishers_sign_digest_and_mirror_the_same_oci_index_to_ghcr() {
+fn image_publishers_require_signed_digest_verified_ghcr_mirrors() {
     let workflow = deploy_workflow();
-    for job in ["publish-service", "publish-triggers"] {
+    let parsed: serde_yaml::Value = serde_yaml::from_str(&workflow).expect("valid workflow");
+    for (job, digest_source) in [
+        ("publish-service", "${{ steps.digest.outputs.digest }}"),
+        ("publish-triggers", "${{ steps.digest.outputs.digest }}"),
+        ("publish-cli-image", "${{ steps.publish.outputs.digest }}"),
+    ] {
+        let publisher = &parsed["jobs"][job];
+        let mirror = publisher["steps"]
+            .as_sequence()
+            .expect("publisher steps")
+            .iter()
+            .find(|step| step["name"] == "mirror the same digest to public GHCR")
+            .expect("required GHCR mirror step");
+        for scope in [publisher, mirror] {
+            assert!(
+                scope["continue-on-error"].is_null()
+                    || scope["continue-on-error"].as_bool() == Some(false)
+            );
+        }
+        assert_eq!(mirror["timeout-minutes"].as_u64(), Some(5));
+        assert_eq!(mirror["env"]["IMAGE_DIGEST"], digest_source);
+        assert_eq!(
+            mirror["env"]["RELEASE_TAG"],
+            "${{ needs.release-version.outputs.tag }}"
+        );
+        let script = mirror["run"].as_str().expect("mirror script");
+        for required in [
+            "set -euo pipefail",
+            "imagetools create --tag \"${target}:${RELEASE_TAG}\" --tag \"${target}:latest\" \"${IMAGE_REF}@${IMAGE_DIGEST}\"",
+            "imagetools inspect --raw \"${IMAGE_REF}@${IMAGE_DIGEST}\"",
+            "imagetools inspect --raw \"${target}:${RELEASE_TAG}\"",
+            "[ \"${source_digest}\" = \"${target_digest}\" ]",
+            "cosign sign --yes \"${target}@sha256:${target_digest}\"",
+            "exit 0",
+            "::error::GHCR mirror of ${target}:${RELEASE_TAG} failed after retries",
+            "exit 1",
+        ] {
+            assert!(script.contains(required), "{job} mirror must contain {required}");
+        }
         let text = job_text(&workflow, job);
-        assert!(text.contains("steps.build-push.outputs.digest"));
+        if job != "publish-cli-image" {
+            assert!(text.contains("steps.build-push.outputs.digest"));
+        }
         assert!(text.contains("cosign sign --yes \"${IMAGE_REF}@${IMAGE_DIGEST}\""));
-        assert!(text.contains(
-            "imagetools create --tag \"${target}:${RELEASE_TAG}\" --tag \"${target}:latest\" \"${IMAGE_REF}@${IMAGE_DIGEST}\""
-        ));
-        assert!(text.contains("source_digest") && text.contains("target_digest"));
-        assert!(text.contains("failed after retries"));
-        assert!(text.contains("timeout-minutes: 5"));
         assert!(text.contains("actions/upload-artifact@v7"));
     }
     assert!(workflow.contains("ghcr.io/${{ github.repository_owner }}/navigator"));

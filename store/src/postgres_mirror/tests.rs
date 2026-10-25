@@ -36,6 +36,10 @@ async fn completion_retries_transient_failures() {
 async fn completion_does_not_retry_invalid_source_or_constraints() {
     for error in [
         MirrorError::SourceTimestamp,
+        MirrorError::UnmappedSourceFields {
+            table: "contract_review",
+            count: 1,
+        },
         MirrorError::Target("23503".into()),
     ] {
         let mut error = Some(error);
