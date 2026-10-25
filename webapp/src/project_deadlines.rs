@@ -407,6 +407,7 @@ mod tests {
             Deadline {
                 id: Uuid::new_v4(),
                 project_id: Uuid::nil(),
+                title: None,
                 due_at: due_at.to_string(),
                 authority_kind: "court_order".to_string(),
                 authority: String::new(),

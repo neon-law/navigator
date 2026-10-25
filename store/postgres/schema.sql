@@ -2228,3 +2228,7 @@ END $$;
 
 CREATE TRIGGER project_code_immutable BEFORE UPDATE OF code ON project
     FOR EACH ROW EXECUTE FUNCTION project_code_immutable();
+
+-- Migration: 20261025120000_add_project_deadline_title.sql
+-- A Deadline's short title: what is due. NULL for rows written before titles existed.
+ALTER TABLE project_deadlines ADD COLUMN title TEXT CHECK (title IS NULL OR length(btrim(title)) BETWEEN 1 AND 200);

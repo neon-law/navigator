@@ -1147,6 +1147,10 @@ mod tests {
                 "20261022210000_enforce_project_code.sql",
                 include_str!("../postgres/migrations/20261022210000_enforce_project_code.sql"),
             ),
+            (
+                "20261025120000_add_project_deadline_title.sql",
+                include_str!("../postgres/migrations/20261025120000_add_project_deadline_title.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

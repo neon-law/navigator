@@ -79,6 +79,7 @@ async fn fixture() -> Fixture {
     store::project_deadlines::create(
         &surreal,
         &store::project_deadlines::NewDeadline {
+            title: None,
             project_id: project.id,
             due_at: "2099-11-02T17:00:00-08:00".into(),
             authority_kind: "court_order".into(),
