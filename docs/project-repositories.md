@@ -1060,6 +1060,14 @@ permits a client to see, and every lens carries `boundary_note` and `provenance_
 `D001` through `D005` before it is shown. `--write` adds it to `navigator.yaml` and leaves every other line as written;
 replacing an existing `pages:` block needs `--force`.
 
+A Project with a `matter:` block or a pleading Draft (`kind: pleading`) also gets a `matter_status_console` overview, a
+`docket_deadline_board` docket page (`case_caption`, `deadline_board`, `docket_timeline`, `party_roster`), and a
+`document_workbench` page for each pleading Draft, carrying that Draft as `draft:`. These pages declare the lawyer lens
+only; add a client lens by hand. A litigation pin's deadline board takes the docket sections instead of a second board.
+
+`navigator project pages kinds` lists every page kind with the sections it requires, may carry, and reserves to the
+lawyer lens, read from the same skeletons the gate checks.
+
 ## Local checkouts
 
 One checkout root per organization, holding one directory per Project code. The root is the organization's own name, so
