@@ -335,6 +335,7 @@ DEFINE INDEX OVERWRITE statutory_deadline_replay ON statutory_deadline FIELDS pr
 -- The due instant is stored with its offset; nothing here counts court days.
 DEFINE TABLE IF NOT EXISTS project_deadlines SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE project_id ON project_deadlines TYPE record<project>;
+DEFINE FIELD OVERWRITE title ON project_deadlines TYPE option<string>;
 DEFINE FIELD OVERWRITE due_at ON project_deadlines TYPE string;
 DEFINE FIELD OVERWRITE authority_kind ON project_deadlines TYPE string
     ASSERT $value IN ['statute', 'court_rule', 'court_order', 'contract', 'internal'];

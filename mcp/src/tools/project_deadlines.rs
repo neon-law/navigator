@@ -17,7 +17,7 @@ pub fn list_descriptor() -> Value {
     json!({
         "name": "list_project_deadlines",
         "description": "List the deadlines stored on one Project the caller participates in. \
-                        Each row includes its stored due instant, authority, calendar role, and status.",
+                        Each row includes its title, stored due instant, authority, calendar role, and status.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -40,6 +40,7 @@ pub fn create_descriptor() -> Value {
             "type": "object",
             "properties": {
                 "project_id": { "type": "string", "format": "uuid" },
+                "title": { "type": "string", "maxLength": 200, "description": "A short name for what is due, such as the pleading or response." },
                 "due_at": { "type": "string" },
                 "authority_kind": { "type": "string" },
                 "authority": { "type": "string" },
@@ -67,6 +68,7 @@ pub fn update_descriptor() -> Value {
             "properties": {
                 "project_id": { "type": "string", "format": "uuid" },
                 "deadline_id": { "type": "string", "format": "uuid" },
+                "title": { "type": "string", "maxLength": 200, "description": "An empty string clears the title." },
                 "due_at": { "type": "string" },
                 "authority_kind": { "type": "string" },
                 "authority": { "type": "string" },
@@ -131,6 +133,7 @@ struct ProjectArgs {
 #[derive(Deserialize)]
 struct CreateArgs {
     project_id: Uuid,
+    title: Option<String>,
     due_at: String,
     authority_kind: String,
     #[serde(default)]
@@ -150,6 +153,7 @@ struct CreateArgs {
 struct UpdateArgs {
     project_id: Uuid,
     deadline_id: Uuid,
+    title: Option<String>,
     due_at: Option<String>,
     authority_kind: Option<String>,
     authority: Option<String>,
@@ -233,6 +237,7 @@ pub async fn create_call(
         surreal,
         &store::project_deadlines::NewDeadline {
             project_id: args.project_id,
+            title: args.title,
             due_at: args.due_at,
             authority_kind: args.authority_kind,
             authority: args.authority,
@@ -266,6 +271,7 @@ pub async fn update_call(
         args.project_id,
         args.deadline_id,
         &store::project_deadlines::DeadlinePatch {
+            title: args.title.map(Some),
             due_at: args.due_at,
             authority_kind: args.authority_kind,
             authority: args.authority,
@@ -462,6 +468,36 @@ mod tests {
         assert_eq!(
             completed["structuredContent"]["deadline"]["status"],
             "complete"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_title_is_stored_and_changed() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let person_id = lawyer(&surreal, Some(project_id)).await;
+        let mut args = create_args(project_id, "15 U.S.C. § 1");
+        args["title"] = json!("Answer to the complaint");
+        let created = create_call(&surreal, person_id, Role::Lawyer, &args)
+            .await
+            .unwrap();
+        let deadline = &created["structuredContent"]["deadline"];
+        assert_eq!(deadline["title"], "Answer to the complaint");
+        let updated = update_call(
+            &surreal,
+            person_id,
+            Role::Lawyer,
+            &json!({
+                "project_id": project_id,
+                "deadline_id": deadline["id"],
+                "title": "Reply brief"
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            updated["structuredContent"]["deadline"]["title"],
+            "Reply brief"
         );
     }
 

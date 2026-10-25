@@ -53,6 +53,7 @@ If a fact is missing or unverified, stop and ask the lawyer DRI. Do not record a
 
 ```bash
 navigator project deadline create \
+  --title "Opposition to the motion" \
   --due-at 2026-11-02T17:00:00-08:00 \
   --authority-kind court_order \
   --authority "Order setting briefing schedule, entered 2026-10-05" \
@@ -64,6 +65,8 @@ navigator project deadline create \
   --client-lead-days 3
 ```
 
+- **Name what is due.** `--title` is a short name for the pleading or response (at most 200 characters). Without one,
+  the board shows only the authority and role. `update <id> --title ""` clears it.
 - **Lead times are visibility.** `--internal-lead-days` warns the firm. `--client-lead-days` is the only way a client
   ever sees a deadline: with it unset, the date stays internal on the matter page and in every reminder. The internal
   lead is never shorter than the client lead.
@@ -83,7 +86,8 @@ navigator project deadline reopen <id>
 Put the docket on a calendar with `navigator project deadline ics`. It prints every row as one RFC 5545 `VCALENDAR`, one
 `VEVENT` per Deadline. The `UID` is `<deadline id>@<host>` and `SEQUENCE` follows the row's last update, so re-importing
 the file after an `update` changes the same calendar event. A cancelled row renders `STATUS:CANCELLED`, and
-`--internal-lead-days` becomes the reminder alarm. The summary carries the Project code, never the client's name.
+`--internal-lead-days` becomes the reminder alarm. The summary is the row's title (or its kind, when untitled) followed
+by the Project code, never the client's name.
 
 Reopen only when a cancelled date applies again. It restores the same row to open, retaining its id, replay key, and
 stored fields. Reopening an open row is a no-op; a complete row cannot be reopened. Replaying a cancelled row refuses

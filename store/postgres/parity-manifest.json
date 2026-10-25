@@ -1350,6 +1350,7 @@
         "source": "string",
         "source_document_id": "option<record<asset>>",
         "status": "string",
+        "title": "option<string>",
         "updated_at": "string"
       },
       "project_module": {
@@ -3953,6 +3954,7 @@
           "source": "TEXT",
           "source_document_id": "UUID",
           "status": "TEXT",
+          "title": "TEXT",
           "updated_at": "TIMESTAMPTZ"
         },
         "foreign_keys": [

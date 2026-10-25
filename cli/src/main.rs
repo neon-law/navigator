@@ -1723,6 +1723,9 @@ enum DeadlineCmd {
     },
     /// Store a deadline and print the row that was written.
     Create {
+        /// What is due, such as the pleading or response (at most 200 characters).
+        #[arg(long)]
+        title: Option<String>,
         /// RFC 3339 timestamp with an explicit offset.
         #[arg(long)]
         due_at: String,
@@ -1763,6 +1766,9 @@ enum DeadlineCmd {
     Update {
         /// Deadline id from project deadline list.
         id: uuid::Uuid,
+        /// What is due. An empty value clears the title.
+        #[arg(long)]
+        title: Option<String>,
         #[arg(long)]
         due_at: Option<String>,
         #[arg(long)]
@@ -5023,6 +5029,7 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             DeadlineCmd::Create {
                 host,
                 project,
+                title,
                 due_at,
                 authority_kind,
                 authority,
@@ -5037,6 +5044,7 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 projects::deadline::create(
                     host.host.as_deref(),
                     project.as_deref(),
+                    title,
                     due_at,
                     authority_kind,
                     authority,
@@ -5054,6 +5062,7 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 host,
                 project,
                 id,
+                title,
                 due_at,
                 authority_kind,
                 authority,
@@ -5068,6 +5077,7 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     host.host.as_deref(),
                     project.as_deref(),
                     id,
+                    title,
                     due_at,
                     authority_kind,
                     authority,

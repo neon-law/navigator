@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeadlineRow {
     pub id: String,
+    /// What is due; empty for a row recorded without a title.
+    pub title: String,
     /// The stored due instant with weekday and its original offset.
     pub due: String,
     /// Whose date it is, in plain words.
@@ -122,6 +124,7 @@ pub fn deadline_groups(
                 due_at,
                 DeadlineRow {
                     id: row.id.to_string(),
+                    title: row.title.clone().unwrap_or_default(),
                     due,
                     role: role_label(&row.calendar_role).to_string(),
                     authority,
@@ -219,6 +222,9 @@ pub fn ProjectDeadlinesPanel(
                                     "data-deadline": "{row.id}",
                                     td { "{row.due}" }
                                     td {
+                                        if !row.title.is_empty() {
+                                            strong { class: "project-deadlines__title", "{row.title} " }
+                                        }
                                         span { class: "project-deadlines__chip project-deadlines__chip--role status-chip", "{row.role}" }
                                     }
                                     td {
@@ -259,7 +265,12 @@ pub fn ProjectDeadlinesPanel(
                                         key: "past-{row.id}",
                                         "data-deadline": "{row.id}",
                                         td { "{row.due}" }
-                                        td { span { class: "project-deadlines__chip project-deadlines__chip--role status-chip", "{row.role}" } }
+                                        td {
+                                            if !row.title.is_empty() {
+                                                strong { class: "project-deadlines__title", "{row.title} " }
+                                            }
+                                            span { class: "project-deadlines__chip project-deadlines__chip--role status-chip", "{row.role}" }
+                                        }
                                         td {
                                             span { class: "project-deadlines__chip project-deadlines__chip--authority status-chip", "{row.authority_kind}" }
                                             if !row.authority.is_empty() {
@@ -298,6 +309,7 @@ mod tests {
     fn row(id: &str, state: &str, overdue: bool) -> DeadlineRow {
         DeadlineRow {
             id: id.to_string(),
+            title: String::new(),
             due: "2026-11-02 17:00 -08:00".to_string(),
             role: "Our deadline".to_string(),
             authority: "Order setting briefing schedule".to_string(),
@@ -317,6 +329,19 @@ mod tests {
                 past,
             }
         })
+    }
+
+    #[test]
+    fn the_panel_shows_a_title_only_when_the_row_has_one() {
+        let mut titled = row("a", "Upcoming", false);
+        titled.title = "Answer to the complaint".to_string();
+        let html = panel(vec![titled, row("b", "Upcoming", false)]);
+        assert_eq!(
+            html.matches("project-deadlines__title").count(),
+            1,
+            "{html}"
+        );
+        assert!(html.contains("Answer to the complaint"), "{html}");
     }
 
     #[test]
@@ -407,6 +432,7 @@ mod tests {
             Deadline {
                 id: Uuid::new_v4(),
                 project_id: Uuid::nil(),
+                title: None,
                 due_at: due_at.to_string(),
                 authority_kind: "court_order".to_string(),
                 authority: String::new(),
@@ -514,6 +540,16 @@ mod tests {
             assert_eq!(groups.open[0].authority_preview.chars().count(), 121);
             assert!(groups.open[0].authority_preview.ends_with('…'));
             assert_eq!(groups.open[0].authority, citation);
+        }
+
+        #[test]
+        fn a_title_reaches_the_row_and_a_missing_one_is_empty() {
+            let mut titled = deadline("2026-12-01T17:00:00-08:00", "open", None);
+            titled.title = Some("Answer to the complaint".to_string());
+            let plain = deadline("2026-12-02T17:00:00-08:00", "open", None);
+            let rows = deadline_rows(&[titled, plain], now(), false);
+            assert_eq!(rows[0].title, "Answer to the complaint");
+            assert_eq!(rows[1].title, "");
         }
 
         #[test]

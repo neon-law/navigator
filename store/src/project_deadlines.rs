@@ -21,12 +21,15 @@ const AUTHORITY_KINDS: &[&str] = &[
     "contract",
     "internal",
 ];
+pub const MAX_TITLE_CHARS: usize = 200;
 const CALENDAR_ROLES: &[&str] = &["firm", "opponent", "hearing"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Deadline {
     pub id: Uuid,
     pub project_id: Uuid,
+    /// A short name for what is due; rows written before titles existed have none.
+    pub title: Option<String>,
     pub due_at: String,
     pub authority_kind: String,
     pub authority: String,
@@ -46,6 +49,7 @@ pub struct Deadline {
 struct DeadlineRow {
     id: surrealdb::types::RecordId,
     project_id: surrealdb::types::RecordId,
+    title: Option<String>,
     due_at: String,
     authority_kind: String,
     authority: String,
@@ -66,6 +70,7 @@ impl DeadlineRow {
         Some(Deadline {
             id: record_uuid(&self.id)?,
             project_id: record_uuid(&self.project_id)?,
+            title: self.title,
             due_at: self.due_at,
             authority_kind: self.authority_kind,
             authority: self.authority,
@@ -83,7 +88,7 @@ impl DeadlineRow {
     }
 }
 
-const SELECT: &str = "id, project_id, due_at, authority_kind, authority, source, \
+const SELECT: &str = "id, project_id, title, due_at, authority_kind, authority, source, \
      source_document_id, owner_person_id, status, calendar_role, internal_lead_days, \
      client_lead_days, replay_key, inserted_at, updated_at";
 
@@ -102,6 +107,7 @@ pub enum DeadlineError {
 #[derive(Debug, Clone)]
 pub struct NewDeadline {
     pub project_id: Uuid,
+    pub title: Option<String>,
     pub due_at: String,
     pub authority_kind: String,
     pub authority: String,
@@ -116,6 +122,8 @@ pub struct NewDeadline {
 
 #[derive(Debug, Clone, Default)]
 pub struct DeadlinePatch {
+    /// `Some(None)` clears the title.
+    pub title: Option<Option<String>>,
     pub due_at: Option<String>,
     pub authority_kind: Option<String>,
     pub authority: Option<String>,
@@ -128,6 +136,7 @@ pub struct DeadlinePatch {
 }
 
 struct Normalized {
+    title: Option<String>,
     due_at: String,
     authority_kind: String,
     authority: String,
@@ -140,6 +149,7 @@ struct Normalized {
 
 #[derive(Clone, Copy)]
 struct DeadlineInput<'a> {
+    title: Option<&'a str>,
     due_at: &'a str,
     authority_kind: &'a str,
     authority: &'a str,
@@ -152,6 +162,7 @@ struct DeadlineInput<'a> {
 
 fn normalize(input: &DeadlineInput<'_>) -> Result<Normalized, DeadlineError> {
     let DeadlineInput {
+        title,
         due_at,
         authority_kind,
         authority,
@@ -216,8 +227,15 @@ fn normalize(input: &DeadlineInput<'_>) -> Result<Normalized, DeadlineError> {
             trimmed.to_string()
         }
     };
+    let title = title.map(str::trim).filter(|title| !title.is_empty());
+    if title.is_some_and(|title| title.chars().count() > MAX_TITLE_CHARS) {
+        return Err(DeadlineError::Invalid(format!(
+            "title must be at most {MAX_TITLE_CHARS} characters"
+        )));
+    }
     let replay_key = replay_key.map(str::trim).filter(|key| !key.is_empty());
     Ok(Normalized {
+        title: title.map(str::to_string),
         due_at,
         authority_kind: authority_kind.to_string(),
         authority,
@@ -345,7 +363,7 @@ async fn persist(
     let now = chrono::Utc::now().to_rfc3339();
     let mut response = surreal
         .query(format!(
-            "UPSERT $id SET project_id = $project_id, due_at = $due_at, \
+            "UPSERT $id SET project_id = $project_id, title = $title, due_at = $due_at, \
              authority_kind = $authority_kind, authority = $authority, source = $source, \
              source_document_id = $source_document_id, owner_person_id = $owner_person_id, \
              status = $status, calendar_role = $calendar_role, \
@@ -355,6 +373,7 @@ async fn persist(
         ))
         .bind(("id", record_id("project_deadlines", id)))
         .bind(("project_id", record_id("project", project_id)))
+        .bind(("title", normalized.title.clone()))
         .bind(("due_at", normalized.due_at.clone()))
         .bind(("authority_kind", normalized.authority_kind.clone()))
         .bind(("authority", normalized.authority.clone()))
@@ -394,6 +413,7 @@ async fn persist(
 /// their status while their fields update.
 pub async fn create(surreal: &SurrealDb, new: &NewDeadline) -> Result<Deadline, DeadlineError> {
     let normalized = normalize(&DeadlineInput {
+        title: new.title.as_deref(),
         due_at: &new.due_at,
         authority_kind: &new.authority_kind,
         authority: &new.authority,
@@ -459,6 +479,7 @@ pub async fn update(
     let existing = find(surreal, project_id, id)
         .await?
         .ok_or(DeadlineError::NotFound)?;
+    let title = patch.title.clone().unwrap_or(existing.title);
     let due_at = patch.due_at.clone().unwrap_or(existing.due_at);
     let authority_kind = patch
         .authority_kind
@@ -479,6 +500,7 @@ pub async fn update(
         .unwrap_or(existing.source_document_id);
     let owner_person_id = patch.owner_person_id.unwrap_or(existing.owner_person_id);
     let normalized = normalize(&DeadlineInput {
+        title: title.as_deref(),
         due_at: &due_at,
         authority_kind: &authority_kind,
         authority: &authority,
@@ -526,6 +548,7 @@ async fn transition(
         return Ok(existing);
     }
     let normalized = normalize(&DeadlineInput {
+        title: existing.title.as_deref(),
         due_at: &existing.due_at,
         authority_kind: &existing.authority_kind,
         authority: &existing.authority,
@@ -585,6 +608,7 @@ mod tests {
     fn sample(project_id: Uuid) -> NewDeadline {
         NewDeadline {
             project_id,
+            title: None,
             due_at: "2026-11-02T17:00:00-08:00".into(),
             authority_kind: "statute".into(),
             authority: "15 U.S.C. § 1681i(a)(1)".into(),
@@ -790,5 +814,76 @@ mod tests {
                 .unwrap_err(),
             DeadlineError::Invalid(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_title_round_trips_updates_and_clears() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let mut input = sample(project_id);
+        input.title = Some("  Answer to the complaint ".into());
+        let created = create(&surreal, &input).await.unwrap();
+        assert_eq!(created.title.as_deref(), Some("Answer to the complaint"));
+        let renamed = update(
+            &surreal,
+            project_id,
+            created.id,
+            &DeadlinePatch {
+                title: Some(Some("Reply brief".into())),
+                ..DeadlinePatch::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(renamed.title.as_deref(), Some("Reply brief"));
+        let kept = complete(&surreal, project_id, created.id).await.unwrap();
+        assert_eq!(kept.title.as_deref(), Some("Reply brief"));
+        let cleared = update(
+            &surreal,
+            project_id,
+            created.id,
+            &DeadlinePatch {
+                title: Some(None),
+                ..DeadlinePatch::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.title, None);
+    }
+
+    #[tokio::test]
+    async fn an_overlong_title_is_refused() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let mut input = sample(project_id);
+        input.title = Some("x".repeat(MAX_TITLE_CHARS + 1));
+        assert!(matches!(
+            create(&surreal, &input).await.unwrap_err(),
+            DeadlineError::Invalid(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_row_written_without_a_title_still_reads() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let id = Uuid::now_v7();
+        surreal
+            .query(
+                "CREATE $id SET project_id = $project, due_at = '2027-04-05T12:00:00+00:00', \
+                 authority_kind = 'internal', authority = '', source = 'lawyer', status = 'open', \
+                 calendar_role = 'firm', inserted_at = '2026-10-15T12:00:00Z', \
+                 updated_at = '2026-10-15T12:00:00Z'",
+            )
+            .bind(("id", record_id("project_deadlines", id)))
+            .bind(("project", record_id("project", project_id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let row = find(&surreal, project_id, id).await.unwrap().unwrap();
+        assert_eq!(row.title, None);
+        assert_eq!(list(&surreal, project_id).await.unwrap().len(), 1);
     }
 }

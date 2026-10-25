@@ -123,6 +123,7 @@ pub async fn ics(host: Option<&str>, project: Option<&str>) -> ExitCode {
 pub async fn create(
     host: Option<&str>,
     project: Option<&str>,
+    title: Option<String>,
     due_at: String,
     authority_kind: String,
     authority: Option<String>,
@@ -145,6 +146,9 @@ pub async fn create(
             let Some(object) = body.as_object_mut() else {
                 return Err(anyhow!("deadline body is an object"));
             };
+            if let Some(title) = title {
+                object.insert("title".into(), json!(title));
+            }
             if let Some(authority) = authority {
                 object.insert("authority".into(), json!(authority));
             }
@@ -184,6 +188,7 @@ pub async fn update(
     host: Option<&str>,
     project: Option<&str>,
     id: Uuid,
+    title: Option<String>,
     due_at: Option<String>,
     authority_kind: Option<String>,
     authority: Option<String>,
@@ -201,6 +206,9 @@ pub async fn update(
             let Some(object) = body.as_object_mut() else {
                 return Err(anyhow!("deadline body is an object"));
             };
+            if let Some(title) = title {
+                object.insert("title".into(), json!(title));
+            }
             if let Some(due_at) = due_at {
                 object.insert("due_at".into(), json!(due_at));
             }

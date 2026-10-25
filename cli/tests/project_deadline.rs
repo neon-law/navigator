@@ -37,6 +37,7 @@ async fn mount(server: &MockServer, project_id: Uuid, deadline_id: Uuid) -> Stor
         .and(path(format!("/app/api/projects/{project_id}/deadlines")))
         .and(header("authorization", "Bearer test-token"))
         .and(body_json(json!({
+            "title": "Answer to the complaint",
             "due_at": "2026-11-02T17:00:00-08:00",
             "authority_kind": "statute",
             "authority": "15 U.S.C. § 1",
@@ -66,7 +67,9 @@ async fn mount(server: &MockServer, project_id: Uuid, deadline_id: Uuid) -> Stor
             "/app/api/projects/{project_id}/deadlines/{deadline_id}"
         )))
         .and(header("authorization", "Bearer test-token"))
-        .and(body_json(json!({"calendar_role": "opponent"})))
+        .and(body_json(
+            json!({"title": "Reply brief", "calendar_role": "opponent"}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(&updated))
         .expect(1)
         .mount(server)
@@ -139,6 +142,8 @@ async fn deadline_create_list_update_and_complete_print_the_stored_row() {
                 "project",
                 "deadline",
                 "create",
+                "--title",
+                "Answer to the complaint",
                 "--due-at",
                 "2026-11-02T17:00:00-08:00",
                 "--authority-kind",
@@ -169,6 +174,8 @@ async fn deadline_create_list_update_and_complete_print_the_stored_row() {
                 "deadline",
                 "update",
                 id.as_str(),
+                "--title",
+                "Reply brief",
                 "--calendar-role",
                 "opponent",
             ],

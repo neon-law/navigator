@@ -259,6 +259,7 @@ pub fn deadline_board(
                 .map(|deadline| deadline.authority_kind.as_str())
                 .unwrap_or_default();
             DeadlineCard {
+                title: row.title,
                 due: row.due,
                 binding: binding(kind).to_string(),
                 authority: row.authority,
@@ -659,6 +660,7 @@ mod tests {
         Deadline {
             id: Uuid::now_v7(),
             project_id: Uuid::nil(),
+            title: None,
             due_at: due_at.to_string(),
             authority_kind: "court_order".to_string(),
             authority: format!("Synthetic {role} order"),

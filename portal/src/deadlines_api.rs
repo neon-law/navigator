@@ -17,6 +17,7 @@ use crate::api::{ApiError, ApiState, LawyerSession};
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CreateDeadlineRequest {
+    title: Option<String>,
     due_at: String,
     authority_kind: String,
     #[serde(default)]
@@ -35,6 +36,8 @@ pub(crate) struct CreateDeadlineRequest {
 #[serde(deny_unknown_fields)]
 #[allow(clippy::option_option)]
 pub(crate) struct UpdateDeadlineRequest {
+    /// An empty string clears the title.
+    title: Option<String>,
     due_at: Option<String>,
     authority_kind: Option<String>,
     authority: Option<String>,
@@ -97,6 +100,7 @@ pub(crate) async fn create_deadline(
         &state.surreal,
         &store::project_deadlines::NewDeadline {
             project_id: id,
+            title: input.title,
             due_at: input.due_at,
             authority_kind: input.authority_kind,
             authority: input.authority,
@@ -127,6 +131,7 @@ pub(crate) async fn update_deadline(
         id,
         deadline_id,
         &store::project_deadlines::DeadlinePatch {
+            title: input.title.map(Some),
             due_at: input.due_at,
             authority_kind: input.authority_kind,
             authority: input.authority,

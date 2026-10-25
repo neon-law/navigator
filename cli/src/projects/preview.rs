@@ -176,6 +176,8 @@ struct LiveProject {
 struct LiveDeadline {
     id: Uuid,
     project_id: Uuid,
+    #[serde(default)]
+    title: Option<String>,
     due_at: String,
     #[serde(default)]
     authority_kind: String,
@@ -207,6 +209,7 @@ impl From<LiveDeadline> for store::project_deadlines::Deadline {
         Self {
             id: row.id,
             project_id: row.project_id,
+            title: row.title,
             due_at: row.due_at,
             authority_kind: row.authority_kind,
             authority: row.authority,

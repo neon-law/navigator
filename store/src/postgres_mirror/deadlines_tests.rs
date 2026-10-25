@@ -38,7 +38,7 @@ async fn project_deadline_mirrors_replay_and_reconcile() {
     sqlx::query("INSERT INTO project (id,code,name,status,entity_id) VALUES ($1,$2,'Synthetic project','open',$3)")
         .bind(project).bind(format!("deadline-{project}")).bind(entity).execute(&pg.0).await.unwrap();
 
-    surreal.query("CREATE $id SET project_id=$project, due_at='2027-04-05T12:00:00Z', authority_kind='internal', authority='', source='synthetic test', status='open', calendar_role='firm', inserted_at='2026-10-15T12:00:00Z', updated_at='2026-10-15T12:00:00Z'")
+    surreal.query("CREATE $id SET project_id=$project, title='Answer', due_at='2027-04-05T12:00:00Z', authority_kind='internal', authority='', source='synthetic test', status='open', calendar_role='firm', inserted_at='2026-10-15T12:00:00Z', updated_at='2026-10-15T12:00:00Z'")
         .bind(("id", crate::surreal::record_id("project_deadlines", id)))
         .bind(("project", crate::surreal::record_id("project", project)))
         .await.unwrap().check().unwrap();
@@ -73,5 +73,12 @@ async fn project_deadline_mirrors_replay_and_reconcile() {
         .await
         .unwrap();
     assert_eq!(status, "complete");
+    let title: Option<String> =
+        sqlx::query_scalar("SELECT title FROM project_deadlines WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
+    assert_eq!(title.as_deref(), Some("Answer"));
     pg.0.close().await;
 }

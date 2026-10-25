@@ -41,6 +41,7 @@ fn deadline(
     client_lead_days: Option<i64>,
 ) -> store::project_deadlines::NewDeadline {
     store::project_deadlines::NewDeadline {
+        title: None,
         project_id,
         // Far enough out that the test never turns into an overdue one.
         due_at: "2099-11-02T17:00:00-08:00".into(),
