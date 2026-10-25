@@ -80,6 +80,11 @@ navigator project deadline cancel <id>
 navigator project deadline reopen <id>
 ```
 
+Put the docket on a calendar with `navigator project deadline ics`. It prints every row as one RFC 5545 `VCALENDAR`, one
+`VEVENT` per Deadline. The `UID` is `<deadline id>@<host>` and `SEQUENCE` follows the row's last update, so re-importing
+the file after an `update` changes the same calendar event. A cancelled row renders `STATUS:CANCELLED`, and
+`--internal-lead-days` becomes the reminder alarm. The summary carries the Project code, never the client's name.
+
 Reopen only when a cancelled date applies again. It restores the same row to open, retaining its id, replay key, and
 stored fields. Reopening an open row is a no-op; a complete row cannot be reopened. Replaying a cancelled row refuses
 without changing it and directs you to reopen first. Reopen it, then update or replay the same key; never create a
