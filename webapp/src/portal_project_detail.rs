@@ -1289,6 +1289,7 @@ mod render_tests {
         let html = render_page(ProjectDetailView {
             deadlines: vec![crate::project_deadlines::DeadlineRow {
                 id: "d1".into(),
+                title: "Answer to the complaint".into(),
                 due: "2026-11-02 17:00 -08:00".into(),
                 role: "Hearing".into(),
                 authority: "Notice of hearing".into(),
@@ -1300,6 +1301,7 @@ mod render_tests {
             }],
             past_deadlines: vec![crate::project_deadlines::DeadlineRow {
                 id: "d2".into(),
+                title: String::new(),
                 due: "Monday, 7 Sep 26 17:00 -08:00".into(),
                 role: "Hearing".into(),
                 authority: "Earlier notice".into(),

@@ -259,6 +259,7 @@ pub fn deadline_board(
                 .map(|deadline| deadline.authority_kind.as_str())
                 .unwrap_or_default();
             DeadlineCard {
+                title: row.title,
                 due: row.due,
                 binding: binding(kind).to_string(),
                 authority: row.authority,
