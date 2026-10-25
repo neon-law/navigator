@@ -247,3 +247,47 @@ pub fn load(section: Section, cx: &LoadContext) -> SectionView {
         Section::RedlineView => SectionView::RedlineView(cx.closing.redlines.clone()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// The sections [`load`](super::load) still maps to an empty view, so
+    /// their pages always show the empty state. Loading data into one means
+    /// removing it from this list in the same change.
+    const UNLOADED: [&str; 10] = [
+        "AssertionPanel",
+        "CommentRail",
+        "ItemDetail",
+        "MetricStrip",
+        "PackageManifest",
+        "PrebillReview",
+        "QueueRail",
+        "SourcePagePanel",
+        "Stepper",
+        "WorkstreamCards",
+    ];
+
+    /// Every `Section::X => SectionView::X(Vec::new())` arm of `load`.
+    fn unloaded_in_source() -> Vec<String> {
+        let source = include_str!("load.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+        let mut found: Vec<String> = production
+            .lines()
+            .filter_map(|line| {
+                let (section, view) = line.trim().strip_prefix("Section::")?.split_once(" => ")?;
+                let view = view.strip_prefix("SectionView::")?;
+                (view == format!("{section}(Vec::new()),")).then(|| section.to_string())
+            })
+            .collect();
+        found.sort_unstable();
+        found
+    }
+
+    #[test]
+    fn the_sections_that_load_nothing_are_exactly_the_listed_ones() {
+        assert_eq!(
+            unloaded_in_source(),
+            UNLOADED,
+            "a section now loads data (or a new one loads none): update UNLOADED"
+        );
+    }
+}
