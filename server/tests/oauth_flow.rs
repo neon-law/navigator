@@ -99,14 +99,9 @@ fn query_param(location: &str, param: &str) -> String {
         .to_string()
 }
 
-async fn seed_person(surreal: &store::surreal::SurrealDb, email: &str, role: store::persons::Role) {
-    store::persons::create(
-        surreal,
-        &store::persons::NewPerson::with_role(email.to_string(), email.to_string(), role),
-    )
-    .await
-    .expect("seed person");
-}
+#[path = "common/seed_person.rs"]
+mod seed_person;
+use seed_person::seed_person;
 
 #[tokio::test]
 async fn login_sets_pre_auth_cookie_and_redirects_to_idp() {

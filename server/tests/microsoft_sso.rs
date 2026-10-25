@@ -79,14 +79,9 @@ async fn state_with_both_providers(mock: &MockServer, sessions_store: SessionSto
     }
 }
 
-async fn seed_person(surreal: &store::surreal::SurrealDb, email: &str, role: store::persons::Role) {
-    store::persons::create(
-        surreal,
-        &store::persons::NewPerson::with_role(email.to_string(), email.to_string(), role),
-    )
-    .await
-    .expect("seed person");
-}
+#[path = "common/seed_person.rs"]
+mod seed_person;
+use seed_person::seed_person;
 
 /// Extract the value of `param=` from an authorize-redirect `Location`.
 fn query_param(location: &str, param: &str) -> String {
