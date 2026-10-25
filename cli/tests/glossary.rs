@@ -226,6 +226,35 @@ fn glossary_nightly_project_update_is_a_dag_of_tagged_child_dags() {
     assert!(!stdout.contains("## Deployment Environment"));
 }
 
+/// A Pointer is the tracked YAML naming one Document revision; a Blob is the
+/// stored bytes it addresses by SHA-256. Pin the split so no entry drifts back
+/// to calling the committed YAML a Blob.
+#[test]
+fn glossary_separates_the_pointer_from_the_blob() {
+    let pointer = navigator(&["glossary", "show", "Pointer"]);
+    assert!(
+        pointer.status.success(),
+        "exit status: {:?}",
+        pointer.status
+    );
+    let pointer = String::from_utf8_lossy(&pointer.stdout);
+    assert!(pointer.contains("## Pointer"));
+    assert!(pointer.contains("never contains bytes"), "{pointer}");
+    assert!(pointer.contains("store::document_pointers::DocumentPointer"));
+
+    let blob = navigator(&["glossary", "show", "Blob"]);
+    assert!(blob.status.success(), "exit status: {:?}", blob.status);
+    let blob = String::from_utf8_lossy(&blob.stdout);
+    assert!(blob.contains("## Blob"));
+    assert!(blob.contains("sha256"), "{blob}");
+    assert!(blob.contains("[Pointer](pointer.md)"), "{blob}");
+    assert!(
+        !blob.contains("committed pointer"),
+        "a Blob is bytes, not the committed YAML: {blob}"
+    );
+    assert!(!blob.contains("## Pointer"), "one term only: {blob}");
+}
+
 #[test]
 fn glossary_show_is_case_insensitive() {
     let out = navigator(&["glossary", "show", "lawyer review"]);
