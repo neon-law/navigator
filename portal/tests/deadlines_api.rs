@@ -331,3 +331,44 @@ async fn cancelled_replay_requires_explicit_reopen_on_the_same_project() {
     let (_, listed) = send(&fixture.app, "GET", &uri, &fixture.participant, Vec::new()).await;
     assert_eq!(listed, json!([completed]));
 }
+
+#[tokio::test]
+async fn a_title_is_stored_changed_and_cleared() {
+    let fixture = fixture().await;
+    let uri = format!("/app/api/projects/{}/deadlines", fixture.project_id);
+    let mut input: Value = serde_json::from_slice(&body("15 U.S.C. § 1")).unwrap();
+    input["title"] = json!("Answer to the complaint");
+    let (status, created) = send(
+        &fixture.app,
+        "POST",
+        &uri,
+        &fixture.participant,
+        serde_json::to_vec(&input).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 201, "{created}");
+    assert_eq!(created["title"], "Answer to the complaint");
+    let id = created["id"].as_str().unwrap();
+
+    let (status, renamed) = send(
+        &fixture.app,
+        "PATCH",
+        &format!("{uri}/{id}"),
+        &fixture.participant,
+        serde_json::to_vec(&json!({"title": "Reply brief"})).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "{renamed}");
+    assert_eq!(renamed["title"], "Reply brief");
+
+    let (status, cleared) = send(
+        &fixture.app,
+        "PATCH",
+        &format!("{uri}/{id}"),
+        &fixture.participant,
+        serde_json::to_vec(&json!({"title": ""})).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "{cleared}");
+    assert!(cleared["title"].is_null(), "{cleared}");
+}

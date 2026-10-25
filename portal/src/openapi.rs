@@ -1693,7 +1693,7 @@ fn canonical_document(base: &str) -> Value {
           },
           "post": {
             "summary": "Create a deadline",
-            "description": "Store a deadline and return the written row. due_at is an RFC 3339 timestamp with an offset. A statute or court_rule requires an authority citation. The internal lead time is never shorter than the client lead time. Dates are stored as given; court days are not computed. Replaying a cancelled row is refused without changing it; POST to the row's /reopen endpoint first. Replaying a complete row updates its fields and preserves complete status.",
+            "description": "Store a deadline and return the written row. An optional title (at most 200 characters) names what is due. due_at is an RFC 3339 timestamp with an offset. A statute or court_rule requires an authority citation. The internal lead time is never shorter than the client lead time. Dates are stored as given; court days are not computed. Replaying a cancelled row is refused without changing it; POST to the row's /reopen endpoint first. Replaying a complete row updates its fields and preserves complete status.",
             "x-mcp-tool": "create_deadline",
             "parameters": [
               { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
@@ -1709,7 +1709,7 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/projects/{id}/deadlines/{deadline_id}": {
           "patch": {
             "summary": "Update a deadline",
-            "description": "Change the stored fields and return the written row. Status changes only through complete, cancel, and reopen.",
+            "description": "Change the stored fields and return the written row. An empty title clears it. Status changes only through complete, cancel, and reopen.",
             "x-mcp-tool": "update_deadline",
             "parameters": [
               { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
