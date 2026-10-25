@@ -166,7 +166,10 @@ async fn the_nautilus_page_renders_on_neon_hosts_with_the_app_checks_and_pricing
             assert!(body.contains(expected), "{host:?} is missing {expected:?}");
         }
         for retired in ["The Reef", "The Cove", "Write your triggers together"] {
-            assert!(!body.contains(retired), "{host:?} still carries {retired:?}");
+            assert!(
+                !body.contains(retired),
+                "{host:?} still carries {retired:?}"
+            );
         }
     }
 }

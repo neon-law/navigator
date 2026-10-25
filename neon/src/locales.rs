@@ -660,43 +660,7 @@ fn band(copy: BandCopy, catalog: Option<&views::locales::services::ServicesCatal
                  `the_services_band_only_ships_where_a_catalog_does` is the gate",
             ),
         ),
-        BandCopy::AppPreview {
-            anchor,
-            overline,
-            heading,
-            description,
-            app_name,
-            app_subtitle,
-            price,
-            install_ios_label,
-            install_android_label,
-            checks_heading,
-            checks,
-            app_store_label,
-            play_store_label,
-            availability,
-        } => Band::AppPreview {
-            anchor,
-            overline,
-            heading,
-            description,
-            app_name,
-            app_subtitle,
-            price,
-            install_ios_label,
-            install_android_label,
-            checks_heading,
-            checks: checks
-                .into_iter()
-                .map(|check| webapp::marketing_page::AppCheck {
-                    title: check.title,
-                    detail: check.detail,
-                })
-                .collect(),
-            app_store_label,
-            play_store_label,
-            availability,
-        },
+        copy @ BandCopy::AppPreview { .. } => app_preview_band(copy),
         BandCopy::Cta {
             heading,
             body,
@@ -735,6 +699,50 @@ fn enrollment_band(copy: BandCopy) -> Band {
         booking_label,
         booking_body,
         booking_href: String::new(),
+    }
+}
+
+fn app_preview_band(copy: BandCopy) -> Band {
+    let BandCopy::AppPreview {
+        anchor,
+        overline,
+        heading,
+        description,
+        app_name,
+        app_subtitle,
+        price,
+        install_ios_label,
+        install_android_label,
+        checks_heading,
+        checks,
+        app_store_label,
+        play_store_label,
+        availability,
+    } = copy
+    else {
+        unreachable!("app preview helper receives only app preview copy")
+    };
+    Band::AppPreview {
+        anchor,
+        overline,
+        heading,
+        description,
+        app_name,
+        app_subtitle,
+        price,
+        install_ios_label,
+        install_android_label,
+        checks_heading,
+        checks: checks
+            .into_iter()
+            .map(|check| webapp::marketing_page::AppCheck {
+                title: check.title,
+                detail: check.detail,
+            })
+            .collect(),
+        app_store_label,
+        play_store_label,
+        availability,
     }
 }
 
@@ -2477,7 +2485,13 @@ mod tests {
             }
             // One product name, plainly: no themed card names, and no sibling
             // brand drawing attention to a single check.
-            for retired in ["Neon Law Nautilus", "The Reef", "The Cove", "Vesta", "DeleteYourData"] {
+            for retired in [
+                "Neon Law Nautilus",
+                "The Reef",
+                "The Cove",
+                "Vesta",
+                "DeleteYourData",
+            ] {
                 assert!(!text.contains(retired), "{host}: {retired} survives");
             }
             assert!(!text.contains("$50"), "{host}: the retired price survives");

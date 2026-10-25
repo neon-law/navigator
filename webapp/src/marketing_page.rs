@@ -1332,7 +1332,10 @@ mod tests {
             install_ios_label: "Get".into(),
             install_android_label: "Install".into(),
             checks_heading: "Your checks".into(),
-            checks: vec![AppCheck { title: "Data removal".into(), detail: "Requests".into() }],
+            checks: vec![AppCheck {
+                title: "Data removal".into(),
+                detail: "Requests".into(),
+            }],
             app_store_label: "App Store".into(),
             play_store_label: "Google Play".into(),
             availability: "Coming soon to".into(),
@@ -1340,10 +1343,19 @@ mod tests {
         let html = dioxus_ssr::render_element(rsx! { Bands { items: vec![band] } });
         assert_eq!(html.matches("Data removal").count(), 2, "{html}");
         assert_eq!(html.matches("<h3").count(), 1, "{html}");
-        assert!(html.contains(r#"data-phone="ios" aria-hidden="false""#), "{html}");
-        assert!(html.contains(r#"data-phone="android" aria-hidden="true""#), "{html}");
+        assert!(
+            html.contains(r#"data-phone="ios" aria-hidden="false""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"data-phone="android" aria-hidden="true""#),
+            "{html}"
+        );
         assert!(html.contains(r#"data-store="ios""#) && html.contains(r#"data-store="android""#));
-        assert!(!html.contains("<a "), "unpublished apps link nowhere: {html}");
+        assert!(
+            !html.contains("<a "),
+            "unpublished apps link nowhere: {html}"
+        );
     }
 
     /// Each box is one anchor at the version's real GitHub Release asset, in

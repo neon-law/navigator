@@ -274,37 +274,43 @@ mod firm_copy_tests {
                     saas_tools.join(" ")
                 )
             }
-            Band::AppPreview {
-                overline,
-                heading,
-                description,
-                app_name,
-                app_subtitle,
-                price,
-                checks_heading,
-                checks,
-                app_store_label,
-                play_store_label,
-                availability,
-                ..
-            } => {
-                let checks = checks
-                    .iter()
-                    .map(|check| format!("{} {}", check.title, check.detail))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let description = description.clone().unwrap_or_default();
-                format!(
-                    "{overline} {heading} {description} {app_name} {app_subtitle} {price} \
-                     {checks_heading} {checks} {app_store_label} {play_store_label} {availability}"
-                )
-            }
+            Band::AppPreview { .. } => app_preview_text(band),
             Band::Downloads { .. } => downloads_text(band),
             Band::Services(services) => services_text(services),
             Band::Cta { heading, body, .. } => {
                 format!("{heading} {}", body.clone().unwrap_or_default())
             }
         }
+    }
+
+    fn app_preview_text(band: &Band) -> String {
+        let Band::AppPreview {
+            overline,
+            heading,
+            description,
+            app_name,
+            app_subtitle,
+            price,
+            checks_heading,
+            checks,
+            app_store_label,
+            play_store_label,
+            availability,
+            ..
+        } = band
+        else {
+            return String::new();
+        };
+        let checks = checks
+            .iter()
+            .map(|check| format!("{} {}", check.title, check.detail))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let description = description.clone().unwrap_or_default();
+        format!(
+            "{overline} {heading} {description} {app_name} {app_subtitle} {price} \
+             {checks_heading} {checks} {app_store_label} {play_store_label} {availability}"
+        )
     }
 
     fn page_text(bands: &[Band]) -> String {
