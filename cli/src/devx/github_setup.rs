@@ -242,6 +242,16 @@ const ACTIONS_APP_SLUG: &str = "github-actions";
 /// ruleset to — two constants for one convention is a rename waiting to leave
 /// one of them stale.
 pub(crate) const REQUIRED_CHECK: &str = "ci";
+/// The status check GitHub's code-scanning App posts for `CodeQL` results.
+///
+/// It is distinct from the `Analyze (<language>)` jobs in `codeql.yml`, which
+/// pass whenever the analysis ran. This check fails only on new alerts in code a
+/// pull request changed, so alerts already open on `main` do not block merges.
+const CODE_SCANNING_CHECK: &str = "CodeQL";
+/// The id of the `github-advanced-security` App that posts
+/// [`CODE_SCANNING_CHECK`]. Fixed on github.com, unlike the Actions App id,
+/// which is read from the host.
+const CODE_SCANNING_APP_ID: u64 = 57789;
 /// Workflow files that may terminate in the [`REQUIRED_CHECK`] job, in the
 /// order they are looked for.
 ///
@@ -277,6 +287,7 @@ const COMMON_POLICY: RepositoryPolicy = RepositoryPolicy {
     labels: &[],
     assert_codeowners: true,
     branch_protections: true,
+    code_scanning: false,
 };
 
 /// The same gate, with client-confidential defaults: what every repository
@@ -299,6 +310,7 @@ const CLIENT_POLICY: RepositoryPolicy = RepositoryPolicy {
     labels: &[],
     assert_codeowners: true,
     branch_protections: true,
+    code_scanning: false,
 };
 
 /// Navigator's own policy: the common gate plus cutting release tags, the one
@@ -310,6 +322,7 @@ const NAVIGATOR_POLICY: RepositoryPolicy = RepositoryPolicy {
     labels: &[],
     assert_codeowners: true,
     branch_protections: true,
+    code_scanning: true,
 };
 
 /// The Homebrew tap's policy: nothing on `main` at all.
@@ -340,6 +353,7 @@ const TAP_POLICY: RepositoryPolicy = RepositoryPolicy {
     labels: &[],
     assert_codeowners: false,
     branch_protections: false,
+    code_scanning: false,
 };
 
 /// The policy a repository is reconciled against, forked by organization first.
@@ -593,6 +607,9 @@ struct RepositoryPolicy {
     /// whose `main` is written by a machine, where the same rules refuse the
     /// write instead of reviewing it.
     branch_protections: bool,
+    /// Whether `main` also waits on the `CodeQL` code-scanning check. True only
+    /// where the repository carries the `CodeQL` workflow that posts it.
+    code_scanning: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -822,10 +839,18 @@ fn desired_rulesets(
 ) -> Vec<RulesetPayload> {
     let mut rulesets = Vec::new();
     if policy.branch_protections {
+        let code_scanning = [serde_json::json!({
+            "context": CODE_SCANNING_CHECK,
+            "integration_id": CODE_SCANNING_APP_ID
+        })];
         rulesets.push(desired_branch_ruleset(
             actions_app_id,
             required_check_context,
-            &[],
+            if policy.code_scanning {
+                &code_scanning
+            } else {
+                &[]
+            },
         ));
     }
     if policy.release_tags {
@@ -2829,6 +2854,14 @@ mod tests {
     /// behaviour.
     const TEST_ACTIONS_APP_ID: u64 = 4242;
     const TEST_EXTRA_CHECK_INTEGRATION_ID: u64 = 1234;
+
+    /// The `CodeQL` check Navigator's own gate also requires.
+    fn codeql_check() -> serde_json::Value {
+        serde_json::json!({
+            "context": CODE_SCANNING_CHECK,
+            "integration_id": CODE_SCANNING_APP_ID
+        })
+    }
     const TEST_OTHER_APP_ID: u64 = 9931;
 
     #[tokio::test]
@@ -2897,7 +2930,8 @@ mod tests {
     }
 
     fn live_ruleset() -> RulesetPayload {
-        let mut ruleset = desired_branch_ruleset(TEST_ACTIONS_APP_ID, REQUIRED_CHECK, &[]);
+        let mut ruleset =
+            desired_branch_ruleset(TEST_ACTIONS_APP_ID, REQUIRED_CHECK, &[codeql_check()]);
         let pull_request = ruleset
             .rules
             .iter_mut()
@@ -3459,21 +3493,71 @@ mod tests {
         assert_eq!(contexts, vec![serde_json::json!("ci / ci")]);
     }
 
+    /// Navigator's own `main` also waits on code scanning: the `CodeQL` check
+    /// the GitHub code-scanning App posts, which counts only the alerts a pull
+    /// request introduces. Every other repository keeps the `ci` check alone,
+    /// because none of them is promised a `CodeQL` workflow.
     #[test]
-    fn navigator_requires_only_the_ci_check() {
-        let contexts = desired_rulesets(NAVIGATOR_POLICY, TEST_ACTIONS_APP_ID, &[], REQUIRED_CHECK)
-            .into_iter()
-            .flat_map(|ruleset| ruleset.rules)
-            .filter(|rule| rule.kind == "required_status_checks")
-            .flat_map(|rule| {
-                rule.parameters.unwrap()["required_status_checks"]
-                    .as_array()
-                    .unwrap()
-                    .clone()
-            })
-            .filter_map(|check| check["context"].as_str().map(str::to_string))
-            .collect::<Vec<_>>();
-        assert_eq!(contexts, vec!["ci"]);
+    fn only_navigator_also_requires_the_codeql_check() {
+        let checks = |policy| {
+            desired_rulesets(policy, TEST_ACTIONS_APP_ID, &[], REQUIRED_CHECK)
+                .into_iter()
+                .flat_map(|ruleset| ruleset.rules)
+                .filter(|rule| rule.kind == "required_status_checks")
+                .flat_map(|rule| {
+                    rule.parameters.unwrap()["required_status_checks"]
+                        .as_array()
+                        .unwrap()
+                        .clone()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            checks(NAVIGATOR_POLICY),
+            vec![
+                serde_json::json!({"context": "ci", "integration_id": TEST_ACTIONS_APP_ID}),
+                serde_json::json!({
+                    "context": CODE_SCANNING_CHECK,
+                    "integration_id": CODE_SCANNING_APP_ID
+                }),
+            ]
+        );
+        assert_eq!(CODE_SCANNING_CHECK, "CodeQL");
+        assert_eq!(
+            checks(COMMON_POLICY),
+            vec![serde_json::json!({"context": "ci", "integration_id": TEST_ACTIONS_APP_ID})]
+        );
+    }
+
+    /// A live `production` ruleset that lacks the `CodeQL` check is drift:
+    /// `ops github setup` plans an update (and its dry run reports it), rather
+    /// than treating a `ci`-only gate as converged.
+    #[test]
+    fn a_navigator_ruleset_without_the_codeql_check_is_drift() {
+        let desired = desired_rulesets(NAVIGATOR_POLICY, TEST_ACTIONS_APP_ID, &[], REQUIRED_CHECK);
+        let branch = desired
+            .iter()
+            .find(|ruleset| ruleset.name == BRANCH_RULESET_NAME)
+            .unwrap()
+            .clone();
+        assert!(ruleset_matches(&branch, &branch));
+        let ci_only = desired_branch_ruleset(TEST_ACTIONS_APP_ID, REQUIRED_CHECK, &[]);
+        assert!(!ruleset_matches(&branch, &ci_only));
+        let tag = desired_tag_ruleset();
+        assert_eq!(
+            plan(
+                NAVIGATOR_POLICY,
+                TEST_ACTIONS_APP_ID,
+                &[],
+                REQUIRED_CHECK,
+                true,
+                &[Some(ci_only), Some(tag)],
+                &[],
+            ),
+            vec![Action::UpdateRuleset {
+                name: BRANCH_RULESET_NAME.to_string()
+            }]
+        );
     }
 
     /// The repository's own workflow satisfies the convention the policy
@@ -3640,10 +3724,13 @@ mod tests {
             Some(desired_branch_ruleset(
                 TEST_ACTIONS_APP_ID,
                 REQUIRED_CHECK,
-                &[serde_json::json!({
-                    "context": "security-scan",
-                    "integration_id": TEST_EXTRA_CHECK_INTEGRATION_ID
-                })],
+                &[
+                    codeql_check(),
+                    serde_json::json!({
+                        "context": "security-scan",
+                        "integration_id": TEST_EXTRA_CHECK_INTEGRATION_ID
+                    }),
+                ],
             )),
             None,
             None,
@@ -3675,6 +3762,7 @@ mod tests {
         labels: &[],
         assert_codeowners: false,
         branch_protections: true,
+        code_scanning: false,
     };
 
     /// LAW-10: a Project repository that already has its `production` ruleset
@@ -4227,7 +4315,7 @@ mod tests {
                 serde_json::to_value(desired_branch_ruleset(
                     TEST_ACTIONS_APP_ID,
                     REQUIRED_CHECK,
-                    &[],
+                    &[codeql_check()],
                 ))
                 .unwrap(),
             ))
@@ -4258,10 +4346,13 @@ mod tests {
             &desired_branch_ruleset(
                 TEST_ACTIONS_APP_ID,
                 REQUIRED_CHECK,
-                &[serde_json::json!({
-                    "context": "security-scan",
-                    "integration_id": TEST_EXTRA_CHECK_INTEGRATION_ID
-                })],
+                &[
+                    codeql_check(),
+                    serde_json::json!({
+                        "context": "security-scan",
+                        "integration_id": TEST_EXTRA_CHECK_INTEGRATION_ID
+                    }),
+                ],
             ),
             vec![],
             REQUIRED_CHECK_WORKFLOW,
@@ -4450,10 +4541,13 @@ mod tests {
             &desired_branch_ruleset(
                 TEST_ACTIONS_APP_ID,
                 REQUIRED_CHECK,
-                &[serde_json::json!({
-                    "context": "security-scan",
-                    "integration_id": TEST_EXTRA_CHECK_INTEGRATION_ID
-                })],
+                &[
+                    codeql_check(),
+                    serde_json::json!({
+                        "context": "security-scan",
+                        "integration_id": TEST_EXTRA_CHECK_INTEGRATION_ID
+                    }),
+                ],
             ),
             vec![],
             REQUIRED_CHECK_WORKFLOW,

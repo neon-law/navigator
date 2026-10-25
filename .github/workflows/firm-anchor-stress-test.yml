@@ -26,6 +26,9 @@ on:
         description: iterations, each racing 4 concurrent copies x 8 rounds
         default: "600"
 
+permissions:
+  contents: read
+
 jobs:
   stress-test:
     # The class the fork was observed on. It is scheduler-dependent, so the
@@ -40,7 +43,7 @@ jobs:
       - name: install lld
         run: sudo apt-get update && sudo apt-get install -y lld
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
@@ -51,7 +54,9 @@ jobs:
       # the window inside the claim, so an uninstrumented stress test is not the same
       # experiment.
       - name: install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: cargo-llvm-cov@0.8.7
 
       - name: cache the Rust dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2

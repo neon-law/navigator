@@ -368,8 +368,22 @@ fn the_required_ci_job_runs_the_markdown_and_yaml_rule_through_the_cli() {
         .expect("ci runs `navigator project gate --tracked-files`");
     let gather = runs
         .iter()
-        .position(|run| run.contains("needs.verify.result"))
+        .position(|run| run.contains("$VERIFY_RESULT"))
         .expect("ci still requires every job");
+    // Job results reach the shell through `env:`, never interpolated into the
+    // script (CodeQL `actions/code-injection`).
+    let gather_step = steps
+        .iter()
+        .find(|step| {
+            step["run"]
+                .as_str()
+                .is_some_and(|run| run.contains("$VERIFY_RESULT"))
+        })
+        .unwrap();
+    assert_eq!(
+        gather_step["env"]["VERIFY_RESULT"].as_str(),
+        Some("${{ needs.verify.result }}")
+    );
     assert!(
         rule < gather,
         "the rule names its paths before the gather step"

@@ -215,8 +215,9 @@
         var backForm = questionForm();
         if (backForm) {
           var backHref = backForm.getAttribute("data-nav-back-href");
-          if (backHref) {
-            window.location.assign(backHref);
+          var backUrl = backHref ? new URL(backHref, window.location.href) : null;
+          if (backUrl && backUrl.origin === window.location.origin) {
+            window.location.assign(backUrl.href);
           } else {
             var action = backForm.querySelector("[data-nav-action]");
             if (action) action.value = "back";

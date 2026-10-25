@@ -8,6 +8,9 @@
   var nextId = 0;
 
   window.addEventListener("message", function (event) {
+    // The diagram frame is sandboxed without allow-same-origin, so its origin
+    // is the opaque "null"; the frame registry below is the identity check.
+    if (event.origin !== "null") return;
     var entry = frames.get(event.source);
     if (!entry || !event.data || event.data.type !== "navigator-mermaid") return;
     if (event.data.ready) {
