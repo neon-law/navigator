@@ -309,6 +309,10 @@ navigator ops postgres backfill --resume <run-id> --json  # continue a run from 
 - **Plan.** `--dry-run` compares every mirror in registry order and lists, per table, the rows a run would write (by
   UUID), the batches they need, and the differing and PostgreSQL-only rows it would leave. It writes nothing, not even a
   run record. The same stores give the same plan.
+- **Source fields.** Whole-row record mirrors refuse source fields without a declared preservation mapping, including
+  explicit nulls and empty values. The error gives the registered table and field count only. Declared JSON content is
+  preserved recursively; absent optional fields retain their null mapping. Consumed source-key metadata supplies the row
+  identity, while generated PostgreSQL identity columns and target-only metadata are not source-field mappings.
 - **Batches.** A run walks the mirror groups parents first. Each batch writes up to `--batch-size` rows, then advances
   the group's row in `mirror_backfill_checkpoint`. A group is complete once its missing rows are written or recorded.
 - **Resume.** `--resume` recomputes the current group's missing rows, so rows an interrupted batch already wrote are

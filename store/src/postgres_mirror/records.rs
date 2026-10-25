@@ -3,7 +3,8 @@
 //!
 //! Each [`Table`] names its columns, which of them are record links and the
 //! table each link names, and which carry timestamps. A row keeps its record
-//! UUID as `id`. Parity compares whole rows as JSON, timestamps at
+//! UUID as `id`. A source field without a declared preservation mapping is refused.
+//! Parity compares whole rows as JSON, timestamps at
 //! PostgreSQL's microsecond precision. The upsert writes only when a column
 //! differs, so a replay changes nothing. A row SurrealDB no longer has is
 //! removed from PostgreSQL.
@@ -1109,6 +1110,7 @@ fn normalize_surreal(
     table: &'static Table,
     row: surrealdb::types::Value,
 ) -> Result<(MirrorKey, Value), MirrorError> {
+    let mut used_identity_alias = false;
     let natural_id = if STRING_KEY_TABLES.contains(&table.name)
         || MIXED_KEY_TABLES.contains(&table.name)
     {
@@ -1117,7 +1119,10 @@ fn normalize_surreal(
                 let id = fields.get("id").ok_or(MirrorError::Source)?;
                 let raw_string_key = string_record_key(table, id).or_else(|| {
                     fields.get("__surreal_key").and_then(|key| match key {
-                        surrealdb::types::Value::String(key) => Some(key.clone()),
+                        surrealdb::types::Value::String(key) => {
+                            used_identity_alias = true;
+                            Some(key.clone())
+                        }
                         _ => None,
                     })
                 });
@@ -1143,6 +1148,23 @@ fn normalize_surreal(
     } else {
         None
     };
+    if let surrealdb::types::Value::Object(fields) = &row {
+        let count = fields
+            .keys()
+            .filter(|name| {
+                // id_kind is generated from the typed source key, not copied from a source field.
+                let mapped = table.columns.contains(&name.as_str())
+                    && !(name.as_str() == "id_kind" && MIXED_KEY_TABLES.contains(&table.name));
+                !(mapped || used_identity_alias && name.as_str() == "__surreal_key")
+            })
+            .count();
+        if count > 0 {
+            return Err(MirrorError::UnmappedSourceFields {
+                table: table.name,
+                count,
+            });
+        }
+    }
     let mut tagged_values = BTreeMap::<&str, Value>::new();
     if let surrealdb::types::Value::Object(fields) = &row {
         for (_, field, _) in TAGGED_REFERENCES

@@ -458,6 +458,8 @@ pub enum MirrorError {
     Source,
     #[error("the SurrealDB source row carries an unreadable timestamp")]
     SourceTimestamp,
+    #[error("the SurrealDB source row in table {table} has {count} unmapped field(s); update its PostgreSQL import mapping")]
+    UnmappedSourceFields { table: &'static str, count: usize },
     #[error("PostgreSQL is unavailable")]
     Unavailable,
     #[error("PostgreSQL mirror completion timed out")]
@@ -470,7 +472,7 @@ impl MirrorError {
     fn retryable(&self) -> bool {
         match self {
             Self::Source | Self::Unavailable | Self::Timeout => true,
-            Self::SourceTimestamp => false,
+            Self::SourceTimestamp | Self::UnmappedSourceFields { .. } => false,
             Self::Target(code) => {
                 code.starts_with("08")
                     || matches!(
