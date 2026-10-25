@@ -173,7 +173,7 @@ bands:
     description: >-
       Navigator is open source under MIT OR Apache-2.0. It is built for Macs and for
       containers in the cloud: download it for Apple silicon macOS or x86_64 Linux.
-      Each release is mirrored to the public Homebrew repository.
+      Each release is attached to the public GitHub repository.
     archive_label: every release
     package:
       heading: Install with Homebrew

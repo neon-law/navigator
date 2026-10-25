@@ -706,11 +706,9 @@ release instead of only the images. It also stops occupying runners on every rel
 — the archives they produce have no possible consumer once the Release is never cut. Nothing reaches a stranger early
 either, because `release-cli-publish` needs both publish jobs as well as the two archives — the Release is the first
 fetchable artifact of the run. This is not only for human downloads: the `.github/actions/gate` composite action, the
-gate **every** Project repository runs, downloads `navigator-<version>-<platform>` from the public distribution host
-these jobs mirror onto (see below). Navigator's source repository and its Releases are public; Project CI uses the
-distribution host configured in the composite action. If the archive jobs or the mirror step stop running, Project CI
-breaks everywhere with a download 404 and nothing in this repository goes red — which is exactly the kind of failure
-worth stating in prose, because no test here will catch it.
+gate **every** Project repository runs, downloads `navigator-<version>-<platform>` from this repository's public Release
+(see below). If the archive jobs stop running, Project CI breaks everywhere with a download 404 and nothing in this
+repository goes red — which is exactly the kind of failure worth stating in prose, because no test here will catch it.
 
 **The Linux archive job runs on `blacksmith-4vcpu-ubuntu-2404`; the macOS job runs on `macos-latest`.**
 
@@ -736,35 +734,23 @@ staples that package, and `release-cli-publish` attaches it alongside the tarbal
 Homebrew tap's Slack pitch (`cli/tests/homebrew_tap_dispatch.rs`) only in the release that first publishes a real
 `.pkg`, not before and not as part of landing this workflow.
 
-**ENG-931: the tap's own Release is now where every public download resolves, not this repository's.** This repository
-will not stay public. `release-cli-publish` still attaches the two CLI archives, the two `navigator-lsp` archives, both
-Linux/macOS checksums, `install.sh`, `LICENSE`, and `NOTICE` to its own Release here — that Release remains the origin,
-and `ops release check`'s idempotency read still targets it — but the same job then mirrors every one of those files,
-tag for tag, onto a Release on the tap. `webapp::cli_release::RELEASE_DOWNLOAD_BASE`,
-`cli::lsp_download::RELEASES_REPO`, `.github/actions/gate`, `.github/actions/navigator-install`, and
-`.github/actions/navigator-install/install.sh`'s default all resolve the tap's Release, never this repository's, so
-every one of them keeps working anonymously once this repository does not. `cli/tests/public_distribution.rs` holds that
-contract.
+**Every public download resolves to this repository's own Release.** `neon-law/navigator` is public, and
+`release-cli-publish` attaches the two CLI archives, the two `navigator-lsp` archives, both Linux/macOS checksums,
+`install.sh`, `LICENSE`, and `NOTICE` to it. Nothing is mirrored onto the tap.
+`webapp::cli_release::RELEASE_DOWNLOAD_BASE`, `cli::lsp_download::RELEASES_REPO`, `.github/actions/gate`,
+`.github/actions/navigator-install`, and `.github/actions/navigator-install/install.sh`'s default all read that Release,
+as does the formula's `url`. `cli/tests/public_distribution.rs` holds that contract.
 
-The mirror authenticates with the same `HOMEBREW_TAP_TOKEN` the formula bump below uses — `contents: write` on the tap
-and nothing else, which is exactly the scope uploading a release asset needs, so mirroring widens no grant. A missing or
-rejected token fails the release, the same rule the dispatch below follows and for the same reason: a public host that
-silently stops receiving archives serves a stale version to every anonymous caller while nothing here goes red.
+`release-homebrew-tap` is the formula hand-off: it needs `release-cli-publish` and sends a `repository_dispatch` naming
+the tag **and nothing else**. The tap computes every `sha256` itself by downloading the artifacts it will then tell
+readers to download, from this repository's Release. A payload carrying digests would let a malformed dispatch pin the
+formula to bytes nobody verified, and would leave the tap unable to repair a bad bump from a bare tag — which matters,
+because `YY.M.D` admits no second ordinary release the same UTC day, so a bump that went wrong cannot be fixed by
+re-cutting the release it came from. The tap covers that with a `workflow_dispatch` that re-runs any tag by hand.
 
-`release-homebrew-tap` is the formula hand-off, and it is unchanged by the above — it still needs `release-cli-publish`
-(which now also proves the mirror landed) and sends a `repository_dispatch` naming the tag **and nothing else**. The tap
-computes every `sha256` itself by downloading the artifacts it will then tell readers to download — now from its own
-Release rather than this repository's, which is the one line `scripts/bump.sh` in the tap had to change. A payload
-carrying digests would let a malformed dispatch pin the formula to bytes nobody verified, and would leave the tap unable
-to repair a bad bump from a bare tag — which matters, because `YY.M.D` admits no second ordinary release the same UTC
-day, so a bump that went wrong cannot be fixed by re-cutting the release it came from. The tap covers that with a
-`workflow_dispatch` that re-runs any tag by hand.
-
-**The formula does not support Intel macOS or arm64 Linux.** A source-build fallback would need this repository's source
-tree to stay fetchable after it goes private, and ENG-931 rules out mirroring the private monorepo into the tap. The
-formula `odie`s on both with a message naming the supported alternatives, and the tap's `unsupported` CI job proves that
-refusal weekly. This is the "deliberately reduced support matrix" ENG-931's acceptance allows in place of building two
-more prebuilt archives.
+**The formula does not support Intel macOS or arm64 Linux.** No prebuilt archive exists for either, and the formula does
+not compile from source. It `odie`s on both with a message naming the supported alternatives, and the tap's
+`unsupported` CI job proves that refusal weekly.
 
 **A separate repository, not a folder here.** A tap is a Git repository Homebrew clones and re-reads on every `brew
 update`, and its formula changes once per release, mechanically, with no review to add. Keeping it here would mean
@@ -1016,8 +1002,7 @@ failure there is evidence about the version rather than about real people's matt
 
 ### The deploy pipeline
 
-1. `deploy.yml` publishes every image, every CLI and LSP archive, and the mirror to
-   `neon-law/homebrew-navigator`.
+1. `deploy.yml` publishes every image and attaches every CLI and LSP archive to this repository's Release.
 2. Its `release-deploy` job needs every one of those jobs. When `DEPLOY_AUTOMATION_ENABLED` is `true`, it runs
    `gh workflow run release-deploy.yml --ref main -f tag=<tag> \
    -f image-digests=<release-map-json>` with `actions: write`; otherwise it dispatches nothing.

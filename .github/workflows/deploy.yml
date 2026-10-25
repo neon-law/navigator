@@ -3089,92 +3089,13 @@ jobs:
           cp .github/actions/navigator-install/install.sh "navigator-${TAG}-install.sh"
           gh release upload "${TAG}" "navigator-${TAG}-install.sh" \
               --repo "${GITHUB_REPOSITORY}" --clobber
-
-      # ---------- Stage 3a½: mirror the same archives to the public
-      # distribution host ----------
-      #
-      # ENG-931: this repository will not stay public. Everything a stranger
-      # downloads — `brew install`, `navigator lsp`, `/navigator`'s links, the
-      # install script, and every Project repository's gate — has to resolve
-      # against a host that outlives that change, so this step attaches the
-      # SAME bytes this job just uploaded above onto
-      # `neon-law/homebrew-navigator`'s own Release for the same
-      # tag. Not a second build: every asset here is a file already sitting in
-      # `dist/` or checked out above.
-      #
-      # `HOMEBREW_TAP_TOKEN` authenticates it. That token already exists and
-      # is already scoped to exactly this: `contents: write` on
-      # `homebrew-navigator` and nothing else, granted to `release-homebrew-tap`
-      # below for the same reason — uploading a release asset is a
-      # `contents: write` operation, so publishing archives here asks that
-      # token for no grant it does not already hold. This job keeps its own
-      # `contents: write` on `${GITHUB_REPOSITORY}` besides; the two writes are
-      # independent and this step widens neither.
-      #
-      # A missing token fails the release rather than silently skipping, the
-      # same rule `release-homebrew-tap` follows and for the same reason: a
-      # public host that silently stops receiving archives serves a stale
-      # version to every anonymous caller while nothing here goes red.
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "release-cli-publish"
-          step: "mirror the archives to the public distribution host"
-      - name: mirror the archives to the public distribution host
-        timeout-minutes: 90
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAG: ${{ needs.release-version.outputs.tag }}
-          PRERELEASE: ${{ needs.release-version.outputs.prerelease }}
-          PUBLIC_REPO: neon-law/homebrew-navigator
-        run: |
-          set -euo pipefail
-          if [ -z "${GH_TOKEN}" ]; then
-              echo "::error::HOMEBREW_TAP_TOKEN is unset — the public distribution host cannot receive ${TAG}, and every anonymous brew install, navigator lsp, and Project gate would keep resolving the previous release"
-              exit 1
-          fi
-          GH_HOST="${GITHUB_SERVER_URL#https://}"
-          export GH_HOST
-
-          if ! gh release view "${TAG}" --repo "${PUBLIC_REPO}" >/dev/null 2>&1; then
-              flags=(--title "Neon Law Navigator ${TAG}" --generate-notes)
-              if [ "${PRERELEASE}" = "true" ]; then
-                  flags+=(--prerelease)
-              fi
-              # NO `--target`: this repository has no commit this tag names, and
-              # none is needed — nothing here ever reads the tap's default
-              # branch history, only its Release assets.
-              gh release create "${TAG}" --repo "${PUBLIC_REPO}" "${flags[@]}"
-          fi
-
-          # Tag-exact, `--clobber` for the same reason the Release above uses
-          # it: idempotent on a re-run, and every name matches what the CLI,
-          # the website, the gate action, and `scripts/bump.sh` in the tap all
-          # resolve.
-          gh release upload "${TAG}" dist/navigator-${TAG}-linux.tar.gz \
-              --repo "${PUBLIC_REPO}" --clobber
-          gh release upload "${TAG}" dist/navigator-${TAG}-macos.tar.gz \
-              --repo "${PUBLIC_REPO}" --clobber
-          gh release upload "${TAG}" dist/navigator-lsp-${TAG}-linux.tar.gz \
-              --repo "${PUBLIC_REPO}" --clobber
-          gh release upload "${TAG}" dist/navigator-lsp-${TAG}-macos.tar.gz \
-              --repo "${PUBLIC_REPO}" --clobber
-          gh release upload "${TAG}" dist/navigator-${TAG}-linux.tar.gz.sha256 \
-              --repo "${PUBLIC_REPO}" --clobber
-          gh release upload "${TAG}" dist/navigator-${TAG}-macos.tar.gz.sha256 \
-              --repo "${PUBLIC_REPO}" --clobber
-          gh release upload "${TAG}" "navigator-${TAG}-install.sh" \
-            --repo "${PUBLIC_REPO}" --clobber
           # LICENSE and NOTICE travel standalone too, not only bundled inside
-          # each archive — a reader who never unpacks an archive still has
-          # both a click away, and `--clobber` keeps a re-run identical rather
-          # than versioning a file that never changes shape.
-          gh release upload "${TAG}" LICENSE --repo "${PUBLIC_REPO}" --clobber
-          gh release upload "${TAG}" LICENSE-MIT --repo "${PUBLIC_REPO}" --clobber
-          gh release upload "${TAG}" LICENSE-APACHE-2 --repo "${PUBLIC_REPO}" --clobber
-          gh release upload "${TAG}" NOTICE --repo "${PUBLIC_REPO}" --clobber
+          # each archive — a reader who never unpacks one still has them a
+          # click away.
+          gh release upload "${TAG}" LICENSE --repo "${GITHUB_REPOSITORY}" --clobber
+          gh release upload "${TAG}" LICENSE-MIT --repo "${GITHUB_REPOSITORY}" --clobber
+          gh release upload "${TAG}" LICENSE-APACHE-2 --repo "${GITHUB_REPOSITORY}" --clobber
+          gh release upload "${TAG}" NOTICE --repo "${GITHUB_REPOSITORY}" --clobber
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -3642,8 +3563,8 @@ jobs:
           fi
           echo "Published-assets manifest posted to #navigator"
 
-      # Every release is mirrored to the public Homebrew repository, so these
-      # instructions stay usable after the source repository becomes private.
+      # The archives live on this repository's public Release, so these
+      # instructions need no other host.
       - name: post tagged CLI installation instructions to engineering Slack
         timeout-minutes: 90
         run: |
@@ -3659,7 +3580,7 @@ jobs:
           TEXT="*CLI installation for ${TAG}*
 
           ${BREW_LINE}
-          • macOS (Apple silicon): download \`navigator-${TAG}-macos.tar.gz\` from the \`${TAG}\` Release at https://github.com/neon-law/homebrew-navigator/releases, then \`tar -xzf navigator-${TAG}-macos.tar.gz navigator && install -m 0755 navigator /usr/local/bin/navigator && navigator --version\`.
+          • macOS (Apple silicon): download \`navigator-${TAG}-macos.tar.gz\` from the \`${TAG}\` Release at https://github.com/neon-law/navigator/releases, then \`tar -xzf navigator-${TAG}-macos.tar.gz navigator && install -m 0755 navigator /usr/local/bin/navigator && navigator --version\`.
           • Linux: download \`navigator-${TAG}-linux.tar.gz\` from the same Release, then \`tar -xzf navigator-${TAG}-linux.tar.gz navigator && install -m 0755 navigator /usr/local/bin/navigator && navigator --version\`.
 
           Intel macOS and arm64 Linux have no prebuilt Navigator archive or Homebrew install path.
@@ -3817,8 +3738,7 @@ jobs:
   # `workflow_dispatch` this job sends, not from the Release: GitHub starts no
   # workflow from an event `github.token` caused, and the Release exists before
   # the images and archives finish. So this job needs every publish job — both
-  # image matrices, every CLI and LSP archive build, and the attach job that
-  # also mirrors the archives to `neon-law/homebrew-navigator` —
+  # image matrices, every CLI and LSP archive build, and the attach job —
   # and dispatches only once all of them succeeded.
   #
   # `vars.DEPLOY_AUTOMATION_ENABLED` is the on switch for the unattended path.

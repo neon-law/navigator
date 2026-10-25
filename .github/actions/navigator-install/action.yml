@@ -116,7 +116,7 @@ runs:
         # `github.action_repository` — this action's own code may relocate
         # (see ENG-931's Project CI/CD step) while the release binaries stay
         # on this fixed, always-public repository.
-        repo="neon-law/homebrew-navigator"
+        repo="neon-law/navigator"
         asset="navigator-${VERSION}-${PLATFORM}.tar.gz"
         checksum="${asset}.sha256"
         tmp="$(mktemp -d)"

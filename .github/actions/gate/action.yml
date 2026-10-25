@@ -97,7 +97,7 @@ runs:
 
         # The public distribution host, not the source tree. See the note on
         # this step's name above.
-        repo="neon-law/homebrew-navigator"
+        repo="neon-law/navigator"
         asset="navigator-${VERSION}-${platform}.tar.gz"
         tmp="$(mktemp -d)"
 

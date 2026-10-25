@@ -86,7 +86,7 @@ fn every_cli_release_upload_uses_a_tag_exact_archive_name() {
                 && !line.contains("-lsp-")
                 && !line.contains("navigator-${TAG}-")
                 // ENG-931: LICENSE, LICENSE-MIT, LICENSE-APACHE-2, and NOTICE travel
-                // to the public distribution host standalone, under their own plain names —
+                // on the Release standalone, under their own plain names —
                 // they are supporting files, not tag-named CLI archives, and
                 // the same names are correct on every release since each
                 // Release has its own asset namespace.
@@ -570,20 +570,18 @@ fn one_publish_job_attaches_every_cli_archive() {
             !trimmed.starts_with('#') && trimmed.starts_with("gh release create")
         })
         .collect();
-    for (repo, label) in [
-        ("${GITHUB_REPOSITORY}", "this repository"),
-        ("${PUBLIC_REPO}", "the public distribution host"),
-    ] {
-        let matching = creates.iter().filter(|line| line.contains(repo)).count();
-        assert_eq!(
-            matching, 1,
-            "exactly one job may create the Release on {label}, or two runs race on the same tag; got {creates:?}"
-        );
-    }
+    let matching = creates
+        .iter()
+        .filter(|line| line.contains("${GITHUB_REPOSITORY}"))
+        .count();
+    assert_eq!(
+        matching, 1,
+        "exactly one job may create the Release on this repository, or two runs race on the same tag; got {creates:?}"
+    );
     assert_eq!(
         creates.len(),
-        2,
-        "expected exactly the two creates above and no third, got {creates:?}"
+        1,
+        "expected exactly the one create above and no second, got {creates:?}"
     );
 }
 
