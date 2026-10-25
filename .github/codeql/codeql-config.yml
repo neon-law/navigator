@@ -1,0 +1,14 @@
+# CodeQL configuration for .github/workflows/codeql.yml.
+#
+# `actions/unpinned-tag` is the one query excluded. The release cut
+# (`ops release version`) pins this repository's own composite action to the
+# release tag, e.g. `neon-law/navigator/.github/actions/navigator-install@26.10.25-rc.1`,
+# and the tag does not exist until `deploy.yml` creates it after merge, so a
+# commit SHA cannot be known at cut time. `ops release pins` / `ops release
+# check` already verify those pins, and
+# `cli/tests/workflow_action_pins.rs` requires every other third-party action
+# to be pinned to a full commit SHA. Every other actions query stays on.
+name: navigator codeql
+query-filters:
+  - exclude:
+      id: actions/unpinned-tag

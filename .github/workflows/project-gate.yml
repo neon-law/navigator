@@ -243,8 +243,13 @@ jobs:
         run: navigator project gate --tracked-files
       - name: Require every job to have succeeded
         if: always()
+        env:
+          READ_MANIFEST_RESULT: ${{ needs.read-manifest.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          DOCUMENTS_RESULT: ${{ needs.documents.result }}
+          SEEDS_RESULT: ${{ needs.seeds.result }}
         run: |
-          test "${{ needs.read-manifest.result }}" = "success"
-          test "${{ needs.verify.result }}" = "success"
-          test "${{ needs.documents.result }}" = "success"
-          test "${{ needs.seeds.result }}" = "success"
+          test "$READ_MANIFEST_RESULT" = "success"
+          test "$VERIFY_RESULT" = "success"
+          test "$DOCUMENTS_RESULT" = "success"
+          test "$SEEDS_RESULT" = "success"

@@ -90,8 +90,13 @@ leaving those repositories alone.
 Visibility itself is never written. A live visibility that differs from the policy's default is a dry-run finding only:
 flipping it would either publish a client matter or unpublish the product.
 
-`neon-law/navigator` alone adds `NAVIGATOR_POLICY`'s one extra — the release-tag ruleset — because it is the only
-repository that cuts a release.
+`neon-law/navigator` alone adds `NAVIGATOR_POLICY`'s extras — the release-tag ruleset, because it is the only repository
+that cuts a release, and a required `CodeQL` status check, because it is the repository that carries the CodeQL
+workflow. `CodeQL` is the check the GitHub code-scanning App (id 57789) posts; it fails only on alerts a pull request
+introduces, so alerts already open on `main` do not block merges. A live `production` ruleset without it is drift: `ops
+github setup` reports and writes the update. The `actions/unpinned-tag` query is excluded in
+`.github/codeql/codeql-config.yml` because the release cut pins this repository's own action to a tag that does not
+exist yet; `cli/tests/workflow_action_pins.rs` requires every other third-party action to be pinned to a commit SHA.
 
 There is one lighter tier and one repository in it. A repository the Firm administers on someone else's behalf still
 receives the same integrity gate; what earns the exception is not ownership but whether a person writes `main` at all.
