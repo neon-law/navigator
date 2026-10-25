@@ -1,15 +1,15 @@
 //! DBOS port of the daily `GeneralNag` operations notice.
 //!
 //! Runs once per UTC date when explicitly enabled. Its workflow id is stable
-//! across replicas and restarts; Slack itself provides no idempotency key, so
-//! a crash after Slack accepts a post but before its DBOS checkpoint can still
-//! produce one duplicate delivery.
+//! across replicas and restarts. Each post uses its Effect Key as a receipt
+//! correlation. Recovery searches retained history from the original slot's UTC
+//! date, reuses a found receipt, and refuses incomplete history before sending.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::SlackBot;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use dbos::{CancellationToken, StepOptions, WorkflowHandle, WorkflowRef, DBOS};
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +41,7 @@ pub struct GeneralNagReport {
 
 #[derive(Debug, thiserror::Error, Serialize, Deserialize)]
 pub enum GeneralNagError {
-    #[error("the general notice was not delivered")]
+    #[error("the general notice delivery could not be confirmed")]
     Notify,
     #[error("the open-matters count could not be read")]
     Counts,
@@ -123,6 +123,33 @@ pub fn workflow_id(slot: DateTime<Utc>) -> String {
     format!("{WORKFLOW}-{}", slot.format("%Y-%m-%d"))
 }
 
+async fn post_once(
+    slack: &dyn SlackBot,
+    channel: &str,
+    text: &str,
+    oldest: DateTime<Utc>,
+) -> dbos::Result<(), GeneralNagError> {
+    let key = super::effect_key().ok_or(dbos::Error::Application(GeneralNagError::Notify))?;
+    let receipt = match slack
+        .message_receipt_by_correlation_since(channel, &key, oldest)
+        .await
+        .map_err(|_| dbos::Error::Application(GeneralNagError::Notify))?
+    {
+        Some(receipt) => receipt,
+        None => slack
+            .post_message_with_receipt(channel, text, Some(&key))
+            .await
+            .map_err(|_| dbos::Error::Application(GeneralNagError::Notify))?,
+    };
+    if receipt.channel_id != channel
+        || receipt.correlation_id.as_deref() != Some(key.as_str())
+        || receipt.timestamp.is_empty()
+    {
+        return Err(dbos::Error::Application(GeneralNagError::Notify));
+    }
+    Ok(())
+}
+
 pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<GeneralNagWorkflow> {
     dbos.register_workflow(WORKFLOW, move |()| {
         let context = context.clone();
@@ -130,6 +157,14 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<GeneralNagWorkflo
             if context.channel_id.is_empty() {
                 return Err(dbos::Error::Application(GeneralNagError::Notify));
             }
+            let oldest = dbos::workflow_id()
+                .and_then(|id| {
+                    id.strip_prefix(&format!("{WORKFLOW}-"))
+                        .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+                })
+                .and_then(|date| date.and_hms_opt(0, 0, 0))
+                .map(|time| time.and_utc())
+                .ok_or(dbos::Error::Application(GeneralNagError::Notify))?;
             let channel_id = context.channel_id.clone();
             let slack = Arc::clone(&context.slack);
             dbos::step_with(
@@ -141,10 +176,13 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<GeneralNagWorkflo
                 move || {
                     let (channel_id, slack) = (channel_id.clone(), Arc::clone(&slack));
                     async move {
-                        slack
-                            .post_message(&channel_id, "Nobody Cares, Work Harder")
-                            .await
-                            .map_err(|_| dbos::Error::Application(GeneralNagError::Notify))
+                        post_once(
+                            slack.as_ref(),
+                            &channel_id,
+                            "Nobody Cares, Work Harder",
+                            oldest,
+                        )
+                        .await
                     }
                 },
             )
@@ -171,10 +209,7 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<GeneralNagWorkflo
                         let (channel_id, followup, slack) =
                             (channel_id.clone(), followup.clone(), Arc::clone(&slack));
                         async move {
-                            slack
-                                .post_message(&channel_id, &followup)
-                                .await
-                                .map_err(|_| dbos::Error::Application(GeneralNagError::Notify))
+                            post_once(slack.as_ref(), &channel_id, &followup, oldest).await
                         }
                     },
                 )

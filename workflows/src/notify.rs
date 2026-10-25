@@ -190,6 +190,20 @@ pub trait SlackBot: Send + Sync {
         let _ = (channel_id, correlation_id);
         Ok(None)
     }
+    /// Search visible channel history from `oldest`, including its boundary.
+    /// `None` requires complete, unrestricted visible history; it does not
+    /// establish whether Slack deleted an earlier receipt. Incomplete history
+    /// is an error, so callers must not retransmit on that uncertainty.
+    /// Implementors without this stronger lookup explicitly refuse it.
+    async fn message_receipt_by_correlation_since(
+        &self,
+        channel_id: &str,
+        correlation_id: &str,
+        oldest: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<SlackMessageReceipt>, SlackBotError> {
+        let _ = (channel_id, correlation_id, oldest);
+        Err(SlackBotError::IncompleteResponse)
+    }
     /// Post `text` as a reply in the thread whose parent message has
     /// timestamp `thread_ts`. Implementors without threads post it flat.
     async fn post_thread_reply(
@@ -711,6 +725,88 @@ impl SlackBot for SlackBotClient {
         }))
     }
 
+    async fn message_receipt_by_correlation_since(
+        &self,
+        channel_id: &str,
+        correlation_id: &str,
+        oldest: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<SlackMessageReceipt>, SlackBotError> {
+        #[derive(Deserialize)]
+        struct Message {
+            ts: String,
+            client_msg_id: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct Page {
+            next_cursor: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct History {
+            ok: bool,
+            error: Option<String>,
+            messages: Option<Vec<Message>>,
+            has_more: Option<bool>,
+            #[serde(default)]
+            is_limited: bool,
+            response_metadata: Option<Page>,
+        }
+        let mut cursor = None;
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            let mut query = json!({
+                "channel": channel_id,
+                "limit": 15,
+                "oldest": oldest.timestamp().to_string(),
+                "inclusive": true,
+            });
+            if let Some(cursor) = &cursor {
+                query["cursor"] = json!(cursor);
+            }
+            let history: History = self.get("conversations.history", &query).await?;
+            if !history.ok {
+                return Err(api_error(history.error));
+            }
+            for message in history.messages.ok_or(SlackBotError::IncompleteResponse)? {
+                let (seconds, fraction) = message
+                    .ts
+                    .split_once('.')
+                    .ok_or(SlackBotError::IncompleteResponse)?;
+                let seconds: i64 = seconds
+                    .parse()
+                    .map_err(|_| SlackBotError::IncompleteResponse)?;
+                if fraction.is_empty()
+                    || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+                    || seconds < oldest.timestamp()
+                {
+                    return Err(SlackBotError::IncompleteResponse);
+                }
+                if message.client_msg_id.as_deref() == Some(correlation_id) {
+                    return Ok(Some(SlackMessageReceipt {
+                        channel_id: channel_id.to_owned(),
+                        timestamp: message.ts,
+                        correlation_id: Some(correlation_id.to_owned()),
+                    }));
+                }
+            }
+            if history.is_limited {
+                return Err(SlackBotError::IncompleteResponse);
+            }
+            let next = history
+                .response_metadata
+                .and_then(|page| page.next_cursor)
+                .filter(|cursor| !cursor.is_empty());
+            match (history.has_more, next) {
+                (Some(false), None) => return Ok(None),
+                (Some(true), Some(next))
+                    if !next.trim().is_empty() && seen.insert(next.clone()) =>
+                {
+                    cursor = Some(next);
+                }
+                _ => return Err(SlackBotError::IncompleteResponse),
+            }
+        }
+    }
+
     async fn post_thread_reply(
         &self,
         channel_id: &str,
@@ -1004,6 +1100,17 @@ impl SlackBot for CapturingSlackBot {
                     && receipt.correlation_id.as_deref() == Some(correlation_id)
             })
             .cloned())
+    }
+
+    async fn message_receipt_by_correlation_since(
+        &self,
+        channel_id: &str,
+        correlation_id: &str,
+        _oldest: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<SlackMessageReceipt>, SlackBotError> {
+        // The capture contains every synthetic receipt, without a history page limit.
+        self.message_receipt_by_correlation(channel_id, correlation_id)
+            .await
     }
 
     async fn post_thread_reply(
@@ -1337,6 +1444,131 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn bounded_history_requires_complete_absence_or_a_matching_receipt() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let oldest = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
+        for (history, expected) in [
+            (
+                serde_json::json!({"ok":true,"messages":[],"has_more":false}),
+                "absent",
+            ),
+            (
+                serde_json::json!({"ok":true,"messages":[],"has_more":true}),
+                "unknown",
+            ),
+            (
+                serde_json::json!({"ok":true,"messages":vec![serde_json::json!({"ts":"1001.000000"});15],"has_more":true}),
+                "unknown",
+            ),
+            (
+                serde_json::json!({"ok":true,"messages":[{"ts":"999.999999","client_msg_id":"synthetic-key"}],"has_more":false}),
+                "unknown",
+            ),
+            (
+                serde_json::json!({"ok":true,"messages":[],"has_more":false,"response_metadata":{"next_cursor":"next"}}),
+                "unknown",
+            ),
+            (
+                serde_json::json!({"ok":true,"messages":[],"has_more":false,"is_limited":true}),
+                "unknown",
+            ),
+            (serde_json::json!({"ok":true,"messages":[]}), "unknown"),
+            (serde_json::json!({"ok":true,"has_more":false}), "unknown"),
+            (
+                serde_json::json!({"ok":true,"messages":[{"ts":"invalid"}],"has_more":false}),
+                "unknown",
+            ),
+            (
+                serde_json::json!({"ok":true,"messages":[{"ts":"1000.000000","client_msg_id":"synthetic-key"}],"has_more":true}),
+                "found",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/conversations.history"))
+                .and(query_param("channel", "synthetic-channel"))
+                .and(query_param("limit", "15"))
+                .and(query_param("oldest", "1000"))
+                .and(query_param("inclusive", "true"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(history.clone()))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let bot = SlackBotClient::with_base_url("synthetic-token", server.uri());
+            let result = bot
+                .message_receipt_by_correlation_since("synthetic-channel", "synthetic-key", oldest)
+                .await;
+            match expected {
+                "absent" => assert!(result.unwrap().is_none(), "{history}"),
+                "found" => assert_eq!(result.unwrap().unwrap().timestamp, "1000.000000"),
+                _ => assert!(
+                    result.is_err(),
+                    "incomplete history must fail closed: {history}"
+                ),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_history_paginates_before_concluding_absence_or_reusing_a_receipt() {
+        use serde_json::json;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let oldest = chrono::DateTime::from_timestamp(1000, 0).unwrap();
+        for (last_page, expected) in [
+            (
+                json!({"ok":true,"messages":[{"ts":"1000.000000","client_msg_id":"synthetic-key"}],"has_more":false}),
+                "found",
+            ),
+            (json!({"ok":true,"messages":[],"has_more":false}), "absent"),
+            (
+                json!({"ok":true,"messages":[],"has_more":true,"response_metadata":{"next_cursor":"page-two"}}),
+                "unknown",
+            ),
+            (
+                json!({"ok":true,"messages":[],"has_more":false,"response_metadata":{"next_cursor":"page-three"}}),
+                "unknown",
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/conversations.history"))
+                .and(query_param("oldest", "1000"))
+                .and(query_param("inclusive", "true"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "ok":true,"messages":vec![json!({"ts":"2000.000000"});15],"has_more":true,
+                    "response_metadata":{"next_cursor":"page-two"}
+                })))
+                .up_to_n_times(1)
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/conversations.history"))
+                .and(query_param("cursor", "page-two"))
+                .and(query_param("oldest", "1000"))
+                .and(query_param("inclusive", "true"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(last_page))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let bot = SlackBotClient::with_base_url("synthetic-token", server.uri());
+            let result = bot
+                .message_receipt_by_correlation_since("synthetic-channel", "synthetic-key", oldest)
+                .await;
+            match expected {
+                "found" => assert_eq!(result.unwrap().unwrap().timestamp, "1000.000000"),
+                "absent" => assert!(result.unwrap().is_none()),
+                _ => assert!(
+                    result.is_err(),
+                    "contradictory/repeated pagination must hold"
+                ),
+            }
+        }
     }
 
     #[tokio::test]

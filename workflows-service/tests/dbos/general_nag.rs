@@ -73,8 +73,23 @@ impl SlackBot for FailOnceBot {
         text: &str,
         correlation_id: Option<&str>,
     ) -> Result<SlackMessageReceipt, SlackBotError> {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(SlackBotError::Transport(
+                "synthetic first-attempt failure".into(),
+            ));
+        }
         self.capture
             .post_message_with_receipt(channel, text, correlation_id)
+            .await
+    }
+    async fn message_receipt_by_correlation_since(
+        &self,
+        channel: &str,
+        key: &str,
+        _oldest: chrono::DateTime<Utc>,
+    ) -> Result<Option<SlackMessageReceipt>, SlackBotError> {
+        self.capture
+            .message_receipt_by_correlation(channel, key)
             .await
     }
 }
@@ -282,4 +297,235 @@ async fn recovery_reuses_the_first_notice_checkpoint_and_finishes_the_counts_pos
         ],
         "recovery must reuse the first step checkpoint",
     );
+}
+
+#[derive(Clone, Default)]
+struct AcceptedBot {
+    capture: CapturingSlackBot,
+    hold_counts: bool,
+    accepted: Arc<Notify>,
+    accepts: Arc<AtomicUsize>,
+    incomplete: Arc<std::sync::atomic::AtomicBool>,
+    keys: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl AcceptedBot {
+    async fn deliver(
+        &self,
+        channel: &str,
+        text: &str,
+        key: Option<&str>,
+    ) -> Result<SlackMessageReceipt, SlackBotError> {
+        let receipt = self
+            .capture
+            .post_message_with_receipt(channel, text, key)
+            .await?;
+        if let Some(key) = key {
+            self.keys.lock().unwrap().push(key.to_owned());
+        }
+        if text.starts_with("Total open matters:") == self.hold_counts
+            && self.accepts.fetch_add(1, Ordering::SeqCst) == 0
+        {
+            self.accepted.notify_one();
+            std::future::pending::<()>().await;
+        }
+        Ok(receipt)
+    }
+}
+
+#[async_trait::async_trait]
+impl SlackBot for AcceptedBot {
+    async fn create_private_channel(&self, name: &str) -> Result<SlackChannel, SlackBotError> {
+        self.capture.create_private_channel(name).await
+    }
+    async fn post_message(&self, channel: &str, text: &str) -> Result<(), SlackBotError> {
+        self.deliver(channel, text, None).await.map(|_| ())
+    }
+    async fn post_message_with_receipt(
+        &self,
+        channel: &str,
+        text: &str,
+        key: Option<&str>,
+    ) -> Result<SlackMessageReceipt, SlackBotError> {
+        self.deliver(channel, text, key).await
+    }
+    async fn message_receipt_by_correlation_since(
+        &self,
+        channel: &str,
+        key: &str,
+        oldest: chrono::DateTime<Utc>,
+    ) -> Result<Option<SlackMessageReceipt>, SlackBotError> {
+        assert_eq!(
+            oldest,
+            slot().date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc(),
+            "replay must keep the original slot boundary"
+        );
+        if self.incomplete.load(Ordering::SeqCst) {
+            return Err(SlackBotError::IncompleteResponse);
+        }
+        self.capture
+            .message_receipt_by_correlation(channel, key)
+            .await
+    }
+    async fn user_id_by_email(&self, email: &str) -> Result<Option<String>, SlackBotError> {
+        self.capture.user_id_by_email(email).await
+    }
+    async fn channel_member_ids(&self, channel: &str) -> Result<Vec<String>, SlackBotError> {
+        self.capture.channel_member_ids(channel).await
+    }
+    async fn invite_to_channel(
+        &self,
+        channel: &str,
+        users: &[String],
+    ) -> Result<(), SlackBotError> {
+        self.capture.invite_to_channel(channel, users).await
+    }
+}
+
+#[allow(clippy::too_many_lines)] // The acceptance/checkpoint crash boundary stays in one scenario.
+async fn recover_accepted_notice(hold_counts: bool, incomplete: bool) {
+    let Some(db) = database().await else { return };
+    let bot = AcceptedBot {
+        hold_counts,
+        ..Default::default()
+    };
+    let mut ctx = context(Arc::new(bot.clone()));
+    ctx.simulated = false;
+    let id = general_nag::workflow_id(slot());
+    let first = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
+    let workflow = general_nag::register(&first, ctx.clone()).unwrap();
+    first.launch().await.unwrap();
+    general_nag::fire(&workflow, slot()).await.unwrap();
+    tokio::time::timeout(DEADLINE, bot.accepted.notified())
+        .await
+        .expect("provider accepted before checkpoint");
+    first.shutdown().await;
+    let accepted_before_restart = bot.capture.posted_messages().len();
+    bot.incomplete.store(incomplete, Ordering::SeqCst);
+
+    let restarted = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
+    general_nag::register(&restarted, ctx).unwrap();
+    restarted.launch().await.unwrap();
+    let result = tokio::time::timeout(
+        DEADLINE,
+        restarted
+            .retrieve_workflow::<GeneralNagReport, GeneralNagError>(&id)
+            .unwrap()
+            .result(),
+    )
+    .await
+    .expect("recovered workflow settles");
+    restarted.shutdown().await;
+    if incomplete {
+        assert!(
+            result.is_err(),
+            "ambiguous history must hold the failed notification"
+        );
+        assert_eq!(
+            bot.capture.posted_messages().len(),
+            accepted_before_restart,
+            "uncertainty must never retransmit"
+        );
+    } else {
+        assert!(result.unwrap().posted_followup);
+        assert_eq!(
+            bot.capture.posted_messages().len(),
+            2,
+            "both accepted effects must be reused before their checkpoints"
+        );
+        let keys = bot.keys.lock().unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_ne!(
+            keys[0], keys[1],
+            "the two steps need distinct stable Effect Keys"
+        );
+        assert!(keys.iter().all(|key| key.starts_with(&format!("{id}/"))));
+    }
+}
+
+#[tokio::test]
+async fn acceptance_before_either_notification_checkpoint_reuses_the_receipt() {
+    for hold_counts in [false, true] {
+        recover_accepted_notice(hold_counts, false).await;
+    }
+}
+
+#[tokio::test]
+async fn ambiguous_history_after_acceptance_holds_both_notifications_without_retransmission() {
+    for hold_counts in [false, true] {
+        recover_accepted_notice(hold_counts, true).await;
+    }
+}
+
+#[tokio::test]
+async fn paginated_complete_absence_sends_each_initial_notification_once() {
+    use serde_json::json;
+    use wiremock::matchers::{method, path, query_param, query_param_is_missing};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let Some(db) = database().await else { return };
+    let server = MockServer::start().await;
+    let oldest = slot()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp()
+        .to_string();
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .and(query_param_is_missing("cursor"))
+        .and(query_param("oldest", &oldest))
+        .and(query_param("inclusive", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok":true,"messages":vec![json!({"ts":"1791849601.000000"});15],"has_more":true,
+            "response_metadata":{"next_cursor":"page-two"}
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/conversations.history"))
+        .and(query_param("cursor", "page-two"))
+        .and(query_param("oldest", &oldest))
+        .and(query_param("inclusive", "true"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok":true,"messages":[],"has_more":false,"response_metadata":{"next_cursor":""}
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat.postMessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok":true,"channel":"C_GENERAL","ts":"1791849602.000000"
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let bot = workflows::SlackBotClient::with_base_url("synthetic-token", server.uri());
+    let mut ctx = context(Arc::new(bot));
+    ctx.simulated = false;
+    let executor = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
+    let workflow = general_nag::register(&executor, ctx).unwrap();
+    executor.launch().await.unwrap();
+    general_nag::fire(&workflow, slot()).await.unwrap();
+    assert!(
+        report_of(&executor, &general_nag::workflow_id(slot()))
+            .await
+            .posted_followup
+    );
+    executor.shutdown().await;
+    let requests = server.received_requests().await.unwrap();
+    let keys = requests
+        .iter()
+        .filter(|request| request.url.path() == "/chat.postMessage")
+        .map(|request| {
+            serde_json::from_slice::<serde_json::Value>(&request.body).unwrap()["client_msg_id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(keys.len(), 2);
+    assert_ne!(keys[0], keys[1]);
 }

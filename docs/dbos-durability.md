@@ -196,8 +196,14 @@ from the render, and deletes the live one, because `kubectl apply` does not prun
 and shipping restores the CronJob, which is the rollback path. Ship refuses the switch without `NAVIGATOR_DBOS_ENABLED =
 "true"`.
 
-Slack does not accept an idempotency key, so a crash after a successful post but before its DBOS checkpoint can still
-repeat that post.
+Each notification step uses its DBOS Effect Key as Slack's `client_msg_id` and searches channel history from the
+original workflow date's UTC midnight, inclusively. Recovery reuses a retained receipt before sending. It follows cursor
+pages until it finds the receipt or exhausts the visible range. Limited history, malformed responses, and missing,
+contradictory, or repeated pagination stop the notification step without sending. The bot needs the channel's history
+scope as well as permission to post.
+
+This proves recovery while Slack retains and exposes the receipt. Provider retention or deletion can remove that
+external evidence, so this is receipt reconciliation rather than a provider exactly-once guarantee.
 
 ## DriDigest rollout
 
