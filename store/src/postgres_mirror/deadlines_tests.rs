@@ -73,11 +73,12 @@ async fn project_deadline_mirrors_replay_and_reconcile() {
         .await
         .unwrap();
     assert_eq!(status, "complete");
-    let title: Option<String> = sqlx::query_scalar("SELECT title FROM project_deadlines WHERE id=$1")
-        .bind(id)
-        .fetch_one(&pg.0)
-        .await
-        .unwrap();
+    let title: Option<String> =
+        sqlx::query_scalar("SELECT title FROM project_deadlines WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
     assert_eq!(title.as_deref(), Some("Answer"));
     pg.0.close().await;
 }
