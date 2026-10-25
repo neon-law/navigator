@@ -25,6 +25,8 @@ pub mod create_notation;
 pub mod create_person;
 pub mod create_project;
 pub mod delete_closed_repository;
+pub mod glossary_list;
+pub mod glossary_show;
 pub mod link_person_project;
 pub mod list_deadlines;
 pub mod list_entities;
@@ -66,6 +68,8 @@ pub fn list_tools() -> Vec<Value> {
         bulk_import::descriptor(),
         spawn_legal_council::descriptor(),
         send_welcome_email::descriptor(),
+        glossary_list::descriptor(),
+        glossary_show::descriptor(),
     ]
 }
 
@@ -149,6 +153,8 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "project_status",
     "list_tools",
     "spawn_legal_council",
+    "glossary_list",
+    "glossary_show",
 ];
 
 /// Whether a tool mutates state — writes a row, sends an email, commits
@@ -313,6 +319,8 @@ pub async fn call_tool(
         "list_tools" => list_tools::call(arguments).await,
         "spawn_legal_council" => spawn_legal_council::call(arguments).await,
         "send_welcome_email" => send_welcome_email::call(state, arguments).await,
+        "glossary_list" => glossary_list::call(arguments).await,
+        "glossary_show" => glossary_show::call(arguments).await,
         other => Err(ToolError::Unknown(other.to_string())),
     }
 }
@@ -793,6 +801,8 @@ mod tests {
         assert!(names.contains(&"list_tools"));
         assert!(names.contains(&"spawn_legal_council"));
         assert!(names.contains(&"send_welcome_email"));
+        assert!(names.contains(&"glossary_list"));
+        assert!(names.contains(&"glossary_show"));
     }
 
     #[test]
@@ -1242,5 +1252,92 @@ mod tests {
             .unwrap();
         assert_eq!(read["structuredContent"]["count"], 0);
         assert_eq!(read["structuredContent"]["lens"], "membership");
+    }
+
+    // -----------------------------------------------------------------
+    // Glossary. The CLI's `glossary list` / `glossary show`, read from
+    // the same embedded terms, as tools any signed-in caller may run.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn the_glossary_tools_are_read_only_and_advertised() {
+        for name in ["glossary_list", "glossary_show"] {
+            assert!(!super::is_side_effecting(name), "{name} only reads");
+            assert!(super::is_advertised(name), "{name} is offered to models");
+        }
+    }
+
+    #[tokio::test]
+    async fn glossary_list_returns_every_term_sorted_by_title() {
+        let s = state().await;
+        let result = call_tool(&s, None, "glossary_list", &json!({}))
+            .await
+            .unwrap();
+        let terms = result["structuredContent"]["terms"].as_array().unwrap();
+        assert_eq!(terms.len(), store::glossary::terms().len());
+        let titles: Vec<&str> = terms.iter().map(|t| t["title"].as_str().unwrap()).collect();
+        let mut sorted = titles.clone();
+        sorted.sort_unstable();
+        assert_eq!(titles, sorted);
+        assert!(terms
+            .iter()
+            .all(|t| !t["description"].as_str().unwrap().is_empty()));
+    }
+
+    #[tokio::test]
+    async fn glossary_show_returns_the_cli_definition_for_a_client() {
+        let state = state().await;
+        store::persons::create(
+            &state.surreal,
+            &store::persons::NewPerson::with_role(
+                "client@example.com",
+                "client@example.com",
+                Role::Client,
+            ),
+        )
+        .await
+        .unwrap();
+        let principal = Principal::new("client@example.com");
+        let result = call_tool(
+            &state,
+            Some(&principal),
+            "glossary_show",
+            &json!({ "term": "matter" }),
+        )
+        .await
+        .unwrap();
+        let matter = store::glossary::find("Matter").unwrap();
+        assert_eq!(result["structuredContent"]["title"], "Matter");
+        assert_eq!(result["structuredContent"]["body"], matter.body.trim());
+        assert_eq!(
+            result["structuredContent"]["description"],
+            matter.description
+        );
+    }
+
+    #[tokio::test]
+    async fn glossary_show_refuses_an_unknown_term_without_echoing_it() {
+        let s = state().await;
+        let error = call_tool(
+            &s,
+            None,
+            "glossary_show",
+            &json!({ "term": "zz-private-input" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, ToolError::NotFound(_)), "{error}");
+        let text = error.to_string();
+        assert!(!text.contains("zz-private-input"), "{text}");
+        assert!(text.contains("glossary_list"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn glossary_show_requires_a_term() {
+        let s = state().await;
+        let error = call_tool(&s, None, "glossary_show", &json!({}))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ToolError::InvalidArguments(_)), "{error}");
     }
 }

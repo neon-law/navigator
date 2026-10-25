@@ -348,6 +348,8 @@ mod tests {
             "list_tools",
             "bulk_import",
             "spawn_legal_council",
+            "glossary_list",
+            "glossary_show",
         ] {
             assert!(
                 names.contains(&offered),
@@ -355,7 +357,7 @@ mod tests {
             );
         }
 
-        assert_eq!(names.len(), 20, "got {names:?}");
+        assert_eq!(names.len(), 22, "got {names:?}");
         for name in &names {
             assert!(
                 !name.starts_with("aida_"),

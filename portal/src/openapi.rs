@@ -4674,6 +4674,19 @@ pub fn documented_operations() -> Vec<(String, String)> {
 /// of that pressure, so it needs a reason a reader can disagree with.
 pub const TOOLS_WITHOUT_AN_API_OPERATION: &[(&str, &str)] = &[
     (
+        "glossary_list",
+        "No route today. The glossary is public reference data compiled into \
+         the binary; the `/glossary` page and `navigator glossary list` read \
+         the same embedded terms, so there is no command for an API \
+         operation to share.",
+    ),
+    (
+        "glossary_show",
+        "No route today. One term's definition is the same embedded entry \
+         the `/glossary` page anchors and `navigator glossary show` prints, \
+         so there is no command for an API operation to share.",
+    ),
+    (
         "list_tools",
         "Protocol, not capability: it enumerates the catalog itself. The \
          OpenAPI document is the API surface's own equivalent, so an \
