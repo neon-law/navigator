@@ -356,6 +356,10 @@ pub(crate) const SYNCED_SKILLS: &[(&str, &str)] = &[
         include_str!("../../../.agents/skills/record-search/SKILL.md"),
     ),
     (
+        "working-notes",
+        include_str!("../../../.agents/skills/working-notes/SKILL.md"),
+    ),
+    (
         "pull-changes",
         include_str!("../../../.agents/skills/pull-changes/SKILL.md"),
     ),
@@ -3796,6 +3800,50 @@ jobs:
                 "synced skill `{name}` documents a command that does not resolve: {found:?}"
             );
         }
+    }
+
+    #[test]
+    fn working_notes_is_synced_and_preserves_handoff_state() {
+        let (_, canonical) = SYNCED_SKILLS
+            .iter()
+            .find(|(name, _)| *name == "working-notes")
+            .expect("working-notes is a synced skill");
+        for required in [
+            "notes/HANDOFF-<topic>.md.local",
+            "near compaction",
+            "never append a contradiction",
+            "## Plan",
+            "## Files",
+            "## Drafts waiting",
+            "## Deadlines",
+            "## Reminders",
+            "## Open items",
+            "absolute dates with a time zone",
+            "Navigator Communication",
+            "delete the note",
+        ] {
+            assert!(canonical.contains(required), "skill must name `{required}`");
+        }
+        assert!(AGENT_CONTRACT_BASE.contains(".agents/skills/working-notes/SKILL.md"));
+    }
+
+    #[test]
+    fn working_notes_syncs_exactly_and_the_gate_refuses_drift() {
+        let root = tempfile::tempdir().unwrap();
+        super::emit_synced_skills(root.path()).unwrap();
+        let path = root.path().join(".agents/skills/working-notes/SKILL.md");
+        let canonical = include_str!("../../../.agents/skills/working-notes/SKILL.md");
+        assert_eq!(fs::read_to_string(&path).unwrap(), canonical);
+        let mut findings = Vec::new();
+        validate_skills(root.path(), &mut findings);
+        assert!(findings.is_empty(), "{findings:?}");
+        fs::write(&path, format!("{canonical}drift\n")).unwrap();
+        validate_skills(root.path(), &mut findings);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].message,
+            "synced skill `working-notes` has drifted from the canonical copy"
+        );
     }
 
     /// LAW-126: the fleet's `deadline` skill writes through the Deadline verbs,
