@@ -433,7 +433,7 @@ fn social_provider(view: &BrandsEditView, provider: &str) -> Element {
                             aria_label: format!("Connect {provider} account"),
                             input { class: "nav-control", r#type: "hidden", name: "_csrf", value: "{view.csrf_token}" }
                             div { class: "nav-field",
-                                label { r#for: "{input_id}",
+                                label { class: "nav-label", r#for: "{input_id}",
                                     if matches!(provider, "x" | "tiktok") { "{label} username" }
                                     else { "{label} account ID" }
                                 }
