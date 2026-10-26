@@ -1065,7 +1065,8 @@ pub struct IdentityPasswordConfig {
     /// Identity Platform browser API key (`?key=` on the REST call).
     pub api_key: String,
     /// Identity Toolkit REST base. `https://identitytoolkit.googleapis.com`
-    /// in prod; tests point it at a mock.
+    /// in prod; overrides require HTTPS or loopback HTTP and no URL userinfo.
+    /// Password requests never follow redirects.
     pub endpoint: String,
 }
 
@@ -1489,6 +1490,24 @@ struct SignInResponse {
     id_token: String,
 }
 
+/// Password requests use a configured confidential endpoint, including loopback
+/// HTTP for local fixtures. A URL cannot introduce an HTTP Basic credential.
+fn identity_password_sign_in_url(cfg: &IdentityPasswordConfig) -> Result<url::Url, PasswordError> {
+    let url = url::Url::parse(&format!(
+        "{}/v1/accounts:signInWithPassword?key={}",
+        cfg.endpoint.trim_end_matches('/'),
+        cfg.api_key,
+    ))
+    .map_err(|_| PasswordError::Upstream)?;
+    if !token_endpoint_is_confidential(&url)
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(PasswordError::Upstream);
+    }
+    Ok(url)
+}
+
 /// Forward the typed password to Identity Platform's
 /// `accounts:signInWithPassword` over TLS and return the ID token it
 /// mints. The password is never logged, stored, or hashed by us —
@@ -1500,13 +1519,14 @@ async fn verify_password_with_identity_platform(
     email: &str,
     password: &str,
 ) -> Result<String, PasswordError> {
-    let url = format!(
-        "{}/v1/accounts:signInWithPassword?key={}",
-        cfg.endpoint.trim_end_matches('/'),
-        cfg.api_key,
-    );
-    let resp = reqwest::Client::new()
-        .post(&url)
+    let url = identity_password_sign_in_url(cfg)?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|_| PasswordError::Upstream)?;
+    let resp = client
+        .post(url)
         .json(&SignInRequest {
             email,
             password,
@@ -5445,6 +5465,39 @@ mod tests {
             IdentityPasswordConfig::DEFAULT_ENDPOINT,
             "https://identitytoolkit.googleapis.com",
         );
+    }
+
+    #[test]
+    fn password_sign_in_url_requires_confidential_transport_without_userinfo() {
+        for endpoint in [
+            "http://identity.example.test",
+            "http://localhost.example.test",
+            "ftp://127.0.0.1",
+            "file:///identity",
+            "https://synthetic@identity.example.test",
+            "https://synthetic:credential@identity.example.test",
+        ] {
+            let cfg = IdentityPasswordConfig {
+                api_key: "synthetic-browser-key".into(),
+                endpoint: endpoint.into(),
+            };
+            assert!(super::identity_password_sign_in_url(&cfg).is_err());
+        }
+        for endpoint in [
+            IdentityPasswordConfig::DEFAULT_ENDPOINT,
+            "http://127.0.0.1:1234",
+            "http://[::1]:1234",
+            "http://localhost:1234",
+        ] {
+            let cfg = IdentityPasswordConfig {
+                api_key: "synthetic-browser-key".into(),
+                endpoint: endpoint.into(),
+            };
+            let url = super::identity_password_sign_in_url(&cfg)
+                .unwrap_or_else(|_| panic!("a confidential endpoint is accepted"));
+            assert_eq!(url.path(), "/v1/accounts:signInWithPassword");
+            assert_eq!(url.query(), Some("key=synthetic-browser-key"));
+        }
     }
 
     /// A token exchange carries the client secret and the authorization code,

@@ -343,6 +343,47 @@ mod tests {
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     #[tokio::test]
+    async fn evidence_and_attachment_redirects_stay_on_the_selected_provider() {
+        let source = MockServer::start().await;
+        let target = MockServer::start().await;
+        let tenant = Uuid::now_v7();
+        let id = Uuid::now_v7();
+        let attachment = Attachment {
+            attachment_id: Uuid::now_v7(),
+            file_name: "synthetic.pdf".into(),
+            mime_type: "application/pdf".into(),
+            content_length: 2,
+        };
+        for request_path in [
+            format!("/Invoices/{id}"),
+            format!("/Invoices/{id}/Attachments"),
+            format!("/Invoices/{id}/Attachments/{}", attachment.attachment_id),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(request_path))
+                .and(header("Authorization", "Bearer synthetic"))
+                .and(header("Xero-Tenant-Id", tenant.to_string()))
+                .respond_with(ResponseTemplate::new(307).insert_header("Location", target.uri()))
+                .expect(1)
+                .mount(&source)
+                .await;
+        }
+        let mut client = XeroEvidence::new("synthetic", tenant).unwrap();
+        assert_eq!(client.base, "https://api.xero.com/api.xro/2.0");
+        client.base = source.uri();
+        assert!(
+            matches!(client.invoice(id).await, Err(EvidenceError::Http(status)) if status.as_u16() == 307)
+        );
+        assert!(
+            matches!(client.attachments(AttachmentParent::Invoice, id).await, Err(EvidenceError::Http(status)) if status.as_u16() == 307)
+        );
+        assert!(
+            matches!(client.attachment(AttachmentParent::Invoice, id, &attachment).await, Err(EvidenceError::Http(status)) if status.as_u16() == 307)
+        );
+        assert!(target.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn credit_note_identity_and_refund_parent_are_distinct_from_invoice() {
         let server = MockServer::start().await;
         let tenant = Uuid::now_v7();

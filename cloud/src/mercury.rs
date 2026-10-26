@@ -147,6 +147,28 @@ mod tests {
         assert!(client.transaction(account, Uuid::now_v7()).await.is_err());
     }
     #[tokio::test]
+    async fn transaction_redirects_cannot_change_the_fixed_provider_destination() {
+        let source = MockServer::start().await;
+        let target = MockServer::start().await;
+        let account = Uuid::now_v7();
+        let id = Uuid::now_v7();
+        Mock::given(method("GET"))
+            .and(path(format!("/api/v1/account/{account}/transaction/{id}")))
+            .and(header("Authorization", "Bearer synthetic-read-token"))
+            .respond_with(ResponseTemplate::new(307).insert_header("Location", target.uri()))
+            .expect(1)
+            .mount(&source)
+            .await;
+        let mut client = Mercury::new("synthetic-read-token").unwrap();
+        assert_eq!(client.base, "https://api.mercury.com");
+        client.base = source.uri();
+        assert!(
+            matches!(client.transaction(account, id).await, Err(MercuryError::Http(status)) if status.as_u16() == 307)
+        );
+        assert!(target.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn receipts_refuse_untrusted_urls_before_sending_credentials() {
         let client = Mercury::new("synthetic").unwrap();
         let a = Attachment {
