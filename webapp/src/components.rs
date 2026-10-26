@@ -138,7 +138,7 @@ pub use sample_matters_banner::{SampleMattersBanner, SAMPLE_MATTERS_BANNER_ID};
 pub use separator::{Separator, SeparatorOrientation};
 pub use site_footer::{
     FooterAttorney, FooterBarLicense, FooterBrandLink, FooterMembership, FooterNavLink,
-    FooterOffice, FooterSocialLink, SiteFooterLegal, FOOTER_TAGLINE, POWERED_BY_NEON_LAW_NAVIGATOR,
+    FooterOffice, FooterSocialLink, SiteFooterLegal, FOOTER_TAGLINE,
 };
 pub(crate) use social_mark::SocialMarkGlyph;
 pub use status_strip::{StatusCell, StatusStrip};

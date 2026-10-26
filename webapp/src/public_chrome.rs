@@ -165,10 +165,6 @@ pub struct PublicChrome {
     /// ever changed to allow it; the footer renders no version in that case
     /// rather than a bare `<p>` with nothing after the product name.
     pub navigator_version: String,
-    /// Where "Neon Law Navigator" links, constant rather than a brand field:
-    /// a white-label deployment wears its own wordmark but runs this
-    /// software, developed here.
-    pub navigator_href: String,
     /// Last known public GitHub star count; absent until GitHub responds.
     #[serde(default)]
     pub github_stars: Option<u64>,
@@ -231,7 +227,7 @@ pub fn PublicFooter(chrome: PublicChrome) -> Element {
             copyright_holder: chrome.legal_entity.clone(),
             disclosure: chrome.disclosure.clone(),
             attribution: if practice_footer { String::new() } else { chrome.attribution.clone() },
-            copyright_href: if practice_footer { "https://www.lawyershook.com".to_string() } else { String::new() },
+            copyright_href: if practice_footer { "https://www.guiebandshook.com".to_string() } else { String::new() },
             disclaimer: chrome.disclaimer.clone(),
             // Registration metadata accompanies the independently resolved ownership notice.
             trademark: chrome.trademark.clone(),
@@ -281,7 +277,6 @@ pub fn PublicFooter(chrome: PublicChrome) -> Element {
                 })
                 .collect(),
             navigator_version: chrome.navigator_version.clone(),
-            navigator_href: chrome.navigator_href.clone(),
             github_stars: chrome.github_stars,
             brands: chrome
                 .brands
@@ -442,7 +437,6 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         // the environment and falls back to the compiled manifest version
         // rather than ever rendering a bare, unstamped line.
         navigator_version: crate::cli_release::release_version(),
-        navigator_href: crate::source_repository::NAVIGATOR_HREF.to_string(),
         github_stars: crate::source_repository::known_stars(),
         tokens_href: crate::brand_style::brand_tokens_href(views::brand::brand_key().as_str()),
         is_practice: views::brand::BrandKey::LIVE.contains(&views::brand::brand_key()),

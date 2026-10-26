@@ -91,7 +91,7 @@ async fn daybridge_home_publishes_the_one_time_mutual_split_fee() {
         // footer is the single-focus "practice" variant
         // (`PublicChrome::is_practice`, keyed off `BrandKey::LIVE`), which
         // omits the "Our Family" cross-sell and points the copyright at
-        // Lawyer Shook instead. See `server/tests/vesta_home.rs`'s
+        // the firm's own site instead. See `server/tests/vesta_home.rs`'s
         // `vesta_and_lawyer_shook_omit_the_lawyer_shook_trademark_notice`
         // for the same shape on an already-launched sibling.
         let footer = html.split("<footer").nth(1).expect("shared footer");
@@ -100,8 +100,8 @@ async fn daybridge_home_publishes_the_one_time_mutual_split_fee() {
             "{host} a launched practice brand must not cross-sell the family row: {footer}"
         );
         assert!(
-            footer.contains(r#"href="https://www.lawyershook.com""#),
-            "{host} the practice footer's copyright links Lawyer Shook: {footer}"
+            footer.contains(r#"href="https://www.guiebandshook.com""#),
+            "{host} the practice footer's copyright links the firm: {footer}"
         );
         assert!(
             !html.contains("A practice of Guieb &#38; Shook PC"),

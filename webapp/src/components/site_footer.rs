@@ -22,11 +22,6 @@
 
 use dioxus::prelude::*;
 
-/// The platform line every Navigator footer carries, so a white-label
-/// deployment still names the software it runs. Shared with
-/// [`crate::firm_footer::FirmFooter`] so the wording cannot drift.
-pub const POWERED_BY_NEON_LAW_NAVIGATOR: &str = "Powered by Neon Law Navigator";
-
 /// The firm's final footer line, shared by public and authenticated pages.
 pub const FOOTER_TAGLINE: &str = "Everyone deserves access to justice. Made with ❤️ in 🗽.";
 
@@ -353,18 +348,13 @@ pub fn SiteFooterLegal(
     #[props(default)] trademark_registration: String,
     #[props(default)] trademark_record_url: String,
     /// The version this deployment is running, plain text right after the
-    /// linked product name — "Powered by Neon Law Navigator 26.9.27" closes
+    /// linked repository — "Powered by neon-law/navigator 26.9.27 ★ 4" closes
     /// the strip, one line and no attribution prose. Empty renders no version
     /// at all, which is the ordinary local case: `NAVIGATOR_RELEASE_TAG` is
     /// unset under `cargo run`, and a footer inventing one would be worse
     /// than a footer that names the software and stops there.
     #[props(default)]
     navigator_version: String,
-    /// Where "Neon Law Navigator" links — the page that describes the
-    /// platform. Empty renders the name unlinked rather than an `<a
-    /// href="">` that reloads whatever page it sits on.
-    #[props(default)]
-    navigator_href: String,
     /// Last known star count for Navigator's public source repository.
     #[props(default)]
     github_stars: Option<u64>,
@@ -767,36 +757,22 @@ pub fn SiteFooterLegal(
                             }
                         }
                     }
-                    // One line names the software this page runs and, right
-                    // after it, the release serving here: "Powered by", the
-                    // linked product name, and the version as plain text —
-                    // one line, with the public source repository below.
+                    // One line names the software this page runs: "Powered
+                    // by", the public source repository, the release serving
+                    // here, and the repository's stars.
                     //
-                    // `navigator_href` empty renders the name unlinked rather
-                    // than an `<a href="">` that reloads the page; the version
-                    // is independent of it: `NAVIGATOR_RELEASE_TAG` is unset
-                    // under `cargo run`, so a local build names the software
-                    // and stops there.
+                    // The version is plain text and optional:
+                    // `NAVIGATOR_RELEASE_TAG` is unset under `cargo run`, so a
+                    // local build names the repository and stops there.
                     div { class: "site-footer__legal-platform",
                         p { class: "site-footer__powered",
-                            if navigator_href.is_empty() {
-                                "{POWERED_BY_NEON_LAW_NAVIGATOR}"
-                            } else {
-                                "Powered by "
-                                a { class: "site-footer__release", href: "{navigator_href}",
-                                    "Neon Law Navigator"
-                                }
+                            "Powered by "
+                            crate::components::GitHubStars {
+                                href: crate::source_repository::SOURCE_HREF.to_string(),
+                                repo: crate::source_repository::SOURCE_REPO.to_string(),
+                                version: navigator_version.clone(),
+                                stars: github_stars,
                             }
-                            if !navigator_version.is_empty() {
-                                " {navigator_version}"
-                            }
-                        }
-                    }
-                    p { class: "site-footer__source",
-                        crate::components::GitHubStars {
-                            href: crate::source_repository::SOURCE_HREF.to_string(),
-                            repo: crate::source_repository::SOURCE_REPO.to_string(),
-                            stars: github_stars,
                         }
                     }
                     if !disclosure.provider.is_empty() {
@@ -895,7 +871,6 @@ mod tests {
                         "https://tmsearch.uspto.gov/search/search-results/90039224".to_string(),
                     github_stars: 1234u64,
                     navigator_version: "26.8.20".to_string(),
-                    navigator_href: "https://www.neonlaw.com/navigator".to_string(),
                 }
             }
         }
@@ -1023,9 +998,9 @@ mod tests {
         assert!(!out.contains("®") && !out.contains("U.S. Reg."), "{out}");
     }
 
-    /// The platform line names the software, links it to the page describing
-    /// it, and states the running release — and it closes the strip, below
-    /// the disclaimer.
+    /// The platform line names the public source repository, links it, and
+    /// states the running release and the star count — and it closes the
+    /// strip, below the disclaimer.
     ///
     /// Order is the substance here, as it is for every other line in this
     /// strip: a reader meets the bar records and the advertising disclaimer
@@ -1034,20 +1009,10 @@ mod tests {
     fn closes_the_strip_with_the_navigator_attribution() {
         let out = legal_html();
         assert!(
-            out.contains(
-                r#"<a class="site-footer__release" href="https://www.neonlaw.com/navigator">Neon Law Navigator</a>"#
-            ),
-            "the product name links to the page describing the platform: {out}"
-        );
-        assert!(
-            out.contains("Neon Law Navigator</a> 26.8.20"),
-            "the running release reads right after the product name: {out}"
-        );
-        assert!(
-            out.contains("https://github.com/neon-law/navigator")
+            out.contains(r#"href="https://github.com/neon-law/navigator""#)
                 && out.contains("1,234")
                 && out.contains("<title>GitHub stars</title>"),
-            "the shared footer links the public source and names its star count: {out}"
+            "the footer links the public source and names its star count: {out}"
         );
         let disclaimer = out.find("Attorney advertisement").expect("the disclaimer");
         let platform = out.find("site-footer__powered").expect("the platform line");
@@ -1057,17 +1022,15 @@ mod tests {
         );
     }
 
-    /// "Powered by", the linked product name, and the running release are one
-    /// line — one `<p>`, with exactly one link and no `#` prefix on the
-    /// version.
+    /// "Powered by", the linked repository, the running release, and the star
+    /// count are one line — one `<p>`, with exactly one link and no `#` prefix
+    /// on the version.
     ///
-    /// The single line is the assertion. The two facts name one thing between
-    /// them — this software, at this build — so they belong in one glance;
-    /// a second link on the version is the shape this component used to take
-    /// and must not regress to.
+    /// The single line is the assertion: the facts name one thing between
+    /// them — this software, at this build — so they belong in one glance.
     #[test]
     fn collapses_the_platform_attribution_onto_one_line() {
-        let out = contactable_html();
+        let out = legal_html();
         let line = out
             .split(r#"<p class="site-footer__powered">"#)
             .nth(1)
@@ -1078,41 +1041,35 @@ mod tests {
             1,
             "one line carries the whole attribution: {out}"
         );
+        assert!(
+            !out.contains("site-footer__source"),
+            "no second line for the repository: {out}"
+        );
         assert_eq!(
             line.matches("<a ").count(),
             1,
-            "exactly one link — the product name, never a second one on the version: {line}"
+            "exactly one link — the repository, never a second one on the version: {line}"
         );
         assert!(!line.contains('#'), "no # prefix on the version: {line}");
 
         let powered = line.find("Powered by").expect("the attribution opens it");
-        let product_link = line
-            .find(r#"class="site-footer__release""#)
-            .expect("the linked product name");
+        let repo = line
+            .find(r#"href="https://github.com/neon-law/navigator""#)
+            .expect("the linked repository");
         let version = line.find("26.8.20").expect("the version");
+        let stars = line.find("github-stars__count").expect("the star count");
         assert!(
-            powered < product_link && product_link < version,
-            "it reads Powered by, the linked product name, then the release: {line}"
+            powered < repo && repo < version && version < stars,
+            "it reads Powered by, the repository, the release, then the stars: {line}"
         );
     }
 
-    /// With no release stamp, the footer still names the software and links
-    /// it — it just omits the version, rather than rendering a bare "#".
-    /// With nowhere to link either, it falls back to the shared unlinked
-    /// wording.
+    /// With no release stamp and no star count, the footer still names the
+    /// repository and links it — it just omits the version and the count,
+    /// rather than rendering a bare "#" or a zero.
     #[test]
-    fn omits_the_version_when_unstamped_and_falls_back_when_unlinked() {
-        fn linked_but_unstamped() -> Element {
-            rsx! {
-                SiteFooterLegal {
-                    copyright_holder: "Neon Law".to_string(),
-                    disclaimer: "This is an attorney advertisement.".to_string(),
-                    copyright_year: 2026,
-                    navigator_href: "https://www.neonlaw.com/navigator".to_string(),
-                }
-            }
-        }
-        fn neither() -> Element {
+    fn omits_the_version_and_stars_when_unknown() {
+        fn unstamped() -> Element {
             rsx! {
                 SiteFooterLegal {
                     copyright_holder: "Neon Law".to_string(),
@@ -1122,27 +1079,22 @@ mod tests {
             }
         }
 
-        let out = ssr(linked_but_unstamped);
+        let out = ssr(unstamped);
         let line = out
             .split(r#"<p class="site-footer__powered">"#)
             .nth(1)
             .and_then(|rest| rest.split("</p>").next())
             .expect("the platform line renders");
+        assert!(line.starts_with("Powered by "), "{line}");
         assert!(
-            line.ends_with("</a>"),
-            "the product name still links, with no version after it: {line}"
-        );
-
-        let bare = ssr(neither);
-        assert!(
-            bare.contains("site-footer__legal-platform"),
-            "the platform region carries the powered-by line: {bare}"
+            line.contains(r#"href="https://github.com/neon-law/navigator""#),
+            "the repository still links: {line}"
         );
         assert!(
-            bare.contains(POWERED_BY_NEON_LAW_NAVIGATOR),
-            "with nowhere to link, the shared unlinked wording carries the line: {bare}"
+            !line.contains("github-stars__version") && !line.contains("github-stars__count"),
+            "no version or count it does not have: {line}"
         );
-        assert!(!bare.contains(r#"href="""#), "no empty anchor: {bare}");
+        assert!(!out.contains(r#"href="""#), "no empty anchor: {out}");
     }
 
     /// The copyright names one entity: the firm's legal person, and nobody
@@ -1273,7 +1225,6 @@ mod tests {
                         })
                         .collect(),
                     navigator_version: "26.8.20".to_string(),
-                    navigator_href: "https://www.neonlaw.com/navigator".to_string(),
                 }
             }
         }
@@ -1738,24 +1689,16 @@ mod tests {
     }
 
     /// The footer names the release serving the page, right after the linked
-    /// product name, on the one line that closes the strip.
+    /// repository, on the one line that closes the strip.
     ///
     /// This is what makes a push visible end to end: the moment a new image is
-    /// live, the number at the bottom of every public page changes. The
-    /// product name links the public Navigator page, so a reader who wants to
-    /// know what the number refers to has somewhere to go.
+    /// live, the number at the bottom of every public page changes.
     #[test]
     fn publishes_the_release_it_is_running() {
         let out = contactable_html();
         assert!(
-            out.contains("Neon Law Navigator</a> 26.8.20"),
-            "the footer names the software and the running release: {out}"
-        );
-        assert!(
-            out.contains(
-                r#"<a class="site-footer__release" href="https://www.neonlaw.com/navigator">Neon Law Navigator</a>"#,
-            ),
-            "the product name links to the page describing the platform: {out}"
+            out.contains(r#"<span class="github-stars__version">26.8.20</span>"#),
+            "the footer names the running release: {out}"
         );
         assert!(
             !out.contains("#26.8.20"),
@@ -1768,32 +1711,7 @@ mod tests {
         let release = out.find("26.8.20").expect("the release renders");
         assert!(
             platform < powered && powered < release,
-            "the release sits right after the product name that opens the line: {out}"
-        );
-    }
-
-    /// With no repository or product page to name, the line falls back to the
-    /// wording `/app`'s footer carries, so the two cannot drift where they
-    /// still say the same thing.
-    #[test]
-    fn the_platform_line_is_the_shared_powered_by_wording() {
-        fn app() -> Element {
-            rsx! {
-                SiteFooterLegal {
-                    copyright_holder: "Neon Law".to_string(),
-                    disclaimer: "This is an attorney advertisement.".to_string(),
-                    copyright_year: 2026,
-                }
-            }
-        }
-        let out = ssr(app);
-        assert!(
-            out.contains(POWERED_BY_NEON_LAW_NAVIGATOR),
-            "the public footer uses the shared wording: {out}"
-        );
-        assert_eq!(
-            POWERED_BY_NEON_LAW_NAVIGATOR,
-            "Powered by Neon Law Navigator"
+            "the release sits on the platform line: {out}"
         );
     }
 

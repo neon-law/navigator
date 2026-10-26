@@ -1868,8 +1868,8 @@ a.nav-pagination__link:hover {
   line-height: 0;
 }
 
-/* The platform line: "Powered by", the repository, its stars, and the running
-   release on one row. A flex row because the parts are separate elements — the
+/* The platform line: "Powered by", the repository, the running release, and
+   its stars on one row. A flex row because the parts are separate elements — the
    gap spaces them, so none has to carry a literal space — and it wraps on a
    narrow viewport rather than overflowing the strip. */
 .site-footer__powered {
@@ -1934,10 +1934,6 @@ a.nav-pagination__link:hover {
   }
 }
 
-
-.site-footer__source {
-  margin-block: 0.5rem;
-}
 
 /* Keep the count beside its repository link, with room to read each. */
 .github-stars {
