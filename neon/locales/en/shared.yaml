@@ -57,3 +57,11 @@ entries:
   lead.consent: By sending this, you agree that {site_name} may email you about this inquiry. Sending it does not make you a client, and nothing on this page is legal advice. See our Privacy Policy.
   lead.phone_helper: Optional. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Our Privacy Policy and texting terms explain how we text and what we keep.
   lead.sms_label: Yes, {site_name} may send me text messages about this inquiry at this number, including automated texts. Texting is not a condition of hiring the firm.
+
+# Per-brand overrides. DeleteYourDebt.com's legal services come from PandA Law
+# Firm, not the default provider, so its footer names and links that firm.
+brands:
+  delete-your-debt:
+    footer.provider_prefix: Legal services provided by
+    footer.provider_name: PandA Law Firm
+    footer.provider_href: https://www.pandalawfirm.com/

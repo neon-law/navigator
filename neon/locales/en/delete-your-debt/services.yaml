@@ -86,6 +86,10 @@ bands:
       DeleteYourDebt.com is operated by Guieb & Shook PC and is a way to
       work with PandA Law on debt relief.
     body:
+      - - text: "Legal services are provided by "
+        - text: PandA Law Firm
+          href: https://www.pandalawfirm.com/
+        - text: .
       - - text: >-
             Contacting either team does not create an attorney-client
             relationship. The name DeleteYourDebt.com does not guarantee

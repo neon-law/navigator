@@ -1048,6 +1048,40 @@ mod tests {
         }
     }
 
+    /// DeleteYourDebt.com, and only DeleteYourDebt.com, credits PandA Law Firm
+    /// with its legal services and links out to that firm.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn only_delete_your_debt_credits_panda_law_firm_in_its_footer() {
+        for key in views::brand::BrandKey::ALL {
+            let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
+            let chrome =
+                views::brand::scope(branding, async { chrome_for(&branding.firm, Vec::new()) })
+                    .await;
+            let mut dom = VirtualDom::new_with_props(PublicFooter, PublicFooterProps { chrome });
+            dom.rebuild_in_place();
+            let out = dioxus_ssr::render(&dom);
+            let name = key.as_str();
+
+            if *key == views::brand::BrandKey::DeleteYourDebt {
+                assert_eq!(
+                    element_text(&out, "site-footer__provider"),
+                    "Legal services provided by PandA Law Firm opens in a new tab",
+                    "{name}'s footer names its legal-services provider"
+                );
+                assert!(
+                    out.contains(r#"href="https://www.pandalawfirm.com/""#),
+                    "{name}'s footer links out to PandA Law Firm: {out}"
+                );
+            } else {
+                assert!(
+                    !out.contains("pandalawfirm.com") && !out.contains("PandA Law Firm"),
+                    "{name}'s footer must not credit PandA Law Firm: {out}"
+                );
+            }
+        }
+    }
+
     /// The visible text of the first element carrying `class`, tags
     /// stripped. Enough to assert *where* a string renders rather than only
     /// that it is somewhere in the markup; the footer's legal strip nests a
