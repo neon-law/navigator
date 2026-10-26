@@ -229,7 +229,11 @@ concurrency:
 jobs:
   release-version:
     name: is this commit a release?
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Standard runner. On ~95% of merges this job downloads a published binary
+    # and answers in seconds (0.2 min on every run this month). Its fallback
+    # compiles the debug CLI, the same build `ci.yml`'s gate and
+    # `quickstart.yml` run on `ubuntu-24.04`.
+    runs-on: ubuntu-24.04
     # This job CREATES NOTHING and holds `contents: read`. It reads the merged
     # manifest and the tag list, answers one question, and writes nothing. The
     # ref that names this release is created by `release-tag`, after integration
@@ -317,10 +321,10 @@ jobs:
       # (run 32531667235). The published Linux archive is the same code, already
       # built, and unpacks in seconds.
       #
-      # NOT A CACHE STEP. This job is on `ubuntu-latest` with a different
-      # preinstalled Rust than the Blacksmith merge gate, so it cannot read the
-      # gate's entry and would write its own into the shared 10 GB Actions
-      # quota — the contention that starved the gate's Rust cache before.
+      # NOT A CACHE STEP. Actions caches are scoped per ref and the merge gate
+      # runs only on pull requests, so this `main` run cannot read the gate's
+      # entry and would write its own into the shared 10 GB Actions quota — the
+      # contention that starved the gate's Rust cache before.
       #
       # THE BOOTSTRAP CAVEAT, accepted deliberately: the checker is release
       # N-1's, so a change to `ops release check` itself governs from the
@@ -2474,7 +2478,13 @@ jobs:
     # the tag, gated on `publishable`.
     needs: [integration, release-version, release-tag]
     if: needs.release-version.outputs.publishable == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Standard runner. One `--release` build of two binaries, with no cache and
+    # no linked test set: 20.8 min on Blacksmith's four vCPU (run 40152667654)
+    # against the same four vCPU here, inside the 90-minute cap. The same
+    # compile already runs GitHub-hosted for the macOS archive below. Unlike
+    # `build` and the publish legs, nothing here runs inside buildx, so the
+    # image layers that need Blacksmith's ~145 GB root never touch this disk.
+    runs-on: ubuntu-24.04
     # This is the archive CI actually consumes. `.github/actions/gate`
     # derives its download from the runner's platform and asks for
     # `navigator-<tag>-linux.tar.gz`. So without this job the notation gate
@@ -2916,7 +2926,8 @@ jobs:
     # now, so `publishable` is the whole condition — `release-version` sets it
     # only for a validated tag ref.
     if: needs.release-version.outputs.publishable == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Standard runner: downloads, `gh release` calls, and uploads. No compile.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -3648,7 +3659,9 @@ jobs:
     name: publish the Navigator CLI container
     needs: [release-version, release-tag, release-cli-build-linux]
     if: needs.release-version.outputs.publishable == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Standard runner. The image is `FROM scratch` plus the already-built
+    # binary, so buildx compiles nothing.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read

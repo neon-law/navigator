@@ -53,7 +53,10 @@ permissions:
 jobs:
   cut:
     name: open the daily version bump
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Standard runner. `cargo run -p cli` compiles the debug CLI cold, as it
+    # did on Blacksmith's four vCPU; `quickstart.yml` builds that binary cold
+    # on `ubuntu-24.04` in 8m33s (run 40247074498, debuginfo off).
+    runs-on: ubuntu-24.04
     if: vars.RELEASE_TRAIN_ENABLED == 'true'
     timeout-minutes: 15
     permissions:

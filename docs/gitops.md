@@ -30,8 +30,9 @@ Navigator is at [`neon-law/navigator`](https://github.com/neon-law/navigator) on
 sets `GH_HOST`, or repoints `NAVIGATOR_GITHUB_API_BASE`: `gh` and every Action default to the right place.
 
 Standard GitHub-hosted runners are free for public repositories. Coordination jobs, auto-merge, CodeQL, Dependabot, the
-KIND quickstart, and the nightly stress test use `ubuntu-24.04`. CI and deploy build jobs retain Blacksmith where disk,
-memory, or cache need it. The Marketplace is available.
+KIND quickstart, the nightly stress test, the content gate, the CLI release archives, and the release ships use
+`ubuntu-24.04`. The Rust suite, KIND integration, and the buildx image builds retain Blacksmith for its disk. The
+Marketplace is available.
 
 **Confirm an App id against a live check run before trusting it.** A required status check registered under the wrong id
 still *reads* as present in the API while matching an App that never posts a check, so the gate silently enforces
@@ -336,10 +337,11 @@ push reads it is indistinguishable from one never written. That budget is why `d
 export of a Rust builder stage carries the whole `target` directory, so one leg nobody reads is enough to starve the
 gate. Before adding a `cache-to` anywhere, name the reader.
 
-Read cache health from a job log, not from the API. Every job on this fleet logs `Enabling Blacksmith transparent cache`
+Read cache health from a job log, not from the API. Every Blacksmith job logs `Enabling Blacksmith transparent cache`
 and Blacksmith serves the Actions cache protocol from its own store, so `/actions/cache/usage` and `/actions/caches` can
-both report zero while every gate run restores a full match. Grep the job for `Cache hit`, `No cache found`, and `full
-match` instead — that is the only authoritative signal.
+both report zero while every `rust` run restores a full match. The `gate` job runs GitHub-hosted, so its `gate-cli`
+entry lives in GitHub's own store and counts against the 10 GB quota. Grep the job for `Cache hit`, `No cache found`,
+and `full match` instead — that is the only authoritative signal.
 
 `ci.yml`'s `gate content` job also runs `navigator ops github check-signatures` over `base.sha..head.sha`. `production`
 already requires verified signatures on `main`, but squash-merge writes a new GitHub-signed commit there, so that rule
@@ -404,14 +406,17 @@ also use these runners. In `deploy.yml`, tag creation, Homebrew and Zed dispatch
 rollout dispatch also move to GitHub. These jobs run shell commands and API calls without compiling Rust or building
 images.
 
-The content gate, managed Word adapter, and Rust suite retain `blacksmith-4vcpu-ubuntu-2404`, as do release builds and
-deployment jobs that build the CLI. Public GitHub Linux runners provide four CPUs, 16 GB RAM, and 14 GB SSD storage;
-private repositories get two CPUs and 8 GB RAM with the same label. Free usage depends on actual repository visibility.
-See [GitHub's runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+The content gate and managed Word adapter also run on `ubuntu-24.04`: the gate compiles one debug CLI, the same build
+`quickstart.yml` proves on that runner. So do the release decision, the Linux CLI archive, the CLI container and Release
+publish, the daily release cut, and both release-deploy ships. The Rust suite, KIND integration, and every buildx image
+build (`build`, `publish-service`, `publish-triggers`) retain `blacksmith-4vcpu-ubuntu-2404`. Public GitHub Linux
+runners provide four CPUs, 16 GB RAM, and 14 GB SSD storage; private repositories get two CPUs and 8 GB RAM with the
+same label. Free usage depends on actual repository visibility. See [GitHub's runner
+specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 
 The Rust workflow records a measured peak of 142 GB disk use, so CPU count alone does not make a standard runner a
 suitable replacement. Its header preserves the four-versus-eight-core timing and memory measurements. Before moving any
-remaining build job, measure peak disk and memory, cold and warm cache behavior, and elapsed time on the candidate
+remaining Blacksmith job, measure peak disk and memory, cold and warm cache behavior, and elapsed time on the candidate
 runner. The workflow remains the source of truth for commands, caches, and pinned tool versions.
 
 The `ci` job is the required status check — see [One required check, named `ci`
@@ -706,7 +711,7 @@ gate **every** Project repository runs, downloads `navigator-<version>-<platform
 (see below). If the archive jobs stop running, Project CI breaks everywhere with a download 404 and nothing in this
 repository goes red — which is exactly the kind of failure worth stating in prose, because no test here will catch it.
 
-**The Linux archive job runs on `blacksmith-4vcpu-ubuntu-2404`; the macOS job runs on `macos-latest`.**
+**The Linux archive job runs on `ubuntu-24.04`; the macOS job runs on `macos-latest`.**
 
 ### The Homebrew tap
 

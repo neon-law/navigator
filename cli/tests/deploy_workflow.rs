@@ -1220,8 +1220,8 @@ fn an_unavailable_checker_falls_back_to_building_from_source() {
 
 /// No Actions cache in this job, deliberately.
 ///
-/// It runs on `ubuntu-latest` with a different preinstalled Rust than the
-/// Blacksmith merge gate, so it cannot read the gate's entry — it would have to
+/// Actions caches are scoped per ref and the merge gate runs only on pull
+/// requests, so this `main` job cannot read the gate's entry — it would have to
 /// write its own into the shared 10 GB repository quota. That quota is the one
 /// the release pipeline already starved once, evicting the Rust dependency cache
 /// the PR gate uploads on every push. Downloading a built binary is the cheaper
@@ -1234,7 +1234,7 @@ fn the_release_decision_job_writes_no_actions_cache() {
     for cache in ["actions/cache", "Swatinem/rust-cache", "type=gha"] {
         assert!(
             !job.contains(cache),
-            "`release-version` must not use `{cache}`: it cannot read the Blacksmith gate's \
+            "`release-version` must not use `{cache}`: it cannot read the pull-request gate's \
              entry and would write its own into the shared quota that starved that gate before"
         );
     }

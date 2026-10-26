@@ -22,9 +22,11 @@ name: ci
 # in `deploy.yml`. UI changes also use the local worktree browser gate before
 # review; the required PR merge gate below remains independent of that workflow.
 #
-# Shell/API coordination jobs use standard GitHub-hosted `ubuntu-24.04`
-# runners, free for public repositories. Build jobs retain Blacksmith cache
-# and disk capacity; the workspace suite peaks at 142 GB (see below).
+# Shell/API coordination jobs, the content gate, and the managed Word adapter
+# use standard GitHub-hosted `ubuntu-24.04` runners, free for public
+# repositories (four vCPU, 16 GB RAM). The `rust` job alone retains Blacksmith
+# disk capacity: the workspace suite peaks at 142 GB (see below), against the
+# roughly 14 GB a standard runner promises free.
 # The macOS legs in `deploy.yml` stay on GitHub-hosted runners.
 #
 # The history matters, because the previous label cost a full CI cycle to
@@ -194,7 +196,9 @@ jobs:
     name: test managed Word adapter
     needs: [changes]
     if: needs.changes.outputs.word_adapter == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Standard runner. A .NET restore and test plus one SDK-stage docker build
+    # compile no Rust, so nothing here needs Blacksmith's disk.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -222,7 +226,18 @@ jobs:
           - 3000:3000
         # Analyzer errors can contain input text. Never upload its raw logs.
         options: --log-driver none
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Standard runner. This job compiles one debug `navigator` binary, not the
+    # workspace's linked test set, and `quickstart.yml` already proves that
+    # exact build on `ubuntu-24.04`: run 40247074498 compiled `cargo build -p
+    # cli` cold in 8m33s and then stood up a whole KIND cluster on the same
+    # disk. On Blacksmith this job measured 4.9 to 14.6 minutes (runs
+    # 40334647835, 40339164606), so 45 stays a wedge detector.
+    #
+    # Off Blacksmith, `rust-cache` below writes to GitHub's own Actions cache,
+    # inside the repository's shared 10 GB quota rather than Blacksmith's
+    # transparent store. `quickstart.yml` reads the same `gate-cli` key on the
+    # same pull request.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: "0"
