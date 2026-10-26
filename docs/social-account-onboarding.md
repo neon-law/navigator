@@ -101,8 +101,8 @@ comments, and both `comment.list` and `comment.list.manage` are checked before r
 setup](tiktok-publishing.md#public-comment-inbox) to update the configured authorization URL and reconnect with these
 grants.
 
-TikTok Business requires app approval, verified public media URLs, explicit automated-publishing consent, and separate
-OAuth authorization per Brand. Setup and manual fallback are in the [TikTok guide](tiktok-publishing.md).
+TikTok Business requires app approval, verified public media URLs, and separate OAuth authorization per Brand. Setup and
+manual fallback are in the [TikTok guide](tiktok-publishing.md).
 
 ## Who does this
 
@@ -208,9 +208,9 @@ provider app, token, or production secret is needed.
    Obtain Accounts API access approval through the application linked in the [TikTok guide](tiktok-publishing.md).
    Configure the console-generated account authorization URL and exact trailing-slash callback, request the four
    permissions above, and verify the production media URL property. Each Brand then authorizes its own TikTok account
-   separately and explicitly consents to automated publishing. Approval and ownership remain unverified until checked.
-   Use the [manual handoff](tiktok-publishing.md#manual-handoff-while-setup-is-pending) while a requirement is pending;
-   it needs no app credential. This Business Accounts API route has its own approval contract, distinct from the general
+   separately through provider OAuth. Connecting authorizes approved scheduled Posts; disconnecting stops access. Use
+   the [manual handoff](tiktok-publishing.md#manual-handoff-while-setup-is-pending) while a requirement is pending; it
+   needs no app credential. This Business Accounts API route has its own approval contract, distinct from the general
    Content Posting API's internal-utility restrictions.
 5. **Secret entry:** enter app secrets from the provider console directly into the operator's own terminal, using the
    SOPS stdin method in [deployment secrets](deployment-secrets.md#secure-social-secret-entry). Never paste them into
@@ -303,12 +303,12 @@ authorize any Brand's account.
 In the Brand's Social accounts form, enter its exact X username without `@` before granting consent. For Brand `neon`,
 verify the intended `NeonLawUSA` account yourself; its public handle is not evidence of ownership or authorization.
 Navigator reads `/2/users/me`, matches the chosen username case-insensitively, and stores only that account's numeric
-ID. Every publish checks the token's identity again. The connection requires express automatic-publishing consent, with
-disconnect as the opt-out. Select approved, purpose-specific Brand content; do not schedule substantially similar Posts
-across accounts. Automated mentions, replies, and direct messages are not supported. Tokens and rotated refresh tokens
-stay encrypted in the Brand account store, never in SOPS, staging, logs, or source. A known receipt is read back with
-its author ID before linking the post; an ambiguous write remains unknown and is never automatically resent. No setup
-step sends a live test post.
+ID. Every publish checks the token's identity again. Connecting authorizes Navigator to publish approved scheduled
+Posts; disconnect to stop access. Select approved, purpose-specific Brand content; do not schedule substantially similar
+Posts across accounts. Automated mentions, replies, and direct messages are not supported. Tokens and rotated refresh
+tokens stay encrypted in the Brand account store, never in SOPS, staging, logs, or source. A known receipt is read back
+with its author ID before linking the post; an ambiguous write remains unknown and is never automatically resent. No
+setup step sends a live test post.
 
 Official contracts: [OAuth and PKCE](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code),
 [create Posts](https://docs.x.com/x-api/posts/create-post), and [weighted

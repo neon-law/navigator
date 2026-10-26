@@ -144,8 +144,6 @@ impl Provider {
 pub struct ConnectForm {
     #[serde(default)]
     provider_account_id: Option<String>,
-    #[serde(default)]
-    auto_publish: Option<String>,
     #[serde(rename = "_csrf")]
     _csrf: Option<String>,
 }
@@ -206,7 +204,7 @@ async fn connect_start_configured(
     State(state): State<crate::admin::AdminState>,
     session: Option<Extension<SessionData>>,
     Path((brand_key, provider_name)): Path<(String, String)>,
-    Form(form): Form<ConnectForm>,
+    Form(_form): Form<ConnectForm>,
     config: Option<OAuthConfig>,
 ) -> Response {
     let back = format!("/app/admin/brands/{brand_key}/edit");
@@ -219,14 +217,6 @@ async fn connect_start_configured(
     let Some(provider) = Provider::parse(&provider_name) else {
         return redirect_error(&back, "Unsupported social provider");
     };
-    if matches!(provider, Provider::X | Provider::Tiktok)
-        && form.auto_publish.as_deref() != Some("yes")
-    {
-        return redirect_error(
-            &back,
-            "Consent to automatic publishing of this Brand's approved scheduled Posts is required",
-        );
-    }
     let Ok(selections) =
         store::social_account_selections::for_brand(&state.surreal, &brand_key).await
     else {
@@ -2531,7 +2521,6 @@ mod tests {
         let form = || {
             axum::Form(ConnectForm {
                 provider_account_id: Some("ignored-unsaved-account".into()),
-                auto_publish: None,
                 _csrf: None,
             })
         };
@@ -2628,7 +2617,6 @@ mod tests {
             None,
             Path(("neon".into(), "facebook".into())),
             axum::Form(ConnectForm {
-                auto_publish: None,
                 _csrf: None,
                 provider_account_id: None,
             }),
@@ -2643,7 +2631,6 @@ mod tests {
                 Some(Extension(session.clone())),
                 Path(("neon".into(), "carrier-pigeon".into())),
                 axum::Form(ConnectForm {
-                    auto_publish: None,
                     _csrf: None,
                     provider_account_id: None,
                 }),
@@ -2659,7 +2646,6 @@ mod tests {
                 Some(Extension(session.clone())),
                 Path(("neon".into(), "facebook".into())),
                 axum::Form(ConnectForm {
-                    auto_publish: None,
                     _csrf: None,
                     provider_account_id: None,
                 }),
@@ -2793,7 +2779,6 @@ mod tests {
             Some(Extension(session.clone())),
             Path((brand_key.clone(), "facebook".into())),
             axum::Form(ConnectForm {
-                auto_publish: None,
                 _csrf: None,
                 provider_account_id: Some("page-99".into()),
             }),
@@ -3318,31 +3303,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn x_connection_requires_express_automated_publishing_consent() {
+    async fn connections_without_checkbox_still_require_saved_destinations() {
         use axum::extract::{Path, State};
         use axum::Extension;
         let db = mem_surreal().await;
         let (admin, brand) = practice(&db).await;
         let mut session = crate::session::SessionData::fresh("admin@example.com", Role::Admin);
         session.person_id = Some(admin);
-        let (_, location) = location_of(
-            &connect_start(
-                State(admin_state(db).await),
-                Some(Extension(session)),
-                Path((brand, "x".into())),
-                axum::Form(ConnectForm {
-                    provider_account_id: Some("SyntheticBrand".into()),
-                    auto_publish: None,
-                    _csrf: None,
-                }),
-            )
-            .await
-            .into_response(),
-        );
-        assert!(
-            location.contains("Consent%20to%20automatic%20publishing"),
-            "{location}"
-        );
+        for provider in ["x", "tiktok"] {
+            let (_, location) = location_of(
+                &connect_start(
+                    State(admin_state(db.clone()).await),
+                    Some(Extension(session.clone())),
+                    Path((brand.clone(), provider.into())),
+                    axum::Form(ConnectForm {
+                        provider_account_id: Some("SyntheticBrand".into()),
+                        _csrf: None,
+                    }),
+                )
+                .await
+                .into_response(),
+            );
+            assert!(
+                location.contains("save%20it%20before%20authorizing"),
+                "{provider}: {location}"
+            );
+        }
     }
     #[tokio::test]
     async fn missing_brand_target_refuses_start_and_legacy_callback_without_provider_requests() {
@@ -3361,7 +3347,6 @@ mod tests {
                     Path((brand.clone(), "facebook".into())),
                     axum::Form(ConnectForm {
                         provider_account_id: target,
-                        auto_publish: None,
                         _csrf: None,
                     }),
                 )

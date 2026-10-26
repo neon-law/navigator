@@ -4076,6 +4076,33 @@ async fn brand_social_connection_form_requires_a_company_page_and_preserves_csrf
         c.screenshot().await.unwrap(),
     )
     .unwrap();
+    if account.attr("readonly").await.unwrap().is_some() {
+        scroll_and_js_click(
+            &c,
+            "button[data-account-update='provider_account_id-linkedin']",
+        )
+        .await;
+    }
+    account.clear().await.unwrap();
+    account.send_keys("123456789").await.unwrap();
+    scroll_and_js_click(&c, &format!("{form} button[formaction$='/selection']")).await;
+    wait_for_text(&c, "Social accounts", Duration::from_secs(10)).await;
+    let saved = c
+        .find(Locator::Css("#provider_account_id-linkedin"))
+        .await
+        .unwrap();
+    assert!(saved.attr("readonly").await.unwrap().is_some());
+    let update = "button[data-account-update='provider_account_id-linkedin']";
+    scroll_and_js_click(&c, update).await;
+    assert!(saved.attr("readonly").await.unwrap().is_none());
+    saved.clear().await.unwrap();
+    saved.send_keys("987654321").await.unwrap();
+    scroll_and_js_click(&c, update).await;
+    assert!(saved.attr("readonly").await.unwrap().is_some());
+    assert_eq!(
+        saved.prop("value").await.unwrap().as_deref(),
+        Some("123456789")
+    );
     let x_form = "form[action='/app/admin/brands/neon/social/x/connect']";
     let username = c
         .find(Locator::Css(&format!(
@@ -4084,31 +4111,10 @@ async fn brand_social_connection_form_requires_a_company_page_and_preserves_csrf
         .await
         .expect("Brand X username");
     assert!(username.attr("required").await.unwrap().is_some());
-    let consent = c
-        .find(Locator::Css(&format!(
-            "{x_form} input[name='auto_publish']"
-        )))
+    assert!(c
+        .find(Locator::Css(&format!("{x_form} input[type='checkbox']")))
         .await
-        .expect("explicit publishing consent");
-    assert!(consent.attr("required").await.unwrap().is_some());
-    assert_eq!(consent.attr("value").await.unwrap().as_deref(), Some("yes"));
-    c.execute(
-        r#"document.querySelector("form[action='/app/admin/brands/neon/social/x/connect']").scrollIntoView({block: 'center'})"#,
-        vec![],
-    )
-    .await
-    .expect("show X consent");
-    std::fs::write(
-        capture_dir.join("x-consent-before.png"),
-        c.screenshot().await.unwrap(),
-    )
-    .unwrap();
-    consent.click().await.expect("select publishing consent");
-    std::fs::write(
-        capture_dir.join("x-consent-after.png"),
-        c.screenshot().await.unwrap(),
-    )
-    .unwrap();
+        .is_err());
     c.close().await.unwrap();
 }
 
@@ -4175,9 +4181,11 @@ async fn brand_social_native_handoff_reaches_a_fake_provider_with_click_and_ente
             .find(Locator::Css("#provider_account_id-facebook"))
             .await
             .unwrap();
-        input.clear().await.unwrap();
-        input.send_keys("synthetic-browser-page").await.unwrap();
-        let connect = c.find(Locator::Css("form[action='/app/admin/brands/neon/social/facebook/connect'] button:not([formaction])")).await.unwrap();
+        if input.attr("readonly").await.unwrap().is_none() {
+            input.clear().await.unwrap();
+            input.send_keys("synthetic-browser-page").await.unwrap();
+        }
+        let connect = c.find(Locator::Css("form[action='/app/admin/brands/neon/social/facebook/connect'] button[data-account-connect]")).await.unwrap();
         if keyboard {
             connect.send_keys("\u{e007}").await.unwrap();
         } else {
@@ -4217,6 +4225,13 @@ async fn brand_social_selection_survives_reload_and_connect_failure() {
     let identity = format!("synthetic-page-{}", Uuid::now_v7());
     let selector = "#provider_account_id-facebook";
     let field = c.find(Locator::Css(selector)).await.unwrap();
+    if field.attr("readonly").await.unwrap().is_some() {
+        scroll_and_js_click(
+            &c,
+            "button[data-account-update='provider_account_id-facebook']",
+        )
+        .await;
+    }
     field.clear().await.unwrap();
     field.send_keys(&identity).await.unwrap();
     c.find(Locator::Css(
@@ -4227,9 +4242,9 @@ async fn brand_social_selection_survives_reload_and_connect_failure() {
     .click()
     .await
     .unwrap();
-    wait_for_text(&c, "Saved selection:", Duration::from_secs(10)).await;
+    wait_for_text(&c, "Update Facebook account", Duration::from_secs(10)).await;
     c.refresh().await.unwrap();
-    wait_for_text(&c, "Saved selection:", Duration::from_secs(10)).await;
+    wait_for_text(&c, "Update Facebook account", Duration::from_secs(10)).await;
     assert_eq!(
         c.find(Locator::Css(selector))
             .await
@@ -4241,7 +4256,7 @@ async fn brand_social_selection_survives_reload_and_connect_failure() {
         Some(identity.as_str())
     );
     c.find(Locator::Css(
-        "form[action='/app/admin/brands/neon/social/facebook/connect'] button:not([formaction])",
+        "form[action='/app/admin/brands/neon/social/facebook/connect'] button[data-account-connect]",
     ))
     .await
     .unwrap()
@@ -4323,9 +4338,9 @@ async fn owner_social_keys_are_blank_and_configuration_check_is_read_only() {
     c.close().await.unwrap();
 }
 
-/// Business publishing requires a chosen Brand identity and explicit consent.
+/// Business publishing requires a chosen Brand identity; OAuth grants consent.
 #[tokio::test]
-async fn brand_tiktok_connection_requires_username_and_automated_publishing_consent() {
+async fn brand_tiktok_connection_requires_username_without_redundant_checkbox() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
@@ -4341,27 +4356,17 @@ async fn brand_tiktok_connection_requires_username_and_automated_publishing_cons
         )))
         .await
         .unwrap();
-    let consent = c
-        .find(Locator::Css(&format!("{form} input[name='auto_publish']")))
-        .await
-        .unwrap();
-    let consent_selector = format!("{form} input[name='auto_publish']");
     assert!(username.attr("required").await.unwrap().is_some());
-    assert!(consent.attr("required").await.unwrap().is_some());
-    assert!(consent.attr("checked").await.unwrap().is_none());
-    assert_eq!(consent.attr("value").await.unwrap().as_deref(), Some("yes"));
+    assert!(c
+        .find(Locator::Css(&format!("{form} input[type='checkbox']")))
+        .await
+        .is_err());
     username.send_keys("synthetic_business").await.unwrap();
     let valid = format!("return document.querySelector(\"{form}\").checkValidity()");
     assert_eq!(
         c.execute(&valid, vec![]).await.unwrap().as_bool(),
-        Some(false)
-    );
-    scroll_and_js_click(&c, &consent_selector).await;
-    assert_eq!(
-        c.execute(&valid, vec![]).await.unwrap().as_bool(),
         Some(true)
     );
-    scroll_and_js_click(&c, &consent_selector).await;
     set_practice_viewport(&c, 1280, 1000).await;
     c.execute(
         &format!("document.querySelector(\"{form}\").scrollIntoView({{block:'center'}})"),
@@ -4372,7 +4377,7 @@ async fn brand_tiktok_connection_requires_username_and_automated_publishing_cons
     let directory = std::path::Path::new("/tmp/navigator-screenshots/tiktok-business");
     std::fs::create_dir_all(directory).unwrap();
     std::fs::write(
-        directory.join("brand-tiktok-consent.png"),
+        directory.join("brand-tiktok-connection.png"),
         c.screenshot().await.unwrap(),
     )
     .unwrap();

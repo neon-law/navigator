@@ -1,8 +1,8 @@
 # TikTok publishing
 
 Navigator supports the TikTok API for Business Accounts route for approved, scheduled Brand video Posts. A connection
-requires approved app permissions, explicit automated-publishing consent, and provider-verified account identity. No
-credential, account connection, approval, or published post is established by this document.
+requires approved app permissions, provider OAuth authorization, and provider-verified account identity. No credential,
+account connection, approval, or published post is established by this document.
 
 ## Choose the Business route
 
@@ -34,9 +34,9 @@ The owner completes that application and checks approval in [My Apps](https://bu
    `https://www.neonlaw.com/assets/` as a URL prefix, or the parent `neonlaw.com` domain. URL verification has been
    mandatory since November 16, 2023. Navigator refuses expiring signed URLs for this adapter. Its public Asset URLs
    have no expiry; TikTok recommends at least 30 minutes of availability.
-4. For each Brand separately, open its admin page, enter the exact TikTok username without `@`, and consent to automated
-   publication of approved scheduled Posts. Complete provider OAuth for that account. The returned identity must match
-   the chosen username before Navigator stores any token.
+4. For each Brand separately, open its admin page, save the exact TikTok username without `@`, then connect the account
+   to authorize Navigator to publish approved scheduled Posts. Complete provider OAuth for that account. The returned
+   identity must match the chosen username before Navigator stores any token.
 
 The connection requires `video.publish`, `video.list`, `user.info.basic`, and `user.info.username`. Navigator verifies
 permissions and both the app id and application-specific account id with the provider's [token

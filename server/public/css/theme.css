@@ -2147,8 +2147,44 @@ a.nav-pagination__link:hover {
 /* Brand settings keep each provider's connection controls together. */
 .brand-social-accounts-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
-  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr));
+  gap: 1.5rem 2.5rem;
+  align-items: start;
+}
+
+.brand-social-accounts-grid > section[aria-label="Meta"] {
+  grid-row: span 3;
+}
+
+.brand-social-provider {
+  padding-block: 1rem;
+  border-top: 1px solid var(--nav-color-border, #ccc);
+  min-width: 0;
+}
+
+.brand-social-provider__heading {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+}
+
+.brand-social-provider__heading svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+}
+
+.brand-social-provider input[readonly] {
+  background: var(--nav-color-surface, #f5f5f5);
+  cursor: default;
+}
+
+.brand-social-provider button[hidden] {
+  display: none;
+}
+
+.brand-social-provider .nav-field button {
+  margin-top: .5rem;
 }
 
 #brands-edit > section {
