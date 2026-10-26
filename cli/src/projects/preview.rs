@@ -178,6 +178,8 @@ struct LiveDeadline {
     project_id: Uuid,
     #[serde(default)]
     title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
     due_at: String,
     #[serde(default)]
     authority_kind: String,
@@ -202,6 +204,8 @@ struct LiveDeadline {
     inserted_at: String,
     #[serde(default)]
     updated_at: String,
+    #[serde(default)]
+    calendar_sequence: Option<i64>,
 }
 
 impl From<LiveDeadline> for store::project_deadlines::Deadline {
@@ -210,6 +214,7 @@ impl From<LiveDeadline> for store::project_deadlines::Deadline {
             id: row.id,
             project_id: row.project_id,
             title: row.title,
+            description: row.description,
             due_at: row.due_at,
             authority_kind: row.authority_kind,
             authority: row.authority,
@@ -223,6 +228,7 @@ impl From<LiveDeadline> for store::project_deadlines::Deadline {
             replay_key: row.replay_key,
             inserted_at: row.inserted_at,
             updated_at: row.updated_at,
+            calendar_sequence: row.calendar_sequence,
         }
     }
 }

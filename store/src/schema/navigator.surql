@@ -336,6 +336,7 @@ DEFINE INDEX OVERWRITE statutory_deadline_replay ON statutory_deadline FIELDS pr
 DEFINE TABLE IF NOT EXISTS project_deadlines SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE project_id ON project_deadlines TYPE record<project>;
 DEFINE FIELD OVERWRITE title ON project_deadlines TYPE option<string>;
+DEFINE FIELD OVERWRITE description ON project_deadlines TYPE option<string>;
 DEFINE FIELD OVERWRITE due_at ON project_deadlines TYPE string;
 DEFINE FIELD OVERWRITE authority_kind ON project_deadlines TYPE string
     ASSERT $value IN ['statute', 'court_rule', 'court_order', 'contract', 'internal'];
@@ -352,6 +353,8 @@ DEFINE FIELD OVERWRITE client_lead_days ON project_deadlines TYPE option<int>;
 DEFINE FIELD OVERWRITE replay_key ON project_deadlines TYPE option<string>;
 DEFINE FIELD OVERWRITE inserted_at ON project_deadlines TYPE string;
 DEFINE FIELD OVERWRITE updated_at ON project_deadlines TYPE string;
+DEFINE FIELD OVERWRITE calendar_sequence ON project_deadlines TYPE option<int>
+    ASSERT $value = NONE OR ($value >= 0 AND $value <= 2147483647);
 
 -- A Matter Page: one `pages:` entry of a Project repository's navigator.yaml,
 -- as `navigator project sync` last stored it (store::matter_pages). A sync

@@ -1298,6 +1298,7 @@ mod render_tests {
                 status: "open".into(),
                 state: "Due soon".into(),
                 overdue: false,
+                ..Default::default()
             }],
             past_deadlines: vec![crate::project_deadlines::DeadlineRow {
                 id: "d2".into(),
@@ -1310,6 +1311,7 @@ mod render_tests {
                 status: "cancelled".into(),
                 state: "Cancelled".into(),
                 overdue: false,
+                ..Default::default()
             }],
             ..base
         });
