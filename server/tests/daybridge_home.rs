@@ -82,7 +82,7 @@ async fn daybridge_home_publishes_the_one_time_mutual_split_fee() {
             "/public/brand/daybridge/logo.svg",
             "/public/css/daybridge.css",
             "Attorney advertisement",
-            "Shook Law PC",
+            "Guieb &#38; Shook PC",
         ] {
             assert!(html.contains(expected), "{host} missing {expected:?}");
         }
@@ -104,7 +104,7 @@ async fn daybridge_home_publishes_the_one_time_mutual_split_fee() {
             "{host} the practice footer's copyright links Lawyer Shook: {footer}"
         );
         assert!(
-            !html.contains("A practice of Shook Law PC"),
+            !html.contains("A practice of Guieb &#38; Shook PC"),
             "{host} {html}"
         );
         assert!(!html.to_lowercase().contains("guaranteed result"));

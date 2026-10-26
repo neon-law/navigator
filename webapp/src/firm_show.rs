@@ -832,9 +832,9 @@ mod tests {
     #[test]
     fn renders_members_with_a_read_only_dri_marker() {
         let html = render(Some(FirmFields {
-            name: "Shook Law PC".to_string(),
+            name: "Guieb & Shook PC".to_string(),
             status: "active".to_string(),
-            entity_name: "Shook Law PC".to_string(),
+            entity_name: "Guieb & Shook PC".to_string(),
             brand_keys: vec!["neon".to_string()],
             admin_dri: Some(("Nick Shook".to_string(), "nick@neonlaw.com".to_string())),
             admin_dri_problem: None,

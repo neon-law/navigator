@@ -71,7 +71,7 @@ async fn the_gateway_renders_on_neon_hosts_with_neon_chrome_and_the_approved_cop
             r#"content="Neon Law | Estate planning" property="og:title""#,
             "An estate plan shaped around you.",
             "Vesta Estate Planning",
-            "Shook Law PC",
+            "Guieb &#38; Shook PC",
             "Nevada asset protection trust",
             "when the matter",
             "Visit Vesta Estate Planning",

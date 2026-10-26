@@ -106,13 +106,20 @@ async fn the_privacy_policy_keeps_its_access_to_justice_commitments() {
 async fn the_terms_and_the_footer_name_the_same_engagement_entity() {
     let entity = views::brand::FIRM_BRAND.legal_entity;
     assert_eq!(
-        entity, "Shook Law PC",
+        entity, "Guieb & Shook PC",
         "the firm of record is the entity that holds the engagement"
     );
 
     let app = app().await;
     let (_, html) = get(&app, "/terms").await;
-    let collapsed = html.split_whitespace().collect::<Vec<_>>().join(" ");
+    // The firm's name carries an ampersand, escaped as `&amp;` by the
+    // Markdown body and as `&#38;` by the Dioxus footer.
+    let collapsed = html
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace("&amp;", "&")
+        .replace("&#38;", "&");
 
     // The footer's legal person, which since #145 is the copyright line.
     assert!(
@@ -150,9 +157,16 @@ async fn the_terms_and_the_footer_name_the_same_engagement_entity() {
 async fn the_terms_name_one_firm_however_the_reader_arrived() {
     let app = app().await;
     let (_, html) = get(&app, "/terms").await;
-    let collapsed = html.split_whitespace().collect::<Vec<_>>().join(" ");
+    // The firm's name carries an ampersand, escaped as `&amp;` by the
+    // Markdown body and as `&#38;` by the Dioxus footer.
+    let collapsed = html
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace("&amp;", "&")
+        .replace("&#38;", "&");
     assert!(
-        collapsed.contains("written engagement agreement with Shook Law PC"),
+        collapsed.contains("written engagement agreement with Guieb & Shook PC"),
         "the engagement runs through the firm of record: {collapsed}"
     );
     assert!(

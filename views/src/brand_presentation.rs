@@ -367,6 +367,42 @@ pub const PALETTE: &[Palette] = &[
             border: Some("#8f842d"),
         },
     },
+    Palette {
+        id: "guieb-shook",
+        label: "Navy and ivory",
+        light: PaletteScheme {
+            primary: "#1f3a5f",
+            primary_hover: "#182e4c",
+            primary_active: "#112239",
+            on_primary: "#ffffff",
+            on_brand: "#ffffff",
+            link: "#1f3a5f",
+            link_hover: "#112239",
+            surface_subtle: "#f4f1e8",
+            bg: None,
+            surface: None,
+            surface_raised: None,
+            text: None,
+            text_muted: None,
+            border: None,
+        },
+        dark: PaletteScheme {
+            primary: "#a9c4e8",
+            primary_hover: "#c3d6ef",
+            primary_active: "#dbe7f6",
+            on_primary: "#0f1e33",
+            on_brand: "#0f1e33",
+            link: "#a9c4e8",
+            link_hover: "#c3d6ef",
+            surface_subtle: "#16263b",
+            bg: Some("#0d1117"),
+            surface: Some("#161b22"),
+            surface_raised: Some("#1c2128"),
+            text: None,
+            text_muted: None,
+            border: None,
+        },
+    },
     // --- The seven practice brands -----------------------------------
     // Every primary below is a light-mode colour that clears WCAG AA on
     // white; each also carries a dark-mode primary raised to clear 7:1 on
@@ -665,7 +701,9 @@ impl BrandKey {
             Self::DeleteYourData => {
                 typeface_by_id("plus-jakarta-sans").expect("plus-jakarta-sans is catalogued")
             }
-            Self::LawyerShook => typeface_by_id("tinos").expect("tinos is catalogued"),
+            Self::LawyerShook | Self::GuiebShook => {
+                typeface_by_id("tinos").expect("tinos is catalogued")
+            }
             Self::Vesta => typeface_by_id("eb-garamond").expect("eb-garamond is catalogued"),
             Self::Misericordia => {
                 typeface_by_id("source-sans-3").expect("source-sans-3 is catalogued")
@@ -712,6 +750,7 @@ impl BrandKey {
             Self::Neon
             | Self::DeleteYourData
             | Self::LawyerShook
+            | Self::GuiebShook
             | Self::Vesta
             | Self::Abhaya
             | Self::DeleteYourDebt
@@ -733,6 +772,7 @@ impl BrandKey {
                 palette_by_id("delete-your-data").expect("delete-your-data is catalogued")
             }
             Self::LawyerShook => palette_by_id("lawyer-shook").expect("lawyer-shook is catalogued"),
+            Self::GuiebShook => palette_by_id("guieb-shook").expect("guieb-shook is catalogued"),
             Self::Vesta => palette_by_id("vesta").expect("vesta is catalogued"),
             Self::Misericordia => {
                 palette_by_id("misericordia").expect("misericordia is catalogued")

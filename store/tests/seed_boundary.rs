@@ -179,7 +179,7 @@ fn identity_seeds_hold_only_the_inventoried_public_firm_facts() {
     assert_eq!(text(&boxes[0], "street"), "5150 Mae Anne Ave Ste 405-9002");
 
     for fact in [
-        "Shook Law PC",
+        "Guieb & Shook PC",
         "Nick Shook",
         "13400",
         "337252",

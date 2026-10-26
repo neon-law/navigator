@@ -77,7 +77,7 @@ async fn the_gateway_renders_on_neon_hosts_with_neon_chrome_and_the_approved_cop
             r#"content="Neon Law | Privacy and data removal" property="og:title""#,
             "Make your personal information harder to find.",
             "DeleteYourData.com",
-            "Shook Law PC",
+            "Guieb &#38; Shook PC",
             "does not promise",
             "Visit DeleteYourData.com",
             "site-footer",

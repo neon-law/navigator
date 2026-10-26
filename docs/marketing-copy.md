@@ -55,6 +55,13 @@ Lawyer Shook (`lawyer-shook/`):
 | `neon/locales/en/lawyer-shook/home.yaml` | `/` practice cards beneath the firm's notice |
 | `neon/locales/en/lawyer-shook/services.yaml` | `/services` (kept valid; the route is not published on that host) |
 
+Guieb & Shook (`guieb-shook/`):
+
+| File | Page |
+| --- | --- |
+| `neon/locales/en/guieb-shook/home.yaml` | `/` page-shell defaults; the statement is hardcoded in `firm_pages.rs` |
+| `neon/locales/en/guieb-shook/services.yaml` | `/services` (kept valid; the route is not published on that host) |
+
 Daybridge Divorce Law (`daybridge/`):
 
 | File | Page |
@@ -89,13 +96,14 @@ programs require confirmation of Abhaya's own offering before they can be advert
 
 DeleteYourDebt.com introduces PandA Law's debt-relief work in Nevada, Washington, New York, and California. Its primary
 action opens [PandA Law's contact page](https://www.pandalawfirm.com/contact/). The team works across the country and
-offers in-person meetings in Brooklyn. Shook Law PC remains the site's operator; the written engagement identifies the
-lawyers, scope, and fees. The homepage, services catalog, Neon gateway, and brand descriptions share this scope and make
-no outcome promise. The two-column homepage uses Public Sans and the registered green palette.
+offers in-person meetings in Brooklyn. Guieb & Shook PC remains the site's operator; the written engagement identifies
+the lawyers, scope, and fees. The homepage, services catalog, Neon gateway, and brand descriptions share this scope and
+make no outcome promise. The two-column homepage uses Public Sans and the registered green palette.
 
 Lawyer Shook's `/` combines the firm notice and client sign-in written in Rust
 (`neon::firm_pages::lawyer_shook_holding_content`) with Neon Law and Vesta practice cards from its home catalog. It uses
-the shared footer treatment used by Neon Law and Vesta, including the link to Shook Law PC and the common closing line.
+the shared footer treatment used by Neon Law and Vesta, including the link to Guieb & Shook PC and the common closing
+line.
 
 Neon's `team.yaml` keeps the directory to one name and link; Nick's profile holds a two-sentence introduction and his
 LinkedIn link. The profile does not repeat the directory's heading or copy a full service biography.
@@ -157,9 +165,10 @@ without adopting competitor experience or outcome claims.
 
 [NRS 669.080(1)(c), (n)](https://www.leg.state.nv.us/NRS/NRS-669.html#NRS669Sec080) exempts performance of attorney
 duties and individual fiduciary service from that chapter. This supports the advertised legal-advice and
-individual-appointment paths; it does not establish that Shook Law PC is a licensed trust company or qualified for every
-proposed trust. [NRS 162.310](https://www.leg.state.nv.us/NRS/NRS-162.html#NRS162Sec310) distinguishes a fiduciary's
-attorney from duties to the principal arising solely from that representation. The engagement must identify the client.
+individual-appointment paths; it does not establish that Guieb & Shook PC is a licensed trust company or qualified for
+every proposed trust. [NRS 162.310](https://www.leg.state.nv.us/NRS/NRS-162.html#NRS162Sec310) distinguishes a
+fiduciary's attorney from duties to the principal arising solely from that representation. The engagement must identify
+the client.
 
 The [Nevada Rules of Professional Conduct](https://www.leg.state.nv.us/courtrules/rpc.html) supply the ethics limits:
 

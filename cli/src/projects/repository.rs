@@ -2427,12 +2427,12 @@ fn firm_trade_name_claims(contents: &str) -> Vec<(usize, String)> {
             .collect::<String>()
             .to_ascii_lowercase();
         let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
-        let claim = normalized.contains("neon law, a practice of shook law pc")
+        let claim = normalized.contains("neon law, a practice of guieb & shook pc")
             || normalized.contains("trading as neon law")
             || normalized.contains("doing business as neon law")
             || normalized.contains("d/b/a neon law")
-            || normalized.contains("shook law pc (\"neon law\")")
-            || normalized.contains("shook law pc ('neon law')")
+            || normalized.contains("guieb & shook pc (\"neon law\")")
+            || normalized.contains("guieb & shook pc ('neon law')")
             || normalized.trim_matches(|character: char| !character.is_ascii_alphanumeric())
                 == "neon law";
         if claim {
@@ -2459,7 +2459,7 @@ fn california_law_firm_entity_claims(contents: &str) -> Vec<usize> {
     }
 
     // The firm's name without its entity suffix, so a bare signature heading
-    // naming the firm as an LLC (`**Shook Law PLLC**`) is a party claim.
+    // naming the firm as an LLC (`**Guieb & Shook PLLC**`) is a party claim.
     let firm = store::seed::FIRM_ENTITY_NAME.to_ascii_lowercase();
     let firm_stem = firm
         .rsplit_once(' ')
@@ -5377,13 +5377,13 @@ jobs:
             ("Neon Law, inc. signs below", "Neon Law, inc."),
         ] {
             assert_eq!(
-                misnamed_firm_entities(body, "Shook Law PC"),
+                misnamed_firm_entities(body, "Guieb & Shook PC"),
                 vec![(1, spelling.to_string())],
                 "{body}"
             );
         }
         assert_eq!(
-            misnamed_firm_entities("---\ntitle: x\n---\n\nNeon Law, Inc.\n", "Shook Law PC"),
+            misnamed_firm_entities("---\ntitle: x\n---\n\nNeon Law, Inc.\n", "Guieb & Shook PC"),
             vec![(5, "Neon Law, Inc.".to_string())]
         );
         // The comparison is against the entity of record, not against every
@@ -5404,14 +5404,14 @@ jobs:
             "Neon Law",
             "Neon Law.",
             "Neon Law helps you.",
-            "Neon Law, a practice of Shook Law PC, will",
+            "Neon Law, a practice of Guieb & Shook PC, will",
             "Neon Law IP LLC licenses the mark.",
             "Neon Lawyers Inc",
             "Neon Law Incorporates the terms",
-            "Shook Law PC",
+            "Guieb & Shook PC",
         ] {
             assert_eq!(
-                misnamed_firm_entities(body, "Shook Law PC"),
+                misnamed_firm_entities(body, "Guieb & Shook PC"),
                 Vec::new(),
                 "{body}"
             );
@@ -5423,9 +5423,9 @@ jobs:
         for kind in ["onboarding", "offboarding"] {
             let body = format!(
                 "---\nkind: {kind}\ntitle: Letter\n---\n\n\
-                 Thank you for choosing Neon Law, a practice of Shook Law PC.\n\
-                 Shook Law PC, trading as Neon Law\n\
-                 Shook Law PC (\"Neon Law\")\n\
+                 Thank you for choosing Neon Law, a practice of Guieb & Shook PC.\n\
+                 Guieb & Shook PC, trading as Neon Law\n\
+                 Guieb & Shook PC (\"Neon Law\")\n\
                  Neon Law\n\
                  Write to contact@neonlaw.com or use the Neon Law portal.\n"
             );
@@ -5438,7 +5438,7 @@ jobs:
     #[test]
     fn firm_trade_name_rule_ignores_other_kinds_and_contact_references() {
         for body in [
-            "---\nkind: letter\ntitle: Letter\n---\n\nShook Law PC, trading as Neon Law\n",
+            "---\nkind: letter\ntitle: Letter\n---\n\nGuieb & Shook PC, trading as Neon Law\n",
             "---\nkind: onboarding\ntitle: Letter\n---\n\nWrite to contact@neonlaw.com or use the Neon Law portal.\n",
         ] {
             assert!(firm_trade_name_claims(body).is_empty(), "{body}");
@@ -5471,7 +5471,7 @@ jobs:
             format!("---\nkind: onboarding\ntitle: Letter\njurisdiction: CA\n---\n{body}\n")
         };
         for party in [
-            "Thank you for choosing Shook Law PC.\n\n**Shook Law PC**",
+            "Thank you for choosing Guieb & Shook PC.\n\n**Guieb & Shook PC**",
             "Thank you for choosing Nick Shook, Attorney at Law (State Bar No. 000000), called \"the Firm\" in this letter.\n\n**Nick Shook, Attorney at Law**",
         ] {
             assert!(
@@ -5481,7 +5481,7 @@ jobs:
         }
         assert_eq!(
             california_law_firm_entity_claims(&template(
-                "Thank you for choosing Shook Law PLLC.\n\n**Shook Law PLLC**"
+                "Thank you for choosing Guieb & Shook PLLC.\n\n**Guieb & Shook PLLC**"
             )),
             vec![6, 8]
         );
@@ -5601,7 +5601,7 @@ jobs:
             "  END: {}\n",
             "---\n",
             "\n",
-            "Shook Law PC, trading as Neon Law\n",
+            "Guieb & Shook PC, trading as Neon Law\n",
             "Write to contact@neonlaw.com or use the Neon Law portal.\n",
         );
         let line = template

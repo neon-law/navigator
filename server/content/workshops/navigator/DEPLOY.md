@@ -1173,7 +1173,7 @@ roles. Complete the global Workspace attachment once:
 `web-env.yaml` uses `# NAVIGATOR_OPTIONAL_ENV <KEY>` to mark an optional coordinate (`OAUTH_APPLE_CLIENT_ID`,
 `OAUTH_MICROSOFT_ALLOW_ANY_TENANT`); `ops ship` emits its entry, quoted, only for a nonblank value.
 | Bootstrap Owner | `NAVIGATOR_BOOTSTRAP_OWNER_EMAIL` (`config.toml`) | Missing: ship refused; unset: no JIT identity |
-| Protected firm Entity | `NAVIGATOR_BOOTSTRAP_COMPANY` | `Shook Law PC` is protected either way |
+| Protected firm Entity | `NAVIGATOR_BOOTSTRAP_COMPANY` | `Guieb & Shook PC` is protected either way |
 | Google token policy | `GOOGLE_OAUTH_CLIENT_IDS`, `GOOGLE_OAUTH_REQUIRED_HD` | No client/domain pin |
 | Google token endpoint | `GOOGLE_TOKENINFO_URL` | Google default |
 | Password door | `NAVIGATOR_IDENTITY_PLATFORM_API_KEY` | OIDC-only login |
@@ -1187,9 +1187,9 @@ participation decide access. `OIDC_DISABLED` exists for host-side diagnosis but 
 both parsed profiles. `NAVIGATOR_GCP_METADATA_ENDPOINT`, `GOOGLE_TOKENINFO_URL`, and
 `NAVIGATOR_IDENTITY_PLATFORM_ENDPOINT` are controlled test seams; a normal deploy leaves them on their secure defaults.
 `NAVIGATOR_BOOTSTRAP_COMPANY` names a firm Entity that lawyer and admin may re-type or re-domicile but never rename or
-delete. It adds to rather than replaces the protected set: the canonical seed re-creates `Shook Law PC` by exact name on
-every boot, so that row is protected in every deployment and a white-label operator's own firm Entity is protected
-alongside it.
+delete. It adds to rather than replaces the protected set: the canonical seed re-creates `Guieb & Shook PC` by exact
+name on every boot, so that row is protected in every deployment and a white-label operator's own firm Entity is
+protected alongside it.
 
 ### Deployed runtime: email, signatures, and billing
 

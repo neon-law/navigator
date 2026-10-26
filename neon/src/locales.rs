@@ -81,6 +81,7 @@ const CYBER_INJURY_SERVICES_YAML: &str =
 const CYBER_INJURY_HOME_YAML: &str = include_str!("../locales/en/cyber-injury-law/home.yaml");
 const AEGIS_HOME_YAML: &str = include_str!("../locales/en/aegis/home.yaml");
 const AEGIS_SERVICES_YAML: &str = include_str!("../locales/en/aegis/services.yaml");
+const GUIEB_SHOOK_HOME_YAML: &str = include_str!("../locales/en/guieb-shook/home.yaml");
 const GROUNDWORK_HOME_YAML: &str = include_str!("../locales/en/groundwork/home.yaml");
 const GROUNDWORK_SERVICES_YAML: &str = include_str!("../locales/en/groundwork/services.yaml");
 const DAYBRIDGE_HOME_YAML: &str = include_str!("../locales/en/daybridge/home.yaml");
@@ -156,6 +157,10 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Aegis, "home") => Some(AEGIS_HOME_YAML),
         (BrandKey::Aegis, "services") => Some(AEGIS_SERVICES_YAML),
         (BrandKey::Groundwork, "home") => Some(GROUNDWORK_HOME_YAML),
+        (BrandKey::GuiebShook, "home") => Some(GUIEB_SHOOK_HOME_YAML),
+        (BrandKey::GuiebShook, "services") => {
+            Some(include_str!("../locales/en/guieb-shook/services.yaml"))
+        }
         (BrandKey::Groundwork, "services") => Some(GROUNDWORK_SERVICES_YAML),
         (BrandKey::Daybridge, "home") => Some(DAYBRIDGE_HOME_YAML),
         (BrandKey::Daybridge, "services") => Some(DAYBRIDGE_SERVICES_YAML),
@@ -1602,11 +1607,17 @@ mod tests {
             })
             .expect("brand directory");
         // Neon Law's own site needs no Neon Law card, and the Lawyer Shook
-        // holding page is a mark, not a service, so it is not listed.
+        // and Guieb & Shook holding pages are firm marks, not services, so
+        // neither is listed.
         let brands: Vec<BrandKey> = BrandKey::ALL
             .iter()
             .copied()
-            .filter(|key| !matches!(key, BrandKey::Neon | BrandKey::LawyerShook))
+            .filter(|key| {
+                !matches!(
+                    key,
+                    BrandKey::Neon | BrandKey::LawyerShook | BrandKey::GuiebShook
+                )
+            })
             .collect();
         assert_eq!(cards.len(), brands.len());
         for key in brands {
@@ -2189,7 +2200,7 @@ mod tests {
     fn lawyer_shook_services_catalog_is_brand_keyed_and_attributed() {
         let branding = &views::brand::LAWYER_SHOOK_BRANDING;
         let services_content = legal_services(branding);
-        assert!(services_content.hero_lead.contains("Shook Law PC"));
+        assert!(services_content.hero_lead.contains("Guieb & Shook PC"));
         assert!(!services_content.meta_description.contains("flat-fee"));
     }
 
@@ -2578,7 +2589,7 @@ mod tests {
             .expect("Neon home has the company section");
         let text = serde_yaml::to_string(&company).expect("company copy serializes");
         assert!(!text.contains("For life outside the company."));
-        assert!(!text.contains("Neon Law also helps you find the right Shook Law PC practice"));
+        assert!(!text.contains("Neon Law also helps you find the right Guieb & Shook PC practice"));
         for retired in [
             "Debt-collection defense",
             "/delete-your-debt",
@@ -3183,7 +3194,7 @@ mod tests {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
             assert_eq!(
                 branding.firm.legal_entity,
-                "Shook Law PC",
+                "Guieb & Shook PC",
                 "{} names the firm",
                 key.as_str()
             );

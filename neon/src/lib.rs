@@ -6,7 +6,7 @@
 //! to its own [`views::brand::BrandKey`], so the same running process renders
 //! Neon Law's chrome on its own hosts and a second house brand's on its own,
 //! from the one composed router this crate declares. Neon Law is the practice
-//! of Shook Law PC, and every page this crate serves is the firm's or a
+//! of Guieb & Shook PC, and every page this crate serves is the firm's or a
 //! house brand the firm operates.
 //!
 //! This crate owns the public surface outright: its marketing copy, its page
@@ -162,7 +162,7 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
             .iter()
             .map(|path| (*path).to_string())
             .collect(),
-        BrandKey::LawyerShook => ["/", "/testimonials"]
+        BrandKey::LawyerShook | BrandKey::GuiebShook => ["/", "/testimonials"]
             .iter()
             .map(|path| (*path).to_string())
             .collect(),
@@ -289,7 +289,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
                         title: "Contact".to_string(),
                         path: "/contact".to_string(),
                         description: format!(
-                            "How to reach {mark}, a practice of Shook Law PC, about a \
+                            "How to reach {mark}, a practice of Guieb & Shook PC, about a \
                              data-deletion request."
                         ),
                     },
@@ -297,17 +297,19 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
                 sections: Vec::new(),
             }
         }
-        BrandKey::LawyerShook => {
-            // Lawyer Shook is a bare holding page: the same statement
+        BrandKey::LawyerShook | BrandKey::GuiebShook => {
+            // A bare holding page: the same statement
             // `resolve_firm_home_content` puts on the screen is the whole of
             // what a crawler reads here too, so this reuses it rather than
             // keeping a second copy of the sentence in step.
-            let content =
-                firm_pages::resolve_firm_home_content(&views::brand::LAWYER_SHOOK_BRANDING, None);
+            let content = firm_pages::resolve_firm_home_content(
+                key.resolve_branding(&views::brand::DEFAULT_BRANDING),
+                None,
+            );
             let bare = content
                 .bare
                 .as_ref()
-                .expect("invariant: Lawyer Shook's home content is always bare");
+                .expect("invariant: a holding page's home content is always bare");
             portal::LlmsTxt {
                 title: bare.heading.clone(),
                 summary: bare.paragraph.clone(),

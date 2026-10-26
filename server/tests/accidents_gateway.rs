@@ -72,7 +72,7 @@ async fn the_gateway_renders_on_neon_hosts_with_neon_chrome_and_the_approved_cop
             r#"content="Neon Law | Accidents and injury claims" property="og:title""#,
             "Talk to a lawyer after an injury.",
             "Misericordia Injury Law",
-            "Shook Law PC",
+            "Guieb &#38; Shook PC",
             "We do not promise a recovery amount",
             "Visit Misericordia Injury Law",
             "site-footer",

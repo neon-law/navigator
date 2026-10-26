@@ -13,7 +13,7 @@
 //! 3. **Tier.** `dev worktree-env up` gives the checkout its own KIND cluster
 //!    on its own slot ports, applies the schema, and stages the sample
 //!    matters; `dev forgejo up` adds PostgreSQL and Forgejo on that slot.
-//! 4. **Web.** `dev serve` builds and starts `web`, which seeds the Shook Law
+//! 4. **Web.** `dev serve` builds and starts `web`, which seeds the Guieb & Shook
 //!    PC firm and its sample matters on boot, and the browser opens once it
 //!    is ready.
 //!
@@ -216,7 +216,7 @@ Navigator is running on this machine.
   Rauthy (sign-in)      {rauthy}
 
 Sign in at {web}/auth/login as owner@, lawyer@, clerk@, or client@neonlaw.com
-with the password `password`. The seeded firm is Shook Law PC with three sample
+with the password `password`. The seeded firm is Guieb & Shook PC with three sample
 matters: Cruller v. Prine, Widget Works, and the Estate of Cornelius Montgomery.
 
 Make it yours: copy .env.example to .env and add your own Meta, TikTok, or other
@@ -354,7 +354,7 @@ mod tests {
             "127.0.0.1:21537 (TLS",
             "http://localhost:20437",
             "http://localhost:20637/auth/login",
-            "Shook Law PC",
+            "Guieb & Shook PC",
             ".env.example",
             "Meta, TikTok",
             CONTACT_URL,

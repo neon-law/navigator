@@ -70,7 +70,7 @@ mod tests {
             rsx! {
                 SocialMeta {
                     title: "Lawyer Shook".to_string(),
-                    description: "The Shook Law PC holding page.".to_string(),
+                    description: "The Guieb & Shook PC holding page.".to_string(),
                     site_name: "Lawyer Shook".to_string(),
                     image: String::new(),
                 }

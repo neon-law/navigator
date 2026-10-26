@@ -42,7 +42,12 @@ async fn services_directory_renders_every_brand_icon() {
     let brands: Vec<BrandKey> = BrandKey::ALL
         .iter()
         .copied()
-        .filter(|key| !matches!(key, BrandKey::Neon | BrandKey::LawyerShook))
+        .filter(|key| {
+            !matches!(
+                key,
+                BrandKey::Neon | BrandKey::LawyerShook | BrandKey::GuiebShook
+            )
+        })
         .collect();
     assert_eq!(
         html.matches("class=\"fm-card__logo\"").count(),

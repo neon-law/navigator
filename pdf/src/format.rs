@@ -1007,7 +1007,7 @@ mod tests {
         assert!(letter.contains("contact\\@neonlaw.com"));
         // The wordmark is the trading brand alone. Pin the whole `#upper`
         // argument rather than a substring, so re-attaching an entity
-        // suffix ("Neon Law by Shook Law PC") fails here.
+        // suffix ("Neon Law by Guieb & Shook PC") fails here.
         assert!(
             letter.contains("#upper[Neon Law]"),
             "the wordmark is not exactly `Neon Law`: {letter}"

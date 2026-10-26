@@ -5,15 +5,15 @@ of Service. If you do not agree, please do not use our services.
 
 ## Who Provides These Services
 
-**Neon Law** (Shook Law PC) operates this site and renders every legal service under these Terms. One organization
+**Neon Law** (Guieb & Shook PC) operates this site and renders every legal service under these Terms. One organization
 provides everything here: there is no second entity behind any part of this site, and nothing on it is supplied by
-anyone else. Every reference to "Neon Law" in these Terms means Shook Law PC.
+anyone else. Every reference to "Neon Law" in these Terms means Guieb & Shook PC.
 
 ## No Legal Advice Without Engagement
 
 Information on this website is for general informational and educational purposes only and does not constitute legal
-advice. An attorney-client relationship is formed only upon execution of a written engagement agreement with Shook Law
-PC.
+advice. An attorney-client relationship is formed only upon execution of a written engagement agreement with Guieb &
+Shook PC.
 
 ## Conflicts of Interest
 
@@ -58,7 +58,7 @@ NEON LAW® is a registered trademark of Neon Law IP LLC, [U.S. Reg. No.
 6,325,650](https://tmsearch.uspto.gov/search/search-results/90039224), registered on the Principal Register of the
 United States Patent and Trademark Office in Class 45 for legal services. That link is the register's own record, so you
 can verify the registration and its owner without taking our word for it. The Neon Law name, logo, and related marks
-remain the exclusive property of Shook Law PC, and any other use without prior written permission is unauthorized.
+remain the exclusive property of Guieb & Shook PC, and any other use without prior written permission is unauthorized.
 
 ## Privacy and Third Parties
 
@@ -79,7 +79,7 @@ Use of this site and our services is at your sole risk. We make commercially rea
 and to safeguard the information you provide, but we make no warranty, express or implied, regarding outcome,
 availability, or freedom from defect or compromise.
 
-To the maximum extent permitted by law, you release, indemnify, and hold harmless Shook Law PC and its officers,
+To the maximum extent permitted by law, you release, indemnify, and hold harmless Guieb & Shook PC and its officers,
 employees, attorneys, contractors, agents, and volunteers from any claim, loss, liability, or expense — direct,
 indirect, incidental, consequential, or punitive — arising from your use of the services, excepting only our gross
 negligence or willful misconduct.

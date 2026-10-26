@@ -64,7 +64,7 @@ async fn cyber_injury_home_serves_its_copy_assets_and_fonts() {
             "href=\"https://www.cyberinjurylaw.com/testimonials\"",
             "cyber-incident",
             "cyber-timing",
-            "Shook Law PC",
+            "Guieb &#38; Shook PC",
             "site-footer",
             "Law.com",
             "cyber-consultation-qr.svg",

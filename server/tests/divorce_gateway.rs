@@ -72,7 +72,7 @@ async fn the_gateway_renders_on_neon_hosts_with_neon_chrome_and_the_approved_cop
             r#"content="Neon Law | Divorce" property="og:title""#,
             "A brighter way through divorce.",
             "Daybridge Divorce Law",
-            "Shook Law PC",
+            "Guieb &#38; Shook PC",
             "one-time $5,000 fee",
             "No result or timeline is promised",
             "Visit Daybridge Divorce Law",

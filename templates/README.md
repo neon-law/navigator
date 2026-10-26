@@ -92,8 +92,8 @@ templates/notations/neon_law/
 
 Each file declares its own confidentiality classification. Public business templates contain no client data. The marks
 are reserved. **NEON LAW** is a registered trademark of Neon Law IP LLC (U.S. Reg. No. 6,325,650);
-**DELETEYOURDATA.COM™** and **LAWYER SHOOK™** are common-law marks of Shook Law PC; see the [Trademark note in the root
-README.md](../README.md#trademark). A rebrand goes through the white-label seam.
+**DELETEYOURDATA.COM™** and **LAWYER SHOOK™** are common-law marks of Guieb & Shook PC; see the [Trademark note in the
+root README.md](../README.md#trademark). A rebrand goes through the white-label seam.
 
 `navigator project gate` rejects any legal template outside `notations/forms/` or `notations/neon_law/`. Those two
 shelves are the whole legal-notation surface; `github/` sits beside `notations/` for engineering intake, and nowhere

@@ -130,7 +130,7 @@ pub struct PublicChrome {
     pub legal_entity: String,
     #[serde(default)]
     pub disclosure: crate::components::site_footer::FooterDisclosure,
-    /// "A practice of Shook Law PC", when the name on the masthead is not
+    /// "A practice of Guieb & Shook PC", when the name on the masthead is not
     /// the name of the legal person behind it. Empty otherwise.
     ///
     /// Derived rather than listed. A trade name is permitted in Nevada
@@ -390,7 +390,7 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         firm_logo_href: FIRM_BRAND.logo_href.to_string(),
         firm_home_href: FIRM_BRAND.home_href.to_string(),
         legal_entity: FIRM_BRAND.legal_entity.to_string(),
-        disclosure: if FIRM_BRAND.legal_entity == "Shook Law PC" {
+        disclosure: if FIRM_BRAND.legal_entity == "Guieb & Shook PC" {
             crate::components::site_footer::FooterDisclosure {
                 prefix: marketing_copy("footer.provider_prefix"),
                 provider: marketing_copy("footer.provider_name"),
@@ -571,8 +571,8 @@ mod tests {
             firm_name: "Neon Law".to_string(),
             firm_logo_href: "/public/logo.svg".to_string(),
             firm_home_href: "/".to_string(),
-            legal_entity: "Shook Law PC".to_string(),
-            attribution: "A practice of Shook Law PC".to_string(),
+            legal_entity: "Guieb & Shook PC".to_string(),
+            attribution: "A practice of Guieb & Shook PC".to_string(),
             disclaimer: "This is an attorney advertisement.".to_string(),
             // The real registration, as `chrome_for` resolves it from the firm
             // brand: the notice's registrant is `legal_entity` above, so a
@@ -641,7 +641,7 @@ mod tests {
             rsx! { PublicFooter { chrome: firm_chrome() } }
         }
         let out = ssr(app);
-        assert!(out.contains("\u{a9} 2026 Shook Law PC"), "{out}");
+        assert!(out.contains("\u{a9} 2026 Guieb &#38; Shook PC"), "{out}");
         assert!(out.contains("support@neonlaw.com"), "{out}");
         assert!(
             out.contains(r#"href="mailto:support@neonlaw.com""#),
@@ -811,7 +811,7 @@ mod tests {
             rsx! { PublicFooter { chrome: firm_chrome() } }
         }
         let out = ssr(app);
-        assert!(out.contains("© 2026 Shook Law PC"), "{out}");
+        assert!(out.contains("© 2026 Guieb &#38; Shook PC"), "{out}");
     }
 
     /// The mark notice names the registrant the copyright line names, and
@@ -831,7 +831,7 @@ mod tests {
             "the mark renders as registered: {out}"
         );
         assert!(
-            out.contains("is a registered trademark of Shook Law PC"),
+            out.contains("is a registered trademark of Guieb &#38; Shook PC"),
             "the registrant is the legal person, not the wordmark: {out}"
         );
         assert!(
@@ -904,7 +904,8 @@ mod tests {
                 "Death & Divorce",
                 "CyberInjuryLaw",
                 "Aegis Criminal Defense",
-                "Groundwork Real Estate Law"
+                "Groundwork Real Estate Law",
+                "Guieb & Shook"
             ]
         );
         assert!(chrome.brands[0].current, "the default brand is current");
@@ -1020,7 +1021,7 @@ mod tests {
                 "{name}'s page must carry its service disclosure: {out}"
             );
             assert!(
-                out.contains(branding.firm.legal_entity),
+                out.contains(&branding.firm.legal_entity.replace('&', "&#38;")),
                 "{name}'s page must name {}: {out}",
                 branding.firm.legal_entity
             );
@@ -1079,7 +1080,8 @@ mod tests {
                 _ => {}
             }
         }
-        text.trim().to_string()
+        // Dioxus writes a firm name's ampersand ("Guieb & Shook PC") as `&#38;`.
+        text.trim().replace("&#38;", "&")
     }
 
     /// The attribution line is derived, not listed.
@@ -1108,7 +1110,7 @@ mod tests {
                     if *key == views::brand::BrandKey::Daybridge {
                         ""
                     } else {
-                        "A practice of Shook Law PC"
+                        "A practice of Guieb & Shook PC"
                     },
                     "{} has the expected attribution treatment",
                     key.as_str()

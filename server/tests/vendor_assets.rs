@@ -690,7 +690,7 @@ fn inline_prose_links_are_underlined_without_an_allow_list_of_pages() {
 ///
 /// `link-secondary` is the fine-print anchor around a trademark registration
 /// or a bar licence number, and it is always read mid-sentence: "… is a
-/// registered trademark of Shook Law PC, U.S. Reg. No. 6,325,650". It had no
+/// registered trademark of Guieb & Shook PC, U.S. Reg. No. 6,325,650". It had no
 /// stylesheet rule at all, so `.nav-theme a { text-decoration: none }` left it
 /// distinguishable by colour alone and axe failed `link-in-text-block` on
 /// `/design` — in the `/app` footer and, undecidably, in the public one.

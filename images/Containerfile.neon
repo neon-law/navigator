@@ -264,7 +264,7 @@ EXPOSE 3001
 # nor a release archive. Stage the project's license and attribution files
 # beside the binary so downstream recipients can retain them in distributions.
 LABEL org.opencontainers.image.licenses="MIT OR Apache-2.0" \
-      org.opencontainers.image.vendor="Shook Law PC" \
+      org.opencontainers.image.vendor="Guieb & Shook PC" \
       org.opencontainers.image.source="https://github.com/neon-law/navigator"
 
 COPY LICENSE /app/LICENSE

@@ -118,14 +118,14 @@ pub const ENTITY_SEED_YAML: &str = canonical::ENTITY;
 ///
 /// This is the professional corporation a client engages — the entity of record behind
 /// the Neon Law mark, which is why it is the row the application refuses to
-/// delete. `Neon Law` is what the site is signed with; `Shook Law PC` is the
+/// delete. `Neon Law` is what the site is signed with; `Guieb & Shook PC` is the
 /// legal person that renders the services and owns the mark, and only a legal
 /// person can anchor a client relationship. It is also the copyright holder in
 /// Navigator and the Licensor named in `LICENSE`. Moving this name is a data
 /// change as well as a code one: `seed_entities` reconciles
 /// `entities.firm_anchor_key` on every boot, because the delete guard reads
 /// that column and not the name.
-pub const FIRM_ENTITY_NAME: &str = "Shook Law PC";
+pub const FIRM_ENTITY_NAME: &str = "Guieb & Shook PC";
 
 /// The seeded practice's first Admin DRI (ENG-499). `User.yaml` carries the
 /// canonical `role: admin` assignment for this email; [`seed_practice`]
@@ -3068,23 +3068,30 @@ async fn seed_entities(
     Ok(())
 }
 
-/// The firm's name before it became a California professional corporation:
-/// only a PC may practise law in California, so `Shook Law PLLC` is now
+/// The firm's earlier names, newest first. `Shook Law PLLC` predates the
+/// California professional corporation (only a PC may practise law in
+/// California); `Shook Law PC` is that corporation before it was renamed
 /// [`FIRM_ENTITY_NAME`].
-const LEGACY_FIRM_ENTITY_NAME: &str = "Shook Law PLLC";
+const LEGACY_FIRM_ENTITY_NAMES: &[&str] = &["Shook Law PC", "Shook Law PLLC"];
 
-/// Move a database that still carries the `Shook Law PLLC` row onto the PC.
+/// Move a database that still carries a legacy firm row onto the PC.
 ///
 /// The seed finds rows by name and type, so without this a persisted
 /// database would keep the old row holding `firm_anchor_key` and the new
 /// row could never be minted. Renaming in place keeps the row's id, so
 /// every Firm, Address, and Matter that points at it stays pointed.
 /// The anchor is surrendered first because `entities::update` refuses to
-/// rename a row that holds it. Idempotent: a no-op once the legacy row is
-/// gone, and when the PC row already exists.
+/// rename a row that holds it. Idempotent: a no-op once no legacy row is
+/// left, and when the PC row already exists.
 async fn rename_legacy_firm_entity(surreal: &SurrealDb) -> anyhow::Result<()> {
-    let Some(legacy) = crate::entities::find_by_name(surreal, LEGACY_FIRM_ENTITY_NAME).await?
-    else {
+    let mut legacy = None;
+    for name in LEGACY_FIRM_ENTITY_NAMES {
+        legacy = crate::entities::find_by_name(surreal, name).await?;
+        if legacy.is_some() {
+            break;
+        }
+    }
+    let Some(legacy) = legacy else {
         return Ok(());
     };
     if crate::entities::find_by_name(surreal, FIRM_ENTITY_NAME)
@@ -3119,7 +3126,8 @@ async fn rename_legacy_firm_entity(surreal: &SurrealDb) -> anyhow::Result<()> {
     .await?;
     anyhow::ensure!(
         renamed.is_some(),
-        "seed: renaming {LEGACY_FIRM_ENTITY_NAME} to {FIRM_ENTITY_NAME} wrote no row"
+        "seed: renaming {} to {FIRM_ENTITY_NAME} wrote no row",
+        legacy.name
     );
     Ok(())
 }
@@ -3208,7 +3216,7 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
         typeface: "tinos",
         primary_hex: "#5c5100",
     },
-    // The public Summons Defense wordmark is a brand of Shook Law PC, so
+    // The public Summons Defense wordmark is a brand of Guieb & Shook PC, so
     // this row copies the public name rendered by `SUMMONS_BRANDING`.
     CompiledBrand {
         key: "summons",
@@ -3252,6 +3260,13 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
         name: "Groundwork Real Estate Law",
         typeface: "source-serif-4",
         primary_hex: "#8C252B",
+    },
+    CompiledBrand {
+        key: "guieb-shook",
+        website_url: "https://www.guiebandshook.com",
+        name: "Guieb & Shook",
+        typeface: "tinos",
+        primary_hex: "#1f3a5f",
     },
 ];
 
@@ -6013,7 +6028,7 @@ records:
     /// index can refuse (ENG-120). The seed re-runs over a live database
     /// on every boot, so it has to survive losing that write.
     ///
-    /// Shook Law PC holds its own private mailbox at the Ridgeview Mail
+    /// Guieb & Shook PC holds its own private mailbox at the Ridgeview Mail
     /// Center, and within that mail centre the box number is the whole address
     /// — every box shares a street, suite, and ZIP, so a wrong suffix delivers
     /// the firm's mail to another entity rather than bouncing. Only the box the
@@ -6122,6 +6137,27 @@ records:
     /// points at it — survives, and no second anchor is forked.
     #[tokio::test]
     async fn a_legacy_pllc_firm_row_is_renamed_to_the_pc_in_place() {
+        a_legacy_firm_row_is_renamed_in_place("Shook Law PLLC", "Professional LLC", "Nevada").await;
+    }
+
+    /// The same move for a database seeded before the corporation was
+    /// renamed from `Shook Law PC` to [`super::FIRM_ENTITY_NAME`].
+    #[tokio::test]
+    async fn a_shook_law_pc_firm_row_is_renamed_to_the_current_name_in_place() {
+        a_legacy_firm_row_is_renamed_in_place(
+            "Shook Law PC",
+            "Professional Corporation",
+            "California",
+        )
+        .await;
+    }
+
+    async fn a_legacy_firm_row_is_renamed_in_place(
+        legacy_name: &str,
+        legacy_type: &str,
+        legacy_jurisdiction: &str,
+    ) {
+        assert!(super::LEGACY_FIRM_ENTITY_NAMES.contains(&legacy_name));
         let surreal = mem_surreal().await;
         seed_canonical(&surreal, &fs_storage().await)
             .await
@@ -6131,14 +6167,14 @@ records:
             .await
             .unwrap()
             .expect("the anchor seeds");
-        let llc = crate::entity_types::find_by_name(&surreal, "Professional LLC")
+        let legacy_type = crate::entity_types::find_by_name(&surreal, legacy_type)
             .await
             .unwrap()
-            .expect("the professional-LLC type seeds");
-        let nevada = jurisdictions::find_by_name(&surreal, "Nevada")
+            .expect("the legacy entity type seeds");
+        let legacy_jurisdiction = jurisdictions::find_by_name(&surreal, legacy_jurisdiction)
             .await
             .unwrap()
-            .expect("Nevada seeds");
+            .expect("the legacy jurisdiction seeds");
         crate::entities::set_firm_anchor_key(&surreal, anchor.id, None)
             .await
             .unwrap();
@@ -6146,18 +6182,18 @@ records:
             &surreal,
             anchor.id,
             &crate::entities::NewEntity {
-                name: super::LEGACY_FIRM_ENTITY_NAME.to_string(),
-                entity_type_id: llc.id,
-                jurisdiction_id: nevada.id,
+                name: legacy_name.to_string(),
+                entity_type_id: legacy_type.id,
+                jurisdiction_id: legacy_jurisdiction.id,
                 phone: None,
                 url: None,
                 xero_id: None,
-                firm_anchor_key: Some("shook law pllc".to_string()),
+                firm_anchor_key: Some(legacy_name.to_ascii_lowercase()),
             },
         )
         .await
         .unwrap()
-        .expect("rewound to the PLLC");
+        .expect("rewound to the legacy name");
 
         seed_canonical(&surreal, &fs_storage().await)
             .await
@@ -6170,11 +6206,11 @@ records:
         assert_eq!(renamed.name, super::FIRM_ENTITY_NAME);
         assert!(renamed.is_firm_anchor());
         assert!(
-            crate::entities::find_by_name(&surreal, super::LEGACY_FIRM_ENTITY_NAME)
+            crate::entities::find_by_name(&surreal, legacy_name)
                 .await
                 .unwrap()
                 .is_none(),
-            "no PLLC row may remain"
+            "no {legacy_name} row may remain"
         );
         let pc = crate::entity_types::find_by_name(&surreal, "Professional Corporation")
             .await

@@ -72,7 +72,7 @@ async fn the_gateway_renders_on_neon_hosts_with_neon_chrome_and_the_approved_cop
             r#"content="Neon Law | Immigration" property="og:title""#,
             "Immigration help, through Abhaya.",
             "Abhaya Immigration",
-            "Shook Law PC",
+            "Guieb &#38; Shook PC",
             "cannot promise",
             "Visit Abhaya Immigration",
             "site-footer",

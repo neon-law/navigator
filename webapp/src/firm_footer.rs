@@ -285,7 +285,7 @@ mod tests {
 
     fn model(brands: Vec<FirmFooterBrand>) -> FirmFooterModel {
         FirmFooterModel {
-            legal_entity: "Shook Law PC".to_string(),
+            legal_entity: "Guieb & Shook PC".to_string(),
             brands,
             copyright_year: 2026,
         }
@@ -299,7 +299,7 @@ mod tests {
             }
         }
         let html = ssr(app);
-        assert!(html.contains("© 2026 Shook Law PC"), "{html}");
+        assert!(html.contains("© 2026 Guieb &#38; Shook PC"), "{html}");
         assert!(html.contains("app-footer__copyright"), "{html}");
         assert!(html.starts_with("<footer"), "{html}");
     }
@@ -401,7 +401,8 @@ mod tests {
                 "Death & Divorce",
                 "CyberInjuryLaw",
                 "Aegis Criminal Defense",
-                "Groundwork Real Estate Law"
+                "Groundwork Real Estate Law",
+                "Guieb & Shook"
             ]
         );
         let current: Vec<bool> = model.brands.iter().map(|b| b.current).collect();
@@ -409,7 +410,7 @@ mod tests {
             current,
             [
                 false, true, false, false, false, false, false, false, false, false, false, false,
-                false
+                false, false
             ]
         );
         assert_eq!(model.brands[0].href, "https://www.neonlaw.com");
@@ -418,7 +419,7 @@ mod tests {
         assert_eq!(model.brands[8].href, "https://www.daybridgedivorce.com");
         assert_eq!(model.brands[9].href, "https://www.deathanddivorcelaw.com");
         assert_eq!(model.brands[10].href, "https://www.cyberinjurylaw.com");
-        assert_eq!(model.legal_entity, "Shook Law PC");
+        assert_eq!(model.legal_entity, "Guieb & Shook PC");
     }
 
     #[cfg(feature = "server")]
@@ -453,7 +454,7 @@ mod tests {
         let entity = store::entities::create(
             &surreal,
             &store::entities::NewEntity {
-                name: "Shook Law PC".to_string(),
+                name: "Guieb & Shook PC".to_string(),
                 entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
                 jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
                 phone: None,
@@ -484,7 +485,7 @@ mod tests {
 
         let model = resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
 
-        assert_eq!(model.legal_entity, "Shook Law PC");
+        assert_eq!(model.legal_entity, "Guieb & Shook PC");
         assert_eq!(model.brands.len(), 2);
         assert!(model.brands[0].current);
         assert_eq!(model.brands[0].label, "Neon Law");

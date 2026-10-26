@@ -433,9 +433,9 @@ async fn the_lawyer_shook_llms_txt_is_that_brands_pages_under_its_host() {
     let host = "staging.lawyershook.com";
     let (status, body) = get_on_host(&app, "/llms.txt", Some(host)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    // A bare holding page for Shook Law PC, not a marketing site named
+    // A bare holding page for Guieb & Shook PC, not a marketing site named
     // for its house-brand mark.
-    assert!(body.starts_with("# Shook Law PC\n"), "{body}");
+    assert!(body.starts_with("# Guieb & Shook PC\n"), "{body}");
     assert!(body.contains(&format!("https://{host}/)")), "{body}");
     assert!(!body.contains("neonlaw.com"), "{body}");
     assert!(!body.contains("/disputes"), "{body}");

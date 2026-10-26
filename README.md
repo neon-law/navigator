@@ -24,7 +24,7 @@ navigator quickstart
 
 `quickstart` takes no flags. It checks the host tools, including a running Docker runtime, and prints one `brew install`
 line for anything missing. It then clones this repository into `~/.navigator/quickstart`, brings up a KIND cluster with
-PostgreSQL and Forgejo, and seeds the Shook Law PC firm with three sample matters. Finally it builds the website and
+PostgreSQL and Forgejo, and seeds the Guieb & Shook PC firm with three sample matters. Finally it builds the website and
 opens it. Every service gets its own port, and the closing summary lists them all with the sample sign-ins. Inside a
 checkout, run `cargo run -p cli -- quickstart` instead. The first run builds from source and takes a while.
 
