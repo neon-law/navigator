@@ -324,7 +324,7 @@ mod tests {
     }
 
     /// `current_version.created_at` is required, not merely
-    /// validated-when-present: a committed pointer YAML that omits the key
+    /// validated-when-present: a committed Pointer that omits the key
     /// entirely fails to parse at all, so `project gate --check` (which
     /// calls `from_yaml` on every committed pointer) fails it too.
     #[test]

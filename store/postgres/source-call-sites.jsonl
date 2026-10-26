@@ -655,8 +655,8 @@
 {"file":"rules/src/clauses.rs","line":280,"function":"compile","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/engine.rs","line":361,"function":"code_uniqueness_violations","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/engine.rs","line":427,"function":"service_template_violations","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"rules/src/engine.rs","line":673,"function":"navigator_markdown_only_rules","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"rules/src/engine.rs","line":1161,"function":"navigator_markdown_only_rules_drop_n_family_and_add_m036","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"rules/src/engine.rs","line":674,"function":"navigator_markdown_only_rules","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"rules/src/engine.rs","line":1162,"function":"navigator_markdown_only_rules_drop_n_family_and_add_m036","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/f107.rs","line":218,"function":"loop_variables","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/f107.rs","line":355,"function":"scan_placeholders","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"rules/src/f114.rs","line":139,"function":"reaches","operation":"insert","sql_operations":[],"tables":[],"transaction":false}

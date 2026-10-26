@@ -2181,11 +2181,11 @@ fn source_revision<'a>(
         .iter()
         .find(|revision| revision.asset_id == pointer.asset_id)
         .ok_or_else(|| {
-            anyhow!("source pointer revision is no longer on the live document chain")
+            anyhow!("source document's Pointer revision is no longer on the live document chain")
         })?;
     if !source.operative || source.version != pointer.version || source.sha256 != pointer.sha256 {
         return Err(anyhow!(
-            "source pointer is stale; run `navigator project gate --check` before transcribing"
+            "source document's Pointer is stale; run `navigator project gate --check` before transcribing"
         ));
     }
     Ok(source)
@@ -2757,7 +2757,7 @@ pub async fn archive_repository(host: Option<&str>, project_code: &str, dir: &Pa
 /// `navigator site mail file --message <id> --project <code> --kind …`
 /// — file one inbound message's attachments into a matter, entirely
 /// server-side (`POST /app/api/projects/{id}/mail/file`, #517). The
-/// attachment bytes never reach this process; only the pointer YAML this
+/// attachment bytes never reach this process; only the Pointer this
 /// prints and stages under `documents/mail/<message>/` does, so the result
 /// is committable without the bytes ever having transited the checkout.
 /// `--dry-run` writes nothing and only lists what would be filed.
@@ -7203,11 +7203,11 @@ mod tests {
                 None,
             )
             .await
-            .expect_err("a bare slug cannot become a repository pointer");
+            .expect_err("a bare slug cannot become a Pointer");
 
         assert_eq!(
             error.to_string(),
-            "document slug `dkt-001-complaint` must carry the source extension from `complaint.pdf`; use `dkt-001-complaint.pdf` so it can be represented as a repository pointer"
+            "document slug `dkt-001-complaint` must carry the source extension from `complaint.pdf`; use `dkt-001-complaint.pdf` so it can be represented as a Pointer"
         );
         assert!(server
             .received_requests()

@@ -195,6 +195,7 @@ to resolve it.
 | `S102` | Error | A line could absorb more text from the next line before hitting the limit. | Yes |
 | `S103` | Error | The declared `kind:` must be a recognized document kind, and never a matter page kind. | No |
 | `S104` | Error | A file's declared `kind:` must agree with its notation/event structure. | No |
+| `S105` | Error | Teaching prose must use Pointer, Blob, and Matter Folder consistently with the glossary. | No |
 
 `S102` runs on notation templates as well as prose, because a template renders into an instrument a client signs; the
 rule's own guards hold back the structured YAML. The single exception is a GitHub intake notation under

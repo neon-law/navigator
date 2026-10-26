@@ -206,7 +206,7 @@ fn transcript_source_problem(asset: &IntegrityAsset, assets: &[IntegrityAsset]) 
     let sha256 = source.get("sha256").and_then(serde_json::Value::as_str);
     let (Some(document_id), Some(version), Some(sha256)) = (document_id, version, sha256) else {
         return Some(
-            "transcript source linkage is incomplete; re-transcribe from the source pointer".into(),
+            "transcript source linkage is incomplete; re-transcribe from the source document's Pointer".into(),
         );
     };
     let Some(source_asset) = assets
@@ -220,7 +220,7 @@ fn transcript_source_problem(asset: &IntegrityAsset, assets: &[IntegrityAsset]) 
         || source_asset.sha256 != sha256
     {
         return Some(
-            "transcript source revision is stale; re-transcribe from the current source pointer"
+            "transcript source revision is stale; re-transcribe from the current source document's Pointer"
                 .into(),
         );
     }

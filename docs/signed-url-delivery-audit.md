@@ -180,7 +180,7 @@ from the cross-matter guard.
 
 A committed pointer ([`store/src/document_pointers.rs:14`](../store/src/document_pointers.rs)) carries `kind`,
 `visibility`, `version`, `asset_id`, `created_at`, `sha256`, `size_bytes`, and an optional `previous_version`. It is
-committed as a [Blob](glossary/blob.md) at `blobs/<slug>.yaml`, so that path, less `.yaml`, is the document slug.
+committed as a [Pointer](glossary/pointer.md) at `blobs/<slug>.yaml`, so that path, less `.yaml`, is the document slug.
 
 **The identifier alone is worthless without a session.** Every read path that accepts an `asset_id` is behind the layers
 in Finding 4. The object key is `projects/<code>/documents/<sha256>`
