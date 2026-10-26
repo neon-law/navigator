@@ -91,6 +91,6 @@ navigator project docket ingest notices/*.eml --dry-run
 navigator project docket ingest notices/*.eml
 ```
 
-The verb downloads each document once, files it under `documents/docket/<case>/` with its pointer under
-`blobs/docket/<case>/`, and records the Service List as Persons and Relationship Log rows for conflicts. It never adds
+The verb downloads each document once and files it as `documents/Docket Filings/DKT NNNN - <title>.pdf`, with its
+Pointer under `blobs/`. It records the Service List as Persons and Relationship Log rows for conflicts without adding
 those people to the Project.

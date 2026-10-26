@@ -7,7 +7,7 @@ Each Navigator [Project](glossary/project.md) coordinates five distinct surfaces
 | Documents bucket | Working files | Content-addressed keys under `projects/<code>/documents/<sha256>` |
 | Google Drive | Ingest dropbox | Files people drop in; Navigator copies them into the documents bucket |
 | Navigator | Matter record | Project identity, participation, Notations, and asset provenance |
-| Project repository | Source control | Notation templates, Project-application source, and document pointer YAML only |
+| Project repository | Source control | Notation templates, Project-application source, and document Pointers only |
 | Matter show page | Authorized view | The matter's declared Matter Pages, rendered from `navigator.yaml` `pages:` |
 
 Git never stores legal files or client data. Navigator-managed systems and approved file stores do. A Project's deletion
@@ -26,7 +26,7 @@ holds that Project's notation templates and application workspaces side by side:
 ├── .github/workflows/cd.yml
 ├── .gitattributes       # keep checkout text files at LF
 ├── drafts/            # *.md Drafts; templates/ is the alias spelling
-├── blobs/             # *.yaml Blobs: committed pointers to each document's live revision
+├── blobs/             # *.yaml Pointers: committed metadata to each document's live revision
 ├── documents/         # git-ignored document bytes, staged for or pulled down by project sync
 ├── notes/             # git-ignored call notes and memos for Communication bodies
 ├── seeds/             # lookup_fields / records YAML for `navigator site import`
@@ -111,9 +111,9 @@ as content.
 ## Document staging and pointers
 
 Two root-level folders carry a Project's documents, alongside the chosen blueprint directory and never inside any
-application. `blobs/` holds one committed YAML pointer per document, a [Blob](glossary/blob.md). `documents/` holds the
-bytes those pointers name, staged for upload or pulled down for reading, and the root `.gitignore` ignores the whole
-folder: nothing below `documents/` is ever committed. Neither folder is a second document store.
+application. `blobs/` holds one committed [Pointer](glossary/pointer.md) per document. `documents/` holds the bytes
+those pointers name, staged for upload or pulled down for reading, and the root `.gitignore` ignores the whole folder:
+nothing below `documents/` is ever committed. Neither folder is a second document store.
 
 ### Matter folders
 
@@ -195,11 +195,11 @@ every `documents/cases/**` and `documents/rules/**` capture through the same doo
 create`: it reads a sidecar (`<capture-filename>.authority.yaml`, beside the capture under `documents/`) carrying
 `class`, `citation`, `title`, and optionally `short_cite`, `publisher`, `issued_on`, `canonical_url`, and `checked_on` —
 the fields `authorities create` needs and cannot reliably scrape from arbitrary HTML `<meta>` tags — archives the bytes
-as an Authority, and writes a Blob at the capture's slug (`blobs/cases/<capture>.yaml` or `blobs/rules/<capture>.yaml`)
-carrying the resulting `authority_id` alongside `sha256`, `canonical_url`, `checked_on`, and `created_at`. The staging
-sidecar is removed once the pointer is filed; the ignored capture remains in `documents/`. Only the pointer belongs in
-Git. A repeated exact citation with matching bytes reuses the global Authority; different bytes under that citation
-require review.
+as an Authority, and writes a Pointer at the capture's slug (`blobs/cases/<capture>.yaml` or
+`blobs/rules/<capture>.yaml`) carrying the resulting `authority_id` alongside `sha256`, `canonical_url`, `checked_on`,
+and `created_at`. The staging sidecar is removed once the pointer is filed; the ignored capture remains in `documents/`.
+Only the pointer belongs in Git. A repeated exact citation with matching bytes reuses the global Authority; different
+bytes under that citation require review.
 
 The two folders split [`AuthorityClass`](../rules/src/citation.rs): `documents/cases/` holds `case_law` alone, and
 `documents/rules/` holds every other class — `statute`, `regulation`, `administrative`, and `secondary`. The sidecar's
@@ -329,10 +329,10 @@ it. `a` is not offered for deletions, `--yes` does not answer one, and a deletio
 archive, and a pointer that only moved to another path (use `navigator site document reslug`), are never offered for
 deletion. Bytes left behind by a removed pointer are reported, never uploaded as a new document.
 
-A mistaken chain that never had a repository pointer has no removal commit for `project sync` to act on. Retire it with
-`navigator site document retire <asset_id> --project <code> --yes-retire`; `--dry-run` reports its slug and revision
-count. This applies the same 180-day soft deletion and can be undone with `navigator site document restore`. Remove the
-local pointer and byte copy for that slug before the next project sync.
+A mistaken chain that never had a Pointer has no removal commit for `project sync` to act on. Retire it with `navigator
+site document retire <asset_id> --project <code> --yes-retire`; `--dry-run` reports its slug and revision count. This
+applies the same 180-day soft deletion and can be undone with `navigator site document restore`. Remove the local
+pointer and byte copy for that slug before the next project sync.
 
 A confirmed deletion calls `POST /app/api/projects/{id}/documents/{asset_id}/delete` with the commit that removed the
 pointer. The server stamps every revision of the slug chain with `deleted_at`, `purge_after` (180 days later), the
@@ -353,7 +353,7 @@ Authority captures hydrate the same way. `project sync` also reads every committ
 the copies it would fetch as `would fetch <path>`. The archived object sits at the object-storage key `blobs/<sha256>`,
 unrelated to the repository's `blobs/` folder.
 
-`navigator site document get <pointer> --out <path>` takes the Blob path (`blobs/<name>.yaml`) or the bytes path
+`navigator site document get <pointer> --out <path>` takes the Pointer path (`blobs/<name>.yaml`) or the bytes path
 (`documents/<name>`) and writes outside both folders, with one exception: `--out` may name the pointer's own
 sync-managed copy (`documents/<name>` for `blobs/<name>.yaml`) when Git ignores it and the fetched revision is the
 pointer's current one. That refreshes a single copy; every other destination below `documents/`, and any destination
@@ -397,22 +397,22 @@ that already exists is `navigator site document reslug`, not this command. A mis
 document repair`, which copies bytes from a same-hash sibling in the matter onto the content-addressed key, or re-points
 the row at that key, then verifies the sha256. It does not expunge the document.
 
-**A re-upload is a revision of the file's Blob.** A pointer has no slug field; its path below `blobs/` is the slug. When
+**A re-upload creates a Document revision.** A pointer has no slug field; its path below `blobs/` is the slug. When
 `navigator site document upload --file documents/drafts/n.md` finds `blobs/drafts/n.md.yaml`, the upload files a new
 revision of `drafts/n.md` and prints that slug, wherever the command was typed: the checkout is the nearest directory
 above the file whose `navigator.yaml` names the Project. A `--slug` that differs from the pointer's, a pointer that
 cannot be parsed, a retired `.yml` pointer, and `.yaml` and `.yml` side by side are each refused before anything is
 filed, because filing anyway would start a second chain that no `site document` verb can retire. To start a separate
-document, upload a copy that has no Blob. A file with no Blob keeps the path-below-`documents/` slug, and a file outside
-`documents/` is never matched to a pointer. The checkout is the nearest directory above `--file` whose `navigator.yaml`
-names the Project, whether or not a Blob exists, so a first upload typed from another folder writes its pointer to
-`blobs/` in the file's own checkout rather than the working directory. A pointer written before slugs carried their
-extension (a chain filed as `summons`, pointed at by `blobs/summons.pdf.yaml`) is named by its path, as `project sync`
-and the gate already name it; `reslug` makes the chain's slug match.
+document, upload a copy that has no Pointer. A file with no Pointer keeps the path-below-`documents/` slug, and a file
+outside `documents/` is never matched to a pointer. The checkout is the nearest directory above `--file` whose
+`navigator.yaml` names the Project, whether or not a Pointer exists, so a first upload typed from another folder writes
+its pointer to `blobs/` in the file's own checkout rather than the working directory. A pointer written before slugs
+carried their extension (a chain filed as `summons`, pointed at by `blobs/summons.pdf.yaml`) is named by its path, as
+`project sync` and the gate already name it; `reslug` makes the chain's slug match.
 
 **Upload a directory as a batch.** `navigator site document upload --project acme --dir exhibits --kind exhibit` files
 regular files in filename order without recursing or following file symlinks. Choose exactly one of `--dir` and
-`--file`; `--slug` applies only to `--file`. Each file uses the same Blob resolver, folder, visibility, and extension
+`--file`; `--slug` applies only to `--file`. Each file uses the same Pointer resolver, folder, visibility, and extension
 rules as a single upload. SHA-256 matches within a batch are skipped only after the first copy is successfully filed.
 The summary reports every file, including duplicates and failures. A failed or uncertain upload also blocks later copies
 of its bytes from being sent again. Successful uploads and their pointers remain when another file fails, and any
@@ -495,12 +495,15 @@ skipped as "not a docket of this Project", without naming the case. `--only <doc
 `--skip-pattern <text>` drops notices whose docket text contains the text (for example `transfer of claim`). Both
 repeat. `--dry-run` reads the notices and the checkout and prints the plan; it downloads nothing and contacts no server.
 
-Each document lands at `documents/docket/<case>/di-<n>[-<att>]-<slug>.pdf`, its pointer at `blobs/docket/<case>/`, with
-a suggested kind (`pleading`, `exhibit` for an exhibit attachment, `transcript` for a transcript) that `--kind`
-overrides. A free-look link is single-use, so the bytes are written to disk before anything else; a run that fails after
-the download leaves them there, and the next run uploads them without spending another free look. An entry already filed
-is skipped: the same `(case, entry, attachment)` under `blobs/docket/`, a pointer anywhere whose filename equals the
-notice's original filename (our own filing, uploaded from the drafts lane), or the same bytes.
+Each document lands at `documents/Docket Filings/DKT NNNN - <title>.pdf`, with its Pointer at `blobs/DKT NNNN -
+<title>.pdf.yaml`. The suggested kind is `pleading`, `exhibit` for an exhibit attachment, or `transcript` for a
+transcript; `--kind` overrides it. A free-look link is single-use, so bytes are written to disk before anything else. A
+failed upload leaves them there, and the next run uses them without spending another free look. An entry already filed
+is skipped by its DKT identity or an existing Pointer matching the notice's original filename. Distinct docket numbers
+keep distinct Document Identities even when their bytes match. Each numbered attachment gets its own linked
+Docket Entry.
+`docket add --slug` and `docket link-document` apply the linked entry's DKT name too. `docket renumber --apply`
+reconciles existing names; ambiguous links and colliding names stop it.
 
 ## Existing Project setup
 

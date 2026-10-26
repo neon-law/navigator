@@ -18,7 +18,6 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
-use sha2::{Digest, Sha256};
 
 use super::case_timeline;
 use super::nef::{self, Notice};
@@ -173,7 +172,7 @@ pub struct Report {
     pub skipped_notices: usize,
     pub failures: usize,
     /// Docket entries recorded through `POST /app/api/projects/{id}/docket`,
-    /// one per notice that names an entry number.
+    /// one per main document and numbered attachment.
     pub entries: usize,
 }
 
@@ -355,7 +354,6 @@ struct Filed {
     /// Lowercased document filename → slug, for a filing uploaded from the
     /// drafts lane under its own name.
     named: BTreeMap<String, String>,
-    hashed: BTreeMap<String, String>,
 }
 
 impl Filed {
@@ -370,12 +368,6 @@ impl Filed {
                 continue;
             };
             filed.record(slug);
-            if let Ok(Some(pointer)) = crate::document_sync::read_pointer(&root.join(&relative)) {
-                filed.hashed.insert(
-                    pointer.current_version.sha256.to_ascii_lowercase(),
-                    slug.to_string(),
-                );
-            }
         }
         Ok(filed)
     }
@@ -431,6 +423,7 @@ struct Item {
     doc_no: String,
     attachment: Option<u32>,
     filename: String,
+    title: String,
     kind: String,
     free_look_url: Option<String>,
     original_filename: Option<String>,
@@ -462,6 +455,7 @@ fn items_for(notice: &Notice, docket: &str, kind_override: Option<&str>) -> Vec<
         doc_no: doc_no.clone(),
         attachment: None,
         filename: document_filename(&doc_no, None, &notice.docket_text),
+        title: notice.docket_text.clone(),
         kind: kind_override
             .unwrap_or_else(|| suggested_kind(&notice.docket_text, None))
             .to_string(),
@@ -480,6 +474,7 @@ fn items_for(notice: &Notice, docket: &str, kind_override: Option<&str>) -> Vec<
             doc_no: doc_no.clone(),
             attachment: Some(attachment.number),
             filename: document_filename(&doc_no, Some(attachment.number), &attachment.description),
+            title: attachment.description.clone(),
             kind: kind_override
                 .unwrap_or_else(|| {
                     suggested_kind(&notice.docket_text, Some(&attachment.description))
@@ -643,7 +638,7 @@ pub async fn ingest(root: &Path, options: &Options, free_look: &dyn FreeLook) ->
 
     let entries: Vec<serde_json::Value> = accepted
         .iter()
-        .filter_map(|accepted| docket_entry_body(&accepted.notice, &accepted.docket))
+        .flat_map(|accepted| docket_entry_bodies(&accepted.notice, &accepted.docket, &filed))
         .collect();
     for entry in &entries {
         println!(
@@ -680,8 +675,12 @@ pub async fn ingest(root: &Path, options: &Options, free_look: &dyn FreeLook) ->
         )
         .await?;
     }
+    let entries: Vec<_> = accepted
+        .iter()
+        .flat_map(|accepted| docket_entry_bodies(&accepted.notice, &accepted.docket, &filed))
+        .collect();
     if !entries.is_empty() {
-        record_entries(host, &scope.code, &entries, &mut report).await;
+        record_entries(root, host, &scope.code, &entries, &mut report).await;
     }
     if !service_list.is_empty() {
         match service_list.persist(host).await {
@@ -708,7 +707,7 @@ fn docket_entry_body(notice: &Notice, docket: &str) -> Option<serde_json::Value>
         "docket_number": docket,
         "entry_number": doc_no,
         "kind": entry_kind(&notice.docket_text),
-        "title": truncate(&notice.docket_text, 400),
+        "title": notice.docket_text,
         "slug": filing_slug(
             &case_folder(docket),
             &document_filename(doc_no, None, &notice.docket_text),
@@ -731,6 +730,32 @@ fn docket_entry_body(notice: &Notice, docket: &str) -> Option<serde_json::Value>
         body["filed_or_served_on"] = serde_json::json!(filed.format("%Y-%m-%d").to_string());
     }
     Some(body)
+}
+
+/// Every court-numbered document has its own linked entry. An unavailable
+/// document remains source pending; retained identities are linked before being renamed.
+fn docket_entry_bodies(notice: &Notice, docket: &str, filed: &Filed) -> Vec<serde_json::Value> {
+    let Some(base) = docket_entry_body(notice, docket) else {
+        return Vec::new();
+    };
+    items_for(notice, docket, None)
+        .into_iter()
+        .map(|item| {
+            let mut body = base.clone();
+            body["entry_number"] = serde_json::json!(match item.attachment {
+                Some(number) => format!("{}-{number}", item.doc_no),
+                None => item.doc_no.clone(),
+            });
+            body["title"] = serde_json::json!(item.title);
+            body["kind"] = serde_json::json!(entry_kind(&item.title));
+            if let Some(slug) = filed.existing(&item) {
+                body["slug"] = serde_json::json!(slug);
+            } else if let Some(object) = body.as_object_mut() {
+                object.remove("slug");
+            }
+            body
+        })
+        .collect()
 }
 
 /// The docket entry kind a notice's text names: its first word, when that
@@ -760,6 +785,7 @@ fn entry_kind(docket_text: &str) -> &'static str {
 /// The door answers an entry number already on the case with the existing
 /// row, so a re-run records nothing twice.
 async fn record_entries(
+    root: &Path,
     host: Option<&str>,
     code: &str,
     entries: &[serde_json::Value],
@@ -777,9 +803,16 @@ async fn record_entries(
         base: client.base().to_string(),
         token: client.token().to_string(),
         project_id: client.project_id(),
+        project_code: code.to_string(),
     };
     for entry in entries {
-        match super::entries::post_entry(&coordinates, entry).await {
+        let recorded = async {
+            let row = super::entries::post_entry(&coordinates, entry).await?;
+            super::renumber::name_linked_document(&coordinates, &row, root).await?;
+            Ok::<_, anyhow::Error>(row)
+        }
+        .await;
+        match recorded {
             Ok(row) => {
                 report.entries += 1;
                 println!(
@@ -812,17 +845,9 @@ async fn file_planned(
     crate::document_sync::ensure_documents_ignored(root)?;
     for item in planned {
         match file_one(root, &client, free_look, item, filed).await {
-            Ok(Filing::Filed(pointer_path)) => {
+            Ok(pointer_path) => {
                 println!("staged {}", pointer_path.display());
                 report.filed += 1;
-            }
-            Ok(Filing::SameBytes(existing)) => {
-                println!(
-                    "{} · {} · the same bytes are already filed as {existing}",
-                    item.case_no,
-                    item.label()
-                );
-                report.duplicates += 1;
             }
             Err(error) => {
                 eprintln!("{} · {} · {error:#}", item.case_no, item.label());
@@ -947,11 +972,6 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::rename(&temp, path).with_context(|| format!("publish {}", path.display()))
 }
 
-enum Filing {
-    Filed(PathBuf),
-    SameBytes(String),
-}
-
 /// Where docket ingest saves a filing's bytes: Docket Filings, whatever the
 /// entry's kind (LAW-189).
 fn docket_bytes(root: &Path, slug: &str) -> PathBuf {
@@ -969,7 +989,7 @@ async fn file_one(
     free_look: &dyn FreeLook,
     item: &Item,
     filed: &mut Filed,
-) -> Result<Filing> {
+) -> Result<PathBuf> {
     let slug = item.slug();
     let target = docket_bytes(root, &slug);
     // A download saved before the matter folders sits at the slug itself; a
@@ -994,16 +1014,6 @@ async fn file_one(
         println!("saved {}", target.display());
         bytes
     };
-    let sha256 = Sha256::digest(&bytes)
-        .iter()
-        .fold(String::new(), |mut hex, byte| {
-            use std::fmt::Write as _;
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        });
-    if let Some(existing) = filed.hashed.get(&sha256) {
-        return Ok(Filing::SameBytes(existing.clone()));
-    }
     let metadata = serde_json::json!({
         "source": "cm_ecf_notice",
         "case_number": item.case_no,
@@ -1029,8 +1039,7 @@ async fn file_one(
     );
     let pointer_path = crate::document_sync::write_uploaded_pointer(root, &slug, &pointer)?;
     filed.record(&slug);
-    filed.hashed.insert(sha256, slug);
-    Ok(Filing::Filed(pointer_path))
+    Ok(pointer_path)
 }
 
 #[cfg(test)]
@@ -1075,13 +1084,17 @@ mod tests {
 
     impl CredentialsEnv {
         fn logged_in(base: &str) -> Self {
+            Self::with_token(base, "test-token")
+        }
+
+        fn with_token(base: &str, token: &str) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("navigator.json");
             let mut creds = Credentials::default();
             creds.set(
                 base,
                 HostCredential {
-                    token: "test-token".into(),
+                    token: token.into(),
                     person_email: Some("lawyer@neonlaw.com".into()),
                     role: Some("lawyer".into()),
                     expires_at: i64::MAX,
@@ -1449,6 +1462,217 @@ mod tests {
         .unwrap();
         assert_eq!(report.filed, 1);
         assert_eq!(free_look.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "real upload, retained identity, docket, metadata, and checkout gate form one regression"
+    )]
+    async fn attachments_and_a_retained_filing_pass_the_real_scoped_integrity_gate() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let db = store::test_support::mem_surreal().await;
+        let project = store::projects::create(
+            &db,
+            &store::projects::NewProject {
+                code: "acme".into(),
+                name: "Acme".into(),
+                status: "open".into(),
+                entity_id: store::test_support::seed_entity(&db).await,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let lawyer = store::persons::create(
+            &db,
+            &store::persons::NewPerson::with_role(
+                "Synthetic Lawyer",
+                "lawyer@example.com",
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        store::projects::designate_dri_in_surreal(
+            &db,
+            project.id,
+            lawyer.id,
+            store::projects::DriSide::Lawyer,
+        )
+        .await
+        .unwrap();
+        let mut state = portal::test_support::app_state(db.clone()).await;
+        state.policy = portal::policy::PolicyClient::embedded().unwrap();
+        let mut session =
+            portal::SessionData::fresh("synthetic-lawyer", store::persons::Role::Lawyer);
+        session.person_id = Some(lawyer.id);
+        session.email = Some("lawyer@example.com".into());
+        session.source = portal::SessionSource::Cli;
+        let token = state.sessions.encode(&session);
+        let mut ci_session = session.clone();
+        ci_session.source = portal::SessionSource::Ci;
+        ci_session.scope = Some(portal::session::SessionScope::Document(
+            portal::session::DocumentScope {
+                project_id: project.id,
+                project_code: "acme".into(),
+            },
+        ));
+        let ci_token = state.sessions.encode(&ci_session);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, portal::router(state)).await.unwrap();
+        });
+        let _env = CredentialsEnv::with_token(&base, &token);
+        let dir = checkout(&format!(
+            "host: {base}\nproject: acme\ndockets:\n  - 9:26-cv-00042\n"
+        ));
+        let client =
+            crate::remote::DocumentClient::with_credential(base.clone(), token.clone(), "acme")
+                .await
+                .unwrap();
+        let retained_slug = "docket/9-26-cv-00042/di-12-motion.pdf";
+        let pointer = client
+            .upload_bytes(
+                "motion.pdf",
+                b"%PDF synthetic main",
+                "pleading",
+                None,
+                None,
+                Some("application/pdf"),
+                Some(retained_slug),
+                None,
+            )
+            .await
+            .unwrap();
+        crate::document_sync::write_uploaded_pointer(dir.path(), retained_slug, &pointer).unwrap();
+        let retained_asset = pointer.current_version.asset_id;
+        let notice =
+            super::nef::parse_eml(&std::fs::read(fixture("district-motion.eml")).unwrap()).unwrap();
+        let case = store::cases::open_case(
+            &db,
+            &store::cases::NewCase {
+                project_id: project.id,
+                caption: "Synthetic caption",
+                forum: None,
+                jurisdiction: None,
+                docket_number: Some("9:26-cv-00042"),
+                judge: None,
+                posture: "plaintiff",
+            },
+        )
+        .await
+        .unwrap();
+        store::cases::record_entry(
+            &db,
+            &store::cases::NewDocketEntry {
+                case_id: case.id,
+                entry_number: "12",
+                kind: store::cases::EntryKind::Motion,
+                title: &notice.docket_text,
+                party: None,
+                filed_or_served_on: None,
+                scheduled_on: None,
+                supersedes: None,
+                document_asset_id: None,
+                notation_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let items = super::items_for(&notice, "9:26-cv-00042", None);
+        assert_eq!(items.len(), 3);
+        for item in items.iter().skip(1) {
+            let target = super::docket_bytes(dir.path(), &item.slug());
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(target, b"%PDF identical synthetic attachment bytes").unwrap();
+        }
+        let free_look = FakeFreeLook {
+            calls: AtomicUsize::new(0),
+        };
+        let report = ingest(
+            dir.path(),
+            &Options {
+                notices: vec![fixture("district-motion.eml")],
+                host: Some(base.clone()),
+                ..Options::default()
+            },
+            &free_look,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.entries, 3, "{report:?}");
+        assert_eq!(report.failures, 0, "{report:?}");
+        assert_eq!(
+            report.filed, 2,
+            "identical bytes on distinct entries need distinct Document Identities: {report:?}"
+        );
+        assert_eq!(free_look.calls.load(Ordering::SeqCst), 0);
+        let entries = store::cases::docket_for_project(&db, project.id)
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 3);
+        assert!(entries
+            .iter()
+            .any(|entry| entry.entry_number == "12"
+                && entry.document_asset_id == Some(retained_asset)));
+        let ci_client =
+            crate::remote::DocumentClient::with_credential(base.clone(), ci_token, "acme")
+                .await
+                .unwrap();
+        let integrity = ci_client.integrity(false).await.unwrap();
+        assert_eq!(integrity.assets.len(), 3);
+        assert!(
+            integrity
+                .assets
+                .iter()
+                .all(|asset| asset.docket_name_matches == Some(true)),
+            "{:#?}",
+            integrity.assets
+        );
+        let metadata:Vec<_> = integrity.assets.iter().map(|asset| serde_json::json!({"asset_id":asset.asset_id,"slug":asset.slug,"docket_name_matches":asset.docket_name_matches})).collect();
+        super::super::renumber::validate_checkout(dir.path(), &metadata).unwrap();
+        assert!(!dir
+            .path()
+            .join("blobs")
+            .join(format!("{retained_slug}.yaml"))
+            .exists());
+        let ids: std::collections::BTreeSet<_> = integrity
+            .assets
+            .iter()
+            .map(|asset| asset.asset_id)
+            .collect();
+        let rerun = ingest(
+            dir.path(),
+            &Options {
+                notices: vec![fixture("district-motion.eml")],
+                host: Some(base),
+                ..Options::default()
+            },
+            &free_look,
+        )
+        .await
+        .unwrap();
+        assert_eq!(rerun.filed, 0, "{rerun:?}");
+        assert_eq!(rerun.entries, 3, "{rerun:?}");
+        assert_eq!(rerun.failures, 0, "{rerun:?}");
+        let after = ci_client.integrity(false).await.unwrap();
+        assert_eq!(
+            after
+                .assets
+                .iter()
+                .map(|asset| asset.asset_id)
+                .collect::<std::collections::BTreeSet<_>>(),
+            ids
+        );
+        assert!(after
+            .assets
+            .iter()
+            .all(|asset| asset.docket_name_matches == Some(true)));
+        let metadata:Vec<_> = after.assets.iter().map(|asset| serde_json::json!({"asset_id":asset.asset_id,"slug":asset.slug,"docket_name_matches":asset.docket_name_matches})).collect();
+        super::super::renumber::validate_checkout(dir.path(), &metadata).unwrap();
+        server.abort();
     }
 
     #[tokio::test(flavor = "current_thread")]

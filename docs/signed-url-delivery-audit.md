@@ -180,7 +180,7 @@ from the cross-matter guard.
 
 A committed pointer ([`store/src/document_pointers.rs:14`](../store/src/document_pointers.rs)) carries `kind`,
 `visibility`, `version`, `asset_id`, `created_at`, `sha256`, `size_bytes`, and an optional `previous_version`. It is
-committed as a [Blob](glossary/blob.md) at `blobs/<slug>.yaml`, so that path, less `.yaml`, is the document slug.
+committed as a [Pointer](glossary/pointer.md) at `blobs/<slug>.yaml`, so that path, less `.yaml`, is the document slug.
 
 **The identifier alone is worthless without a session.** Every read path that accepts an `asset_id` is behind the layers
 in Finding 4. The object key is `projects/<code>/documents/<sha256>`
@@ -414,7 +414,8 @@ The document session carries an explicit [`DocumentScope`](../portal/src/session
 - `GET /app/api/projects/{id}/documents/revisions?slug=` is allowed only for that exact Project id and returns revision
   metadata.
 - `GET /app/api/projects/{id}/documents/integrity` is allowed for that same Project id and returns each asset's storage
-  presence and size. `?deep=true` re-hashes the object. The session still cannot download bytes.
+  presence and size. `?deep=true` re-hashes the object. `docket_name_matches` reports whether the slug matches its
+  linked Docket Entry, as a boolean without docket content. The session still cannot download bytes.
 - `GET /app/api/project-surfaces/{id}` is allowed only for that same Project id and returns the nonsecret coordinates:
   code, repository URL, DRI emails, and stored Slack and Notion URLs. Provider credentials stay off the response.
 - Document downloads, signed-download issuance, writes, unrelated routes, and every other Project are refused before a

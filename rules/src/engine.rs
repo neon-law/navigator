@@ -543,6 +543,7 @@ pub fn navigator_default_rules() -> Vec<Box<dyn Rule>> {
         // carrying notation/event structure declared one at all.
         Box::new(S103KindEnum),
         Box::new(S104MissingKind),
+        Box::new(crate::S105DocumentTerminology),
         Box::new(F101FrontmatterTitle),
         Box::new(F102RespondentType),
         Box::new(F103SnakeCaseFilename),
@@ -1055,14 +1056,14 @@ mod tests {
     /// literally so this test fails loudly if a future change
     /// silently reorders or drops a rule.
     const EXPECTED_DEFAULT_RULE_CODES: &[&str] = &[
-        "S101", "S102", "S103", "S104", "N101", "N102", "N103", "N104", "N105", "N106", "N107",
-        "N108", "N109", "N110", "N112", "N113", "N114", "N115", "N116", "N117", "N118", "N120",
-        "N121", "N122", "N123", "N125", "N128", "N129", "N130", "N131", "N132", "E002", "M001",
-        "M003", "M004", "M005", "M007", "M009", "M010", "M011", "M012", "M018", "M019", "M020",
-        "M021", "M022", "M023", "M024", "M025", "M026", "M027", "M028", "M029", "M030", "M031",
-        "M032", "M034", "M035", "M037", "M038", "M039", "M040", "M042", "M045", "M046", "M047",
-        "M048", "M049", "M050", "M051", "M052", "M053", "M054", "M055", "M056", "M057", "M058",
-        "M059", "M060", "M061",
+        "S101", "S102", "S103", "S104", "S105", "N101", "N102", "N103", "N104", "N105", "N106",
+        "N107", "N108", "N109", "N110", "N112", "N113", "N114", "N115", "N116", "N117", "N118",
+        "N120", "N121", "N122", "N123", "N125", "N128", "N129", "N130", "N131", "N132", "E002",
+        "M001", "M003", "M004", "M005", "M007", "M009", "M010", "M011", "M012", "M018", "M019",
+        "M020", "M021", "M022", "M023", "M024", "M025", "M026", "M027", "M028", "M029", "M030",
+        "M031", "M032", "M034", "M035", "M037", "M038", "M039", "M040", "M042", "M045", "M046",
+        "M047", "M048", "M049", "M050", "M051", "M052", "M053", "M054", "M055", "M056", "M057",
+        "M058", "M059", "M060", "M061",
     ];
 
     #[test]

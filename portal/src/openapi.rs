@@ -3569,7 +3569,8 @@ fn canonical_document(base: &str) -> Value {
                     "exists": { "type": "boolean" },
                     "size_bytes": { "type": "integer" },
                     "recorded_size": { "type": "integer" },
-                    "sha256_matches": { "type": "boolean" }
+                    "sha256_matches": { "type": "boolean" },
+                    "docket_name_matches": { "type": "boolean", "description": "Whether exactly one linked Docket Entry gives this document its current DKT filename; no docket content is returned." }
                   } } },
                   "integrations": { "type": "array", "items": { "type": "object", "required": ["asset_id", "integration", "outcome", "detail"], "properties": {
                     "asset_id": { "type": "string", "format": "uuid" },

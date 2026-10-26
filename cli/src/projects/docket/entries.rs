@@ -27,6 +27,7 @@ pub(crate) struct Coordinates {
     pub(crate) base: String,
     pub(crate) token: String,
     pub(crate) project_id: Uuid,
+    pub(crate) project_code: String,
 }
 
 pub(crate) async fn coordinates(host: Option<&str>, project: Option<&str>) -> Result<Coordinates> {
@@ -41,6 +42,7 @@ pub(crate) async fn coordinates(host: Option<&str>, project: Option<&str>) -> Re
         base,
         token,
         project_id,
+        project_code: project.to_string(),
     })
 }
 
@@ -141,9 +143,9 @@ async fn call(request: reqwest::RequestBuilder, action: &str) -> Result<Value> {
     serde_json::from_str(&body).context("parse docket response")
 }
 
-/// `POST /app/api/projects/{id}/docket`, read back as the stored row.
+/// Record an entry and attach an upload that arrived after a source-pending row.
 pub(crate) async fn post_entry(coordinates: &Coordinates, body: &Value) -> Result<Value> {
-    call(
+    let row = call(
         reqwest::Client::new()
             .post(format!(
                 "{}/app/api/projects/{}/docket",
@@ -152,6 +154,42 @@ pub(crate) async fn post_entry(coordinates: &Coordinates, body: &Value) -> Resul
             .bearer_auth(&coordinates.token)
             .json(body),
         "add",
+    )
+    .await?;
+    if row.get("document_asset_id") == Some(&Value::Null)
+        && (body.get("slug").is_some() || body.get("document_id").is_some())
+    {
+        let entry = row["id"]
+            .as_str()
+            .context("pending Docket Entry has no id")?
+            .parse()
+            .context("parse pending Docket Entry id")?;
+        let document = body
+            .get("document_id")
+            .and_then(Value::as_str)
+            .map(str::parse)
+            .transpose()
+            .context("parse document id")?;
+        return post_link(
+            coordinates,
+            entry,
+            &document_body(document, body["slug"].as_str())?,
+        )
+        .await;
+    }
+    Ok(row)
+}
+
+async fn post_link(c: &Coordinates, entry: Uuid, body: &Value) -> Result<Value> {
+    call(
+        reqwest::Client::new()
+            .post(format!(
+                "{}/app/api/projects/{}/docket/{entry}/link-document",
+                c.base, c.project_id
+            ))
+            .bearer_auth(&c.token)
+            .json(body),
+        "link-document",
     )
     .await
 }
@@ -256,7 +294,9 @@ pub async fn add(host: Option<&str>, project: Option<&str>, new: NewEntry, dry: 
                 return Ok(dry_run("add", &body));
             }
             let c = coordinates(host, project).await?;
-            post_entry(&c, &body).await
+            let row = post_entry(&c, &body).await?;
+            super::renumber::name_linked_document(&c, &row, Path::new(".")).await?;
+            Ok(row)
         }
         .await,
     )
@@ -287,17 +327,9 @@ pub async fn link_document(
                 return Ok(dry_run("link-document", &body));
             }
             let c = coordinates(host, project).await?;
-            call(
-                reqwest::Client::new()
-                    .post(format!(
-                        "{}/app/api/projects/{}/docket/{entry}/link-document",
-                        c.base, c.project_id
-                    ))
-                    .bearer_auth(c.token)
-                    .json(&body),
-                "link-document",
-            )
-            .await
+            let row = post_link(&c, entry, &body).await?;
+            super::renumber::name_linked_document(&c, &row, Path::new(".")).await?;
+            Ok(row)
         }
         .await,
     )

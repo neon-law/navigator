@@ -101,7 +101,7 @@ pub fn document_upload_size_message_for_kind(kind: &str, actual: usize) -> Strin
     format!("Document upload exceeds the maximum of {max} bytes; received {actual} bytes. {next}")
 }
 
-/// The repository pointer path must retain the uploaded filename's extension.
+/// The Pointer path must retain the uploaded filename's extension.
 /// A slug without one cannot be represented as `blobs/<slug>.yaml` while
 /// also satisfying the Project gate's pointer rule.
 #[derive(Debug, PartialEq, Eq)]
@@ -116,12 +116,12 @@ impl fmt::Display for DocumentSlugError {
                 if let Some(suggested_slug) = suggested_slug(filename, slug) {
                     write!(
                         formatter,
-                        "document slug `{slug}` must carry the source extension from `{filename}`; use `{suggested_slug}` so it can be represented as a repository pointer"
+                        "document slug `{slug}` must carry the source extension from `{filename}`; use `{suggested_slug}` so it can be represented as a Pointer"
                     )
                 } else {
                     write!(
                         formatter,
-                        "document slug `{slug}` must carry the source extension from `{filename}` so it can be represented as a repository pointer"
+                        "document slug `{slug}` must carry the source extension from `{filename}` so it can be represented as a Pointer"
                     )
                 }
             }
@@ -948,7 +948,7 @@ mod tests {
         let error = validate_document_slug("complaint.pdf", "dkt-001-complaint").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "document slug `dkt-001-complaint` must carry the source extension from `complaint.pdf`; use `dkt-001-complaint.pdf` so it can be represented as a repository pointer"
+            "document slug `dkt-001-complaint` must carry the source extension from `complaint.pdf`; use `dkt-001-complaint.pdf` so it can be represented as a Pointer"
         );
         assert!(matches!(
             error,

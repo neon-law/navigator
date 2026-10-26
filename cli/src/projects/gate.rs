@@ -317,6 +317,19 @@ async fn check_live_handles(dir: &Path, base: &str, token: &str) -> Result<()> {
         .map(|project| project.id)
         .ok_or_else(|| anyhow!("no live row for the declared Project"))?;
     let live = super::surfaces::get_handles(base, token, project_id).await?;
+    if super::docket::renumber::has_filings(dir)? {
+        let client = remote::DocumentClient::with_credential(
+            base.to_string(),
+            token.to_string(),
+            project_code,
+        )
+        .await?;
+        let integrity = client.integrity(false).await?;
+        let metadata: Vec<_> = integrity.assets.iter().map(|asset| serde_json::json!({
+            "asset_id": asset.asset_id, "slug": asset.slug, "docket_name_matches": asset.docket_name_matches,
+        })).collect();
+        super::docket::renumber::validate_checkout(dir, &metadata)?;
+    }
 
     let mut differing = Vec::new();
     if !manifest.lawyer_dri.as_deref().is_some_and(|value| {

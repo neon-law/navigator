@@ -53,8 +53,8 @@ own persistence logic.
 - **Document upload.** `navigator site document upload --project <code> --file <path> --kind <kind>` reads the file
   locally and sends it with the same bearer to `POST /app/api/projects/{id}/documents`. `--kind` is required and must be
   an asset-lane value — the same enum OpenAPI publishes on that operation. Run inside the matching Project checkout, it
-  writes the document's Blob at `blobs/<slug>.yaml`; elsewhere it writes no local pointer. Either way it prints the
-  pointer YAML. When `documents/<slug>` already has a Blob at `blobs/<slug>.yaml`, the upload files under that pointer's
+  writes the document's Pointer at `blobs/<slug>.yaml`; elsewhere it writes no local pointer. Either way it prints the
+  Pointer. When `documents/<slug>` already has a Pointer at `blobs/<slug>.yaml`, the upload files under that pointer's
   slug and refuses a `--slug` that names another (LAW-102, see [Project repositories](project-repositories.md)). From
   inside a Project checkout, `navigator project gate --check` writes the missing `blobs/<slug>.yaml` for every row this
   login can see. `navigator project sync` uses this same upload door for each staged file, then writes the pointer
