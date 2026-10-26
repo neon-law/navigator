@@ -1263,7 +1263,7 @@
   transform: translateX(-50%); border-radius: 1rem; background: #000;
 }
 .fm-phone[data-phone="ios"] .fm-phone__icon { border-radius: 22%; }
-.fm-phone[data-phone="ios"] .fm-phone__install { border-radius: 1rem; background: #007aff; color: #fff; text-transform: uppercase; }
+.fm-phone[data-phone="ios"] .fm-phone__install { border-radius: 1rem; background: #0066cc; color: #fff; text-transform: uppercase; }
 .fm-phone[data-phone="ios"] .fm-phone__checks { border-radius: .75rem; background: #c6c6c8; }
 .fm-phone[data-phone="ios"] .fm-phone__check { background: #fff; }
 .fm-phone[data-phone="ios"] .fm-phone__tick { color: #34c759; }
