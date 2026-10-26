@@ -724,6 +724,22 @@ async fn notation_inventory_refuses_an_unreadable_repository_instead_of_showing_
 }
 
 #[tokio::test]
+async fn notation_inventory_reads_a_never_pushed_matter_without_creating_its_repository() {
+    // The deployed `neon` image has no `git`, so the board must not provision
+    // a bare repository just to find it empty (release 26.10.26's KIND gate).
+    let fx = build_fixture().await;
+    let path = format!("/app/api/projects/{}/notation-inventory", fx.project_id);
+    assert_eq!(
+        get(&fx, &path, Some(&fx.lawyer)).await.status(),
+        StatusCode::OK
+    );
+    assert!(
+        !repo_store().path_for_code(&fx.project_code).exists(),
+        "reading the board must not create the Project repository"
+    );
+}
+
+#[tokio::test]
 async fn notation_inventory_is_lawyer_only_and_matter_scoped() {
     let fx = build_fixture().await;
     let path = format!("/app/api/projects/{}/notation-inventory", fx.project_id);
