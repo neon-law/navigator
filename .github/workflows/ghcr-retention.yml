@@ -1,13 +1,16 @@
 name: GHCR retention
-# Deletes Navigator's public GHCR image versions seven days after they were
-# pushed, matching the private Artifact Registry's cleanup policy. `deploy.yml`
-# mirrors every release image to ghcr.io/<owner>/navigator/<image>; without this
-# the public registry would keep every release forever.
+# Deletes every container image version in the owner's GHCR thirty days after
+# it was pushed. `deploy.yml` mirrors every release image to
+# ghcr.io/<owner>/navigator/<image>, and the weekly Postgres image lands beside
+# them; without this the registry would keep every version forever.
 #
 # Two versions are never deleted: one tagged `latest`, which is the pointer a
 # stranger pulls, and nothing newer than the cutoff. Cosign signatures are
-# versions of their own and age out with the image they sign. Packages outside
-# the `navigator/` prefix (the Postgres image, for one) are not touched.
+# versions of their own and age out with the image they sign.
+#
+# `GITHUB_TOKEN` can delete only versions of packages this repository has Admin
+# access to. A refused delete is reported as a warning and the sweep moves on,
+# so one package linked to another repository does not stop the rest.
 #
 # A manual run defaults to a dry run that only lists what it would delete.
 on:
@@ -29,10 +32,10 @@ defaults:
   run:
     shell: bash
 env:
-  RETENTION_DAYS: '7'
+  RETENTION_DAYS: '30'
 jobs:
   prune:
-    name: delete image versions older than seven days
+    name: delete image versions older than thirty days
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -46,16 +49,20 @@ jobs:
           cutoff="$(date -u -d "${RETENTION_DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ)"
           echo "cutoff ${cutoff} (dry run: ${DRY_RUN})"
           deleted=0
+          refused=0
           while IFS= read -r package; do
               encoded="${package//\//%2F}"
               while IFS=$'\t' read -r id created; do
                   echo "stale ${package} version ${id} pushed ${created}"
-                  if [ "${DRY_RUN}" != "true" ]; then
-                      gh api -X DELETE "/orgs/${OWNER}/packages/container/${encoded}/versions/${id}"
+                  if [ "${DRY_RUN}" != "true" ] \
+                      && ! gh api -X DELETE "/orgs/${OWNER}/packages/container/${encoded}/versions/${id}"; then
+                      echo "::warning::could not delete ${package} version ${id}; grant this repository Admin on the package"
+                      refused=$((refused + 1))
+                      continue
                   fi
                   deleted=$((deleted + 1))
               done < <(gh api --paginate "/orgs/${OWNER}/packages/container/${encoded}/versions?per_page=100" \
                   --jq ".[] | select(.created_at < \"${cutoff}\") | select(((.metadata.container.tags // []) | index(\"latest\")) | not) | [.id, .created_at] | @tsv")
           done < <(gh api --paginate "/orgs/${OWNER}/packages?package_type=container&per_page=100" \
-              --jq '.[] | select(.name | startswith("navigator/")) | .name')
-          echo "${deleted} version(s) $([ "${DRY_RUN}" = "true" ] && echo 'would be deleted' || echo 'deleted')"
+              --jq '.[].name')
+          echo "${deleted} version(s) $([ "${DRY_RUN}" = "true" ] && echo 'would be deleted' || echo 'deleted'), ${refused} refused"
