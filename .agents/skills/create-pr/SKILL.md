@@ -21,8 +21,8 @@ Read, in order:
 - **[docs/agent-workflows.md → Create a PR](../../../docs/agent-workflows.md#create-a-pr)**: the whole flow (survey,
   group into commits with the Conventional Commit type table, run the gate, branch, commit, capture a visual, push, open
   the PR), plus the `gh auth` recipe for an unauthenticated shell.
-- **[docs/gitops.md](../../../docs/gitops.md)**: branch → PR → auto-merge. `main` is squash-merge-only. The `automerge`
-  label arms auto-merge.
+- **[docs/gitops.md](../../../docs/gitops.md)**: branch → PR → auto-merge. `main` is squash-merge-only. Ready PRs from
+  this repository arm auto-merge automatically.
 
 Rules:
 
@@ -66,6 +66,7 @@ Rules:
   same store as `web`, then sign in through Rauthy for a real session cookie.
 - **Audit the teaching surfaces (advisory).** Before pushing, run [[author-docs]] against what this branch changed.
   Fix confirmed drift or escalate per its routing, updating the surface that owns each changed fact in the same commits.
-- **Auto-merge is opt-in.** Push and run `gh pr create --base main` with no `--draft`. Add `--label automerge` only
-  when the user asks. Then check `gh pr view --json autoMergeRequest`. Report the PR URL and whether auto-merge is
-  armed. An unlabelled PR waits for a human. Use `--draft` only when the user asks to hold the PR.
+- **Auto-merge is automatic.** Push and run `gh pr create --base main` with no `--draft`. Ready PRs from this
+  repository arm App-owned squash auto-merge without a label. Then check `gh pr view --json autoMergeRequest,state`; an
+  already-green PR may merge immediately. Report the PR URL and whether it merged or auto-merge is armed. Use `--draft`
+  when the user asks to hold the PR. Required checks and resolved review threads still govern merging.

@@ -19,9 +19,10 @@ operator a deliberate rollout. This flow supports the actions in [`agent-workflo
    [`agent-workflows.md`](agent-workflows.md#create-a-pr) for the stop condition when a task did not start in New
    Worktree.
 2. **Push + open a PR.** `git push -u origin <branch>` then `gh pr create`.
-3. **Let auto-merge land it.** `automerge.yml` enables auto-merge on a PR labelled `automerge`, on label and each push.
-   Squash fires once the required gate is green and review threads are resolved. No approving review is required. Remove
-   the label or use draft status to hold a PR. The PR title becomes the Conventional Commit subject on `main`.
+3. **Let auto-merge land it.** `automerge.yml` enables App-owned squash auto-merge when a same-repository PR opens,
+   reopens, becomes ready, or receives a push. A ready PR needs no label. Squash fires once the required gate is green
+   and review threads are resolved. No approving review is required. Use draft status to hold a PR. The PR title becomes
+   the Conventional Commit subject on `main`.
 
 ### Codified merge gate
 
@@ -254,8 +255,9 @@ control the squash.
 
 **Once the Project gate-pin rollout reaches a repository, its pinned `navigator project gate` runs inside the required
 `ci` check.** It validates the manifest key set and value shapes, document pointers, the origin scan over the built
-bundle, and the no-client-data pass. Auto-merge is armed on a non-draft pull request labelled `automerge`; required
-checks and thread resolution gate the merge.
+bundle, and the no-client-data pass. Navigator automatically arms auto-merge on ready PRs from the same repository;
+required checks and thread resolution gate the merge. Drafts hold work for later, and fork PRs remain outside the
+App-owned workflow.
 
 #### CODEOWNERS owners must resolve
 
@@ -292,18 +294,12 @@ rather than half-reconciled.
 > silently, with no failing check to read. That is what happened to #95: it bumped the workspace to
 > `26.8.22-hotfix.23`, `main` moved, and `deploy` never ran.
 >
-> The App holds no `workflows` permission on purpose, so a pull request touching `.github/workflows/**` still cannot
-> be auto-merged and is merged by hand. Arming also requires at least one *required* status check: with nothing
-> required, the mutation is refused with `Pull request is in unstable status`, because auto-merge has nothing to wait
-> on.
+> The App needs permission to merge the files a PR changes. A refusal for missing `workflows` permission leaves a
+> workflow-changing PR for manual handling; other merge failures fail the coordination job.
 >
-> The same refusal comes back once every required check has already passed: `Pull request is in clean status` (or
-> `unstable status`, when a check the ruleset does not require failed), because there is nothing left to queue. A
-> re-run of the arming job on a green pull request therefore always failed. `navigator ops github auto-merge
-> --pull-request <n> [owner/name]` closes that gap: it arms squash auto-merge when GitHub will queue it, and otherwise
-> reads the base branch's live rules and squash-merges only when every required check passed on the head commit,
-> pinning the merge to that commit. A branch with no required check is refused, so the direct merge never bypasses a
-> missing `production` ruleset. `ci.yml` keeps its inline arming step until a published release carries the verb.
+> `automerge.yml` calls `gh pr merge --auto --squash --match-head-commit` under the App token. The CLI arms auto-merge
+> while required gates are pending and requests the governed squash merge immediately when the PR is already ready.
+> The expected head commit binds both paths to the workflow event. GitHub enforces branch protections throughout.
 >
 > Dependabot has a separate secret store, so mirror both App secrets there. Forks do not use this path.
 

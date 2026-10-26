@@ -15,8 +15,8 @@ The required input is a positive GitHub pull-request number. Resolve the reposit
 assume a repository slug.
 
 **A review of a colleague's pull request ends by landing the fix and approving it, not by requesting changes and
-waiting.** A pull request labelled `automerge` arms auto-merge (`automerge.yml`), so the queue moves once the required
-gate is green, the threads resolve, and the review gate is satisfied (see [The branch → PR → auto-merge
+waiting.** A ready pull request from this repository arms auto-merge (`automerge.yml`), so the queue moves once the
+required gate is green, the threads resolve, and the review gate is satisfied (see [The branch → PR → auto-merge
 flow](../../../docs/gitops.md#the-branch--pr--auto-merge-flow)). Every finding you can fix without a design decision
 becomes a commit on the PR branch, and the review is an approval at the head those commits produced. Request changes
 only for a finding that needs the author's decision, and say which findings those are.

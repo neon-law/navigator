@@ -191,18 +191,50 @@ fn project_gate_does_not_own_auto_merge_or_inherit_secrets() {
     );
 }
 
-/// Auto-merge is opt-in: the job runs only for a pull request carrying the
-/// `automerge` label, and `ci.yml` no longer arms anything.
+/// Ready same-repository PRs need no label; drafts and forks remain excluded.
 #[test]
-fn auto_merge_is_opt_in_by_label() {
+fn auto_merge_is_automatic_for_ready_same_repository_pull_requests() {
     let workflow = ci_yaml();
     let condition = workflow["jobs"]["enable-automerge"]["if"]
         .as_str()
         .expect("enable-automerge has an `if`");
     assert!(
-        condition.contains("contains(github.event.pull_request.labels.*.name, 'automerge')"),
-        "enable-automerge must require the `automerge` label"
+        !condition.contains("labels"),
+        "ready pull requests must not wait for a per-PR label"
     );
+    let events = workflow["on"]["pull_request"]["types"]
+        .as_sequence()
+        .expect("pull request lifecycle triggers");
+    for event in ["opened", "synchronize", "reopened", "ready_for_review"] {
+        assert!(events.iter().any(|value| value.as_str() == Some(event)));
+    }
+    for (event, draft, head, expected) in [
+        ("pull_request", false, "example/sample", true),
+        ("pull_request", true, "example/sample", false),
+        ("pull_request", false, "example/fork", false),
+        ("push", false, "example/sample", false),
+    ] {
+        let expression = condition
+            .replace("github.event_name", &format!("'{event}'"))
+            .replace("github.event.pull_request.draft", &draft.to_string())
+            .replace(
+                "github.event.pull_request.head.repo.full_name",
+                &format!("'{head}'"),
+            )
+            .replace("github.repository", "'example/sample'");
+        let status = std::process::Command::new("bash")
+            .args([
+                "-c",
+                &format!("if [[ {expression} ]]; then exit 0; else exit 1; fi"),
+            ])
+            .status()
+            .expect("evaluate the workflow's boolean eligibility condition");
+        assert_eq!(
+            status.code(),
+            Some(i32::from(!expected)),
+            "{event}, draft={draft}, head={head}"
+        );
+    }
     let ci =
         std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).expect("read ci.yml");
     let ci: serde_yaml::Value = serde_yaml::from_str(&ci).expect("ci.yml parses");

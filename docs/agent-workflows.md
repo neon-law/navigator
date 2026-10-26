@@ -80,7 +80,8 @@ When a dirty tree is ready to land:
    or synthetic animation.
 7. Push and open a PR against `main`, ready for review, not as a draft, linking its Linear issue with a bare
    `Closes ENG-NN` trailer in the body — see [Linking a PR to its Linear issue](#linking-a-pr-to-its-linear-issue).
-   Auto-merge needs the `automerge` label and a non-draft PR. Do not run `gh pr merge` yourself.
+   Ready PRs from this repository arm App-owned auto-merge automatically. Use draft status to hold a PR. Do not run `gh
+   pr merge` yourself.
 8. Clean up task-owned local resources before ending the session. See [Resource cleanup](#resource-cleanup).
 
 If the work should become multiple PRs, decide that before committing. Use the Engineering Council for real sequencing
