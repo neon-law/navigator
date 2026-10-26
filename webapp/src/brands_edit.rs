@@ -376,6 +376,20 @@ fn social_accounts(view: &BrandsEditView) -> Element {
     }
 }
 
+fn social_provider_heading(provider: &str, label: &str) -> Element {
+    rsx! {
+                        h3 { class: "brand-social-provider__heading",
+                            match provider {
+                                "youtube" => rsx! { Icon { name: IconName::YouTube } },
+                                "linkedin" => rsx! { Icon { name: IconName::LinkedIn } },
+                                "x" => rsx! { Icon { name: IconName::X } },
+                                _ => rsx! { SocialMarkGlyph { label: label.to_string() } },
+                            }
+                            "{label}"
+                        }
+    }
+}
+
 fn social_provider(view: &BrandsEditView, provider: &str) -> Element {
     let label = match provider {
         "facebook" => "Facebook",
@@ -394,15 +408,7 @@ fn social_provider(view: &BrandsEditView, provider: &str) -> Element {
     let input_id = format!("provider_account_id-{provider}");
     rsx! {
                     section { class: "brand-social-provider", aria_label: "{label}",
-                        h3 { class: "brand-social-provider__heading",
-                            match provider {
-                                "youtube" => rsx! { Icon { name: IconName::YouTube } },
-                                "linkedin" => rsx! { Icon { name: IconName::LinkedIn } },
-                                "x" => rsx! { Icon { name: IconName::X } },
-                                _ => rsx! { SocialMarkGlyph { label: label.to_string() } },
-                            }
-                            "{label}"
-                        }
+                        {social_provider_heading(provider, label)}
                         for account in view.social_accounts.iter().filter(|account| account.provider == provider) {
                             p { "{account.display_name.as_deref().unwrap_or(&account.provider_account_id)} ({account.status})" }
                             details {
