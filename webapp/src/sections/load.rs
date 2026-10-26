@@ -204,6 +204,9 @@ pub fn load(section: Section, cx: &LoadContext) -> SectionView {
         Section::CommentRail => SectionView::CommentRail(Vec::new()),
         Section::AuthorityTable => SectionView::AuthorityTable(cx.authorities.clone()),
         Section::DiscoveryPairs => SectionView::DiscoveryPairs(cx.discovery.clone()),
+        Section::ArgumentExchange => {
+            SectionView::ArgumentExchange(lawyer_only(cx, |cx| cx.notations.exchanges.clone()))
+        }
         Section::StageList => {
             SectionView::StageList(lawyer_only(cx, |cx| cx.notations.stages.clone()))
         }

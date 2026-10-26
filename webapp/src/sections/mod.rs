@@ -19,6 +19,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
+pub mod argument_exchange;
 pub mod authorities;
 pub mod checklist;
 pub mod discovery;
@@ -31,6 +32,7 @@ pub mod records;
 pub mod timeline;
 pub mod transactional;
 
+pub use argument_exchange::{ArgumentExchange, ArgumentExchangeView, ArgumentTurn};
 pub use authorities::{AuthorityCard, AuthorityQuote, AuthorityView};
 pub use checklist::ChecklistStep;
 pub use discovery::{DiscoveryFilter, DiscoveryPair, DiscoveryView};
@@ -151,6 +153,7 @@ pub enum SectionView {
     AuthorityTable(AuthorityView),
     DiscoveryPairs(DiscoveryView),
     StageList(Vec<SectionRow>),
+    ArgumentExchange(ArgumentExchangeView),
     PackageManifest(Vec<SectionRow>),
     DownloadList(Vec<SectionRow>),
     EngagementLetter(EngagementLetterView),
@@ -206,6 +209,7 @@ impl SectionView {
             Self::AuthorityTable(_) => "authority_table",
             Self::DiscoveryPairs(_) => "discovery_pairs",
             Self::StageList(_) => "stage_list",
+            Self::ArgumentExchange(_) => "argument_exchange",
             Self::PackageManifest(_) => "package_manifest",
             Self::DownloadList(_) => "download_list",
             Self::EngagementLetter(_) => "engagement_letter",
@@ -261,6 +265,7 @@ impl SectionView {
             Self::AuthorityTable(AuthorityView::default()),
             Self::DiscoveryPairs(DiscoveryView::default()),
             Self::StageList(Vec::new()),
+            Self::ArgumentExchange(ArgumentExchangeView::default()),
             Self::PackageManifest(Vec::new()),
             Self::DownloadList(Vec::new()),
             Self::EngagementLetter(EngagementLetterView::default()),
@@ -544,6 +549,9 @@ pub fn SectionBody(view: SectionView) -> Element {
         SectionView::AuthorityTable(view) => rsx! { authorities::AuthorityTableSection { view } },
         SectionView::DiscoveryPairs(view) => rsx! { discovery::DiscoveryPairsSection { view } },
         SectionView::StageList(rows) => rsx! { StageListSection { rows } },
+        SectionView::ArgumentExchange(view) => {
+            rsx! { argument_exchange::ArgumentExchangeSection { view } }
+        }
         SectionView::PackageManifest(rows) => rsx! { PackageManifestSection { rows } },
         SectionView::DownloadList(rows) => rsx! { DownloadListSection { rows } },
         SectionView::EngagementLetter(view) => {
@@ -597,7 +605,7 @@ pub(crate) mod tests {
     /// wasm build of this crate never links `rules`; the server-side test
     /// below proves the two agree.
     fn rules_section_count() -> usize {
-        48
+        49
     }
 
     pub(super) fn render(view: SectionView) -> String {
@@ -716,6 +724,18 @@ pub(crate) mod tests {
             super::load(rules::dashboard::Section::StageList, &cx),
             SectionView::StageList(rows) if rows == cx.notations.stages
         ));
+        cx.notations.exchanges.unavailable = true;
+        assert!(matches!(
+            super::load(rules::dashboard::Section::ArgumentExchange, &cx),
+            SectionView::ArgumentExchange(view) if view.unavailable
+        ));
+        for lens in [super::PageLens::Client, super::PageLens::Clerk] {
+            cx.lens = lens;
+            assert!(matches!(
+                super::load(rules::dashboard::Section::ArgumentExchange, &cx),
+                SectionView::ArgumentExchange(view) if view == super::ArgumentExchangeView::default()
+            ));
+        }
         cx.lens = super::PageLens::Client;
         assert!(matches!(
             super::load(rules::dashboard::Section::StageList, &cx),

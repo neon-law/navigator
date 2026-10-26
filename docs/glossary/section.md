@@ -20,3 +20,6 @@ reader's lens.
 
 - Vocabulary: [`rules::dashboard`](../../rules/src/dashboard.rs) · Components:
   [`webapp::sections`](../../webapp/src/sections/mod.rs)
+
+The hearing console supports a lawyer-only [Argument Exchange](argument-exchange.md) section alongside its required
+`stage_list`. Each exchange keeps multiline points, expected responses, replies, and supporting authority together.

@@ -250,7 +250,9 @@ mod tests {
             "a hard-wrapped paragraph must reach Notion as one line"
         );
         assert!(
-            !rendered.contains("title: "),
+            !rules::frontmatter::body_lines(&rendered)
+                .iter()
+                .any(|(_, line)| line.starts_with("title: ")),
             "entry frontmatter stays home"
         );
         for (at, _) in rendered.match_indices("](") {
@@ -272,6 +274,24 @@ mod tests {
             "notion source links name the release tag"
         );
         assert!(rendered.contains("\n## Workshop\n"));
+    }
+
+    #[test]
+    fn notion_markdown_preserves_title_fields_inside_fenced_yaml() {
+        let example =
+            "```yaml\ntitle: Synthetic argument\npoint: |\n  First line.\n  Second line.\n```";
+        let term = store::glossary::Term {
+            slug: "synthetic-example".into(),
+            title: "Synthetic Example".into(),
+            description: "A synthetic export example.".into(),
+            body: example.into(),
+        };
+        let rendered = super::notion_markdown("Glossary", &[term]);
+        assert!(rendered.contains("## Synthetic Example\n\nA synthetic export example."));
+        assert!(
+            rendered.contains(example),
+            "fenced YAML retains its fields and line breaks"
+        );
     }
 
     /// `rust/cleartext-logging` flags any logging sink fed a value parsed
