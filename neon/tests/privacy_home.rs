@@ -60,7 +60,7 @@ async fn privacy_home_publishes_both_plans_with_referrals_and_shared_footer() {
         r#"href="https://www.cyberinjurylaw.com""#,
         "privacy-cloak",
         "site-footer__legal",
-        "https://www.lawyershook.com",
+        "https://www.guiebandshook.com",
     ] {
         assert!(html.contains(required), "missing {required}");
     }
