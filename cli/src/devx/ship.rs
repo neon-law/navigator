@@ -3017,7 +3017,7 @@ fn image_only_steps(
         exec(dry_run, &mut cmd)?;
     }
 
-    pin_cronjob_images(cfg, tag, dry_run)?;
+    pin_cronjob_images(cfg, tag, None, dry_run)?;
     wait_rollouts(cfg, dry_run, ROLLOUT_TIMEOUT, rollout_wait_deployments())?;
     finish_roll(
         ShipLane::ImageOnly,
@@ -3270,7 +3270,7 @@ fn roll(
     //     across ALL navigator images, not just the two services. CronJobs
     //     don't "roll" — the new image takes effect on the next scheduled
     //     run — so there is nothing to wait on.
-    pin_cronjob_images(cfg, &tag, dry_run)?;
+    pin_cronjob_images(cfg, &tag, opts.image_digests.as_deref(), dry_run)?;
 
     // 6. Re-register the workers with Restate, then verify every public asset
     // after the new pods are live. The DevX notification worker must register
@@ -3383,25 +3383,90 @@ fn reconcile_ordered_services(
     })
 }
 
+/// The repository part of an image reference: `name@sha256:<digest>` loses
+/// its digest, and `name:<tag>` loses its tag only when that colon comes after
+/// the last `/`, so a registry `host:port` is never mistaken for a tag.
+fn image_repository(image: &str) -> &str {
+    if let Some((repository, _)) = image.split_once('@') {
+        return repository;
+    }
+    let name_start = image.rfind('/').map_or(0, |slash| slash + 1);
+    match image[name_start..].rfind(':') {
+        Some(colon) => &image[..name_start + colon],
+        None => image,
+    }
+}
+
+/// What a ship does to one trigger `CronJob` container image.
+#[derive(Debug, PartialEq, Eq)]
+enum CronJobPin {
+    /// Already on the signed image map's digest; nothing to write.
+    Current,
+    /// Re-point at this signed `repository@sha256:<digest>` reference.
+    Repoint(String),
+    /// Re-point at `target` once `repository` is confirmed to publish the tag.
+    CheckTag { repository: String, target: String },
+}
+
+/// The pure decision behind [`pin_cronjob_images`]: `None` for an image this
+/// deployment's registry does not publish. With the release's image digest
+/// map, a `CronJob` on the map's digest is current and any other reference is
+/// re-pointed at that digest; without one (or for an image the map does not
+/// carry) the tag-only path re-points at `<repository>:<tag>`.
+fn cronjob_pin_action(
+    image: &str,
+    prefix: &str,
+    tag: &str,
+    digests: Option<&std::collections::BTreeMap<String, String>>,
+) -> Option<CronJobPin> {
+    if !image.starts_with(prefix) {
+        return None;
+    }
+    let reference = image_repository(image);
+    let repository = reference.strip_prefix(prefix).unwrap_or(reference);
+    if let Some(digest) = digests.and_then(|d| digest_for_image(d, repository, reference).ok()) {
+        let signed = format!("{reference}@{digest}");
+        return Some(if image == signed {
+            CronJobPin::Current
+        } else {
+            CronJobPin::Repoint(signed)
+        });
+    }
+    Some(CronJobPin::CheckTag {
+        repository: repository.to_string(),
+        target: format!("{reference}:{tag}"),
+    })
+}
+
 /// Re-pin every navigator trigger `CronJob` to `tag`. Discovers the
 /// `CronJobs` from the live cluster and re-points any container whose image
 /// is one of ours (`<region>-docker.pkg.dev/<project>/<repo>/navigator-*`) — no hard-coded list,
-/// so a newly added trigger is covered automatically. Each image is
-/// re-pinned only after confirming `tag` is actually published for it;
-/// a trigger whose image hasn't published `tag` yet is skipped with a
+/// so a newly added trigger is covered automatically.
+///
+/// With the release's signed image digest map (`--image-digests`), a trigger
+/// already on its mapped digest counts as current and any other is re-pointed
+/// at `repository@sha256:<digest>`. Without one, each image is re-pinned to
+/// `repository:<tag>` only after confirming `tag` is actually published for
+/// it; a trigger whose image hasn't published `tag` yet is skipped with a
 /// warning rather than wedged in `ImagePullBackOff`.
-fn pin_cronjob_images(cfg: &ShipConfig, tag: &str, dry_run: bool) -> Result<()> {
+fn pin_cronjob_images(
+    cfg: &ShipConfig,
+    tag: &str,
+    digest_file: Option<&Path>,
+    dry_run: bool,
+) -> Result<()> {
     let prefix = format!("{}/", cfg.registry());
     if dry_run {
         eprintln!("DRY-RUN: would re-pin every {prefix}navigator-* CronJob image to {tag}");
         return Ok(());
     }
+    let digests = digest_file.map(read_digest_manifest).transpose()?;
     let list = kubectl_list_json(cfg, "cronjobs")?;
     let Some(items) = list.get("items").and_then(serde_json::Value::as_array) else {
         eprintln!("==> no CronJobs found; nothing to pin");
         return Ok(());
     };
-    let mut pinned = 0u32;
+    let (mut pinned, mut current) = (0u32, 0u32);
     for item in items {
         let Some(name) = item
             .pointer("/metadata/name")
@@ -3422,36 +3487,46 @@ fn pin_cronjob_images(cfg: &ShipConfig, tag: &str, dry_run: bool) -> Result<()> 
             ) else {
                 continue;
             };
-            // Ours only: `<registry>/navigator-<something>:<tag>`.
-            if !image.starts_with(&prefix) {
-                continue;
-            }
-            let base = image.rsplit_once(':').map_or(image, |(b, _)| b);
-            let short = base.strip_prefix(&prefix).unwrap_or(base);
-            match registry::tag_exists(&cfg.registry, short, tag) {
-                Ok(true) => {
-                    let target = format!("{base}:{tag}");
-                    exec(
-                        dry_run,
-                        kubectl(cfg)
-                            .arg("set")
-                            .arg("image")
-                            .arg(format!("cronjob/{name}"))
-                            .arg(format!("{cname}={target}")),
-                    )?;
-                    pinned += 1;
+            let target = match cronjob_pin_action(image, &prefix, tag, digests.as_ref()) {
+                None => continue,
+                Some(CronJobPin::Current) => {
+                    current += 1;
+                    continue;
                 }
-                Ok(false) => eprintln!(
-                    "WARN: {short} has no {tag} tag in the registry — leaving CronJob/{name} on {image}"
-                ),
-                Err(error) => eprintln!(
-                    "WARN: could not check whether {short}:{tag} is published ({error}) — \
-                     leaving CronJob/{name} on {image}"
-                ),
-            }
+                Some(CronJobPin::Repoint(target)) => target,
+                Some(CronJobPin::CheckTag { repository, target }) => {
+                    match registry::tag_exists(&cfg.registry, &repository, tag) {
+                        Ok(true) => target,
+                        Ok(false) => {
+                            eprintln!(
+                                "WARN: {repository} has no {tag} tag in the registry — leaving CronJob/{name} on {image}"
+                            );
+                            continue;
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "WARN: could not check whether {repository}:{tag} is published ({error}) — \
+                                 leaving CronJob/{name} on {image}"
+                            );
+                            continue;
+                        }
+                    }
+                }
+            };
+            exec(
+                dry_run,
+                kubectl(cfg)
+                    .arg("set")
+                    .arg("image")
+                    .arg(format!("cronjob/{name}"))
+                    .arg(format!("{cname}={target}")),
+            )?;
+            pinned += 1;
         }
     }
-    eprintln!("==> pinned {pinned} trigger CronJob image(s) to {tag}");
+    eprintln!(
+        "==> pinned {pinned} trigger CronJob image(s) to {tag}; {current} already on the signed digest"
+    );
     Ok(())
 }
 
@@ -3818,9 +3893,8 @@ fn manifest_images_under_registry(manifests: &str, prefix: &str) -> BTreeSet<Str
         let Some(rest) = value.strip_prefix(prefix) else {
             continue;
         };
-        // `<repository>:<tag>` — split from the right so a registry host
-        // carrying a port never loses its own colon to the tag split.
-        let repository = rest.rsplit_once(':').map_or(rest, |(name, _)| name);
+        // `<repository>:<tag>` or `<repository>@sha256:<digest>`.
+        let repository = image_repository(rest);
         if !repository.is_empty() {
             images.insert(repository.to_string());
         }
@@ -3934,10 +4008,7 @@ fn pin_and_verify_manifest_images(
     tag: &str,
     digest_file: &Path,
 ) -> Result<()> {
-    let bytes = fs::read(digest_file)
-        .with_context(|| format!("read image digest manifest {}", digest_file.display()))?;
-    let digests: std::collections::BTreeMap<String, String> =
-        serde_json::from_slice(&bytes).context("parse image digest manifest JSON")?;
+    let digests = read_digest_manifest(digest_file)?;
     let prefix = format!("{}/", cfg.registry());
     let repositories = manifest_images_under_registry(manifests, &prefix);
     for repository in repositories {
@@ -3962,6 +4033,13 @@ fn pin_and_verify_manifest_images(
         pin_verified_image(target, &reference, tag, &digest, true)?;
     }
     Ok(())
+}
+
+/// Read the release's image repository → `sha256:<digest>` map.
+fn read_digest_manifest(digest_file: &Path) -> Result<std::collections::BTreeMap<String, String>> {
+    let bytes = fs::read(digest_file)
+        .with_context(|| format!("read image digest manifest {}", digest_file.display()))?;
+    serde_json::from_slice(&bytes).context("parse image digest manifest JSON")
 }
 
 fn ensure_tag_digest(reference: &str, tag: &str, expected: &str, actual: &str) -> Result<()> {
@@ -8634,6 +8712,140 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(missing.contains("image digest manifest is missing"));
+    }
+
+    const CRON_PREFIX: &str = "registry.example/navigator/";
+    const CRON_DIGEST: &str =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const OTHER_DIGEST: &str =
+        "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+
+    #[test]
+    fn image_repository_strips_a_digest_or_a_tag_but_never_a_registry_port() {
+        let digest_pinned =
+            format!("registry.example/navigator/navigator-archives-trigger@{CRON_DIGEST}");
+        assert_eq!(
+            image_repository(&digest_pinned),
+            "registry.example/navigator/navigator-archives-trigger"
+        );
+        assert_eq!(
+            image_repository("registry.example/navigator/navigator-archives-trigger:26.10.26"),
+            "registry.example/navigator/navigator-archives-trigger"
+        );
+        assert_eq!(
+            image_repository("localhost:5000/navigator/navigator-archives-trigger"),
+            "localhost:5000/navigator/navigator-archives-trigger"
+        );
+        assert_eq!(
+            image_repository("localhost:5000/navigator/navigator-archives-trigger:26.10.26"),
+            "localhost:5000/navigator/navigator-archives-trigger"
+        );
+    }
+
+    #[test]
+    fn cronjob_on_the_digest_maps_digest_is_already_current() {
+        let digests = std::collections::BTreeMap::from([(
+            "navigator-archives-trigger".to_string(),
+            CRON_DIGEST.to_string(),
+        )]);
+        let image = format!("{CRON_PREFIX}navigator-archives-trigger@{CRON_DIGEST}");
+        assert_eq!(
+            cronjob_pin_action(&image, CRON_PREFIX, "26.10.26", Some(&digests)),
+            Some(CronJobPin::Current)
+        );
+    }
+
+    #[test]
+    fn cronjob_on_another_digest_is_repointed_at_the_maps_digest() {
+        let digests = std::collections::BTreeMap::from([(
+            "navigator-archives-trigger".to_string(),
+            CRON_DIGEST.to_string(),
+        )]);
+        for image in [
+            format!("{CRON_PREFIX}navigator-archives-trigger@{OTHER_DIGEST}"),
+            format!("{CRON_PREFIX}navigator-archives-trigger:26.10.19"),
+        ] {
+            assert_eq!(
+                cronjob_pin_action(&image, CRON_PREFIX, "26.10.26", Some(&digests)),
+                Some(CronJobPin::Repoint(format!(
+                    "{CRON_PREFIX}navigator-archives-trigger@{CRON_DIGEST}"
+                )))
+            );
+        }
+    }
+
+    #[test]
+    fn cronjob_without_a_digest_map_checks_the_tag_on_the_bare_repository() {
+        let expected = Some(CronJobPin::CheckTag {
+            repository: "navigator-archives-trigger".to_string(),
+            target: format!("{CRON_PREFIX}navigator-archives-trigger:26.10.26"),
+        });
+        assert_eq!(
+            cronjob_pin_action(
+                &format!("{CRON_PREFIX}navigator-archives-trigger:26.10.19"),
+                CRON_PREFIX,
+                "26.10.26",
+                None,
+            ),
+            expected
+        );
+        // A digest-pinned image no longer leaks `@sha256` into the tag lookup.
+        assert_eq!(
+            cronjob_pin_action(
+                &format!("{CRON_PREFIX}navigator-archives-trigger@{OTHER_DIGEST}"),
+                CRON_PREFIX,
+                "26.10.26",
+                None,
+            ),
+            expected
+        );
+    }
+
+    #[test]
+    fn cronjob_behind_a_registry_port_keeps_its_port() {
+        let prefix = "localhost:5000/navigator/";
+        assert_eq!(
+            cronjob_pin_action(
+                "localhost:5000/navigator/navigator-archives-trigger",
+                prefix,
+                "26.10.26",
+                None,
+            ),
+            Some(CronJobPin::CheckTag {
+                repository: "navigator-archives-trigger".to_string(),
+                target: "localhost:5000/navigator/navigator-archives-trigger:26.10.26".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn cronjob_outside_our_registry_is_left_alone() {
+        assert_eq!(
+            cronjob_pin_action(
+                "docker.io/envoyproxy/envoy:v1",
+                CRON_PREFIX,
+                "26.10.26",
+                None
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn cronjob_missing_from_the_digest_map_falls_back_to_the_tag_check() {
+        let digests = std::collections::BTreeMap::new();
+        assert_eq!(
+            cronjob_pin_action(
+                &format!("{CRON_PREFIX}navigator-new-trigger:26.10.19"),
+                CRON_PREFIX,
+                "26.10.26",
+                Some(&digests),
+            ),
+            Some(CronJobPin::CheckTag {
+                repository: "navigator-new-trigger".to_string(),
+                target: format!("{CRON_PREFIX}navigator-new-trigger:26.10.26"),
+            })
+        );
     }
 
     #[test]
