@@ -1,15 +1,13 @@
 name: automerge
 
-# Arms GitHub auto-merge on a pull request, and only on one a maintainer has
-# labelled `automerge`. It is opt-in: an unlabelled pull request is never armed,
-# whatever its author. The job lives in its own workflow, on a standard
-# GitHub-hosted runner, so adding the label starts this job alone and does not
-# restart `ci.yml` or cancel a CI run already in flight.
+# Arms App-owned squash auto-merge for ready pull requests from this repository.
+# Required checks and resolved review threads govern the merge. Use draft status
+# to hold a pull request. This coordination job runs separately from CI.
 
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 concurrency:
   group: automerge-${{ github.ref }}
@@ -19,18 +17,10 @@ permissions:
   contents: read
 
 jobs:
-  # Turn on GitHub auto-merge for a labelled PR on open, ready-for-review, label
-  # and every push (`synchronize`). Auto-merge squash-merges the PR the moment its
-  # gate is green and every required review thread is resolved. The step is
-  # idempotent (it exits early when auto-merge is already on), so re-running on a
-  # push is a harmless no-op that also re-arms auto-merge if a push cleared it.
-  # To hold a labelled PR, remove the `automerge` label or convert it to draft
-  # (the `draft == false` guard below skips drafts).
-  # `gh pr merge --auto` only *requests* it; GitHub still holds the PR until the
-  # required `ci` check passes and, for everyone but the organization
-  # administrator, the code-owner review lands (see the `production` and
-  # `production-review` rulesets in `cli/src/devx/github_setup.rs`).
-  # The fork guard skips PRs from forks, whose GITHUB_TOKEN is read-only.
+  # Arm on open, reopen, ready-for-review, and every push (`synchronize`).
+  # GitHub enforces required checks and resolved threads for the squash merge.
+  # The request is idempotent and re-arms after pushes that clear it.
+  # Drafts and forks stay outside the App-owned merge path.
   enable-automerge:
     name: enable PR auto-merge
     # Only this job needs write; the test job stays contents:read (above).
@@ -41,9 +31,7 @@ jobs:
       pull-requests: write
     if: >
       github.event_name == 'pull_request' &&
-      (github.event.action == 'opened' || github.event.action == 'labeled' || github.event.action == 'ready_for_review' || github.event.action == 'synchronize') &&
       github.event.pull_request.draft == false &&
-      contains(github.event.pull_request.labels.*.name, 'automerge') &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     # The App ID lives in a secret (not a variable) because the repo keeps
