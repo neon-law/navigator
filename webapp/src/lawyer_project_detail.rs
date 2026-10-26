@@ -226,6 +226,13 @@ async fn project_repository_templates(
         }
         Err(error) => return Err(error.to_string()),
     };
+    // Reading must not provision: `read_head_tree_code` would `git init` an
+    // absent repository, and the distroless `neon` image ships no `git`, so
+    // every never-pushed matter's workbench would fail. Anything already at
+    // the path is still read, so an unreadable repository remains an error.
+    if !repo.path_for_code(&project.code).exists() {
+        return Ok(std::collections::BTreeMap::default());
+    }
     let tree = tokio::task::spawn_blocking(move || repo.read_head_tree_code(&project.code))
         .await
         .map_err(|error| error.to_string())?
