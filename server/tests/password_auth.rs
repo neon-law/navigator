@@ -224,6 +224,46 @@ async fn valid_password_mints_the_standard_session_cookie() {
 }
 
 #[tokio::test]
+async fn password_redirects_neither_forward_credentials_nor_mint_sessions() {
+    for status in [307, 308] {
+        let target = mount_identity_platform(
+            200,
+            json!({"idToken": fake_id_token("synthetic-redirect", "client@example.com")}),
+        )
+        .await;
+        let idp = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/accounts:signInWithPassword"))
+            .respond_with(ResponseTemplate::new(status).insert_header(
+                "Location",
+                format!("{}/v1/accounts:signInWithPassword", target.uri()),
+            ))
+            .expect(1)
+            .mount(&idp)
+            .await;
+        let (state, surreal) = state_with_password(Some(idp.uri())).await;
+        let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+        let (cookie, csrf) = open_login_form(&app).await;
+        let response = post_password(
+            &app,
+            &cookie,
+            form_body("client@example.com", &test_password("redirect"), &csrf),
+        )
+        .await;
+        assert!(
+            target.received_requests().await.unwrap().is_empty(),
+            "a {status} response must not forward the password to another endpoint"
+        );
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert!(!has_session(&response));
+        assert!(store::persons::list_directory(&surreal, "", "", &[])
+            .await
+            .unwrap()
+            .is_empty());
+    }
+}
+
+#[tokio::test]
 async fn wrong_password_is_rejected_without_enumeration_and_without_session() {
     // Identity Platform 400 = bad creds / unknown email / disabled — all
     // collapse to one outcome.
