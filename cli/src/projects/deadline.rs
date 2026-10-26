@@ -119,6 +119,43 @@ pub async fn ics(host: Option<&str>, project: Option<&str>) -> ExitCode {
     }
 }
 
+fn export_row(base: &str, code: &str, row: &Value, location: Option<&str>) -> Result<String> {
+    let url = reqwest::Url::parse(base)?;
+    let mut row = row.clone();
+    if let Some(location) = location {
+        row["location"] = json!(location);
+    }
+    ics::render(
+        &ics::Calendar {
+            host: url.host_str().unwrap_or("navigator"),
+            base_url: base,
+            project_code: code,
+        },
+        &[row],
+    )
+    .map_err(|error| anyhow!(error))
+}
+
+fn finish_write(
+    row: Value,
+    base: &str,
+    code: &str,
+    path: Option<&Path>,
+    location: Option<&str>,
+) -> Result<Value> {
+    if let Some(path) = path {
+        let calendar = export_row(base, code, &row, location)?;
+        std::fs::write(path, calendar).with_context(|| {
+            format!(
+                "deadline {} was saved, but calendar export to {} failed",
+                row["id"],
+                path.display()
+            )
+        })?;
+    }
+    Ok(row)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn create(
     host: Option<&str>,
@@ -134,10 +171,12 @@ pub async fn create(
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
     replay_key: Option<String>,
+    ics_path: Option<&Path>,
+    location: Option<&str>,
 ) -> ExitCode {
     finish(
         async {
-            let (base, token, id) = coordinates(host, project).await?;
+            let (base, token, id, code) = coordinates_with_code(host, project).await?;
             let mut body = json!({
                 "due_at": due_at,
                 "authority_kind": authority_kind,
@@ -170,14 +209,15 @@ pub async fn create(
             if let Some(key) = replay_key {
                 object.insert("replay_key".into(), json!(key));
             }
-            call(
+            let row = call(
                 reqwest::Client::new()
                     .post(format!("{base}/app/api/projects/{id}/deadlines"))
                     .bearer_auth(token)
                     .json(&body),
                 "create",
             )
-            .await
+            .await?;
+            finish_write(row, &base, &code, ics_path, location)
         }
         .await,
     )
@@ -198,10 +238,12 @@ pub async fn update(
     calendar_role: Option<String>,
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
+    ics_path: Option<&Path>,
+    location: Option<&str>,
 ) -> ExitCode {
     finish(
         async {
-            let (base, token, project_id) = coordinates(host, project).await?;
+            let (base, token, project_id, code) = coordinates_with_code(host, project).await?;
             let mut body = json!({});
             let Some(object) = body.as_object_mut() else {
                 return Err(anyhow!("deadline body is an object"));
@@ -236,7 +278,7 @@ pub async fn update(
             if let Some(days) = client_lead_days {
                 object.insert("client_lead_days".into(), json!(days));
             }
-            call(
+            let row = call(
                 reqwest::Client::new()
                     .patch(format!(
                         "{base}/app/api/projects/{project_id}/deadlines/{id}"
@@ -245,7 +287,8 @@ pub async fn update(
                     .json(&body),
                 "update",
             )
-            .await
+            .await?;
+            finish_write(row, &base, &code, ics_path, location)
         }
         .await,
     )
@@ -298,7 +341,7 @@ async fn post_transition(
 
 #[cfg(test)]
 mod tests {
-    use super::post_transition;
+    use super::{export_row, finish_write, post_transition};
     use uuid::Uuid;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -335,5 +378,36 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{verb}: {error:#}"));
             assert_eq!(row["status"], verb);
         }
+    }
+    #[test]
+    fn row_export_preserves_the_event_and_ephemeral_location() {
+        let row = serde_json::json!({"id":"deadline-1", "due_at":"2026-11-02T17:00:00-08:00", "updated_at":"2026-10-26T00:00:00Z", "status":"open", "title":"Response"});
+        let calendar = export_row(
+            "https://example.test",
+            "sample",
+            &row,
+            Some("https://court.test/join?a=1,b=2"),
+        )
+        .unwrap();
+        assert!(calendar.contains("UID:deadline-1@example.test\r\n"));
+        assert!(calendar.contains("LOCATION:https://court.test/join?a=1\\,b=2\r\n"));
+        assert_eq!(calendar.matches("BEGIN:VEVENT").count(), 1);
+        assert!(row.get("location").is_none());
+    }
+    #[test]
+    fn failed_export_reports_that_the_deadline_was_saved() {
+        let row = serde_json::json!({"id":"saved-row", "due_at":"2026-11-02T17:00:00-08:00"});
+        let directory = tempfile::tempdir().unwrap();
+        let missing_parent = directory.path().join("missing/event.ics");
+        let error = finish_write(
+            row,
+            "https://example.test",
+            "sample",
+            Some(&missing_parent),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("saved-row"));
+        assert!(error.to_string().contains("was saved"));
     }
 }

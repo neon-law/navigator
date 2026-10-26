@@ -191,6 +191,7 @@ mod tests {
             replay_key: None,
             inserted_at: String::new(),
             updated_at: String::new(),
+            calendar_sequence: None,
         }
     }
 

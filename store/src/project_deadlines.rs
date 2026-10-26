@@ -43,6 +43,8 @@ pub struct Deadline {
     pub replay_key: Option<String>,
     pub inserted_at: String,
     pub updated_at: String,
+    /// Monotonic RFC 5545 revision; absent on historical rows.
+    pub calendar_sequence: Option<i64>,
 }
 
 #[derive(SurrealValue)]
@@ -63,6 +65,7 @@ struct DeadlineRow {
     replay_key: Option<String>,
     inserted_at: String,
     updated_at: String,
+    calendar_sequence: Option<i64>,
 }
 
 impl DeadlineRow {
@@ -84,13 +87,14 @@ impl DeadlineRow {
             replay_key: self.replay_key,
             inserted_at: self.inserted_at,
             updated_at: self.updated_at,
+            calendar_sequence: self.calendar_sequence,
         })
     }
 }
 
 const SELECT: &str = "id, project_id, title, due_at, authority_kind, authority, source, \
      source_document_id, owner_person_id, status, calendar_role, internal_lead_days, \
-     client_lead_days, replay_key, inserted_at, updated_at";
+     client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence";
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeadlineError {
@@ -368,7 +372,9 @@ async fn persist(
              source_document_id = $source_document_id, owner_person_id = $owner_person_id, \
              status = $status, calendar_role = $calendar_role, \
              internal_lead_days = $internal_lead_days, client_lead_days = $client_lead_days, \
-             replay_key = $replay_key, inserted_at = $inserted_at, updated_at = $now \
+             replay_key = $replay_key, calendar_sequence = IF updated_at IS NONE THEN 0 ELSE \
+             (calendar_sequence ?? math::max([0, time::unix(<datetime>updated_at)])) + 1 END, \
+             inserted_at = $inserted_at, updated_at = $now \
              RETURN {SELECT}"
         ))
         .bind(("id", record_id("project_deadlines", id)))
@@ -760,6 +766,7 @@ mod tests {
         let reopened = reopen(&surreal, project_id, created.id).await.unwrap();
         let mut expected = created.clone();
         expected.updated_at = reopened.updated_at.clone();
+        expected.calendar_sequence = Some(2);
         assert_eq!(reopened, expected);
         assert_eq!(
             reopen(&surreal, project_id, created.id).await.unwrap(),
@@ -814,6 +821,62 @@ mod tests {
                 .unwrap_err(),
             DeadlineError::Invalid(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn calendar_sequence_increments_on_rapid_updates_and_cancellation() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let row = create(&surreal, &sample(project_id)).await.unwrap();
+        assert_eq!(row.calendar_sequence, Some(0));
+        for sequence in 1..=3 {
+            let updated = update(&surreal, project_id, row.id, &DeadlinePatch::default())
+                .await
+                .unwrap();
+            assert_eq!(updated.id, row.id);
+            assert_eq!(updated.calendar_sequence, Some(sequence));
+        }
+        let cancelled = cancel(&surreal, project_id, row.id).await.unwrap();
+        assert_eq!(cancelled.id, row.id);
+        assert_eq!(cancelled.calendar_sequence, Some(4));
+    }
+
+    #[tokio::test]
+    async fn historical_calendar_versions_never_regress_and_overflow_is_refused() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let row = create(&surreal, &sample(project_id)).await.unwrap();
+        surreal
+            .query("UPDATE $id SET calendar_sequence = NONE, updated_at = '2026-10-26T00:00:00Z'")
+            .bind(("id", record_id("project_deadlines", row.id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let updated = update(&surreal, project_id, row.id, &DeadlinePatch::default())
+            .await
+            .unwrap();
+        assert_eq!(updated.calendar_sequence, Some(1_792_972_801));
+        surreal
+            .query("UPDATE $id SET calendar_sequence = 2147483647")
+            .bind(("id", record_id("project_deadlines", row.id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        assert!(
+            update(&surreal, project_id, row.id, &DeadlinePatch::default())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            find(&surreal, project_id, row.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .calendar_sequence,
+            Some(2_147_483_647)
+        );
     }
 
     #[tokio::test]
@@ -884,6 +947,7 @@ mod tests {
             .unwrap();
         let row = find(&surreal, project_id, id).await.unwrap().unwrap();
         assert_eq!(row.title, None);
+        assert_eq!(row.calendar_sequence, None);
         assert_eq!(list(&surreal, project_id).await.unwrap().len(), 1);
     }
 }

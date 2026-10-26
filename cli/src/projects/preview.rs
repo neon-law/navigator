@@ -202,6 +202,8 @@ struct LiveDeadline {
     inserted_at: String,
     #[serde(default)]
     updated_at: String,
+    #[serde(default)]
+    calendar_sequence: Option<i64>,
 }
 
 impl From<LiveDeadline> for store::project_deadlines::Deadline {
@@ -223,6 +225,7 @@ impl From<LiveDeadline> for store::project_deadlines::Deadline {
             replay_key: row.replay_key,
             inserted_at: row.inserted_at,
             updated_at: row.updated_at,
+            calendar_sequence: row.calendar_sequence,
         }
     }
 }

@@ -352,6 +352,8 @@ DEFINE FIELD OVERWRITE client_lead_days ON project_deadlines TYPE option<int>;
 DEFINE FIELD OVERWRITE replay_key ON project_deadlines TYPE option<string>;
 DEFINE FIELD OVERWRITE inserted_at ON project_deadlines TYPE string;
 DEFINE FIELD OVERWRITE updated_at ON project_deadlines TYPE string;
+DEFINE FIELD OVERWRITE calendar_sequence ON project_deadlines TYPE option<int>
+    ASSERT $value = NONE OR ($value >= 0 AND $value <= 2147483647);
 
 -- A Matter Page: one `pages:` entry of a Project repository's navigator.yaml,
 -- as `navigator project sync` last stored it (store::matter_pages). A sync

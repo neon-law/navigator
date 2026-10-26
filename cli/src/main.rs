@@ -1726,6 +1726,12 @@ enum DeadlineCmd {
         /// What is due, such as the pleading or response (at most 200 characters).
         #[arg(long)]
         title: Option<String>,
+        /// Write the saved row as an RFC 5545 calendar to this private file.
+        #[arg(long)]
+        ics: Option<PathBuf>,
+        /// Court-supplied location; included only in the exported file.
+        #[arg(long, requires = "ics")]
+        location: Option<String>,
         /// RFC 3339 timestamp with an explicit offset.
         #[arg(long)]
         due_at: String,
@@ -1769,6 +1775,12 @@ enum DeadlineCmd {
         /// What is due. An empty value clears the title.
         #[arg(long)]
         title: Option<String>,
+        /// Write the saved row as an RFC 5545 calendar to this private file.
+        #[arg(long)]
+        ics: Option<PathBuf>,
+        /// Court-supplied location; included only in the exported file.
+        #[arg(long, requires = "ics")]
+        location: Option<String>,
         #[arg(long)]
         due_at: Option<String>,
         #[arg(long)]
@@ -5030,6 +5042,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 host,
                 project,
                 title,
+                ics,
+                location,
                 due_at,
                 authority_kind,
                 authority,
@@ -5055,6 +5069,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     internal_lead_days,
                     client_lead_days,
                     replay_key,
+                    ics.as_deref(),
+                    location.as_deref(),
                 )
                 .await
             }
@@ -5063,6 +5079,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 project,
                 id,
                 title,
+                ics,
+                location,
                 due_at,
                 authority_kind,
                 authority,
@@ -5087,6 +5105,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     calendar_role,
                     internal_lead_days,
                     client_lead_days,
+                    ics.as_deref(),
+                    location.as_deref(),
                 )
                 .await
             }

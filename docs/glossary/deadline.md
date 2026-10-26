@@ -48,6 +48,10 @@ row. Reopen restores a cancelled row to open and preserves its id, replay key, a
 is a no-op; a complete row cannot be reopened. Replaying a cancelled row refuses without changing it and directs the
 caller to reopen first. Replaying a complete row updates its fields while preserving complete status.
 
+**Calendar revision.** `calendar_sequence` is an internal, monotonic RFC 5545 integer. A new row starts at zero; updates
+and status changes increment it atomically. Historical rows keep their timestamp-based exported version until the next
+write increments from that version. Values above 2147483647 are refused.
+
 **Who owns it.** `owner_person_id` is the optional Person responsible for the date.
 
 **Where it was read.** `source_document_id` is the optional Document ([Asset](asset.md)) that records the date. It is

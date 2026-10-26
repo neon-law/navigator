@@ -84,10 +84,15 @@ navigator project deadline reopen <id>
 ```
 
 Put the docket on a calendar with `navigator project deadline ics`. It prints every row as one RFC 5545 `VCALENDAR`, one
-`VEVENT` per Deadline. The `UID` is `<deadline id>@<host>` and `SEQUENCE` follows the row's last update, so re-importing
-the file after an `update` changes the same calendar event. A cancelled row renders `STATUS:CANCELLED`, and
+`VEVENT` per Deadline. The `UID` is `<deadline id>@<host>` and `SEQUENCE` is the row's monotonic calendar revision, so
+re-importing the file after an `update` changes the same calendar event. A cancelled row renders `STATUS:CANCELLED`, and
 `--internal-lead-days` becomes the reminder alarm. The summary is the row's title (or its kind, when untitled) followed
 by the Project code, never the client's name.
+
+For a single saved event, pass `--ics <private path>` to `create` or `update`. The command prints the stored row and
+writes that row as a calendar file. `--location` requires `--ics` and copies a court-supplied location into that file
+only. Keep the file outside Git: a registration link may be personal. If export fails after the write, the error names
+the saved Deadline; update that row or export the feed instead of creating a replacement.
 
 Reopen only when a cancelled date applies again. It restores the same row to open, retaining its id, replay key, and
 stored fields. Reopening an open row is a no-op; a complete row cannot be reopened. Replaying a cancelled row refuses

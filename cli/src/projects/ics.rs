@@ -2,9 +2,10 @@
 //!
 //! The renderer is pure: the same rows always produce the same bytes. A
 //! Deadline's `UID` is `<deadline id>@<host>`, so a regenerated file updates the
-//! calendar event instead of duplicating it. `SEQUENCE` and `DTSTAMP` derive from
-//! the row's `updated_at`, so an unchanged row renders identically and an edited
-//! row supersedes the earlier event. A cancelled row renders `STATUS:CANCELLED`.
+//! calendar event instead of duplicating it. `SEQUENCE` is its stored monotonic
+//! `calendar_sequence`; `DTSTAMP` follows `updated_at`. Historical rows without a
+//! sequence retain their timestamp-based version until the next write increments
+//! it. A cancelled row renders `STATUS:CANCELLED`.
 //!
 //! The stored `due_at` carries only a UTC offset, so the event's zone is a
 //! fixed-offset `VTIMEZONE` named for that offset (`UTC-08:00`). A `Z` offset
@@ -64,6 +65,7 @@ pub fn render(calendar: &Calendar<'_>, rows: &[Value]) -> Result<String, String>
 struct Event {
     id: String,
     title: String,
+    location: Option<String>,
     due: DateTime<FixedOffset>,
     stamp: DateTime<Utc>,
     sequence: i64,
@@ -89,9 +91,24 @@ impl Event {
             Ok(updated) => (updated.with_timezone(&Utc), updated.timestamp().max(0)),
             Err(_) => (due.with_timezone(&Utc), 0),
         };
+        let sequence = match row
+            .get("calendar_sequence")
+            .filter(|value| !value.is_null())
+        {
+            Some(value) => value
+                .as_i64()
+                .ok_or_else(|| format!("deadline {id} has an unreadable calendar_sequence"))?,
+            None => sequence,
+        };
+        if !(0..=i64::from(i32::MAX)).contains(&sequence) {
+            return Err(format!(
+                "deadline {id} has a calendar_sequence outside the RFC 5545 integer range"
+            ));
+        }
         Ok(Self {
             id,
             title: text("title").trim().to_string(),
+            location: row["location"].as_str().map(str::to_string),
             due,
             stamp,
             sequence,
@@ -212,6 +229,9 @@ impl Out {
             ));
         }
         self.line(&format!("SUMMARY:{}", escape(&summary)));
+        if let Some(location) = &event.location {
+            self.line(&format!("LOCATION:{}", escape(location)));
+        }
         let mut description = String::new();
         if !event.authority.is_empty() {
             let _ = writeln!(description, "Authority: {}", event.authority);
@@ -408,5 +428,27 @@ mod tests {
         untitled["title"] = json!(null);
         let text = render(&calendar(), &[untitled]).unwrap();
         assert!(text.contains("SUMMARY:Court order deadline - acme\r\n"));
+    }
+    #[test]
+    fn persisted_sequences_version_same_second_edits_and_fit_rfc_integers() {
+        let mut original = row();
+        original["calendar_sequence"] = json!(0);
+        let first = render(&calendar(), &[original.clone()]).unwrap();
+        original["calendar_sequence"] = json!(1);
+        let next = render(&calendar(), &[original.clone()]).unwrap();
+        assert!(first.contains("SEQUENCE:0\r\n"));
+        assert!(next.contains("SEQUENCE:1\r\n"));
+        let uid = first.lines().find(|line| line.starts_with("UID:")).unwrap();
+        assert!(next.lines().any(|line| line == uid));
+        original["status"] = json!("cancelled");
+        original["calendar_sequence"] = json!(2);
+        let cancelled = render(&calendar(), &[original.clone()]).unwrap();
+        assert!(cancelled.contains("STATUS:CANCELLED\r\n"));
+        assert!(cancelled.contains("SEQUENCE:2\r\n"));
+        assert!(cancelled.lines().any(|line| line == uid));
+        for invalid in [json!(-1), json!(2_147_483_648_i64), json!("bad")] {
+            original["calendar_sequence"] = invalid;
+            assert!(render(&calendar(), &[original.clone()]).is_err());
+        }
     }
 }
