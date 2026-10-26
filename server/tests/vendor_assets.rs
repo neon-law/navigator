@@ -931,6 +931,60 @@ fn the_services_package_badge_clears_wcag_aa_on_its_tinted_panel() {
     }
 }
 
+/// `/nautilus` paints each store-listing Install pill in the platform's own
+/// ink on white. Apple's `#007aff` is 4.02:1 against `#fff` — under the 4.5:1
+/// floor for the 13.6px label — and axe failed the `26.10.26` cut on
+/// `.fm-phone__install`. This reads both pills and does the arithmetic.
+#[test]
+fn the_nautilus_phone_install_pills_clear_wcag_aa() {
+    let css = std::fs::read_to_string(public_dir().join("css/marketing-page.css"))
+        .expect("read the marketing-page stylesheet");
+    for selector in [
+        ".fm-phone[data-phone=\"ios\"] .fm-phone__install",
+        ".fm-phone[data-phone=\"android\"] .fm-phone__install",
+    ] {
+        let body = rule_body(&css, selector);
+        let ink = hex_in(body, "color");
+        let ground = hex_in(body, "background");
+        let ink_rgb = views::brand_presentation::parse_hex(&ink)
+            .unwrap_or_else(|| panic!("{selector} color {ink}"));
+        let ground_rgb = views::brand_presentation::parse_hex(&ground)
+            .unwrap_or_else(|| panic!("{selector} background {ground}"));
+        let ratio = views::brand_presentation::contrast_ratio(ink_rgb, ground_rgb);
+        assert!(
+            ratio >= 4.5,
+            "{selector}: {ink} on {ground} is {ratio:.2}:1 — under the 4.5:1 floor \
+             for the Install label. Darken the platform ink rather than lightening \
+             the type."
+        );
+    }
+}
+
+/// The `#rrggbb` (or `#rgb`) a declaration paints, expanded to six digits.
+fn hex_in(declarations: &str, property: &str) -> String {
+    let value = declarations
+        .split(';')
+        .map(str::trim)
+        .find_map(|declaration| declaration.strip_prefix(&format!("{property}:")))
+        .unwrap_or_else(|| panic!("no `{property}` in `{declarations}`"))
+        .trim();
+    let hex = value
+        .strip_prefix('#')
+        .unwrap_or_else(|| panic!("`{property}` must be a hex color: `{value}`"));
+    match hex.len() {
+        3 => {
+            let mut expanded = String::from("#");
+            for ch in hex.chars() {
+                expanded.push(ch);
+                expanded.push(ch);
+            }
+            expanded
+        }
+        6 => format!("#{hex}"),
+        _ => panic!("`{property}` must be `#rgb` or `#rrggbb`: `{value}`"),
+    }
+}
+
 /// `/notations` prints each band overline on `#notation-flow`, whose ground is
 /// `--nav-color-surface-subtle`. The 500 stop is sized against a *plain*
 /// surface (`tokens.css`); on teal-subtle the firm's pair is 4.41:1 and axe
