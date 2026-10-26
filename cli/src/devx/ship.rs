@@ -7658,7 +7658,7 @@ mod tests {
                 .count();
             assert!(
                 names <= TARGET_PROXY_CERTIFICATE_LIMIT,
-                "{public_host} attaches {names} certificates: {annotation}"
+                "{public_host} attaches {names} certificates"
             );
         }
     }
