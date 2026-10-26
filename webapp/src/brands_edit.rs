@@ -437,7 +437,7 @@ fn social_provider(view: &BrandsEditView, provider: &str) -> Element {
                                     if matches!(provider, "x" | "tiktok") { "{label} username" }
                                     else { "{label} account ID" }
                                 }
-                                input { class: "nav-control", r#type: "text", name: "provider_account_id",
+                                input { class: "nav-input", r#type: "text", name: "provider_account_id",
                                     id: "{input_id}", required: true, readonly: saved.is_some(),
                                     value: saved.map_or("", String::as_str),
                                 }

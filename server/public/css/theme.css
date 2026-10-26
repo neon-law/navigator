@@ -2183,6 +2183,10 @@ a.nav-pagination__link:hover {
   display: none;
 }
 
+.brand-social-provider button {
+  margin-inline-end: .5rem;
+}
+
 .brand-social-provider .nav-field button {
   margin-top: .5rem;
 }
