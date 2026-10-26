@@ -157,6 +157,8 @@ pub enum Section {
     /// Ordered stages with argument points, authorities, and anticipated
     /// questions.
     StageList,
+    /// Ordered point, response, and reply turns with supporting authority.
+    ArgumentExchange,
     /// What a package includes and, as importantly, what it excludes.
     PackageManifest,
     /// The files a reader takes away.
@@ -246,6 +248,7 @@ impl Section {
         Section::AuthorityTable,
         Section::DiscoveryPairs,
         Section::StageList,
+        Section::ArgumentExchange,
         Section::PackageManifest,
         Section::DownloadList,
         Section::EngagementLetter,
@@ -300,6 +303,7 @@ impl Section {
             Section::AuthorityTable => "authority_table",
             Section::DiscoveryPairs => "discovery_pairs",
             Section::StageList => "stage_list",
+            Section::ArgumentExchange => "argument_exchange",
             Section::PackageManifest => "package_manifest",
             Section::DownloadList => "download_list",
             Section::EngagementLetter => "engagement_letter",
@@ -359,6 +363,9 @@ impl Section {
             Section::AuthorityTable => "Authorities with citation, holding, quote, and position",
             Section::DiscoveryPairs => "Numbered request/response pairs with objection tracking",
             Section::StageList => "Ordered stages with argument points and anticipated questions",
+            Section::ArgumentExchange => {
+                "Multiline points, expected responses, replies, and their authority"
+            }
             Section::PackageManifest => "What the package includes, and what it excludes",
             Section::DownloadList => "The files a reader takes away",
             Section::EngagementLetter => "The engagement agreement as a record",
@@ -548,13 +555,19 @@ pub fn skeleton(kind: Kind) -> Option<Skeleton> {
             family: Family::Dashboard,
             required: &[S::StageList],
             optional: &[
+                S::ArgumentExchange,
                 S::AuthorityTable,
                 S::KeyDatesStrip,
                 S::Stepper,
                 S::CaseCaption,
                 S::RelationshipGraph,
             ],
-            lawyer_only: &[S::StageList, S::AuthorityTable, S::RelationshipGraph],
+            lawyer_only: &[
+                S::StageList,
+                S::ArgumentExchange,
+                S::AuthorityTable,
+                S::RelationshipGraph,
+            ],
         },
         // The second family: linear, non-interactive, read rather than
         // worked in.
@@ -978,5 +991,18 @@ mod tests {
                 assert!(s.permits(Lens::Lawyer, *section));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod argument_exchange_tests {
+    #[test]
+    fn hearing_argument_exchange_is_an_optional_lawyer_only_section() {
+        use super::{skeleton, Section};
+        let section = Section::parse("argument_exchange").expect("registered section");
+        let hearing = skeleton(crate::kind::Kind::HearingConsole).unwrap();
+        assert!(hearing.optional.contains(&section));
+        assert!(hearing.lawyer_only.contains(&section));
+        assert!(hearing.required.contains(&Section::StageList));
     }
 }

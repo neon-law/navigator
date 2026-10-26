@@ -261,6 +261,8 @@ pub struct NotationsData {
     pub checklist: ChecklistView,
     /// Ordered trial-preparation cards from the lawyer's verified Notation.
     pub stages: Vec<super::SectionRow>,
+    /// Ordered argument exchanges, refused when the body or block is invalid.
+    pub exchanges: super::ArgumentExchangeView,
     /// On the client lens, the one step that unblocks the matter.
     pub decisions: Vec<super::SectionRow>,
 }
@@ -459,6 +461,11 @@ pub async fn load_notations(
     let stages = read.as_ref().map_or_else(Vec::new, |(body, _)| {
         trial_prep_stages(stage_kind, lens, body)
     });
+    let exchanges = read
+        .as_ref()
+        .map_or_else(super::ArgumentExchangeView::default, |(body, _)| {
+            trial_prep_exchanges(stage_kind, lens, body)
+        });
     let (document, checklist) = read.map_or_else(
         || (NotationDocumentView::default(), ChecklistView::default()),
         |(body, state)| {
@@ -472,6 +479,7 @@ pub async fn load_notations(
         document,
         checklist,
         stages,
+        exchanges,
         list: notations
             .iter()
             .filter(|notation| {
@@ -649,6 +657,76 @@ fn valid_table_separator(cell: &str) -> bool {
     let without_leading = cell.strip_prefix(':').unwrap_or(cell);
     let dashes = without_leading.strip_suffix(':').unwrap_or(without_leading);
     dashes.len() >= 3 && dashes.chars().all(|ch| ch == '-')
+}
+
+/// Internal exchanges only enter the view from a verified `TrialPrep` body.
+#[cfg(feature = "server")]
+fn trial_prep_exchanges(
+    kind: Option<&str>,
+    lens: super::PageLens,
+    body: &Result<String, BodyFailure>,
+) -> super::ArgumentExchangeView {
+    if lens != super::PageLens::Lawyer || kind != Some(rules::kind::Kind::TrialPrep.as_str()) {
+        return super::ArgumentExchangeView::default();
+    }
+    let exchanges = body
+        .as_ref()
+        .ok()
+        .and_then(|body| parse_argument_exchanges(body).ok());
+    super::ArgumentExchangeView {
+        unavailable: exchanges.is_none(),
+        exchanges: exchanges.unwrap_or_default(),
+    }
+}
+
+/// Exactly one explicit block supplies exchanges; examples in other fences
+/// are ignored. Invalid fields refuse the entire list rather than a partial argument.
+#[cfg(feature = "server")]
+fn parse_argument_exchanges(body: &str) -> Result<Vec<super::ArgumentExchange>, &'static str> {
+    let mut fence: Option<(char, usize)> = None;
+    let mut collecting = false;
+    let mut found = false;
+    let mut yaml = String::new();
+    for line in body.lines() {
+        let trimmed = line.trim();
+        let marker = trimmed.chars().next().filter(|c| *c == '`' || *c == '~');
+        let count = marker.map_or(0, |marker| {
+            trimmed.chars().take_while(|c| *c == marker).count()
+        });
+        if let Some((open, length)) = fence {
+            if marker == Some(open) && count >= length && trimmed[count..].trim().is_empty() {
+                fence = None;
+                collecting = false;
+            } else if collecting {
+                yaml.push_str(line);
+                yaml.push('\n');
+            }
+        } else if count >= 3 {
+            collecting = trimmed[count..].trim() == "argument_exchange";
+            if collecting && found {
+                return Err("more than one argument-exchange block");
+            }
+            found |= collecting;
+            fence = marker.map(|marker| (marker, count));
+        }
+    }
+    if collecting {
+        return Err("argument-exchange block is not closed");
+    }
+    if !found {
+        return Ok(Vec::new());
+    }
+    let exchanges: Vec<super::ArgumentExchange> =
+        serde_yaml::from_str(&yaml).map_err(|_| "invalid argument-exchange YAML or fields")?;
+    if exchanges.iter().any(|exchange| {
+        exchange.title.trim().is_empty()
+            || [&exchange.point, &exchange.response, &exchange.reply]
+                .iter()
+                .any(|turn| turn.text.trim().is_empty() || turn.authority.trim().is_empty())
+    }) {
+        return Err("argument-exchange fields must not be blank");
+    }
+    Ok(exchanges)
 }
 
 #[cfg(test)]
@@ -996,5 +1074,160 @@ Later prose is outside the table.",
         let css = include_str!("../../../server/public/css/theme.css");
         let block = &css[css.find("Notation sections").expect("notation css block")..];
         assert!(!block.contains("min-width"), "no fixed minimum width");
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
+mod argument_exchange_tests {
+    #[test]
+    fn argument_exchange_preserves_multiline_turns_and_order() {
+        let body = "```argument_exchange\n- title: First\n  point: {text: 'Point <script>', authority: 'Rule A'}\n  response: {text: Response, authority: 'Rule B'}\n  reply:\n    text: |\n      Reply one\n      Reply two\n    authority: 'Rule C'\n- title: Second\n  point: {text: P, authority: A}\n  response: {text: R, authority: B}\n  reply: {text: R, authority: C}\n```";
+        let rows = super::parse_argument_exchanges(body).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].title, "First");
+        assert_eq!(rows[1].title, "Second");
+        assert_eq!(rows[0].reply.text, "Reply one\nReply two\n");
+        let html = crate::sections::tests::render(crate::sections::SectionView::ArgumentExchange(
+            crate::sections::ArgumentExchangeView {
+                exchanges: rows,
+                unavailable: false,
+            },
+        ));
+        assert!(html.contains("Point &#60;script&#62;"), "{html}");
+        assert!(!html.contains("<script>"), "{html}");
+        assert!(html.contains("Rule A"), "{html}");
+    }
+    #[tokio::test]
+    async fn argument_exchange_loader_uses_activated_pinned_body_and_hides_other_lenses() {
+        use crate::sections::PageLens;
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "exchange-synthetic").await;
+        let person = store::persons::create(
+            &db,
+            &store::persons::NewPerson::new("Synthetic Lawyer", "exchange@example.com"),
+        )
+        .await
+        .unwrap();
+        let path =
+            std::env::temp_dir().join(format!("navigator-exchanges-{}", uuid::Uuid::now_v7()));
+        let storage: std::sync::Arc<dyn cloud::StorageService> =
+            std::sync::Arc::new(cloud::FsStorage::new(path.clone()).await.unwrap());
+        let body = "```argument_exchange\n- title: Verified exchange\n  point: {text: Point, authority: A}\n  response: {text: Response, authority: B}\n  reply: {text: Reply, authority: C}\n```";
+        let asset_id =
+            store::assets::ingest_content(&db, &storage, body.as_bytes(), "text/markdown")
+                .await
+                .unwrap();
+        let template = store::templates::save_version(
+            &db,
+            Some(project_id),
+            "exchange",
+            store::templates::Version {
+                title: "Synthetic preparation".into(),
+                respondent_type: "person".into(),
+                asset_id: Some(asset_id),
+                form_code: None,
+                kind: Some("trial_prep".into()),
+                source_commit_sha: Some(store::test_support::SYNTHETIC_COMMIT_SHA.into()),
+            },
+        )
+        .await
+        .unwrap()
+        .into_model();
+        let mut source = super::NotationsSource {
+            project_id,
+            code: "exchange-synthetic",
+            draft: Some("drafts/exchange.md"),
+            lens: PageLens::Lawyer,
+            document_on_page: false,
+        };
+        let preview = super::load_notations(&db, &storage, &source).await.unwrap();
+        assert!(
+            preview.exchanges.exchanges.is_empty(),
+            "preview is not an activated Notation"
+        );
+        store::notations::create(
+            &db,
+            &store::notations::NewNotation::new(template.id, person.id, project_id, "BEGIN"),
+        )
+        .await
+        .unwrap();
+        let loaded = super::load_notations(&db, &storage, &source).await.unwrap();
+        assert_eq!(loaded.exchanges.exchanges[0].title, "Verified exchange");
+        for lens in [PageLens::Client, PageLens::Clerk] {
+            source.lens = lens;
+            let loaded = super::load_notations(&db, &storage, &source).await.unwrap();
+            assert!(loaded.exchanges.exchanges.is_empty());
+            assert!(loaded.list.is_empty());
+        }
+        source.lens = PageLens::Lawyer;
+        let key = format!("blobs/{}", store::assets::sha256_hex(body.as_bytes()));
+        storage
+            .put(&key, b"tampered", "text/markdown")
+            .await
+            .unwrap();
+        let refused = super::load_notations(&db, &storage, &source).await.unwrap();
+        assert!(refused.exchanges.unavailable);
+        assert!(refused.exchanges.exchanges.is_empty());
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn argument_exchange_requires_verified_trial_prep_and_lawyer_lens() {
+        use crate::sections::{ArgumentExchangeView, PageLens, SectionView};
+        let invalid = Ok("```argument_exchange\ninvalid\n```".to_string());
+        let refused = super::trial_prep_exchanges(Some("trial_prep"), PageLens::Lawyer, &invalid);
+        assert!(refused.unavailable);
+        let html = crate::sections::tests::render(SectionView::ArgumentExchange(refused));
+        assert!(html.contains("role=\"alert\""), "{html}");
+        for lens in [PageLens::Client, PageLens::Clerk] {
+            assert_eq!(
+                super::trial_prep_exchanges(Some("trial_prep"), lens, &invalid),
+                ArgumentExchangeView::default()
+            );
+        }
+        for kind in [None, Some("memo")] {
+            assert_eq!(
+                super::trial_prep_exchanges(kind, PageLens::Lawyer, &invalid),
+                ArgumentExchangeView::default()
+            );
+        }
+        assert!(
+            super::trial_prep_exchanges(
+                Some("trial_prep"),
+                PageLens::Lawyer,
+                &Err(super::BodyFailure::Unverified)
+            )
+            .unavailable
+        );
+        assert!(
+            !super::trial_prep_exchanges(
+                Some("trial_prep"),
+                PageLens::Lawyer,
+                &Ok("ordinary prose".into())
+            )
+            .unavailable
+        );
+    }
+
+    #[test]
+    fn argument_exchange_rejects_malformed_or_ambiguous_data() {
+        for body in [
+            "```argument_exchange\nnot yaml: [\n```",
+            "```argument_exchange\n- title: Missing turns\n```",
+            "```argument_exchange\n[]",
+            "```argument_exchange\n[]\n```\n```argument_exchange\n[]\n```",
+            "```argument_exchange\n- title: Blank\n  point: {text: ' ', authority: A}\n  response: {text: R, authority: B}\n  reply: {text: R, authority: C}\n```",
+            "```argument_exchange\n- title: Extra\n  unexpected: field\n  point: {text: P, authority: A}\n  response: {text: R, authority: B}\n  reply: {text: R, authority: C}\n```",
+        ] {
+            assert!(super::parse_argument_exchanges(body).is_err(), "{body}");
+        }
+        assert!(super::parse_argument_exchanges("ordinary prose")
+            .unwrap()
+            .is_empty());
+        assert!(super::parse_argument_exchanges(
+            "````markdown\n```argument_exchange\nnot data\n```\n````"
+        )
+        .unwrap()
+        .is_empty());
     }
 }

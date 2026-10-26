@@ -30,7 +30,8 @@ rendered through `navigator notation pdf`.
 - `resume` — A person's resume. It needs no `questionnaire:`, `workflow:`, or `jurisdiction:`. Default output: `resume`,
   no letterhead.
 - `trial_prep` — An internal trial-preparation Notation whose digest-verified body can supply a lawyer-only `stage_list`
-  table. Default output: plain. Its body is work product; the kind catalog does not make that body public.
+  table and [Argument Exchanges](argument-exchange.md). Default output: plain. Its body is work product; the kind
+  catalog does not make that body public.
 - `event` — A dated public event page under `server/content/events/`. Default output: not rendered.
 - `post` — A blog post file. Posts are database rows now ([Post](post.md)). Default output: not
   rendered.
