@@ -497,6 +497,9 @@ runtime environment variable `NAVIGATOR_RELEASE_TAG`.
 is where it is written down — but a version that departs from it publishes just as well, provided it is newer than the
 last one. What the date really bought was uniqueness, and comparing against the tags buys that directly.
 
+**Only the scheduled release job cuts a daily `YY.M.D` release.** Agents cut release candidates (`YY.M.D-rc.N`) with the
+[`cut-release`](../.agents/skills/cut-release/SKILL.md) skill, never a daily version.
+
 **`ops cut-release` selects today's UTC version and writes the bump.** It compares `YY.M.D` with the release tags
 fetched from `origin` and delegates the write to `ops release version`. A covered date or operational error exits 2.
 `--repo` selects the worktree for the tags, root manifest, pins, lockfile, and commit. Relative `--manifest-path` values
