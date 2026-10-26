@@ -65,6 +65,7 @@ pub fn render(calendar: &Calendar<'_>, rows: &[Value]) -> Result<String, String>
 struct Event {
     id: String,
     title: String,
+    description: String,
     location: Option<String>,
     due: DateTime<FixedOffset>,
     stamp: DateTime<Utc>,
@@ -108,6 +109,7 @@ impl Event {
         Ok(Self {
             id,
             title: text("title").trim().to_string(),
+            description: text("description"),
             location: row["location"].as_str().map(str::to_string),
             due,
             stamp,
@@ -232,7 +234,10 @@ impl Out {
         if let Some(location) = &event.location {
             self.line(&format!("LOCATION:{}", escape(location)));
         }
-        let mut description = String::new();
+        let mut description = event.description.clone();
+        if !description.is_empty() {
+            description.push('\n');
+        }
         if !event.authority.is_empty() {
             let _ = writeln!(description, "Authority: {}", event.authority);
         }

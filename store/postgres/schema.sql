@@ -2235,3 +2235,6 @@ ALTER TABLE project_deadlines ADD COLUMN title TEXT CHECK (title IS NULL OR leng
 
 -- Migration: 20261026120000_add_deadline_calendar_sequence.sql
 ALTER TABLE project_deadlines ADD COLUMN calendar_sequence BIGINT CHECK (calendar_sequence IS NULL OR calendar_sequence BETWEEN 0 AND 2147483647);
+
+-- Migration: 20261026130000_add_deadline_description.sql
+ALTER TABLE project_deadlines ADD COLUMN description TEXT;

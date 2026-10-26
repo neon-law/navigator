@@ -48,9 +48,23 @@ async fn call(request: reqwest::RequestBuilder, action: &str) -> Result<Value> {
     serde_json::from_str(&body).context("parse deadline response")
 }
 
+fn annotate_visibility(row: &mut Value) {
+    if let Some(rows) = row.as_array_mut() {
+        for row in rows {
+            annotate_visibility(row);
+        }
+    } else if let Some(object) = row.as_object_mut() {
+        if let Some(lead) = object.get("client_lead_days") {
+            let visibility = if lead.is_null() { "internal" } else { "client" };
+            object.insert("visibility".into(), json!(visibility));
+        }
+    }
+}
+
 fn finish(result: Result<Value>) -> ExitCode {
     match result {
-        Ok(row) => {
+        Ok(mut row) => {
+            annotate_visibility(&mut row);
             println!("{row}");
             ExitCode::SUCCESS
         }
@@ -119,6 +133,30 @@ pub async fn ics(host: Option<&str>, project: Option<&str>) -> ExitCode {
     }
 }
 
+fn apply_visibility(
+    object: &mut serde_json::Map<String, Value>,
+    visibility: Option<&str>,
+    client_lead: Option<i64>,
+    creating: bool,
+) -> Result<()> {
+    match visibility {
+        Some("internal") => {
+            object.insert("client_lead_days".into(), Value::Null);
+        }
+        Some("client") if client_lead.is_none() => {
+            return Err(anyhow!(
+                "client visibility requires --client-lead-days and --internal-lead-days"
+            ))
+        }
+        None if creating => {
+            object.insert("client_lead_days".into(), Value::Null);
+        }
+        Some("client") | None => {}
+        Some(_) => return Err(anyhow!("visibility must be internal or client")),
+    }
+    Ok(())
+}
+
 fn export_row(base: &str, code: &str, row: &Value, location: Option<&str>) -> Result<String> {
     let url = reqwest::Url::parse(base)?;
     let mut row = row.clone();
@@ -161,6 +199,8 @@ pub async fn create(
     host: Option<&str>,
     project: Option<&str>,
     title: Option<String>,
+    description: Option<String>,
+    visibility: Option<String>,
     due_at: String,
     authority_kind: String,
     authority: Option<String>,
@@ -176,6 +216,9 @@ pub async fn create(
 ) -> ExitCode {
     finish(
         async {
+            if title.as_deref().is_none_or(|title| title.trim().is_empty()) {
+                return Err(anyhow!("--title must name what is due"));
+            }
             let (base, token, id, code) = coordinates_with_code(host, project).await?;
             let mut body = json!({
                 "due_at": due_at,
@@ -187,6 +230,9 @@ pub async fn create(
             };
             if let Some(title) = title {
                 object.insert("title".into(), json!(title));
+            }
+            if let Some(description) = description {
+                object.insert("description".into(), json!(description));
             }
             if let Some(authority) = authority {
                 object.insert("authority".into(), json!(authority));
@@ -209,6 +255,7 @@ pub async fn create(
             if let Some(key) = replay_key {
                 object.insert("replay_key".into(), json!(key));
             }
+            apply_visibility(object, visibility.as_deref(), client_lead_days, true)?;
             let row = call(
                 reqwest::Client::new()
                     .post(format!("{base}/app/api/projects/{id}/deadlines"))
@@ -229,6 +276,8 @@ pub async fn update(
     project: Option<&str>,
     id: Uuid,
     title: Option<String>,
+    description: Option<String>,
+    visibility: Option<String>,
     due_at: Option<String>,
     authority_kind: Option<String>,
     authority: Option<String>,
@@ -278,6 +327,10 @@ pub async fn update(
             if let Some(days) = client_lead_days {
                 object.insert("client_lead_days".into(), json!(days));
             }
+            if let Some(description) = description {
+                object.insert("description".into(), json!(description));
+            }
+            apply_visibility(object, visibility.as_deref(), client_lead_days, false)?;
             let row = call(
                 reqwest::Client::new()
                     .patch(format!(
@@ -341,7 +394,7 @@ async fn post_transition(
 
 #[cfg(test)]
 mod tests {
-    use super::{export_row, finish_write, post_transition};
+    use super::{annotate_visibility, apply_visibility, export_row, finish_write, post_transition};
     use uuid::Uuid;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -409,5 +462,34 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("saved-row"));
         assert!(error.to_string().contains("was saved"));
+    }
+    #[test]
+    fn visibility_is_a_projection_of_the_client_lead() {
+        let mut body = serde_json::json!({"client_lead_days": 3});
+        apply_visibility(
+            body.as_object_mut().unwrap(),
+            Some("internal"),
+            Some(3),
+            false,
+        )
+        .unwrap();
+        assert!(body["client_lead_days"].is_null());
+        annotate_visibility(&mut body);
+        assert_eq!(body["visibility"], "internal");
+        assert!(
+            apply_visibility(body.as_object_mut().unwrap(), Some("client"), None, false).is_err()
+        );
+        let mut client = serde_json::json!({"client_lead_days": 3});
+        apply_visibility(
+            client.as_object_mut().unwrap(),
+            Some("client"),
+            Some(3),
+            true,
+        )
+        .unwrap();
+        annotate_visibility(&mut client);
+        assert_eq!(client["visibility"], "client");
+        apply_visibility(client.as_object_mut().unwrap(), None, Some(3), true).unwrap();
+        assert!(client["client_lead_days"].is_null());
     }
 }

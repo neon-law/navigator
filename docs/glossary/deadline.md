@@ -15,6 +15,13 @@ The table is `project_deadlines`. [Matter](matter.md) is client-English for the 
 row recorded without one reads back with no title. The matter page, the `deadline_board`, and the Project's ICS calendar
 show the title when a row has one. Clearing it returns the row to untitled.
 
+**Description.** `description` is an optional explanation of what is due. Empty input clears it. It follows the
+Deadline's visibility on the matter page and board.
+
+**Visibility.** `--visibility internal|client` on the CLI expresses the existing client lead rule. Creation defaults to
+internal. Choosing `internal` clears the client lead. Choosing `client` requires an explicit client lead and its
+internal lead. Updates preserve visibility unless a new choice is supplied. No second visibility field is stored.
+
 **Authority.** Every deadline records *why the date binds*: a closed `authority_kind` vocabulary — `statute`,
 `court_rule`, `court_order`, `contract`, or `internal` — beside a free-text `authority` citation such as `15 U.S.C. §
 1681i(a)(1)` or a court-order reference. "Statutory" stays a queryable distinction rather than collapsing into a general

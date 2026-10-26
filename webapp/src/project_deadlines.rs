@@ -17,6 +17,10 @@ pub struct DeadlineRow {
     pub id: String,
     /// What is due; empty for a row recorded without a title.
     pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub visibility: String,
     /// The stored due instant with weekday and its original offset.
     pub due: String,
     /// Whose date it is, in plain words.
@@ -125,6 +129,13 @@ pub fn deadline_groups(
                 DeadlineRow {
                     id: row.id.to_string(),
                     title: row.title.clone().unwrap_or_default(),
+                    description: row.description.clone().unwrap_or_default(),
+                    visibility: if row.client_lead_days.is_some() {
+                        "Client"
+                    } else {
+                        "Internal"
+                    }
+                    .to_string(),
                     due,
                     role: role_label(&row.calendar_role).to_string(),
                     authority,
@@ -226,6 +237,8 @@ pub fn ProjectDeadlinesPanel(
                                             strong { class: "project-deadlines__title", "{row.title} " }
                                         }
                                         span { class: "project-deadlines__chip project-deadlines__chip--role status-chip", "{row.role}" }
+                                        span { class: "status-chip", "{row.visibility}" }
+                                        if !row.description.is_empty() { p { "{row.description}" } }
                                     }
                                     td {
                                         span { class: "project-deadlines__chip project-deadlines__chip--authority status-chip", "{row.authority_kind}" }
@@ -270,6 +283,8 @@ pub fn ProjectDeadlinesPanel(
                                                 strong { class: "project-deadlines__title", "{row.title} " }
                                             }
                                             span { class: "project-deadlines__chip project-deadlines__chip--role status-chip", "{row.role}" }
+                                        span { class: "status-chip", "{row.visibility}" }
+                                        if !row.description.is_empty() { p { "{row.description}" } }
                                         }
                                         td {
                                             span { class: "project-deadlines__chip project-deadlines__chip--authority status-chip", "{row.authority_kind}" }
@@ -310,6 +325,8 @@ mod tests {
         DeadlineRow {
             id: id.to_string(),
             title: String::new(),
+            description: "Synthetic description".to_string(),
+            visibility: "Internal".to_string(),
             due: "2026-11-02 17:00 -08:00".to_string(),
             role: "Our deadline".to_string(),
             authority: "Order setting briefing schedule".to_string(),
@@ -433,6 +450,7 @@ mod tests {
                 id: Uuid::new_v4(),
                 project_id: Uuid::nil(),
                 title: None,
+                description: None,
                 due_at: due_at.to_string(),
                 authority_kind: "court_order".to_string(),
                 authority: String::new(),

@@ -49,6 +49,7 @@ fn deadline(
 ) -> store::project_deadlines::NewDeadline {
     store::project_deadlines::NewDeadline {
         title: None,
+        description: None,
         project_id,
         due_at: "2099-11-02T17:00:00-08:00".into(),
         authority_kind: "court_order".into(),

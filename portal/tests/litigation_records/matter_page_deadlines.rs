@@ -42,6 +42,7 @@ fn deadline(
 ) -> store::project_deadlines::NewDeadline {
     store::project_deadlines::NewDeadline {
         title: None,
+        description: None,
         project_id,
         // Far enough out that the test never turns into an overdue one.
         due_at: "2099-11-02T17:00:00-08:00".into(),
@@ -189,6 +190,10 @@ async fn a_lawyer_records_a_deadline_through_the_assembled_router() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
+                        "title": "Synthetic response",
+                        "description": "Synthetic private preparation instructions",
+                        "internal_lead_days": 7,
+                        "client_lead_days": 3,
                         "due_at": "2099-12-01T17:00:00-08:00",
                         "authority_kind": "internal",
                         "authority": "Synthetic preparation target",
@@ -212,4 +217,33 @@ async fn a_lawyer_records_a_deadline_through_the_assembled_router() {
     );
     let html = matter_page(&f, &f.lawyer_cookie).await;
     assert!(html.contains("Synthetic preparation target"), "{html}");
+    assert!(html.contains("Synthetic private preparation instructions"));
+    let client = matter_page(&f, &f.client_cookie).await;
+    assert!(client.contains("Synthetic private preparation instructions"));
+    let row: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let response = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/app/api/projects/{}/deadlines/{}",
+                    f.project_id,
+                    row["id"].as_str().unwrap()
+                ))
+                .header("cookie", &f.lawyer_cookie)
+                .header("x-csrf-token", &f.lawyer_csrf)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"client_lead_days":null}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let internal = matter_page(&f, &f.client_cookie).await;
+    assert!(!internal.contains("Synthetic private preparation instructions"));
+    assert!(!internal.contains("Synthetic response"));
+    let lawyer = matter_page(&f, &f.lawyer_cookie).await;
+    assert!(lawyer.contains("Synthetic private preparation instructions"));
 }

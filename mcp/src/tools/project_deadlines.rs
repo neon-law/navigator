@@ -40,6 +40,7 @@ pub fn create_descriptor() -> Value {
             "type": "object",
             "properties": {
                 "project_id": { "type": "string", "format": "uuid" },
+                "description": { "type": "string" },
                 "title": { "type": "string", "maxLength": 200, "description": "A short name for what is due, such as the pleading or response." },
                 "due_at": { "type": "string" },
                 "authority_kind": { "type": "string" },
@@ -68,6 +69,7 @@ pub fn update_descriptor() -> Value {
             "properties": {
                 "project_id": { "type": "string", "format": "uuid" },
                 "deadline_id": { "type": "string", "format": "uuid" },
+                "description": { "type": "string" },
                 "title": { "type": "string", "maxLength": 200, "description": "An empty string clears the title." },
                 "due_at": { "type": "string" },
                 "authority_kind": { "type": "string" },
@@ -134,6 +136,7 @@ struct ProjectArgs {
 struct CreateArgs {
     project_id: Uuid,
     title: Option<String>,
+    description: Option<String>,
     due_at: String,
     authority_kind: String,
     #[serde(default)]
@@ -154,6 +157,7 @@ struct UpdateArgs {
     project_id: Uuid,
     deadline_id: Uuid,
     title: Option<String>,
+    description: Option<String>,
     due_at: Option<String>,
     authority_kind: Option<String>,
     authority: Option<String>,
@@ -238,6 +242,7 @@ pub async fn create_call(
         &store::project_deadlines::NewDeadline {
             project_id: args.project_id,
             title: args.title,
+            description: args.description,
             due_at: args.due_at,
             authority_kind: args.authority_kind,
             authority: args.authority,
@@ -272,6 +277,7 @@ pub async fn update_call(
         args.deadline_id,
         &store::project_deadlines::DeadlinePatch {
             title: args.title.map(Some),
+            description: args.description.map(Some),
             due_at: args.due_at,
             authority_kind: args.authority_kind,
             authority: args.authority,

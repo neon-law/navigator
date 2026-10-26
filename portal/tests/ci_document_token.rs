@@ -155,6 +155,7 @@ async fn fixture() -> Fixture {
                 &surreal,
                 &store::project_deadlines::NewDeadline {
                     title: None,
+                    description: None,
                     project_id: project,
                     due_at: "2026-11-02T17:00:00-08:00".into(),
                     authority_kind: "internal".into(),

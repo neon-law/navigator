@@ -62,11 +62,16 @@ navigator project deadline create \
   --source-document <document id> \
   --owner <lawyer DRI person id> \
   --internal-lead-days 7 \
-  --client-lead-days 3
+  --client-lead-days 3 \
+  --visibility client
 ```
 
-- **Name what is due.** `--title` is a short name for the pleading or response (at most 200 characters). Without one,
-  the board shows only the authority and role. `update <id> --title ""` clears it.
+- **Name what is due.** Creation requires `--title`, a short name for the pleading or response (at most 200 characters).
+  Rows recorded without one show only the authority and role. `update <id> --title ""` clears it.
+- **Explain the obligation.** `--description` adds optional detail. An empty description on update clears it.
+- **Choose visibility.** Creation defaults to `--visibility internal`. Selecting `internal` clears the client lead;
+  `--visibility client` requires `--client-lead-days` and the store's internal lead. Updates preserve the current choice
+  unless visibility or the lead is changed explicitly.
 - **Lead times are visibility.** `--internal-lead-days` warns the firm. `--client-lead-days` is the only way a client
   ever sees a deadline: with it unset, the date stays internal on the matter page and in every reminder. The internal
   lead is never shorter than the client lead.
