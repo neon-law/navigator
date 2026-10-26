@@ -20,11 +20,14 @@
 #   alignment work that's deferred).
 # - `networking.gke.io/managed-certificates` — comma-separated list
 #   of `ManagedCertificate` CRs that Google's cert-issuer flips to
-#   Active once DNS resolves to this LB's IP. One cert per domain
-#   family (the default public host, each additional live brand,
-#   the workflows host, and the Forgejo host) sharing this single LB. `ops ship`
-#   rewrites the annotation so a brand added to the registry gets
-#   its own certificate attached here.
+#   Active once DNS resolves to this LB's IP: the default public host,
+#   the workflows host, the Forgejo host, and the Firm certificate
+#   (`navigator-firm`) carrying every brand host of this environment,
+#   all sharing this single LB. Brands not yet moved onto the Firm
+#   certificate keep their own. `ops ship` rewrites the annotation from
+#   the brand registry. A target HTTPS proxy accepts at most 15 of these
+#   certificates, a fixed limit rather than a quota:
+#   https://docs.cloud.google.com/load-balancing/docs/ssl-certificates
 # - `networking.gke.io/v1beta1.FrontendConfig` — opts the LB into
 #   HTTP->HTTPS redirect with a 308 once the cert is provisioned.
 # - `cloud.google.com/neg: '{"ingress": true}'` annotation on the

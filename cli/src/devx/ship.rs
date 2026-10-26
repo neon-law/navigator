@@ -422,12 +422,12 @@ where
     substitutions.push(Substitution {
         token: BRAND_MANAGED_CERTIFICATES_TOKEN,
         env: "views::brand::BrandKey",
-        value: brand_managed_certificate_yaml(&namespace, &brand_bindings),
+        value: brand_managed_certificate_yaml(&namespace, &public_host, &brand_bindings),
     });
     substitutions.push(Substitution {
         token: BRAND_CERT_KUSTOMIZE_TOKEN,
         env: "views::brand::BrandKey",
-        value: brand_cert_kustomize_resource(&brand_bindings),
+        value: brand_cert_kustomize_resource(),
     });
     substitutions.push(Substitution {
         token: MANAGED_CERTIFICATES_ANNOTATION_TOKEN,
@@ -988,37 +988,91 @@ fn brand_certificate_name(key: BrandKey) -> String {
     format!("navigator-web-{}", key.as_str())
 }
 
-/// One `ManagedCertificate` document per additional live brand. Each
-/// document lists exactly that family's environment host, so adding or
-/// removing a name reissues only that family's certificate.
-fn brand_managed_certificate_yaml(namespace: &str, bindings: &[AdditionalBrandBinding]) -> String {
-    use std::fmt::Write as _;
-    bindings
-        .iter()
-        .enumerate()
-        .fold(String::new(), |mut documents, (index, binding)| {
-            if index > 0 {
-                documents.push_str("---\n");
-            }
-            let name = brand_certificate_name(binding.key);
-            let _ = write!(
-                documents,
-                "apiVersion: networking.gke.io/v1\n\
-                 kind: ManagedCertificate\n\
-                 metadata:\n  name: {name}\n  namespace: {namespace}\n\
-                 spec:\n  domains:\n    - {}\n",
-                binding.host
-            );
-            documents
-        })
+/// The most Compute Engine SSL certificates one target HTTPS proxy
+/// references. GKE Ingress attaches one per `ManagedCertificate` it names,
+/// and the limit is fixed, not a quota:
+/// <https://docs.cloud.google.com/load-balancing/docs/ssl-certificates>.
+#[cfg(test)]
+const TARGET_PROXY_CERTIFICATE_LIMIT: usize = 15;
+
+/// The one `ManagedCertificate` that carries every brand host of the
+/// environment: the Firm wears every brand, so its storefronts share a
+/// certificate instead of spending a target-proxy slot each.
+const FIRM_CERTIFICATE_NAME: &str = "navigator-firm";
+
+/// Brands served only by the Firm certificate. The rest keep their own
+/// certificate until the Firm certificate is `Active` on every deployment;
+/// GKE recreates a certificate whose domains change, so the safe order is
+/// to attach the new one first and remove the old ones after:
+/// <https://docs.cloud.google.com/kubernetes-engine/docs/how-to/managed-certs>.
+const FIRM_CERTIFICATE_ONLY: &[BrandKey] = &[
+    BrandKey::Abhaya,
+    BrandKey::DeathAndDivorce,
+    BrandKey::GuiebShook,
+];
+
+fn has_own_certificate(key: BrandKey) -> bool {
+    !FIRM_CERTIFICATE_ONLY.contains(&key)
 }
 
-fn brand_cert_kustomize_resource(bindings: &[AdditionalBrandBinding]) -> String {
-    if bindings.is_empty() {
-        String::new()
-    } else {
-        "  - ingress/brand-managed-certificates.yaml\n".to_string()
-    }
+/// Every brand host of `public_host`'s environment: the default brand's
+/// public host, then each other registered brand's.
+fn firm_certificate_hosts(public_host: &str) -> Vec<String> {
+    std::iter::once(public_host.to_string())
+        .chain(
+            additional_brand_hosts(public_host)
+                .into_iter()
+                .map(str::to_string),
+        )
+        .collect()
+}
+
+fn managed_certificate_document(namespace: &str, name: &str, domains: &[String]) -> String {
+    use std::fmt::Write as _;
+    let domains = domains.iter().fold(String::new(), |mut list, domain| {
+        let _ = writeln!(list, "    - {domain}");
+        list
+    });
+    format!(
+        "apiVersion: networking.gke.io/v1\n\
+         kind: ManagedCertificate\n\
+         metadata:\n  name: {name}\n  namespace: {namespace}\n\
+         spec:\n  domains:\n{domains}"
+    )
+}
+
+/// The Firm certificate, then one `ManagedCertificate` per additional brand
+/// that still has its own. Each per-brand document lists exactly that
+/// family's environment host.
+fn brand_managed_certificate_yaml(
+    namespace: &str,
+    public_host: &str,
+    bindings: &[AdditionalBrandBinding],
+) -> String {
+    std::iter::once(managed_certificate_document(
+        namespace,
+        FIRM_CERTIFICATE_NAME,
+        &firm_certificate_hosts(public_host),
+    ))
+    .chain(
+        bindings
+            .iter()
+            .filter(|binding| has_own_certificate(binding.key))
+            .map(|binding| {
+                managed_certificate_document(
+                    namespace,
+                    &brand_certificate_name(binding.key),
+                    &[binding.host.to_string()],
+                )
+            }),
+    )
+    .collect::<Vec<_>>()
+    .join("---\n")
+}
+
+/// The Firm certificate always exists, so the overlay always lists the file.
+fn brand_cert_kustomize_resource() -> String {
+    "  - ingress/brand-managed-certificates.yaml\n".to_string()
 }
 
 fn managed_certificates_annotation(bindings: &[AdditionalBrandBinding]) -> String {
@@ -1026,10 +1080,12 @@ fn managed_certificates_annotation(bindings: &[AdditionalBrandBinding]) -> Strin
     names.extend(
         bindings
             .iter()
+            .filter(|binding| has_own_certificate(binding.key))
             .map(|binding| brand_certificate_name(binding.key)),
     );
     names.push("navigator-workflows".to_string());
     names.push("navigator-forgejo".to_string());
+    names.push(FIRM_CERTIFICATE_NAME.to_string());
     format!(
         "    networking.gke.io/managed-certificates: {}\n",
         names.join(",")
@@ -6268,9 +6324,14 @@ mod tests {
                 "additional brands must not share the default-brand certificate: {production_host}"
             );
             assert!(
-                brand_certs.contains(&format!("name: {}", brand_certificate_name(*key)))
-                    && brand_certs.contains(&format!("- {production_host}")),
-                "{}'s production host gets its own certificate",
+                brand_certs.contains(&format!("- {production_host}")),
+                "{}'s production host is on a brand certificate",
+                key.as_str(),
+            );
+            assert_eq!(
+                brand_certs.contains(&format!("name: {}", brand_certificate_name(*key))),
+                has_own_certificate(*key),
+                "{}'s own certificate exists only until the Firm certificate replaces it",
                 key.as_str(),
             );
             assert!(
@@ -7635,8 +7696,9 @@ mod tests {
     }
 
     /// The full `networking.gke.io/managed-certificates` annotation ENG-808
-    /// expects: the default brand, every other registered key in registry
-    /// order, then the workflows service — derived from the same
+    /// expects: the default brand, every other registered key that still has
+    /// its own certificate in registry order, the workflows and Forgejo
+    /// services, then the Firm certificate — derived from the same
     /// [`views::brand::BrandKey::ALL`] the render reads, so this drifts with
     /// the registry rather than needing a hand-maintained string.
     fn expected_managed_certificates_annotation() -> String {
@@ -7646,11 +7708,63 @@ mod tests {
                 .iter()
                 .copied()
                 .filter(|key| *key != views::brand::BrandKey::default())
+                .filter(|key| has_own_certificate(*key))
                 .map(brand_certificate_name),
         );
         names.push("navigator-workflows".to_string());
         names.push("navigator-forgejo".to_string());
+        names.push(FIRM_CERTIFICATE_NAME.to_string());
         names.join(",")
+    }
+
+    /// A target HTTPS proxy references at most 15 Compute Engine SSL
+    /// certificates, and GKE Ingress attaches one per `ManagedCertificate`
+    /// it names. Past that the extra certificate is never attached, so
+    /// Google cannot validate it and it sits at `FAILED_NOT_VISIBLE`.
+    #[test]
+    fn the_ingress_attaches_no_more_certificates_than_a_target_proxy_accepts() {
+        for public_host in [
+            "navigator.example.invalid",
+            "staging.navigator.example.invalid",
+        ] {
+            let bindings = additional_brand_bindings(public_host);
+            let annotation = managed_certificates_annotation(&bindings);
+            let names = annotation
+                .trim()
+                .trim_start_matches("networking.gke.io/managed-certificates: ")
+                .split(',')
+                .count();
+            assert!(
+                names <= TARGET_PROXY_CERTIFICATE_LIMIT,
+                "{public_host} attaches {names} certificates"
+            );
+        }
+    }
+
+    /// The Firm certificate lists every brand host the environment serves,
+    /// the default brand's included, and none of the other environment's.
+    #[test]
+    fn the_firm_certificate_carries_every_brand_host_for_its_environment() {
+        let production = firm_certificate_hosts("www.neonlaw.com");
+        let staging = firm_certificate_hosts("staging.neonlaw.com");
+        for key in views::brand::BrandKey::ALL {
+            let www = key.canonical_host();
+            let staging_host = format!("staging.{}", key.apex());
+            assert!(
+                production.iter().any(|host| host == www),
+                "{www} is on the production Firm certificate"
+            );
+            assert!(
+                staging.contains(&staging_host),
+                "{staging_host} is on the staging Firm certificate"
+            );
+            assert!(!production.contains(&staging_host));
+            assert!(!staging.iter().any(|host| host == www));
+        }
+        assert!(
+            production.len() <= 100,
+            "a managed certificate holds at most 100 names"
+        );
     }
 
     /// The Ingress host rule for `host`, as `(path, service, port)` triples.
@@ -7831,9 +7945,24 @@ mod tests {
             )),
             vec!["navigator.example.invalid"]
         );
-        let mut certificate_names = vec!["navigator-web".to_string()];
+        let firm_certificate =
+            manifest_doc(&manifests, "ManagedCertificate", FIRM_CERTIFICATE_NAME);
+        let firm_domains = certificate_domains(&firm_certificate);
+        assert!(firm_domains.contains(&"navigator.example.invalid"));
+        let mut certificate_names = vec![
+            "navigator-web".to_string(),
+            FIRM_CERTIFICATE_NAME.to_string(),
+        ];
         for key in views::brand::BrandKey::ALL {
             if *key == views::brand::BrandKey::default() {
+                continue;
+            }
+            assert!(
+                firm_domains.contains(&key.canonical_host()),
+                "{}'s www host is on the Firm certificate",
+                key.as_str(),
+            );
+            if !has_own_certificate(*key) {
                 continue;
             }
             let name = brand_certificate_name(*key);
