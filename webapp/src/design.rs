@@ -1251,7 +1251,6 @@ fn SiteFooterShowcase() -> Element {
                 // the line a deployed page renders. A local `cargo run` leaves
                 // it unset and the site publishes no version.
                 navigator_version: "26.8.20".to_string(),
-                navigator_href: "https://www.neonlaw.com/navigator".to_string(),
             }
         }
     }

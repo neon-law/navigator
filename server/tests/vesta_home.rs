@@ -199,7 +199,7 @@ async fn vesta_and_lawyer_shook_omit_the_lawyer_shook_trademark_notice() {
         page("staging.lawyershook.com", "/").await,
     ] {
         let footer = html.split("<footer").nth(1).expect("shared footer");
-        assert!(footer.contains("https://www.lawyershook.com"));
+        assert!(footer.contains("https://www.guiebandshook.com"));
         assert!(footer.contains("Everyone deserves access to justice."));
         assert!(!footer.contains("Our family"));
         assert!(!footer.contains("LAWYER SHOOK"));
