@@ -4,7 +4,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Card, Field, FormCard, Heading};
+use crate::components::{Card, Field, FormCard, Heading, Icon, IconName, SocialMarkGlyph};
 use crate::people::ViewerRole;
 
 /// Everything the edit page renders.
@@ -362,7 +362,7 @@ fn social_accounts(view: &BrandsEditView) -> Element {
     rsx! {
         section { id: "brand-social-accounts", aria_label: "Social accounts",
             h2 { "Social accounts" }
-            p { "Connect the accounts this Brand uses to publish and manage social conversations." }
+            p { "Connect accounts to let Navigator publish this Brand’s approved scheduled Posts and manage social conversations. Disconnect an account to stop." }
             div { class: "brand-social-accounts-grid",
                 section { aria_label: "Meta", h3 { "Meta" }
                     p { "Facebook and Instagram share Facebook Login. Save the Page and its linked Instagram professional account, then connect Meta once. Threads requires separate authorization." }
@@ -376,14 +376,46 @@ fn social_accounts(view: &BrandsEditView) -> Element {
     }
 }
 
-fn social_provider(view: &BrandsEditView, provider: &str) -> Element {
+fn social_provider_heading(provider: &str, label: &str) -> Element {
     rsx! {
-                    Card {
-                        header: rsx! { h3 { "{provider}" } },
+                        h3 { class: "brand-social-provider__heading",
+                            match provider {
+                                "youtube" => rsx! { Icon { name: IconName::YouTube } },
+                                "linkedin" => rsx! { Icon { name: IconName::LinkedIn } },
+                                "x" => rsx! { Icon { name: IconName::X } },
+                                _ => rsx! { SocialMarkGlyph { label: label.to_string() } },
+                            }
+                            "{label}"
+                        }
+    }
+}
+
+fn social_provider(view: &BrandsEditView, provider: &str) -> Element {
+    let label = match provider {
+        "facebook" => "Facebook",
+        "instagram" => "Instagram",
+        "threads" => "Threads",
+        "youtube" => "YouTube",
+        "linkedin" => "LinkedIn",
+        "x" => "X",
+        "tiktok" => "TikTok",
+        _ => provider,
+    };
+    let saved = view
+        .social_selections
+        .get(provider)
+        .filter(|id| !id.is_empty());
+    let input_id = format!("provider_account_id-{provider}");
+    rsx! {
+                    section { class: "brand-social-provider", aria_label: "{label}",
+                        {social_provider_heading(provider, label)}
                         for account in view.social_accounts.iter().filter(|account| account.provider == provider) {
                             p { "{account.display_name.as_deref().unwrap_or(&account.provider_account_id)} ({account.status})" }
-                            p { "Permissions: " {account.scopes.join(", ")} }
-                            p { "Authorization expiry: " {account.expires_at.as_deref().unwrap_or("No scheduled expiry")} }
+                            details {
+                                summary { "Authorization details" }
+                                p { "Permissions: " {account.scopes.join(", ")} }
+                                p { "Authorization expiry: " {account.expires_at.as_deref().unwrap_or("No scheduled expiry")} }
+                            }
                             if account.status != "revoked" {
                                 form {
                                     class: "nav-form",
@@ -396,7 +428,6 @@ fn social_provider(view: &BrandsEditView, provider: &str) -> Element {
                             }
                         }
                         if view.social_selections.contains_key(provider) {
-                            p { "Saved selection: " {view.social_selections.get(provider).cloned().unwrap_or_default()} }
                             if !view.social_accounts.iter().any(|account| account.provider == provider && account.status == "connected" && view.social_selections.get(provider).is_some_and(|selection| account.matches_selection(selection))) {
                                 p { "Authorization needed. Connect or reconnect this saved destination." }
                             }
@@ -407,34 +438,27 @@ fn social_provider(view: &BrandsEditView, provider: &str) -> Element {
                             action: format!("/app/admin/brands/{}/social/{provider}/connect", view.key),
                             aria_label: format!("Connect {provider} account"),
                             input { class: "nav-control", r#type: "hidden", name: "_csrf", value: "{view.csrf_token}" }
-                            {Field::text(
-                                match provider {
-                                    "facebook" => "Facebook Page ID for this Brand",
-                                    "instagram" => "Linked Instagram professional account ID",
-                                    _ => "Provider account ID for this Brand",
-                                },
-                                "provider_account_id",
-                                view.social_selections.get(provider).map_or("", String::as_str),
-                            )
-                            .id(format!("provider_account_id-{provider}"))
-                            .required()
-                            .render()}
+                            div { class: "nav-field",
+                                label { class: "nav-label", r#for: "{input_id}",
+                                    if matches!(provider, "x" | "tiktok") { "{label} username" }
+                                    else { "{label} account ID" }
+                                }
+                                input { class: "nav-input", r#type: "text", name: "provider_account_id",
+                                    id: "{input_id}", required: true, readonly: saved.is_some(),
+                                    value: saved.map_or("", String::as_str),
+                                }
+                                if saved.is_some() {
+                                    button { class: "nav-btn nav-btn--secondary", r#type: "button",
+                                        "data-account-update": "{input_id}", aria_controls: "{input_id}",
+                                        aria_pressed: "false", "Update {label} account"
+                                    }
+                                }
+                            }
                             if provider == "x" {
                                 p { "Enter this Brand's X username without @. X publishes text only within a conservative 280-weight budget." }
                             }
                             if provider == "tiktok" {
                                 p { "Enter this Brand's TikTok username without @. TikTok Business access approval and verified video URLs are required." }
-                            }
-                            if matches!(provider, "x" | "tiktok") {
-                                {Field::checkbox(
-                                    "I authorize Navigator to automatically publish this Brand's approved scheduled Posts to this account. Disconnect to stop.",
-                                    "auto_publish",
-                                    "yes",
-                                    false,
-                                )
-                                .id(format!("auto_publish-{provider}"))
-                                .required()
-                                .render()}
                             }
                             if provider == "threads" {
                                 p { "Enter this Brand's exact Threads username without @, or its provider account ID." }
@@ -452,13 +476,15 @@ fn social_provider(view: &BrandsEditView, provider: &str) -> Element {
                                 p { "Enter this Brand's numeric Company Page ID. LinkedIn publishes text only." }
                             }
                             button { class: "nav-btn nav-btn--secondary", r#type: "submit",
+                                "data-account-save": "", hidden: saved.is_some(),
                                 formnovalidate: true,
                                 formaction: format!("/app/admin/brands/{}/social/{provider}/selection", view.key),
                                 "Save {provider} account"
                             }
-                            p { "Save the destination first. Saving does not authorize or publish." }
+                            if saved.is_none() { p { "Save the destination first, then connect. Saving does not authorize or publish." } }
                             if provider != "instagram" {
                                 button { class: "nav-btn nav-btn--secondary", r#type: "submit",
+                                    "data-account-connect": "",
                                     if provider == "facebook" { "Connect/Reconnect Meta" } else { "Connect {provider}" }
                                 }
                             } else { p { "Use Connect/Reconnect Meta after saving the linked Facebook Page." } }
@@ -473,6 +499,7 @@ pub fn brands_edit_body(view: &BrandsEditView) -> Element {
     let firm_name = view.firm_name.clone();
     rsx! {
         document::Title { "{firm_name} | Brands | Edit" }
+        document::Script { src: "/public/js/brand-social-accounts.js", defer: true }
         document::Stylesheet { href: crate::components::THEME_STYLESHEET_HREF }
         document::Stylesheet { href: "{view.tokens_href}" }
         crate::components::AppNavbar {
@@ -568,8 +595,8 @@ mod tests {
         assert!(html.contains("Threads requires separate authorization"));
         assert!(html.contains("Connect linkedin"), "{html}");
         assert!(html.contains("Connect x"), "{html}");
-        assert!(html.contains("name=\"auto_publish\""), "{html}");
-        assert!(html.contains("Disconnect to stop"), "{html}");
+        assert!(!html.contains("name=\"auto_publish\""), "{html}");
+        assert!(html.contains("Disconnect an account to stop"), "{html}");
         assert!(html.contains("pages_manage_posts"), "{html}");
         assert!(html.contains("provider_account_id"), "{html}");
         assert!(
@@ -583,13 +610,12 @@ mod tests {
         assert!(html.contains("Disconnect"), "{html}");
     }
 
-    /// The `x` and `tiktok` connect forms both carry an `auto_publish` consent
-    /// checkbox. Each needs its own id, or both labels target the first box:
-    /// a click on the second form's label checks the first form's consent and
-    /// leaves the second form invalid.
     #[test]
-    fn each_consent_checkbox_has_its_own_id_and_label() {
-        let html = dioxus_ssr::render_element(brands_edit_body(&view(Some(fields()))));
+    fn saved_destinations_are_read_only_with_an_explicit_update_toggle() {
+        let mut view = view(Some(fields()));
+        view.social_selections
+            .insert("youtube".into(), "synthetic-channel".into());
+        let html = dioxus_ssr::render_element(brands_edit_body(&view));
         assert_forms_accessible(&html, "brand social accounts");
         for provider in [
             "facebook",
@@ -601,19 +627,23 @@ mod tests {
             "tiktok",
         ] {
             let id = format!("provider_account_id-{provider}");
-            assert_eq!(html.matches(&format!(r#"id="{id}""#)).count(), 1, "{html}");
-            assert!(html.contains(&format!(r#"for="{id}""#)), "{html}");
+            assert_eq!(html.matches(&format!("id=\"{id}\"")).count(), 1, "{html}");
+            assert!(html.contains(&format!("for=\"{id}\"")), "{html}");
         }
-        for provider in ["x", "tiktok"] {
-            let id = format!("auto_publish-{provider}");
-            assert_eq!(
-                html.matches(&format!(r#"id="{id}""#)).count(),
-                1,
-                "{provider} consent id: {html}"
+        assert!(html.contains("readonly"), "{html}");
+        assert!(
+            html.contains("data-account-update=\"provider_account_id-youtube\""),
+            "{html}"
+        );
+        assert!(html.contains("aria-pressed=\"false\""), "{html}");
+        assert!(!html.contains("Saved selection:"), "{html}");
+        assert!(!html.contains("auto_publish"), "{html}");
+        for label in ["Facebook", "Instagram", "Threads", "TikTok"] {
+            assert!(
+                html.contains(&format!("data-social-mark=\"{label}\"")),
+                "{html}"
             );
-            assert!(html.contains(&format!(r#"for="{id}""#)), "{html}");
         }
-        assert!(!html.contains(r#"id="auto_publish""#), "{html}");
     }
 
     #[test]
