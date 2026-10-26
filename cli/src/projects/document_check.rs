@@ -704,6 +704,7 @@ mod tests {
             size_bytes: Some(100),
             recorded_size: 100,
             sha256_matches: None,
+            docket_name_matches: None,
         };
         let source = IntegrityAsset {
             asset_id: source_id,
@@ -718,6 +719,7 @@ mod tests {
             size_bytes: Some(200),
             recorded_size: 200,
             sha256_matches: None,
+            docket_name_matches: None,
         };
         let message = transcript_source_problem(&transcript, &[transcript.clone(), source])
             .expect("stale transcript is a gate failure");
@@ -744,6 +746,7 @@ mod tests {
             size_bytes: Some(100),
             recorded_size: 100,
             sha256_matches: None,
+            docket_name_matches: None,
         };
         let source = IntegrityAsset {
             asset_id: source_id,
@@ -758,6 +761,7 @@ mod tests {
             size_bytes: Some(200),
             recorded_size: 200,
             sha256_matches: None,
+            docket_name_matches: None,
         };
         assert!(transcript_source_problem(&transcript, std::slice::from_ref(&source)).is_none());
 

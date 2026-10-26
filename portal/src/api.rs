@@ -5063,6 +5063,9 @@ struct IntegrityAsset {
     /// row's sha256.
     #[serde(skip_serializing_if = "Option::is_none")]
     sha256_matches: Option<bool>,
+    /// Only a validation result, never docket content. Present for the lawyer gate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    docket_name_matches: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -5141,6 +5144,9 @@ async fn document_integrity_door(
         .await
         .map_err(ApiError::Asset)?;
         rows.extend(chunk_rows);
+    }
+    if matches!(lens, store::access::ProjectLens::Lawyer) {
+        populate_docket_name_checks(&state, id, &mut rows).await?;
     }
     let elapsed = started.elapsed();
     if elapsed >= INTEGRITY_SLOW_PAGE {
@@ -5226,6 +5232,35 @@ async fn integrity_chains(
     Ok((current_by_slug, version_by_id))
 }
 
+/// Populate only validation outcomes on the existing document metadata projection.
+async fn populate_docket_name_checks(
+    state: &ApiState,
+    id: Uuid,
+    rows: &mut [IntegrityAsset],
+) -> Result<(), ApiError> {
+    let entries = store::cases::docket_for_project(&state.surreal, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    for row in rows {
+        let linked: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.document_asset_id == Some(row.asset_id))
+            .collect();
+        row.docket_name_matches = Some(match linked.as_slice() {
+            [entry] => row.slug.as_deref().is_some_and(|slug| {
+                let ext = std::path::Path::new(slug)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .unwrap_or("pdf");
+                store::cases::filing_name(&entry.entry_number, &entry.title, ext)
+                    .is_ok_and(|expected| expected == slug)
+            }),
+            _ => false,
+        });
+    }
+    Ok(())
+}
+
 /// The integrity row for one asset: its storage presence and size, and with
 /// `deep` whether the stored bytes hash to the row's sha256.
 async fn integrity_row(
@@ -5269,6 +5304,7 @@ async fn integrity_row(
         size_bytes: stored_size,
         recorded_size: asset.byte_size,
         sha256_matches,
+        docket_name_matches: None,
     })
 }
 

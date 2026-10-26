@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 struct Fixture {
     app: Router,
+    state: portal::AppState,
     project_id: Uuid,
     other_project_id: Uuid,
     lawyer_id: Uuid,
@@ -191,7 +192,8 @@ async fn fixture() -> Fixture {
     });
 
     Fixture {
-        app: portal::router(state),
+        app: portal::router(state.clone()),
+        state,
         project_id,
         other_project_id,
         lawyer_id: lawyer.id,
@@ -896,4 +898,145 @@ async fn a_large_matter_on_slow_storage_is_checked_in_bounded_pages() {
     .await;
     assert!(body["assets"].as_array().unwrap().is_empty());
     assert!(body.get("next_offset").is_none());
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one assembled-router scenario covers valid, invalid, absent, ambiguous, and foreign docket links"
+)]
+async fn the_scoped_integrity_projection_checks_docket_names_without_returning_docket_content() {
+    let fixture = fixture().await;
+    let db = &fixture.state.surreal;
+    let cases = store::cases::for_project(db, fixture.project_id)
+        .await
+        .unwrap();
+    let other_cases = store::cases::for_project(db, fixture.other_project_id)
+        .await
+        .unwrap();
+    let mut expected = Vec::new();
+    for (index, slug, links, project) in [
+        (2, "DKT 0002 - Order.pdf", 1, fixture.project_id),
+        (3, "wrong-name.pdf", 1, fixture.project_id),
+        (4, "DKT 0004 - Order.pdf", 0, fixture.project_id),
+        (5, "DKT 0005 - Order.pdf", 2, fixture.project_id),
+        (6, "DKT 0006 - Order.pdf", 1, fixture.other_project_id),
+    ] {
+        let document = store::assets::file_revision(
+            db,
+            &fixture.state.storage,
+            &store::documents::IngestArgs {
+                project_id: project,
+                source: store::documents::source::UPLOAD,
+                filename: slug,
+                kind: "pleading",
+                content_type: "application/pdf",
+                description: None,
+                visibility: store::documents::visibility::INTERNAL,
+                secondary_storage_key: None,
+            },
+            &store::documents::DocumentIdentity {
+                slug: Some(slug),
+                ..Default::default()
+            },
+            format!("synthetic {index}").as_bytes(),
+        )
+        .await
+        .unwrap();
+        let document_id = match document {
+            store::assets::Filed::Revision(document) => document.asset_id,
+            store::assets::Filed::Unchanged { asset_id } => asset_id,
+        };
+        for link in 0..links {
+            store::cases::record_entry(
+                db,
+                &store::cases::NewDocketEntry {
+                    case_id: if project == fixture.project_id {
+                        cases[0].id
+                    } else {
+                        other_cases[0].id
+                    },
+                    entry_number: &format!("{}", index + link * 100),
+                    kind: store::cases::EntryKind::Order,
+                    title: "Order",
+                    party: None,
+                    filed_or_served_on: None,
+                    scheduled_on: None,
+                    supersedes: None,
+                    document_asset_id: Some(document_id),
+                    notation_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        if project == fixture.project_id {
+            expected.push((document_id, index == 2));
+        }
+    }
+    let (_, minted) = mint(&fixture.app).await;
+    let token = minted["token"].as_str().unwrap();
+    let auth = bearer(token);
+    for (authorization, cookie) in [(Some(auth.as_str()), None), (None, Some(token))] {
+        let (status, integrity) = request(
+            &fixture.app,
+            "GET",
+            &format!(
+                "/app/api/projects/{}/documents/integrity",
+                fixture.project_id
+            ),
+            authorization,
+            cookie,
+            Body::empty(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let assets = integrity["assets"].as_array().unwrap();
+        for (id, valid) in &expected {
+            let asset = assets
+                .iter()
+                .find(|asset| asset["asset_id"] == id.to_string())
+                .unwrap();
+            assert_eq!(asset["docket_name_matches"], *valid);
+        }
+        assert_eq!(
+            assets.len(),
+            5,
+            "the foreign Project's document must not be projected"
+        );
+        for asset in assets {
+            for key in ["title", "party", "entry_number", "case_id"] {
+                assert!(
+                    asset.get(key).is_none(),
+                    "docket content {key} must remain off the projection"
+                );
+            }
+        }
+        let rendered = integrity.to_string();
+        assert!(!rendered.contains("Synthetic private docket title"));
+        assert!(!rendered.contains("Synthetic private caption"));
+        let (status, _) = request(
+            &fixture.app,
+            "GET",
+            &format!("/app/api/projects/{}/docket", fixture.project_id),
+            authorization,
+            cookie,
+            Body::empty(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, _) = request(
+            &fixture.app,
+            "GET",
+            &format!(
+                "/app/api/projects/{}/documents/integrity",
+                fixture.other_project_id
+            ),
+            authorization,
+            cookie,
+            Body::empty(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
 }

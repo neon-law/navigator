@@ -495,12 +495,15 @@ skipped as "not a docket of this Project", without naming the case. `--only <doc
 `--skip-pattern <text>` drops notices whose docket text contains the text (for example `transfer of claim`). Both
 repeat. `--dry-run` reads the notices and the checkout and prints the plan; it downloads nothing and contacts no server.
 
-Each document lands at `documents/docket/<case>/di-<n>[-<att>]-<slug>.pdf`, its pointer at `blobs/docket/<case>/`, with
-a suggested kind (`pleading`, `exhibit` for an exhibit attachment, `transcript` for a transcript) that `--kind`
-overrides. A free-look link is single-use, so the bytes are written to disk before anything else; a run that fails after
-the download leaves them there, and the next run uploads them without spending another free look. An entry already filed
-is skipped: the same `(case, entry, attachment)` under `blobs/docket/`, a pointer anywhere whose filename equals the
-notice's original filename (our own filing, uploaded from the drafts lane), or the same bytes.
+Each document lands at `documents/Docket Filings/DKT NNNN - <title>.pdf`, with its Pointer at `blobs/DKT NNNN -
+<title>.pdf.yaml`. The suggested kind is `pleading`, `exhibit` for an exhibit attachment, or `transcript` for a
+transcript; `--kind` overrides it. A free-look link is single-use, so bytes are written to disk before anything else. A
+failed upload leaves them there, and the next run uses them without spending another free look. An entry already filed
+is skipped by its DKT identity or an existing Pointer matching the notice's original filename. Distinct docket numbers
+keep distinct Document Identities even when their bytes match. Each numbered attachment gets its own linked
+Docket Entry.
+`docket add --slug` and `docket link-document` apply the linked entry's DKT name too. `docket renumber --apply`
+reconciles existing names; ambiguous links and colliding names stop it.
 
 ## Existing Project setup
 

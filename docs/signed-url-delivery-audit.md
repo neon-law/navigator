@@ -414,7 +414,8 @@ The document session carries an explicit [`DocumentScope`](../portal/src/session
 - `GET /app/api/projects/{id}/documents/revisions?slug=` is allowed only for that exact Project id and returns revision
   metadata.
 - `GET /app/api/projects/{id}/documents/integrity` is allowed for that same Project id and returns each asset's storage
-  presence and size. `?deep=true` re-hashes the object. The session still cannot download bytes.
+  presence and size. `?deep=true` re-hashes the object. `docket_name_matches` reports whether the slug matches its
+  linked Docket Entry, as a boolean without docket content. The session still cannot download bytes.
 - `GET /app/api/project-surfaces/{id}` is allowed only for that same Project id and returns the nonsecret coordinates:
   code, repository URL, DRI emails, and stored Slack and Notion URLs. Provider credentials stay off the response.
 - Document downloads, signed-download issuance, writes, unrelated routes, and every other Project are refused before a

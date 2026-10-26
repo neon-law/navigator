@@ -828,6 +828,8 @@ pub(crate) struct IntegrityAsset {
     pub(crate) recorded_size: i64,
     #[serde(default)]
     pub(crate) sha256_matches: Option<bool>,
+    #[serde(default)]
+    pub(crate) docket_name_matches: Option<bool>,
 }
 
 /// One server-side external-id finding. Empty until a pointer carries an
@@ -2422,7 +2424,7 @@ async fn retire_document(
 /// change the live identity and move its local pair. A rejected server write
 /// leaves the checkout untouched; a local failure attempts to restore the
 /// live identity to its prior slug.
-async fn reslug_with_local(
+pub(crate) async fn reslug_with_local(
     client: &DocumentClient,
     asset_id: Uuid,
     new_slug: &str,

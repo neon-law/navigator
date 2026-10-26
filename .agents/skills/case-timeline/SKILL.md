@@ -40,8 +40,8 @@ A Docket Entry names the document on file for it. File that document before reco
 *source pending* longer than it has to be:
 
 - A court's CM/ECF notice: `navigator project docket ingest <notice.eml>` files the free-look PDF under
-  `documents/docket/<case>/`, its pointer under `blobs/docket/<case>/`, and records the entry through the same door, one
-  per notice.
+  `documents/Docket Filings/DKT NNNN - <title>.pdf`, its Pointer under `blobs/`, and records a linked Docket Entry for
+  the main document and each numbered attachment.
 - Our own filing, or a document that arrived another way: `navigator project sync` from the checkout, or `navigator site
   document upload --kind filing`, then record the entry below and pass the document's slug (its path under `documents/`)
   as `--slug`.
@@ -57,7 +57,7 @@ navigator project docket add \
   --title "MOTION to Dismiss for Failure to State a Claim" \
   --party "Defendant Example Co." \
   --filed-on 2026-03-05 \
-  --slug docket/9-26-cv-00042/di-29-motion-to-dismiss.pdf
+  --slug motion-to-dismiss.pdf
 ```
 
 - **The entry number is the court's**, as text: `29`, or `29-1` for an attachment. Never renumber.
@@ -68,12 +68,13 @@ navigator project docket add \
   With several, pass `--docket <case number>`. A matter with no case row yet gets one opened from that number on the
   first write, captioned from `matter:`.
 - **`--dry-run` prints the request and writes nothing.** Use it to check the entry before it is recorded.
-- The command prints the stored row. Read it back and confirm the number, kind, title, and date before going further.
+- The command applies the Docket Entry's DKT name to its linked Document and prints the stored row. Read it back and
+  confirm the number, kind, title, and date before going further.
 
 Link a document to an entry recorded before the document was on file:
 
 ```bash
-navigator project docket link-document <entry id> --slug docket/9-26-cv-00042/di-29-motion-to-dismiss.pdf
+navigator project docket link-document <entry id> --slug motion-to-dismiss.pdf
 ```
 
 ## 4. A hearing is a Docket Entry

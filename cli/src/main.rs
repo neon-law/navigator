@@ -1450,12 +1450,15 @@ enum DocketCmd {
         #[command(flatten)]
         host: HostOpt,
     },
-    /// List every older `di-` filing beside the `DKT NNNN - <title>` name its
-    /// docket entry gives it. Renames nothing.
+    /// List every Docket Filings document beside the `DKT NNNN - <title>` name its
+    /// docket entry gives it. Pass --apply to reconcile linked documents.
     ///
     /// A filing no entry links, or two that would share a name, are listed
     /// as UNRESOLVED for a lawyer to settle.
     Renumber {
+        /// Apply names from linked Docket Entries after checking unresolved filings.
+        #[arg(long)]
+        apply: bool,
         /// Project code. Defaults to project.name in navigator.yaml.
         #[arg(long)]
         project: Option<String>,
@@ -4850,8 +4853,13 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             .await
         }
         ProjectsCmd::Docket {
-            action: DocketCmd::Renumber { host, project },
-        } => projects::docket::renumber::run(host.host.as_deref(), project.as_deref()).await,
+            action:
+                DocketCmd::Renumber {
+                    host,
+                    project,
+                    apply,
+                },
+        } => projects::docket::renumber::run(host.host.as_deref(), project.as_deref(), apply).await,
         ProjectsCmd::Docket {
             action: DocketCmd::List { host, project },
         } => projects::docket::entries::list(host.host.as_deref(), project.as_deref()).await,
