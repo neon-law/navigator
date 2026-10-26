@@ -31,22 +31,22 @@ bindgen blobs, `OUT_DIR`).
 
 ## 2. Read the references that apply
 
-Keep clones out of the workspace. Reuse `/tmp/navigator-rust-library` (sparse `library/std` / `core` / `alloc`) and
-rust-lang/book when `.git` is there; otherwise clone them. If a clone cannot run, fetch the matching chapter from
-<https://doc.rust-lang.org/> and say so. Do not invent a standard-library API from memory.
-
-Read only what the file uses (Klabnik/Nichols). Search `library/std` for the same type before a local helper. Then the
-workspace Rust doc and skill, [API Guidelines](https://rust-lang.github.io/api-guidelines/checklist.html), [Style
-Guide](https://doc.rust-lang.org/style-guide/), [Rust by Example](https://doc.rust-lang.org/rust-by-example/), and
-Microsoft's [Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/) (`M-UPSTREAM-GUIDELINES`,
-`M-STATIC-VERIFICATION`: rustc, clippy, and rustfmt review before prose does). A public item with no caller is unused.
+Keep clones out of the workspace. Reuse `/tmp/navigator-rust-library` (sparse `library/std`) and rust-lang/book when
+`.git` is there; otherwise clone them or fetch the chapter from <https://doc.rust-lang.org/>. Do not invent a
+standard-library API from memory. Read only what the file uses (Klabnik/Nichols). Search `library/std` for the same type
+before a local helper. Then the workspace Rust doc and skill, the Foundation learn catalog (Book, [Rust by
+Example](https://doc.rust-lang.org/rust-by-example/), std), [API
+Guidelines](https://rust-lang.github.io/api-guidelines/checklist.html) (C-CONV, C-GETTER, C-CTOR), [Style
+Guide](https://doc.rust-lang.org/style-guide/), and Microsoft's [Pragmatic Rust
+Guidelines](https://microsoft.github.io/rust-guidelines/) (`M-UPSTREAM-GUIDELINES`, `M-STATIC-VERIFICATION`: rustc,
+clippy, and rustfmt review before prose does). A public item with no caller is unused.
 
 ## 3. Compare similar patterns
 
 Identify the file's public types, error enum, traits, Axum extractors, store module, or CLI subcommand. Search the
-workspace for the same names, the `thiserror`/`anyhow` split, extractor order, test layout, and sibling `is_*` getters
-(C-GETTER). Cite at least two siblings as `path:line`. A one-off that duplicates a helper two crates over is a finding;
-a one-off that is the helper is not.
+workspace for the same names, the `thiserror`/`anyhow` split, extractor order, and test layout. Cite at least two
+siblings as `path:line`. A one-off that duplicates a helper two crates over is a finding; a one-off that is the helper
+is not.
 
 ## 4. Answer every review question with evidence
 
@@ -65,14 +65,11 @@ No `unwrap` / `expect` / `panic!` outside `main()` and tests, no `unsafe`, Axum 
 ## 5. Write the report, then maybe edit
 
 Write one report at `/tmp/navigator-random-refactor/<file-stem>-<shortsha>.md`, including a zero-finding result. Keep
-citations. Do not copy client data, legal files, real contact details, production identifiers, or Linear titles.
-
-Then take exactly one of these actions:
+citations. Do not copy client data, legal files, real contact details, production identifiers, or Linear titles. Then
+take exactly one of these actions. A behavior-preserving refactor is still a refactor: keep the covering test green.
 
 - **Zero findings, or findings that need an author or council decision:** stop. Hand the report back.
 - **Clear, small, evidence-backed findings:** smallest present-tense change, covering test first, one file. Run
-  `cargo fmt`, the focused test, clippy with warnings denied, and `cargo run -p cli --quiet -- project gate`. Prefix
-  `cargo test` and `cargo clippy` with `rtk` for compact output.
+  `cargo fmt`, the focused test, clippy `-D warnings`, and `cargo run -p cli --quiet -- project gate`. Prefix `cargo
+  test` and `cargo clippy` with `rtk`.
 - **Teaching-surface drift only:** fix the doc, comment, or test. Do not rewrite workshop spoken words.
-
-A behavior-preserving refactor is still a refactor: keep the covering test green, and do not add chronology.
