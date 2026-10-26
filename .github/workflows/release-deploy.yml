@@ -225,7 +225,10 @@ jobs:
       needs.dedup.result == 'success' &&
       needs.dedup.outputs.already-deployed != 'true' &&
       (needs.resolve-rollback.result == 'success' || needs.resolve-rollback.result == 'skipped')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Standard runner. A ship pulls the signed CLI image and drives `ops ship`
+    # against the cluster; it compiles nothing and builds no image. Measured
+    # at 8.8 to 12.1 minutes on Blacksmith (runs 40161400290, 40323676699).
+    runs-on: ubuntu-24.04
     environment: staging-deploy
     timeout-minutes: 30
     permissions:
@@ -463,7 +466,8 @@ jobs:
     # `if:`, so a failed, cancelled, or skipped `ship-staging` skips this job.
     needs: [preflight, ship-staging]
     if: needs.preflight.outputs.prerelease != 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Standard runner, for the reason `ship-staging` gives.
+    runs-on: ubuntu-24.04
     environment: production-deploy
     timeout-minutes: 30
     permissions:
