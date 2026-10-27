@@ -1048,7 +1048,7 @@ mod tests {
         }
     }
 
-    /// DeleteYourDebt.com, and only DeleteYourDebt.com, credits PandA Law Firm
+    /// DeleteYourDebt.com, and only DeleteYourDebt.com, credits `PandA` Law Firm
     /// with its legal services and links out to that firm.
     #[cfg(feature = "server")]
     #[tokio::test]
