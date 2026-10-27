@@ -214,8 +214,7 @@ async fn prepare(input: &Path, output: &Path) -> Result<()> {
         .persist_noclobber(output)
         .context("save prepared MP4 without replacing an existing file")?;
     println!(
-        "Prepared {}: {bytes} bytes, {}×{}, 30 fps, video budget {rate} bits/s. Inspect video and audio before uploading.",
-        output.display(),
+        "Prepared MP4: {bytes} bytes, {}×{}, 30 fps, video budget {rate} bits/s. Inspect video and audio before uploading.",
         video.width,
         video.height
     );
