@@ -4272,14 +4272,14 @@ async fn brand_social_selection_survives_reload_and_connect_failure() {
             .as_deref(),
         Some(identity.as_str())
     );
-    c.find(Locator::Css(
+    // A keypress sent while the reloaded page hydrates is dropped, as `send_keys` is in
+    // `save_brand_social_selection`; the keyboard path is proven against a static page in
+    // `brand_social_native_handoff_reaches_a_fake_provider_with_click_and_enter`.
+    scroll_and_js_click(
+        &c,
         "form[action='/app/admin/brands/neon/social/facebook/connect'] button[data-account-connect]",
-    ))
-    .await
-    .unwrap()
-    .send_keys("\u{e007}")
-    .await
-    .unwrap();
+    )
+    .await;
     wait_for_text(
         &c,
         "Social account connection is not configured",
