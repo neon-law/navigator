@@ -4032,6 +4032,51 @@ async fn admin_hub_links_to_social_and_calendar_without_owner_keys() {
     c.close().await.unwrap();
 }
 
+/// Fill one Brand social destination and POST its selection in a single script.
+///
+/// `send_keys` and a native WebDriver click drop the value on this Dioxus form.
+/// Waiting for "Social accounts" cannot prove the save landed — that heading is
+/// already on the page before the POST.
+async fn save_brand_social_selection(
+    c: &Client,
+    provider: &str,
+    identity: &str,
+    update_label: &str,
+) {
+    let form = format!("form[action='/app/admin/brands/neon/social/{provider}/connect']");
+    let landed = c
+        .execute(
+            "const form = document.querySelector(arguments[0]); \
+             if (!form) { return null; } \
+             const input = form.querySelector(\"input[name='provider_account_id']\"); \
+             if (!input) { return null; } \
+             const update = form.querySelector('[data-account-update]'); \
+             if (input.readOnly && update) { update.click(); } \
+             const proto = Object.getPrototypeOf(input); \
+             const desc = Object.getOwnPropertyDescriptor(proto, 'value'); \
+             if (desc && desc.set) { desc.set.call(input, arguments[1]); } \
+             else { input.value = arguments[1]; } \
+             input.dispatchEvent(new Event('input', {bubbles: true})); \
+             input.dispatchEvent(new Event('change', {bubbles: true})); \
+             const save = form.querySelector('button[formaction$=\"/selection\"]'); \
+             if (!save) { return null; } \
+             save.click(); \
+             return input.value;",
+            vec![
+                serde_json::Value::String(form),
+                serde_json::Value::String(identity.to_string()),
+            ],
+        )
+        .await
+        .expect("set and save the Brand social destination");
+    assert_eq!(
+        landed.as_str(),
+        Some(identity),
+        "destination did not land before save: {landed:?}"
+    );
+    wait_for_text(c, update_label, Duration::from_secs(10)).await;
+}
+
 /// Provider identities are chosen within one Brand's own connection form.
 #[tokio::test]
 async fn brand_social_connection_form_requires_a_company_page_and_preserves_csrf() {
@@ -4076,17 +4121,7 @@ async fn brand_social_connection_form_requires_a_company_page_and_preserves_csrf
         c.screenshot().await.unwrap(),
     )
     .unwrap();
-    if account.attr("readonly").await.unwrap().is_some() {
-        scroll_and_js_click(
-            &c,
-            "button[data-account-update='provider_account_id-linkedin']",
-        )
-        .await;
-    }
-    account.clear().await.unwrap();
-    account.send_keys("123456789").await.unwrap();
-    scroll_and_js_click(&c, &format!("{form} button[formaction$='/selection']")).await;
-    wait_for_text(&c, "Social accounts", Duration::from_secs(10)).await;
+    save_brand_social_selection(&c, "linkedin", "123456789", "Update LinkedIn account").await;
     let saved = c
         .find(Locator::Css("#provider_account_id-linkedin"))
         .await
@@ -4224,25 +4259,7 @@ async fn brand_social_selection_survives_reload_and_connect_failure() {
     });
     let identity = format!("synthetic-page-{}", Uuid::now_v7());
     let selector = "#provider_account_id-facebook";
-    let field = c.find(Locator::Css(selector)).await.unwrap();
-    if field.attr("readonly").await.unwrap().is_some() {
-        scroll_and_js_click(
-            &c,
-            "button[data-account-update='provider_account_id-facebook']",
-        )
-        .await;
-    }
-    field.clear().await.unwrap();
-    field.send_keys(&identity).await.unwrap();
-    c.find(Locator::Css(
-        "button[formaction='/app/admin/brands/neon/social/facebook/selection']",
-    ))
-    .await
-    .unwrap()
-    .click()
-    .await
-    .unwrap();
-    wait_for_text(&c, "Update Facebook account", Duration::from_secs(10)).await;
+    save_brand_social_selection(&c, "facebook", &identity, "Update Facebook account").await;
     c.refresh().await.unwrap();
     wait_for_text(&c, "Update Facebook account", Duration::from_secs(10)).await;
     assert_eq!(
@@ -4361,12 +4378,23 @@ async fn brand_tiktok_connection_requires_username_without_redundant_checkbox() 
         .find(Locator::Css(&format!("{form} input[type='checkbox']")))
         .await
         .is_err());
-    username.send_keys("synthetic_business").await.unwrap();
-    let valid = format!("return document.querySelector(\"{form}\").checkValidity()");
-    assert_eq!(
-        c.execute(&valid, vec![]).await.unwrap().as_bool(),
-        Some(true)
-    );
+    let valid = c
+        .execute(
+            "const form = document.querySelector(arguments[0]); \
+             if (!form) { return false; } \
+             const input = form.querySelector(\"input[name='provider_account_id']\"); \
+             if (!input) { return false; } \
+             const proto = Object.getPrototypeOf(input); \
+             const desc = Object.getOwnPropertyDescriptor(proto, 'value'); \
+             if (desc && desc.set) { desc.set.call(input, 'synthetic_business'); } \
+             else { input.value = 'synthetic_business'; } \
+             input.dispatchEvent(new Event('input', {bubbles: true})); \
+             return form.checkValidity();",
+            vec![serde_json::Value::String(form.to_string())],
+        )
+        .await
+        .unwrap();
+    assert_eq!(valid.as_bool(), Some(true));
     set_practice_viewport(&c, 1280, 1000).await;
     c.execute(
         &format!("document.querySelector(\"{form}\").scrollIntoView({{block:'center'}})"),
