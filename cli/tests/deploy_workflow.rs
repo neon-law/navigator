@@ -1642,3 +1642,39 @@ fn the_cli_image_uses_the_published_archive_and_joins_the_digest_manifest() {
     assert!(attached.contains("gh release upload"));
     assert!(attached.contains("navigator-image-digests.json"));
 }
+
+/// `publish-service` compiles cold, and a cold `neon-server` compile outlives
+/// the hour the registry token lasts: 26.10.27's ran 68 minutes and its push
+/// got 401 Unauthorized. So the job compiles in `build` without pushing,
+/// refreshes the token, and only then runs `build and push`, which replays the
+/// builder's cached layers and pushes on the fresh token.
+#[test]
+fn publish_service_pushes_on_a_token_minted_after_the_compile() {
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&deploy_workflow()).expect("deploy.yml parses as YAML");
+    let steps = workflow["jobs"]["publish-service"]["steps"]
+        .as_sequence()
+        .expect("publish-service declares steps");
+    let position = |name: &str| {
+        steps
+            .iter()
+            .position(|step| step["name"].as_str() == Some(name))
+            .unwrap_or_else(|| panic!("publish-service must have a `{name}` step"))
+    };
+    let build = position("build");
+    let refresh = position("refresh the registry token");
+    let login = position("log in to the image registry again");
+    let push = position("build and push");
+    assert!(
+        build < refresh && refresh < login && login < push,
+        "publish-service must compile, refresh the token, log in again, then push"
+    );
+    assert_eq!(steps[build]["with"]["push"].as_bool(), Some(false));
+    assert_eq!(steps[push]["with"]["push"].as_bool(), Some(true));
+    for key in ["file", "platforms", "build-args", "cache-from"] {
+        assert_eq!(
+            steps[build]["with"][key], steps[push]["with"][key],
+            "`build` and `build and push` must share `{key}` so the push replays the compile"
+        );
+    }
+}
