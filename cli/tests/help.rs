@@ -580,6 +580,17 @@ fn site_authorities_help_lists_create_and_update() {
     assert_eq!(command_names(&output), vec!["create", "update", "help"]);
 }
 
+#[test]
+fn site_asset_prepare_video_is_explicit_and_local() {
+    let output = unwrapped(&help(&["site", "asset", "prepare-video", "--help"]));
+    assert!(output.contains("<INPUT>"), "{output}");
+    assert!(output.contains("<OUTPUT>"), "{output}");
+    assert!(
+        !output.contains("--host"),
+        "preparation must not publish: {output}"
+    );
+}
+
 /// ENG-909: `navigator site asset upload` takes one or more `--host` values
 /// and a local `ASSET_NAME` path/key, with no bucket argument at all — the
 /// authenticated sibling of `ops assets upload`.

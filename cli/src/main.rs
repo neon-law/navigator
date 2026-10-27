@@ -56,6 +56,7 @@ mod sendgrid_openapi;
 mod site_asset;
 mod surreal_archive;
 mod upload_slug;
+mod video_prepare;
 
 use cli::import;
 use devx::brand::BrandCmd;
@@ -3841,6 +3842,14 @@ enum AuthoritiesAction {
 /// above): one asset, one or more deployments, no bucket credential.
 #[derive(Subcommand)]
 enum AssetAction {
+    /// Prepare a separate upload-ready MP4 locally. Requires ffmpeg and ffprobe.
+    /// Keeps the original, refuses output replacement, and verifies decoding.
+    PrepareVideo {
+        /// Original local MP4, up to 2 GiB and 3–600 seconds.
+        input: PathBuf,
+        /// New MP4 path; inspect the result before uploading it separately.
+        output: PathBuf,
+    },
     /// Upload one local public-safe asset to one or more logged-in hosts,
     /// through `POST /app/api/assets`. `ASSET_NAME` is the local path to
     /// read; when it lives under `server/public/`, its relative path is
@@ -4621,6 +4630,9 @@ fn run() -> ExitCode {
                 )),
             },
             SiteCmd::Asset { action } => match action {
+                AssetAction::PrepareVideo { input, output } => {
+                    runtime().block_on(video_prepare::run_prepare(&input, &output))
+                }
                 AssetAction::Upload {
                     hosts,
                     asset_name,
