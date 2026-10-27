@@ -71,6 +71,21 @@ pub struct LoadContext {
 }
 
 impl LoadContext {
+    /// Fill the caption and roster from a Project's declared Matter Caption.
+    /// A local preview has no live case, service list, or participation rows.
+    pub fn set_matter_caption(&mut self, matter: &word::matter::Matter) {
+        self.caption = super::derive::caption(&[], Some(matter), "");
+        self.roster = super::derive::roster(&super::derive::RosterInputs {
+            matter: Some(matter),
+            client_entity: "",
+            team: &[],
+            items: &[],
+            services: &[],
+            references: &[],
+            client_lens: self.lens == PageLens::Client,
+        });
+    }
+
     /// A context with no data, for a lens.
     #[must_use]
     pub fn empty(lens: PageLens) -> Self {
