@@ -144,6 +144,29 @@ means the asset is already live, not merely accepted — no separate `assets ver
 Authorization is Owner/Admin, the same tier every other site-branding write uses — a public asset is firm-side site
 configuration, not matter-scoped lawyer work.
 
+## Preparing a social video locally
+
+For an original MP4 larger than the 64 MiB site-upload limit, create a separate prepared file before uploading. Install
+FFmpeg with `ffmpeg` and `ffprobe` on `PATH`, then run:
+
+```bash
+navigator site asset prepare-video /path/original.mp4 /path/ready.mp4
+navigator site asset upload --host www.neonlaw.com --key img/example/video.mp4 /path/ready.mp4
+```
+
+Preparation accepts a local MP4 up to 2 GiB and 3–600 seconds. It preserves the original, refuses to replace an existing
+output, and creates an H.264/AAC MP4 at 30 frames per second with fast-start playback. The longest side is limited to
+1920 pixels, preserving orientation without upscaling. Two-pass encoding budgets for audio and container overhead;
+output must fit within 64 MiB and decode successfully before it is saved. Each encoding or decoding process has a
+ten-minute limit. Long videos receive a lower bitrate, so inspect representative frames and listen to the audio before
+uploading. Videos with either side below 360 pixels or nonsquare input pixels are refused. Audio is encoded as AAC when
+the original contains an audio track.
+
+The command prints the prepared size and dimensions. It makes no network requests, uploads nothing, and sends no social
+post. Reuse the prepared file for upload retries. Provider-specific media eligibility, account authorization, caption
+approval, and scheduling still apply after upload. Original-to-derived Asset records and preparation inside the web
+composer are separate features.
+
 ## Adding an image to a presentation or workshop slide
 
 A bucket-lane slide image is complete only when the same file has two homes:

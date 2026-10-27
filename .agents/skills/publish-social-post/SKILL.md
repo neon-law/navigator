@@ -79,8 +79,10 @@ These contracts are grounded in `portal/src/blog_api.rs` (`record`, `prepare`, `
    fallback is optional; agree on that change of workflow before taking control of the user's browser. When the user
    takes over a provider, stop interacting with it and reconcile any submission already made before retrying.
 3. For video, inspect the MP4 with `ffprobe`, preserve the original resolution where practical, and keep the upload
-   at or below 64 MiB. Compare compressed frames with the original and check decoding before uploading under
-   `img/<brand>/`:
+   at or below 64 MiB. Use `navigator site asset prepare-video <original.mp4> <new-output.mp4>` for explicit local
+   preparation with FFmpeg; this preserves the original and verifies the derived MP4 without uploading or sending.
+   Inspect its reported dimensions and bitrate tradeoff. Compare compressed frames with the original and check decoding
+   before uploading under `img/<brand>/`:
 
    ```bash
    navigator site asset upload --host <host> --key img/<brand>/<video>.mp4 /absolute/path/video.mp4
