@@ -73,7 +73,10 @@ the U.S. state and GDPR supplements appear only when the drafter says those laws
 included in the Employee Offer Letter when the work state is California.
 
 When a choice selects one of several bodies, use `{{else if state=value}}` branches and an optional `{{else}}` before
-the closing `{{/if}}`. The first matching branch renders; `{{else}}` renders when no earlier condition matches.
+the closing `{{/if}}`. The first matching branch renders; `{{else}}` renders when no earlier condition matches. For a
+custom choice state, `N115` requires every option in `choices.<role>` to have a branch or an explicit `{{else}}`
+fallback in that conditional. It also rejects branch values absent from the declared options, including when a fallback
+exists. Nested and separate conditionals each need their own coverage.
 
 ```text
 {{#if custom_single_choice__category=first}}First body.

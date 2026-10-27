@@ -231,7 +231,7 @@ trailing backslash — is left alone, which is what a signature block is built f
 | `N112` | **Warning** | A workflow step is allowed but its automation is not built yet. | No |
 | `N113` | Error | Questionnaire state type must be a registered question type. | No |
 | `N114` | Error | A `__for_` child state must follow a role-matched person/entity parent. | No |
-| `N115` | Error | Data paths, iterators, and declared signer roles must resolve against questionnaire state. | No |
+| `N115` | Error | Paths and signer roles resolve; choice branches cover declared options or use a fallback. | No |
 | `N116` | Error | Notation workflow must gate every outbound submission behind lawyer review. | No |
 | `N117` | Error | A `custom_text__*` state the respondent answers must be an allowlisted free-text primitive. | No |
 | `N118` | Error | Questionnaire must be one linear chain from `BEGIN` to `END`. | No |
