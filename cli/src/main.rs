@@ -2831,12 +2831,13 @@ enum OpsCmd {
         #[command(subcommand)]
         action: AssetsAction,
     },
-    /// Name today's UTC `YY.M.D` and write it as the workspace version, or
-    /// fail if that name is not a new release.
+    /// Name the next release and write it as the workspace version.
     ///
-    /// Compares today's date against published tags and delegates the write
-    /// to `ops release version`. A covered date or operational error exits 2.
-    /// Hotfixes and other explicit names use `ops release version --tag`.
+    /// Today's UTC `YY.M.D` until that is published, then the next
+    /// unpublished date's `YY.M.D-rc.N`. Delegates the write to `ops release
+    /// version`. A tag far ahead of the calendar or an operational error
+    /// exits 2. Hotfixes and other explicit names use `ops release version
+    /// --tag`.
     CutRelease {
         /// Git checkout supplying the release tags, workspace files, and commit.
         #[arg(long, default_value = ".")]
@@ -2851,7 +2852,7 @@ enum OpsCmd {
         /// Write the manifest but create no commit.
         #[arg(long)]
         no_commit: bool,
-        /// Print today's tag and write nothing.
+        /// Print the next release's tag and write nothing.
         #[arg(long)]
         dry_run: bool,
     },
@@ -2891,10 +2892,12 @@ enum OpsCmd {
         #[arg(long)]
         sign: bool,
     },
-    /// Probe today's UTC `YY.M.D` against published tags.
+    /// Probe the next release's name against published tags.
     ///
-    /// Prints the bare candidate on stdout when it is newer than every
-    /// release. A covered date prints only a reason on stderr and exits 0.
+    /// Prints today's UTC `YY.M.D` until that is published, then the next
+    /// unpublished date's `YY.M.D-rc.N`. When a tag far ahead of the
+    /// calendar leaves nothing to cut, prints only a reason on stderr and
+    /// exits 0.
     /// `ops cut-release` writes a daily cut; `ops release version --tag`
     /// writes an explicitly named version.
     ReleaseDefaultTag {
