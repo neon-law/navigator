@@ -41,7 +41,7 @@ on:
     - cron: "0 9 * * *"
 
 concurrency:
-  # One cut in flight at a time. `ops cut-release` already refuses a covered
+  # One cut in flight at a time. The probe skips a covered
   # date; this stops a second scheduled run from opening a second PR for a
   # bump the first run has not merged yet.
   group: release-cut
@@ -83,7 +83,13 @@ jobs:
         run: |
           set -euo pipefail
           if cargo run --locked -p cli --quiet -- ops cut-release --dry-run > /tmp/candidate; then
-              echo "tag=$(cat /tmp/candidate)" >> "${GITHUB_OUTPUT}"
+              tag="$(cat /tmp/candidate)"
+              # Once today is published, cut-release names tomorrow's -rc.N.
+              # The train opens daily bumps only; candidates are cut by hand.
+              case "${tag}" in
+                  *-*) echo "::notice::today's release is already published; next would be ${tag}" ;;
+                  *) echo "tag=${tag}" >> "${GITHUB_OUTPUT}" ;;
+              esac
           else
               echo "::notice::no new release for today's date — $(cat /tmp/candidate 2>/dev/null || true)"
           fi

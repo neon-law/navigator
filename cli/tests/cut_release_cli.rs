@@ -1,6 +1,6 @@
 //! `navigator ops cut-release` end-to-end: it names today's UTC `YY.M.D`
-//! and either writes that version or fails when a published release already
-//! covers today. `--dry-run` is the rehearsal — stdout is the tag, nothing
+//! (or, once that is published, the next date's `-rc.N`) and writes it, or
+//! fails when a tag far ahead of the calendar leaves nothing to cut. `--dry-run` is the rehearsal — stdout is the tag, nothing
 //! is written.
 //!
 //! Fixed-date ordering lives in the decision unit tests. CLI smoke tests

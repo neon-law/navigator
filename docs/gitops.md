@@ -502,11 +502,14 @@ runtime environment variable `NAVIGATOR_RELEASE_TAG`.
 is where it is written down — but a version that departs from it publishes just as well, provided it is newer than the
 last one. What the date really bought was uniqueness, and comparing against the tags buys that directly.
 
-**Only the scheduled release job cuts a daily `YY.M.D` release.** Agents cut release candidates (`YY.M.D-rc.N`) with the
-[`cut-release`](../.agents/skills/cut-release/SKILL.md) skill, never a daily version.
+**The default release is today's, then tomorrow's candidate.** Unless the operator names a version, the
+[`cut-release`](../.agents/skills/cut-release/SKILL.md) skill cuts today's UTC `YY.M.D` while it is unpublished, and
+the next date's `YY.M.D-rc.N` once it is. A published `YY.M.D-rc.N` does not take today's name. The scheduled release
+job opens daily bumps only and skips a covered date.
 
-**`ops cut-release` selects today's UTC version and writes the bump.** It compares `YY.M.D` with the release tags
-fetched from `origin` and delegates the write to `ops release version`. A covered date or operational error exits 2.
+**`ops cut-release` selects that version and writes the bump.** It compares the candidate with the release tags fetched
+from `origin` and delegates the write to `ops release version`. A tag far ahead of the calendar or an operational error
+exits 2.
 `--repo` selects the worktree for the tags, root manifest, pins, lockfile, and commit. Relative `--manifest-path` values
 resolve from that worktree's root; the manifest must be its root `Cargo.toml`. Automatic commits require a clean index
 and worktree on a named branch other than `main`.
@@ -516,9 +519,9 @@ cut-release skill](../.agents/skills/cut-release/SKILL.md) supplies the browser/
 version, pins, and lockfile before push. An explicit version, including a hotfix, uses `ops release version --tag` and
 skips the daily probe. `deploy.yml` creates the tag after merge.
 
-**`ops release-default-tag` probes the daily name.** It prints today's `YY.M.D` when the version is newer than every
-published tag. A covered date produces empty stdout, a reason on stderr, and exit 0. `ops release version --tag` writes
-the exact version the operator supplies.
+**`ops release-default-tag` probes the same name.** It prints today's `YY.M.D`, or the next date's `YY.M.D-rc.N`
+once today is published. A tag far ahead of the calendar produces empty stdout, a reason on stderr, and exit 0. `ops
+release version --tag` writes the exact version the operator supplies.
 
 Three shape facts still hold, because they are semver's:
 

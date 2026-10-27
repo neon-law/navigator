@@ -1,7 +1,7 @@
 //! `navigator ops release-default-tag` — the version the `cut-release` skill
 //! should hand to `ops release version --tag` when the operator names none:
-//! today's UTC date under the `YY.M.D` convention, unless a release already
-//! exists that makes today's date no improvement.
+//! today's UTC `YY.M.D` until that is published, then the next unpublished
+//! date's `YY.M.D-rc.N`. [`crate::release::default_tag`] holds the rule.
 //!
 //! `ops release version` itself still derives nothing and still requires
 //! `--tag` — see its module doc for why, and `docs/gitops.md` for the
@@ -11,11 +11,11 @@
 //! acting for one) can still be the one who types `--tag`. Nothing in
 //! `deploy.yml` calls this, and it writes nothing.
 //!
-//! Prints the bare tag on stdout and nothing else when today is releasable,
-//! so a caller can capture it directly: `tag=$(navigator ops
-//! release-default-tag)`. Prints nothing to stdout — only a human-readable
-//! reason on stderr — when today is already covered, so an empty capture
-//! means "nothing to cut" rather than a value to go parse.
+//! Prints the bare tag on stdout and nothing else, so a caller can capture it
+//! directly: `tag=$(navigator ops release-default-tag)`. Prints nothing to
+//! stdout — only a human-readable reason on stderr — when a tag far ahead of
+//! the calendar leaves nothing to cut, so an empty capture means "nothing to
+//! cut" rather than a value to go parse.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -34,8 +34,8 @@ pub fn run(now: DateTime<Utc>, repo: &Path, fetch: bool) -> ExitCode {
         }
         Ok(None) => {
             eprintln!(
-                "navigator: release-default-tag: today's date names nothing new to release — a \
-                 version at or past it is already published; nothing to do"
+                "navigator: release-default-tag: no date within a year names a new release — a \
+                 version past it is already published; nothing to do"
             );
             ExitCode::SUCCESS
         }
@@ -118,23 +118,21 @@ mod tests {
         );
     }
 
-    /// A release already exists for today: nothing is suggested, and it is
-    /// not an error — asking twice in one day is ordinary.
+    /// Today is already released: tomorrow's first candidate is suggested.
     #[test]
-    fn suggests_nothing_when_today_is_already_released() {
+    fn suggests_tomorrows_candidate_when_today_is_already_released() {
         let repo = repo_with_tags(&["26.8.22"]);
         assert_eq!(
             suggest(utc(2026, 8, 22), repo.path(), false).expect("a decision"),
-            None
+            Some("26.8.23-rc.1".to_string())
         );
     }
 
-    /// A LATER version is already released than today's date would name.
-    /// Still not an error: there is nothing today's date would publish that
-    /// is not already superseded.
+    /// A tag far ahead of the calendar leaves nothing to suggest, and that
+    /// is not an error.
     #[test]
-    fn suggests_nothing_when_a_later_version_is_already_released() {
-        let repo = repo_with_tags(&["26.8.23"]);
+    fn suggests_nothing_past_a_far_future_release() {
+        let repo = repo_with_tags(&["99.12.31"]);
         assert_eq!(
             suggest(utc(2026, 8, 22), repo.path(), false).expect("a decision"),
             None
