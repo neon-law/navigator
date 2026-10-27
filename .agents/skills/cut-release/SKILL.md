@@ -38,8 +38,8 @@ next daily release.
    ```
 
    `release version` writes the manifest, sweeps action pins, refreshes `Cargo.lock`, and commits. `release check` must
-   report a new release; "already released" does not qualify. Every pin must name the version. Any failure stops the
-   cut before push.
+   report a new release; "already released" does not qualify. Every pin must name the version. Any failure stops the cut
+   before push.
 5. **Open a ready PR** titled `chore(release): <version>` against `main` with the `automerge` label and the gate
    results, per the [merge gate](../../../docs/gitops.md#merge-gate-integrity-checks-with-auto-merge). Report the PR
    URL, version, and proof once it merges. Leave tagging and publishing to `deploy.yml`. Keep production coordinates out
