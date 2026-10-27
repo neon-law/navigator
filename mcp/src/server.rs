@@ -350,6 +350,8 @@ mod tests {
             "spawn_legal_council",
             "glossary_list",
             "glossary_show",
+            "project_skill_list",
+            "project_skill_show",
         ] {
             assert!(
                 names.contains(&offered),
@@ -357,7 +359,7 @@ mod tests {
             );
         }
 
-        assert_eq!(names.len(), 22, "got {names:?}");
+        assert_eq!(names.len(), 24, "got {names:?}");
         for name in &names {
             assert!(
                 !name.starts_with("aida_"),

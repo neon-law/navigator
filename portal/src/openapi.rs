@@ -4675,6 +4675,14 @@ pub fn documented_operations() -> Vec<(String, String)> {
 /// of that pressure, so it needs a reason a reader can disagree with.
 pub const TOOLS_WITHOUT_AN_API_OPERATION: &[(&str, &str)] = &[
     (
+        "project_skill_list",
+        "No route today. Project Skills are compiled reference data; the CLI and MCP share rules::project_skill_catalog.",
+    ),
+    (
+        "project_skill_show",
+        "No route today. A playbook is read from the same compiled catalog as navigator project skill show.",
+    ),
+    (
         "glossary_list",
         "No route today. The glossary is public reference data compiled into \
          the binary; the `/glossary` page and `navigator glossary list` read \
