@@ -993,3 +993,30 @@ fn docker_context_excludes_private_runtime_files_and_keeps_env_examples() {
         );
     }
 }
+
+/// Rules embeds the Project Skill catalog for both the CLI and MCP tools.
+#[test]
+fn every_containerfile_that_stages_rules_also_copies_project_skills() {
+    let mut checked = 0;
+    for entry in fs::read_dir(images_dir()).unwrap() {
+        let path = entry.unwrap().path();
+        if !path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("Containerfile")
+        {
+            continue;
+        }
+        let body = fs::read_to_string(&path).unwrap();
+        if copies_crate(&body, "rules") {
+            checked += 1;
+            assert!(
+                copies_crate(&body, "skills"),
+                "{} must stage the embedded Project Skill catalog",
+                path.display()
+            );
+        }
+    }
+    assert!(checked > 0);
+}

@@ -10330,6 +10330,7 @@ name = "rules"
 version = "26.10.27-rc.1"
 dependencies = [
  "chrono",
+ "include_dir",
  "semver",
  "serde",
  "serde_yaml",

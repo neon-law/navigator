@@ -100,6 +100,7 @@ pub mod pages;
 pub mod project_blueprints;
 pub mod project_manifest;
 pub mod project_skill;
+pub mod project_skill_catalog;
 pub mod questionnaire;
 pub mod questionnaire_hover;
 pub mod s102;
