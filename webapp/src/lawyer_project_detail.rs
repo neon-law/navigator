@@ -2207,7 +2207,7 @@ mod tests {
         assert!(html.contains(">engagement.pdf<"), "{html}");
         assert!(
             html.contains("Empty"),
-            "the empty matter folder is still listed: {html}"
+            "the empty folder is still listed: {html}"
         );
     }
 }

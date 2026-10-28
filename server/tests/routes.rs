@@ -17885,8 +17885,8 @@ async fn lawyer_project_documents_render_grouped_history_and_one_offs() {
             .await;
 
     assert!(
-        body.contains("agreement-v2.pdf"),
-        "the operative filename renders: {body}"
+        body.contains("documents/Work Product/") && body.contains(">agreement<"),
+        "the chain renders by its path under its documents/ folder: {body}"
     );
     assert!(
         body.contains("2 revisions"),
