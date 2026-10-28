@@ -546,14 +546,13 @@ async fn local_page_draft(root: &Path, draft: Option<&str>) -> webapp::sections:
         tokio::fs::read_to_string(path).await
     }
     .await;
-    match read {
-        Ok(body) => webapp::sections::engagement::page_draft(&body),
-        Err(_) => {
-            eprintln!(
-                "navigator project preview: a declared draft could not be read from the checkout"
-            );
-            PageDraft::Unreadable
-        }
+    if let Ok(body) = read {
+        webapp::sections::engagement::page_draft(&body)
+    } else {
+        eprintln!(
+            "navigator project preview: a declared draft could not be read from the checkout"
+        );
+        PageDraft::Unreadable
     }
 }
 
