@@ -507,6 +507,15 @@ fn HomePageBody(
             // class.
             div { class: "nav-theme",
                 main { class: "holding-page",
+                    if chrome.tokens_href == crate::brand_style::brand_tokens_href("guieb-shook") {
+                        img {
+                            class: "holding-page__logo",
+                            src: "{chrome.logo_href}",
+                            alt: "",
+                            width: "1050",
+                            height: "600",
+                        }
+                    }
                     h1 { class: "holding-page__heading", "{bare.heading}" }
                     if !bare.paragraph.is_empty() {
                         p { class: "holding-page__paragraph", "{bare.paragraph}" }
@@ -1479,6 +1488,36 @@ mod tests {
         let out = statement_only_html();
         assert!(!out.contains("home-service"), "no empty section: {out}");
         assert!(!out.contains("neon-card"), "no empty card: {out}");
+    }
+
+    #[test]
+    fn guieb_holding_page_displays_its_logo_above_the_heading() {
+        fn app() -> Element {
+            rsx! {
+                HomePage {
+                    chrome: PublicChrome {
+                        tokens_href: crate::brand_style::brand_tokens_href("guieb-shook"),
+                        logo_href: "/assets/brand/guieb-shook/logo.svg".to_string(),
+                        ..PublicChrome::default()
+                    },
+                    content: HomeContent {
+                        bare: Some(BareStatement {
+                            heading: "Guieb & Shook".to_string(),
+                            ..BareStatement::default()
+                        }),
+                        ..HomeContent::default()
+                    },
+                }
+            }
+        }
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        let out = dioxus_ssr::render(&dom);
+        let logo = out.find("holding-page__logo").expect("visible logo");
+        let heading = out.find("holding-page__heading").expect("heading");
+        assert!(logo < heading);
+        assert!(out.contains(r#"src="/assets/brand/guieb-shook/logo.svg""#));
+        assert!(!out.contains("<header"));
     }
 
     #[test]

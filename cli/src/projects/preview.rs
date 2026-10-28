@@ -178,6 +178,8 @@ struct LiveDeadline {
     project_id: Uuid,
     #[serde(default)]
     title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
     due_at: String,
     #[serde(default)]
     authority_kind: String,
@@ -202,6 +204,8 @@ struct LiveDeadline {
     inserted_at: String,
     #[serde(default)]
     updated_at: String,
+    #[serde(default)]
+    calendar_sequence: Option<i64>,
 }
 
 impl From<LiveDeadline> for store::project_deadlines::Deadline {
@@ -210,6 +214,7 @@ impl From<LiveDeadline> for store::project_deadlines::Deadline {
             id: row.id,
             project_id: row.project_id,
             title: row.title,
+            description: row.description,
             due_at: row.due_at,
             authority_kind: row.authority_kind,
             authority: row.authority,
@@ -223,6 +228,7 @@ impl From<LiveDeadline> for store::project_deadlines::Deadline {
             replay_key: row.replay_key,
             inserted_at: row.inserted_at,
             updated_at: row.updated_at,
+            calendar_sequence: row.calendar_sequence,
         }
     }
 }
@@ -242,8 +248,8 @@ async fn read_host(host: &ReadOnlyHost, code: &str) -> Result<HostData> {
     let Some(project) = projects.into_iter().find(|project| project.code == code) else {
         return Ok(HostData {
             note: Some(
-                "The host has no live matter for this Project yet, so every section shows its \
-                 empty state."
+                "The host has no live matter for this Project yet. Sections that need live records \
+                 show their empty state; local manifest and document data remain available."
                     .to_string(),
             ),
             ..HostData::default()
@@ -281,6 +287,7 @@ struct LocalDocument {
 struct Snapshot {
     fingerprint: String,
     manifest: Result<Manifest, String>,
+    matter: Option<word::matter::Matter>,
     findings: Vec<PreviewFinding>,
     documents: Vec<LocalDocument>,
     drafts: usize,
@@ -358,6 +365,7 @@ impl Preview {
         };
         Snapshot {
             fingerprint,
+            matter: super::matter::read(&self.root.join(manifest::FILE)).ok(),
             manifest,
             findings,
             documents,
@@ -694,6 +702,11 @@ async fn page(
     let mut cx = LoadContext::empty(lens);
     cx.slug.clone_from(&slug);
     cx.synced_at = format!("{} (working tree)", snapshot.read_at);
+    if let Some(matter) = &snapshot.matter {
+        cx.set_matter_caption(matter);
+        cx.synced_at
+            .push_str("; caption and parties from navigator.yaml");
+    }
     cx.deadlines = matter_page::deadline_section_rows(
         host.map_or(&[][..], |data| data.deadlines.as_slice()),
         chrono::Utc::now(),
@@ -1159,6 +1172,86 @@ mod tests {
             );
         }
         assert_eq!(new_pull_request_url("not a remote", "topic"), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_preview_reads_caption_and_parties_from_the_working_tree() {
+        let host = fake_host().await;
+        let dir = checkout("Case timeline");
+        let original = manifest("Case timeline").replace(
+            "[deadline_board, key_dates_strip, boundary_note, provenance_statement]",
+            "[case_caption, party_roster, deadline_board, boundary_note, provenance_statement]",
+        ).replace(
+            "[key_dates_strip, boundary_note, provenance_statement]",
+            "[case_caption, party_roster, key_dates_strip, boundary_note, provenance_statement]",
+        );
+        let matter = word::matter::Matter {
+            court: vec!["SYNTHETIC SUPERIOR COURT".into()],
+            case_number: "00CV000777".into(),
+            judicial_officer: "Hon. Sample Jurist".into(),
+            department: "12".into(),
+            filed_on: "2026-02-02".into(),
+            parties: vec![
+                word::matter::Party {
+                    name: "Gamma Example".into(),
+                    role: "Plaintiff".into(),
+                },
+                word::matter::Party {
+                    name: "Delta Example".into(),
+                    role: "Defendant".into(),
+                },
+            ],
+            counsel: word::matter::Counsel {
+                name: "Sample Counsel".into(),
+                bar_jurisdiction: "California".into(),
+                bar_number: "000000".into(),
+                address: vec!["1 Example Way".into()],
+                telephone: "Not supplied".into(),
+                email: "counsel@example.com".into(),
+                appears_for: "Plaintiff Gamma Example".into(),
+                ..word::matter::Counsel::default()
+            },
+            ..word::matter::Matter::default()
+        };
+        let with_matter = format!(
+            "{original}{}",
+            serde_yaml::to_string(&serde_json::json!({ "matter": matter })).unwrap()
+        );
+        std::fs::write(dir.path().join("navigator.yaml"), &with_matter).unwrap();
+        let app = preview(dir.path(), &host);
+        let (status, html, _) = get(&app, "/app/projects/acme/timeline").await;
+        assert_eq!(status, StatusCode::OK, "{html}");
+        for value in [
+            "Gamma Example v. Delta Example",
+            "00CV000777",
+            "SYNTHETIC SUPERIOR COURT",
+            "Sample Counsel",
+            "from navigator.yaml",
+        ] {
+            assert!(html.contains(value), "missing {value}: {html}");
+        }
+        assert!(!html.contains("No case is recorded"), "{html}");
+        assert!(!html.contains("No parties are recorded"), "{html}");
+        let (_, client, _) = get(&app, "/app/projects/acme/timeline?lens=client").await;
+        assert!(client.contains("00CV000777"), "{client}");
+        assert!(client.contains("Sample Counsel"), "{client}");
+        host.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&host)
+            .await;
+        let local_only = preview(dir.path(), &host);
+        let (_, html, _) = get(&local_only, "/app/projects/acme/timeline").await;
+        assert!(
+            html.contains("00CV000777"),
+            "no live Project required: {html}"
+        );
+        std::fs::write(dir.path().join("navigator.yaml"), original).unwrap();
+        let (_, html, _) = get(&app, "/app/projects/acme/timeline").await;
+        assert!(!html.contains("00CV000777"), "cleared caption: {html}");
+        assert!(html.contains("No case is recorded"), "{html}");
+        assert_only_reads(&host).await;
     }
 
     /// ENG-1077: an edit to `navigator.yaml` changes the next response, and

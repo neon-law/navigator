@@ -1118,6 +1118,12 @@
   gap: 1.25rem;
 }
 
+.holding-page__logo {
+  display: block;
+  width: min(100%, 24rem);
+  height: auto;
+}
+
 .holding-page__heading {
   margin: 0;
   font-size: clamp(2rem, 5.5vw, 3.25rem);
@@ -1134,8 +1140,9 @@
   text-wrap: pretty;
 }
 
-.holding-page__link {
+.nav-theme a.holding-page__link {
   color: var(--firm-brand-strong);
+  text-decoration-line: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 0.15em;
 }

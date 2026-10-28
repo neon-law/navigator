@@ -117,6 +117,6 @@ fn every_shipped_code_has_an_entry_in_the_gate_docs() {
 /// Pin the exhaustive count so a rule addition or removal is a visible diff here, not a silent
 /// change to how many codes the doc is supposed to cover.
 #[test]
-fn the_shipped_code_count_is_one_hundred_and_eighteen() {
-    assert_eq!(all_shipped_codes().len(), 118);
+fn the_shipped_code_count_is_one_hundred_and_nineteen() {
+    assert_eq!(all_shipped_codes().len(), 119);
 }

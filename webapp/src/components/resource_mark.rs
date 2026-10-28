@@ -23,6 +23,11 @@
 //! marks (Slack, Drive) carry explicit fills and read correctly on either
 //! theme; Notion's is monochrome and takes `currentColor`, so it inverts with
 //! the page instead of vanishing into a dark background.
+//!
+//! The calendar rows open on a plain calendar glyph rather than Google
+//! Calendar's logo: the label already says what the row is, and a hand-drawn
+//! copy of the logo would be the approximation this module refuses. It is
+//! monochrome for the same reason Notion's is.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -37,6 +42,9 @@ pub enum ResourceMark {
     Notion,
     /// Google Drive's tri-colour triangle.
     GoogleDrive,
+    /// A plain monochrome calendar page, for the matter calendar and the
+    /// client's booking link.
+    Calendar,
 }
 
 impl ResourceMark {
@@ -48,6 +56,7 @@ impl ResourceMark {
             Self::Slack => "slack",
             Self::Notion => "notion",
             Self::GoogleDrive => "google-drive",
+            Self::Calendar => "calendar",
         }
     }
 }
@@ -130,6 +139,22 @@ pub fn ResourceMarkGlyph(mark: ResourceMark, #[props(default)] class: String) ->
                 }
             }
         },
+        ResourceMark::Calendar => rsx! {
+            svg {
+                class: "{class}",
+                "data-resource-mark": mark.name(),
+                "viewBox": "0 0 24 24",
+                fill: "none",
+                stroke: "currentColor",
+                "stroke-width": "2",
+                "stroke-linecap": "round",
+                "stroke-linejoin": "round",
+                "aria-hidden": "true",
+                "focusable": "false",
+                rect { x: "3", y: "4", width: "18", height: "17", rx: "2" }
+                path { d: "M3 9h18M8 2v4M16 2v4" }
+            }
+        },
     }
 }
 
@@ -152,6 +177,7 @@ mod tests {
             (ResourceMark::Slack, "slack"),
             (ResourceMark::Notion, "notion"),
             (ResourceMark::GoogleDrive, "google-drive"),
+            (ResourceMark::Calendar, "calendar"),
         ] {
             assert_eq!(mark.name(), name);
         }
@@ -174,12 +200,15 @@ mod tests {
     /// Notion's mark is monochrome, so it must follow the text colour or it
     /// disappears against a dark background.
     #[test]
-    fn the_monochrome_mark_follows_the_text_colour() {
-        let html = render(ResourceMark::Notion);
-        assert!(
-            html.contains("currentColor"),
-            "notion should inherit the text colour: {html}"
-        );
+    fn the_monochrome_marks_follow_the_text_colour() {
+        for mark in [ResourceMark::Notion, ResourceMark::Calendar] {
+            let html = render(mark);
+            assert!(
+                html.contains("currentColor"),
+                "{} should inherit the text colour: {html}",
+                mark.name()
+            );
+        }
     }
 
     /// The glyph is decorative — the row's link text names the service — so it

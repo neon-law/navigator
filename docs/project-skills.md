@@ -16,9 +16,9 @@ kind of legal engagement. Neither catalog reads the other, and pinning a Project
 Every entry lives at `skills/<jurisdiction_code_lowercase>/<practice_area>.md` in this repository — for example
 [`skills/nv/estates.md`](../skills/nv/estates.md) and [`skills/tx/probate.md`](../skills/tx/probate.md), the two seeded
 entries. The directory is compiled into the `navigator` binary at build time with `include_dir!`
-(`cli/src/projects/skill.rs`), the same way Navigator's bundled Notation catalog is compiled in — so `list`, `show`, and
-`use` need no network call and no database connection, and a checkout's gate can never drift against a different catalog
-than the one a Project pins against.
+(`rules/src/project_skill_catalog.rs`), shared by the CLI and MCP tools — so `list`, `show`, and `use` need no network
+call and no database connection, and a checkout's gate can never drift against a different catalog than the one a
+Project pins against.
 
 ## Required frontmatter
 
@@ -57,6 +57,13 @@ navigator project skill show nv estates
 resolved entry's full body. An unresolved pair exits non-zero, naming the catalog entries closest to it by edit distance
 rather than dumping the whole catalog — and never echoes the argument back, so a plain-text operator typo cannot be
 mistaken for the `CodeQL` secrets false positive `cli/src/projects/skill.rs` documents inline.
+
+## Assistant lookups
+
+The Assistant Chat can read the same compiled catalog through `project_skill_list` and `project_skill_show`.
+`project_skill_list` takes no arguments and returns each entry's jurisdiction, practice area, name, and version.
+`project_skill_show` takes `jurisdiction` and `practice_area` and returns the playbook body and its bundled Notation
+codes. These tools only read reference data; pinning a Project Skill uses the CLI.
 
 ## Pinning a Project Skill
 

@@ -101,6 +101,15 @@ pub struct Project {
     /// The Notion page shared with the client, if this matter has one. Optional
     /// in exactly the way [`Self::external_slack_channel_url`] is.
     pub shared_notion_page_url: Option<String>,
+    /// The matter's shared Google Calendar, by its Calendar API id. Firm-side:
+    /// the calendar is shared with the firm-side participants only.
+    #[serde(default)]
+    pub calendar_id: Option<String>,
+    /// Where the client books time: an appointment schedule a lawyer made on
+    /// the Project calendar in Google Calendar, entered by hand because the
+    /// Calendar API cannot create one. Shown to the client; cleared on close.
+    #[serde(default)]
+    pub booking_url: Option<String>,
     pub inserted_at: String,
     pub updated_at: String,
 }
@@ -130,6 +139,8 @@ struct ProjectRow {
     internal_slack_channel_id: Option<String>,
     private_notion_page_url: Option<String>,
     shared_notion_page_url: Option<String>,
+    calendar_id: Option<String>,
+    booking_url: Option<String>,
     inserted_at: String,
     updated_at: String,
 }
@@ -163,6 +174,8 @@ impl ProjectRow {
             internal_slack_channel_id: self.internal_slack_channel_id,
             private_notion_page_url: self.private_notion_page_url,
             shared_notion_page_url: self.shared_notion_page_url,
+            calendar_id: self.calendar_id,
+            booking_url: self.booking_url,
             inserted_at: self.inserted_at,
             updated_at: self.updated_at,
         })
@@ -180,6 +193,7 @@ const PROJECT_SELECT: &str = "id, code, name, status, brand, entity_id, firm_id,
                               internal_slack_channel_url, external_slack_channel_url, \
                               internal_slack_channel_id, \
                               private_notion_page_url, shared_notion_page_url, \
+                              calendar_id, booking_url, \
                               inserted_at, updated_at";
 
 /// Errors from the SurrealDB Project read seam.
@@ -1275,6 +1289,7 @@ pub async fn restore_archived(
                  internal_slack_channel_id = $internal_slack_channel_id, \
                  private_notion_page_url = $private_notion_page_url, \
                  shared_notion_page_url = $shared_notion_page_url, \
+                 calendar_id = $calendar_id, booking_url = $booking_url, \
                  inserted_at = $inserted_at, updated_at = $updated_at RETURN {PROJECT_SELECT}"
             ))
             .bind(("id", record_id(PROJECT_TABLE, project.id)))
@@ -1320,6 +1335,8 @@ pub async fn restore_archived(
                 "shared_notion_page_url",
                 project.shared_notion_page_url.clone(),
             ))
+            .bind(("calendar_id", project.calendar_id.clone()))
+            .bind(("booking_url", project.booking_url.clone()))
             .bind(("inserted_at", project.inserted_at.clone()))
             .bind(("updated_at", project.updated_at.clone()))
     })
@@ -1725,6 +1742,26 @@ pub const RESOURCE_URL_INVALID: &str =
 #[must_use]
 pub fn is_valid_resource_url(url: &str) -> bool {
     is_valid_repository_url(url)
+}
+
+/// Human-readable reason [`is_valid_calendar_id`] refuses a value.
+pub const CALENDAR_ID_INVALID: &str =
+    "A calendar id is the Calendar ID shown in the Google Calendar's settings, not a link.";
+
+/// Whether a value has the shape of a Google Calendar id: one token of at most
+/// 255 characters, letters, digits, and `.`, `_`, `-`, `+`, `@` only.
+///
+/// The id is placed in a Calendar API path and in a `calendar.google.com`
+/// link, so anything that could change the path or the query is refused rather
+/// than escaped. Whether the calendar exists is the provider's answer, not
+/// this one.
+#[must_use]
+pub fn is_valid_calendar_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 255
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '@'))
 }
 
 /// The notation id of the person's **sole open matter**, for auto-routing an
@@ -2330,6 +2367,70 @@ pub async fn set_private_notion_page_url(
     Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await)
 }
 
+/// Record the shared Google Calendar provisioned for a Project. Like the
+/// firm-private Notion page, it is a system-managed coordinate written by
+/// `navigator project setup` before the setup reports success.
+///
+/// Returns `Ok(None)` when the matter no longer exists.
+///
+/// # Errors
+/// [`ProjectCommandError::Invalid`] for a value [`is_valid_calendar_id`]
+/// refuses, or a database error.
+pub async fn set_calendar_id(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+    calendar_id: &str,
+) -> Result<Option<Project>, ProjectCommandError> {
+    let calendar_id = calendar_id.trim();
+    if !is_valid_calendar_id(calendar_id) {
+        return Err(ProjectCommandError::Invalid(CALENDAR_ID_INVALID));
+    }
+    set_optional_column(surreal, project_id, "calendar_id", Some(calendar_id)).await
+}
+
+/// Clear the client's booking link. Closing a matter calls this: a closed
+/// matter takes no new bookings.
+///
+/// Returns `Ok(None)` when the matter no longer exists.
+///
+/// # Errors
+/// Propagates a database error.
+pub async fn clear_booking_url(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+) -> Result<Option<Project>, ProjectCommandError> {
+    set_optional_column(surreal, project_id, "booking_url", None).await
+}
+
+async fn set_optional_column(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+    column: &'static str,
+    value: Option<&str>,
+) -> Result<Option<Project>, ProjectCommandError> {
+    if find_by_id(surreal, project_id)
+        .await
+        .map_err(|error| ProjectCommandError::Db(error.to_string()))?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let mut response = surreal
+        .query(format!(
+            "UPDATE $id SET {column} = $value, updated_at = $updated_at RETURN {PROJECT_SELECT}"
+        ))
+        .bind(("id", record_id(PROJECT_TABLE, project_id)))
+        .bind(("value", value.map(str::to_string)))
+        .bind(("updated_at", chrono::Utc::now().to_rfc3339()))
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+    let updated: Option<ProjectRow> = response
+        .take(0)
+        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await)
+}
+
 /// Request body for updating a matter's **descriptive** fields through the
 /// command boundary — its name, entity, and scope narrative. Deliberately
 /// narrow: it is neither the matter-open path (no conflict check, no repo
@@ -2405,6 +2506,14 @@ pub struct UpdateProjectCommand {
     /// The client-shared Notion page, on the same blank-clears terms.
     #[serde(default)]
     pub shared_notion_page_url: Option<String>,
+    /// The Project's shared Google Calendar id, on the same blank-clears
+    /// terms. Checked by [`is_valid_calendar_id`].
+    #[serde(default)]
+    pub calendar_id: Option<String>,
+    /// The client's booking link, on the same blank-clears terms. Rendered as
+    /// an `href` to the client, so it passes [`is_valid_resource_url`].
+    #[serde(default)]
+    pub booking_url: Option<String>,
 }
 
 /// Set or clear the Project's source repository URL.
@@ -2568,7 +2677,7 @@ pub enum ProjectCommandError {
 /// `SET` clause carries and which parameters are bound — so a new optional
 /// column is one row here instead of two `if` blocks that must agree. `None`
 /// means "leave this column alone"; `Some("")` means "clear it".
-fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 6] {
+fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 8] {
     [
         ("description", input.description.as_ref()),
         (
@@ -2588,6 +2697,8 @@ fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option
             "shared_notion_page_url",
             input.shared_notion_page_url.as_ref(),
         ),
+        ("calendar_id", input.calendar_id.as_ref()),
+        ("booking_url", input.booking_url.as_ref()),
     ]
 }
 
@@ -2597,10 +2708,16 @@ fn validate_resource_links(input: &UpdateProjectCommand) -> Result<(), ProjectCo
         &input.external_slack_channel_url,
         &input.private_notion_page_url,
         &input.shared_notion_page_url,
+        &input.booking_url,
     ];
     for url in links.into_iter().flatten() {
         if !url.trim().is_empty() && !is_valid_resource_url(url) {
             return Err(ProjectCommandError::Invalid(RESOURCE_URL_INVALID));
+        }
+    }
+    if let Some(calendar_id) = &input.calendar_id {
+        if !calendar_id.trim().is_empty() && !is_valid_calendar_id(calendar_id) {
+            return Err(ProjectCommandError::Invalid(CALENDAR_ID_INVALID));
         }
     }
     Ok(())

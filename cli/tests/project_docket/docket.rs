@@ -333,7 +333,35 @@ mod verbs {
             .expect(1)
             .mount(&server)
             .await;
-        let linked = json!({ "id": entry_id, "document_asset_id": document_id });
+        let linked = json!({ "id": entry_id, "document_asset_id": document_id,
+            "entry_number": "12", "title": "MOTION to Dismiss" });
+        let previous_slug = "docket/9-26-cv-00042/di-12-motion.pdf";
+        let target_slug = "DKT 0012 - MOTION to Dismiss.pdf";
+        Mock::given(method("GET"))
+            .and(path(format!("/app/api/projects/{project_id}/documents")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                "id": document_id, "byte_size": 12, "sha256_hex": "synthetic",
+                "filename": "motion.pdf", "kind": "pleading", "visibility": "lawyer",
+                "slug": previous_slug, "inserted_at": "2026-03-04T00:00:00Z"
+            }])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        for dry_run in [true, false] {
+            Mock::given(method("PATCH"))
+                .and(path(format!(
+                    "/app/api/projects/{project_id}/documents/{document_id}"
+                )))
+                .and(body_json(
+                    json!({"slug": target_slug, "reslug": true, "dry_run": dry_run}),
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "previous_slug": previous_slug, "slug": target_slug, "dry_run": dry_run
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
         Mock::given(method("POST"))
             .and(path(format!(
                 "/app/api/projects/{project_id}/docket/{entry_id}/link-document"

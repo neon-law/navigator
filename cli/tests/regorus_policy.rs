@@ -446,9 +446,11 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // + 3 for the client purchase page (`/purchases`): a client reads it and
     //   buys one Offering; firm tiers and anonymous are denied; the rule is
     //   exact = 621.
+    // + 2 for the Project calendar door: an Admin may ensure it and a Client
+    //   may not = 623.
     assert_eq!(
         test_names.len(),
-        621,
+        623,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

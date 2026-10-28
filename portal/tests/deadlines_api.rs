@@ -234,6 +234,7 @@ async fn cancelled_replay_requires_explicit_reopen_on_the_same_project() {
     )
     .await;
     assert_eq!(status, 201, "{created}");
+    assert_eq!(created["calendar_sequence"], 0);
     let id = created["id"].as_str().unwrap();
     let (status, cancelled) = send(
         &fixture.app,
@@ -245,6 +246,7 @@ async fn cancelled_replay_requires_explicit_reopen_on_the_same_project() {
     .await;
     assert_eq!(status, 200, "{cancelled}");
     assert_eq!(cancelled["status"], "cancelled");
+    assert_eq!(cancelled["calendar_sequence"], 1);
     input["due_at"] = json!("2026-12-15T12:00:00Z");
     let (status, refused) = send(
         &fixture.app,
@@ -284,7 +286,9 @@ async fn cancelled_replay_requires_explicit_reopen_on_the_same_project() {
     )
     .await;
     assert_eq!(status, 200, "{reopened}");
+    assert_eq!(reopened["calendar_sequence"], 2);
     let mut expected = created.clone();
+    expected["calendar_sequence"] = json!(2);
     expected["updated_at"] = reopened["updated_at"].clone();
     assert_eq!(reopened, expected);
     let (status, repeated) = send(

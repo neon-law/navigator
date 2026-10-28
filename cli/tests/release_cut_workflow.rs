@@ -68,8 +68,8 @@ fn the_only_trigger_is_a_schedule() {
         assert!(
             !triggers.contains_key(serde_yaml::Value::String(forbidden.into())),
             "release-cut.yml must not carry a `{forbidden}` trigger — a dispatch or a push would \
-             let a run propose a bump nobody scheduled, and `ops cut-release` already refuses to \
-             write a covered date twice"
+             let a run propose a bump nobody scheduled, and the probe already skips a covered \
+             date"
         );
     }
 }
@@ -137,6 +137,11 @@ fn a_covered_date_writes_nothing() {
     assert!(
         cut_text.contains("if cargo run --locked -p cli --quiet -- ops cut-release --dry-run"),
         "the probe's exit code, not its stdout alone, must gate whether the job proceeds to write"
+    );
+    assert!(
+        cut_text.contains("*-*) echo \"::notice::"),
+        "a covered date makes `ops cut-release` name tomorrow's `-rc.N`; the train opens daily \
+         bumps only, so a prerelease candidate must be reported rather than written"
     );
 }
 

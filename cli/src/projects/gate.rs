@@ -317,6 +317,19 @@ async fn check_live_handles(dir: &Path, base: &str, token: &str) -> Result<()> {
         .map(|project| project.id)
         .ok_or_else(|| anyhow!("no live row for the declared Project"))?;
     let live = super::surfaces::get_handles(base, token, project_id).await?;
+    if super::docket::renumber::has_filings(dir)? {
+        let client = remote::DocumentClient::with_credential(
+            base.to_string(),
+            token.to_string(),
+            project_code,
+        )
+        .await?;
+        let integrity = client.integrity(false).await?;
+        let metadata: Vec<_> = integrity.assets.iter().map(|asset| serde_json::json!({
+            "asset_id": asset.asset_id, "slug": asset.slug, "docket_name_matches": asset.docket_name_matches,
+        })).collect();
+        super::docket::renumber::validate_checkout(dir, &metadata)?;
+    }
 
     let mut differing = Vec::new();
     if !manifest.lawyer_dri.as_deref().is_some_and(|value| {
@@ -344,6 +357,14 @@ async fn check_live_handles(dir: &Path, base: &str, token: &str) -> Result<()> {
         live.private_notion_page.as_deref(),
     ) {
         differing.push("private_notion_page");
+    }
+    // Optional: a manifest that names no calendar makes no claim about one.
+    if manifest
+        .calendar_id
+        .as_deref()
+        .is_some_and(|value| Some(value) != live.calendar_id.as_deref())
+    {
+        differing.push("calendar_id");
     }
 
     if differing.is_empty() {
@@ -1194,6 +1215,60 @@ mod tests {
             !message.contains("lawyer_dri") && !message.contains("private_slack_channel"),
             "the error must not name a coordinate that actually matched: {message}"
         );
+    }
+
+    /// A manifest `calendar_id` must name the live Project's calendar; a
+    /// manifest without one makes no claim and passes.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_declared_calendar_must_match_the_live_project() {
+        let project_id = "00000000-0000-0000-0000-000000000001";
+        let base = concat!(
+            "version: 26.9.26\nproject:\n",
+            "  host: staging.neonlaw.com\n  name: acme\n",
+            "  lawyer_dri: lawyer@example.com\n",
+            "  client_dri: client@example.com\n",
+            "  private_slack_channel: https://slack.example.com/private\n",
+            "  private_notion_page: https://notion.example.com/private\n",
+        );
+        let navigator = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "id": project_id, "code": "acme" }
+            ])))
+            .mount(&navigator)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/app/api/project-surfaces/{project_id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": "acme",
+                "lawyer_dri": ["lawyer@example.com"],
+                "client_dri": ["client@example.com"],
+                "private_slack_channel": "https://slack.example.com/private",
+                "private_notion_page": "https://notion.example.com/private",
+                "calendar_id": "c_live@group.calendar.example.com"
+            })))
+            .mount(&navigator)
+            .await;
+
+        for (declared, agrees) in [
+            (None, true),
+            (Some("c_live@group.calendar.example.com"), true),
+            (Some("c_other@group.calendar.example.com"), false),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let manifest = match declared {
+                Some(id) => format!("{base}  calendar_id: {id}\n"),
+                None => base.to_string(),
+            };
+            std::fs::write(dir.path().join("navigator.yaml"), manifest).unwrap();
+            let result = check_live_handles(dir.path(), &navigator.uri(), "local-token").await;
+            match (agrees, result) {
+                (true, Ok(())) => {}
+                (false, Err(error)) => assert!(error.to_string().contains("calendar_id")),
+                (agrees, result) => panic!("{declared:?}: expected {agrees}, got {result:?}"),
+            }
+        }
     }
 
     /// `Y016` lets `private_slack_channel`/`private_notion_page` carry the

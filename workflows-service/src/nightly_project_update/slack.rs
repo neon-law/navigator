@@ -377,6 +377,7 @@ mod tests {
         forge.set_head_commit_committed_at(&project.code, "2026-10-05T12:00:00Z");
         let input = NewDeadline {
             title: None,
+            description: None,
             project_id: project.id,
             due_at: "2026-10-09T17:00:00-07:00".into(),
             authority_kind: "court_rule".into(),

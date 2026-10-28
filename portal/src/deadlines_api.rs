@@ -18,6 +18,7 @@ use crate::api::{ApiError, ApiState, LawyerSession};
 #[serde(deny_unknown_fields)]
 pub(crate) struct CreateDeadlineRequest {
     title: Option<String>,
+    description: Option<String>,
     due_at: String,
     authority_kind: String,
     #[serde(default)]
@@ -38,6 +39,7 @@ pub(crate) struct CreateDeadlineRequest {
 pub(crate) struct UpdateDeadlineRequest {
     /// An empty string clears the title.
     title: Option<String>,
+    description: Option<String>,
     due_at: Option<String>,
     authority_kind: Option<String>,
     authority: Option<String>,
@@ -46,7 +48,16 @@ pub(crate) struct UpdateDeadlineRequest {
     owner_person_id: Option<Option<Uuid>>,
     calendar_role: Option<String>,
     internal_lead_days: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "present_client_lead")]
     client_lead_days: Option<Option<i64>>,
+}
+
+#[allow(clippy::option_option)]
+fn present_client_lead<'de, D>(deserializer: D) -> Result<Option<Option<i64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
 }
 
 async fn require_participant(
@@ -101,6 +112,7 @@ pub(crate) async fn create_deadline(
         &store::project_deadlines::NewDeadline {
             project_id: id,
             title: input.title,
+            description: input.description,
             due_at: input.due_at,
             authority_kind: input.authority_kind,
             authority: input.authority,
@@ -132,6 +144,7 @@ pub(crate) async fn update_deadline(
         deadline_id,
         &store::project_deadlines::DeadlinePatch {
             title: input.title.map(Some),
+            description: input.description.map(Some),
             due_at: input.due_at,
             authority_kind: input.authority_kind,
             authority: input.authority,

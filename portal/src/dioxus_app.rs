@@ -541,6 +541,9 @@ fn bucket_font_head(family: &str, dir_and_stem: &str) -> String {
     )
 }
 
+static GUIEB_SHOOK_HEAD: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| bucket_font_head("EB Garamond", "eb-garamond/EBGaramond"));
+
 static VESTA_HEAD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     two_face_head(
         ("EB Garamond", "eb-garamond/EBGaramond"),
@@ -611,7 +614,7 @@ pub fn font_head(key: views::brand::BrandKey) -> &'static str {
         views::brand::BrandKey::Neon => &GORP_HEAD,
         views::brand::BrandKey::DeleteYourData => &PLUS_JAKARTA_SANS_HEAD,
         views::brand::BrandKey::LawyerShook => &LAWYER_SHOOK_HEAD,
-        views::brand::BrandKey::GuiebShook => &TINOS_HEAD,
+        views::brand::BrandKey::GuiebShook => &GUIEB_SHOOK_HEAD,
         views::brand::BrandKey::Vesta => &VESTA_HEAD,
         views::brand::BrandKey::Misericordia => &MISERICORDIA_HEAD,
         views::brand::BrandKey::Abhaya => &ABHAYA_HEAD,
@@ -4873,6 +4876,16 @@ mod tests {
             ),
             "the reading face must be preloaded: {fragment}",
         );
+    }
+
+    #[test]
+    fn guieb_shook_preloads_its_self_hosted_garamond() {
+        let head = font_head(views::brand::BrandKey::GuiebShook);
+        assert!(head.contains("EBGaramond-Regular.woff2"));
+        assert!(head.contains("EBGaramond-Bold.woff2"));
+        assert!(!head.contains("Tinos"));
+        assert!(!head.contains("googleapis"));
+        assert!(!head.contains("gstatic"));
     }
 
     #[test]

@@ -565,6 +565,8 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
                 drive_folder_id: project.drive_folder_id.clone(),
                 shared_slack_channel_url: project.external_slack_channel_url.clone(),
                 shared_notion_page_url: project.shared_notion_page_url.clone(),
+                calendar_id: project.calendar_id.clone(),
+                booking_url: project.booking_url.clone(),
             },
             role,
         ),
@@ -1298,6 +1300,7 @@ mod render_tests {
                 status: "open".into(),
                 state: "Due soon".into(),
                 overdue: false,
+                ..Default::default()
             }],
             past_deadlines: vec![crate::project_deadlines::DeadlineRow {
                 id: "d2".into(),
@@ -1310,6 +1313,7 @@ mod render_tests {
                 status: "cancelled".into(),
                 state: "Cancelled".into(),
                 overdue: false,
+                ..Default::default()
             }],
             ..base
         });

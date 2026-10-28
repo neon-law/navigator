@@ -1,10 +1,12 @@
-//! `navigator ops cut-release` names today's UTC `YY.M.D`, compares it with
-//! published tags, and writes the workspace version when the name is new.
+//! `navigator ops cut-release` names the next release, compares it with
+//! published tags, and writes the workspace version. The name is today's UTC
+//! `YY.M.D` until that is published, then the next unpublished date's
+//! `YY.M.D-rc.N`; [`crate::release::default_tag`] holds the rule.
 //!
 //! The clock is sampled once at the CLI boundary. The decision uses that date
 //! and the tag list; the writer uses the selected repository's root manifest.
-//! `--dry-run` prints the candidate without writing release files. A covered
-//! date or an operational error exits 2. `ops release-default-tag` is the
+//! `--dry-run` prints the candidate without writing release files. A tag far
+//! ahead of the calendar or an operational error exits 2. `ops release-default-tag` is the
 //! read-only probe whose covered-date result exits 0.
 
 use std::path::{Path, PathBuf};
@@ -15,19 +17,20 @@ use chrono::{DateTime, Utc};
 
 use crate::release_check::{fetch_tags, release_tags};
 
-/// What today's UTC date means against the published tags.
+/// What the next release is called against the published tags.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Decision {
-    /// Today's `YY.M.D` is newer than every published release.
+    /// Newer than every published release: today's `YY.M.D`, or a later
+    /// date's `YY.M.D-rc.N` once today is published.
     Cut(String),
-    /// A version at or past today is already published.
+    /// No date within the lookahead clears the published releases.
     AlreadyCovered {
         today: String,
         published: Option<String>,
     },
 }
 
-/// Decide whether today's UTC date names a release worth writing.
+/// Name the next release, or report that nothing clears the published tags.
 #[must_use]
 pub(crate) fn decide(now: DateTime<Utc>, tags: &[String]) -> Decision {
     let today = crate::release::today_tag(now);
@@ -56,7 +59,7 @@ pub fn run(
             ExitCode::SUCCESS
         }
         Ok(Decision::Cut(tag)) => {
-            println!("navigator: cut-release: today's UTC date names {tag}");
+            println!("navigator: cut-release: the next release is {tag}");
             match workspace_manifest(repo, manifest_path) {
                 Ok(manifest) => crate::release_version::run(&manifest, &tag, no_commit),
                 Err(error) => {
@@ -158,35 +161,30 @@ mod tests {
         );
     }
 
+    /// Once today is published, the cut is tomorrow's next candidate.
     #[test]
-    fn fails_when_today_is_already_published() {
+    fn cuts_tomorrows_candidate_when_today_is_already_published() {
         assert_eq!(
-            decide(utc(2026, 9, 24), &tags(&["26.9.24"])),
-            Decision::AlreadyCovered {
-                today: "26.9.24".to_string(),
-                published: Some("26.9.24".to_string()),
-            }
+            decide(utc(2026, 9, 24), &tags(&["26.9.24", "26.9.25-rc.1"])),
+            Decision::Cut("26.9.25-rc.2".to_string())
         );
     }
 
     #[test]
-    fn fails_when_a_later_version_is_already_published() {
+    fn cuts_a_candidate_past_a_later_published_daily() {
         assert_eq!(
             decide(utc(2026, 9, 24), &tags(&["26.9.25"])),
-            Decision::AlreadyCovered {
-                today: "26.9.24".to_string(),
-                published: Some("26.9.25".to_string()),
-            }
+            Decision::Cut("26.9.26-rc.1".to_string())
         );
     }
 
     #[test]
     fn names_the_highest_published_version_in_the_covered_decision() {
         assert_eq!(
-            decide(utc(2026, 9, 24), &tags(&["26.9.23", "26.9.24"])),
+            decide(utc(2026, 9, 24), &tags(&["26.9.23", "99.12.31"])),
             Decision::AlreadyCovered {
                 today: "26.9.24".to_string(),
-                published: Some("26.9.24".to_string()),
+                published: Some("99.12.31".to_string()),
             }
         );
     }

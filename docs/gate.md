@@ -195,6 +195,7 @@ to resolve it.
 | `S102` | Error | A line could absorb more text from the next line before hitting the limit. | Yes |
 | `S103` | Error | The declared `kind:` must be a recognized document kind, and never a matter page kind. | No |
 | `S104` | Error | A file's declared `kind:` must agree with its notation/event structure. | No |
+| `S105` | Error | Teaching prose must use Pointer, Blob, and Matter Folder consistently with the glossary. | No |
 
 `S102` runs on notation templates as well as prose, because a template renders into an instrument a client signs; the
 rule's own guards hold back the structured YAML. The single exception is a GitHub intake notation under
@@ -230,7 +231,7 @@ trailing backslash — is left alone, which is what a signature block is built f
 | `N112` | **Warning** | A workflow step is allowed but its automation is not built yet. | No |
 | `N113` | Error | Questionnaire state type must be a registered question type. | No |
 | `N114` | Error | A `__for_` child state must follow a role-matched person/entity parent. | No |
-| `N115` | Error | Data paths, iterators, and declared signer roles must resolve against questionnaire state. | No |
+| `N115` | Error | Paths and signer roles resolve; choice branches cover declared options or use a fallback. | No |
 | `N116` | Error | Notation workflow must gate every outbound submission behind lawyer review. | No |
 | `N117` | Error | A `custom_text__*` state the respondent answers must be an allowlisted free-text primitive. | No |
 | `N118` | Error | Questionnaire must be one linear chain from `BEGIN` to `END`. | No |

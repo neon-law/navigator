@@ -221,7 +221,7 @@ async fn the_home_books_consultations_and_retires_business_and_disputes_pages() 
     assert!(!body.contains("Drafting, review, and litigation are priced separately."));
     assert!(body.contains("/public/ferris.svg"));
     assert!(!body.contains("Our family") && !body.contains("A practice of"));
-    assert!(body.contains("https://www.lawyershook.com"));
+    assert!(body.contains("https://www.guiebandshook.com"));
     // The header nav links the fee schedule, which now answers.
     assert!(body.contains("href=\"/services\""), "{body}");
     let services = anon_get(&app, "/services").await;
@@ -2096,19 +2096,13 @@ async fn every_public_page_names_and_links_navigator() {
             .and_then(|rest| rest.split("</p>").next())
             .expect("the Navigator attribution renders");
         assert!(
-            attribution.contains(
-                r#"class="site-footer__release" href="https://www.neonlaw.com/navigator""#
-            ) && attribution.contains(">Neon Law Navigator</a>"),
-            "{uri} links the Navigator name: {attribution}"
+            attribution.contains(r#"href="https://github.com/neon-law/navigator""#),
+            "{uri} links the Navigator repository: {attribution}"
         );
         assert_eq!(
             attribution.matches("<a ").count(),
             1,
             "{uri} has one attribution link: {attribution}"
-        );
-        assert!(
-            !attribution.to_lowercase().contains("github"),
-            "{uri} does not attribute the page to GitHub: {attribution}"
         );
     }
 }

@@ -16,6 +16,10 @@ use crate::components::{Badge, BadgeTone, Empty, FactCard, FactGrid, Panel};
 pub struct DeadlineCard {
     /// What is due; empty for a row recorded without a title.
     pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub visibility: String,
     /// The stored due instant in its own offset.
     pub due: String,
     /// `Hard` when a statute, court rule, court order, or contract binds the
@@ -85,6 +89,8 @@ pub fn DeadlineBoardSection(rows: Vec<DeadlineCard>) -> Element {
                             thead {
                                 tr {
                                     th { scope: "col", "Deadline" }
+                                    th { scope: "col", "Description" }
+                                    th { scope: "col", "Visibility" }
                                     th { scope: "col", "Due" }
                                     th { scope: "col", "Binding" }
                                     th { scope: "col", "Authority" }
@@ -102,6 +108,8 @@ pub fn DeadlineBoardSection(rows: Vec<DeadlineCard>) -> Element {
                                                 "{row.title}"
                                             }
                                         }
+                                        td { "{row.description}" }
+                                        td { "{row.visibility}" }
                                         td { "{row.due}" }
                                         td {
                                             Badge {
@@ -223,6 +231,8 @@ mod tests {
     fn the_deadline_board_shows_binding_authority_and_state() {
         let html = render(SectionView::DeadlineBoard(vec![DeadlineCard {
             title: "Opposition to the motion".to_string(),
+            description: "Synthetic description".to_string(),
+            visibility: "Internal".to_string(),
             due: "2026-11-02 17:00 -08:00".to_string(),
             binding: "Hard".to_string(),
             authority: "Synthetic order setting briefing".to_string(),
@@ -232,6 +242,8 @@ mod tests {
         }]));
         for text in [
             "Opposition to the motion",
+            "Synthetic description",
+            "Internal",
             "2026-11-02 17:00 -08:00",
             "data-binding=\"Hard\"",
             "Synthetic order setting briefing",

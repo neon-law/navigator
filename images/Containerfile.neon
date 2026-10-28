@@ -109,6 +109,7 @@ RUN cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked \
     && wasm-bindgen --version
 
 COPY rules             rules
+COPY skills            skills
 COPY store             store
 COPY repos             repos
 COPY import            import

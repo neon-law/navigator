@@ -43,64 +43,7 @@ fn text(row: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// `4` becomes `0004` and `29-1` becomes `0029-1`: the leading digits are
-/// zero-padded to four and an attachment suffix is kept as the court prints it.
-fn dkt_number(entry_number: &str) -> Result<String, String> {
-    let (lead, suffix) = match entry_number.split_once('-') {
-        Some((lead, suffix)) => (lead, Some(suffix)),
-        None => (entry_number, None),
-    };
-    if lead.is_empty() || !lead.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(format!(
-            "entry_number `{entry_number}` does not start with digits"
-        ));
-    }
-    Ok(match suffix {
-        Some(suffix) => format!("{lead:0>4}-{suffix}"),
-        None => format!("{lead:0>4}"),
-    })
-}
-
-/// Minimal path-safety: each of `/ \ : * ? " < > |` and every control
-/// character becomes `-`, runs of whitespace collapse to one space, and
-/// leading or trailing dots and spaces are dropped. An empty result reads
-/// `Untitled`. Nothing else about the title changes; the entry's own `title`
-/// field in the YAML stays verbatim.
-fn safe_title(title: &str) -> String {
-    let replaced: String = title
-        .chars()
-        .map(|c| {
-            if c.is_control() || "/\\:*?\"<>|".contains(c) {
-                '-'
-            } else {
-                c
-            }
-        })
-        .collect();
-    let collapsed = replaced.split_whitespace().collect::<Vec<_>>().join(" ");
-    let trimmed = collapsed.trim_matches(|c| c == '.' || c == ' ');
-    if trimmed.is_empty() {
-        "Untitled".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// The longest title, in characters, a filing name carries. Four bytes per
-/// character plus `DKT NNNN-NN - ` and an extension stay under a 255-byte
-/// file name.
-const TITLE_MAX_CHARS: usize = 120;
-
-/// `DKT NNNN[-att] - <title>.<ext>`: the name of a Docket Filings document.
-/// The title is [`safe_title`]d (so `:` and `/`, which macOS forbids in a
-/// file name, read `-`) and cut to [`TITLE_MAX_CHARS`] characters.
-pub(crate) fn filing_name(entry_number: &str, title: &str, ext: &str) -> Result<String, String> {
-    let number = dkt_number(entry_number.trim())?;
-    let safe = safe_title(title);
-    let cut: String = safe.chars().take(TITLE_MAX_CHARS).collect();
-    let cut = cut.trim_end_matches(['.', ' ']);
-    Ok(format!("DKT {number} - {cut}.{ext}"))
-}
+pub(crate) use store::cases::filing_name;
 
 /// The `(entry number, attachment)` a `DKT NNNN[-att] - …` file name names,
 /// with the entry number's leading zeros dropped (`0029` reads `29`).
@@ -124,8 +67,8 @@ pub fn render(row: &Value) -> Result<Record, String> {
     let entry_number = text(row, "entry_number").ok_or("entry has no entry_number")?;
     let title = text(row, "title").ok_or("entry has no title")?;
     let kind = text(row, "kind").ok_or("entry has no kind")?;
-    let number = dkt_number(&entry_number)?;
-    let file_name = format!("DKT {number} - {}.yaml", safe_title(&title));
+    let file_name =
+        filing_name(&entry_number, &title, "yaml").map_err(|error| error.to_string())?;
     let fields = Fields {
         number: entry_number,
         kind,
@@ -235,6 +178,8 @@ mod tests {
             "DKT 0029-1 - Exhibit A- Supply-Agreement.pdf"
         );
         assert!(filing_name("x", "t", "pdf").is_err());
+        assert!(filing_name("4-../../other", "t", "pdf").is_err());
+        assert!(filing_name("4-", "t", "pdf").is_err());
     }
 
     #[test]
@@ -242,6 +187,8 @@ mod tests {
         let name = filing_name("1", &"é".repeat(300), "pdf").unwrap();
         assert!(name.len() <= 255, "{}", name.len());
         assert!(name.contains(".pdf") && name.len() <= 255);
+        let name = filing_name("1", &"🗂".repeat(300), "pdf").unwrap();
+        assert!(name.len() <= 255, "{name}");
     }
 
     #[test]
@@ -260,8 +207,14 @@ mod tests {
 
     #[test]
     fn a_title_with_nothing_safe_reads_untitled() {
-        assert_eq!(safe_title("?*:"), "---");
-        assert_eq!(safe_title(" . "), "Untitled");
+        assert_eq!(
+            filing_name("1", "?*:", "pdf").unwrap(),
+            "DKT 0001 - ---.pdf"
+        );
+        assert_eq!(
+            filing_name("1", " . ", "pdf").unwrap(),
+            "DKT 0001 - Untitled.pdf"
+        );
     }
 
     #[test]

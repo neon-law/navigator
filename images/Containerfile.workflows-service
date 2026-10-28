@@ -46,6 +46,7 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 RUN rustup target add "$(cat /tmp/rust-target)"
 COPY rules             rules
+COPY skills            skills
 COPY store             store
 COPY repos             repos
 COPY import            import

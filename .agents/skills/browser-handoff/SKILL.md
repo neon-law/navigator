@@ -72,4 +72,4 @@ confirm the new revision is the operative row, marked `*`:
 navigator site document log blobs/<name>.pdf.yaml
 ```
 
-That table, not the upload's exit code, is the proof the file landed. Commit only the pointer YAML under `blobs/`.
+That table, not the upload's exit code, is the proof the file landed. Commit only the Pointer under `blobs/`.

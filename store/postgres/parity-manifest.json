@@ -1312,7 +1312,9 @@
         "youtube_caption": "option<string>"
       },
       "project": {
+        "booking_url": "option<string>",
         "brand": "option<string>",
+        "calendar_id": "option<string>",
         "closed_at": "option<string>",
         "closure_reason": "option<string>",
         "code": "string",
@@ -1339,7 +1341,9 @@
         "authority": "string",
         "authority_kind": "string",
         "calendar_role": "string",
+        "calendar_sequence": "option<int>",
         "client_lead_days": "option<int>",
+        "description": "option<string>",
         "due_at": "string",
         "id": "record",
         "inserted_at": "string",
@@ -3791,7 +3795,9 @@
       },
       "project": {
         "columns": {
+          "booking_url": "TEXT",
           "brand": "TEXT",
+          "calendar_id": "TEXT",
           "closed_at": "TEXT",
           "closure_reason": "TEXT",
           "code": "TEXT",
@@ -3943,7 +3949,9 @@
           "authority": "TEXT",
           "authority_kind": "TEXT",
           "calendar_role": "TEXT",
+          "calendar_sequence": "BIGINT",
           "client_lead_days": "BIGINT",
+          "description": "TEXT",
           "due_at": "TIMESTAMPTZ",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",

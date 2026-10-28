@@ -275,7 +275,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
     assert!(setup.contains("--all"));
     assert!(setup.contains("--json"));
     assert!(
-        setup.contains("Complete an existing Project's Drive, GitHub, Slack, and Notion setup.")
+        setup.contains("Complete an existing Project's Drive, GitHub, Slack, Notion, and shared")
     );
     let set = unwrapped(&help(&["project", "set", "--help"]));
     assert!(set.contains("live"));
@@ -578,6 +578,17 @@ fn site_authorities_help_lists_create_and_update() {
     let output = help(&["site", "authorities", "--help"]);
 
     assert_eq!(command_names(&output), vec!["create", "update", "help"]);
+}
+
+#[test]
+fn site_asset_prepare_video_is_explicit_and_local() {
+    let output = unwrapped(&help(&["site", "asset", "prepare-video", "--help"]));
+    assert!(output.contains("<INPUT>"), "{output}");
+    assert!(output.contains("<OUTPUT>"), "{output}");
+    assert!(
+        !output.contains("--host"),
+        "preparation must not publish: {output}"
+    );
 }
 
 /// ENG-909: `navigator site asset upload` takes one or more `--host` values

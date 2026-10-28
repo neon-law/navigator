@@ -76,6 +76,7 @@ pub use acroform::{
 pub use certificate::{render_certificate, CertificateParams};
 pub use format::{
     render_document, render_document_with_options, Closing, LetterBlocks, Letterhead, OutputFormat,
+    PREVIEW_LABEL, PRIVILEGED_LABEL,
 };
 pub use markdown::to_typst;
 pub use passage::{
@@ -146,6 +147,9 @@ pub struct RenderOptions {
     /// A preview: stamp every page "PREVIEW, NOT FOR FILING" so it can
     /// never be mistaken for, or filed as, a final document.
     pub preview: bool,
+    /// Privileged work product: mark every page "PRIVILEGED AND
+    /// CONFIDENTIAL", whatever the body itself says.
+    pub privileged: bool,
 }
 
 impl Default for RenderOptions {
@@ -153,6 +157,7 @@ impl Default for RenderOptions {
         Self {
             creation_timestamp: DateTime::<Utc>::UNIX_EPOCH,
             preview: false,
+            privileged: false,
         }
     }
 }

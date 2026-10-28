@@ -433,9 +433,16 @@ fn a_failed_cli_build_pages_engineering() {
 fn releases_build_and_attach_a_linux_cli_archive() {
     let workflow = deploy_workflow();
 
+    // A standard GitHub-hosted runner: one release compile with no linked test
+    // set fits its disk, the way the macOS leg already does.
+    assert_eq!(
+        deploy_job("release-cli-build-linux")["runs-on"].as_str(),
+        Some("ubuntu-24.04"),
+        "the Linux CLI archive builds on the standard ubuntu-24.04 runner"
+    );
+
     for required in [
         "release-cli-build-linux:",
-        "runs-on: blacksmith-4vcpu-ubuntu-2404",
         "install -m 0755 target/release/navigator dist/navigator-linux/navigator",
         "install -m 0644 LICENSE dist/navigator-linux/LICENSE",
         "-C dist/navigator-linux navigator LICENSE",

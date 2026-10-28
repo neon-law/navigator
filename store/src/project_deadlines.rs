@@ -30,6 +30,7 @@ pub struct Deadline {
     pub project_id: Uuid,
     /// A short name for what is due; rows written before titles existed have none.
     pub title: Option<String>,
+    pub description: Option<String>,
     pub due_at: String,
     pub authority_kind: String,
     pub authority: String,
@@ -43,6 +44,8 @@ pub struct Deadline {
     pub replay_key: Option<String>,
     pub inserted_at: String,
     pub updated_at: String,
+    /// Monotonic RFC 5545 revision; absent on historical rows.
+    pub calendar_sequence: Option<i64>,
 }
 
 #[derive(SurrealValue)]
@@ -50,6 +53,7 @@ struct DeadlineRow {
     id: surrealdb::types::RecordId,
     project_id: surrealdb::types::RecordId,
     title: Option<String>,
+    description: Option<String>,
     due_at: String,
     authority_kind: String,
     authority: String,
@@ -63,6 +67,7 @@ struct DeadlineRow {
     replay_key: Option<String>,
     inserted_at: String,
     updated_at: String,
+    calendar_sequence: Option<i64>,
 }
 
 impl DeadlineRow {
@@ -71,6 +76,7 @@ impl DeadlineRow {
             id: record_uuid(&self.id)?,
             project_id: record_uuid(&self.project_id)?,
             title: self.title,
+            description: self.description,
             due_at: self.due_at,
             authority_kind: self.authority_kind,
             authority: self.authority,
@@ -84,13 +90,15 @@ impl DeadlineRow {
             replay_key: self.replay_key,
             inserted_at: self.inserted_at,
             updated_at: self.updated_at,
+            calendar_sequence: self.calendar_sequence,
         })
     }
 }
 
-const SELECT: &str = "id, project_id, title, due_at, authority_kind, authority, source, \
+const SELECT: &str =
+    "id, project_id, title, description, due_at, authority_kind, authority, source, \
      source_document_id, owner_person_id, status, calendar_role, internal_lead_days, \
-     client_lead_days, replay_key, inserted_at, updated_at";
+     client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence";
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeadlineError {
@@ -108,6 +116,7 @@ pub enum DeadlineError {
 pub struct NewDeadline {
     pub project_id: Uuid,
     pub title: Option<String>,
+    pub description: Option<String>,
     pub due_at: String,
     pub authority_kind: String,
     pub authority: String,
@@ -124,6 +133,7 @@ pub struct NewDeadline {
 pub struct DeadlinePatch {
     /// `Some(None)` clears the title.
     pub title: Option<Option<String>>,
+    pub description: Option<Option<String>>,
     pub due_at: Option<String>,
     pub authority_kind: Option<String>,
     pub authority: Option<String>,
@@ -137,6 +147,7 @@ pub struct DeadlinePatch {
 
 struct Normalized {
     title: Option<String>,
+    description: Option<String>,
     due_at: String,
     authority_kind: String,
     authority: String,
@@ -150,6 +161,7 @@ struct Normalized {
 #[derive(Clone, Copy)]
 struct DeadlineInput<'a> {
     title: Option<&'a str>,
+    description: Option<&'a str>,
     due_at: &'a str,
     authority_kind: &'a str,
     authority: &'a str,
@@ -163,6 +175,7 @@ struct DeadlineInput<'a> {
 fn normalize(input: &DeadlineInput<'_>) -> Result<Normalized, DeadlineError> {
     let DeadlineInput {
         title,
+        description,
         due_at,
         authority_kind,
         authority,
@@ -236,6 +249,10 @@ fn normalize(input: &DeadlineInput<'_>) -> Result<Normalized, DeadlineError> {
     let replay_key = replay_key.map(str::trim).filter(|key| !key.is_empty());
     Ok(Normalized {
         title: title.map(str::to_string),
+        description: description
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
         due_at,
         authority_kind: authority_kind.to_string(),
         authority,
@@ -363,17 +380,20 @@ async fn persist(
     let now = chrono::Utc::now().to_rfc3339();
     let mut response = surreal
         .query(format!(
-            "UPSERT $id SET project_id = $project_id, title = $title, due_at = $due_at, \
+            "UPSERT $id SET project_id = $project_id, title = $title, description = $description, due_at = $due_at, \
              authority_kind = $authority_kind, authority = $authority, source = $source, \
              source_document_id = $source_document_id, owner_person_id = $owner_person_id, \
              status = $status, calendar_role = $calendar_role, \
              internal_lead_days = $internal_lead_days, client_lead_days = $client_lead_days, \
-             replay_key = $replay_key, inserted_at = $inserted_at, updated_at = $now \
+             replay_key = $replay_key, calendar_sequence = IF updated_at IS NONE THEN 0 ELSE \
+             (calendar_sequence ?? math::max([0, time::unix(<datetime>updated_at)])) + 1 END, \
+             inserted_at = $inserted_at, updated_at = $now \
              RETURN {SELECT}"
         ))
         .bind(("id", record_id("project_deadlines", id)))
         .bind(("project_id", record_id("project", project_id)))
         .bind(("title", normalized.title.clone()))
+        .bind(("description", normalized.description.clone()))
         .bind(("due_at", normalized.due_at.clone()))
         .bind(("authority_kind", normalized.authority_kind.clone()))
         .bind(("authority", normalized.authority.clone()))
@@ -414,6 +434,7 @@ async fn persist(
 pub async fn create(surreal: &SurrealDb, new: &NewDeadline) -> Result<Deadline, DeadlineError> {
     let normalized = normalize(&DeadlineInput {
         title: new.title.as_deref(),
+        description: new.description.as_deref(),
         due_at: &new.due_at,
         authority_kind: &new.authority_kind,
         authority: &new.authority,
@@ -480,6 +501,7 @@ pub async fn update(
         .await?
         .ok_or(DeadlineError::NotFound)?;
     let title = patch.title.clone().unwrap_or(existing.title);
+    let description = patch.description.clone().unwrap_or(existing.description);
     let due_at = patch.due_at.clone().unwrap_or(existing.due_at);
     let authority_kind = patch
         .authority_kind
@@ -501,6 +523,7 @@ pub async fn update(
     let owner_person_id = patch.owner_person_id.unwrap_or(existing.owner_person_id);
     let normalized = normalize(&DeadlineInput {
         title: title.as_deref(),
+        description: description.as_deref(),
         due_at: &due_at,
         authority_kind: &authority_kind,
         authority: &authority,
@@ -549,6 +572,7 @@ async fn transition(
     }
     let normalized = normalize(&DeadlineInput {
         title: existing.title.as_deref(),
+        description: existing.description.as_deref(),
         due_at: &existing.due_at,
         authority_kind: &existing.authority_kind,
         authority: &existing.authority,
@@ -609,6 +633,7 @@ mod tests {
         NewDeadline {
             project_id,
             title: None,
+            description: None,
             due_at: "2026-11-02T17:00:00-08:00".into(),
             authority_kind: "statute".into(),
             authority: "15 U.S.C. § 1681i(a)(1)".into(),
@@ -760,6 +785,7 @@ mod tests {
         let reopened = reopen(&surreal, project_id, created.id).await.unwrap();
         let mut expected = created.clone();
         expected.updated_at = reopened.updated_at.clone();
+        expected.calendar_sequence = Some(2);
         assert_eq!(reopened, expected);
         assert_eq!(
             reopen(&surreal, project_id, created.id).await.unwrap(),
@@ -817,6 +843,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn calendar_sequence_increments_on_rapid_updates_and_cancellation() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let row = create(&surreal, &sample(project_id)).await.unwrap();
+        assert_eq!(row.calendar_sequence, Some(0));
+        for sequence in 1..=3 {
+            let updated = update(&surreal, project_id, row.id, &DeadlinePatch::default())
+                .await
+                .unwrap();
+            assert_eq!(updated.id, row.id);
+            assert_eq!(updated.calendar_sequence, Some(sequence));
+        }
+        let cancelled = cancel(&surreal, project_id, row.id).await.unwrap();
+        assert_eq!(cancelled.id, row.id);
+        assert_eq!(cancelled.calendar_sequence, Some(4));
+    }
+
+    #[tokio::test]
+    async fn historical_calendar_versions_never_regress_and_overflow_is_refused() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let row = create(&surreal, &sample(project_id)).await.unwrap();
+        surreal
+            .query("UPDATE $id SET calendar_sequence = NONE, updated_at = '2026-10-26T00:00:00Z'")
+            .bind(("id", record_id("project_deadlines", row.id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let updated = update(&surreal, project_id, row.id, &DeadlinePatch::default())
+            .await
+            .unwrap();
+        assert_eq!(updated.calendar_sequence, Some(1_792_972_801));
+        surreal
+            .query("UPDATE $id SET calendar_sequence = 2147483647")
+            .bind(("id", record_id("project_deadlines", row.id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        assert!(
+            update(&surreal, project_id, row.id, &DeadlinePatch::default())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            find(&surreal, project_id, row.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .calendar_sequence,
+            Some(2_147_483_647)
+        );
+    }
+
+    #[tokio::test]
     async fn a_title_round_trips_updates_and_clears() {
         let surreal = mem_surreal().await;
         let project_id = project(&surreal).await;
@@ -853,6 +935,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn descriptions_round_trip_and_clear_without_changing_visibility() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let mut input = sample(project_id);
+        input.description = Some("  Synthetic preparation instructions  ".into());
+        let created = create(&surreal, &input).await.unwrap();
+        assert_eq!(
+            created.description.as_deref(),
+            Some("Synthetic preparation instructions")
+        );
+        let changed = update(
+            &surreal,
+            project_id,
+            created.id,
+            &DeadlinePatch {
+                description: Some(Some("Revised instructions".into())),
+                ..DeadlinePatch::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(changed.description.as_deref(), Some("Revised instructions"));
+        assert_eq!(changed.client_lead_days, input.client_lead_days);
+        let cleared = update(
+            &surreal,
+            project_id,
+            created.id,
+            &DeadlinePatch {
+                description: Some(Some(String::new())),
+                ..DeadlinePatch::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.description, None);
+    }
+
+    #[tokio::test]
     async fn an_overlong_title_is_refused() {
         let surreal = mem_surreal().await;
         let project_id = project(&surreal).await;
@@ -884,6 +1004,8 @@ mod tests {
             .unwrap();
         let row = find(&surreal, project_id, id).await.unwrap().unwrap();
         assert_eq!(row.title, None);
+        assert_eq!(row.description, None);
+        assert_eq!(row.calendar_sequence, None);
         assert_eq!(list(&surreal, project_id).await.unwrap().len(), 1);
     }
 }

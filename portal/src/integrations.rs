@@ -89,6 +89,24 @@ pub trait IntegrationProviders: Send + Sync {
         surreal: &SurrealDb,
         project_id: Uuid,
     ) -> Result<Arc<dyn cloud::SlackService>, IntegrationError>;
+
+    /// The Workspace calendar a Project's shared calendar lives on.
+    ///
+    /// Unlike Notion and Slack this is not a per-Firm credential: the calendar
+    /// is owned by the deployment's Workspace service account, the one Drive
+    /// already uses, so every resolver reads the same deployment
+    /// configuration. A deployment with none of it set is `NotConfigured`.
+    async fn calendar(
+        &self,
+        _surreal: &SurrealDb,
+        _project_id: Uuid,
+    ) -> Result<Arc<dyn cloud::CalendarService>, IntegrationError> {
+        match store::project_calendar::calendar_from_env().await {
+            Ok(Some(calendar)) => Ok(Arc::new(calendar)),
+            Ok(None) => Err(IntegrationError::NotConfigured),
+            Err(_) => Err(IntegrationError::CredentialUnusable),
+        }
+    }
 }
 
 /// The default for a deployment with no runtime KMS key and no provider
@@ -253,8 +271,10 @@ pub async fn from_env() -> Arc<dyn IntegrationProviders> {
 pub struct FakeIntegrations {
     pub notion: cloud::FakeNotion,
     pub slack: cloud::FakeSlack,
+    pub calendar: cloud::FakeCalendar,
     notion_calls: Arc<AtomicUsize>,
     slack_calls: Arc<AtomicUsize>,
+    calendar_calls: Arc<AtomicUsize>,
 }
 
 impl FakeIntegrations {
@@ -271,6 +291,11 @@ impl FakeIntegrations {
     #[must_use]
     pub fn slack_calls(&self) -> usize {
         self.slack_calls.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn calendar_calls(&self) -> usize {
+        self.calendar_calls.load(Ordering::Relaxed)
     }
 }
 
@@ -292,6 +317,15 @@ impl IntegrationProviders for FakeIntegrations {
     ) -> Result<Arc<dyn cloud::SlackService>, IntegrationError> {
         self.slack_calls.fetch_add(1, Ordering::Relaxed);
         Ok(Arc::new(self.slack.clone()))
+    }
+
+    async fn calendar(
+        &self,
+        _surreal: &SurrealDb,
+        _project_id: Uuid,
+    ) -> Result<Arc<dyn cloud::CalendarService>, IntegrationError> {
+        self.calendar_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(Arc::new(self.calendar.clone()))
     }
 }
 

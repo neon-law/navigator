@@ -17,10 +17,13 @@ service:
           with your state, the kind of debt, and any upcoming deadline.
           PandA Law already provides debt relief; this is a way to begin
           working with that team.
-    - - text: >-
-          DeleteYourDebt.com is operated by Guieb & Shook PC. The lawyers
-          handling your matter, the scope of work, and the fees will be
-          identified in a written engagement before representation begins.
+    - - text: "DeleteYourDebt.com is operated by Guieb & Shook PC. Legal services are provided by "
+      - text: PandA Law Firm
+        href: https://www.pandalawfirm.com/
+      - text: >-
+          . The lawyers handling your matter, the scope of work, and the fees
+          will be identified in a written engagement before representation
+          begins.
     - - text: "Prefer to meet in Brooklyn? "
       - text: Ask our team for an in-person meeting.
         href: https://www.pandalawfirm.com/contact/

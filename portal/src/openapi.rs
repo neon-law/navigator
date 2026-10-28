@@ -963,6 +963,31 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/integrations/calendar/ensure": {
+          "post": {
+            "summary": "Create or adopt each Project's shared Google Calendar (admin)",
+            "description":
+              "Creates the Project's calendar on the deployment's Workspace, named for the Project code, or adopts an unrecorded one with that name, and records its id on the Project before sharing it as a writer with every firm-side participant — never a client. A recorded calendar is checked by id and never replaced. A closed or archived Project's calendar is made read-only instead and its booking link cleared. Outcomes: `created`, `adopted`, `present`, `read_only`, `recorded_resource_missing`, `duplicate`, `runtime_not_configured`, `credential_unusable`, `provider_unavailable`, `address_not_recorded`. The response carries outcomes only. Authorization: admin-tier, plus `use_integrations` on the Project's owning Firm.",
+            "requestBody": { "required": true, "content": { "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProjectSelector" }
+            } } },
+            "responses": {
+              "200": { "description": "One outcome per selected Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IntegrationReport" } } } },
+              "400": { "description": "The selector is not accepted", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "403": { "description": "Authenticated caller is not admin-tier", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "404": { "description": "No Project with that code is visible to the caller, or the caller may not use its Firm's integrations — the two answer identically on purpose", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
         "/app/api/integrations/notion/reconcile": {
           "post": {
             "summary": "Reconcile each Project against the selected Notion database (admin)",
@@ -1468,8 +1493,9 @@ fn canonical_document(base: &str) -> Value {
                `store::projects::transition_project`. Distinct from `POST /app/api/projects/{id}/close`: \
                that door opens the firm-signed closing-letter notation and leaves the status flip to \
                the walk that follows, while this one flips `status`/`closed_at` immediately and opens \
-               no notation. `closed_at` is derived from `transition` and optional `effective_at`, never \
-               posted directly. An effective time must be RFC 3339, not be in the future, and not \
+               no notation. A close or archive also makes the Project's shared calendar read-only and \
+               clears its booking link, best-effort. `closed_at` is derived from `transition` and optional \
+               `effective_at`, never posted directly. An effective time must be RFC 3339, not be in the future, and not \
                precede matter-open. Without one, an existing close stamp is preserved. Re-applying \
                the same transition and effective time is idempotent; supplying a different valid \
                effective time corrects the retention start. `archived` is terminal — every transition off it, other than a repeated \
@@ -3569,7 +3595,8 @@ fn canonical_document(base: &str) -> Value {
                     "exists": { "type": "boolean" },
                     "size_bytes": { "type": "integer" },
                     "recorded_size": { "type": "integer" },
-                    "sha256_matches": { "type": "boolean" }
+                    "sha256_matches": { "type": "boolean" },
+                    "docket_name_matches": { "type": "boolean", "description": "Whether exactly one linked Docket Entry gives this document its current DKT filename; no docket content is returned." }
                   } } },
                   "integrations": { "type": "array", "items": { "type": "object", "required": ["asset_id", "integration", "outcome", "detail"], "properties": {
                     "asset_id": { "type": "string", "format": "uuid" },
@@ -4091,6 +4118,10 @@ fn canonical_document(base: &str) -> Value {
               "forge_provisioned_at": { "type": ["string", "null"],
                                       "description": "Stamped only once `repository_url` was created or adopted; `null` means not done or unknown." },
               "closed_at":          { "type": ["string", "null"] },
+              "calendar_id":        { "type": ["string", "null"],
+                                      "description": "The Project's shared Google Calendar id, or `null` before it is created." },
+              "booking_url":        { "type": ["string", "null"],
+                                      "description": "Where the client books time with the firm, or `null`. Cleared when the Project closes." },
               "inserted_at":        { "type": "string" },
               "updated_at":         { "type": "string" }
             }
@@ -4200,7 +4231,11 @@ fn canonical_document(base: &str) -> Value {
               "private_notion_page_url": { "type": "string",
                                "description": "The firm-only Notion page. Omit to leave unchanged; a blank string clears it." },
               "shared_notion_page_url": { "type": "string",
-                               "description": "The Notion page shared with the client. Omit to leave unchanged; a blank string clears it." }
+                               "description": "The Notion page shared with the client. Omit to leave unchanged; a blank string clears it." },
+              "calendar_id": { "type": "string",
+                               "description": "The Project's shared Google Calendar id. Omit to leave unchanged; a blank string clears it." },
+              "booking_url": { "type": "string",
+                               "description": "The client's booking page, an http(s) URL. Omit to leave unchanged; a blank string clears it." }
             },
             "additionalProperties": false,
             "example": {
@@ -4673,6 +4708,14 @@ pub fn documented_operations() -> Vec<(String, String)> {
 /// of reaching into `store::` on its own — an exemption opts a tool out
 /// of that pressure, so it needs a reason a reader can disagree with.
 pub const TOOLS_WITHOUT_AN_API_OPERATION: &[(&str, &str)] = &[
+    (
+        "project_skill_list",
+        "No route today. Project Skills are compiled reference data; the CLI and MCP share rules::project_skill_catalog.",
+    ),
+    (
+        "project_skill_show",
+        "No route today. A playbook is read from the same compiled catalog as navigator project skill show.",
+    ),
     (
         "glossary_list",
         "No route today. The glossary is public reference data compiled into \

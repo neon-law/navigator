@@ -422,12 +422,12 @@ where
     substitutions.push(Substitution {
         token: BRAND_MANAGED_CERTIFICATES_TOKEN,
         env: "views::brand::BrandKey",
-        value: brand_managed_certificate_yaml(&namespace, &brand_bindings),
+        value: brand_managed_certificate_yaml(&namespace, &public_host, &brand_bindings),
     });
     substitutions.push(Substitution {
         token: BRAND_CERT_KUSTOMIZE_TOKEN,
         env: "views::brand::BrandKey",
-        value: brand_cert_kustomize_resource(&brand_bindings),
+        value: brand_cert_kustomize_resource(),
     });
     substitutions.push(Substitution {
         token: MANAGED_CERTIFICATES_ANNOTATION_TOKEN,
@@ -988,37 +988,119 @@ fn brand_certificate_name(key: BrandKey) -> String {
     format!("navigator-web-{}", key.as_str())
 }
 
-/// One `ManagedCertificate` document per additional live brand. Each
-/// document lists exactly that family's environment host, so adding or
-/// removing a name reissues only that family's certificate.
-fn brand_managed_certificate_yaml(namespace: &str, bindings: &[AdditionalBrandBinding]) -> String {
-    use std::fmt::Write as _;
-    bindings
-        .iter()
-        .enumerate()
-        .fold(String::new(), |mut documents, (index, binding)| {
-            if index > 0 {
-                documents.push_str("---\n");
-            }
-            let name = brand_certificate_name(binding.key);
-            let _ = write!(
-                documents,
-                "apiVersion: networking.gke.io/v1\n\
-                 kind: ManagedCertificate\n\
-                 metadata:\n  name: {name}\n  namespace: {namespace}\n\
-                 spec:\n  domains:\n    - {}\n",
-                binding.host
-            );
-            documents
-        })
+/// The most Compute Engine SSL certificates one target HTTPS proxy
+/// references. GKE Ingress attaches one per `ManagedCertificate` it names,
+/// and the limit is fixed, not a quota:
+/// <https://docs.cloud.google.com/load-balancing/docs/ssl-certificates>.
+#[cfg(test)]
+const TARGET_PROXY_CERTIFICATE_LIMIT: usize = 15;
+
+/// The one `ManagedCertificate` that carries every brand host of the
+/// environment: the Firm wears every brand, so its storefronts share a
+/// certificate instead of spending a target-proxy slot each.
+const FIRM_CERTIFICATE_NAME: &str = "navigator-firm";
+
+/// Brands served only by the Firm certificate. The rest keep their own
+/// certificate until the Firm certificate is `Active` on every deployment;
+/// GKE recreates a certificate whose domains change, so the safe order is
+/// to attach the new one first and remove the old ones after:
+/// <https://docs.cloud.google.com/kubernetes-engine/docs/how-to/managed-certs>.
+const FIRM_CERTIFICATE_ONLY: &[BrandKey] = &[
+    BrandKey::Abhaya,
+    BrandKey::DeathAndDivorce,
+    BrandKey::GuiebShook,
+];
+
+fn has_own_certificate(key: BrandKey) -> bool {
+    !FIRM_CERTIFICATE_ONLY.contains(&key)
 }
 
-fn brand_cert_kustomize_resource(bindings: &[AdditionalBrandBinding]) -> String {
-    if bindings.is_empty() {
-        String::new()
-    } else {
-        "  - ingress/brand-managed-certificates.yaml\n".to_string()
+/// The own `ManagedCertificate` of every [`FIRM_CERTIFICATE_ONLY`] brand. No
+/// render produces them, but `kubectl apply` never prunes one an earlier
+/// release created, and GKE attaches every `ManagedCertificate` still in the
+/// namespace whether or not the Ingress names it. Left in place they push the
+/// target proxy past its 15 certificates, the Ingress stops syncing, and
+/// `navigator-firm` is never attached, so it can never validate.
+fn retired_brand_certificates() -> Vec<String> {
+    FIRM_CERTIFICATE_ONLY
+        .iter()
+        .map(|key| brand_certificate_name(*key))
+        .collect()
+}
+
+/// Delete each [`retired_brand_certificates`] entry after the apply.
+fn retire_firm_only_brand_certificates(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
+    for name in retired_brand_certificates() {
+        exec(
+            dry_run,
+            kubectl(cfg)
+                .arg("delete")
+                .arg("managedcertificate")
+                .arg(&name)
+                .arg("--ignore-not-found=true"),
+        )?;
     }
+    Ok(())
+}
+
+/// Every brand host of `public_host`'s environment: the default brand's
+/// public host, then each other registered brand's.
+fn firm_certificate_hosts(public_host: &str) -> Vec<String> {
+    std::iter::once(public_host.to_string())
+        .chain(
+            additional_brand_hosts(public_host)
+                .into_iter()
+                .map(str::to_string),
+        )
+        .collect()
+}
+
+fn managed_certificate_document(namespace: &str, name: &str, domains: &[String]) -> String {
+    use std::fmt::Write as _;
+    let domains = domains.iter().fold(String::new(), |mut list, domain| {
+        let _ = writeln!(list, "    - {domain}");
+        list
+    });
+    format!(
+        "apiVersion: networking.gke.io/v1\n\
+         kind: ManagedCertificate\n\
+         metadata:\n  name: {name}\n  namespace: {namespace}\n\
+         spec:\n  domains:\n{domains}"
+    )
+}
+
+/// The Firm certificate, then one `ManagedCertificate` per additional brand
+/// that still has its own. Each per-brand document lists exactly that
+/// family's environment host.
+fn brand_managed_certificate_yaml(
+    namespace: &str,
+    public_host: &str,
+    bindings: &[AdditionalBrandBinding],
+) -> String {
+    std::iter::once(managed_certificate_document(
+        namespace,
+        FIRM_CERTIFICATE_NAME,
+        &firm_certificate_hosts(public_host),
+    ))
+    .chain(
+        bindings
+            .iter()
+            .filter(|binding| has_own_certificate(binding.key))
+            .map(|binding| {
+                managed_certificate_document(
+                    namespace,
+                    &brand_certificate_name(binding.key),
+                    &[binding.host.to_string()],
+                )
+            }),
+    )
+    .collect::<Vec<_>>()
+    .join("---\n")
+}
+
+/// The Firm certificate always exists, so the overlay always lists the file.
+fn brand_cert_kustomize_resource() -> String {
+    "  - ingress/brand-managed-certificates.yaml\n".to_string()
 }
 
 fn managed_certificates_annotation(bindings: &[AdditionalBrandBinding]) -> String {
@@ -1026,10 +1108,12 @@ fn managed_certificates_annotation(bindings: &[AdditionalBrandBinding]) -> Strin
     names.extend(
         bindings
             .iter()
+            .filter(|binding| has_own_certificate(binding.key))
             .map(|binding| brand_certificate_name(binding.key)),
     );
     names.push("navigator-workflows".to_string());
     names.push("navigator-forgejo".to_string());
+    names.push(FIRM_CERTIFICATE_NAME.to_string());
     format!(
         "    networking.gke.io/managed-certificates: {}\n",
         names.join(",")
@@ -1680,16 +1764,60 @@ fn wait_statefulset(cfg: &ShipConfig, dry_run: bool, name: &str, timeout: &str) 
     .with_context(|| format!("statefulset/{name} did not become Ready within {timeout}"))
 }
 
+/// Wait for `job/{name}` to complete, and fail as soon as it fails.
+///
+/// `kubectl wait --for=condition=complete` alone never returns for a Job that
+/// reached its backoff limit: it waits out the whole timeout. 26.10.27's staging
+/// ship sat 25 minutes on a failed `navigator-postgres-mirror-reconcile` until
+/// the workflow's 30-minute cap cancelled it, which also lost the transcript.
+/// So a second `kubectl wait --for=condition=failed` races the first.
 fn wait_job(cfg: &ShipConfig, dry_run: bool, name: &str, timeout: &str) -> Result<()> {
-    exec(
-        dry_run,
-        kubectl(cfg)
-            .arg("wait")
-            .arg("--for=condition=complete")
+    let wait = |condition: &str| {
+        let mut cmd = kubectl(cfg);
+        cmd.arg("wait")
+            .arg(format!("--for=condition={condition}"))
             .arg(format!("job/{name}"))
-            .arg(format!("--timeout={timeout}")),
-    )
-    .with_context(|| format!("job/{name} did not complete within {timeout}"))
+            .arg(format!("--timeout={timeout}"));
+        cmd
+    };
+    let mut complete = wait("complete");
+    if dry_run {
+        return exec(true, &mut complete);
+    }
+    let mut complete = complete
+        .spawn()
+        .with_context(|| format!("wait for job/{name} to complete"))?;
+    let mut failed = wait("failed")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .with_context(|| format!("watch job/{name} for failure"))?;
+    let mut failure_watch_open = true;
+    loop {
+        if let Some(status) = complete.try_wait()? {
+            let _ = failed.kill();
+            let _ = failed.wait();
+            ensure!(
+                status.success(),
+                "job/{name} did not complete within {timeout}"
+            );
+            return Ok(());
+        }
+        if failure_watch_open {
+            if let Some(status) = failed.try_wait()? {
+                failure_watch_open = false;
+                if status.success() {
+                    let _ = complete.kill();
+                    let _ = complete.wait();
+                    bail!(
+                        "job/{name} failed: it reached its backoff limit before completing; read \
+                         `kubectl logs job/{name}` before its pod is cleaned up"
+                    );
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
 }
 
 /// Rerun an idempotent one-shot service Job without touching retained data.
@@ -2663,6 +2791,12 @@ fn offline_ship_plan(
                     "delete the Restate CronJob {cronjob} now hosted by DBOS"
                 ));
             }
+            for name in retired_brand_certificates() {
+                operations.push(format!(
+                    "delete the ManagedCertificate {name} now carried by \
+                     {FIRM_CERTIFICATE_NAME}"
+                ));
+            }
             operations.push("pin Navigator CronJob images to the selected tag".to_owned());
             operations.push("wait for rollouts and re-register the Restate worker".to_owned());
             operations.push("verify public assets and smoke-check the public host".to_owned());
@@ -3017,7 +3151,7 @@ fn image_only_steps(
         exec(dry_run, &mut cmd)?;
     }
 
-    pin_cronjob_images(cfg, tag, dry_run)?;
+    pin_cronjob_images(cfg, tag, None, dry_run)?;
     wait_rollouts(cfg, dry_run, ROLLOUT_TIMEOUT, rollout_wait_deployments())?;
     finish_roll(
         ShipLane::ImageOnly,
@@ -3260,6 +3394,7 @@ fn roll(
     // 5. Reconcile services in dependency order, then apply the application.
     reconcile_ordered_services(cfg, dry_run, &rendered, opts, &tag, &target)?;
     retire_dbos_hosted_cronjobs(cfg, dry_run, deployment)?;
+    retire_firm_only_brand_certificates(cfg, dry_run)?;
 
     // 6. Wait on the rollouts the reconcile started. The apply in step 5
     //    already pinned every image to `tag` — the render substitutes it —
@@ -3270,7 +3405,7 @@ fn roll(
     //     across ALL navigator images, not just the two services. CronJobs
     //     don't "roll" — the new image takes effect on the next scheduled
     //     run — so there is nothing to wait on.
-    pin_cronjob_images(cfg, &tag, dry_run)?;
+    pin_cronjob_images(cfg, &tag, opts.image_digests.as_deref(), dry_run)?;
 
     // 6. Re-register the workers with Restate, then verify every public asset
     // after the new pods are live. The DevX notification worker must register
@@ -3383,25 +3518,90 @@ fn reconcile_ordered_services(
     })
 }
 
+/// The repository part of an image reference: `name@sha256:<digest>` loses
+/// its digest, and `name:<tag>` loses its tag only when that colon comes after
+/// the last `/`, so a registry `host:port` is never mistaken for a tag.
+fn image_repository(image: &str) -> &str {
+    if let Some((repository, _)) = image.split_once('@') {
+        return repository;
+    }
+    let name_start = image.rfind('/').map_or(0, |slash| slash + 1);
+    match image[name_start..].rfind(':') {
+        Some(colon) => &image[..name_start + colon],
+        None => image,
+    }
+}
+
+/// What a ship does to one trigger `CronJob` container image.
+#[derive(Debug, PartialEq, Eq)]
+enum CronJobPin {
+    /// Already on the signed image map's digest; nothing to write.
+    Current,
+    /// Re-point at this signed `repository@sha256:<digest>` reference.
+    Repoint(String),
+    /// Re-point at `target` once `repository` is confirmed to publish the tag.
+    CheckTag { repository: String, target: String },
+}
+
+/// The pure decision behind [`pin_cronjob_images`]: `None` for an image this
+/// deployment's registry does not publish. With the release's image digest
+/// map, a `CronJob` on the map's digest is current and any other reference is
+/// re-pointed at that digest; without one (or for an image the map does not
+/// carry) the tag-only path re-points at `<repository>:<tag>`.
+fn cronjob_pin_action(
+    image: &str,
+    prefix: &str,
+    tag: &str,
+    digests: Option<&std::collections::BTreeMap<String, String>>,
+) -> Option<CronJobPin> {
+    if !image.starts_with(prefix) {
+        return None;
+    }
+    let reference = image_repository(image);
+    let repository = reference.strip_prefix(prefix).unwrap_or(reference);
+    if let Some(digest) = digests.and_then(|d| digest_for_image(d, repository, reference).ok()) {
+        let signed = format!("{reference}@{digest}");
+        return Some(if image == signed {
+            CronJobPin::Current
+        } else {
+            CronJobPin::Repoint(signed)
+        });
+    }
+    Some(CronJobPin::CheckTag {
+        repository: repository.to_string(),
+        target: format!("{reference}:{tag}"),
+    })
+}
+
 /// Re-pin every navigator trigger `CronJob` to `tag`. Discovers the
 /// `CronJobs` from the live cluster and re-points any container whose image
 /// is one of ours (`<region>-docker.pkg.dev/<project>/<repo>/navigator-*`) — no hard-coded list,
-/// so a newly added trigger is covered automatically. Each image is
-/// re-pinned only after confirming `tag` is actually published for it;
-/// a trigger whose image hasn't published `tag` yet is skipped with a
+/// so a newly added trigger is covered automatically.
+///
+/// With the release's signed image digest map (`--image-digests`), a trigger
+/// already on its mapped digest counts as current and any other is re-pointed
+/// at `repository@sha256:<digest>`. Without one, each image is re-pinned to
+/// `repository:<tag>` only after confirming `tag` is actually published for
+/// it; a trigger whose image hasn't published `tag` yet is skipped with a
 /// warning rather than wedged in `ImagePullBackOff`.
-fn pin_cronjob_images(cfg: &ShipConfig, tag: &str, dry_run: bool) -> Result<()> {
+fn pin_cronjob_images(
+    cfg: &ShipConfig,
+    tag: &str,
+    digest_file: Option<&Path>,
+    dry_run: bool,
+) -> Result<()> {
     let prefix = format!("{}/", cfg.registry());
     if dry_run {
         eprintln!("DRY-RUN: would re-pin every {prefix}navigator-* CronJob image to {tag}");
         return Ok(());
     }
+    let digests = digest_file.map(read_digest_manifest).transpose()?;
     let list = kubectl_list_json(cfg, "cronjobs")?;
     let Some(items) = list.get("items").and_then(serde_json::Value::as_array) else {
         eprintln!("==> no CronJobs found; nothing to pin");
         return Ok(());
     };
-    let mut pinned = 0u32;
+    let (mut pinned, mut current) = (0u32, 0u32);
     for item in items {
         let Some(name) = item
             .pointer("/metadata/name")
@@ -3422,36 +3622,46 @@ fn pin_cronjob_images(cfg: &ShipConfig, tag: &str, dry_run: bool) -> Result<()> 
             ) else {
                 continue;
             };
-            // Ours only: `<registry>/navigator-<something>:<tag>`.
-            if !image.starts_with(&prefix) {
-                continue;
-            }
-            let base = image.rsplit_once(':').map_or(image, |(b, _)| b);
-            let short = base.strip_prefix(&prefix).unwrap_or(base);
-            match registry::tag_exists(&cfg.registry, short, tag) {
-                Ok(true) => {
-                    let target = format!("{base}:{tag}");
-                    exec(
-                        dry_run,
-                        kubectl(cfg)
-                            .arg("set")
-                            .arg("image")
-                            .arg(format!("cronjob/{name}"))
-                            .arg(format!("{cname}={target}")),
-                    )?;
-                    pinned += 1;
+            let target = match cronjob_pin_action(image, &prefix, tag, digests.as_ref()) {
+                None => continue,
+                Some(CronJobPin::Current) => {
+                    current += 1;
+                    continue;
                 }
-                Ok(false) => eprintln!(
-                    "WARN: {short} has no {tag} tag in the registry — leaving CronJob/{name} on {image}"
-                ),
-                Err(error) => eprintln!(
-                    "WARN: could not check whether {short}:{tag} is published ({error}) — \
-                     leaving CronJob/{name} on {image}"
-                ),
-            }
+                Some(CronJobPin::Repoint(target)) => target,
+                Some(CronJobPin::CheckTag { repository, target }) => {
+                    match registry::tag_exists(&cfg.registry, &repository, tag) {
+                        Ok(true) => target,
+                        Ok(false) => {
+                            eprintln!(
+                                "WARN: {repository} has no {tag} tag in the registry — leaving CronJob/{name} on {image}"
+                            );
+                            continue;
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "WARN: could not check whether {repository}:{tag} is published ({error}) — \
+                                 leaving CronJob/{name} on {image}"
+                            );
+                            continue;
+                        }
+                    }
+                }
+            };
+            exec(
+                dry_run,
+                kubectl(cfg)
+                    .arg("set")
+                    .arg("image")
+                    .arg(format!("cronjob/{name}"))
+                    .arg(format!("{cname}={target}")),
+            )?;
+            pinned += 1;
         }
     }
-    eprintln!("==> pinned {pinned} trigger CronJob image(s) to {tag}");
+    eprintln!(
+        "==> pinned {pinned} trigger CronJob image(s) to {tag}; {current} already on the signed digest"
+    );
     Ok(())
 }
 
@@ -3818,9 +4028,8 @@ fn manifest_images_under_registry(manifests: &str, prefix: &str) -> BTreeSet<Str
         let Some(rest) = value.strip_prefix(prefix) else {
             continue;
         };
-        // `<repository>:<tag>` — split from the right so a registry host
-        // carrying a port never loses its own colon to the tag split.
-        let repository = rest.rsplit_once(':').map_or(rest, |(name, _)| name);
+        // `<repository>:<tag>` or `<repository>@sha256:<digest>`.
+        let repository = image_repository(rest);
         if !repository.is_empty() {
             images.insert(repository.to_string());
         }
@@ -3934,10 +4143,7 @@ fn pin_and_verify_manifest_images(
     tag: &str,
     digest_file: &Path,
 ) -> Result<()> {
-    let bytes = fs::read(digest_file)
-        .with_context(|| format!("read image digest manifest {}", digest_file.display()))?;
-    let digests: std::collections::BTreeMap<String, String> =
-        serde_json::from_slice(&bytes).context("parse image digest manifest JSON")?;
+    let digests = read_digest_manifest(digest_file)?;
     let prefix = format!("{}/", cfg.registry());
     let repositories = manifest_images_under_registry(manifests, &prefix);
     for repository in repositories {
@@ -3962,6 +4168,13 @@ fn pin_and_verify_manifest_images(
         pin_verified_image(target, &reference, tag, &digest, true)?;
     }
     Ok(())
+}
+
+/// Read the release's image repository → `sha256:<digest>` map.
+fn read_digest_manifest(digest_file: &Path) -> Result<std::collections::BTreeMap<String, String>> {
+    let bytes = fs::read(digest_file)
+        .with_context(|| format!("read image digest manifest {}", digest_file.display()))?;
+    serde_json::from_slice(&bytes).context("parse image digest manifest JSON")
 }
 
 fn ensure_tag_digest(reference: &str, tag: &str, expected: &str, actual: &str) -> Result<()> {
@@ -6190,9 +6403,14 @@ mod tests {
                 "additional brands must not share the default-brand certificate: {production_host}"
             );
             assert!(
-                brand_certs.contains(&format!("name: {}", brand_certificate_name(*key)))
-                    && brand_certs.contains(&format!("- {production_host}")),
-                "{}'s production host gets its own certificate",
+                brand_certs.contains(&format!("- {production_host}")),
+                "{}'s production host is on a brand certificate",
+                key.as_str(),
+            );
+            assert_eq!(
+                brand_certs.contains(&format!("name: {}", brand_certificate_name(*key))),
+                has_own_certificate(*key),
+                "{}'s own certificate exists only until the Firm certificate replaces it",
                 key.as_str(),
             );
             assert!(
@@ -7145,6 +7363,32 @@ mod tests {
         );
     }
 
+    /// Staging's Ingress asked for 17 certificates for 21 hours: the three
+    /// brands moved onto `navigator-firm` kept their own `ManagedCertificate`
+    /// because nothing deleted it, so `navigator-firm` never attached.
+    #[test]
+    fn every_roll_deletes_the_certificates_the_firm_certificate_replaced() {
+        let manifests = rendered_manifests(with_schedules(None, None, None));
+        let retired = retired_brand_certificates();
+        assert_eq!(
+            retired,
+            [
+                "navigator-web-abhaya",
+                "navigator-web-death-and-divorce",
+                "navigator-web-guieb-shook"
+            ]
+        );
+        for name in &retired {
+            assert!(
+                !manifests.split("\n---").any(|doc| {
+                    doc.contains("kind: ManagedCertificate")
+                        && doc.contains(&format!("\n  name: {name}\n"))
+                }),
+                "{name} is never rendered"
+            );
+        }
+    }
+
     #[test]
     fn dri_digest_on_dbos_requires_its_webhook_secret() {
         let mut deployment =
@@ -7557,8 +7801,9 @@ mod tests {
     }
 
     /// The full `networking.gke.io/managed-certificates` annotation ENG-808
-    /// expects: the default brand, every other registered key in registry
-    /// order, then the workflows service — derived from the same
+    /// expects: the default brand, every other registered key that still has
+    /// its own certificate in registry order, the workflows and Forgejo
+    /// services, then the Firm certificate — derived from the same
     /// [`views::brand::BrandKey::ALL`] the render reads, so this drifts with
     /// the registry rather than needing a hand-maintained string.
     fn expected_managed_certificates_annotation() -> String {
@@ -7568,11 +7813,63 @@ mod tests {
                 .iter()
                 .copied()
                 .filter(|key| *key != views::brand::BrandKey::default())
+                .filter(|key| has_own_certificate(*key))
                 .map(brand_certificate_name),
         );
         names.push("navigator-workflows".to_string());
         names.push("navigator-forgejo".to_string());
+        names.push(FIRM_CERTIFICATE_NAME.to_string());
         names.join(",")
+    }
+
+    /// A target HTTPS proxy references at most 15 Compute Engine SSL
+    /// certificates, and GKE Ingress attaches one per `ManagedCertificate`
+    /// it names. Past that the extra certificate is never attached, so
+    /// Google cannot validate it and it sits at `FAILED_NOT_VISIBLE`.
+    #[test]
+    fn the_ingress_attaches_no_more_certificates_than_a_target_proxy_accepts() {
+        for public_host in [
+            "navigator.example.invalid",
+            "staging.navigator.example.invalid",
+        ] {
+            let bindings = additional_brand_bindings(public_host);
+            let annotation = managed_certificates_annotation(&bindings);
+            let names = annotation
+                .trim()
+                .trim_start_matches("networking.gke.io/managed-certificates: ")
+                .split(',')
+                .count();
+            assert!(
+                names <= TARGET_PROXY_CERTIFICATE_LIMIT,
+                "{public_host} attaches {names} certificates"
+            );
+        }
+    }
+
+    /// The Firm certificate lists every brand host the environment serves,
+    /// the default brand's included, and none of the other environment's.
+    #[test]
+    fn the_firm_certificate_carries_every_brand_host_for_its_environment() {
+        let production = firm_certificate_hosts("www.neonlaw.com");
+        let staging = firm_certificate_hosts("staging.neonlaw.com");
+        for key in views::brand::BrandKey::ALL {
+            let www = key.canonical_host();
+            let staging_host = format!("staging.{}", key.apex());
+            assert!(
+                production.iter().any(|host| host == www),
+                "{www} is on the production Firm certificate"
+            );
+            assert!(
+                staging.contains(&staging_host),
+                "{staging_host} is on the staging Firm certificate"
+            );
+            assert!(!production.contains(&staging_host));
+            assert!(!staging.iter().any(|host| host == www));
+        }
+        assert!(
+            production.len() <= 100,
+            "a managed certificate holds at most 100 names"
+        );
     }
 
     /// The Ingress host rule for `host`, as `(path, service, port)` triples.
@@ -7753,9 +8050,24 @@ mod tests {
             )),
             vec!["navigator.example.invalid"]
         );
-        let mut certificate_names = vec!["navigator-web".to_string()];
+        let firm_certificate =
+            manifest_doc(&manifests, "ManagedCertificate", FIRM_CERTIFICATE_NAME);
+        let firm_domains = certificate_domains(&firm_certificate);
+        assert!(firm_domains.contains(&"navigator.example.invalid"));
+        let mut certificate_names = vec![
+            "navigator-web".to_string(),
+            FIRM_CERTIFICATE_NAME.to_string(),
+        ];
         for key in views::brand::BrandKey::ALL {
             if *key == views::brand::BrandKey::default() {
+                continue;
+            }
+            assert!(
+                firm_domains.contains(&key.canonical_host()),
+                "{}'s www host is on the Firm certificate",
+                key.as_str(),
+            );
+            if !has_own_certificate(*key) {
                 continue;
             }
             let name = brand_certificate_name(*key);
@@ -8634,6 +8946,140 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(missing.contains("image digest manifest is missing"));
+    }
+
+    const CRON_PREFIX: &str = "registry.example/navigator/";
+    const CRON_DIGEST: &str =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const OTHER_DIGEST: &str =
+        "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+
+    #[test]
+    fn image_repository_strips_a_digest_or_a_tag_but_never_a_registry_port() {
+        let digest_pinned =
+            format!("registry.example/navigator/navigator-archives-trigger@{CRON_DIGEST}");
+        assert_eq!(
+            image_repository(&digest_pinned),
+            "registry.example/navigator/navigator-archives-trigger"
+        );
+        assert_eq!(
+            image_repository("registry.example/navigator/navigator-archives-trigger:26.10.26"),
+            "registry.example/navigator/navigator-archives-trigger"
+        );
+        assert_eq!(
+            image_repository("localhost:5000/navigator/navigator-archives-trigger"),
+            "localhost:5000/navigator/navigator-archives-trigger"
+        );
+        assert_eq!(
+            image_repository("localhost:5000/navigator/navigator-archives-trigger:26.10.26"),
+            "localhost:5000/navigator/navigator-archives-trigger"
+        );
+    }
+
+    #[test]
+    fn cronjob_on_the_digest_maps_digest_is_already_current() {
+        let digests = std::collections::BTreeMap::from([(
+            "navigator-archives-trigger".to_string(),
+            CRON_DIGEST.to_string(),
+        )]);
+        let image = format!("{CRON_PREFIX}navigator-archives-trigger@{CRON_DIGEST}");
+        assert_eq!(
+            cronjob_pin_action(&image, CRON_PREFIX, "26.10.26", Some(&digests)),
+            Some(CronJobPin::Current)
+        );
+    }
+
+    #[test]
+    fn cronjob_on_another_digest_is_repointed_at_the_maps_digest() {
+        let digests = std::collections::BTreeMap::from([(
+            "navigator-archives-trigger".to_string(),
+            CRON_DIGEST.to_string(),
+        )]);
+        for image in [
+            format!("{CRON_PREFIX}navigator-archives-trigger@{OTHER_DIGEST}"),
+            format!("{CRON_PREFIX}navigator-archives-trigger:26.10.19"),
+        ] {
+            assert_eq!(
+                cronjob_pin_action(&image, CRON_PREFIX, "26.10.26", Some(&digests)),
+                Some(CronJobPin::Repoint(format!(
+                    "{CRON_PREFIX}navigator-archives-trigger@{CRON_DIGEST}"
+                )))
+            );
+        }
+    }
+
+    #[test]
+    fn cronjob_without_a_digest_map_checks_the_tag_on_the_bare_repository() {
+        let expected = Some(CronJobPin::CheckTag {
+            repository: "navigator-archives-trigger".to_string(),
+            target: format!("{CRON_PREFIX}navigator-archives-trigger:26.10.26"),
+        });
+        assert_eq!(
+            cronjob_pin_action(
+                &format!("{CRON_PREFIX}navigator-archives-trigger:26.10.19"),
+                CRON_PREFIX,
+                "26.10.26",
+                None,
+            ),
+            expected
+        );
+        // A digest-pinned image no longer leaks `@sha256` into the tag lookup.
+        assert_eq!(
+            cronjob_pin_action(
+                &format!("{CRON_PREFIX}navigator-archives-trigger@{OTHER_DIGEST}"),
+                CRON_PREFIX,
+                "26.10.26",
+                None,
+            ),
+            expected
+        );
+    }
+
+    #[test]
+    fn cronjob_behind_a_registry_port_keeps_its_port() {
+        let prefix = "localhost:5000/navigator/";
+        assert_eq!(
+            cronjob_pin_action(
+                "localhost:5000/navigator/navigator-archives-trigger",
+                prefix,
+                "26.10.26",
+                None,
+            ),
+            Some(CronJobPin::CheckTag {
+                repository: "navigator-archives-trigger".to_string(),
+                target: "localhost:5000/navigator/navigator-archives-trigger:26.10.26".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn cronjob_outside_our_registry_is_left_alone() {
+        assert_eq!(
+            cronjob_pin_action(
+                "docker.io/envoyproxy/envoy:v1",
+                CRON_PREFIX,
+                "26.10.26",
+                None
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn cronjob_missing_from_the_digest_map_falls_back_to_the_tag_check() {
+        let digests = std::collections::BTreeMap::new();
+        assert_eq!(
+            cronjob_pin_action(
+                &format!("{CRON_PREFIX}navigator-new-trigger:26.10.19"),
+                CRON_PREFIX,
+                "26.10.26",
+                Some(&digests),
+            ),
+            Some(CronJobPin::CheckTag {
+                repository: "navigator-new-trigger".to_string(),
+                target: format!("{CRON_PREFIX}navigator-new-trigger:26.10.26"),
+            })
+        );
     }
 
     #[test]

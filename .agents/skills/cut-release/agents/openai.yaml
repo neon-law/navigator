@@ -1,4 +1,4 @@
 interface:
   display_name: "Cut Release"
-  short_description: "Prepare a daily or named version bump, run the release preflight, and open a ready PR against main."
-  default_prompt: "Use $cut-release to cut a release. If I give you a version, use it; otherwise ask the CLI for today's candidate and stop if it says there is nothing to cut. Then run the preflight, write the workspace version, and open a ready PR. Leave tagging to deploy.yml."
+  short_description: "Cut the next release as a version-bump PR: today's YY.M.D, or tomorrow's YY.M.D-rc.N once today's is published."
+  default_prompt: "Use $cut-release to cut the next release. If I name a version, use it; otherwise take ops release-default-tag. Run the preflight, write the version, and open a ready PR. Leave tagging to deploy.yml."

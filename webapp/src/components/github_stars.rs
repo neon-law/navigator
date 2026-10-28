@@ -38,6 +38,8 @@ fn grouped(count: u64) -> String {
 /// - `href`: the repository's web address.
 /// - `repo`: how the repository is named to a reader — `owner/name`, which is
 ///   how GitHub addresses it and how a developer expects to see it written.
+/// - `version`: the release this deployment runs, plain text between the link
+///   and the count. Empty renders none.
 /// - `stars`: the star count, or `None` when it is not known. `None` renders
 ///   the link alone; see the module docs for why that is the normal case
 ///   rather than an error one.
@@ -47,7 +49,12 @@ fn grouped(count: u64) -> String {
 /// The GitHub glyph inside the anchor is decorative — the repository name
 /// beside it is already the link's accessible text.
 #[component]
-pub fn GitHubStars(href: String, repo: String, #[props(default)] stars: Option<u64>) -> Element {
+pub fn GitHubStars(
+    href: String,
+    repo: String,
+    #[props(default)] version: String,
+    #[props(default)] stars: Option<u64>,
+) -> Element {
     rsx! {
         span { class: "github-stars",
             ExternalLink {
@@ -55,6 +62,9 @@ pub fn GitHubStars(href: String, repo: String, #[props(default)] stars: Option<u
                 class: "github-stars__repo".to_string(),
                 Icon { name: IconName::Github }
                 " {repo}"
+            }
+            if !version.is_empty() {
+                span { class: "github-stars__version", "{version}" }
             }
             if let Some(count) = stars {
                 span { class: "github-stars__count",

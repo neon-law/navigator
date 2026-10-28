@@ -62,11 +62,16 @@ navigator project deadline create \
   --source-document <document id> \
   --owner <lawyer DRI person id> \
   --internal-lead-days 7 \
-  --client-lead-days 3
+  --client-lead-days 3 \
+  --visibility client
 ```
 
-- **Name what is due.** `--title` is a short name for the pleading or response (at most 200 characters). Without one,
-  the board shows only the authority and role. `update <id> --title ""` clears it.
+- **Name what is due.** Creation requires `--title`, a short name for the pleading or response (at most 200 characters).
+  Rows recorded without one show only the authority and role. `update <id> --title ""` clears it.
+- **Explain the obligation.** `--description` adds optional detail. An empty description on update clears it.
+- **Choose visibility.** Creation defaults to `--visibility internal`. Selecting `internal` clears the client lead;
+  `--visibility client` requires `--client-lead-days` and the store's internal lead. Updates preserve the current choice
+  unless visibility or the lead is changed explicitly.
 - **Lead times are visibility.** `--internal-lead-days` warns the firm. `--client-lead-days` is the only way a client
   ever sees a deadline: with it unset, the date stays internal on the matter page and in every reminder. The internal
   lead is never shorter than the client lead.
@@ -84,10 +89,15 @@ navigator project deadline reopen <id>
 ```
 
 Put the docket on a calendar with `navigator project deadline ics`. It prints every row as one RFC 5545 `VCALENDAR`, one
-`VEVENT` per Deadline. The `UID` is `<deadline id>@<host>` and `SEQUENCE` follows the row's last update, so re-importing
-the file after an `update` changes the same calendar event. A cancelled row renders `STATUS:CANCELLED`, and
+`VEVENT` per Deadline. The `UID` is `<deadline id>@<host>` and `SEQUENCE` is the row's monotonic calendar revision, so
+re-importing the file after an `update` changes the same calendar event. A cancelled row renders `STATUS:CANCELLED`, and
 `--internal-lead-days` becomes the reminder alarm. The summary is the row's title (or its kind, when untitled) followed
 by the Project code, never the client's name.
+
+For a single saved event, pass `--ics <private path>` to `create` or `update`. The command prints the stored row and
+writes that row as a calendar file. `--location` requires `--ics` and copies a court-supplied location into that file
+only. Keep the file outside Git: a registration link may be personal. If export fails after the write, the error names
+the saved Deadline; update that row or export the feed instead of creating a replacement.
 
 Reopen only when a cancelled date applies again. It restores the same row to open, retaining its id, replay key, and
 stored fields. Reopening an open row is a no-op; a complete row cannot be reopened. Replaying a cancelled row refuses

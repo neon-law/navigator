@@ -790,6 +790,8 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
                     drive_folder_id: project.drive_folder_id,
                     shared_slack_channel_url: project.external_slack_channel_url,
                     shared_notion_page_url: project.shared_notion_page_url,
+                    calendar_id: project.calendar_id,
+                    booking_url: project.booking_url,
                 },
                 role,
             ),

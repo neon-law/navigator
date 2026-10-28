@@ -362,6 +362,7 @@ async fn litigation(
             &crate::project_deadlines::NewDeadline {
                 project_id: project.id,
                 title: None,
+                description: None,
                 due_at: ahead.due_at.to_string(),
                 authority_kind: ahead.authority_kind.to_string(),
                 authority: ahead.authority.to_string(),

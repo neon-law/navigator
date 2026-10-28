@@ -56,6 +56,7 @@ mod sendgrid_openapi;
 mod site_asset;
 mod surreal_archive;
 mod upload_slug;
+mod video_prepare;
 
 use cli::import;
 use devx::brand::BrandCmd;
@@ -1040,7 +1041,8 @@ enum ProjectsCmd {
         #[command(flatten)]
         host: HostOpt,
     },
-    /// Fill required Project coordinates from the live matter or explicit values.
+    /// Fill Project coordinates from the live matter or explicit values, and set
+    /// the live Project's calendar and client booking link.
     Set {
         /// Project code. Defaults to `project.name` in the current manifest.
         project_code: Option<String>,
@@ -1059,6 +1061,16 @@ enum ProjectsCmd {
         /// Private Notion page URL.
         #[arg(long)]
         private_notion_page: Option<String>,
+        /// The Project's shared Google Calendar id. Written to
+        /// `project.calendar_id` and the live Project; an empty value clears
+        /// both. `navigator project setup` creates the calendar.
+        #[arg(long = "calendar", value_name = "ID")]
+        calendar: Option<String>,
+        /// The client's booking page: the address of an appointment schedule
+        /// made on the Project calendar in Google Calendar. Written to the
+        /// live Project only and shown to the client; an empty value clears it.
+        #[arg(long, value_name = "URL")]
+        booking_url: Option<String>,
         /// Firm name to assign to the live Project (requires --brand).
         #[arg(long, requires = "brand")]
         firm: Option<String>,
@@ -1334,7 +1346,8 @@ enum ProjectsCmd {
         #[command(subcommand)]
         action: projects::pages_init::PagesCmd,
     },
-    /// Complete an existing Project's Drive, GitHub, Slack, and Notion setup.
+    /// Complete an existing Project's Drive, GitHub, Slack, Notion, and shared
+    /// Google Calendar setup. A closed Project's calendar is made read-only.
     ///
     /// Each resource is attempted through the logged-in deployment's existing
     /// authenticated door and reported separately. A failed resource is safe
@@ -1450,12 +1463,15 @@ enum DocketCmd {
         #[command(flatten)]
         host: HostOpt,
     },
-    /// List every older `di-` filing beside the `DKT NNNN - <title>` name its
-    /// docket entry gives it. Renames nothing.
+    /// List every Docket Filings document beside the `DKT NNNN - <title>` name its
+    /// docket entry gives it. Pass --apply to reconcile linked documents.
     ///
     /// A filing no entry links, or two that would share a name, are listed
     /// as UNRESOLVED for a lawyer to settle.
     Renumber {
+        /// Apply names from linked Docket Entries after checking unresolved filings.
+        #[arg(long)]
+        apply: bool,
         /// Project code. Defaults to project.name in navigator.yaml.
         #[arg(long)]
         project: Option<String>,
@@ -1725,7 +1741,19 @@ enum DeadlineCmd {
     Create {
         /// What is due, such as the pleading or response (at most 200 characters).
         #[arg(long)]
-        title: Option<String>,
+        title: String,
+        /// Additional explanation of what is due. An empty update clears it.
+        #[arg(long)]
+        description: Option<String>,
+        /// Internal or client visibility, expressed through the client lead time.
+        #[arg(long, value_parser = ["internal", "client"])]
+        visibility: Option<String>,
+        /// Write the saved row as an RFC 5545 calendar to this private file.
+        #[arg(long)]
+        ics: Option<PathBuf>,
+        /// Court-supplied location; included only in the exported file.
+        #[arg(long, requires = "ics")]
+        location: Option<String>,
         /// RFC 3339 timestamp with an explicit offset.
         #[arg(long)]
         due_at: String,
@@ -1769,6 +1797,18 @@ enum DeadlineCmd {
         /// What is due. An empty value clears the title.
         #[arg(long)]
         title: Option<String>,
+        /// Additional explanation of what is due. An empty update clears it.
+        #[arg(long)]
+        description: Option<String>,
+        /// Internal or client visibility, expressed through the client lead time.
+        #[arg(long, value_parser = ["internal", "client"])]
+        visibility: Option<String>,
+        /// Write the saved row as an RFC 5545 calendar to this private file.
+        #[arg(long)]
+        ics: Option<PathBuf>,
+        /// Court-supplied location; included only in the exported file.
+        #[arg(long, requires = "ics")]
+        location: Option<String>,
         #[arg(long)]
         due_at: Option<String>,
         #[arg(long)]
@@ -2804,12 +2844,13 @@ enum OpsCmd {
         #[command(subcommand)]
         action: AssetsAction,
     },
-    /// Name today's UTC `YY.M.D` and write it as the workspace version, or
-    /// fail if that name is not a new release.
+    /// Name the next release and write it as the workspace version.
     ///
-    /// Compares today's date against published tags and delegates the write
-    /// to `ops release version`. A covered date or operational error exits 2.
-    /// Hotfixes and other explicit names use `ops release version --tag`.
+    /// Today's UTC `YY.M.D` until that is published, then the next
+    /// unpublished date's `YY.M.D-rc.N`. Delegates the write to `ops release
+    /// version`. A tag far ahead of the calendar or an operational error
+    /// exits 2. Hotfixes and other explicit names use `ops release version
+    /// --tag`.
     CutRelease {
         /// Git checkout supplying the release tags, workspace files, and commit.
         #[arg(long, default_value = ".")]
@@ -2824,7 +2865,7 @@ enum OpsCmd {
         /// Write the manifest but create no commit.
         #[arg(long)]
         no_commit: bool,
-        /// Print today's tag and write nothing.
+        /// Print the next release's tag and write nothing.
         #[arg(long)]
         dry_run: bool,
     },
@@ -2864,10 +2905,12 @@ enum OpsCmd {
         #[arg(long)]
         sign: bool,
     },
-    /// Probe today's UTC `YY.M.D` against published tags.
+    /// Probe the next release's name against published tags.
     ///
-    /// Prints the bare candidate on stdout when it is newer than every
-    /// release. A covered date prints only a reason on stderr and exits 0.
+    /// Prints today's UTC `YY.M.D` until that is published, then the next
+    /// unpublished date's `YY.M.D-rc.N`. When a tag far ahead of the
+    /// calendar leaves nothing to cut, prints only a reason on stderr and
+    /// exits 0.
     /// `ops cut-release` writes a daily cut; `ops release version --tag`
     /// writes an explicitly named version.
     ReleaseDefaultTag {
@@ -3814,6 +3857,14 @@ enum AuthoritiesAction {
 /// above): one asset, one or more deployments, no bucket credential.
 #[derive(Subcommand)]
 enum AssetAction {
+    /// Prepare a separate upload-ready MP4 locally. Requires ffmpeg and ffprobe.
+    /// Keeps the original, refuses output replacement, and verifies decoding.
+    PrepareVideo {
+        /// Original local MP4, up to 2 GiB and 3–600 seconds.
+        input: PathBuf,
+        /// New MP4 path; inspect the result before uploading it separately.
+        output: PathBuf,
+    },
     /// Upload one local public-safe asset to one or more logged-in hosts,
     /// through `POST /app/api/assets`. `ASSET_NAME` is the local path to
     /// read; when it lives under `server/public/`, its relative path is
@@ -4594,6 +4645,9 @@ fn run() -> ExitCode {
                 )),
             },
             SiteCmd::Asset { action } => match action {
+                AssetAction::PrepareVideo { input, output } => {
+                    runtime().block_on(video_prepare::run_prepare(&input, &output))
+                }
                 AssetAction::Upload {
                     hosts,
                     asset_name,
@@ -4826,8 +4880,13 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             .await
         }
         ProjectsCmd::Docket {
-            action: DocketCmd::Renumber { host, project },
-        } => projects::docket::renumber::run(host.host.as_deref(), project.as_deref()).await,
+            action:
+                DocketCmd::Renumber {
+                    host,
+                    project,
+                    apply,
+                },
+        } => projects::docket::renumber::run(host.host.as_deref(), project.as_deref(), apply).await,
         ProjectsCmd::Docket {
             action: DocketCmd::List { host, project },
         } => projects::docket::entries::list(host.host.as_deref(), project.as_deref()).await,
@@ -5030,6 +5089,10 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 host,
                 project,
                 title,
+                description,
+                visibility,
+                ics,
+                location,
                 due_at,
                 authority_kind,
                 authority,
@@ -5044,7 +5107,9 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 projects::deadline::create(
                     host.host.as_deref(),
                     project.as_deref(),
-                    title,
+                    Some(title),
+                    description,
+                    visibility,
                     due_at,
                     authority_kind,
                     authority,
@@ -5055,6 +5120,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     internal_lead_days,
                     client_lead_days,
                     replay_key,
+                    ics.as_deref(),
+                    location.as_deref(),
                 )
                 .await
             }
@@ -5063,6 +5130,10 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 project,
                 id,
                 title,
+                description,
+                visibility,
+                ics,
+                location,
                 due_at,
                 authority_kind,
                 authority,
@@ -5078,6 +5149,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     project.as_deref(),
                     id,
                     title,
+                    description,
+                    visibility,
                     due_at,
                     authority_kind,
                     authority,
@@ -5087,6 +5160,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     calendar_role,
                     internal_lead_days,
                     client_lead_days,
+                    ics.as_deref(),
+                    location.as_deref(),
                 )
                 .await
             }
@@ -5219,6 +5294,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             client_dri,
             private_slack_channel,
             private_notion_page,
+            calendar,
+            booking_url,
             firm,
             brand,
             host,
@@ -5233,6 +5310,10 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     private_slack_channel.as_deref(),
                     private_notion_page.as_deref(),
                 ],
+                projects::set::LiveFields {
+                    calendar_id: calendar.as_deref(),
+                    booking_url: booking_url.as_deref(),
+                },
                 firm.as_deref(),
                 brand.as_deref(),
             )
@@ -7267,21 +7348,30 @@ fn run_render(
     // rather than to whatever bundle happens to be mounted at render time.
     // Restore the plumbing here, not somewhere new, if that call changes.
     let letterhead = pdf::Letterhead::default();
+    // A memo is the Firm's analysis for its client, so every page of it
+    // says it is privileged, whatever its author typed (LAW-224).
+    let privileged = field("kind").as_deref() == Some("memo");
     let body = if preview {
         flag_open_markers(&body)
     } else {
         body
     };
     let format_debug = format!("{format:?}");
-    let bytes =
-        match render_notation_artifact(file, &body, output_extension, format, &letterhead, preview)
-        {
-            Ok(bytes) => bytes,
-            Err(_error) => {
-                eprintln!("navigator: render failed");
-                return ExitCode::from(2);
-            }
-        };
+    let bytes = match render_notation_artifact(
+        file,
+        &body,
+        output_extension,
+        format,
+        &letterhead,
+        preview,
+        privileged,
+    ) {
+        Ok(bytes) => bytes,
+        Err(_error) => {
+            eprintln!("navigator: render failed");
+            return ExitCode::from(2);
+        }
+    };
     if let Err(e) = std::fs::write(out, &bytes) {
         eprintln!("navigator: write {}: {e}", out.display());
         return ExitCode::from(2);
@@ -7381,6 +7471,7 @@ fn render_notation_artifact(
     format: pdf::OutputFormat,
     letterhead: &pdf::Letterhead,
     preview: bool,
+    privileged: bool,
 ) -> Result<Vec<u8>, String> {
     if output_extension == "docx" {
         let word_letterhead =
@@ -7416,6 +7507,7 @@ fn render_notation_artifact(
         &pdf::RenderOptions {
             creation_timestamp: notation_render_timestamp(file),
             preview,
+            privileged,
         },
     )
     .map_err(|error| format!("render {}: {error}", file.display()))

@@ -48,9 +48,23 @@ async fn call(request: reqwest::RequestBuilder, action: &str) -> Result<Value> {
     serde_json::from_str(&body).context("parse deadline response")
 }
 
+fn annotate_visibility(row: &mut Value) {
+    if let Some(rows) = row.as_array_mut() {
+        for row in rows {
+            annotate_visibility(row);
+        }
+    } else if let Some(object) = row.as_object_mut() {
+        if let Some(lead) = object.get("client_lead_days") {
+            let visibility = if lead.is_null() { "internal" } else { "client" };
+            object.insert("visibility".into(), json!(visibility));
+        }
+    }
+}
+
 fn finish(result: Result<Value>) -> ExitCode {
     match result {
-        Ok(row) => {
+        Ok(mut row) => {
+            annotate_visibility(&mut row);
             println!("{row}");
             ExitCode::SUCCESS
         }
@@ -119,11 +133,74 @@ pub async fn ics(host: Option<&str>, project: Option<&str>) -> ExitCode {
     }
 }
 
+fn apply_visibility(
+    object: &mut serde_json::Map<String, Value>,
+    visibility: Option<&str>,
+    client_lead: Option<i64>,
+    creating: bool,
+) -> Result<()> {
+    match visibility {
+        Some("internal") => {
+            object.insert("client_lead_days".into(), Value::Null);
+        }
+        Some("client") if client_lead.is_none() => {
+            return Err(anyhow!(
+                "client visibility requires --client-lead-days and --internal-lead-days"
+            ))
+        }
+        None if creating => {
+            object.insert("client_lead_days".into(), Value::Null);
+        }
+        Some("client") | None => {}
+        Some(_) => return Err(anyhow!("visibility must be internal or client")),
+    }
+    Ok(())
+}
+
+fn export_row(base: &str, code: &str, row: &Value, location: Option<&str>) -> Result<String> {
+    let url = reqwest::Url::parse(base)?;
+    let mut row = row.clone();
+    if let Some(location) = location {
+        row["location"] = json!(location);
+    }
+    ics::render(
+        &ics::Calendar {
+            host: url.host_str().unwrap_or("navigator"),
+            base_url: base,
+            project_code: code,
+        },
+        &[row],
+    )
+    .map_err(|error| anyhow!(error))
+}
+
+fn finish_write(
+    row: Value,
+    base: &str,
+    code: &str,
+    path: Option<&Path>,
+    location: Option<&str>,
+) -> Result<Value> {
+    if let Some(path) = path {
+        let calendar = export_row(base, code, &row, location)?;
+        std::fs::write(path, calendar).with_context(|| {
+            format!(
+                "deadline {} was saved, but calendar export to {} failed",
+                row["id"],
+                path.display()
+            )
+        })?;
+    }
+    Ok(row)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn create(
     host: Option<&str>,
     project: Option<&str>,
     title: Option<String>,
+    description: Option<String>,
+    visibility: Option<String>,
     due_at: String,
     authority_kind: String,
     authority: Option<String>,
@@ -134,10 +211,15 @@ pub async fn create(
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
     replay_key: Option<String>,
+    ics_path: Option<&Path>,
+    location: Option<&str>,
 ) -> ExitCode {
     finish(
         async {
-            let (base, token, id) = coordinates(host, project).await?;
+            if title.as_deref().is_none_or(|title| title.trim().is_empty()) {
+                return Err(anyhow!("--title must name what is due"));
+            }
+            let (base, token, id, code) = coordinates_with_code(host, project).await?;
             let mut body = json!({
                 "due_at": due_at,
                 "authority_kind": authority_kind,
@@ -148,6 +230,9 @@ pub async fn create(
             };
             if let Some(title) = title {
                 object.insert("title".into(), json!(title));
+            }
+            if let Some(description) = description {
+                object.insert("description".into(), json!(description));
             }
             if let Some(authority) = authority {
                 object.insert("authority".into(), json!(authority));
@@ -170,14 +255,16 @@ pub async fn create(
             if let Some(key) = replay_key {
                 object.insert("replay_key".into(), json!(key));
             }
-            call(
+            apply_visibility(object, visibility.as_deref(), client_lead_days, true)?;
+            let row = call(
                 reqwest::Client::new()
                     .post(format!("{base}/app/api/projects/{id}/deadlines"))
                     .bearer_auth(token)
                     .json(&body),
                 "create",
             )
-            .await
+            .await?;
+            finish_write(row, &base, &code, ics_path, location)
         }
         .await,
     )
@@ -189,6 +276,8 @@ pub async fn update(
     project: Option<&str>,
     id: Uuid,
     title: Option<String>,
+    description: Option<String>,
+    visibility: Option<String>,
     due_at: Option<String>,
     authority_kind: Option<String>,
     authority: Option<String>,
@@ -198,10 +287,12 @@ pub async fn update(
     calendar_role: Option<String>,
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
+    ics_path: Option<&Path>,
+    location: Option<&str>,
 ) -> ExitCode {
     finish(
         async {
-            let (base, token, project_id) = coordinates(host, project).await?;
+            let (base, token, project_id, code) = coordinates_with_code(host, project).await?;
             let mut body = json!({});
             let Some(object) = body.as_object_mut() else {
                 return Err(anyhow!("deadline body is an object"));
@@ -236,7 +327,11 @@ pub async fn update(
             if let Some(days) = client_lead_days {
                 object.insert("client_lead_days".into(), json!(days));
             }
-            call(
+            if let Some(description) = description {
+                object.insert("description".into(), json!(description));
+            }
+            apply_visibility(object, visibility.as_deref(), client_lead_days, false)?;
+            let row = call(
                 reqwest::Client::new()
                     .patch(format!(
                         "{base}/app/api/projects/{project_id}/deadlines/{id}"
@@ -245,7 +340,8 @@ pub async fn update(
                     .json(&body),
                 "update",
             )
-            .await
+            .await?;
+            finish_write(row, &base, &code, ics_path, location)
         }
         .await,
     )
@@ -298,7 +394,7 @@ async fn post_transition(
 
 #[cfg(test)]
 mod tests {
-    use super::post_transition;
+    use super::{annotate_visibility, apply_visibility, export_row, finish_write, post_transition};
     use uuid::Uuid;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -335,5 +431,65 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{verb}: {error:#}"));
             assert_eq!(row["status"], verb);
         }
+    }
+    #[test]
+    fn row_export_preserves_the_event_and_ephemeral_location() {
+        let row = serde_json::json!({"id":"deadline-1", "due_at":"2026-11-02T17:00:00-08:00", "updated_at":"2026-10-26T00:00:00Z", "status":"open", "title":"Response"});
+        let calendar = export_row(
+            "https://example.test",
+            "sample",
+            &row,
+            Some("https://court.test/join?a=1,b=2"),
+        )
+        .unwrap();
+        assert!(calendar.contains("UID:deadline-1@example.test\r\n"));
+        assert!(calendar.contains("LOCATION:https://court.test/join?a=1\\,b=2\r\n"));
+        assert_eq!(calendar.matches("BEGIN:VEVENT").count(), 1);
+        assert!(row.get("location").is_none());
+    }
+    #[test]
+    fn failed_export_reports_that_the_deadline_was_saved() {
+        let row = serde_json::json!({"id":"saved-row", "due_at":"2026-11-02T17:00:00-08:00"});
+        let directory = tempfile::tempdir().unwrap();
+        let missing_parent = directory.path().join("missing/event.ics");
+        let error = finish_write(
+            row,
+            "https://example.test",
+            "sample",
+            Some(&missing_parent),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("saved-row"));
+        assert!(error.to_string().contains("was saved"));
+    }
+    #[test]
+    fn visibility_is_a_projection_of_the_client_lead() {
+        let mut body = serde_json::json!({"client_lead_days": 3});
+        apply_visibility(
+            body.as_object_mut().unwrap(),
+            Some("internal"),
+            Some(3),
+            false,
+        )
+        .unwrap();
+        assert!(body["client_lead_days"].is_null());
+        annotate_visibility(&mut body);
+        assert_eq!(body["visibility"], "internal");
+        assert!(
+            apply_visibility(body.as_object_mut().unwrap(), Some("client"), None, false).is_err()
+        );
+        let mut client = serde_json::json!({"client_lead_days": 3});
+        apply_visibility(
+            client.as_object_mut().unwrap(),
+            Some("client"),
+            Some(3),
+            true,
+        )
+        .unwrap();
+        annotate_visibility(&mut client);
+        assert_eq!(client["visibility"], "client");
+        apply_visibility(client.as_object_mut().unwrap(), None, Some(3), true).unwrap();
+        assert!(client["client_lead_days"].is_null());
     }
 }

@@ -60,13 +60,13 @@ For architecture or process questions, convene the `council` skill; for how a cl
 
 * `navigator.yaml` names the Project and declares its Matter Pages under `pages:`: each page has a slug, a kind, and
   the Sections each lens (`lawyer`, `client`) shows. Navigator renders them at `/app/projects/<code>/<slug>`.
-* `blobs/` holds one committed YAML pointer (a Blob) per document: `blobs/<slug>.yaml` names the document's live
-  revision. Document bytes stay in Navigator-managed storage.
+* `blobs/` holds one committed Pointer per document: `blobs/<slug>.yaml` names the document's live
+  revision. The Blob is the revision's bytes in Navigator-managed storage.
   * `blobs/onboarding/` and `blobs/offboarding/` hold the pointers for the letters that open and close the Project. A
     signed copy is named `<name>_signed.pdf` and its pointer carries `docusign_envelope_id`.
   * `blobs/invoices/` holds the pointers for invoices named `INV-<digits>.<ext>`; every pointer carries
     `xero_invoice_id`.
-  * A pointer's optional `folder:` names the matter folder its bytes belong in; without it, the folder follows from
+  * A pointer's optional `folder:` names the Matter Folder its bytes belong in; without it, the folder follows from
     `kind`.
 * `documents/` is git-ignored. It holds the bytes `navigator project sync` pulls down or uploads, organised the way a
   case-management system organises a matter. `navigator project sync` creates every folder, even when it is empty:
@@ -86,7 +86,7 @@ For architecture or process questions, convene the `council` skill; for how a cl
 * `seeds/` holds seed data that `navigator site import` creates or updates.
 * `notes/` is git-ignored. Write call notes there for `navigator project communication create --body-file`.
 * Handoff note: work that may outlast the session keeps its state in `notes/HANDOFF-<topic>.md.local`. The gate does
-  not read it, and no matter fact leaves the repository.
+  not read it, and no matter fact leaves the repository. Follow `.agents/skills/working-notes/SKILL.md`.
   * Write it before a session ends with work in flight, near compaction, or when the lawyer asks. Rewrite it when the
     plan changes; never append a contradiction.
   * Sections, in order: Plan (with the rule behind each computed date), Files (paths, render command, open

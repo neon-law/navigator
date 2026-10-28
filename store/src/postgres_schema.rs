@@ -1151,6 +1151,20 @@ mod tests {
                 "20261025120000_add_project_deadline_title.sql",
                 include_str!("../postgres/migrations/20261025120000_add_project_deadline_title.sql"),
             ),
+            (
+                "20261026120000_add_deadline_calendar_sequence.sql",
+                include_str!("../postgres/migrations/20261026120000_add_deadline_calendar_sequence.sql"),
+            ),
+            (
+                "20261026130000_add_deadline_description.sql",
+                include_str!("../postgres/migrations/20261026130000_add_deadline_description.sql"),
+            ),
+            (
+                "20261027120000_add_project_calendar_and_booking_url.sql",
+                include_str!(
+                    "../postgres/migrations/20261027120000_add_project_calendar_and_booking_url.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

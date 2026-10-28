@@ -16,12 +16,13 @@
 //! - **Conditional** — `{{#if custom_yes_no__approved}} … {{/if}}` and its
 //!   `state=value` form name a declared state and must balance. Ordered
 //!   `else if` alternatives name declared states; an optional `else` is a
-//!   branch marker within the same conditional.
+//!   branch marker within the same conditional. Custom choice branches must
+//!   cover every declared option or provide a fallback; unknown options refuse.
 //!
 //! Shares `f107`'s `{{ … }}` dotted-grammar scanning; the per-type shape is
 //! the registry's (mirrored from `store::question_registry`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 
@@ -78,6 +79,89 @@ impl F115PathResolution {
 struct FrontmatterShape {
     #[serde(default)]
     questionnaire: Option<BTreeMap<String, BTreeMap<String, String>>>,
+    #[serde(default)]
+    choices: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+/// Coverage belongs to one balanced conditional, including its alternatives.
+#[derive(Default)]
+struct Conditional {
+    fallback: bool,
+    covered: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl Conditional {
+    fn record(
+        &mut self,
+        condition: &str,
+        choices: &BTreeMap<String, BTreeMap<String, String>>,
+        state_type: &BTreeMap<&str, &str>,
+        file: &SourceFile,
+        violations: &mut Vec<Violation>,
+    ) {
+        let (state, expected) = condition
+            .split_once('=')
+            .map_or((condition.trim(), None), |(state, value)| {
+                (state.trim(), Some(value.trim()))
+            });
+        if !matches!(
+            state_type.get(state),
+            Some(&"custom_single_choice" | &"custom_multiple_choice")
+        ) {
+            return;
+        }
+        let Some((_, role)) = state.split_once("__") else {
+            return;
+        };
+        let Some(options) = choices.get(role) else {
+            return; // N104 requires the option declaration.
+        };
+        let covered = self.covered.entry(state.to_string()).or_default();
+        if let Some(option) = expected {
+            if options.contains_key(option) {
+                covered.insert(option.to_string());
+            } else {
+                violations.push(violation(
+                    file,
+                    format!("Conditional state `{state}` names undeclared option `{option}`"),
+                ));
+            }
+        } else {
+            // The renderer treats these strings as false even when selected.
+            covered.extend(
+                options
+                    .keys()
+                    .filter(|option| {
+                        !option.is_empty() && !matches!(option.as_str(), "false" | "no" | "0")
+                    })
+                    .cloned(),
+            );
+        }
+    }
+
+    fn finish(
+        self,
+        choices: &BTreeMap<String, BTreeMap<String, String>>,
+        file: &SourceFile,
+        violations: &mut Vec<Violation>,
+    ) {
+        if self.fallback {
+            return;
+        }
+        for (state, covered) in self.covered {
+            let Some(options) = state
+                .split_once("__")
+                .and_then(|(_, role)| choices.get(role))
+            else {
+                continue;
+            };
+            for option in options.keys().filter(|option| !covered.contains(*option)) {
+                violations.push(violation(file, format!(
+                    "Conditional state `{state}` is missing option `{option}`; add a branch or `{{{{else}}}}` fallback"
+                )));
+            }
+        }
+    }
 }
 
 /// One `{{ … }}` token: its inner trimmed text.
@@ -130,10 +214,9 @@ impl Rule for F115PathResolution {
             .collect();
 
         // Only the body carries render placeholders; scan past frontmatter.
-        let body = file
-            .contents
-            .split_once("\n---")
-            .map_or(file.contents.as_str(), |(_, rest)| rest);
+        let compiled =
+            crate::clauses::compile(&file.contents).unwrap_or_else(|_| file.contents.clone());
+        let body = frontmatter::split(&compiled).map_or(compiled.as_str(), |(_, body)| body);
 
         let mut violations = Vec::new();
         // Active `#for` loop bindings: var → aggregate `<type>` token.
@@ -147,7 +230,9 @@ impl Rule for F115PathResolution {
                     violations.push(violation(file, "`{{/for}}` without a matching `{{#for}}`"));
                 }
             } else if let Some(rest) = tok.strip_prefix("#if ") {
-                conditionals.push(false);
+                let mut conditional = Conditional::default();
+                conditional.record(rest, &parsed.choices, &state_type, file, &mut violations);
+                conditionals.push(conditional);
                 let state = rest.split_once('=').map_or(rest, |(state, _)| state).trim();
                 if let Some((head, tail)) = state.split_once('.') {
                     handle_path(head, tail, &state_type, &loops, file, &mut violations);
@@ -165,8 +250,14 @@ impl Rule for F115PathResolution {
                     ));
                     continue;
                 }
-                if conditionals.last() == Some(&true) {
+                if conditionals
+                    .last()
+                    .is_some_and(|conditional| conditional.fallback)
+                {
                     violations.push(violation(file, "`{{else if}}` cannot follow `{{else}}`"));
+                }
+                if let Some(conditional) = conditionals.last_mut() {
+                    conditional.record(rest, &parsed.choices, &state_type, file, &mut violations);
                 }
                 let state = rest.split_once('=').map_or(rest, |(state, _)| state).trim();
                 if let Some((head, tail)) = state.split_once('.') {
@@ -179,14 +270,16 @@ impl Rule for F115PathResolution {
                 }
             } else if tok == "else" {
                 match conditionals.last_mut() {
-                    Some(seen_else) if !*seen_else => *seen_else = true,
+                    Some(conditional) if !conditional.fallback => conditional.fallback = true,
                     Some(_) => violations.push(violation(file, "duplicate `{{else}}` branch")),
                     None => {
                         violations.push(violation(file, "`{{else}}` without a matching `{{#if}}`"));
                     }
                 }
             } else if tok == "/if" {
-                if conditionals.pop().is_none() {
+                if let Some(conditional) = conditionals.pop() {
+                    conditional.finish(&parsed.choices, file, &mut violations);
+                } else {
                     violations.push(violation(file, "`{{/if}}` without a matching `{{#if}}`"));
                 }
             } else if let Some((head, tail)) = tok.split_once('.') {
@@ -440,6 +533,109 @@ mod tests {
             .lint(&file(&else_if_after_else))
             .iter()
             .any(|violation| violation.message.contains("cannot follow `{{else}}`")));
+    }
+
+    fn choice_template(body: &str) -> String {
+        format!(
+            "---\nquestionnaire:\n  BEGIN: {{ _: custom_single_choice__delivery }}\n  custom_single_choice__delivery: {{ _: END }}\n  END: {{}}\nchoices:\n  delivery:\n    email: By email\n    post: By post\n---\n{body}\n"
+        )
+    }
+
+    #[test]
+    fn choice_conditional_requires_every_option_or_fallback() {
+        let source = choice_template("{{#if custom_single_choice__delivery=email}}Email{{/if}}");
+        let findings = F115PathResolution.lint(&file(&source));
+        assert!(findings.iter().any(|finding| finding.code == "N115"
+            && finding.message.contains("custom_single_choice__delivery")
+            && finding.message.contains("post")));
+        for body in [
+            "{{#if custom_single_choice__delivery=email}}Email{{else if custom_single_choice__delivery=post}}Post{{/if}}",
+            "{{#if custom_single_choice__delivery=email}}Email{{else}}Other{{/if}}",
+            "{{#if custom_single_choice__delivery}}Any delivery{{/if}}",
+        ] {
+            assert!(F115PathResolution.lint(&file(&choice_template(body))).is_empty(), "{body}");
+        }
+    }
+
+    #[test]
+    fn choice_conditional_rejects_dead_options_even_with_fallback() {
+        let source = choice_template(
+            "{{#if custom_single_choice__delivery=emali}}Email{{else}}Other{{/if}}",
+        );
+        let findings = F115PathResolution.lint(&file(&source));
+        assert!(findings.iter().any(|finding| finding
+            .message
+            .contains("custom_single_choice__delivery")
+            && finding.message.contains("emali")
+            && finding.message.contains("undeclared option")));
+    }
+
+    #[test]
+    fn nested_and_separate_conditionals_do_not_share_coverage() {
+        for body in [
+            "{{#if custom_single_choice__delivery=email}}{{#if custom_single_choice__delivery=post}}Post{{else}}Other{{/if}}{{/if}}",
+            "{{#if custom_single_choice__delivery=email}}Email{{/if}}{{#if custom_single_choice__delivery=post}}Post{{/if}}",
+        ] {
+            let findings = F115PathResolution.lint(&file(&choice_template(body)));
+            assert!(!findings.is_empty(), "{body}");
+        }
+    }
+
+    #[test]
+    fn choice_values_follow_render_whitespace() {
+        let source = choice_template("{{#if custom_single_choice__delivery = email}}Email{{else if custom_single_choice__delivery=post}}Post{{/if}}");
+        assert!(F115PathResolution.lint(&file(&source)).is_empty());
+    }
+
+    #[test]
+    fn truthy_choice_condition_leaves_false_values_unhandled() {
+        let source = choice_template("{{#if custom_single_choice__delivery}}Delivery{{/if}}")
+            .replace("    post: By post", "    'no': No delivery");
+        assert!(F115PathResolution
+            .lint(&file(&source))
+            .iter()
+            .any(|finding| finding.message.contains("no")
+                && finding.message.contains("missing option")));
+    }
+
+    #[test]
+    fn else_if_dead_options_are_checked_and_unrelated_else_is_not_a_fallback() {
+        let source = choice_template("{{#if custom_single_choice__delivery=email}}Email{{else if custom_single_choice__delivery=poste}}Post{{else}}Other{{/if}}");
+        assert!(F115PathResolution
+            .lint(&file(&source))
+            .iter()
+            .any(|finding| finding.message.contains("poste")
+                && finding.message.contains("undeclared option")));
+        let source = choice_template("{{#if custom_single_choice__delivery=email}}{{#if custom_single_choice__delivery}}Any{{else}}None{{/if}}{{/if}}");
+        assert!(F115PathResolution
+            .lint(&file(&source))
+            .iter()
+            .any(|finding| finding.message.contains("post")
+                && finding.message.contains("missing option")));
+    }
+
+    #[test]
+    fn multiple_choice_branches_use_the_same_declared_option_checks() {
+        let source = choice_template("{{#if custom_single_choice__delivery=email}}Email{{/if}}")
+            .replace("custom_single_choice", "custom_multiple_choice");
+        assert!(F115PathResolution
+            .lint(&file(&source))
+            .iter()
+            .any(
+                |finding| finding.message.contains("custom_multiple_choice__delivery")
+                    && finding.message.contains("missing option `post`")
+            ));
+    }
+
+    #[test]
+    fn quoted_comparisons_are_literal_values_like_the_renderer() {
+        let source = choice_template(
+            "{{#if custom_single_choice__delivery='email'}}Email{{else}}Other{{/if}}",
+        );
+        assert!(F115PathResolution
+            .lint(&file(&source))
+            .iter()
+            .any(|finding| finding.message.contains("undeclared option `'email'`")));
     }
 
     #[test]

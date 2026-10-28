@@ -35,6 +35,9 @@ struct ClientProjectView {
     description: Option<String>,
     external_slack_channel_url: Option<String>,
     shared_notion_page_url: Option<String>,
+    /// Where the client books time. The Project calendar's id stays
+    /// firm-side.
+    booking_url: Option<String>,
     inserted_at: String,
     updated_at: String,
 }
@@ -51,6 +54,7 @@ impl From<store::projects::Project> for ClientProjectView {
             description: project.description,
             external_slack_channel_url: project.external_slack_channel_url,
             shared_notion_page_url: project.shared_notion_page_url,
+            booking_url: project.booking_url,
             inserted_at: project.inserted_at,
             updated_at: project.updated_at,
         }
@@ -286,6 +290,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "POST",
             "/app/api/integrations/notion/ensure",
             post(crate::integrations_api::notion_ensure_door),
+        ),
+        (
+            "POST",
+            "/app/api/integrations/calendar/ensure",
+            post(crate::integrations_api::calendar_ensure_door),
         ),
         (
             "POST",
@@ -2878,7 +2887,51 @@ async fn transition_matter(
         input.effective_at,
     )
     .await?;
+    let updated = if updated.status == "open" {
+        updated
+    } else {
+        close_project_calendar(&state, updated).await
+    };
     Ok(Json(updated).into_response())
+}
+
+/// Make a closed or archived matter's calendar read-only and clear its
+/// booking link. Best-effort: the matter is already closed, so a provider
+/// fault is logged rather than reported as a failed close, and the next
+/// `navigator project setup` converges it. Without a configured calendar the
+/// booking link is still cleared.
+async fn close_project_calendar(
+    state: &ApiState,
+    project: store::projects::Project,
+) -> store::projects::Project {
+    let result = match state
+        .integration_providers
+        .calendar(&state.surreal, project.id)
+        .await
+    {
+        Ok(calendar) => {
+            store::project_calendar::close(&state.surreal, project.id, calendar.as_ref())
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        }
+        Err(_) => store::projects::clear_booking_url(&state.surreal, project.id)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
+    };
+    if let Err(error) = result {
+        tracing::error!(
+            %error,
+            project_id = %project.id,
+            "Project calendar close failed; retry with navigator project setup"
+        );
+    }
+    store::projects::find_by_id(&state.surreal, project.id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(project)
 }
 
 /// `DELETE /app/api/projects/{id}` — delete a matter. Lawyer-tier only. A matter
@@ -5063,6 +5116,9 @@ struct IntegrityAsset {
     /// row's sha256.
     #[serde(skip_serializing_if = "Option::is_none")]
     sha256_matches: Option<bool>,
+    /// Only a validation result, never docket content. Present for the lawyer gate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    docket_name_matches: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -5141,6 +5197,9 @@ async fn document_integrity_door(
         .await
         .map_err(ApiError::Asset)?;
         rows.extend(chunk_rows);
+    }
+    if matches!(lens, store::access::ProjectLens::Lawyer) {
+        populate_docket_name_checks(&state, id, &mut rows).await?;
     }
     let elapsed = started.elapsed();
     if elapsed >= INTEGRITY_SLOW_PAGE {
@@ -5226,6 +5285,35 @@ async fn integrity_chains(
     Ok((current_by_slug, version_by_id))
 }
 
+/// Populate only validation outcomes on the existing document metadata projection.
+async fn populate_docket_name_checks(
+    state: &ApiState,
+    id: Uuid,
+    rows: &mut [IntegrityAsset],
+) -> Result<(), ApiError> {
+    let entries = store::cases::docket_for_project(&state.surreal, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    for row in rows {
+        let linked: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.document_asset_id == Some(row.asset_id))
+            .collect();
+        row.docket_name_matches = Some(match linked.as_slice() {
+            [entry] => row.slug.as_deref().is_some_and(|slug| {
+                let ext = std::path::Path::new(slug)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .unwrap_or("pdf");
+                store::cases::filing_name(&entry.entry_number, &entry.title, ext)
+                    .is_ok_and(|expected| expected == slug)
+            }),
+            _ => false,
+        });
+    }
+    Ok(())
+}
+
 /// The integrity row for one asset: its storage presence and size, and with
 /// `deep` whether the stored bytes hash to the row's sha256.
 async fn integrity_row(
@@ -5269,6 +5357,7 @@ async fn integrity_row(
         size_bytes: stored_size,
         recorded_size: asset.byte_size,
         sha256_matches,
+        docket_name_matches: None,
     })
 }
 

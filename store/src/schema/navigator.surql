@@ -122,6 +122,14 @@ DEFINE FIELD OVERWRITE internal_slack_channel_id ON project TYPE option<string>;
 -- an `href`; that is not restated here as a second rule to keep in step.
 DEFINE FIELD OVERWRITE private_notion_page_url ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE shared_notion_page_url ON project TYPE option<string>;
+-- The matter's shared Google Calendar, by its Calendar API id. Created and
+-- shared with the firm-side participants by `navigator project setup`, or
+-- recorded by hand with `navigator project set --calendar`.
+DEFINE FIELD OVERWRITE calendar_id ON project TYPE option<string>;
+-- The client's booking link: the address of an appointment schedule a lawyer
+-- made on the Project calendar in Google Calendar. The Calendar API cannot
+-- create one, so the address is entered by hand. Cleared on close.
+DEFINE FIELD OVERWRITE booking_url ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE inserted_at ON project TYPE string;
 DEFINE FIELD OVERWRITE updated_at ON project TYPE string;
 DEFINE INDEX OVERWRITE project_code ON project FIELDS code UNIQUE;
@@ -336,6 +344,7 @@ DEFINE INDEX OVERWRITE statutory_deadline_replay ON statutory_deadline FIELDS pr
 DEFINE TABLE IF NOT EXISTS project_deadlines SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE project_id ON project_deadlines TYPE record<project>;
 DEFINE FIELD OVERWRITE title ON project_deadlines TYPE option<string>;
+DEFINE FIELD OVERWRITE description ON project_deadlines TYPE option<string>;
 DEFINE FIELD OVERWRITE due_at ON project_deadlines TYPE string;
 DEFINE FIELD OVERWRITE authority_kind ON project_deadlines TYPE string
     ASSERT $value IN ['statute', 'court_rule', 'court_order', 'contract', 'internal'];
@@ -352,6 +361,8 @@ DEFINE FIELD OVERWRITE client_lead_days ON project_deadlines TYPE option<int>;
 DEFINE FIELD OVERWRITE replay_key ON project_deadlines TYPE option<string>;
 DEFINE FIELD OVERWRITE inserted_at ON project_deadlines TYPE string;
 DEFINE FIELD OVERWRITE updated_at ON project_deadlines TYPE string;
+DEFINE FIELD OVERWRITE calendar_sequence ON project_deadlines TYPE option<int>
+    ASSERT $value = NONE OR ($value >= 0 AND $value <= 2147483647);
 
 -- A Matter Page: one `pages:` entry of a Project repository's navigator.yaml,
 -- as `navigator project sync` last stored it (store::matter_pages). A sync

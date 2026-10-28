@@ -20,6 +20,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 pub mod audio;
+pub mod calendar;
 pub mod drive;
 pub mod forge;
 pub mod forgejo_forge;
@@ -38,6 +39,10 @@ pub mod vertex;
 pub mod workspace;
 
 pub use audio::{decode_to_mono_pcm16, AudioError, DecodedAudio};
+pub use calendar::{
+    CalendarError, CalendarMember, CalendarRole, CalendarService, FakeCalendar, GoogleCalendar,
+    ProjectCalendar,
+};
 pub use drive::{
     md5_hex, DriveError, DriveFile, DriveFileDownload, DriveFolder, DriveMember, DriveMemberKind,
     DriveRole, DriveService, DriveWorkspace, DriveWorkspaceConfig, FakeDrive, GoogleDrive,

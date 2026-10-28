@@ -4230,6 +4230,10 @@ async fn projects_update_lawyer_only(
         } else {
             String::new()
         }),
+        // Set with `navigator project set --calendar` / `--booking-url`; the
+        // form carries neither, so it leaves both alone.
+        calendar_id: None,
+        booking_url: None,
     };
     match store::projects::update_project(&surreal, project_id, &command).await {
         Ok(_) => Redirect::to("/app/projects").into_response(),

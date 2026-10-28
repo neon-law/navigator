@@ -1,8 +1,9 @@
 //! The `/app/api/integrations/*` doors.
 //!
-//! Four operations, all admin-tier: ensure or reconcile a Project's
-//! Firm-private Notion page, and ensure or notify its Firm-private Slack
-//! channel. They are the server half of `navigator project setup`.
+//! Five operations, all admin-tier: ensure or reconcile a Project's
+//! Firm-private Notion page, ensure or notify its Firm-private Slack
+//! channel, and ensure its shared Google Calendar. They are the server half
+//! of `navigator project setup`.
 //!
 //! ## Why its own noun
 //!
@@ -635,6 +636,51 @@ pub(crate) async fn slack_notify_door(
             project.code.clone(),
             "provider_unavailable",
         ))),
+    }
+}
+
+/// `POST /app/api/integrations/calendar/ensure` — create or adopt one
+/// Project's shared Google Calendar, record its id, and share it with the
+/// firm-side participants. A closed matter's calendar is made read-only
+/// instead. See [`store::project_calendar`].
+pub(crate) async fn calendar_ensure_door(
+    State(state): State<ApiState>,
+    authed: AdminSession,
+    Json(selector): Json<ProjectSelector>,
+) -> Result<Response, ApiError> {
+    let mut results = Vec::new();
+    for project in targets(&state, &authed, &selector).await? {
+        results.push(ensure_one_calendar(&state, &project).await);
+    }
+    Ok((StatusCode::OK, Json(IntegrationReport { results })).into_response())
+}
+
+async fn ensure_one_calendar(
+    state: &ApiState,
+    project: &store::projects::Project,
+) -> ProjectOutcome {
+    let _guard = ensure_lock(format!("calendar:{}", project.id)).await;
+    let calendar = match state
+        .integration_providers
+        .calendar(&state.surreal, project.id)
+        .await
+    {
+        Ok(calendar) => calendar,
+        Err(error) => return unavailable(project, &error),
+    };
+    match store::project_calendar::ensure(&state.surreal, project.id, calendar.as_ref()).await {
+        Ok(report) => ProjectOutcome::plain(project.code.clone(), report.outcome.slug()),
+        Err(store::project_calendar::ProjectCalendarError::Calendar(
+            cloud::CalendarError::AmbiguousSummary { count },
+        )) => ProjectOutcome::with_detail(
+            project.code.clone(),
+            "duplicate",
+            format!("{count} calendars carry this code"),
+        ),
+        Err(store::project_calendar::ProjectCalendarError::Calendar(_)) => {
+            ProjectOutcome::plain(project.code.clone(), "provider_unavailable")
+        }
+        Err(_) => ProjectOutcome::plain(project.code.clone(), "address_not_recorded"),
     }
 }
 

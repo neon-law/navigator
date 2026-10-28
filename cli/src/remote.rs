@@ -828,6 +828,8 @@ pub(crate) struct IntegrityAsset {
     pub(crate) recorded_size: i64,
     #[serde(default)]
     pub(crate) sha256_matches: Option<bool>,
+    #[serde(default)]
+    pub(crate) docket_name_matches: Option<bool>,
 }
 
 /// One server-side external-id finding. Empty until a pointer carries an
@@ -2179,11 +2181,11 @@ fn source_revision<'a>(
         .iter()
         .find(|revision| revision.asset_id == pointer.asset_id)
         .ok_or_else(|| {
-            anyhow!("source pointer revision is no longer on the live document chain")
+            anyhow!("source document's Pointer revision is no longer on the live document chain")
         })?;
     if !source.operative || source.version != pointer.version || source.sha256 != pointer.sha256 {
         return Err(anyhow!(
-            "source pointer is stale; run `navigator project gate --check` before transcribing"
+            "source document's Pointer is stale; run `navigator project gate --check` before transcribing"
         ));
     }
     Ok(source)
@@ -2422,7 +2424,7 @@ async fn retire_document(
 /// change the live identity and move its local pair. A rejected server write
 /// leaves the checkout untouched; a local failure attempts to restore the
 /// live identity to its prior slug.
-async fn reslug_with_local(
+pub(crate) async fn reslug_with_local(
     client: &DocumentClient,
     asset_id: Uuid,
     new_slug: &str,
@@ -2755,7 +2757,7 @@ pub async fn archive_repository(host: Option<&str>, project_code: &str, dir: &Pa
 /// `navigator site mail file --message <id> --project <code> --kind …`
 /// — file one inbound message's attachments into a matter, entirely
 /// server-side (`POST /app/api/projects/{id}/mail/file`, #517). The
-/// attachment bytes never reach this process; only the pointer YAML this
+/// attachment bytes never reach this process; only the Pointer this
 /// prints and stages under `documents/mail/<message>/` does, so the result
 /// is committable without the bytes ever having transited the checkout.
 /// `--dry-run` writes nothing and only lists what would be filed.
@@ -3684,6 +3686,34 @@ pub async fn set_project_firm_brand(
     if !status.is_success() {
         return Err(anyhow::anyhow!(
             "set Project Firm and brand failed: {status}: {}",
+            body.lines().next().unwrap_or_default().trim()
+        ));
+    }
+    Ok(())
+}
+
+/// `PATCH /app/api/projects/{id}` with `fields`, for the coordinates
+/// `navigator project set` records on the live row.
+pub async fn patch_project_fields(
+    host: &str,
+    project_code: &str,
+    fields: &serde_json::Map<String, serde_json::Value>,
+) -> anyhow::Result<()> {
+    let (base, token) = resolve(Some(host))?;
+    let project_id =
+        crate::projects::surfaces::resolve_project_id(&base, &token, project_code).await?;
+    let response = reqwest::Client::new()
+        .patch(format!("{base}/app/api/projects/{project_id}"))
+        .bearer_auth(&token)
+        .json(fields)
+        .send()
+        .await
+        .context("PATCH /app/api/projects/{id}")?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!(
+            "update live Project failed: {status}: {}",
             body.lines().next().unwrap_or_default().trim()
         ));
     }
@@ -7201,11 +7231,11 @@ mod tests {
                 None,
             )
             .await
-            .expect_err("a bare slug cannot become a repository pointer");
+            .expect_err("a bare slug cannot become a Pointer");
 
         assert_eq!(
             error.to_string(),
-            "document slug `dkt-001-complaint` must carry the source extension from `complaint.pdf`; use `dkt-001-complaint.pdf` so it can be represented as a repository pointer"
+            "document slug `dkt-001-complaint` must carry the source extension from `complaint.pdf`; use `dkt-001-complaint.pdf` so it can be represented as a Pointer"
         );
         assert!(server
             .received_requests()

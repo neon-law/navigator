@@ -156,6 +156,8 @@ async fn deadline_create_list_update_and_complete_print_the_stored_row() {
                 "14",
                 "--client-lead-days",
                 "7",
+                "--visibility",
+                "client",
             ],
         ),
         stored.created
@@ -338,6 +340,8 @@ async fn cli_api_round_trip_cancels_refuses_replay_and_reopens_the_same_row() {
     };
     let create = [
         "create",
+        "--title",
+        "Synthetic response",
         "--due-at",
         "2026-11-02T17:00:00-08:00",
         "--authority-kind",

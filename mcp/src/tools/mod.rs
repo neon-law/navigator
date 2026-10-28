@@ -34,6 +34,8 @@ pub mod list_jurisdictions;
 pub mod list_projects;
 pub mod list_tools;
 pub mod project_deadlines;
+pub mod project_skill_list;
+pub mod project_skill_show;
 pub mod project_status;
 pub mod send_welcome_email;
 pub mod show_person;
@@ -70,6 +72,8 @@ pub fn list_tools() -> Vec<Value> {
         send_welcome_email::descriptor(),
         glossary_list::descriptor(),
         glossary_show::descriptor(),
+        project_skill_list::descriptor(),
+        project_skill_show::descriptor(),
     ]
 }
 
@@ -112,9 +116,14 @@ pub fn advertised_catalog() -> Vec<Value> {
 
 /// The tools an Assistant Chat may call: read-only lookups only, the
 /// CLI's verbs as tools. A tool joins this list on purpose, and
-/// `the_assistant_catalog_is_the_read_only_glossary_tools` holds every
+/// `the_assistant_catalog_contains_only_read_only_lookups` holds every
 /// entry to [`READ_ONLY_TOOLS`].
-const ASSISTANT_TOOLS: &[&str] = &["glossary_list", "glossary_show"];
+const ASSISTANT_TOOLS: &[&str] = &[
+    "glossary_list",
+    "glossary_show",
+    "project_skill_list",
+    "project_skill_show",
+];
 
 /// The descriptors an Assistant Chat offers its model, in catalog order.
 #[must_use]
@@ -174,6 +183,8 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "spawn_legal_council",
     "glossary_list",
     "glossary_show",
+    "project_skill_list",
+    "project_skill_show",
 ];
 
 /// Whether a tool mutates state — writes a row, sends an email, commits
@@ -340,6 +351,8 @@ pub async fn call_tool(
         "send_welcome_email" => send_welcome_email::call(state, arguments).await,
         "glossary_list" => glossary_list::call(arguments).await,
         "glossary_show" => glossary_show::call(arguments).await,
+        "project_skill_list" => project_skill_list::call(arguments).await,
+        "project_skill_show" => project_skill_show::call(arguments).await,
         other => Err(ToolError::Unknown(other.to_string())),
     }
 }
@@ -1278,14 +1291,44 @@ mod tests {
     // the same embedded terms, as tools any signed-in caller may run.
     // -----------------------------------------------------------------
 
+    #[tokio::test]
+    async fn project_skill_show_returns_the_embedded_cli_body() {
+        let s = state().await;
+        let result = call_tool(
+            &s,
+            None,
+            "project_skill_show",
+            &json!({
+                "jurisdiction": "nv", "practice_area": "estates"
+            }),
+        )
+        .await
+        .unwrap();
+        let source = include_str!("../../../skills/nv/estates.md");
+        let expected = rules::project_skill::parse(source).unwrap();
+        assert_eq!(result["structuredContent"]["body"], expected.body);
+        assert_eq!(
+            result["structuredContent"]["notations"],
+            json!(expected.notations)
+        );
+    }
+
     /// The Assistant Chat is never offered a tool that writes.
     #[test]
-    fn the_assistant_catalog_is_the_read_only_glossary_tools() {
+    fn the_assistant_catalog_contains_only_read_only_lookups() {
         let names: Vec<String> = super::assistant_catalog()
             .iter()
             .filter_map(|t| t["name"].as_str().map(String::from))
             .collect();
-        assert_eq!(names, ["glossary_list", "glossary_show"]);
+        assert_eq!(
+            names,
+            [
+                "glossary_list",
+                "glossary_show",
+                "project_skill_list",
+                "project_skill_show"
+            ]
+        );
         for name in &names {
             assert!(!super::is_side_effecting(name), "{name} must only read");
         }
