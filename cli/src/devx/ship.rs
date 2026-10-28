@@ -1015,6 +1015,34 @@ fn has_own_certificate(key: BrandKey) -> bool {
     !FIRM_CERTIFICATE_ONLY.contains(&key)
 }
 
+/// The own `ManagedCertificate` of every [`FIRM_CERTIFICATE_ONLY`] brand. No
+/// render produces them, but `kubectl apply` never prunes one an earlier
+/// release created, and GKE attaches every `ManagedCertificate` still in the
+/// namespace whether or not the Ingress names it. Left in place they push the
+/// target proxy past its 15 certificates, the Ingress stops syncing, and
+/// `navigator-firm` is never attached, so it can never validate.
+fn retired_brand_certificates() -> Vec<String> {
+    FIRM_CERTIFICATE_ONLY
+        .iter()
+        .map(|key| brand_certificate_name(*key))
+        .collect()
+}
+
+/// Delete each [`retired_brand_certificates`] entry after the apply.
+fn retire_firm_only_brand_certificates(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
+    for name in retired_brand_certificates() {
+        exec(
+            dry_run,
+            kubectl(cfg)
+                .arg("delete")
+                .arg("managedcertificate")
+                .arg(&name)
+                .arg("--ignore-not-found=true"),
+        )?;
+    }
+    Ok(())
+}
+
 /// Every brand host of `public_host`'s environment: the default brand's
 /// public host, then each other registered brand's.
 fn firm_certificate_hosts(public_host: &str) -> Vec<String> {
@@ -2719,6 +2747,12 @@ fn offline_ship_plan(
                     "delete the Restate CronJob {cronjob} now hosted by DBOS"
                 ));
             }
+            for name in retired_brand_certificates() {
+                operations.push(format!(
+                    "delete the ManagedCertificate {name} now carried by \
+                     {FIRM_CERTIFICATE_NAME}"
+                ));
+            }
             operations.push("pin Navigator CronJob images to the selected tag".to_owned());
             operations.push("wait for rollouts and re-register the Restate worker".to_owned());
             operations.push("verify public assets and smoke-check the public host".to_owned());
@@ -3316,6 +3350,7 @@ fn roll(
     // 5. Reconcile services in dependency order, then apply the application.
     reconcile_ordered_services(cfg, dry_run, &rendered, opts, &tag, &target)?;
     retire_dbos_hosted_cronjobs(cfg, dry_run, deployment)?;
+    retire_firm_only_brand_certificates(cfg, dry_run)?;
 
     // 6. Wait on the rollouts the reconcile started. The apply in step 5
     //    already pinned every image to `tag` — the render substitutes it —
@@ -7282,6 +7317,32 @@ mod tests {
             retired_cronjobs(&deployment).unwrap(),
             ["general-nag", "billing-digest-trigger", "heartbeat-trigger"]
         );
+    }
+
+    /// Staging's Ingress asked for 17 certificates for 21 hours: the three
+    /// brands moved onto `navigator-firm` kept their own `ManagedCertificate`
+    /// because nothing deleted it, so `navigator-firm` never attached.
+    #[test]
+    fn every_roll_deletes_the_certificates_the_firm_certificate_replaced() {
+        let manifests = rendered_manifests(with_schedules(None, None, None));
+        let retired = retired_brand_certificates();
+        assert_eq!(
+            retired,
+            [
+                "navigator-web-abhaya",
+                "navigator-web-death-and-divorce",
+                "navigator-web-guieb-shook"
+            ]
+        );
+        for name in &retired {
+            assert!(
+                !manifests.split("\n---").any(|doc| {
+                    doc.contains("kind: ManagedCertificate")
+                        && doc.contains(&format!("\n  name: {name}\n"))
+                }),
+                "{name} is never rendered"
+            );
+        }
     }
 
     #[test]
