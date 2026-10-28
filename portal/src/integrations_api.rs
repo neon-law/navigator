@@ -260,7 +260,7 @@ pub(crate) async fn notion_ensure_door(
     for project in targets(&state, &authed, &selector).await? {
         results.push(ensure_one_page(&state, &project).await);
     }
-    Ok((StatusCode::OK, Json(IntegrationReport { results })).into_response())
+    Ok(report(results))
 }
 
 async fn ensure_one_page(state: &ApiState, project: &store::projects::Project) -> ProjectOutcome {
@@ -287,17 +287,13 @@ async fn ensure_one_page(state: &ApiState, project: &store::projects::Project) -
                     if !notion.is_expected_parent(&page) {
                         return ProjectOutcome::plain(project.code.clone(), "wrong_parent");
                     }
+                    let snapshot = to_snapshot(page);
                     let decision = cloud::reconcile_notion_project(
                         &cloud::NotionProjectInput {
                             project_code: project.code.clone(),
                             canonical_url: recorded_url,
                         },
-                        std::slice::from_ref(&cloud::NotionPageSnapshot {
-                            accessible: !page.archived,
-                            id: page.id,
-                            url: page.url,
-                            project_code: page.project_code,
-                        }),
+                        std::slice::from_ref(&snapshot),
                     );
                     return apply_notion_decision(
                         state,
@@ -411,7 +407,7 @@ pub(crate) async fn notion_reconcile_door(
     for project in targets(&state, &authed, &selector).await? {
         results.push(reconcile_one_page(&state, &project).await);
     }
-    Ok((StatusCode::OK, Json(IntegrationReport { results })).into_response())
+    Ok(report(results))
 }
 
 async fn reconcile_one_page(
@@ -440,15 +436,8 @@ async fn reconcile_one_page(
         return ProjectOutcome::plain(project.code.clone(), "wrong_parent");
     }
     if !pages.is_empty() {
-        let snapshots: Vec<cloud::NotionPageSnapshot> = pages
-            .into_iter()
-            .map(|page| cloud::NotionPageSnapshot {
-                accessible: !page.archived,
-                id: page.id,
-                url: page.url,
-                project_code: page.project_code,
-            })
-            .collect();
+        let snapshots: Vec<cloud::NotionPageSnapshot> =
+            pages.into_iter().map(to_snapshot).collect();
         let input = cloud::NotionProjectInput {
             project_code: project.code.clone(),
             canonical_url: canonical,
@@ -473,12 +462,7 @@ async fn reconcile_one_page(
                 project_code: project.code.clone(),
                 canonical_url: canonical,
             };
-            let snapshot = cloud::NotionPageSnapshot {
-                accessible: !page.archived,
-                id: page.id,
-                url: page.url,
-                project_code: page.project_code,
-            };
+            let snapshot = to_snapshot(page);
             let decision = cloud::reconcile_notion_project(&input, std::slice::from_ref(&snapshot));
             apply_notion_decision(state, project, notion.as_ref(), decision, "unchanged").await
         }
@@ -577,7 +561,7 @@ async fn ensure_one_channel(
             Err(_) => return ProjectOutcome::plain(project.code.clone(), "provider_unavailable"),
         };
     // Record the id and its canonical URL together so the two coordinates the
-    // Project row carries for this channel never disagree (ENG-807).
+    // Project row carries for this channel never disagree.
     if store::projects::set_internal_slack_channel(
         &state.surreal,
         project.id,
@@ -704,12 +688,19 @@ fn unavailable(project: &store::projects::Project, error: &IntegrationError) -> 
     ProjectOutcome::plain(project.code.clone(), error.slug())
 }
 
+fn to_snapshot(page: cloud::NotionPage) -> cloud::NotionPageSnapshot {
+    cloud::NotionPageSnapshot {
+        accessible: !page.archived,
+        id: page.id,
+        url: page.url,
+        project_code: page.project_code,
+    }
+}
+
+fn report(results: Vec<ProjectOutcome>) -> Response {
+    (StatusCode::OK, Json(IntegrationReport { results })).into_response()
+}
+
 fn report_one(outcome: ProjectOutcome) -> Response {
-    (
-        StatusCode::OK,
-        Json(IntegrationReport {
-            results: vec![outcome],
-        }),
-    )
-        .into_response()
+    report(vec![outcome])
 }
