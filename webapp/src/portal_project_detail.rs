@@ -565,6 +565,8 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
                 drive_folder_id: project.drive_folder_id.clone(),
                 shared_slack_channel_url: project.external_slack_channel_url.clone(),
                 shared_notion_page_url: project.shared_notion_page_url.clone(),
+                calendar_id: project.calendar_id.clone(),
+                booking_url: project.booking_url.clone(),
             },
             role,
         ),

@@ -1105,7 +1105,7 @@ fn ResourceMarkShowcase() -> Element {
             h2 { "Resource marks" }
             p {
                 "The matter workbench links out to the places work happens. Each \
-                 row opens on the service's own mark so five links are told apart \
+                 row opens on the service's own mark so the links are told apart \
                  by shape before a word is read, and the label names the audience \
                  the mark cannot show."
             }
@@ -1114,6 +1114,7 @@ fn ResourceMarkShowcase() -> Element {
                     (ResourceMark::Slack, "Private Slack channel"),
                     (ResourceMark::Notion, "Private Notion page"),
                     (ResourceMark::GoogleDrive, "Private Google Drive"),
+                    (ResourceMark::Calendar, "Matter calendar"),
                 ] {
                     li { key: "{mark.name()}", class: "project-resources__row",
                         span { class: "project-resources__link",

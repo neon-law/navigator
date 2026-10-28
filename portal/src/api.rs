@@ -35,6 +35,9 @@ struct ClientProjectView {
     description: Option<String>,
     external_slack_channel_url: Option<String>,
     shared_notion_page_url: Option<String>,
+    /// Where the client books time. The Project calendar's id stays
+    /// firm-side.
+    booking_url: Option<String>,
     inserted_at: String,
     updated_at: String,
 }
@@ -51,6 +54,7 @@ impl From<store::projects::Project> for ClientProjectView {
             description: project.description,
             external_slack_channel_url: project.external_slack_channel_url,
             shared_notion_page_url: project.shared_notion_page_url,
+            booking_url: project.booking_url,
             inserted_at: project.inserted_at,
             updated_at: project.updated_at,
         }
@@ -286,6 +290,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "POST",
             "/app/api/integrations/notion/ensure",
             post(crate::integrations_api::notion_ensure_door),
+        ),
+        (
+            "POST",
+            "/app/api/integrations/calendar/ensure",
+            post(crate::integrations_api::calendar_ensure_door),
         ),
         (
             "POST",
@@ -2878,7 +2887,51 @@ async fn transition_matter(
         input.effective_at,
     )
     .await?;
+    let updated = if updated.status == "open" {
+        updated
+    } else {
+        close_project_calendar(&state, updated).await
+    };
     Ok(Json(updated).into_response())
+}
+
+/// Make a closed or archived matter's calendar read-only and clear its
+/// booking link. Best-effort: the matter is already closed, so a provider
+/// fault is logged rather than reported as a failed close, and the next
+/// `navigator project setup` converges it. Without a configured calendar the
+/// booking link is still cleared.
+async fn close_project_calendar(
+    state: &ApiState,
+    project: store::projects::Project,
+) -> store::projects::Project {
+    let result = match state
+        .integration_providers
+        .calendar(&state.surreal, project.id)
+        .await
+    {
+        Ok(calendar) => {
+            store::project_calendar::close(&state.surreal, project.id, calendar.as_ref())
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        }
+        Err(_) => store::projects::clear_booking_url(&state.surreal, project.id)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
+    };
+    if let Err(error) = result {
+        tracing::error!(
+            %error,
+            project_id = %project.id,
+            "Project calendar close failed; retry with navigator project setup"
+        );
+    }
+    store::projects::find_by_id(&state.surreal, project.id)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(project)
 }
 
 /// `DELETE /app/api/projects/{id}` — delete a matter. Lawyer-tier only. A matter

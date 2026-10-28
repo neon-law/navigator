@@ -1041,7 +1041,8 @@ enum ProjectsCmd {
         #[command(flatten)]
         host: HostOpt,
     },
-    /// Fill required Project coordinates from the live matter or explicit values.
+    /// Fill Project coordinates from the live matter or explicit values, and set
+    /// the live Project's calendar and client booking link.
     Set {
         /// Project code. Defaults to `project.name` in the current manifest.
         project_code: Option<String>,
@@ -1060,6 +1061,16 @@ enum ProjectsCmd {
         /// Private Notion page URL.
         #[arg(long)]
         private_notion_page: Option<String>,
+        /// The Project's shared Google Calendar id. Written to
+        /// `project.calendar_id` and the live Project; an empty value clears
+        /// both. `navigator project setup` creates the calendar.
+        #[arg(long = "calendar", value_name = "ID")]
+        calendar: Option<String>,
+        /// The client's booking page: the address of an appointment schedule
+        /// made on the Project calendar in Google Calendar. Written to the
+        /// live Project only and shown to the client; an empty value clears it.
+        #[arg(long, value_name = "URL")]
+        booking_url: Option<String>,
         /// Firm name to assign to the live Project (requires --brand).
         #[arg(long, requires = "brand")]
         firm: Option<String>,
@@ -1335,7 +1346,8 @@ enum ProjectsCmd {
         #[command(subcommand)]
         action: projects::pages_init::PagesCmd,
     },
-    /// Complete an existing Project's Drive, GitHub, Slack, and Notion setup.
+    /// Complete an existing Project's Drive, GitHub, Slack, Notion, and shared
+    /// Google Calendar setup. A closed Project's calendar is made read-only.
     ///
     /// Each resource is attempted through the logged-in deployment's existing
     /// authenticated door and reported separately. A failed resource is safe
@@ -5282,6 +5294,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             client_dri,
             private_slack_channel,
             private_notion_page,
+            calendar,
+            booking_url,
             firm,
             brand,
             host,
@@ -5296,6 +5310,10 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     private_slack_channel.as_deref(),
                     private_notion_page.as_deref(),
                 ],
+                projects::set::LiveFields {
+                    calendar_id: calendar.as_deref(),
+                    booking_url: booking_url.as_deref(),
+                },
                 firm.as_deref(),
                 brand.as_deref(),
             )

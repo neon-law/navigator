@@ -1270,7 +1270,7 @@ route_allow if {
 }
 
 # Ensure or reconcile a Project's Firm-private provider resources:
-# POST /app/api/integrations/{notion,slack}/{verb}. Admin-only, and on its own
+# POST /app/api/integrations/{notion,slack,calendar}/{verb}. Admin-only, and on its own
 # noun rather than under `projects` for the same reason `project-surfaces` is —
 # the projects GET rule admits any authenticated caller up to five segments, so
 # nesting a provisioning path there would make it policy-reachable by a client.

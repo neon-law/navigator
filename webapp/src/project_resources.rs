@@ -1,11 +1,12 @@
-//! The matter's collaboration resources — the five places work on a Project
+//! The matter's collaboration resources — the places work on a Project
 //! actually happens, rendered as one panel on the matter page.
 //!
 //! Every matter travels with a private Slack channel, a private Notion page,
-//! and a private Google Drive folder. Two more are optional: a Slack channel
-//! shared with the client and a Notion page shared with the client. Five links
-//! that a lawyer would otherwise keep in a bookmark folder. The matter page
-//! itself is the client's surface, so it links no separate Portal.
+//! a private Google Drive folder, and a shared Google Calendar the firm side
+//! works from. Three more are optional and shared with the client: a Slack
+//! channel, a Notion page, and a booking link for scheduling time with the
+//! firm. Links a lawyer would otherwise keep in a bookmark folder. The matter
+//! page itself is the client's surface, so it links no separate Portal.
 //!
 //! # The audience split is the whole design
 //!
@@ -44,6 +45,10 @@ use crate::people::ViewerRole;
 /// place.
 const DRIVE_FOLDER_PREFIX: &str = "https://drive.google.com/drive/folders/";
 
+/// Opens a calendar by id in Google Calendar, adding it to the reader's list
+/// when they have been shared it.
+const CALENDAR_PREFIX: &str = "https://calendar.google.com/calendar/r?cid=";
+
 /// Who a resource may be shown to.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Audience {
@@ -66,19 +71,27 @@ pub enum ResourceKind {
     SharedSlackChannel,
     /// The Notion page shared with the client, if the matter has one.
     SharedNotionPage,
+    /// The matter's shared Google Calendar. Firm-only: it is shared with the
+    /// firm-side participants, never with the client.
+    ProjectCalendar,
+    /// Where the client books time with the firm, if a lawyer has made an
+    /// appointment schedule on the Project calendar.
+    BookingLink,
 }
 
 impl ResourceKind {
-    /// Every resource, in render order: the firm's three, then the shared
-    /// two. Declaration order *is* render order so the panel does not
+    /// Every resource, in render order: the firm's four, then the shared
+    /// three. Declaration order *is* render order so the panel does not
     /// interleave audiences — a reader scanning it sees one block they may
     /// speak freely in and one block the client can read too.
     pub const ALL: &'static [ResourceKind] = &[
         ResourceKind::PrivateSlackChannel,
         ResourceKind::PrivateNotionPage,
         ResourceKind::PrivateDriveFolder,
+        ResourceKind::ProjectCalendar,
         ResourceKind::SharedSlackChannel,
         ResourceKind::SharedNotionPage,
+        ResourceKind::BookingLink,
     ];
 
     /// Stable identifier, emitted as `data-resource` so a test names a row
@@ -91,6 +104,8 @@ impl ResourceKind {
             Self::PrivateDriveFolder => "private-drive-folder",
             Self::SharedSlackChannel => "shared-slack-channel",
             Self::SharedNotionPage => "shared-notion-page",
+            Self::ProjectCalendar => "project-calendar",
+            Self::BookingLink => "booking-link",
         }
     }
 
@@ -109,6 +124,8 @@ impl ResourceKind {
             Self::PrivateDriveFolder => "Private Google Drive",
             Self::SharedSlackChannel => "Shared Slack channel",
             Self::SharedNotionPage => "Shared Notion page",
+            Self::ProjectCalendar => "Matter calendar",
+            Self::BookingLink => "Book a time",
         }
     }
 
@@ -116,10 +133,13 @@ impl ResourceKind {
     #[must_use]
     pub const fn audience(self) -> Audience {
         match self {
-            Self::PrivateSlackChannel | Self::PrivateNotionPage | Self::PrivateDriveFolder => {
-                Audience::Firm
+            Self::PrivateSlackChannel
+            | Self::PrivateNotionPage
+            | Self::PrivateDriveFolder
+            | Self::ProjectCalendar => Audience::Firm,
+            Self::SharedSlackChannel | Self::SharedNotionPage | Self::BookingLink => {
+                Audience::Shared
             }
-            Self::SharedSlackChannel | Self::SharedNotionPage => Audience::Shared,
         }
     }
 
@@ -130,6 +150,7 @@ impl ResourceKind {
             Self::PrivateSlackChannel | Self::SharedSlackChannel => ResourceMark::Slack,
             Self::PrivateNotionPage | Self::SharedNotionPage => ResourceMark::Notion,
             Self::PrivateDriveFolder => ResourceMark::GoogleDrive,
+            Self::ProjectCalendar | Self::BookingLink => ResourceMark::Calendar,
         }
     }
 
@@ -159,6 +180,9 @@ pub struct ProjectResourceLinks {
     pub drive_folder_id: Option<String>,
     pub shared_slack_channel_url: Option<String>,
     pub shared_notion_page_url: Option<String>,
+    /// The calendar **id**, like the Drive folder id: the address is derived.
+    pub calendar_id: Option<String>,
+    pub booking_url: Option<String>,
 }
 
 /// One resource row, resolved to what the panel renders.
@@ -214,10 +238,19 @@ pub fn visible_resources(links: &ProjectResourceLinks, role: ViewerRole) -> Vec<
                     configured(links.shared_slack_channel_url.as_ref())
                 }
                 ResourceKind::SharedNotionPage => configured(links.shared_notion_page_url.as_ref()),
+                ResourceKind::ProjectCalendar => configured(links.calendar_id.as_ref())
+                    .map(|id| format!("{CALENDAR_PREFIX}{}", calendar_query_value(&id))),
+                ResourceKind::BookingLink => configured(links.booking_url.as_ref()),
             }?;
             Some(ProjectResource { kind, url })
         })
         .collect()
+}
+
+/// Percent-encode a calendar id for the `cid` query value. Stored ids are
+/// limited to letters, digits, and `._-+@`, so only `+` and `@` need it.
+fn calendar_query_value(id: &str) -> String {
+    id.replace('+', "%2B").replace('@', "%40")
 }
 
 /// A stored value that is actually set — `None` for absent *and* for blank.
@@ -302,6 +335,8 @@ mod tests {
                 "https://neonlaw.slack.com/archives/C0SHARED".to_string(),
             ),
             shared_notion_page_url: Some("https://www.notion.so/neonlaw/Shared-def456".to_string()),
+            calendar_id: Some("c_firm0123@group.calendar.example.com".to_string()),
+            booking_url: Some("https://calendar.app.google/BookShared".to_string()),
         }
     }
 
@@ -316,10 +351,10 @@ mod tests {
         dioxus_ssr::render_element(rsx! { ProjectResourcesPanel { view } })
     }
 
-    /// The firm tiers see all five. Clerk is included deliberately: a supervised
+    /// The firm tiers see all seven. Clerk is included deliberately: a supervised
     /// non-lawyer works for the firm and reads the matter's working surfaces.
     #[test]
-    fn every_firm_tier_sees_all_five() {
+    fn every_firm_tier_sees_all_seven() {
         for role in [
             ViewerRole::Owner,
             ViewerRole::Admin,
@@ -332,8 +367,10 @@ mod tests {
                     "private-slack-channel",
                     "private-notion-page",
                     "private-drive-folder",
+                    "project-calendar",
                     "shared-slack-channel",
                     "shared-notion-page",
+                    "booking-link",
                 ],
                 "{:?} should see every resource",
                 role.authority_rank()
@@ -341,14 +378,14 @@ mod tests {
         }
     }
 
-    /// **The confidentiality boundary.** A client sees the two shared
-    /// resources and none of the firm's — the private Notion page is firm work
+    /// **The confidentiality boundary.** A client sees the shared resources,
+    /// the booking link among them, and none of the firm's — the private Notion page is firm work
     /// product and the private Slack channel is lawyer-only chatter.
     #[test]
     fn a_client_sees_only_the_shared_resources() {
         assert_eq!(
             names(ViewerRole::Client),
-            ["shared-slack-channel", "shared-notion-page"]
+            ["shared-slack-channel", "shared-notion-page", "booking-link"]
         );
     }
 
@@ -367,6 +404,8 @@ mod tests {
             "Private-abc123",
             "1QaBcD_2-efG",
             "drive.google.com",
+            "c_firm0123",
+            "calendar.google.com",
         ] {
             assert!(
                 !rendered.contains(firm_only),
@@ -374,6 +413,7 @@ mod tests {
             );
         }
         assert!(rendered.contains("C0SHARED"), "{rendered}");
+        assert!(rendered.contains("BookShared"), "{rendered}");
     }
 
     /// An unset resource is absent, not an empty row — that is what keeps a
@@ -401,6 +441,20 @@ mod tests {
                 .iter()
                 .any(|r| r.kind == ResourceKind::PrivateNotionPage),
             "a blank page is not a resource"
+        );
+    }
+
+    /// The calendar address is derived from the stored id, encoded for the
+    /// query string.
+    #[test]
+    fn the_calendar_row_is_derived_from_the_calendar_id() {
+        let resource = visible_resources(&every_link(), ViewerRole::Lawyer)
+            .into_iter()
+            .find(|r| r.kind == ResourceKind::ProjectCalendar)
+            .expect("calendar row");
+        assert_eq!(
+            resource.url,
+            "https://calendar.google.com/calendar/r?cid=c_firm0123%40group.calendar.example.com"
         );
     }
 
@@ -467,15 +521,15 @@ mod tests {
     }
 
     /// The audience split is declared once and every kind is classified, so a
-    /// seventh resource cannot be added without choosing a side.
+    /// new resource cannot be added without choosing a side.
     #[test]
     fn every_resource_declares_an_audience() {
         let firm = ResourceKind::ALL
             .iter()
             .filter(|k| k.audience() == Audience::Firm)
             .count();
-        assert_eq!(firm, 3, "three firm-only resources");
-        assert_eq!(ResourceKind::ALL.len(), 5);
+        assert_eq!(firm, 4, "four firm-only resources");
+        assert_eq!(ResourceKind::ALL.len(), 7);
         // The name each kind carries is unique, or `data-resource` could not
         // identify a row.
         let mut names: Vec<_> = ResourceKind::ALL.iter().map(|k| k.name()).collect();

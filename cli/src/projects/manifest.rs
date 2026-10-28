@@ -64,6 +64,7 @@ pub const ACCEPTED_KEYS: &[&str] = &[
 ];
 
 const PROJECT_KEYS: &[&str] = &[
+    "calendar_id",
     "client_dri",
     "host",
     "lawyer_dri",
@@ -83,6 +84,7 @@ const HANDLE_KEYS: &[&str] = &[
     "shared_slack_channel",
     "shared_notion_page",
     "xero_customer",
+    "calendar_id",
 ];
 
 const REQUIRED_HANDLE_KEYS: &[&str] = &[
@@ -149,6 +151,10 @@ pub struct Manifest {
     pub shared_slack_channel: Option<String>,
     pub shared_notion_page: Option<String>,
     pub xero_customer: Option<String>,
+    /// The Project's shared Google Calendar id. Optional: `navigator project
+    /// setup` creates the calendar and `navigator project set --calendar`
+    /// records it here.
+    pub calendar_id: Option<String>,
     pub no_live_row: Option<serde_yaml::Value>,
     pub allowed_hosts: BTreeMap<String, String>,
     pub allowed_links: BTreeMap<String, String>,
@@ -914,6 +920,7 @@ fn lint_handle(path: &Path, key: &str, value: &serde_yaml::Value) -> Vec<Manifes
         | "shared_slack_channel"
         | "shared_notion_page" => is_https_url(&value),
         "xero_customer" => true,
+        "calendar_id" => store::projects::is_valid_calendar_id(&value),
         _ => false,
     };
     if valid {
@@ -1031,6 +1038,7 @@ pub fn parse(contents: &str) -> Result<Manifest, String> {
         shared_slack_channel: values("shared_slack_channel")?,
         shared_notion_page: values("shared_notion_page")?,
         xero_customer: values("xero_customer")?,
+        calendar_id: values("calendar_id")?,
         no_live_row: mapping.get("no_live_row").cloned(),
         allowed_hosts: parse_reason_map(mapping, "allowed_hosts")?,
         allowed_links: parse_reason_map(mapping, "allowed_links")?,
@@ -1465,8 +1473,13 @@ mod tests {
             "  shared_slack_channel: https://slack.example.com/shared\n",
             "  shared_notion_page: https://notion.example.com/shared\n",
             "  xero_customer: customer-1\n",
+            "  calendar_id: c_0123@group.calendar.example.com\n",
         );
         let parsed = parse(yaml).expect("nested manifest deserializes");
+        assert_eq!(
+            parsed.calendar_id.as_deref(),
+            Some("c_0123@group.calendar.example.com")
+        );
         assert_eq!(parsed.version.as_deref(), Some("26.9.14"));
         assert_eq!(parsed.host.as_deref(), Some("staging.neonlaw.com"));
         assert_eq!(parsed.project.as_deref(), Some("acme"));
@@ -1573,6 +1586,34 @@ mod tests {
             "`lawyer_dri` must still require a real email: {:?}",
             lint_contents(Path::new(FILE), dri_sentinel)
         );
+    }
+
+    /// `Y016`: `calendar_id` is optional, but when present it must be a
+    /// Google Calendar id, never a URL or a placeholder.
+    #[test]
+    fn calendar_id_is_optional_and_must_be_a_calendar_id() {
+        let base = concat!(
+            "version: 26.9.14\nproject:\n",
+            "  host: staging.neonlaw.com\n  name: acme\n",
+            "  lawyer_dri: lawyer@example.com\n",
+            "  client_dri: client@example.com\n",
+            "  private_slack_channel: not provisioned\n",
+            "  private_notion_page: not provisioned\n",
+        );
+        assert!(lint_contents(Path::new(FILE), base).is_empty());
+        for bad in [
+            "https://calendar.google.com/calendar/r?cid=abc",
+            "INSERT CALENDAR ID",
+            "two words",
+        ] {
+            let yaml = format!("{base}  calendar_id: {bad}\n");
+            let findings = lint_contents(Path::new(FILE), &yaml);
+            assert!(
+                findings.iter().any(|finding| finding.code == HANDLE_CODE
+                    && finding.message.contains("`project.calendar_id`")),
+                "`{bad}` must be refused: {findings:?}"
+            );
+        }
     }
 
     #[test]

@@ -122,6 +122,14 @@ DEFINE FIELD OVERWRITE internal_slack_channel_id ON project TYPE option<string>;
 -- an `href`; that is not restated here as a second rule to keep in step.
 DEFINE FIELD OVERWRITE private_notion_page_url ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE shared_notion_page_url ON project TYPE option<string>;
+-- The matter's shared Google Calendar, by its Calendar API id. Created and
+-- shared with the firm-side participants by `navigator project setup`, or
+-- recorded by hand with `navigator project set --calendar`.
+DEFINE FIELD OVERWRITE calendar_id ON project TYPE option<string>;
+-- The client's booking link: the address of an appointment schedule a lawyer
+-- made on the Project calendar in Google Calendar. The Calendar API cannot
+-- create one, so the address is entered by hand. Cleared on close.
+DEFINE FIELD OVERWRITE booking_url ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE inserted_at ON project TYPE string;
 DEFINE FIELD OVERWRITE updated_at ON project TYPE string;
 DEFINE INDEX OVERWRITE project_code ON project FIELDS code UNIQUE;

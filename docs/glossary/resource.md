@@ -3,10 +3,10 @@ title: "Resource"
 description: "A Resource is one of the private or client-shared places where work on a Project happens."
 ---
 
-One of the six places work on a [Project](project.md) happens: a private Slack channel, a private Notion page, a private
-Google Drive folder, and — optionally — a Slack channel shared with the client, a Notion page shared with the client,
-and the matter's [Portal](portal.md). Rendered as the matter page's *Resources* panel, each row opening on the service's
-own mark.
+One of the places work on a [Project](project.md) happens: a private Slack channel, a private Notion page, a private
+Google Drive folder, the firm-side [Project Calendar](project-calendar.md), and — optionally — a Slack channel shared
+with the client, a Notion page shared with the client, the client's [Booking Link](booking-link.md), and the matter's
+[Portal](portal.md). Rendered as the matter page's *Resources* panel, each row opening on its mark.
 
 A resource is **firm-only or shared, and its name says which.** That split is the point rather than a label: the private
 Notion page holds firm work product and the private channel holds lawyer-only chatter, so a client who could see either
@@ -22,10 +22,12 @@ Notion each render as their own card there, private field beside a "Share a sepa
 that reveals the shared field: the toggle is a real submitted checkbox the handler reads directly, so unchecking it and
 saving is what clears the shared column, whatever text is left in the field it hid.
 
-Four of the six are stored URLs on the `project` row (`internal_slack_channel_url`, `external_slack_channel_url`,
-`private_notion_page_url`, `shared_notion_page_url`), each validated by
+Five are stored URLs on the `project` row (`internal_slack_channel_url`, `external_slack_channel_url`,
+`private_notion_page_url`, `shared_notion_page_url`, `booking_url`), each validated by
 [`store::projects::is_valid_resource_url`](../../store/src/projects.rs) because each is rendered as an `href`. The Drive
-row is derived from `drive_folder_id`, and the portal row is configured by the matter existing rather than by a column.
+row is derived from `drive_folder_id`, the calendar row from `calendar_id`, and the portal row is configured by the
+matter existing rather than by a column. The calendar id and the booking link are set with `navigator project set`, not
+the edit form.
 
 Navigator stores addresses, not permissions. Who may open a Notion page or a Drive folder is governed by that service's
 own sharing, which Navigator neither reads nor enforces — so a page named "private" here is only private if it was

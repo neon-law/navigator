@@ -107,7 +107,7 @@ fn surface_results(
 fn succeeded(outcome: &ResourceOutcome) -> bool {
     matches!(
         outcome.outcome.as_str(),
-        "created" | "present" | "adopted" | "unchanged" | "repaired" | "notified"
+        "created" | "present" | "adopted" | "unchanged" | "repaired" | "notified" | "read_only"
     )
 }
 
@@ -145,6 +145,20 @@ async fn setup_one(base: &str, token: &str, project: &VisibleProject) -> Project
                 base,
                 token,
                 "/app/api/integrations/slack/ensure",
+                serde_json::json!({ "project_code": project.code }),
+            )
+            .await
+            .and_then(|report| one_integration_result(&report.results)),
+        ),
+    );
+    resources.insert(
+        "calendar".to_string(),
+        integration_result(
+            &project.code,
+            remote::post_integration_door(
+                base,
+                token,
+                "/app/api/integrations/calendar/ensure",
                 serde_json::json!({ "project_code": project.code }),
             )
             .await

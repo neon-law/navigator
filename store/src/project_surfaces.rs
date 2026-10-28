@@ -190,6 +190,10 @@ pub struct ProjectHandles {
     pub client_dri: Vec<String>,
     pub private_slack_channel: Option<String>,
     pub private_notion_page: Option<String>,
+    /// The Project's shared Google Calendar id. `#[serde(default)]` so a
+    /// response from a server that predates the column still deserializes.
+    #[serde(default)]
+    pub calendar_id: Option<String>,
     /// Person ids named by a DRI participation row (`is_lawyer_dri` or
     /// `is_client_dri`) that no longer resolve to a Person — the row survived
     /// a Person delete that should have cleared it (see
@@ -288,6 +292,7 @@ pub async fn read_handles(
         client_dri,
         private_slack_channel: project.internal_slack_channel_url,
         private_notion_page: project.private_notion_page_url,
+        calendar_id: project.calendar_id,
         dangling_dri_person_ids,
     })
 }
@@ -1090,6 +1095,8 @@ mod tests {
             internal_slack_channel_id: None,
             private_notion_page_url: None,
             shared_notion_page_url: None,
+            calendar_id: None,
+            booking_url: None,
             inserted_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
         }

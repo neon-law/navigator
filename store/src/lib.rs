@@ -161,6 +161,7 @@ pub mod postgres_schema;
 pub mod postgres_shadow;
 pub mod posts;
 pub mod project_archives;
+pub mod project_calendar;
 pub mod project_closeout;
 pub mod project_costs;
 pub mod project_deadlines;

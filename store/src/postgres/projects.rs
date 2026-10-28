@@ -74,6 +74,8 @@ fn row(row: &sqlx::postgres::PgRow) -> Result<Project, ProjectError> {
         internal_slack_channel_id: row.try_get("internal_slack_channel_id")?,
         private_notion_page_url: row.try_get("private_notion_page_url")?,
         shared_notion_page_url: row.try_get("shared_notion_page_url")?,
+        calendar_id: row.try_get("calendar_id")?,
+        booking_url: row.try_get("booking_url")?,
         inserted_at: time("inserted_at")?,
         updated_at: time("updated_at")?,
     })
