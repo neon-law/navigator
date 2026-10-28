@@ -8,7 +8,6 @@ pub struct EstateCopy {
     pub process_link: String,
     pub plan_label: String,
     pub plan_description: String,
-    pub price: String,
     pub features: Vec<String>,
     pub fee_note: String,
     pub nevada_label: String,

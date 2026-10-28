@@ -1456,7 +1456,7 @@
 
 .company-pricing__grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 3rem 0 2rem;
 }
 
@@ -1842,10 +1842,8 @@
   display: none;
   margin: 1.5rem 0 1rem;
 }
-.company-simulator:has(#company-plan-days-10:checked):has(#company-review-count-0:checked) .company-simulator__summary-case--10-0,
-.company-simulator:has(#company-plan-days-10:checked):has(#company-review-count-1:checked) .company-simulator__summary-case--10-1,
-.company-simulator:has(#company-plan-days-30:checked):has(#company-review-count-0:checked) .company-simulator__summary-case--30-0,
-.company-simulator:has(#company-plan-days-30:checked):has(#company-review-count-1:checked) .company-simulator__summary-case--30-1 {
+.company-simulator:has(#company-plan-days-10:checked) .company-simulator__summary-case--10,
+.company-simulator:has(#company-plan-days-30:checked) .company-simulator__summary-case--30 {
   display: block;
 }
 .company-simulator__summary-case {

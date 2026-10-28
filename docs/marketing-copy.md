@@ -110,19 +110,19 @@ LinkedIn link. The profile does not repeat the directory's heading or copy a ful
 
 Vesta's `home.yaml` leads with support in life and death and welcomes the person's values and spiritual beliefs. It
 explains that Nevada Asset Protection Trust planning may fit after reviewing the person's circumstances and applicable
-law. Basic estate plans for one person start at $1,111, with services and fees agreed in writing. The package includes a
-will, financial power of attorney, health-care directive, health-care power of attorney, a planning meeting, attorney
-preparation and review, one round of revisions before signing, and signing guidance. Living trusts, advanced planning,
-property transfers, probate, administration, and later updates require a separate quote. The home page puts an optional
-astrology reading during the get-to-know-you session, followed by written engagement, the planning meeting, document
-preparation, and a return meeting for signing with required witnesses and notarization. Probate has its own section and
-separate scope and fees. Readings are optional personal reflection; the person's wishes guide the legal plan. The
-booking link uses Vesta's `consultation_url`, matching the Notion calendar for Neon Law. Its services page describes
-estate planning, Nevada trust planning, custom trust administration, and possible individual trustee appointments under
-written terms. Navigator access is not an appointment, and the copy preserves the Nevada-qualified-trustee, tax,
-conflict, and execution-formality limits. Blockchain recording is fulfilled on request while the automated backend in
-[`solana-attestation`](solana-attestation.md) remains unshipped; a record does not replace required signing or
-notarization.
+law. The page publishes no starting price; services and fees are agreed in writing. The basic package for one person
+includes a will, financial power of attorney, health-care directive, health-care power of attorney, a planning meeting,
+attorney preparation and review, one round of revisions before signing, and signing guidance. Living trusts, advanced
+planning, property transfers, probate, administration, and later updates require a separate quote. The home page puts an
+optional astrology reading during the get-to-know-you session, followed by written engagement, the planning meeting,
+document preparation, and a return meeting for signing with required witnesses and notarization. Probate has its own
+section and separate scope and fees. Readings are optional personal reflection; the person's wishes guide the legal
+plan. The booking link uses Vesta's `consultation_url`, matching the Notion calendar for Neon Law. Its services page
+describes estate planning, Nevada trust planning, custom trust administration, and possible individual trustee
+appointments under written terms. Navigator access is not an appointment, and the copy preserves the
+Nevada-qualified-trustee, tax, conflict, and execution-formality limits. Blockchain recording is fulfilled on request
+while the automated backend in [`solana-attestation`](solana-attestation.md) remains unshipped; a record does not
+replace required signing or notarization.
 
 Neon's estate-planning gateway and the Lawyer Shook practice card introduce Vesta's estate planning and Nevada trust
 work. The gateway directs visitors to Vesta for the service details and written engagement terms.
@@ -305,15 +305,14 @@ paperwork follows the enrollment review. The page expressly distinguishes privac
 other brand host answers `/nautilus` with a 404.
 
 The Neon home page presents common employment, NDA, sales, and privacy agreements under a $5,000 one-time contract fee;
-financings are scoped separately. It also presents a $50 daily minimum for questions over Slack and a separate $500
-expedited review per contract. The expedited review gives the client a practical next step within one business day. Each
-contract covers up to 50 US letter size pages in Times New Roman 10pt or larger, with each additional page priced at $5.
-Its `company` block also holds the service directory, Apache-licensed Rust explanation, independent-funding and
-community copy, and notation callout. GORP and cyan remain the identity; the layout uses static illustrations and
-generous spacing. An interactive trust-balance chart shows the earned contract fee, daily counsel, and review fees
-against the deposit. Its brief allocation animation respects reduced-motion preferences. The presentation video remains
-user-controlled. The business template inventory and drafting choices are documented in [business
-notations](business-notations.md).
+financings are scoped separately. It also presents ongoing counsel from $100 a day, with questions over Slack and
+contract reviews returned within three business days. There is no separate expedited review fee. Each contract covers up
+to 50 US letter size pages in Times New Roman 10pt or larger, with each additional page priced at $5. Its `company`
+block also holds the service directory, Apache-licensed Rust explanation, independent-funding and community copy, and
+notation callout. GORP and cyan remain the identity; the layout uses static illustrations and generous spacing. An
+interactive trust-balance chart shows the earned contract fee and daily counsel against the deposit. Its brief
+allocation animation respects reduced-motion preferences. The presentation video remains user-controlled. The business
+template inventory and drafting choices are documented in [business notations](business-notations.md).
 
 Neon publishes one offer on `/`, plus its fee schedule on `/services`; `/business` and `/disputes` return 404. Other
 brands retain their own home layouts. Litigation and sibling-practice scope remain separately disclosed.

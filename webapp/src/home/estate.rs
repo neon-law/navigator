@@ -18,7 +18,6 @@ pub struct EstateContent {
     pub process_link: String,
     pub plan_label: String,
     pub plan_description: String,
-    pub price: String,
     pub features: Vec<String>,
     pub fee_note: String,
     pub nevada_label: String,
@@ -133,7 +132,6 @@ pub(super) fn EstateHome(
                 aside { class: "vesta-plan", "aria-label": "{estate.plan_label}",
                     img { class: "vesta-plan__mark", src: "/public/brand/vesta.svg", alt: "", width: "36", height: "50" }
                     p { class: "vesta-eyebrow", "{estate.plan_label}" }
-                    p { class: "vesta-price", "{estate.price}" }
                     p { class: "vesta-plan__term", "{estate.plan_description}" }
                     ul { for feature in &estate.features { li { "{feature}" } } }
                     p { class: "vesta-note", "{estate.fee_note}" }
@@ -390,7 +388,6 @@ mod tests {
                 EstateHome {
                     content: HomeContent::default(),
                     estate: EstateContent {
-                        price: "From $1,111".into(),
                         photos: vec![[
                             "/public/img/vesta-home/cherry-blossoms.jpg".into(),
                             "Cherry blossoms above memorials".into(),
@@ -403,7 +400,7 @@ mod tests {
         let mut dom = VirtualDom::new(app);
         dom.rebuild_in_place();
         let html = dioxus_ssr::render(&dom);
-        assert!(html.contains("From $1,111"));
+        assert!(!html.contains("vesta-price"));
         assert!(html.contains("src=\"/public/img/vesta-home/cherry-blossoms.jpg\""));
         assert!(html.contains("alt=\"Cherry blossoms above memorials\""));
         assert!(html.contains("loading=\"lazy\""));

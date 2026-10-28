@@ -178,10 +178,11 @@ async fn vesta_leads_with_tailored_planning_and_explains_nevada_trusts() {
 }
 
 #[tokio::test]
-async fn vesta_services_describe_tailored_planning_with_a_starting_price() {
+async fn vesta_services_describe_tailored_planning_without_a_starting_price() {
     let html = preview(BrandKey::Vesta, "/services").await;
     assert!(html.contains("We listen to what matters to you"));
-    assert!(html.contains("start at $1,111"));
+    assert!(html.contains("Basic estate plans for one person include a will"));
+    assert!(!html.contains("$1,111"));
     assert!(html.contains("Nicholas Shook may accept appointment"));
     assert!(html.contains("qualified Nevada trustee"));
     assert!(html.contains("Life-insurance trusts"));
@@ -259,7 +260,6 @@ async fn vesta_process_keeps_engagement_readings_and_later_help_distinct() {
         "A health-care directive and health-care power of attorney",
         "One round of revisions before signing",
         "Living trusts, advanced asset protection or tax planning",
-        "From $1,111",
         "id=\"astrology\"",
         "id=\"probate\"",
         "required witnesses and notarization",

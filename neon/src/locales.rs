@@ -859,7 +859,6 @@ fn estate_content(
         process_link: copy.process_link,
         plan_label: copy.plan_label,
         plan_description: copy.plan_description,
-        price: copy.price,
         features: copy.features,
         fee_note: copy.fee_note,
         nevada_label: copy.nevada_label,
@@ -1187,9 +1186,7 @@ pub fn home_for_host(
             simulator_heading: copy.simulator_heading,
             simulator_body: copy.simulator_body,
             simulator_days_label: copy.simulator_days_label,
-            simulator_reviews_label: copy.simulator_reviews_label,
             simulator_plan_label: copy.simulator_plan_label,
-            simulator_review_label: copy.simulator_review_label,
             simulator_contract_label: copy.simulator_contract_label,
             simulator_total_label: copy.simulator_total_label,
             simulator_note: copy.simulator_note,
@@ -1203,10 +1200,6 @@ pub fn home_for_host(
             membership_unit: copy.membership_unit,
             membership_body: copy.membership_body,
             membership_features: copy.membership_features,
-            express_heading: copy.express_heading,
-            express_price: copy.express_price,
-            express_unit: copy.express_unit,
-            express_body: copy.express_body,
             page_note: copy.page_note,
             drafting_heading: copy.drafting_heading,
             drafting_packages: copy.drafting_packages,
@@ -1634,21 +1627,21 @@ mod tests {
     }
 
     #[test]
-    fn home_company_contract_publishes_setup_daily_and_express_prices() {
+    fn home_company_contract_publishes_setup_and_daily_prices() {
         let copy: serde_yaml::Value = serde_yaml::from_str(NEON_HOME_YAML).unwrap();
         let company = &copy["company"];
         assert_eq!(company["membership_prefix"].as_str(), Some("From"));
-        assert_eq!(company["membership_price"].as_str(), Some("$50"));
+        assert_eq!(company["membership_price"].as_str(), Some("$100"));
         assert_eq!(company["membership_unit"].as_str(), Some("/ day"));
         assert!(!company["membership_body"]
             .as_str()
             .unwrap()
-            .contains("$50/day"));
+            .contains("$100/day"));
         assert!(company["membership_body"]
             .as_str()
             .unwrap()
             .contains("Additional flat fees may apply and are quoted in the engagement letter."));
-        assert_eq!(company["express_price"].as_str(), Some("$500"));
+        assert!(company["express_price"].is_null(), "expedited reviews are retired");
         assert_eq!(company["drafting_packages"][0][0].as_str(), Some("/ once"));
         assert_eq!(company["drafting_packages"][0][1].as_str(), Some("$5,000"));
         assert_eq!(
@@ -2277,11 +2270,10 @@ mod tests {
     }
 
     #[test]
-    fn vesta_offer_states_starting_price_and_separate_administration() {
+    fn vesta_offer_omits_a_starting_price_and_separates_administration() {
         let content = home(&views::brand::VESTA_BRANDING);
         let estate = content.estate.expect("estate offer");
-        assert_eq!(estate.price, "From $1,111");
-        assert!(estate.fee_note.starts_with("Fees increase with the scope"));
+        assert!(estate.fee_note.starts_with("Fees depend on the scope"));
         assert!(estate
             .plan_description
             .starts_with("For a basic estate plan"));

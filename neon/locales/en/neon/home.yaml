@@ -1,8 +1,8 @@
 head_title: "{site_name} | Home"
 meta_description: >-
   Business counsel, built for the way you work. $5,000 once for contracts within your agreed scope,
-  from $50/day for ongoing counsel, and $500 per review. Additional flat fees may apply and are quoted
-  in the engagement letter. Financings and excluded agreements cost extra.
+  then from $100/day for ongoing counsel, with contract reviews returned within three business days.
+  Additional flat fees may apply and are quoted in the engagement letter. Financings and excluded agreements cost extra.
 heading: Keep building.
 lead: Attorneys for the Ambitious.
 contact_label: Book Consultation
@@ -21,10 +21,8 @@ company:
   simulator_heading: Your retainer at work.
   simulator_body: See how earned fees move out of trust as we do the work.
   simulator_days_label: Days of ongoing counsel
-  simulator_reviews_label: Completed reviews
   simulator_contract_label: One-time contract fee
   simulator_plan_label: Daily attorney-client relationship
-  simulator_review_label: Completed review fees
   simulator_total_label: Illustrative trust balance
   simulator_note: This example assumes the $5,000 contract fee has been earned under your engagement letter. The deposit remains your money until fees are earned. Additional work and expenses are excluded. Unearned funds return to you when the engagement ends.
   packages: [Services, Employment, Privacy]
@@ -32,16 +30,12 @@ company:
   video_label: Neon Law presentation
   membership_label: Counsel on call.
   membership_prefix: From
-  membership_price: "$50"
+  membership_price: "$100"
   membership_unit: / day
   membership_body: For ongoing counsel. Ask questions in Slack and pay only for the days the project is active. Additional flat fees may apply and are quoted in the engagement letter.
   membership_features:
     - Day-to-day questions over Slack
-    - Standard contract reviews returned within five business days
-  express_heading: Expedited reviews.
-  express_price: "$500"
-  express_unit: / contract
-  express_body: We review your contract and subsequent turns within one business day.
+    - Contract reviews returned within three business days
   page_note: "A contract is up to 50 US letter size pages in Times New Roman 10pt or larger. Each additional page is $5."
   drafting_heading: Your everyday contracts.
   drafting_packages:

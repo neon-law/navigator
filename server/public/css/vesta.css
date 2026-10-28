@@ -2,7 +2,7 @@
 .vesta-home { --vesta-rule: var(--nav-color-border); }
 :root:has(.vesta-home) { --firm-serif: var(--nav-font-family); }
 :root:has(.vesta-home) .github-stars__repo { font-family: var(--nav-font-family); }
-.vesta-home h1, .vesta-home h2, .vesta-home h3, .vesta-price {
+.vesta-home h1, .vesta-home h2, .vesta-home h3 {
   font-family: var(--brand-font-display); font-weight: 500; letter-spacing: -.035em;
 }
 .vesta-home h2 { font-size: clamp(2.2rem, 4vw, 3.5rem); line-height: 1.08; margin: 0 0 1.5rem; text-wrap: balance; }
@@ -16,7 +16,6 @@
 .vesta-home .nav-btn { border-radius: 3px; }
 .vesta-plan { position: relative; border-top: 1px solid var(--vesta-rule); padding: clamp(1.5rem, 3vw, 3rem) 0; }
 .vesta-plan__mark { width: 36px; height: 50px; object-fit: contain; float: right; }
-.vesta-home .vesta-price { font-size: clamp(3rem, 5vw, 4.5rem); line-height: 1.15; margin: 1.5rem 0 .75rem; overflow-wrap: normal; }
 .vesta-plan__term { margin: 0 0 2rem; font-size: 1.1rem; }
 .vesta-plan ul { list-style: none; padding: 0; margin: 0; }
 .vesta-plan li { border-top: 1px solid var(--vesta-rule); padding: .8rem 0; }
@@ -177,8 +176,8 @@
 .vesta-offer { padding: 2rem 0 5rem; }
 .vesta-offer .vesta-plan { display: grid; grid-template-columns: 1fr 1.6fr; gap: 1rem 4rem; border: 1px solid var(--vesta-rule); padding: clamp(1.5rem, 4vw, 3.5rem); background: linear-gradient(120deg, #deb3820d, #0b111c); }
 .vesta-offer .vesta-plan__mark { grid-column: 1; float: none; }
-.vesta-offer .vesta-plan > .vesta-eyebrow, .vesta-offer .vesta-price, .vesta-offer .vesta-plan__term { grid-column: 1; margin: 0; }
-.vesta-offer .vesta-plan ul { grid-column: 2; grid-row: 1 / 5; }
+.vesta-offer .vesta-plan > .vesta-eyebrow, .vesta-offer .vesta-plan__term { grid-column: 1; margin: 0; }
+.vesta-offer .vesta-plan ul { grid-column: 2; grid-row: 1 / 4; }
 .vesta-offer .vesta-note { grid-column: 1 / -1; margin-top: 1rem; }
 .vesta-offer .vesta-actions { grid-column: 1 / -1; margin-top: 0; }
 .vesta-process { padding: 5rem 0; }

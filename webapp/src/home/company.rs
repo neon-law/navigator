@@ -23,9 +23,7 @@ pub struct CompanyContent {
     pub simulator_heading: String,
     pub simulator_body: String,
     pub simulator_days_label: String,
-    pub simulator_reviews_label: String,
     pub simulator_plan_label: String,
-    pub simulator_review_label: String,
     pub simulator_contract_label: String,
     pub simulator_total_label: String,
     pub simulator_note: String,
@@ -39,10 +37,6 @@ pub struct CompanyContent {
     pub membership_unit: String,
     pub membership_body: String,
     pub membership_features: Vec<String>,
-    pub express_heading: String,
-    pub express_price: String,
-    pub express_unit: String,
-    pub express_body: String,
     pub page_note: String,
     pub drafting_heading: String,
     pub drafting_packages: Vec<[String; 3]>,
@@ -83,7 +77,6 @@ fn format_dollars(amount: u32) -> String {
 struct FeeScenario {
     class_name: String,
     plan_details: String,
-    review_price: String,
     earned_fees: String,
     remaining_retainer: String,
     earned_share: u32,
@@ -97,45 +90,34 @@ pub(super) fn CompanyHome(
 ) -> Element {
     let booking_external = is_external_href(&company.booking_href);
     let daily_fee = parse_dollars(&company.membership_price);
-    let review_fee = parse_dollars(&company.express_price);
     let contract_fee = company
         .drafting_packages
         .first()
         .map_or(0, |row| parse_dollars(&row[1]));
     let contract_value = format_dollars(contract_fee);
     let retainer_value = format_dollars(company.retainer_amount);
-    let review_rows = [
-        ["No review".to_string(), "$0".to_string()],
-        ["One review".to_string(), company.express_price.clone()],
-    ];
     let mut fee_scenarios = Vec::new();
     for days in [10_u32, 30] {
-        for reviews in 0_u32..=1 {
-            let plan_fees = days.saturating_mul(daily_fee);
-            let review_fees = reviews.saturating_mul(review_fee);
-            let earned_fees = contract_fee
-                .saturating_add(plan_fees)
-                .saturating_add(review_fees);
-            let earned_share = earned_fees
-                .saturating_mul(100)
-                .checked_div(company.retainer_amount)
-                .unwrap_or(0)
-                .min(100);
-            fee_scenarios.push(FeeScenario {
-                class_name: format!("company-simulator__summary-case--{days}-{reviews}"),
-                plan_details: format!(
-                    "{days} days × {} = {}",
-                    company.membership_price,
-                    format_dollars(plan_fees)
-                ),
-                review_price: format_dollars(review_fees),
-                earned_fees: format_dollars(earned_fees),
-                remaining_retainer: format_dollars(
-                    company.retainer_amount.saturating_sub(earned_fees),
-                ),
-                earned_share,
-            });
-        }
+        let plan_fees = days.saturating_mul(daily_fee);
+        let earned_fees = contract_fee.saturating_add(plan_fees);
+        let earned_share = earned_fees
+            .saturating_mul(100)
+            .checked_div(company.retainer_amount)
+            .unwrap_or(0)
+            .min(100);
+        fee_scenarios.push(FeeScenario {
+            class_name: format!("company-simulator__summary-case--{days}"),
+            plan_details: format!(
+                "{days} days × {} = {}",
+                company.membership_price,
+                format_dollars(plan_fees)
+            ),
+            earned_fees: format_dollars(earned_fees),
+            remaining_retainer: format_dollars(
+                company.retainer_amount.saturating_sub(earned_fees),
+            ),
+            earned_share,
+        });
     }
     rsx! {
         div { class: "company-home",
@@ -222,11 +204,6 @@ pub(super) fn CompanyHome(
                         p { "{company.membership_body}" }
                         ul { for feature in company.membership_features.iter() { li { "{feature}" } } }
                     }
-                    article { class: "company-express",
-                        h3 { "{company.express_heading}" }
-                        p { class: "company-price", "{company.express_price}" span { "{company.express_unit}" } }
-                        p { "{company.express_body}" }
-                    }
                 }
                 p { class: "company-pricing__terms", "{company.page_note}" }
                 p { class: "company-note", "{company.retainer_note}" }
@@ -246,24 +223,12 @@ pub(super) fn CompanyHome(
                                 }
                             }
                     }
-                    fieldset {
-                            legend { "{company.simulator_reviews_label}" }
-                            div { class: "company-simulator__options",
-                                for (index, row) in review_rows.iter().enumerate() {
-                                    label { key: "{index}", class: "company-simulator__option", r#for: "company-review-count-{index}",
-                                        input { class: "nav-radio__input company-simulator__radio", id: "company-review-count-{index}", r#type: "radio", name: "company-review-count", value: "{index}", checked: index == 1 }
-                                        span { "{row[0]} · {row[1]}" }
-                                    }
-                                }
-                            }
-                    }
                     for scenario in fee_scenarios.iter() {
                             div { key: "{scenario.class_name}", class: "company-simulator__scenario {scenario.class_name}" ,
                                 dl { class: "company-simulator__summary-case",
                                     div { dt { "Starting retainer" } dd { "{retainer_value}" span { "Held in trust" } } }
                                     div { dt { "{company.simulator_contract_label}" } dd { "{contract_value}" } }
                                     div { dt { "{company.simulator_plan_label}" } dd { "{scenario.plan_details}" } }
-                                    div { dt { "{company.simulator_review_label}" } dd { "{scenario.review_price}" } }
                                 }
                                 div {
                                     class: "company-simulator__allocation",
