@@ -946,9 +946,9 @@ async fn home_presents_company_counsel_pricing_and_business_library() {
     assert!(!body.contains("A clear daily meter"));
     assert!(!body.contains("Separate work quoted before it starts"));
     assert!(!body.contains("Independent counsel for ambitious companies"));
-    assert!(body.contains("Standard contract reviews returned within five business days"));
-    assert!(body.contains("$500"));
-    assert!(body.contains("/ contract"));
+    assert!(body.contains("Contract reviews returned within three business days"));
+    assert!(!body.contains("$500"));
+    assert!(!body.contains("/ contract"));
     assert!(body.contains("deal-exhibition"));
     assert!(body.contains("Computable Contracts that Scale"));
     assert!(body.contains("Notations turn essential agreements into clear, fillable documents"));
@@ -987,11 +987,11 @@ async fn home_explains_retainer_and_additional_fees() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     for text in [
-        "from $50/day",
+        "from $100/day",
+        "with contract reviews returned within three business days",
         "For ongoing counsel.",
         "Additional flat fees may apply and are quoted in the engagement letter.",
-        "$50",
-        "$500",
+        "$100",
         "$5,000",
         "This example assumes the $5,000 contract fee has been earned under your engagement letter.",
         "Common employment, NDA, sales, and privacy agreements.",
@@ -999,8 +999,6 @@ async fn home_explains_retainer_and_additional_fees() {
         "We draw after we perform the work.",
         "The engagement letter sets scope, rates, and refunds.",
         "Additional flat fees may apply and are quoted in the engagement letter.",
-        "Expedited reviews.",
-        "We review your contract and subsequent turns within one business day.",
         "A contract is up to 50 US letter size pages in Times New Roman 10pt or larger. Each additional page is $5.",
         "Day-to-day questions over Slack",
         "Built in Rust for legal work.",
@@ -1011,10 +1009,8 @@ async fn home_explains_retainer_and_additional_fees() {
         assert!(body.contains(text), "missing fee or scope: {text}");
     }
     for allocation in [
-        "After selected services: $5,500 earned, $4,500 remains held in trust.",
         "After selected services: $6,000 earned, $4,000 remains held in trust.",
-        "After selected services: $6,500 earned, $3,500 remains held in trust.",
-        "After selected services: $7,000 earned, $3,000 remains held in trust.",
+        "After selected services: $8,000 earned, $2,000 remains held in trust.",
     ] {
         assert!(
             body.contains(allocation),
@@ -1022,7 +1018,14 @@ async fn home_explains_retainer_and_additional_fees() {
         );
     }
     assert!(body.contains("company-simulator"));
-    for retired in ["Same-day review", "Privileged Slack channel"] {
+    for retired in [
+        "Same-day review",
+        "Privileged Slack channel",
+        "Expedited reviews.",
+        "We review your contract and subsequent turns within one business day.",
+        "Completed reviews",
+        "company-review-count",
+    ] {
         assert!(!body.contains(retired), "superseded offer: {retired}");
     }
     assert!(!body.contains(
@@ -1053,7 +1056,7 @@ async fn home_metadata_qualifies_the_daily_engagement_starting_price() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_string(response).await;
     assert!(
-        body.contains("from $50/day"),
+        body.contains("from $100/day"),
         "home metadata should qualify the rate: {body}"
     );
     assert!(

@@ -132,7 +132,8 @@ async fn retired_service_pages_are_absent_from_the_index() {
         body.contains("/services)"),
         "the fee schedule is advertised: {body}"
     );
-    assert!(body.contains("starts at $50/day"));
+    assert!(body.contains("starts at $100/day"));
+    assert!(!body.contains("express review"));
     assert!(body.contains("additional flat fees may apply and are quoted in the engagement letter"));
 }
 

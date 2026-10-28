@@ -250,16 +250,15 @@ async fn prepared_practice_brands_have_responsive_pages_and_a_working_mobile_men
                 );
                 if *key == views::brand::BrandKey::Vesta && path == "/" {
                     assert_video_rail(&c, width, capture_dir).await;
-                    let price = c
-                        .find(Locator::Css(".vesta-price"))
-                        .await
-                        .expect("starting price");
-                    assert_eq!(price.text().await.expect("price text"), "From $1,111");
                     let layout = c.execute(
-                        "const p=document.querySelector('.vesta-price'); const r=p.getBoundingClientRect(); const a=p.parentElement.getBoundingClientRect(); return {fits:r.left>=a.left&&r.right<=a.right, columns:getComputedStyle(document.querySelector('.vesta-hero')).gridTemplateColumns.split(' ').length};",
+                        "const p=document.querySelector('.vesta-plan__term'); const r=p.getBoundingClientRect(); const a=p.parentElement.getBoundingClientRect(); return {fits:r.left>=a.left&&r.right<=a.right, priced:document.querySelector('.vesta-price')!==null, columns:getComputedStyle(document.querySelector('.vesta-hero')).gridTemplateColumns.split(' ').length};",
                         vec![],
-                    ).await.expect("Vesta price layout");
-                    assert_eq!(layout["fits"], true, "price fits its column at {width}px");
+                    ).await.expect("Vesta plan layout");
+                    assert_eq!(layout["fits"], true, "plan fits its column at {width}px");
+                    assert_eq!(
+                        layout["priced"], false,
+                        "the plan publishes no starting price"
+                    );
                     assert_eq!(layout["columns"], if width < 768 { 1 } else { 2 });
                     std::fs::write(
                         capture_dir.join(format!("vesta-pricing-{width}.png")),

@@ -368,7 +368,7 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
         indexed_page(
             mark,
             "/",
-            "Counsel for technology companies. $5,000 once for contracts within the agreed scope. Company formation, financings, acquisitions, exits, and excluded agreements carry extra fees. Ongoing counsel starts at $50/day; additional flat fees may apply and are quoted in the engagement letter. $500 express review in one business day. Contracts include 50 pages; each additional page is $5. Separate $10,000 retainer.",
+            "Counsel for technology companies. $5,000 once for contracts within the agreed scope. Company formation, financings, acquisitions, exits, and excluded agreements carry extra fees. Ongoing counsel starts at $100/day, with contract reviews returned within three business days; additional flat fees may apply and are quoted in the engagement letter. Contracts include 50 pages; each additional page is $5. Separate $10,000 retainer.",
         ),
         services_page_link(),
         indexed_page(
