@@ -1641,7 +1641,10 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("Additional flat fees may apply and are quoted in the engagement letter."));
-        assert!(company["express_price"].is_null(), "expedited reviews are retired");
+        assert!(
+            company["express_price"].is_null(),
+            "expedited reviews are retired"
+        );
         assert_eq!(company["drafting_packages"][0][0].as_str(), Some("/ once"));
         assert_eq!(company["drafting_packages"][0][1].as_str(), Some("$5,000"));
         assert_eq!(

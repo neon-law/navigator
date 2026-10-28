@@ -113,9 +113,7 @@ pub(super) fn CompanyHome(
                 format_dollars(plan_fees)
             ),
             earned_fees: format_dollars(earned_fees),
-            remaining_retainer: format_dollars(
-                company.retainer_amount.saturating_sub(earned_fees),
-            ),
+            remaining_retainer: format_dollars(company.retainer_amount.saturating_sub(earned_fees)),
             earned_share,
         });
     }

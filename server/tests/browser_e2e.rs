@@ -255,7 +255,10 @@ async fn prepared_practice_brands_have_responsive_pages_and_a_working_mobile_men
                         vec![],
                     ).await.expect("Vesta plan layout");
                     assert_eq!(layout["fits"], true, "plan fits its column at {width}px");
-                    assert_eq!(layout["priced"], false, "the plan publishes no starting price");
+                    assert_eq!(
+                        layout["priced"], false,
+                        "the plan publishes no starting price"
+                    );
                     assert_eq!(layout["columns"], if width < 768 { 1 } else { 2 });
                     std::fs::write(
                         capture_dir.join(format!("vesta-pricing-{width}.png")),
