@@ -18,6 +18,8 @@ struct Reference {
 struct Clause {
     kind: String,
     #[serde(default)]
+    retired_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
     inputs: BTreeMap<String, Input>,
     body: String,
 }
@@ -35,6 +37,8 @@ pub struct Input {
 /// One pinned version of a library Clause, `<code>@<version>`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibraryClause {
+    /// When this version stopped accepting new references. Wording stays readable.
+    pub retired_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Stable source name shared by every version.
     pub code: String,
     /// Positive version number pinned by Templates.
@@ -64,6 +68,7 @@ pub fn library_clauses() -> Result<Vec<LibraryClause>, String> {
                 .filter(|(code, version)| !code.is_empty() && *version > 0)
                 .ok_or_else(|| format!("invalid Clause source `{source}`; use code@version"))?;
             Ok(LibraryClause {
+                retired_at: clause.retired_at,
                 code: code.to_string(),
                 version,
                 kind: clause.kind,
@@ -132,6 +137,12 @@ fn selections(doc: &Value) -> Result<BTreeMap<String, (Reference, Clause)>, Stri
             .get(&reference.source)
             .cloned()
             .ok_or_else(|| format!("unknown Clause version `{}`", reference.source))?;
+        if clause.retired_at.is_some() {
+            return Err(format!(
+                "Clause version `{}` is retired; choose an active version",
+                reference.source
+            ));
+        }
         if doc.get("kind").and_then(Value::as_str) != Some(clause.kind.as_str()) {
             return Err(format!("Clause `{alias}` requires kind `{}`", clause.kind));
         }
@@ -335,14 +346,14 @@ fn bind_inputs(prose: &str, inputs: &BTreeMap<String, String>) -> String {
 /// The Clause every `kind: onboarding` template must include.
 pub const ENGAGEMENT_ARBITRATION: &str = "engagement_arbitration";
 
-/// The highest pinned version of library Clause `code`, as `code@version`.
+/// The highest active version of library Clause `code`, as `code@version`.
 ///
 /// # Errors
 /// Returns a malformed bundled library error, or an unknown code.
 pub fn current_source(code: &str) -> Result<String, String> {
     library_clauses()?
         .into_iter()
-        .filter(|clause| clause.code == code)
+        .filter(|clause| clause.code == code && clause.retired_at.is_none())
         .map(|clause| clause.version)
         .max()
         .map(|version| format!("{code}@{version}"))
@@ -460,13 +471,47 @@ mod tests {
     }
 
     fn source(reference: &str, body: &str) -> String {
-        format!("---\nkind: agreement\nquestionnaire: [entity__company]\nclauses:\n  law:\n    source: {reference}\n    inputs:\n      jurisdiction: jurisdiction__law\n      forum: custom_text__forum\n---\n{body}")
+        let inputs = if reference.starts_with("governing_law@") {
+            "      jurisdiction: jurisdiction__law\n      forum: custom_text__forum"
+        } else {
+            "      law: jurisdiction__law\n      seat: jurisdiction__forum"
+        };
+        format!("---\nkind: agreement\nquestionnaire: [entity__company]\nclauses:\n  law:\n    source: {reference}\n    inputs:\n{inputs}\n---\n{body}")
+    }
+
+    #[test]
+    fn retired_versions_refuse_new_references_but_saved_snapshots_stay_readable() {
+        use crate::Rule;
+        let authored = source("governing_law@1", "{{> law}}");
+        let violations = super::ClauseReferences.lint(&crate::SourceFile {
+            path: "synthetic.md".into(),
+            contents: authored.clone(),
+        });
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].code, "N132");
+        assert!(violations[0].message.contains("retired"));
+        assert!(compile(&authored).unwrap_err().contains("retired"));
+        let nevada = "---\nkind: letter\nquestionnaire: [jurisdiction__law]\nclauses:\n  arbitration:\n    source: nevada_engagement_arbitration@1\n    inputs:\n      law: jurisdiction__law\n---\n{{> arbitration}}\n";
+        assert!(compile(nevada).unwrap_err().contains("retired"));
+        assert!(super::current_source("governing_law").is_err());
+        assert_eq!(
+            super::current_source("nevada_engagement_arbitration").unwrap(),
+            "nevada_engagement_arbitration@2"
+        );
+        let snapshot = "---\nkind: agreement\nclause_sources:\n  law:\n    source: governing_law@1\n    inputs:\n      jurisdiction: jurisdiction__law\n      forum: custom_text__forum\n---\nSaved operative wording.\n";
+        assert_eq!(compile(snapshot).unwrap(), snapshot);
+        assert!(super::show("governing_law@1")
+            .unwrap()
+            .contains("Governing law"));
+        assert!(super::show("nevada_engagement_arbitration@1")
+            .unwrap()
+            .contains("JAMS"));
     }
 
     #[test]
     fn a_compiled_snapshot_names_the_sources_it_pins() {
-        let compiled = compile(&source("governing_law@1", "{{> law}}")).unwrap();
-        assert_eq!(super::pinned_sources(&compiled), ["governing_law@1"]);
+        let compiled = compile(&source("dispute_resolution@1", "{{> law}}")).unwrap();
+        assert_eq!(super::pinned_sources(&compiled), ["dispute_resolution@1"]);
         assert!(super::pinned_sources("no frontmatter").is_empty());
         assert!(super::pinned_sources("---\nkind: agreement\n---\nbody").is_empty());
         assert!(super::pinned_sources("---\nclause_sources: [oops\n---\nbody").is_empty());
@@ -474,30 +519,30 @@ mod tests {
 
     #[test]
     fn pinned_clause_composes_and_adds_missing_questions() {
-        let compiled = compile(&source("governing_law@1", "{{> law}}")).unwrap();
-        assert!(compiled
-            .contains("Governing law: {{jurisdiction__law}}. Courts: {{custom_text__forum}}."));
+        let compiled = compile(&source("dispute_resolution@1", "{{> law}}")).unwrap();
+        assert!(compiled.contains("The law of {{jurisdiction__law}} governs this agreement"));
         let yaml = crate::frontmatter::extract(&compiled).unwrap();
         let doc: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(
             doc["questionnaire"]["entity__company"]["_"],
-            "custom_text__forum"
-        );
-        assert_eq!(
-            doc["questionnaire"]["custom_text__forum"]["_"],
             "jurisdiction__law"
         );
-        assert_eq!(doc["questionnaire"]["jurisdiction__law"]["_"], "END");
+        assert_eq!(
+            doc["questionnaire"]["jurisdiction__law"]["_"],
+            "jurisdiction__forum"
+        );
+        assert_eq!(doc["questionnaire"]["jurisdiction__forum"]["_"], "END");
         assert_eq!(compile(&compiled).unwrap(), compiled);
     }
 
     #[test]
     fn unknown_versions_references_and_wrong_input_types_fail() {
         assert!(compile(&source("governing_law@99", "{{> law}}")).is_err());
-        assert!(compile(&source("governing_law@1", "{{> absent}}")).is_err());
-        assert!(compile(&source("governing_law@1", "{{> law")).is_err());
+        assert!(compile(&source("dispute_resolution@1", "{{> absent}}")).is_err());
+        assert!(compile(&source("dispute_resolution@1", "{{> law")).is_err());
         assert!(compile(
-            &source("governing_law@1", "{{> law}}").replace("jurisdiction__law", "person__law")
+            &source("dispute_resolution@1", "{{> law}}")
+                .replace("jurisdiction__law", "person__law")
         )
         .is_err());
     }
@@ -505,30 +550,32 @@ mod tests {
     #[test]
     fn empty_and_extra_inputs_fail_and_plain_sources_keep_their_bytes() {
         assert!(compile(
-            &source("governing_law@1", "{{> law}}")
-                .replace("      forum: custom_text__forum\n", "")
+            &source("dispute_resolution@1", "{{> law}}")
+                .replace("      seat: jurisdiction__forum\n", "")
         )
         .is_err());
-        assert!(compile(&source("governing_law@1", "{{> law}}").replace(
-            "    inputs:",
-            "    inputs:\n      extra: custom_text__extra"
-        ))
-        .is_err());
+        assert!(
+            compile(&source("dispute_resolution@1", "{{> law}}").replace(
+                "    inputs:",
+                "    inputs:\n      extra: custom_text__extra"
+            ))
+            .is_err()
+        );
         let plain = "---\r\nkind: agreement\r\n---\r\nBody.\r\n";
         assert_eq!(compile(plain).unwrap(), plain);
     }
 
     #[test]
     fn existing_question_order_and_prompt_are_preserved() {
-        let source = source("governing_law@1", "{{> law}}")
-            .replace("questionnaire: [entity__company]", "questionnaire: [jurisdiction__law, custom_text__forum]\nprompts:\n  law: Authored governing-law question");
+        let source = source("dispute_resolution@1", "{{> law}}")
+            .replace("questionnaire: [entity__company]", "questionnaire: [jurisdiction__law, jurisdiction__forum]\nprompts:\n  law: Authored governing-law question");
         let compiled = compile(&source).unwrap();
         let doc: serde_yaml::Value =
             serde_yaml::from_str(crate::frontmatter::extract(&compiled).unwrap()).unwrap();
         assert_eq!(doc["questionnaire"]["BEGIN"]["_"], "jurisdiction__law");
         assert_eq!(
             doc["questionnaire"]["jurisdiction__law"]["_"],
-            "custom_text__forum"
+            "jurisdiction__forum"
         );
         assert_eq!(doc["prompts"]["law"], "Authored governing-law question");
     }
@@ -537,8 +584,8 @@ mod tests {
     fn gate_refuses_unused_and_undeclared_references() {
         use crate::Rule;
         for source in [
-            source("governing_law@1", "No reference."),
-            source("governing_law@1", "{{> absent}}"),
+            source("dispute_resolution@1", "No reference."),
+            source("dispute_resolution@1", "{{> absent}}"),
         ] {
             let violations = super::ClauseReferences.lint(&crate::SourceFile {
                 path: "sample.md".into(),
@@ -597,11 +644,11 @@ mod tests {
 
     #[test]
     fn snapshots_do_not_resolve_historical_library_versions() {
-        let compiled = compile(&source("governing_law@1", "{{> law}}")).unwrap();
-        let historical = compiled.replace("governing_law@1", "retired_source@77");
+        let compiled = compile(&source("dispute_resolution@1", "{{> law}}")).unwrap();
+        let historical = compiled.replace("dispute_resolution@1", "retired_source@77");
         assert_eq!(compile(&historical).unwrap(), historical);
         assert!(compile(
-            &source("governing_law@1", "{{> law}}")
+            &source("dispute_resolution@1", "{{> law}}")
                 .replace("questionnaire: [entity__company]\n", "")
         )
         .is_err());

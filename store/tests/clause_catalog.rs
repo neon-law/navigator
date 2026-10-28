@@ -68,12 +68,11 @@ async fn a_seeded_library_has_one_row_per_version_and_reseeding_writes_nothing()
         assert_eq!(row.inputs, serde_json::to_value(&source.inputs).unwrap());
         let newest = library
             .iter()
-            .filter(|other| other.code == row.code)
+            .filter(|other| other.code == row.code && other.retired_at.is_none())
             .map(|other| other.version)
-            .max()
-            .unwrap();
-        assert_eq!(row.is_current, row.version == newest, "{}", row.code);
-        assert!(row.retired_at.is_none());
+            .max();
+        assert_eq!(row.is_current, Some(row.version) == newest, "{}", row.code);
+        assert_eq!(row.retired_at, source.retired_at);
     }
 
     let before: Vec<(String, i32, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
@@ -110,6 +109,57 @@ async fn a_seeded_library_has_one_row_per_version_and_reseeding_writes_nothing()
 }
 
 #[tokio::test]
+async fn retired_versions_remain_readable_and_reseeding_retires_existing_rows() {
+    let Some((pg, pool)) = database().await else {
+        return;
+    };
+    let library = rules::clauses::library_clauses().unwrap();
+    clauses::seed(&pg, &library).await.unwrap();
+    let before = clauses::get(&pg, "governing_law", 1)
+        .await
+        .unwrap()
+        .unwrap();
+    // Model an existing read model whose retirement metadata has not been seeded.
+    sqlx::query("UPDATE clause SET retired_at = NULL, is_current = (code = 'governing_law') WHERE code IN ('governing_law', 'nevada_engagement_arbitration') AND version = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    clauses::seed(&pg, &library).await.unwrap();
+    for code in ["governing_law", "nevada_engagement_arbitration"] {
+        let retired = clauses::get(&pg, code, 1).await.unwrap().unwrap();
+        assert!(retired.retired_at.is_some(), "{code}@1 is retired");
+        assert!(!retired.is_current, "retired versions cannot be current");
+        assert!(!retired.body.is_empty(), "retired wording remains readable");
+    }
+    let after = clauses::get(&pg, "governing_law", 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.body, before.body);
+    assert_eq!(after.body_sha256, before.body_sha256);
+    assert_eq!(after.inserted_at, before.inserted_at);
+    assert!(clauses::current(&pg, "governing_law")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(clauses::seed(&pg, &library).await.unwrap().is_unchanged());
+    let mut older_bundle = library.clone();
+    for source in &mut older_bundle {
+        source.retired_at = None;
+    }
+    clauses::seed(&pg, &older_bundle).await.unwrap();
+    let retained = clauses::get(&pg, "governing_law", 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        retained.retired_at, after.retired_at,
+        "retirement is monotonic"
+    );
+    assert!(!retained.is_current);
+}
+
+#[tokio::test]
 async fn appending_a_version_moves_current_and_a_changed_pin_is_refused() {
     let Some((pg, _pool)) = database().await else {
         return;
@@ -123,6 +173,7 @@ async fn appending_a_version_moves_current_and_a_changed_pin_is_refused() {
         .unwrap()
         .clone();
     next.version = 2;
+    next.retired_at = None;
     next.body = "Governing law: {{jurisdiction}}. Exclusive courts: {{forum}}.".into();
     library.push(next);
     let appended = clauses::seed(&pg, &library).await.unwrap();
@@ -182,7 +233,7 @@ async fn the_database_refuses_a_second_current_version_and_a_false_digest() {
     let insert = "INSERT INTO clause (code, version, kind, body, body_sha256, is_current) VALUES ($1, $2, 'agreement', $3, $4, $5)";
     let body = "Synthetic clause body.";
     let second_current = sqlx::query(insert)
-        .bind("governing_law")
+        .bind("nevada_engagement_arbitration")
         .bind(7)
         .bind(body)
         .bind(sha256(body))

@@ -10,6 +10,7 @@ struct ListedClause {
     version: i32,
     kind: String,
     is_current: bool,
+    retired: bool,
 }
 
 pub fn list() -> ExitCode {
@@ -26,7 +27,9 @@ pub fn list() -> ExitCode {
                     clause.code,
                     clause.version,
                     clause.kind,
-                    if clause.is_current {
+                    if clause.retired {
+                        "retired"
+                    } else if clause.is_current {
                         "current"
                     } else {
                         "not current"
@@ -71,6 +74,7 @@ async fn list_sources() -> Result<Vec<ListedClause>, String> {
                     version: clause.version,
                     kind: clause.kind,
                     is_current: clause.is_current,
+                    retired: clause.retired_at.is_some(),
                 })
                 .collect()
         })
@@ -87,6 +91,7 @@ async fn show_source(source: &str) -> Result<String, String> {
                     .map_err(|error| error.to_string())?
                     .ok_or_else(|| format!("unknown Clause version `{source}`"))?;
                 return serde_yaml::to_string(&serde_json::json!({
+                    "retired_at": clause.retired_at,
                     "kind": clause.kind,
                     "inputs": clause.inputs,
                     "body": clause.body,

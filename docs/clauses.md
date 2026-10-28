@@ -12,10 +12,10 @@ Declare an alias in the notation's frontmatter and reference it in the body:
 kind: agreement
 clauses:
   law:
-    source: governing_law@1
+    source: dispute_resolution@1
     inputs:
-      jurisdiction: jurisdiction__law
-      forum: custom_text__business_forum
+      law: jurisdiction__law
+      seat: jurisdiction__arbitration_seat
 ```
 
 ```markdown
@@ -35,6 +35,19 @@ expanded body through the existing asset seam. Answers continue to live in the N
 update must add a new source version; changing a reference creates a new Template version through the existing
 persistence seam.
 
+## Retire a version
+
+Set `retired_at` on a library version when it must stop accepting new references. The date is copied to the PostgreSQL
+read model on the next full `navigator-migrate` run. Retirement preserves the version, inputs, wording, digest, and
+insertion timestamp. Re-seeding is idempotent and never reactivates a retired row.
+
+A retired version remains readable through `clause show` and the Clause library pages, where it is marked retired. It is
+never current. `N132` and composition reject new `clauses:` references to it. Saved snapshots carry expanded wording and
+`clause_sources:` provenance, so they remain readable and render without resolving the library again.
+
+`governing_law@1` and the JAMS version `nevada_engagement_arbitration@1` are retired. Use an active version with the
+appropriate legal effect and document context for new Templates.
+
 ## Arbitration inputs
 
 The existing onboarding draft's arbitration wording is available as `engagement_arbitration@1`. It is restricted to
@@ -52,7 +65,7 @@ clauses:
       seat: jurisdiction__arbitration_seat
 ```
 
-Every `kind: onboarding` template must declare the highest pinned version of `engagement_arbitration` under `clauses:`
+Every `kind: onboarding` template must declare the highest active version of `engagement_arbitration` under `clauses:`
 and place it in the body with `{{> name}}`; `N132` (and so `navigator project gate`) fails the template otherwise. The
 onboarding scaffold stub starts with the clause, its `clauses:` block, and the two jurisdiction states. An offboarding
 letter ends an engagement already governed by the signed onboarding letter, so the requirement does not apply to it.
@@ -94,22 +107,23 @@ cargo run -p cli --quiet -- clause show 'governing_law@1'
 
 The versioned source of truth is [`rules/clauses/library.yaml`](../rules/clauses/library.yaml). When PostgreSQL is
 configured, `clause list` and `clause show` read the shared `clause` table; when it is not configured or unavailable,
-they read the library embedded in the binary. `list` reports each version's kind and whether it is current. The table is
-a read model, seeded from the bundled library by `navigator-migrate`; edits still add a version to the YAML source.
-`N132` rejects an unknown version, missing or extra input, incompatible input type, wrong notation kind, unused
-declaration, or unresolved reference. The expanded prose also passes the existing placeholder and drafting-marker rules.
+they read the library embedded in the binary. `list` reports each version's kind and status: current, not current, or
+retired. The table is seeded from the bundled library by `navigator-migrate`; edits add a version to the YAML source.
+`N132` rejects unknown or retired versions, missing or extra inputs, incompatible input types, wrong notation kinds,
+unused declarations, and unresolved references. Expanded prose also passes the placeholder and drafting-marker rules.
 Missing answers remain visible placeholders in previews and are refused by the existing final-document check.
 
 ## Browse the library
 
-The lawyer tier reads the library at `/app/admin/clauses`. The list shows each Clause's current version, kind, input
-count, and how many shared Templates pin any version of it. The search box matches a code, a kind, or wording in the
-body; the kind menu filters exactly. `/app/admin/clauses/{code}` shows every version's body and inputs and the Templates
-that pin that version. Usage is read from each shared Template's `clause_sources:` snapshot, so a Project's own
-Templates do not appear. The canonical seed stores a Template's body without its frontmatter, so for a seeded body the
-snapshot is recovered from the bundled source it was seeded from (`store::seed::seeded_clause_sources`), and only when
-the stored body is byte-identical to it. The pages read the same catalog as `clause list` and write nothing: a change is
-still a new version in the YAML.
+The lawyer tier reads the library at `/app/admin/clauses`. The list shows each Clause's current version, or its latest
+retired version when none is current. Each row shows the kind, input count, retirement status, and how many shared
+Templates pin any version of it. The search box matches a code, a kind, or wording in the body; the kind menu filters
+exactly. `/app/admin/clauses/{code}` shows every version's body and inputs and the Templates that pin that version.
+Usage is read from each shared Template's `clause_sources:` snapshot, so a Project's own Templates do not appear. The
+canonical seed stores a Template's body without its frontmatter, so for a seeded body the snapshot is recovered from the
+bundled source it was seeded from (`store::seed::seeded_clause_sources`), and only when the stored body is
+byte-identical to it. The pages read the same catalog as `clause list` and write nothing: a change is still a new
+version in the YAML.
 
 ## Extract more Clauses
 
@@ -143,7 +157,7 @@ literal.
 
 The NDAs, advisor agreement, and MSA use `dispute_resolution@1`. The onboarding and Nevada engagement templates now
 include their distinct arbitration Clauses. The onboarding retains its existing binding of both law and seat to the
-governing-law answer. The Nevada engagement uses `nevada_engagement_arbitration@1`, with AAA rules and Nevada
+governing-law answer. The Nevada engagement uses `nevada_engagement_arbitration@2`, with AAA rules and Nevada
 fee-dispute protection. The employment offer letter uses `employment_arbitration@1` and includes
 `california_employment@1` only when California is the work state.
 

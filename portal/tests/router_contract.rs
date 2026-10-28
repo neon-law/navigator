@@ -875,7 +875,7 @@ mod clauses_page {
     }
 
     #[tokio::test]
-    async fn the_list_shows_every_current_clause_with_its_usage() {
+    async fn the_list_shows_every_clause_code_with_its_usage_and_retirement() {
         let app = app().await;
         let (status, body) = get(&app, Role::Lawyer, "/app/admin/clauses").await;
         assert_eq!(status, StatusCode::OK);
@@ -894,6 +894,8 @@ mod clauses_page {
             body[start..end].to_string()
         };
         assert!(row("governing_law").contains("2 Templates"));
+        assert!(row("governing_law").contains("(retired)"));
+        assert!(!row("nevada_engagement_arbitration").contains("(retired)"));
         assert!(row("dispute_resolution").contains("1 Template<"));
         assert!(row("nda_administration").contains("No Templates"));
         assert!(body.contains(r#"role="search""#));
@@ -927,6 +929,8 @@ mod clauses_page {
         let (status, body) = get(&app, Role::Lawyer, "/app/admin/clauses/governing_law").await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains("governing_law@1"));
+        assert!(body.contains("(retired)"));
+        assert!(body.contains("new references are refused"));
         assert!(body.contains("Governing law:"));
         assert!(body.contains("jurisdiction"));
         assert!(body.contains("Sample Services Agreement"));

@@ -101,9 +101,9 @@ mod tests {
 
     #[test]
     fn clause_references_reach_the_preview_as_prose_and_questions() {
-        let source = "---\nkind: agreement\ntitle: Sample\nquestionnaire: [entity__company]\nclauses:\n  law:\n    source: governing_law@1\n    inputs:\n      jurisdiction: jurisdiction__law\n      forum: custom_text__forum\n---\n## I. Administration\n\n{{> law}}";
+        let source = "---\nkind: agreement\ntitle: Sample\nquestionnaire: [entity__company]\nclauses:\n  law:\n    source: dispute_resolution@1\n    inputs:\n      law: jurisdiction__law\n      seat: jurisdiction__seat\n---\n## I. Administration\n\n{{> law}}";
         let doc = from_markdown("sample", "", source);
-        assert!(doc.stage_html.contains("Governing law:"));
+        assert!(doc.stage_html.contains("governs this agreement"));
         assert!(!doc.stage_html.contains("{{&gt;"));
         assert!(doc
             .demo_questions
@@ -112,7 +112,17 @@ mod tests {
         assert!(doc
             .demo_questions
             .iter()
-            .any(|question| question.code == "custom_text__forum"));
+            .any(|question| question.code == "jurisdiction__seat"));
+    }
+
+    #[test]
+    fn retired_clause_source_shows_a_composition_error() {
+        let source = "---\nkind: agreement\nclauses:\n  law:\n    source: governing_law@1\n    inputs:\n      jurisdiction: jurisdiction__law\n      forum: custom_text__forum\n---\n{{> law}}";
+        let doc = from_markdown("sample", "", source);
+        assert_eq!(doc.title, "Invalid Clause reference");
+        assert!(doc.demo_questions.is_empty());
+        assert!(doc.stage_html.contains("retired"));
+        assert!(!doc.stage_html.contains("Governing law:"));
     }
 
     #[test]

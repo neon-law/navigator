@@ -1,4 +1,5 @@
 governing_law@1:
+  retired_at: 2026-10-27T00:00:00Z
   kind: agreement
   inputs:
     jurisdiction:
@@ -136,6 +137,7 @@ engagement_arbitration@1:
     a claim that we did our work negligently. Because this section governs how a future dispute between you and your lawyers
     is handled, you may consult independent counsel before agreeing to it.
 nevada_engagement_arbitration@1:
+  retired_at: 2026-10-27T00:00:00Z
   kind: letter
   inputs:
     law:

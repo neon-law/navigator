@@ -11,6 +11,9 @@ source of truth; the shared PostgreSQL `clause` table is a seeded read model. A 
 its body. Composition expands the prose before persistence, so an existing [Notation](../notation.md) keeps its saved
 wording when the library changes.
 
+A retired library version stays readable for provenance and cannot be newly referenced. Its `retired_at` date appears in
+the read model and catalog; `N132` refuses new references. Retirement leaves existing expanded snapshots unchanged.
+
 A lawyer may also add a matter-specific Clause to one Notation. Those paragraphs live in the [`notation_clause`
 table](../../store/src/notation_clauses.rs) and are inserted at `{{custom_clauses}}`; they are separate from the shared
 library. Both uses name legal prose, with different scopes.

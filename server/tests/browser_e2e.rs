@@ -2001,6 +2001,44 @@ async fn a_lawyer_browses_searches_filters_and_opens_a_clause() {
         every.contains(&"governing_law".to_string()),
         "the library lists governing_law: {every:?}"
     );
+    let retired = c
+        .execute(
+            "const a = document.querySelector(\"#clause-library a[href='/app/admin/clauses/governing_law']\"); return a.closest('tr').children[1].textContent;",
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert!(
+        retired.as_str().unwrap().contains("retired"),
+        "retired wording stays discoverable: {retired}"
+    );
+    click_and_reach(
+        &c,
+        "a[href='/app/admin/clauses/governing_law']",
+        "/app/admin/clauses/governing_law",
+        Duration::from_secs(10),
+    )
+    .await;
+    let retired_detail = c
+        .wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("#clause-detail"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(retired_detail.contains("governing_law@1 (retired)"));
+    assert!(retired_detail.contains("new references are refused"));
+    assert!(retired_detail.contains("Governing law"));
+    c.goto(&format!("{}/app/admin/clauses", base_url()))
+        .await
+        .unwrap();
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("#clause-library tr.clause-row"))
+        .await
+        .unwrap();
     let n = every.len();
     assert_eq!(
         clause_count(&c).await,

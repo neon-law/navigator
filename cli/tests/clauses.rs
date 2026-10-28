@@ -35,11 +35,12 @@ fn bundled_list_reports_version_kind_and_current_status() {
     for clause in &clauses {
         let newest = clauses
             .iter()
-            .filter(|candidate| candidate.code == clause.code)
+            .filter(|candidate| candidate.code == clause.code && candidate.retired_at.is_none())
             .map(|candidate| candidate.version)
-            .max()
-            .unwrap();
-        let status = if clause.version == newest {
+            .max();
+        let status = if clause.retired_at.is_some() {
+            "retired"
+        } else if Some(clause.version) == newest {
             "current"
         } else {
             "not current"
@@ -52,6 +53,22 @@ fn bundled_list_reports_version_kind_and_current_status() {
             listed.lines().any(|line| line == row),
             "missing {row:?} in:\n{listed}"
         );
+    }
+}
+
+#[test]
+fn retired_versions_are_labelled_and_remain_readable() {
+    for source in ["governing_law@1", "nevada_engagement_arbitration@1"] {
+        let output = Command::cargo_bin("navigator")
+            .unwrap()
+            .env_remove("NAVIGATOR_POSTGRES_HOST")
+            .args(["clause", "show", source])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let clause: serde_yaml::Value = serde_yaml::from_slice(&output.stdout).unwrap();
+        assert!(clause["retired_at"].is_string());
+        assert!(!clause["body"].as_str().unwrap().is_empty());
     }
 }
 
