@@ -243,7 +243,8 @@ async fn a_soft_delete_stamps_the_chain_and_hides_it_from_clients() {
     let first = file(&fx, "memos/note.txt", b"first", "client").await;
     let second = file(&fx, "memos/note.txt", b"second", "client").await;
     file(&fx, "memos/other.txt", b"other", "client").await;
-    assert_eq!(listed(&fx, &fx.client, "").await.len(), 3);
+    // Filing `second` made `first` internal, so the client lists two.
+    assert_eq!(listed(&fx, &fx.client, "").await.len(), 2);
 
     assert_eq!(
         delete(&fx, None, first).await.status(),
@@ -469,9 +470,14 @@ async fn restoring_returns_the_document_with_its_history() {
     assert_eq!(body["changed"], true);
 
     assert_eq!(
-        listed(&fx, &fx.client, "").await.len(),
+        listed(&fx, &fx.lawyer, "").await.len(),
         2,
         "both revisions return"
+    );
+    assert_eq!(
+        listed(&fx, &fx.client, "").await.len(),
+        1,
+        "the client reads the shared revision; the superseded one is internal"
     );
     let row = store::assets::find_by_id(&fx.surreal, second)
         .await
