@@ -520,6 +520,43 @@ fn local_documents(root: &Path) -> (Vec<LocalDocument>, Vec<PreviewFinding>) {
     (documents, findings)
 }
 
+/// Read the declared Draft from this checkout, including working-tree edits.
+/// A repository-relative pointer must still resolve inside the checkout when it
+/// traverses symlinks. No stored execution status is inferred from local source.
+async fn local_page_draft(root: &Path, draft: Option<&str>) -> webapp::sections::PageDraft {
+    use webapp::sections::PageDraft;
+
+    let Some(draft) = draft else {
+        return PageDraft::Missing;
+    };
+    let read = async {
+        let path = Path::new(draft);
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        }
+        let root = tokio::fs::canonicalize(root).await?;
+        let path = tokio::fs::canonicalize(root.join(path)).await?;
+        if !path.starts_with(&root) {
+            return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        }
+        tokio::fs::read_to_string(path).await
+    }
+    .await;
+    match read {
+        Ok(body) => webapp::sections::engagement::page_draft(&body),
+        Err(_) => {
+            eprintln!(
+                "navigator project preview: a declared draft could not be read from the checkout"
+            );
+            PageDraft::Unreadable
+        }
+    }
+}
+
 fn document_rows(documents: &[LocalDocument], lens: PageLens) -> Vec<SectionRow> {
     match lens {
         PageLens::Clerk => Vec::new(),
@@ -713,6 +750,12 @@ async fn page(
         lens,
     );
     cx.documents = document_rows(&snapshot.documents, lens);
+    let local_draft =
+        if lens != PageLens::Clerk && sections.contains(&rules::dashboard::Section::DocumentBody) {
+            local_page_draft(&preview.root, entry.draft.as_deref()).await
+        } else {
+            webapp::sections::PageDraft::Missing
+        };
     let view = MatterPageView {
         tabs: matter_page::page_tabs(&code, &pages, lens),
         matter_name: host
@@ -724,7 +767,13 @@ async fn page(
         lens,
         sections: sections
             .into_iter()
-            .map(|section| webapp::sections::load(section, &cx))
+            .map(|section| {
+                if section == rules::dashboard::Section::DocumentBody {
+                    webapp::sections::SectionView::DocumentBody(local_draft.clone())
+                } else {
+                    webapp::sections::load(section, &cx)
+                }
+            })
             .collect(),
         role: role_for(lens),
         logo: None,
@@ -1252,6 +1301,86 @@ mod tests {
         assert!(!html.contains("00CV000777"), "cleared caption: {html}");
         assert!(html.contains("No case is recorded"), "{html}");
         assert_only_reads(&host).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn page_drafts_render_from_the_working_tree_and_refresh() {
+        let host = fake_host().await;
+        let dir = checkout("Case timeline");
+        let root = dir.path();
+        let page = "\n  - slug: memo\n    kind: document_workbench\n    title: Sample memo\n    draft: drafts/memo.md\n    lenses:\n      lawyer: [document_body, boundary_note, provenance_statement]\n";
+        std::fs::write(
+            root.join("navigator.yaml"),
+            manifest("Case timeline") + page,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("drafts")).unwrap();
+        let draft = root.join("drafts/memo.md");
+        std::fs::write(
+            &draft,
+            "---\nkind: memo\ntitle: Sample memo\n---\n\n## Scope\n\n- Synthetic review\n",
+        )
+        .unwrap();
+        let app = preview(root, &host);
+        let (status, html, _) = get(&app, "/app/projects/acme/memo?lens=lawyer").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(html.contains("id=\"document-body\""), "{html}");
+        assert!(html.contains("Synthetic review"), "{html}");
+        assert!(html.contains("notation-unit__heading"), "{html}");
+        assert!(html.contains("<ul"), "{html}");
+        assert!(!html.contains("No draft is attached"), "{html}");
+        let (status, html, _) = get(&app, "/app/projects/acme/memo?lens=client").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(!html.contains("Synthetic review"), "{html}");
+        std::fs::write(
+            root.join("navigator.yaml"),
+            manifest("Case timeline") + &page.replace("lawyer:", "clerk:"),
+        )
+        .unwrap();
+        let (_, html, _) = get(&app, "/app/projects/acme/memo?lens=clerk").await;
+        assert!(!html.contains("Synthetic review"), "{html}");
+        std::fs::write(
+            root.join("navigator.yaml"),
+            manifest("Case timeline") + page,
+        )
+        .unwrap();
+        std::fs::write(
+            &draft,
+            "---\nkind: memo\ntitle: Sample memo\n---\n\n## Scope\n\n- Updated synthetic review\n",
+        )
+        .unwrap();
+        let (_, html, _) = get(&app, "/app/projects/acme/memo?lens=lawyer").await;
+        assert!(html.contains("Updated synthetic review"), "{html}");
+        assert_only_reads(&host).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn page_drafts_refuse_missing_and_escaping_paths() {
+        let host = fake_host().await;
+        let dir = checkout("Case timeline");
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.md"), "Outside synthetic text").unwrap();
+        std::fs::create_dir_all(dir.path().join("drafts")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.md"),
+            dir.path().join("drafts/link.md"),
+        )
+        .unwrap();
+        for path in ["drafts/missing.md", "drafts/link.md", "../secret.md"] {
+            let page = format!("\n  - slug: memo\n    kind: document_workbench\n    title: Sample memo\n    draft: {path}\n    lenses:\n      lawyer: [document_body, boundary_note, provenance_statement]\n");
+            std::fs::write(
+                dir.path().join("navigator.yaml"),
+                manifest("Case timeline") + &page,
+            )
+            .unwrap();
+            let app = preview(dir.path(), &host);
+            let (_, html, _) = get(&app, "/app/projects/acme/memo?lens=lawyer").await;
+            assert!(
+                html.contains("This draft could not be read"),
+                "{path}: {html}"
+            );
+            assert!(!html.contains("Outside synthetic text"), "{path}: {html}");
+        }
     }
 
     /// ENG-1077: an edit to `navigator.yaml` changes the next response, and
