@@ -219,17 +219,27 @@ spec:
           volumeMounts:
             - name: repos
               mountPath: /var/lib/navigator/repos
+          # Boot applies the Surreal schema and the seed before the server
+          # listens, which took ~58s against production's data on
+          # 26.10.29-rc.1. A liveness probe timed from container start killed
+          # it at ~60s, so a pod could only win that race. The startup probe
+          # holds liveness and readiness off until the server answers,
+          # allowing up to five minutes.
+          startupProbe:
+            httpGet:
+              path: /app/health
+              port: 3001
+            periodSeconds: 5
+            failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /app/readyz
               port: 3001
-            initialDelaySeconds: 5
             periodSeconds: 5
           livenessProbe:
             httpGet:
               path: /app/health
               port: 3001
-            initialDelaySeconds: 30
             periodSeconds: 10
       volumes:
         # `NAVIGATOR_GIT_REPO_ROOT` above names this directory for
