@@ -21,11 +21,13 @@ use tempfile::TempDir;
 fn navigator() -> Command {
     let mut command = Command::cargo_bin("navigator").unwrap();
     command.env_remove("GITHUB_REPOSITORY");
+    // Keep this rule suite on the compiled release; delegation is covered separately.
+    command.env("NAVIGATOR_RELEASE_TAG", FIXTURE_PIN);
     command
 }
 
 /// The pin these fixtures carry.
-const FIXTURE_PIN: &str = "26.8.23";
+const FIXTURE_PIN: &str = env!("CARGO_PKG_VERSION");
 
 const CODEOWNERS: &str = "# CODEOWNERS\n\n* @shicholas\n";
 const GITATTRIBUTES: &str = "* text=auto eol=lf\n";
@@ -487,7 +489,7 @@ fn the_seed_import_action_uses_the_repository_root() {
 
 /// ENG-1139's synthetic pull requests: the `ci` job's `--tracked-files` pass
 /// fails one adding `package.json`, `x.py`, or `tests/a.mjs` by naming the
-/// path, and passes the Markdown-and-YAML shell. It reads no network, so it
+/// path, and passes the Markdown-and-YAML shell. Its matching release reads no network, so it
 /// needs no login.
 #[test]
 fn tracked_files_gate_names_each_non_markdown_or_yaml_path() {
@@ -570,7 +572,7 @@ fn a_malformed_manifest_is_reported_without_template_cascade() {
     scaffold(dir.path(), "example-project");
     fs::write(
         dir.path().join("navigator.yaml"),
-        "version: 26.9.14\nproject: [not, a, project]\n",
+        format!("version: {FIXTURE_PIN}\nproject: [not, a, project]\n"),
     )
     .unwrap();
 
@@ -590,7 +592,10 @@ fn the_ci_ref_must_match_the_manifest_version() {
     let contents = fs::read_to_string(&ci).unwrap();
     fs::write(
         &ci,
-        contents.replace("project-gate.yml@26.8.23", "project-gate.yml@26.8.22"),
+        contents.replace(
+            &format!("project-gate.yml@{FIXTURE_PIN}"),
+            "project-gate.yml@26.8.22",
+        ),
     )
     .unwrap();
 
@@ -598,7 +603,7 @@ fn the_ci_ref_must_match_the_manifest_version() {
         .failure()
         .stderr(str::contains("must equal manifest version"))
         .stderr(str::contains("26.8.22"))
-        .stderr(str::contains("26.8.23"));
+        .stderr(str::contains(FIXTURE_PIN));
 }
 
 /// The fixed shell — see [`write_repository_shell`] — is exactly what
@@ -663,7 +668,9 @@ fn a_fresh_repository_shell_validates() {
     );
     let cd = fs::read_to_string(dir.path().join(".github/workflows/cd.yml")).unwrap();
     assert!(cd.contains("id-token: write"));
-    assert!(cd.contains("neon-law/navigator/.github/workflows/project-publish.yml@26.8.23"));
+    assert!(cd.contains(&format!(
+        "neon-law/navigator/.github/workflows/project-publish.yml@{FIXTURE_PIN}"
+    )));
     assert!(cd.contains("workflow_dispatch:"));
     assert!(
         !cd.contains("with:"),
@@ -865,8 +872,8 @@ fn the_gate_refuses_a_with_block_on_the_ci_caller() {
     fs::write(
         &ci,
         contents.replace(
-            "uses: neon-law/navigator/.github/workflows/project-gate.yml@26.8.23\n",
-            "uses: neon-law/navigator/.github/workflows/project-gate.yml@26.8.23\n    with:\n      project: \"example-project\"\n",
+            &format!("uses: neon-law/navigator/.github/workflows/project-gate.yml@{FIXTURE_PIN}\n"),
+            &format!("uses: neon-law/navigator/.github/workflows/project-gate.yml@{FIXTURE_PIN}\n    with:\n      project: \"example-project\"\n"),
         ),
     )
     .unwrap();

@@ -29,6 +29,7 @@ pub mod manifest;
 pub mod matter;
 pub mod pages_init;
 pub mod participant;
+pub(crate) mod pinned_gate;
 pub mod preview;
 pub mod reference;
 pub mod repository;
