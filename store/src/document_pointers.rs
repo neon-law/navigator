@@ -150,6 +150,24 @@ impl MatterFolder {
     }
 }
 
+/// The folders below `documents/` that keep their bytes at the slug itself,
+/// because their own rules (signed engagement letters, invoices, Authority
+/// captures) are keyed to that path.
+pub const SIBLING_FOLDERS: &[&str] = &["onboarding", "offboarding", "invoices", "cases", "rules"];
+
+/// Where a document named `slug` sits below a checkout's `documents/`
+/// (LAW-189): at the slug itself when its first component is one of the
+/// [`SIBLING_FOLDERS`], else under `folder`.
+#[must_use]
+pub fn documents_path(slug: &str, folder: MatterFolder) -> String {
+    let first = slug.split('/').next().unwrap_or_default();
+    if SIBLING_FOLDERS.contains(&first) {
+        slug.to_string()
+    } else {
+        format!("{}/{slug}", folder.as_str())
+    }
+}
+
 impl DocumentPointer {
     /// The folder this document's bytes belong in: `folder:` when the
     /// pointer names one, else the one its `kind` maps to.
@@ -611,6 +629,22 @@ mod tests {
         assert!(
             error.to_string().contains("unknown field"),
             "a typo'd key must fail to parse, not silently vanish: {error}"
+        );
+    }
+
+    #[test]
+    fn a_documents_path_sits_in_its_matter_folder_unless_a_sibling_folder_holds_it() {
+        assert_eq!(
+            documents_path("pleadings/motion.pdf", MatterFolder::DocketFilings),
+            "Docket Filings/pleadings/motion.pdf"
+        );
+        assert_eq!(
+            documents_path("memo.docx", MatterFolder::WorkProduct),
+            "Work Product/memo.docx"
+        );
+        assert_eq!(
+            documents_path("onboarding/engagement.pdf", MatterFolder::WorkProduct),
+            "onboarding/engagement.pdf"
         );
     }
 }
