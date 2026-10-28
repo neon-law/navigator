@@ -842,6 +842,8 @@ pub(super) async fn patch_lro(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PolicyRead {
     Get,
+    /// GET with a version-3 policy read, as Cloud KMS requires.
+    GetV3,
     Post,
     PostV3,
 }
@@ -902,6 +904,14 @@ pub(super) async fn ensure_iam_member(
     let get_path = format!("{resource}:getIamPolicy");
     let resp = match read {
         PolicyRead::Get => client.get(service, &get_path).await?,
+        PolicyRead::GetV3 => {
+            client
+                .get(
+                    service,
+                    &format!("{get_path}?options.requestedPolicyVersion=3"),
+                )
+                .await?
+        }
         PolicyRead::Post => client.post_json(service, &get_path, &json!({})).await?,
         PolicyRead::PostV3 => {
             client
@@ -940,7 +950,7 @@ pub(super) async fn ensure_iam_member(
             set_sole_member(&mut policy, role, member);
         }
     }
-    if read == PolicyRead::PostV3 {
+    if matches!(read, PolicyRead::PostV3 | PolicyRead::GetV3) {
         policy["version"] = json!(3);
     }
 

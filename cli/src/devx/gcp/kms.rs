@@ -24,8 +24,9 @@
 //!
 //! ## Idempotency
 //!
-//! Both creates POST unconditionally and treat HTTP 409 Conflict as success,
-//! the convention every other `ensure_*` in this pipeline follows.
+//! Both creates POST unconditionally and treat HTTP 409 Conflict as success.
+//! An explicit operator grant reads the version-3 policy, preserves its etag
+//! and other bindings, and writes only when the unconditional grant is absent.
 //!
 //! ## What this deliberately does not do
 //!
@@ -35,7 +36,9 @@
 
 use serde_json::json;
 
-use super::artifact_registry::EnsureOutcome;
+use super::artifact_registry::{
+    ensure_iam_member, BindingOutcome, EnsureOutcome, MemberMode, PolicyRead,
+};
 use super::client::{GcpClient, GcpService};
 use super::error::{SetupError, SetupResult};
 
@@ -110,6 +113,49 @@ pub async fn ensure_crypto_key(
     }
 }
 
+const OPERATOR_ROLE: &str = "roles/cloudkms.cryptoKeyEncrypterDecrypter";
+
+/// Accept only an explicitly named operator; public and domain-wide grants
+/// cannot be supplied through setup. Runs before provisioning begins.
+pub(super) fn validate_operator(member: &str) -> SetupResult<()> {
+    let valid = member.split_once(':').is_some_and(|(kind, email)| {
+        matches!(kind, "user" | "serviceAccount" | "group")
+            && email.is_ascii()
+            && !email.chars().any(char::is_whitespace)
+            && email.split_once('@').is_some_and(|(local, domain)| {
+                !local.is_empty() && !domain.is_empty() && !domain.contains('@')
+            })
+    });
+    if !valid {
+        return Err(SetupError::InvalidFlag {
+            flag: "--kms-operator",
+            detail: "expected an explicit user:, serviceAccount:, or group: email member",
+        });
+    }
+    Ok(())
+}
+
+/// Reconcile the operator's SOPS encrypt/decrypt grant on this key alone.
+/// Preserve conditional bindings and etags through a version-3 IAM read.
+pub(super) async fn ensure_operator(
+    client: &GcpClient,
+    project_id: &str,
+    location: &str,
+    member: &str,
+) -> SetupResult<BindingOutcome> {
+    validate_operator(member)?;
+    ensure_iam_member(
+        client,
+        GcpService::CloudKms,
+        &format!("/v1/{}", key_name(project_id, location)),
+        OPERATOR_ROLE,
+        member,
+        PolicyRead::GetV3,
+        MemberMode::Additive,
+    )
+    .await
+}
+
 /// Both halves, in order. The ring must exist before the key.
 pub async fn ensure(client: &GcpClient, project_id: &str, location: &str) -> SetupResult<()> {
     ensure_key_ring(client, project_id, location).await?;
@@ -130,6 +176,151 @@ mod tests {
     fn client(server: &MockServer) -> GcpClient {
         GcpClient::new(Arc::new(StaticToken("test-token".into())))
             .with_base_url(GcpService::CloudKms, server.uri())
+    }
+
+    #[tokio::test]
+    async fn operator_grant_preserves_conditions_etag_and_other_members() {
+        let server = MockServer::start().await;
+        let resource = format!("/v1/{}", key_name("example-test", "us-west4"));
+        let condition = json!({"title": "limited", "expression": "request.time < timestamp('2030-01-01T00:00:00Z')"});
+        let existing = json!({"version": 3, "etag": "policy-etag", "bindings": [
+            {"role": OPERATOR_ROLE, "members": ["user:operator@example.com"], "condition": condition},
+            {"role": "roles/viewer", "members": ["user:reader@example.com"]},
+            {"role": OPERATOR_ROLE, "members": ["user:other@example.com"]}
+        ]});
+        Mock::given(method("GET"))
+            .and(path(format!("{resource}:getIamPolicy")))
+            .and(query_param("options.requestedPolicyVersion", "3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(existing))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{resource}:setIamPolicy")))
+            .and(body_json(json!({"policy": {"version": 3, "etag": "policy-etag", "bindings": [
+                {"role": OPERATOR_ROLE, "members": ["user:operator@example.com"], "condition": condition},
+                {"role": "roles/viewer", "members": ["user:reader@example.com"]},
+                {"role": OPERATOR_ROLE, "members": ["user:other@example.com", "user:operator@example.com"]}
+            ]}})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1).mount(&server).await;
+        assert_eq!(
+            ensure_operator(
+                &client(&server),
+                "example-test",
+                "us-west4",
+                "user:operator@example.com"
+            )
+            .await
+            .unwrap(),
+            BindingOutcome::Added
+        );
+    }
+
+    #[tokio::test]
+    async fn operator_policy_read_denial_is_not_treated_as_convergence() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = ensure_operator(
+            &client(&server),
+            "example-test",
+            "us-west4",
+            "user:operator@example.com",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("getIamPolicy"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn operator_policy_write_denial_is_not_treated_as_convergence() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = ensure_operator(
+            &client(&server),
+            "example-test",
+            "us-west4",
+            "user:operator@example.com",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("setIamPolicy"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn existing_operator_grant_does_not_write() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("options.requestedPolicyVersion", "3"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"bindings": [
+                    {"role": OPERATOR_ROLE, "members": ["user:operator@example.com"]}
+                ]})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        assert_eq!(
+            ensure_operator(
+                &client(&server),
+                "example-test",
+                "us-west4",
+                "user:operator@example.com"
+            )
+            .await
+            .unwrap(),
+            BindingOutcome::AlreadyPresent
+        );
+    }
+
+    #[test]
+    fn explicit_operator_member_types_are_accepted() {
+        for member in [
+            "user:operator@example.com",
+            "group:operators@example.com",
+            "serviceAccount:operator@example-test.iam.gserviceaccount.com",
+        ] {
+            validate_operator(member).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_operator_is_refused_before_any_cloud_request() {
+        let server = MockServer::start().await;
+        for member in [
+            "allUsers",
+            "allAuthenticatedUsers",
+            "domain:example.com",
+            "user:",
+            "user:person@example.com\n",
+            "operator@example.com",
+        ] {
+            assert!(
+                ensure_operator(&client(&server), "example-test", "us-west4", member)
+                    .await
+                    .is_err(),
+                "accepted {member:?}"
+            );
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test]

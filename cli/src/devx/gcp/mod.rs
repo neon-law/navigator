@@ -133,6 +133,9 @@ pub const DEFAULT_CI_PUSHER_ACCOUNT_ID: &str = "navigator-ci-pusher";
 /// `--cluster-name`, etc. flags that fall back to env vars.
 #[derive(Clone)]
 pub struct SetupConfig {
+    /// Explicit IAM member granted SOPS encrypt/decrypt on the deployment key.
+    /// `None` leaves operator IAM unchanged; no identity is inferred.
+    pub kms_operator: Option<String>,
     /// GCP region used for GKE Autopilot and bucket location.
     /// Default: `example-region`.
     pub region: String,
@@ -222,6 +225,7 @@ pub struct SetupConfig {
 impl Default for SetupConfig {
     fn default() -> Self {
         Self {
+            kms_operator: None,
             region: DEFAULT_REGION.to_string(),
             cluster_name: gke::DEFAULT_CLUSTER_NAME.to_string(),
             vpc_name: network::DEFAULT_NETWORK_NAME.to_string(),
@@ -474,6 +478,9 @@ pub async fn run(client: &GcpClient, project_id: &str, config: &SetupConfig) -> 
     if let Some(ship) = &config.release_ship {
         ship.validate()?;
     }
+    if let Some(member) = &config.kms_operator {
+        kms::validate_operator(member)?;
+    }
     let names = BucketNames::resolve(project_id, config);
 
     progress(project_id, 1, "enable required APIs");
@@ -557,6 +564,9 @@ pub async fn run(client: &GcpClient, project_id: &str, config: &SetupConfig) -> 
     // rule, so an operator can compare the three without deriving anything.
     progress(project_id, 16, &kms::key_name(project_id, &config.region));
     kms::ensure(client, project_id, &config.region).await?;
+    if let Some(member) = &config.kms_operator {
+        kms::ensure_operator(client, project_id, &config.region, member).await?;
+    }
 
     ensure_log_retention(client, project_id, &names.logs).await?;
     ensure_release_ship(client, project_id, config, &names).await?;
@@ -648,6 +658,54 @@ mod tests {
             "gcp setup [neon-law-test] 05/19 private assets bucket example-a-assets"
         );
         assert!(!line.contains("password"));
+    }
+
+    #[tokio::test]
+    async fn invalid_kms_operator_stops_setup_before_any_cloud_call() {
+        let client = offline_dry_run_client();
+        let config = super::SetupConfig {
+            public_base_url: Some("https://www.example.test".into()),
+            kms_operator: Some("allUsers".into()),
+            ..super::SetupConfig::default()
+        };
+        let error = super::run(&client, "my-project", &config)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("--kms-operator"), "{error}");
+        assert!(client.recorded_calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn setup_records_operator_grant_only_on_its_deployment_key() {
+        let client = offline_dry_run_client();
+        let config = super::SetupConfig {
+            public_base_url: Some("https://www.example.test".into()),
+            kms_operator: Some("user:operator@example.com".into()),
+            ..super::SetupConfig::default()
+        };
+        super::run(&client, "my-project", &config).await.unwrap();
+        let calls = client.recorded_calls();
+        let grants: Vec<_> = calls
+            .iter()
+            .filter(|call| {
+                call.body
+                    .as_deref()
+                    .is_some_and(|body| body.contains("roles/cloudkms.cryptoKeyEncrypterDecrypter"))
+            })
+            .collect();
+        assert_eq!(grants.len(), 1);
+        assert_eq!(
+            grants[0].url,
+            format!(
+                "http://127.0.0.1:1/v1/{}:setIamPolicy",
+                super::kms::key_name("my-project", &config.region)
+            )
+        );
+        assert!(grants[0]
+            .body
+            .as_deref()
+            .unwrap()
+            .contains("user:operator@example.com"));
     }
 
     #[tokio::test]
