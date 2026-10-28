@@ -2238,3 +2238,8 @@ ALTER TABLE project_deadlines ADD COLUMN calendar_sequence BIGINT CHECK (calenda
 
 -- Migration: 20261026130000_add_deadline_description.sql
 ALTER TABLE project_deadlines ADD COLUMN description TEXT;
+
+-- Migration: 20261027120000_add_project_calendar_and_booking_url.sql
+-- A Project's shared Google Calendar id and its client booking link. NULL until recorded.
+ALTER TABLE project ADD COLUMN calendar_id TEXT;
+ALTER TABLE project ADD COLUMN booking_url TEXT;

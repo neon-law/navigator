@@ -1312,7 +1312,9 @@
         "youtube_caption": "option<string>"
       },
       "project": {
+        "booking_url": "option<string>",
         "brand": "option<string>",
+        "calendar_id": "option<string>",
         "closed_at": "option<string>",
         "closure_reason": "option<string>",
         "code": "string",
@@ -3793,7 +3795,9 @@
       },
       "project": {
         "columns": {
+          "booking_url": "TEXT",
           "brand": "TEXT",
+          "calendar_id": "TEXT",
           "closed_at": "TEXT",
           "closure_reason": "TEXT",
           "code": "TEXT",

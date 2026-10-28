@@ -24,6 +24,8 @@ const KEY: &str = "api-reads-test-key";
 /// client-payload redaction has something to redact.
 const PRIVATE_NOTION: &str = "https://notion.example/private-workup";
 const INTERNAL_SLACK_ID: &str = "C0FIRMONLY1";
+const PROJECT_CALENDAR: &str = "c_firmonly@group.calendar.example.com";
+const BOOKING_URL: &str = "https://calendar.app.google/synthetic-booking";
 
 // Serialize repository-backed fixture lifetimes to avoid Git spawn descriptor races on macOS.
 static REPO_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -192,6 +194,17 @@ async fn build_fixture() -> Fixture {
         .await
         .unwrap()
         .expect("the fixture matter records a firm-only Slack channel");
+    store::projects::update_project(
+        &surreal,
+        project.id,
+        &store::projects::UpdateProjectCommand {
+            calendar_id: Some(PROJECT_CALENDAR.into()),
+            booking_url: Some(BOOKING_URL.into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("the fixture matter records a calendar and a booking link");
     let lawyer = store::persons::create(
         &surreal,
         &store::persons::NewPerson::with_role("Lawyer", "lawyer@example.com", Role::Lawyer),
@@ -321,6 +334,7 @@ async fn a_client_project_payload_redacts_the_firm_private_coordinates() {
         "private_notion_page_url",
         "internal_slack_channel_id",
         "internal_slack_channel_url",
+        "calendar_id",
         "firm_id",
         "repository_url",
         "drive_folder_id",
@@ -338,6 +352,13 @@ async fn a_client_project_payload_redacts_the_firm_private_coordinates() {
         Some(fx.project_code.as_str()),
         "the client still reads the matter itself"
     );
+    assert_eq!(
+        client_view
+            .get("booking_url")
+            .and_then(serde_json::Value::as_str),
+        Some(BOOKING_URL),
+        "the client reads the booking link: {client_view}"
+    );
 
     let firm_view = project_json(&fx, Some(&fx.lawyer)).await;
     assert_eq!(
@@ -353,6 +374,13 @@ async fn a_client_project_payload_redacts_the_firm_private_coordinates() {
             .and_then(serde_json::Value::as_str),
         Some(INTERNAL_SLACK_ID),
         "the firm tier still reads the private channel id: {firm_view}"
+    );
+    assert_eq!(
+        firm_view
+            .get("calendar_id")
+            .and_then(serde_json::Value::as_str),
+        Some(PROJECT_CALENDAR),
+        "the firm tier still reads the calendar id: {firm_view}"
     );
 }
 

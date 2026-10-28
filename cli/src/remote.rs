@@ -3692,6 +3692,34 @@ pub async fn set_project_firm_brand(
     Ok(())
 }
 
+/// `PATCH /app/api/projects/{id}` with `fields`, for the coordinates
+/// `navigator project set` records on the live row.
+pub async fn patch_project_fields(
+    host: &str,
+    project_code: &str,
+    fields: &serde_json::Map<String, serde_json::Value>,
+) -> anyhow::Result<()> {
+    let (base, token) = resolve(Some(host))?;
+    let project_id =
+        crate::projects::surfaces::resolve_project_id(&base, &token, project_code).await?;
+    let response = reqwest::Client::new()
+        .patch(format!("{base}/app/api/projects/{project_id}"))
+        .bearer_auth(&token)
+        .json(fields)
+        .send()
+        .await
+        .context("PATCH /app/api/projects/{id}")?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!(
+            "update live Project failed: {status}: {}",
+            body.lines().next().unwrap_or_default().trim()
+        ));
+    }
+    Ok(())
+}
+
 /// `navigator site notation create <template-code> --project <code> --client-email …`
 /// — open a notation on an **already-existing** matter and surface the
 /// notation id. Every notation hangs on a pre-existing Project (the matter

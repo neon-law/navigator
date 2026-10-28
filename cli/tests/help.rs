@@ -275,7 +275,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
     assert!(setup.contains("--all"));
     assert!(setup.contains("--json"));
     assert!(
-        setup.contains("Complete an existing Project's Drive, GitHub, Slack, and Notion setup.")
+        setup.contains("Complete an existing Project's Drive, GitHub, Slack, Notion, and shared")
     );
     let set = unwrapped(&help(&["project", "set", "--help"]));
     assert!(set.contains("live"));

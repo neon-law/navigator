@@ -338,12 +338,24 @@ fn outcomes(report: &serde_json::Value) -> Vec<(String, String)> {
         .collect()
 }
 
-const ALL_DOORS: [&str; 4] = [
+const ALL_DOORS: [&str; 5] = [
     "/app/api/integrations/notion/ensure",
     "/app/api/integrations/notion/reconcile",
     "/app/api/integrations/slack/ensure",
     "/app/api/integrations/slack/notify",
+    "/app/api/integrations/calendar/ensure",
 ];
+
+/// Calls the resolver made for the provider behind `door`.
+fn provider_calls(providers: &FakeIntegrations, door: &str) -> usize {
+    if door.contains("notion") {
+        providers.notion_calls()
+    } else if door.contains("calendar") {
+        providers.calendar_calls()
+    } else {
+        providers.slack_calls()
+    }
+}
 
 /// Provisioning a Firm-private resource is the same kind of act as
 /// `POST /app/api/project-surfaces/{id}`, which is admin-only. A lawyer on
@@ -426,6 +438,119 @@ async fn notion_ensure_creates_then_adopts_and_records_the_address() {
     assert_eq!(stored.private_notion_page_url.as_deref(), Some(&*page.url));
 }
 
+/// The calendar door creates once, records the id, and shares the calendar
+/// with the firm side only; a re-run finds it present and shares no one new.
+#[tokio::test]
+async fn calendar_ensure_creates_once_and_shares_only_the_firm_side() {
+    let fx = build_fixture(true).await;
+    let body = serde_json::json!({ "project_code": fx.code });
+
+    let first = json(post(&fx, ALL_DOORS[4], Some(&fx.admin), body.clone()).await).await;
+    assert_eq!(
+        outcomes(&first),
+        vec![(fx.code.clone(), "created".to_string())]
+    );
+    let second = json(post(&fx, ALL_DOORS[4], Some(&fx.admin), body).await).await;
+    assert_eq!(
+        outcomes(&second),
+        vec![(fx.code.clone(), "present".to_string())]
+    );
+    assert_eq!(fx.providers.calendar.created(), 1);
+
+    let calendar = &fx.providers.calendar.calendars()[0];
+    assert_eq!(calendar.summary, fx.code, "named for the Project code");
+    let stored = store::projects::find_by_code(&fx.surreal, &fx.code)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.calendar_id.as_deref(), Some(calendar.id.as_str()));
+    let sharing = fx.providers.calendar.sharing(&calendar.id);
+    assert!(sharing.keys().any(|email| email.starts_with("lawyer-")));
+    assert!(sharing.keys().any(|email| email.starts_with("admin-")));
+    assert!(
+        !sharing.keys().any(|email| email.starts_with("client-")),
+        "the client is never shared the calendar: {sharing:?}"
+    );
+}
+
+/// Closing the matter makes its calendar read-only and clears the client's
+/// booking link, through the same lifecycle door every close uses.
+#[tokio::test]
+async fn closing_a_matter_makes_its_calendar_read_only_and_drops_the_booking_link() {
+    let fx = build_fixture(true).await;
+    post(
+        &fx,
+        ALL_DOORS[4],
+        Some(&fx.admin),
+        serde_json::json!({ "project_code": fx.code }),
+    )
+    .await;
+    let project = store::projects::find_by_code(&fx.surreal, &fx.code)
+        .await
+        .unwrap()
+        .unwrap();
+    store::projects::update_project(
+        &fx.surreal,
+        project.id,
+        &store::projects::UpdateProjectCommand {
+            booking_url: Some("https://calendar.app.google/synthetic".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    file_offboarding(&fx.surreal, project.id).await;
+
+    let closed = post(
+        &fx,
+        &format!("/app/api/projects/{}/lifecycle", project.id),
+        Some(&fx.admin),
+        serde_json::json!({ "transition": "close", "reason": "pitch_withdrawn" }),
+    )
+    .await;
+    assert_eq!(closed.status(), StatusCode::OK);
+    let body = json(closed).await;
+    assert_eq!(body["status"], "closed");
+    assert!(body["booking_url"].is_null(), "{body}");
+
+    let calendar_id = project_calendar_id(&fx).await;
+    let sharing = fx.providers.calendar.sharing(&calendar_id);
+    assert!(
+        sharing
+            .iter()
+            .filter(|(email, _)| !email.starts_with("owner@"))
+            .all(|(_, role)| *role == cloud::CalendarRole::Reader),
+        "every participant is read-only after close: {sharing:?}"
+    );
+}
+
+async fn project_calendar_id(fx: &Fixture) -> String {
+    store::projects::find_by_code(&fx.surreal, &fx.code)
+        .await
+        .unwrap()
+        .unwrap()
+        .calendar_id
+        .expect("calendar recorded")
+}
+
+async fn file_offboarding(surreal: &store::surreal::SurrealDb, project_id: Uuid) {
+    let mut response = surreal
+        .query(
+            "CREATE $asset SET project_id = $project_id, storage_key = 'test', \
+             content_type = 'application/pdf', byte_size = 1, sha256_hex = $sha, \
+             kind = 'offboarding', visibility = 'internal', metadata = NONE",
+        )
+        .bind(("asset", store::surreal::record_id("asset", Uuid::now_v7())))
+        .bind((
+            "project_id",
+            store::surreal::record_id("project", project_id),
+        ))
+        .bind(("sha", format!("sha-{project_id}")))
+        .await
+        .unwrap();
+    let _: Option<serde_json::Value> = response.take(0).unwrap();
+}
+
 /// The reconciler's whole value is telling a duplicate apart from a missing
 /// page, which needs a lookup that returns every match rather than the first.
 #[tokio::test]
@@ -504,19 +629,11 @@ async fn integration_doors_authorize_the_target_firm_before_provider_lookup() {
             json(missing).await,
             "cross-Firm refusal must match a missing Project: {door}"
         );
-        if door.contains("notion") {
-            assert_eq!(fx.providers.notion_calls(), 0, "{door}");
-        } else {
-            assert_eq!(fx.providers.slack_calls(), 0, "{door}");
-        }
+        assert_eq!(provider_calls(&fx.providers, door), 0, "{door}");
 
         let admitted = post(&fx, door, Some(&fx.admin_b), body_for_door(door, &fx.code)).await;
         assert_eq!(admitted.status(), StatusCode::OK, "{door}");
-        if door.contains("notion") {
-            assert_eq!(fx.providers.notion_calls(), 1, "{door}");
-        } else {
-            assert_eq!(fx.providers.slack_calls(), 1, "{door}");
-        }
+        assert_eq!(provider_calls(&fx.providers, door), 1, "{door}");
     }
 }
 

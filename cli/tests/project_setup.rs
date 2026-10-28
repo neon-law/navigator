@@ -36,7 +36,7 @@ async fn mount_setup_doors(
     server: &MockServer,
     project_id: Uuid,
     code: &str,
-    integration_outcomes: [(&str, &str); 2],
+    integration_outcomes: [(&str, &str); 3],
 ) {
     Mock::given(method("GET"))
         .and(path("/app/api/projects"))
@@ -90,7 +90,9 @@ fn project_set_exposes_the_live_fill_flags() {
         .stdout(predicates::str::contains("--lawyer-dri"))
         .stdout(predicates::str::contains("--client-dri"))
         .stdout(predicates::str::contains("--private-slack-channel"))
-        .stdout(predicates::str::contains("--private-notion-page"));
+        .stdout(predicates::str::contains("--private-notion-page"))
+        .stdout(predicates::str::contains("--calendar"))
+        .stdout(predicates::str::contains("--booking-url"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -104,7 +106,11 @@ async fn setup_runs_every_door_and_repeat_execution_is_successful() {
         &server,
         project_id,
         "acme",
-        [("slack", "adopted"), ("notion", "adopted")],
+        [
+            ("slack", "adopted"),
+            ("notion", "adopted"),
+            ("calendar", "present"),
+        ],
     )
     .await;
 
@@ -141,7 +147,135 @@ async fn setup_runs_every_door_and_repeat_execution_is_successful() {
             report["results"][0]["resources"]["notion"]["outcome"],
             "adopted"
         );
+        assert_eq!(
+            report["results"][0]["resources"]["calendar"]["outcome"],
+            "present"
+        );
     }
+}
+
+/// A closed Project's calendar is made read-only rather than re-shared, and
+/// setup still counts that as converged.
+#[tokio::test(flavor = "multi_thread")]
+async fn setup_reports_a_read_only_calendar_as_converged() {
+    let server = MockServer::start().await;
+    let host = server.uri();
+    let credentials_dir = TempDir::new().unwrap();
+    let credentials_path = credentials(&credentials_dir, &host);
+    mount_setup_doors(
+        &server,
+        Uuid::now_v7(),
+        "acme",
+        [
+            ("slack", "adopted"),
+            ("notion", "adopted"),
+            ("calendar", "read_only"),
+        ],
+    )
+    .await;
+
+    let output = command()
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+        .args(["project", "setup", "acme", "--host", &host, "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["results"][0]["resources"]["calendar"]["outcome"],
+        "read_only"
+    );
+}
+
+/// `--calendar` writes the manifest and the live row; `--booking-url` writes
+/// the live row only.
+#[tokio::test(flavor = "multi_thread")]
+async fn project_set_records_the_calendar_and_booking_link() {
+    let server = MockServer::start().await;
+    let host = server.uri();
+    let credentials_dir = TempDir::new().unwrap();
+    let credentials_path = credentials(&credentials_dir, &host);
+    let project_id = Uuid::now_v7();
+    let checkout = TempDir::new().unwrap();
+    fs::write(
+        checkout.path().join("navigator.yaml"),
+        concat!(
+            "version: \"26.9.26\"\nproject:\n  host: staging.neonlaw.com\n  name: acme\n",
+            "  lawyer_dri: lawyer@example.com\n  client_dri: client@example.com\n",
+            "  private_slack_channel: not provisioned\n  private_notion_page: not provisioned\n",
+        ),
+    )
+    .unwrap();
+    Mock::given(method("GET"))
+        .and(path("/app/api/projects"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "id": project_id, "code": "acme" }
+        ])))
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path(format!("/app/api/projects/{project_id}")))
+        .and(header("authorization", "Bearer test-token"))
+        .and(wiremock::matchers::body_json(serde_json::json!({
+            "calendar_id": "c_0123@group.calendar.example.com",
+            "booking_url": "https://calendar.app.google/synthetic"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = command()
+        .current_dir(checkout.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials_path)
+        .args([
+            "project",
+            "set",
+            "--calendar",
+            "c_0123@group.calendar.example.com",
+            "--booking-url",
+            "https://calendar.app.google/synthetic",
+            "--host",
+            &host,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let manifest = fs::read_to_string(checkout.path().join("navigator.yaml")).unwrap();
+    assert!(
+        manifest.contains("  calendar_id: c_0123@group.calendar.example.com\n"),
+        "{manifest}"
+    );
+    assert!(
+        !manifest.contains("booking"),
+        "the booking link lives on the live Project only: {manifest}"
+    );
+}
+
+/// A malformed value is refused before anything is written.
+#[test]
+fn project_set_refuses_a_malformed_calendar_without_writing() {
+    let checkout = TempDir::new().unwrap();
+    let original = "version: \"26.9.26\"\nproject:\n  host: staging.neonlaw.com\n  name: acme\n";
+    fs::write(checkout.path().join("navigator.yaml"), original).unwrap();
+    command()
+        .current_dir(checkout.path())
+        .args(["project", "set", "--calendar", "not a calendar"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("calendar id"));
+    assert_eq!(
+        fs::read_to_string(checkout.path().join("navigator.yaml")).unwrap(),
+        original
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -212,7 +346,11 @@ async fn setup_all_uses_the_visible_project_list() {
         &server,
         project_id,
         "acme",
-        [("slack", "created"), ("notion", "created")],
+        [
+            ("slack", "created"),
+            ("notion", "created"),
+            ("calendar", "created"),
+        ],
     )
     .await;
 
@@ -246,7 +384,11 @@ async fn setup_reports_partial_failure_and_returns_nonzero() {
         &server,
         project_id,
         "acme",
-        [("slack", "credential_missing"), ("notion", "created")],
+        [
+            ("slack", "credential_missing"),
+            ("notion", "created"),
+            ("calendar", "created"),
+        ],
     )
     .await;
 
@@ -293,7 +435,7 @@ async fn setup_keeps_running_after_an_authorization_refusal() {
         })))
         .mount(&server)
         .await;
-    for provider in ["slack", "notion"] {
+    for provider in ["slack", "notion", "calendar"] {
         Mock::given(method("POST"))
             .and(path(format!("/app/api/integrations/{provider}/ensure")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({

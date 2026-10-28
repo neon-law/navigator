@@ -78,6 +78,8 @@ const PROJECT_COLUMNS: &[&str] = &[
     "internal_slack_channel_id",
     "private_notion_page_url",
     "shared_notion_page_url",
+    "calendar_id",
+    "booking_url",
     "inserted_at",
     "updated_at",
 ];
@@ -385,6 +387,8 @@ struct ProjectImage {
     internal_slack_channel_id: Option<String>,
     private_notion_page_url: Option<String>,
     shared_notion_page_url: Option<String>,
+    calendar_id: Option<String>,
+    booking_url: Option<String>,
     inserted_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -412,6 +416,8 @@ impl ProjectImage {
             internal_slack_channel_id: project.internal_slack_channel_id.clone(),
             private_notion_page_url: project.private_notion_page_url.clone(),
             shared_notion_page_url: project.shared_notion_page_url.clone(),
+            calendar_id: project.calendar_id.clone(),
+            booking_url: project.booking_url.clone(),
             inserted_at: timestamp(&project.inserted_at)?,
             updated_at: timestamp(&project.updated_at)?,
         })
@@ -442,6 +448,8 @@ impl ProjectImage {
             internal_slack_channel_id: row.try_get("internal_slack_channel_id")?,
             private_notion_page_url: row.try_get("private_notion_page_url")?,
             shared_notion_page_url: row.try_get("shared_notion_page_url")?,
+            calendar_id: row.try_get("calendar_id")?,
+            booking_url: row.try_get("booking_url")?,
             inserted_at: row.try_get("inserted_at")?,
             updated_at: row.try_get("updated_at")?,
         })
@@ -743,6 +751,8 @@ async fn upsert_project(pg: &PostgresDb, project: &ProjectImage) -> Result<Mirro
         .bind(&project.internal_slack_channel_id)
         .bind(&project.private_notion_page_url)
         .bind(&project.shared_notion_page_url)
+        .bind(&project.calendar_id)
+        .bind(&project.booking_url)
         .bind(project.inserted_at)
         .bind(project.updated_at)
         .execute(&mut *tx)

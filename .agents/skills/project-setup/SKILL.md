@@ -36,8 +36,24 @@ navigator project setup <code>
 ```
 
 The caller needs the Project's assigned lawyer DRI authorization and a saved Navigator login. The command reconciles the
-Drive, repository, Slack, and Notion surfaces and reports each resource separately. Re-running setup converges after
-partial failures. A Project repository commits only source, so there is no Portal publisher to provision.
+Drive, repository, Slack, Notion, and calendar surfaces and reports each resource separately. Re-running setup converges
+after partial failures. A Project repository commits only source, so there is no Portal publisher to provision.
+
+The `calendar` resource is the Project's shared Google Calendar on the Firm's Workspace, named for the Project code.
+Setup creates it when none is recorded, records its id on the Project, and shares it with every firm-side participant,
+never the client. Record the id in `navigator.yaml` with `navigator project set --from-live` (or `--calendar <id>`).
+When the Project closes, the calendar becomes read-only for its participants and the booking link is cleared.
+
+## Client booking link
+
+The Calendar API cannot create appointment schedules, so the client booking link is one manual step per Project:
+
+1. In Google Calendar on the web, create an appointment schedule for the lawyer, and choose the Project calendar as the
+   calendar bookings are saved to.
+2. Copy the schedule's booking page address.
+3. Record it: `navigator project set --booking-url <address>`.
+
+The matter page shows the link to the client as "Book a time". Clear it with `--booking-url ""`.
 
 For the fleet, a repository adopts this skill and the other synced skills when it updates its gate to a release that
 includes them. The repository gate requires synced skill files to match that release byte-for-byte.
