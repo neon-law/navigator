@@ -3265,7 +3265,7 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
         key: "guieb-shook",
         website_url: "https://www.guiebandshook.com",
         name: "Guieb & Shook",
-        typeface: "tinos",
+        typeface: "eb-garamond",
         primary_hex: "#1f3a5f",
     },
 ];
