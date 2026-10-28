@@ -702,8 +702,9 @@ impl BrandKey {
                 typeface_by_id("plus-jakarta-sans").expect("plus-jakarta-sans is catalogued")
             }
             Self::LawyerShook => typeface_by_id("tinos").expect("tinos is catalogued"),
-            Self::GuiebShook => typeface_by_id("eb-garamond").expect("eb-garamond is catalogued"),
-            Self::Vesta => typeface_by_id("eb-garamond").expect("eb-garamond is catalogued"),
+            Self::GuiebShook | Self::Vesta => {
+                typeface_by_id("eb-garamond").expect("eb-garamond is catalogued")
+            }
             Self::Misericordia => {
                 typeface_by_id("source-sans-3").expect("source-sans-3 is catalogued")
             }

@@ -400,10 +400,11 @@ Guieb & Shook uses EB Garamond for headings and body text, served from the deplo
 Bold WOFF2 files use the `fonts/eb-garamond/` keys above; the OFL notice travels with them. The brand registry and the
 stored brand seed both select `eb-garamond`, and the page head preloads those faces.
 
-The handwritten G, centered ampersand, and S logo uses a 1050 × 600 canvas. The registry selects
-`/assets/brand/guieb-shook/logo.svg` for the logo and `/assets/brand/guieb-shook/logo.png` for social previews. Publish
-both files through `navigator site asset upload` before deploying a changed registry reference. The `guieb-shook`
-palette sets ivory surfaces with navy text in light mode and navy surfaces with ivory text in dark mode.
+The handwritten G, centered ampersand, and S logo uses a 1050 × 600 canvas and appears above the holding-page heading.
+The registry selects `/assets/brand/guieb-shook/logo.svg` for the logo and `/assets/brand/guieb-shook/logo.png` for
+social previews. Publish both files through `navigator site asset upload` before deploying a changed registry reference.
+The `guieb-shook` palette sets ivory surfaces with navy text in light mode and navy surfaces with ivory text in dark
+mode.
 
 ### Lawyer Shook's Tinos
 
