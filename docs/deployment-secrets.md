@@ -150,25 +150,20 @@ for that reason, not because any invariant demands it.
 
 ## Provision a deployment's key
 
-Once per deployment, before its `secrets.enc.yaml` exists. Run it against that deployment's own project:
+Once per deployment, before its `secrets.enc.yaml` exists, supply the operator's explicit IAM member to setup:
 
 ```bash
-OPERATOR="user:you@<deployment>"
-PROJECT="<deployment>"
-LOCATION="<deployment>"
-
-gcloud services enable cloudkms.googleapis.com secretmanager.googleapis.com --project "$PROJECT"
-
-gcloud kms keyrings create navigator-secrets --project "$PROJECT" --location "$LOCATION"
-
-gcloud kms keys create deployment-config \
-    --project "$PROJECT" --location "$LOCATION" \
-    --keyring navigator-secrets --purpose encryption
-
-gcloud kms keys add-iam-policy-binding deployment-config \
-    --project "$PROJECT" --location "$LOCATION" --keyring navigator-secrets \
-    --member "$OPERATOR" --role roles/cloudkms.cryptoKeyEncrypterDecrypter
+navigator ops gcp setup --project-id <project> --public-base-url https://www.example.test \
+    --region <region> --kms-operator user:operator@example.com
 ```
+
+Setup creates the deployment's `navigator-secrets/deployment-config` key and grants that member
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key alone. SOPS needs both permissions to wrap and unwrap its data
+key. The grant preserves other bindings and policy conditions. An existing unconditional grant needs no policy write.
+`--kms-operator` accepts an explicit `user:`, `serviceAccount:`, or `group:` email member. It has no environment
+fallback and never infers the signed-in identity. Omit it to leave operator IAM unchanged. Public, domain-wide, and
+blank principals fail before setup makes any cloud request. `--dry-run` previews the same key-scoped policy change
+without authentication or network traffic.
 
 Grant no runtime service account on this key. `ops secrets apply` performs the decrypt and writes the Kubernetes Secret;
 nothing in a cluster decrypts a repository file.
@@ -194,7 +189,7 @@ gcloud projects get-iam-policy "$PROJECT_ID" \
     --flatten="bindings[].members" --filter="bindings.role:cloudkms" \
     --format="table(bindings.role, bindings.members)"
 
-# Substitute the organization from `gcloud projects get-ancestors "$PROJECT"`,
+# Substitute the organization from `gcloud projects get-ancestors "$PROJECT_ID"`,
 # and check any folder between the two if one exists.
 gcloud organizations get-iam-policy "$ORGANIZATION_ID" \
     --flatten="bindings[].members" --filter="bindings.role:cloudkms" \

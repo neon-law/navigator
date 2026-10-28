@@ -672,6 +672,11 @@ pub enum GcpCmd {
         /// the provider admits only this environment on `main`.
         #[arg(long, requires_all = ["ship_deployment", "ship_repository"])]
         ship_environment: Option<String>,
+        /// Explicit operator IAM member (user:, serviceAccount:, or group:)
+        /// granted SOPS encrypt/decrypt on the deployment KMS key alone.
+        /// Omit to leave operator IAM unchanged; no identity is inferred.
+        #[arg(long)]
+        kms_operator: Option<String>,
         /// Preview the GCP API calls that would be made, without
         /// sending any traffic. `gcloud` has no universal
         /// equivalent of this flag, so we provide one ourselves.
@@ -975,6 +980,7 @@ fn dispatch_with_dns_provider(
             ship_deployment,
             ship_repository,
             ship_environment,
+            kms_operator,
             dry_run,
         })) => {
             let release_ship = match (ship_deployment, ship_repository, ship_environment) {
@@ -988,6 +994,7 @@ fn dispatch_with_dns_provider(
                 _ => None,
             };
             let mut config = gcp::SetupConfig {
+                kms_operator,
                 release_ship,
                 public_base_url: Some(public_base_url),
                 images_project_id,
@@ -4320,5 +4327,38 @@ mod dns_setup_cli_tests {
             .lock()
             .expect("record mutations")
             .is_empty());
+    }
+}
+
+#[cfg(test)]
+mod kms_operator_cli_tests {
+    use clap::Parser as _;
+
+    #[test]
+    fn setup_parses_an_explicit_operator_member() {
+        let cli = crate::Cli::try_parse_from([
+            "navigator",
+            "ops",
+            "gcp",
+            "setup",
+            "--project-id",
+            "example-test",
+            "--public-base-url",
+            "https://www.example.test",
+            "--kms-operator",
+            "user:operator@example.com",
+            "--dry-run",
+        ])
+        .unwrap();
+        let Some(crate::Command::Ops(crate::OpsCmd::Gcp(super::GcpCmd::Setup {
+            kms_operator,
+            dry_run,
+            ..
+        }))) = cli.command
+        else {
+            panic!("expected setup command");
+        };
+        assert_eq!(kms_operator.as_deref(), Some("user:operator@example.com"));
+        assert!(dry_run);
     }
 }

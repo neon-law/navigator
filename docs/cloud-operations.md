@@ -73,7 +73,9 @@ and creates the cloud substrate a hostable deployment needs: APIs, a custom VPC 
 Cloud NAT, five private GCS lanes, runtime identities and IAM, registry access, an Autopilot cluster, the Gateway static
 IP, workload-identity and Fleet integrations, and the deployment KMS key. Every deployment's `config.toml` selects the
 `production` runtime and credential profile. Navigator's rows omit `NAVIGATOR_CONFIG_SYNC_REPO`; `navigator ops ship` is
-their sole manifest owner.
+their sole manifest owner. Supply `--kms-operator <IAM-member>` to reconcile the deployment operator's SOPS
+encrypt/decrypt grant on that key alone. Setup never infers the operator. Keep application runtime identities off this
+key. See [Provision a deployment's key](deployment-secrets.md#provision-a-deployments-key).
 
 The remaining hosting work is deliberately adjacent, not a missing setup stage:
 

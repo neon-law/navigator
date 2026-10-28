@@ -8398,6 +8398,7 @@
       "cli/src/devx/e2e.rs",
       "cli/src/devx/email_summary_e2e/harness.rs",
       "cli/src/devx/gcp/buckets.rs",
+      "cli/src/devx/gcp/kms.rs",
       "cli/src/devx/github_setup.rs",
       "cli/src/devx/native/mod.rs",
       "cli/src/document_deletion.rs",
