@@ -158,6 +158,7 @@ async fn seed_deal(
     )
     .await
     .unwrap();
+    let mut executed = None;
     for (filename, visibility, published) in [
         (
             "ira-v1.docx",
@@ -171,7 +172,7 @@ async fn seed_deal(
         ),
         (DRAFT_REDLINE, store::documents::visibility::INTERNAL, None),
     ] {
-        store::assets::file_revision(
+        let filed = store::assets::file_revision(
             surreal,
             storage,
             &store::documents::IngestArgs {
@@ -193,7 +194,23 @@ async fn seed_deal(
         )
         .await
         .unwrap();
+        if filename == "ira-v2.docx" {
+            executed = match filed {
+                store::assets::Filed::Revision(doc) => Some(doc.asset_id),
+                store::assets::Filed::Unchanged { asset_id } => Some(asset_id),
+            };
+        }
     }
+    // Filing the redline made the executed copy internal; the lawyer shares
+    // it again so the client keeps reading it beneath the unpublished draft.
+    store::assets::set_visibility(
+        surreal,
+        project_id,
+        executed.expect("the executed revision was filed"),
+        store::documents::visibility::CLIENT,
+    )
+    .await
+    .unwrap();
 }
 
 async fn fixture() -> Fixture {
