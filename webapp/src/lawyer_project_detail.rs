@@ -62,6 +62,10 @@ pub struct LawyerDocRevision {
     /// shared executed copy under one slug); that is normal, so each
     /// revision carries its own value rather than inheriting the row's.
     pub visibility: String,
+    /// When this revision was filed, as the page prints it
+    /// (`5 Nov 26 14:00 UTC`).
+    #[serde(default)]
+    pub created_at: String,
 }
 
 /// One document row (the operative filename + id and its revision history).
@@ -720,6 +724,10 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
                         id: revision.id.to_string(),
                         filename: revision.filename.unwrap_or_default(),
                         visibility: visibility_word(&revision.visibility),
+                        created_at: revision
+                            .inserted_at
+                            .format("%-d %b %y %H:%M UTC")
+                            .to_string(),
                     })
                     .collect(),
                 service,
@@ -912,7 +920,8 @@ fn not_found(
 
 /// The documents table: any `?error=` flash, then either the empty notice or
 /// the grouped table with its Visibility column — the operative revision's
-/// value in the row, each revision's own value in the expanded history.
+/// value in the row. A chain with earlier revisions expands into a Previous
+/// versions table giving each one's created-at time and its own visibility.
 fn documents_table(view: &LawyerDetailView) -> Element {
     rsx! {
         if let Some(error) = view.error.as_ref() {
@@ -935,19 +944,32 @@ fn documents_table(view: &LawyerDetailView) -> Element {
                         for doc in view.documents.iter() {
                             tr {
                                 td {
-                                    if doc.revisions.is_empty() {
+                                    if doc.revisions.len() < 2 {
                                         a { class: "nav-link", href: "/app/projects/{view.code}/documents/{doc.id}", "{doc.filename}" }
                                     } else {
                                         details {
                                             summary {
                                                 a { class: "nav-link", href: "/app/projects/{view.code}/documents/{doc.id}", "{doc.filename}" }
                                             }
-                                            ul {
-                                                for revision in doc.revisions.iter() {
-                                                    li {
-                                                        a { class: "nav-link", href: "/app/projects/{view.code}/documents/{revision.id}", "{revision.filename}" }
-                                                        " ({revision.visibility}) "
-                                                        a { class: "nav-link", href: "/app/projects/{view.code}/documents/{revision.id}/download", "Download" }
+                                            table { class: "nav-table",
+                                                caption { "Previous versions" }
+                                                thead {
+                                                    tr {
+                                                        th { scope: "col", "Filename" }
+                                                        th { scope: "col", "Created at" }
+                                                        th { scope: "col", "Visibility" }
+                                                        th { scope: "col", "Download" }
+                                                    }
+                                                }
+                                                tbody {
+                                                    // The first revision is the operative one the row already shows.
+                                                    for revision in doc.revisions.iter().skip(1) {
+                                                        tr {
+                                                            td { a { class: "nav-link", href: "/app/projects/{view.code}/documents/{revision.id}", "{revision.filename}" } }
+                                                            td { "{revision.created_at}" }
+                                                            td { "{revision.visibility}" }
+                                                            td { a { class: "nav-link", href: "/app/projects/{view.code}/documents/{revision.id}/download", "Download" } }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -2017,21 +2039,46 @@ mod tests {
             visibility: "shared".to_string(),
             revisions: vec![
                 LawyerDocRevision {
-                    id: "00000000-0000-0000-0000-0000000000ab".to_string(),
+                    id: "00000000-0000-0000-0000-0000000000aa".to_string(),
                     filename: "agreement.pdf".to_string(),
                     visibility: "shared".to_string(),
+                    created_at: "2 Nov 26 09:00 UTC".to_string(),
                 },
                 // …while an earlier draft under the same slug stayed internal.
                 LawyerDocRevision {
                     id: "00000000-0000-0000-0000-0000000000ac".to_string(),
                     filename: "agreement.pdf".to_string(),
                     visibility: "internal".to_string(),
+                    created_at: "1 Nov 26 14:30 UTC".to_string(),
                 },
             ],
             service: Vec::new(),
         }]);
         assert!(html.contains("<td>shared</td>"), "{html}");
-        assert!(html.contains("(shared)"), "{html}");
-        assert!(html.contains("(internal)"), "{html}");
+        assert!(html.contains("Previous versions"), "{html}");
+        assert!(html.contains("<td>1 Nov 26 14:30 UTC</td>"), "{html}");
+        assert!(html.contains("<td>internal</td>"), "{html}");
+        assert!(
+            !html.contains("<td>2 Nov 26 09:00 UTC</td>"),
+            "the operative revision is the row, not a previous version: {html}"
+        );
+    }
+
+    #[test]
+    fn a_chain_of_one_revision_has_no_previous_versions_table() {
+        let html = render_documents(vec![LawyerDocRow {
+            id: "00000000-0000-0000-0000-0000000000aa".to_string(),
+            filename: "agreement.pdf".to_string(),
+            visibility: "internal".to_string(),
+            revisions: vec![LawyerDocRevision {
+                id: "00000000-0000-0000-0000-0000000000aa".to_string(),
+                filename: "agreement.pdf".to_string(),
+                visibility: "internal".to_string(),
+                created_at: "2 Nov 26 09:00 UTC".to_string(),
+            }],
+            service: Vec::new(),
+        }]);
+        assert!(html.contains("1 revision"), "{html}");
+        assert!(!html.contains("Previous versions"), "{html}");
     }
 }

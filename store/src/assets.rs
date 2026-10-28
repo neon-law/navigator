@@ -987,8 +987,10 @@ pub enum Lens {
 ///   executed agreement changes nothing for the client — the
 ///   NetDocuments "Official Version" semantics without an `is_current`
 ///   flag to keep in sync.
-/// - *Latest visible to you.* The client keeps seeing v2 while lawyer
-///   iterate on v3.
+/// - *Latest visible to you.* The client keeps seeing v2 while lawyers
+///   iterate on v3. A revision filed through [`file_revision`] sets the
+///   chain beneath it to `internal`, so v2 stays in front of the client
+///   only when a lawyer shares it again.
 ///
 /// **Insertion order decides current**, not `published_at`. Ids are
 /// UUIDv7, so `id` descending is newest-first insertion order, and a
@@ -2142,7 +2144,7 @@ pub enum Filed {
 /// File `bytes` as the next revision of the document `(project_id,
 /// identity.slug)` — the **asset lane's write boundary**.
 ///
-/// Three rules live here and nowhere else, so no call site reimplements
+/// Four rules live here and nowhere else, so no call site reimplements
 /// one and drifts:
 ///
 /// 1. **The lane is closed.** `args.kind` must be
@@ -2158,6 +2160,9 @@ pub enum Filed {
 ///    (IEEE S&P 2010) showed lets an outsider confirm a document's
 ///    contents by uploading a guess. The same bytes under a *different*
 ///    slug are a genuinely different document and do create a revision.
+/// 4. **A superseded revision is internal.** Filing a new revision sets
+///    every earlier one in the chain to `internal` ([`demote_superseded`]),
+///    so a stale copy never stays client-visible by default.
 ///
 /// # Errors
 /// [`RevisionError`] when a rule rejects the write, or on a storage or
@@ -2234,7 +2239,48 @@ async fn file_revision_inner(
 
     let doc =
         ingest_with_optional_provenance(db, storage, args, identity, provenance, bytes).await?;
+    // Rule 4 — a superseded revision is internal by default.
+    demote_superseded(db, args.project_id, slug, doc.asset_id).await?;
     Ok(Filed::Revision(doc))
+}
+
+/// Set every revision of `(project_id, slug)` except `current` to
+/// `internal`, returning how many changed.
+///
+/// A new revision supersedes the chain beneath it, and a superseded copy
+/// stays lawyer-only unless a lawyer deliberately shares it again through
+/// [`set_visibility`]. The `visibility != $internal` predicate touches only
+/// the rows still shared, so a chain already internal writes nothing.
+///
+/// # Errors
+/// [`AssetError::Db`] if the update fails.
+pub async fn demote_superseded(
+    db: &SurrealDb,
+    project_id: Uuid,
+    slug: &str,
+    current: Uuid,
+) -> Result<usize, AssetError> {
+    let internal = crate::documents::visibility::INTERNAL;
+    let mut response = writing(|| {
+        db.query(format!(
+            "UPDATE {TABLE} SET visibility = $internal, updated_at = time::now() \
+             WHERE project_id = $project AND slug = $slug AND id != $current \
+             AND visibility != $internal \
+             RETURN id"
+        ))
+        .bind((
+            "project",
+            record_id(crate::projects::PROJECT_TABLE, project_id),
+        ))
+        .bind(("slug", slug.to_string()))
+        .bind(("current", record_id(TABLE, current)))
+        .bind(("internal", internal.to_string()))
+    })
+    .await?;
+    let changed: Vec<surrealdb::types::RecordId> = response.take((0, "id"))?;
+    let ids: Vec<Uuid> = changed.iter().filter_map(record_uuid).collect();
+    mirror_writes(db, &ids).await;
+    Ok(changed.len())
 }
 
 async fn ingest_with_optional_provenance(
@@ -2715,6 +2761,81 @@ mod tests {
             executed.asset_id,
             "the client stays anchored to the executed revision"
         );
+    }
+
+    /// Filing a revision makes every earlier revision of the chain
+    /// internal, whatever each was filed as, and leaves the new one as filed.
+    #[tokio::test]
+    async fn filing_a_revision_makes_the_earlier_revisions_internal() {
+        let (db, storage, _tmp) = fixtures().await;
+        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
+        let file = |bytes: &'static [u8], vis: &'static str| {
+            let db = db.clone();
+            let storage = storage.clone();
+            async move {
+                match super::file_revision(
+                    &db,
+                    &storage,
+                    &crate::documents::IngestArgs {
+                        project_id: project,
+                        source: "upload",
+                        filename: "pitch.pdf",
+                        kind: "memo",
+                        content_type: "application/pdf",
+                        description: None,
+                        secondary_storage_key: None,
+                        visibility: vis,
+                    },
+                    &crate::documents::DocumentIdentity {
+                        slug: Some("pitch"),
+                        published_at: None,
+                        metadata: None,
+                        derived_from: None,
+                        transcript_quality: None,
+                        signing: None,
+                        notarization: Vec::new(),
+                    },
+                    bytes,
+                )
+                .await
+                .unwrap()
+                {
+                    super::Filed::Revision(doc) => doc.asset_id,
+                    super::Filed::Unchanged { .. } => panic!("expected a new revision"),
+                }
+            }
+        };
+        let shared = crate::documents::visibility::CLIENT;
+        let internal = crate::documents::visibility::INTERNAL;
+
+        let v1 = file(b"v1", shared).await;
+        let v2 = file(b"v2", shared).await;
+        let v3 = file(b"v3", internal).await;
+
+        let chain: Vec<(Uuid, String)> = super::revisions(&db, project, "pitch")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|a: Asset| (a.id, a.visibility))
+            .collect();
+        assert_eq!(
+            chain,
+            vec![
+                (v3, internal.to_string()),
+                (v2, internal.to_string()),
+                (v1, internal.to_string()),
+            ]
+        );
+
+        let v4 = file(b"v4", shared).await;
+        let shared_ids: Vec<Uuid> = super::revisions(&db, project, "pitch")
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|a: &Asset| a.visibility == shared)
+            .map(|a| a.id)
+            .collect();
+        assert_eq!(shared_ids, vec![v4], "only the newest revision is shared");
     }
 
     async fn ingest_named(
