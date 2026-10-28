@@ -96,6 +96,14 @@ any tag with a `-` suffix as one. A prerelease rolls to staging; `ship-productio
 the tag was held at staging, and no production Deployment is recorded. A hotfix reaches production through
 [`manual-roll.md`](manual-roll.md) once staging serves it.
 
+### Stable releases need no approval
+
+Every tag without a prerelease suffix rolls on to production as soon as staging's health checks pass. No person stands
+between the two: neither deploy environment carries a required reviewer or a wait timer, and each admits only `main`.
+That is desired state, not a hand setting — `navigator ops github setup neon-law/navigator` reconciles both environments
+and removes a reviewer anyone adds in the settings UI. The prerelease hold above is the only thing that keeps a tag off
+production.
+
 ## The gate
 
 `preflight` reports `proceed=true` only when both hold, and every other job needs it:
@@ -223,9 +231,9 @@ retains the ten newest versions per image.
    `PERMISSION_DENIED`. Secret Manager returns 403, not 404, for a secret the caller cannot read, so a secret that was
    never published fails the same way. The ship error names both commands above.
 
-2. **Create `staging-deploy` and `production-deploy`**, each limited to the `main` branch, with a required reviewer
-   on production and the secrets and variables above. Set the repository variable `DEPLOY_EXPECTED_REPOSITORY`.
-   `*_SHIP_WIF_PROVIDER` is
+2. **Create `staging-deploy` and `production-deploy`** with `navigator ops github setup neon-law/navigator`, which
+   limits each to the `main` branch with no reviewer, then add the secrets and variables above. Set the repository
+   variable `DEPLOY_EXPECTED_REPOSITORY`. `*_SHIP_WIF_PROVIDER` is
    `projects/<number>/locations/global/workloadIdentityPools/navigator-release/providers/github`.
 3. **Rehearse on staging.** With `DEPLOY_AUTOMATION_ENABLED` still unset, dispatch a published `-rc` tag by hand and
    read the run: staging rolls and passes its health checks, and production is held with no production Deployment
