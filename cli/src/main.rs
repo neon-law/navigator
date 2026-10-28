@@ -7330,21 +7330,30 @@ fn run_render(
     // rather than to whatever bundle happens to be mounted at render time.
     // Restore the plumbing here, not somewhere new, if that call changes.
     let letterhead = pdf::Letterhead::default();
+    // A memo is the Firm's analysis for its client, so every page of it
+    // says it is privileged, whatever its author typed (LAW-224).
+    let privileged = field("kind").as_deref() == Some("memo");
     let body = if preview {
         flag_open_markers(&body)
     } else {
         body
     };
     let format_debug = format!("{format:?}");
-    let bytes =
-        match render_notation_artifact(file, &body, output_extension, format, &letterhead, preview)
-        {
-            Ok(bytes) => bytes,
-            Err(_error) => {
-                eprintln!("navigator: render failed");
-                return ExitCode::from(2);
-            }
-        };
+    let bytes = match render_notation_artifact(
+        file,
+        &body,
+        output_extension,
+        format,
+        &letterhead,
+        preview,
+        privileged,
+    ) {
+        Ok(bytes) => bytes,
+        Err(_error) => {
+            eprintln!("navigator: render failed");
+            return ExitCode::from(2);
+        }
+    };
     if let Err(e) = std::fs::write(out, &bytes) {
         eprintln!("navigator: write {}: {e}", out.display());
         return ExitCode::from(2);
@@ -7444,6 +7453,7 @@ fn render_notation_artifact(
     format: pdf::OutputFormat,
     letterhead: &pdf::Letterhead,
     preview: bool,
+    privileged: bool,
 ) -> Result<Vec<u8>, String> {
     if output_extension == "docx" {
         let word_letterhead =
@@ -7479,6 +7489,7 @@ fn render_notation_artifact(
         &pdf::RenderOptions {
             creation_timestamp: notation_render_timestamp(file),
             preview,
+            privileged,
         },
     )
     .map_err(|error| format!("render {}: {error}", file.display()))

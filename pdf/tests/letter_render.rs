@@ -178,3 +178,73 @@ fn client_letter_carries_no_letterhead_but_keeps_the_letter_blocks() {
         Some(OutputFormat::ClientLetter(_))
     ));
 }
+
+fn render_with(blocks: LetterBlocks, body: &str, options: &pdf::RenderOptions) -> Vec<u8> {
+    pdf::render_document_with_options(
+        body,
+        OutputFormat::Letter(blocks),
+        &Letterhead::default(),
+        options,
+    )
+    .expect("letter renders")
+}
+
+fn long_body() -> String {
+    let mut body = String::new();
+    for n in 1..=60 {
+        write!(
+            body,
+            "Paragraph {n}. Filler text long enough to help force the memo across \
+             more than one page eventually.\n\n"
+        )
+        .expect("writing to a String never fails");
+    }
+    body
+}
+
+/// LAW-224: a preview's stamp is a page set rule, and a page set rule that
+/// follows the letterhead's content opens a new page. A letter with no
+/// blocks, the shape every memo has, must still start its body on page one.
+#[test]
+fn a_preview_letter_keeps_its_body_on_page_one() {
+    let pdf = render_with(
+        LetterBlocks::default(),
+        "A short memo body.",
+        &pdf::RenderOptions {
+            preview: true,
+            ..pdf::RenderOptions::default()
+        },
+    );
+    assert_eq!(pdf::page_count(&pdf).expect("page count"), 1);
+}
+
+/// LAW-224: a privileged render says so on every page, not only where its
+/// author typed it.
+#[test]
+fn a_privileged_render_is_marked_on_every_page() {
+    let pdf = render_with(
+        LetterBlocks::default(),
+        &long_body(),
+        &pdf::RenderOptions {
+            privileged: true,
+            ..pdf::RenderOptions::default()
+        },
+    );
+    let pages = pdf::page_count(&pdf).expect("page count");
+    assert!(pages > 1, "fixture must actually span pages: {pages}");
+    assert_eq!(
+        pdf::occurrence_count(&pdf, pdf::PRIVILEGED_LABEL).expect("counts"),
+        pages,
+        "every page must carry the privileged marking"
+    );
+}
+
+/// The marking is opt-in: an ordinary letter carries none.
+#[test]
+fn an_ordinary_render_carries_no_privileged_marking() {
+    let pdf = render(LetterBlocks::default(), &long_body());
+    assert_eq!(
+        pdf::occurrence_count(&pdf, pdf::PRIVILEGED_LABEL).expect("counts"),
+        0
+    );
+}

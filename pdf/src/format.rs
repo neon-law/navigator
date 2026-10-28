@@ -717,16 +717,32 @@ pub fn render_document_with_options(
         }
         _ => (String::new(), body.to_string()),
     };
+    // The stamps are page set rules, so they come first. A page set rule
+    // that follows content opens a new page, and the letter frame's
+    // preamble already carries the letterhead's content (LAW-224).
     let source = format!(
-        "{}{}{}{}{}",
+        "{}{}{}{}{}{}",
+        if options.preview { PREVIEW_STAMP } else { "" },
+        if options.privileged {
+            PRIVILEGED_STAMP
+        } else {
+            ""
+        },
         format.preamble(letterhead),
         chrome,
-        if options.preview { PREVIEW_STAMP } else { "" },
         format.document_source(&markdown),
         format.postamble(),
     );
     crate::render_with_options(&source, options)
 }
+
+/// The words every page of a privileged render carries.
+pub const PRIVILEGED_LABEL: &str = "PRIVILEGED AND CONFIDENTIAL";
+
+/// A background mark at the top of every page. It sets `background`, so it
+/// neither replaces a frame's running header nor the preview's foreground.
+const PRIVILEGED_STAMP: &str = "#set page(background: place(top + center, dy: 0.55in, \
+     text(size: 8pt, weight: \"bold\", tracking: 0.08em, fill: luma(35%))[PRIVILEGED AND CONFIDENTIAL]))\n";
 
 /// The words every page of a preview carries.
 pub const PREVIEW_LABEL: &str = "PREVIEW, NOT FOR FILING";
