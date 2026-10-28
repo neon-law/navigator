@@ -1030,13 +1030,13 @@ fn retired_brand_certificates() -> Vec<String> {
 
 /// Delete each [`retired_brand_certificates`] entry after the apply.
 fn retire_firm_only_brand_certificates(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
-    for certificate in retired_brand_certificates() {
+    for name in retired_brand_certificates() {
         exec(
             dry_run,
             kubectl(cfg)
                 .arg("delete")
                 .arg("managedcertificate")
-                .arg(&certificate)
+                .arg(&name)
                 .arg("--ignore-not-found=true"),
         )?;
     }
@@ -2747,9 +2747,9 @@ fn offline_ship_plan(
                     "delete the Restate CronJob {cronjob} now hosted by DBOS"
                 ));
             }
-            for certificate in retired_brand_certificates() {
+            for name in retired_brand_certificates() {
                 operations.push(format!(
-                    "delete the ManagedCertificate {certificate} now carried by \
+                    "delete the ManagedCertificate {name} now carried by \
                      {FIRM_CERTIFICATE_NAME}"
                 ));
             }
@@ -7334,13 +7334,13 @@ mod tests {
                 "navigator-web-guieb-shook"
             ]
         );
-        for certificate in &retired {
+        for name in &retired {
             assert!(
                 !manifests.split("\n---").any(|doc| {
                     doc.contains("kind: ManagedCertificate")
-                        && doc.contains(&format!("\n  name: {certificate}\n"))
+                        && doc.contains(&format!("\n  name: {name}\n"))
                 }),
-                "{certificate} is never rendered"
+                "{name} is never rendered"
             );
         }
     }
