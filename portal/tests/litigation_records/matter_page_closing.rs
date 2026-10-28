@@ -158,7 +158,7 @@ async fn seed_deal(
     )
     .await
     .unwrap();
-    let mut executed = None;
+    let mut shared = Vec::new();
     for (filename, visibility, published) in [
         (
             "ira-v1.docx",
@@ -194,23 +194,26 @@ async fn seed_deal(
         )
         .await
         .unwrap();
-        if filename == "ira-v2.docx" {
-            executed = match filed {
-                store::assets::Filed::Revision(doc) => Some(doc.asset_id),
-                store::assets::Filed::Unchanged { asset_id } => Some(asset_id),
-            };
+        if visibility == store::documents::visibility::CLIENT {
+            shared.push(match filed {
+                store::assets::Filed::Revision(doc) => doc.asset_id,
+                store::assets::Filed::Unchanged { asset_id } => asset_id,
+            });
         }
     }
-    // Filing the redline made the executed copy internal; the lawyer shares
-    // it again so the client keeps reading it beneath the unpublished draft.
-    store::assets::set_visibility(
-        surreal,
-        project_id,
-        executed.expect("the executed revision was filed"),
-        store::documents::visibility::CLIENT,
-    )
-    .await
-    .unwrap();
+    // Each later filing made the revisions beneath it internal; the lawyer
+    // shares the executed copies again so the client keeps reading them
+    // beneath the unpublished draft.
+    for asset_id in shared {
+        store::assets::set_visibility(
+            surreal,
+            project_id,
+            asset_id,
+            store::documents::visibility::CLIENT,
+        )
+        .await
+        .unwrap();
+    }
 }
 
 async fn fixture() -> Fixture {
