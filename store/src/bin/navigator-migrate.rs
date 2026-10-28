@@ -79,8 +79,8 @@ async fn run(options: Options) -> Result<Vec<i64>, store::clauses::ClauseError> 
     if options == Options::default() {
         if let Some(report) = store::clauses::seed_library_from_env().await? {
             println!(
-                "Clause library seeded: {} versions added, {} current versions moved",
-                report.inserted, report.current_changed
+                "Clause library seeded: {} versions added, {} current versions moved, {} versions retired",
+                report.inserted, report.current_changed, report.retired
             );
         }
     }

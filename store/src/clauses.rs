@@ -3,7 +3,7 @@
 //! `rules/clauses/library.yaml` is the source of truth; the `clause` table is
 //! the read model built from it, versioned by append. A pinned `code@version`
 //! is never rewritten: a change adds a version, and `is_current` marks the
-//! newest version of each code. The table is a shared catalog, owned by no
+//! newest active version of each code. Retired versions remain readable. The table is a shared catalog, owned by no
 //! Firm or Project. `navigator-migrate` seeds it after applying migrations;
 //! without `NAVIGATOR_POSTGRES_HOST` the seed is skipped and callers read the
 //! embedded library through `rules::clauses`.
@@ -39,13 +39,15 @@ pub struct SeedReport {
     pub inserted: usize,
     /// Codes whose current version moved.
     pub current_changed: usize,
+    /// Existing versions retired without changing their content.
+    pub retired: usize,
 }
 
 impl SeedReport {
     /// True when the library already matched the table and nothing was written.
     #[must_use]
     pub const fn is_unchanged(&self) -> bool {
-        self.inserted == 0 && self.current_changed == 0
+        self.inserted == 0 && self.current_changed == 0 && self.retired == 0
     }
 }
 
@@ -144,12 +146,13 @@ pub async fn current(db: &PostgresDb, code: &str) -> Result<Option<Clause>, Clau
 /// supplied it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogClause {
+    pub retired_at: Option<DateTime<Utc>>,
     pub code: String,
     pub version: i32,
     pub kind: String,
     pub inputs: BTreeMap<String, rules::clauses::Input>,
     pub body: String,
-    /// The newest version of its code.
+    /// The newest active version of its code.
     pub is_current: bool,
 }
 
@@ -170,6 +173,7 @@ pub async fn catalog() -> Result<Vec<CatalogClause>, ClauseError> {
                     .into_iter()
                     .map(|clause| {
                         Ok(CatalogClause {
+                            retired_at: clause.retired_at,
                             inputs: serde_json::from_value(clause.inputs)
                                 .map_err(|error| ClauseError::Library(error.to_string()))?,
                             code: clause.code,
@@ -187,13 +191,14 @@ pub async fn catalog() -> Result<Vec<CatalogClause>, ClauseError> {
     }
     let library = rules::clauses::library_clauses().map_err(ClauseError::Library)?;
     let mut newest = BTreeMap::<String, i32>::new();
-    for clause in &library {
+    for clause in library.iter().filter(|clause| clause.retired_at.is_none()) {
         let entry = newest.entry(clause.code.clone()).or_insert(clause.version);
         *entry = (*entry).max(clause.version);
     }
     Ok(library
         .into_iter()
         .map(|clause| CatalogClause {
+            retired_at: clause.retired_at,
             is_current: newest.get(&clause.code) == Some(&clause.version),
             code: clause.code,
             version: clause.version,
@@ -217,7 +222,7 @@ pub fn body_sha256(body: &str) -> String {
 }
 
 /// Upsert `library` into the table in one transaction. New versions are
-/// appended, the newest version of each code becomes current, and an
+/// appended, retirement metadata is applied, the newest active version becomes current, and an
 /// unchanged library writes nothing. A stored version whose content differs
 /// is refused rather than overwritten.
 ///
@@ -232,7 +237,7 @@ pub async fn seed(db: &PostgresDb, library: &[LibraryClause]) -> Result<SeedRepo
             .map_err(|error| ClauseError::Library(error.to_string()))?;
         let digest = body_sha256(&source.body);
         let inserted = sqlx::query(
-            "INSERT INTO clause (code, version, kind, inputs, body, body_sha256) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (code, version) DO NOTHING",
+            "INSERT INTO clause (code, version, kind, inputs, body, body_sha256, retired_at) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (code, version) DO NOTHING",
         )
         .bind(&source.code)
         .bind(source.version)
@@ -240,6 +245,7 @@ pub async fn seed(db: &PostgresDb, library: &[LibraryClause]) -> Result<SeedRepo
         .bind(&inputs)
         .bind(&source.body)
         .bind(&digest)
+        .bind(source.retired_at)
         .execute(&mut *tx)
         .await
         .map_err(query_failed)?
@@ -265,8 +271,22 @@ pub async fn seed(db: &PostgresDb, library: &[LibraryClause]) -> Result<SeedRepo
             }
         }
         report.inserted += usize::try_from(inserted).unwrap_or(usize::MAX);
-        let entry = newest.entry(source.code.as_str()).or_insert(source.version);
-        *entry = (*entry).max(source.version);
+        if let Some(retired_at) = source.retired_at {
+            let retired = sqlx::query(
+                "UPDATE clause SET retired_at = $3, is_current = false WHERE code = $1 AND version = $2 AND retired_at IS NULL",
+            )
+            .bind(&source.code)
+            .bind(source.version)
+            .bind(retired_at)
+            .execute(&mut *tx)
+            .await
+            .map_err(query_failed)?
+            .rows_affected();
+            report.retired += usize::try_from(retired).unwrap_or(usize::MAX);
+        } else {
+            let entry = newest.entry(source.code.as_str()).or_insert(source.version);
+            *entry = (*entry).max(source.version);
+        }
     }
     for (code, version) in newest {
         let cleared = sqlx::query(
@@ -320,9 +340,21 @@ mod tests {
         let versions: Vec<_> = catalog
             .iter()
             .filter(|clause| clause.code == "nevada_engagement_arbitration")
-            .map(|clause| (clause.version, clause.is_current))
+            .map(|clause| {
+                (
+                    clause.version,
+                    clause.is_current,
+                    clause.retired_at.is_some(),
+                )
+            })
             .collect();
-        assert_eq!(versions, [(1, false), (2, true)]);
+        assert_eq!(versions, [(1, false, true), (2, true, false)]);
+        let governing = catalog
+            .iter()
+            .find(|clause| clause.code == "governing_law")
+            .unwrap();
+        assert!(governing.retired_at.is_some());
+        assert!(!governing.is_current);
         assert!(catalog
             .iter()
             .all(|clause| !clause.body.is_empty() && !clause.kind.is_empty()));

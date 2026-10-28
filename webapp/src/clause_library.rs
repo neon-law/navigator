@@ -1,7 +1,7 @@
 //! The lawyer-tier Clauses pages: `/app/admin/clauses` and `/app/admin/clauses/{code}`.
 //!
 //! A read-only view of the Clause library (docs/clauses.md). The list shows the
-//! current version of every Clause with the number of Templates that pin it,
+//! current version of every Clause (or latest retired version) with its Template usage,
 //! and narrows by code, kind, or wording. The detail page shows every version's
 //! body and inputs and the Templates that pin that version. Wording changes
 //! stay in the library YAML as a new version; nothing here writes.
@@ -43,13 +43,15 @@ pub struct PinningTemplate {
     pub title: String,
 }
 
-/// One row of the list: a Clause's current version.
+/// One row of the list: a Clause's current version, or latest retired version.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct ClauseRow {
     pub code: String,
     pub version: i32,
     pub kind: String,
     pub inputs: usize,
+    #[serde(default)]
+    pub retired: bool,
     /// Templates pinning any version of this code.
     pub templates: usize,
 }
@@ -68,6 +70,8 @@ pub struct VersionView {
     pub version: i32,
     pub kind: String,
     pub is_current: bool,
+    #[serde(default)]
+    pub retired_at: Option<String>,
     pub inputs: Vec<InputView>,
     pub body: String,
     pub templates: Vec<PinningTemplate>,
@@ -93,7 +97,7 @@ pub struct ClauseLibraryView {
     pub kind: String,
     /// Every kind in the library, for the filter.
     pub kinds: Vec<String>,
-    /// Current Clauses in the library before narrowing.
+    /// Clause codes in the library before narrowing.
     pub total: usize,
     pub rows: Vec<ClauseRow>,
     pub failed: bool,
@@ -195,7 +199,7 @@ mod load {
     }
 }
 
-/// The list page: every current Clause, narrowed by `?q=` and `?kind=`.
+/// The list page: every Clause code, including retired wording, narrowed by `?q=` and `?kind=`.
 #[server]
 pub async fn get_clause_library() -> Result<ClauseLibraryView, ServerFnError> {
     let chrome = load::chrome().await?;
@@ -210,15 +214,27 @@ pub async fn get_clause_library() -> Result<ClauseLibraryView, ServerFnError> {
     kinds.sort();
     kinds.dedup();
 
-    let current: Vec<_> = catalog.iter().filter(|c| c.is_current).collect();
-    let rows = current
-        .iter()
+    let mut listed = std::collections::BTreeMap::<&str, &store::clauses::CatalogClause>::new();
+    for clause in &catalog {
+        listed
+            .entry(&clause.code)
+            .and_modify(|selected| {
+                if clause.is_current || (!selected.is_current && clause.version > selected.version)
+                {
+                    *selected = clause;
+                }
+            })
+            .or_insert(clause);
+    }
+    let rows = listed
+        .values()
         .filter(|c| matches(&c.code, &c.kind, &c.body, &q, &kind))
         .map(|c| ClauseRow {
             code: c.code.clone(),
             version: c.version,
             kind: c.kind.clone(),
             inputs: c.inputs.len(),
+            retired: c.retired_at.is_some(),
             templates: pinning_count(&catalog, &pins, &c.code),
         })
         .collect();
@@ -227,7 +243,7 @@ pub async fn get_clause_library() -> Result<ClauseLibraryView, ServerFnError> {
         query: q,
         kind,
         kinds,
-        total: current.len(),
+        total: listed.len(),
         rows,
         failed: false,
     })
@@ -270,6 +286,7 @@ pub async fn get_clause_detail() -> Result<ClauseDetailView, ServerFnError> {
             version: c.version,
             kind: c.kind,
             is_current: c.is_current,
+            retired_at: c.retired_at.map(|date| date.to_rfc3339()),
             inputs: c
                 .inputs
                 .into_iter()
@@ -376,7 +393,7 @@ pub fn ClauseLibrary() -> Element {
             p { class: "clause-count", role: "status", "Showing {shown} of {view.total} Clauses" }
             div { class: "nav-table-wrap",
                 table { class: "nav-table",
-                    caption { class: "visually-hidden", "Current Clauses" }
+                    caption { class: "visually-hidden", "Clause library" }
                     thead {
                         tr {
                             th { scope: "col", "Code" }
@@ -397,7 +414,7 @@ pub fn ClauseLibrary() -> Element {
                                 td {
                                     a { href: "{clause_href(&row.code)}", "{row.code}" }
                                 }
-                                td { "{row.version}" }
+                                td { "{row.version}" if row.retired { " (retired)" } }
                                 td { "{row.kind}" }
                                 td { "{row.inputs}" }
                                 td { "{templates_label(row.templates)}" }
@@ -449,11 +466,16 @@ pub fn ClauseDetail() -> Element {
                     "aria-labelledby": "clause-v{version.version}",
                     h2 { id: "clause-v{version.version}",
                         "{view.code}@{version.version}"
-                        if version.is_current {
+                        if version.retired_at.is_some() {
+                            " (retired)"
+                        } else if version.is_current {
                             " (current)"
                         }
                     }
                     p { "Kind: {version.kind}" }
+                    if let Some(retired_at) = &version.retired_at {
+                        p { "Retired: {retired_at}. Available for provenance; new references are refused." }
+                    }
                     h3 { "Body" }
                     pre { class: "clause-body", "{version.body}" }
                     h3 { "Inputs" }
