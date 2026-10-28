@@ -39,6 +39,8 @@ use serde::{Deserialize, Serialize};
 // mistake this avoids.
 use crate::projects::repository as project_repository;
 
+mod deploy_environments;
+
 /// The host and organization set this command may write governance to.
 ///
 /// This is the whole authorization boundary. `ops github setup` takes neither
@@ -288,6 +290,7 @@ const COMMON_POLICY: RepositoryPolicy = RepositoryPolicy {
     assert_codeowners: true,
     branch_protections: true,
     code_scanning: false,
+    deploy_environments: false,
 };
 
 /// The same gate, with client-confidential defaults: what every repository
@@ -311,6 +314,7 @@ const CLIENT_POLICY: RepositoryPolicy = RepositoryPolicy {
     assert_codeowners: true,
     branch_protections: true,
     code_scanning: false,
+    deploy_environments: false,
 };
 
 /// Navigator's own policy: the common gate plus cutting release tags, the one
@@ -323,6 +327,7 @@ const NAVIGATOR_POLICY: RepositoryPolicy = RepositoryPolicy {
     assert_codeowners: true,
     branch_protections: true,
     code_scanning: true,
+    deploy_environments: true,
 };
 
 /// The Homebrew tap's policy: nothing on `main` at all.
@@ -354,6 +359,7 @@ const TAP_POLICY: RepositoryPolicy = RepositoryPolicy {
     assert_codeowners: false,
     branch_protections: false,
     code_scanning: false,
+    deploy_environments: false,
 };
 
 /// The policy a repository is reconciled against, forked by organization first.
@@ -610,6 +616,10 @@ struct RepositoryPolicy {
     /// Whether `main` also waits on the `CodeQL` code-scanning check. True only
     /// where the repository carries the `CodeQL` workflow that posts it.
     code_scanning: bool,
+    /// Whether the repository carries `release-deploy.yml`'s GitHub
+    /// Environments, reconciled to roll a stable release to production with no
+    /// reviewer. See [`deploy_environments`].
+    deploy_environments: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -789,6 +799,11 @@ enum Action {
     UpdateLabel {
         name: String,
     },
+    /// A `release-deploy.yml` environment carries a reviewer, a wait timer,
+    /// or a deployment branch other than `main` — or does not exist.
+    UpdateDeployEnvironment {
+        name: String,
+    },
     /// A confirmed Project repository's generated workflow, manifest pin,
     /// or canonical Agent Skill no longer matches the selected release.
     ///
@@ -816,6 +831,9 @@ impl Action {
             Self::DeleteRuleset { name } => format!("delete ruleset {name}"),
             Self::CreateLabel { name } => format!("create label {name}"),
             Self::UpdateLabel { name } => format!("update label {name}"),
+            Self::UpdateDeployEnvironment { name } => {
+                format!("update deploy environment {name}")
+            }
             Self::UpdateWorkflow { path } => format!("open a pull request updating {path}"),
             Self::SetActionsAccess { home } => {
                 format!("set Actions access on {home} to {ACTIONS_ACCESS_ORGANIZATION}")
@@ -2252,6 +2270,7 @@ async fn reconcile(
             name: REVIEW_RULESET_NAME.to_string(),
         });
     }
+    actions.extend(deploy_environments::plan(policy, client).await?);
 
     // Read only, exactly like every other half of this reconcile: build the
     // desired content and compare it against the live file before a single
@@ -2306,6 +2325,7 @@ async fn reconcile(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // One arm per `Action`, matched exhaustively.
 async fn apply(
     policy: RepositoryPolicy,
     actions_app_id: u64,
@@ -2405,6 +2425,7 @@ async fn apply(
                 )
                 .await
         }
+        Action::UpdateDeployEnvironment { name } => deploy_environments::apply(client, &name).await,
         Action::SetActionsAccess { home } => set_actions_access(client, &home).await,
         // `reconcile` filters every `UpdateWorkflow` out of the plan handed to
         // this per-action loop and applies them all together through
@@ -3763,6 +3784,7 @@ mod tests {
         assert_codeowners: false,
         branch_protections: true,
         code_scanning: false,
+        deploy_environments: false,
     };
 
     /// LAW-10: a Project repository that already has its `production` ruleset
@@ -3989,6 +4011,7 @@ mod tests {
             | Action::DeleteRuleset { .. }
             | Action::CreateLabel { .. }
             | Action::UpdateLabel { .. }
+            | Action::UpdateDeployEnvironment { .. }
             | Action::UpdateWorkflow { .. }
             | Action::SetActionsAccess { .. } => false,
         };
@@ -3999,6 +4022,7 @@ mod tests {
             Action::DeleteRuleset { name: "x".into() },
             Action::CreateLabel { name: "x".into() },
             Action::UpdateLabel { name: "x".into() },
+            Action::UpdateDeployEnvironment { name: "x".into() },
             Action::UpdateWorkflow { path: "x".into() },
             Action::SetActionsAccess { home: "x/y".into() },
         ] {
@@ -4817,6 +4841,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_string(ci_workflow))
             .mount(server)
             .await;
+        deploy_environments::tests::mount_converged(server, "acme/navigator").await;
         Mock::given(method("GET"))
             .and(path("/repos/acme/navigator/rulesets"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
