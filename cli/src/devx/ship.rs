@@ -1764,16 +1764,60 @@ fn wait_statefulset(cfg: &ShipConfig, dry_run: bool, name: &str, timeout: &str) 
     .with_context(|| format!("statefulset/{name} did not become Ready within {timeout}"))
 }
 
+/// Wait for `job/{name}` to complete, and fail as soon as it fails.
+///
+/// `kubectl wait --for=condition=complete` alone never returns for a Job that
+/// reached its backoff limit: it waits out the whole timeout. 26.10.27's staging
+/// ship sat 25 minutes on a failed `navigator-postgres-mirror-reconcile` until
+/// the workflow's 30-minute cap cancelled it, which also lost the transcript.
+/// So a second `kubectl wait --for=condition=failed` races the first.
 fn wait_job(cfg: &ShipConfig, dry_run: bool, name: &str, timeout: &str) -> Result<()> {
-    exec(
-        dry_run,
-        kubectl(cfg)
-            .arg("wait")
-            .arg("--for=condition=complete")
+    let wait = |condition: &str| {
+        let mut cmd = kubectl(cfg);
+        cmd.arg("wait")
+            .arg(format!("--for=condition={condition}"))
             .arg(format!("job/{name}"))
-            .arg(format!("--timeout={timeout}")),
-    )
-    .with_context(|| format!("job/{name} did not complete within {timeout}"))
+            .arg(format!("--timeout={timeout}"));
+        cmd
+    };
+    let mut complete = wait("complete");
+    if dry_run {
+        return exec(true, &mut complete);
+    }
+    let mut complete = complete
+        .spawn()
+        .with_context(|| format!("wait for job/{name} to complete"))?;
+    let mut failed = wait("failed")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .with_context(|| format!("watch job/{name} for failure"))?;
+    let mut failure_watch_open = true;
+    loop {
+        if let Some(status) = complete.try_wait()? {
+            let _ = failed.kill();
+            let _ = failed.wait();
+            ensure!(
+                status.success(),
+                "job/{name} did not complete within {timeout}"
+            );
+            return Ok(());
+        }
+        if failure_watch_open {
+            if let Some(status) = failed.try_wait()? {
+                failure_watch_open = false;
+                if status.success() {
+                    let _ = complete.kill();
+                    let _ = complete.wait();
+                    bail!(
+                        "job/{name} failed: it reached its backoff limit before completing; read \
+                         `kubectl logs job/{name}` before its pod is cleaned up"
+                    );
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
 }
 
 /// Rerun an idempotent one-shot service Job without touching retained data.
