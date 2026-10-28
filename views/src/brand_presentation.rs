@@ -374,17 +374,17 @@ pub const PALETTE: &[Palette] = &[
             primary: "#1f3a5f",
             primary_hover: "#182e4c",
             primary_active: "#112239",
-            on_primary: "#ffffff",
-            on_brand: "#ffffff",
+            on_primary: "#f7f3e8",
+            on_brand: "#f7f3e8",
             link: "#1f3a5f",
             link_hover: "#112239",
             surface_subtle: "#f4f1e8",
-            bg: None,
-            surface: None,
-            surface_raised: None,
-            text: None,
-            text_muted: None,
-            border: None,
+            bg: Some("#f7f3e8"),
+            surface: Some("#f7f3e8"),
+            surface_raised: Some("#fffcf5"),
+            text: Some("#1b2e48"),
+            text_muted: Some("#506079"),
+            border: Some("#c7c9c4"),
         },
         dark: PaletteScheme {
             primary: "#a9c4e8",
@@ -395,12 +395,12 @@ pub const PALETTE: &[Palette] = &[
             link: "#a9c4e8",
             link_hover: "#c3d6ef",
             surface_subtle: "#16263b",
-            bg: Some("#0d1117"),
-            surface: Some("#161b22"),
-            surface_raised: Some("#1c2128"),
-            text: None,
-            text_muted: None,
-            border: None,
+            bg: Some("#101e30"),
+            surface: Some("#16283f"),
+            surface_raised: Some("#1d334d"),
+            text: Some("#f7f3e8"),
+            text_muted: Some("#c6ced9"),
+            border: Some("#52657d"),
         },
     },
     // --- The seven practice brands -----------------------------------
@@ -701,10 +701,10 @@ impl BrandKey {
             Self::DeleteYourData => {
                 typeface_by_id("plus-jakarta-sans").expect("plus-jakarta-sans is catalogued")
             }
-            Self::LawyerShook | Self::GuiebShook => {
-                typeface_by_id("tinos").expect("tinos is catalogued")
+            Self::LawyerShook => typeface_by_id("tinos").expect("tinos is catalogued"),
+            Self::GuiebShook | Self::Vesta => {
+                typeface_by_id("eb-garamond").expect("eb-garamond is catalogued")
             }
-            Self::Vesta => typeface_by_id("eb-garamond").expect("eb-garamond is catalogued"),
             Self::Misericordia => {
                 typeface_by_id("source-sans-3").expect("source-sans-3 is catalogued")
             }
@@ -1166,9 +1166,24 @@ pub fn scheme_bg(scheme: &PaletteScheme, dark: bool) -> [u8; 3] {
 mod tests {
     use super::*;
 
-    /// The list stays closed, and only GORP is licence-encumbered: Plus
-    /// Jakarta Sans is OFL-1.1, so it is bucket-served like GORP without
-    /// carrying GORP's `operator_licence_required` flag.
+    #[test]
+    fn guieb_shook_uses_self_hosted_garamond_on_blue_and_ivory() {
+        let face = BrandKey::GuiebShook.default_typeface();
+        let palette = BrandKey::GuiebShook.default_palette();
+        assert_eq!(face.id, "eb-garamond");
+        assert_eq!(palette.light.bg, Some("#f7f3e8"));
+        assert_eq!(palette.light.primary, "#1f3a5f");
+        let css = tokens_stylesheet(face, None, palette);
+        assert!(css.contains("EBGaramond-Regular.woff2"));
+        assert!(css.contains("EBGaramond-Bold.woff2"));
+        assert!(!css.contains("googleapis"));
+        assert!(!css.contains("gstatic"));
+        for scheme in [palette.light, palette.dark] {
+            assert!(contrast(scheme.text.unwrap(), scheme.bg.unwrap()) >= 4.5);
+            assert!(contrast(scheme.text_muted.unwrap(), scheme.bg.unwrap()) >= 4.5);
+        }
+    }
+
     #[test]
     fn cyber_typefaces_are_self_hosted_with_the_approved_weights() {
         for id in ["barlow-condensed", "dm-sans"] {
@@ -1184,6 +1199,9 @@ mod tests {
         assert!(display.contains("BarlowCondensed-ExtraBold.woff2"));
     }
 
+    /// The list stays closed, and only GORP is licence-encumbered: Plus
+    /// Jakarta Sans is OFL-1.1, so it is bucket-served like GORP without
+    /// carrying GORP's `operator_licence_required` flag.
     #[test]
     fn the_typeface_list_is_closed_and_only_gorp_needs_a_licence() {
         let ids: Vec<_> = TYPEFACES.iter().map(|face| face.id).collect();

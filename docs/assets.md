@@ -289,7 +289,7 @@ verification and orphan-scan contracts.
 | --- | --- | --- |
 | `gorp-serif` | GORP Serif | Neon Law |
 | `plus-jakarta-sans` | Plus Jakarta Sans | DeleteYourData.com |
-| `eb-garamond` | EB Garamond | Vesta Estate Planning (headings and body) |
+| `eb-garamond` | EB Garamond | Vesta Estate Planning and Guieb & Shook (headings and body) |
 | `source-sans-3` | Source Sans 3 | Misericordia Injury Law (body) |
 | `source-serif-4` | Source Serif 4 | Misericordia (display); Daybridge and Groundwork |
 | `pirata-one` | Pirata One | Death & Divorce |
@@ -393,6 +393,18 @@ cargo run -p cli -- ops assets fonts upload --family dm-sans \
 Barlow's upload requires all three faces; missing ExtraBold fails before any write. The font CSS declares actual weights
 and uses the same first-party asset origin as other brands. It makes no Google Fonts runtime request. The preliminary
 assessment hydrates through Dioxus; assessment answers stay in the browser.
+
+### Guieb & Shook
+
+Guieb & Shook uses EB Garamond for headings and body text, served from the deployment's own assets origin. Regular and
+Bold WOFF2 files use the `fonts/eb-garamond/` keys above; the OFL notice travels with them. The brand registry and the
+stored brand seed both select `eb-garamond`, and the page head preloads those faces.
+
+The handwritten G, centered ampersand, and S logo uses a 1050 × 600 canvas and appears above the holding-page heading.
+The registry selects `/assets/brand/guieb-shook/logo.svg` for the logo and `/assets/brand/guieb-shook/logo.png` for
+social previews. Publish both files through `navigator site asset upload` before deploying a changed registry reference.
+The `guieb-shook` palette sets ivory surfaces with navy text in light mode and navy surfaces with ivory text in dark
+mode.
 
 ### Lawyer Shook's Tinos
 
