@@ -778,6 +778,7 @@ pub async fn apply(db: &SurrealDb) -> Result<(), SchemaError> {
     let installed = installed_version(db).await?;
     migrate_inbox_message_table(db).await?;
     move_blog_post_rows_to_post(db).await?;
+    merge_duplicate_visitor_buckets(db).await?;
     db.query(DEFINITIONS)
         .await
         .and_then(surrealdb::IndexedResults::check)
@@ -823,6 +824,63 @@ pub async fn apply(db: &SurrealDb) -> Result<(), SchemaError> {
     .and_then(surrealdb::IndexedResults::check)
     .map_err(SchemaError::RecordVersion)?;
 
+    Ok(())
+}
+
+/// One duplicated `visitor_route_count` bucket: its summed visits and every
+/// row that holds a share of them.
+#[derive(SurrealValue)]
+struct DuplicateVisitorBucket {
+    visits: i64,
+    ids: Vec<RecordId>,
+}
+
+/// Merge `visitor_route_count` rows that share a bucket, before the
+/// definitions rebuild the `visitor_route_count_bucket` unique index.
+///
+/// `DEFINE INDEX OVERWRITE` rebuilds that index on every apply, and a rebuild
+/// over two rows with one bucket fails the whole apply, so a new release's web
+/// pod crash-loops at boot. 26.10.27's production roll did exactly that on
+/// rows that split while the index was being rebuilt by an earlier,
+/// interrupted apply. Each bucket keeps its lowest record and the sum of its
+/// visits; the rest are deleted, in one transaction per bucket.
+async fn merge_duplicate_visitor_buckets(db: &SurrealDb) -> Result<(), SchemaError> {
+    if !table_exists(db, "visitor_route_count").await? {
+        return Ok(());
+    }
+    let duplicates: Vec<DuplicateVisitorBucket> = db
+        .query(
+            "SELECT visits, ids FROM ( \
+                 SELECT bucket_date, country_code, route_pattern, source, locale, \
+                     status_class, count() AS rows, <int> math::sum(visits) AS visits, \
+                     array::group(id) AS ids \
+                 FROM visitor_route_count \
+                 GROUP BY bucket_date, country_code, route_pattern, source, locale, status_class \
+             ) WHERE rows > 1",
+        )
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(SchemaError::Apply)?
+        .take(0)
+        .map_err(SchemaError::Apply)?;
+    for mut bucket in duplicates {
+        bucket.ids.sort();
+        let Some((keep, extra)) = bucket.ids.split_first() else {
+            continue;
+        };
+        db.query(
+            "BEGIN TRANSACTION; \
+             DELETE $extra; \
+             UPDATE $keep SET visits = $visits, updated_at = time::now(); \
+             COMMIT TRANSACTION;",
+        )
+        .bind(("extra", extra.to_vec()))
+        .bind(("keep", keep.clone()))
+        .bind(("visits", bucket.visits))
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(SchemaError::Apply)?;
+    }
     Ok(())
 }
 
@@ -1615,6 +1673,62 @@ mod tests {
             .unwrap();
         assert_eq!(records, vec![i64::from(SCHEMA_VERSION)]);
         assert_eq!(state(&db).await.unwrap(), SchemaState::InSync);
+    }
+
+    /// 26.10.27's production web pods crash-looped because the unique
+    /// bucket index could not be rebuilt over rows that had split while it
+    /// was gone. Applying merges them and the index comes back.
+    #[tokio::test]
+    async fn applying_merges_split_visitor_buckets_and_restores_the_unique_index() {
+        #[derive(SurrealValue)]
+        struct Bucket {
+            route_pattern: String,
+            visits: i64,
+        }
+        let db = unmigrated().await;
+        apply(&db).await.unwrap();
+        db.query("REMOVE INDEX visitor_route_count_bucket ON visitor_route_count")
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .unwrap();
+        for (route, visits) in [("/", 2), ("/", 3), ("/", 4), ("/about", 7)] {
+            db.query(
+                "CREATE visitor_route_count SET bucket_date = d'2026-10-26T00:00:00Z', \
+                 country_code = 'US', route_pattern = $route, source = 'internal', \
+                 locale = 'en', status_class = '2xx', visits = $visits",
+            )
+            .bind(("route", route))
+            .bind(("visits", visits))
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .unwrap();
+        }
+
+        apply(&db).await.unwrap();
+
+        let mut buckets: Vec<(String, i64)> = db
+            .query("SELECT route_pattern, visits FROM visitor_route_count")
+            .await
+            .unwrap()
+            .take::<Vec<Bucket>>(0)
+            .unwrap()
+            .into_iter()
+            .map(|bucket| (bucket.route_pattern, bucket.visits))
+            .collect();
+        buckets.sort();
+        assert_eq!(
+            buckets,
+            vec![("/".to_string(), 9), ("/about".to_string(), 7)]
+        );
+        let duplicate = db
+            .query(
+                "CREATE visitor_route_count SET bucket_date = d'2026-10-26T00:00:00Z', \
+                 country_code = 'US', route_pattern = '/', source = 'internal', \
+                 locale = 'en', status_class = '2xx', visits = 1",
+            )
+            .await
+            .and_then(surrealdb::IndexedResults::check);
+        assert!(duplicate.is_err(), "the unique bucket index is back");
     }
 
     #[tokio::test]
