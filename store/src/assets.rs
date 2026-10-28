@@ -137,6 +137,26 @@ pub struct Asset {
     pub updated_at: DateTime<Utc>,
 }
 
+impl Asset {
+    /// Where this document sits below a Project checkout's `documents/`, by
+    /// the same rule `navigator project sync` lays it out with: the slug, or
+    /// the filename of a one-off, in the matter folder its kind maps to. A
+    /// pointer's `folder:` override lives only in the repository, so a
+    /// document moved by one reads here under its kind's folder.
+    #[must_use]
+    pub fn documents_path(&self) -> String {
+        let name = self
+            .slug
+            .as_deref()
+            .or(self.filename.as_deref())
+            .unwrap_or_default();
+        crate::document_pointers::documents_path(
+            name,
+            crate::document_pointers::MatterFolder::for_kind(self.kind.as_deref().unwrap_or_default()),
+        )
+    }
+}
+
 /// One lawyer-facing document identity and its insertion-ordered revision
 /// history. A `None` slug represents a one-off asset, so `revisions` is empty
 /// and `current` is that asset itself.

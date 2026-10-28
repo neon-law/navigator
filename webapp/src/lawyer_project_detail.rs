@@ -76,6 +76,15 @@ pub struct LawyerDocRow {
     /// The operative revision's visibility, as the plain word rendered in
     /// the table's Visibility column. See [`LawyerDocRevision::visibility`].
     pub visibility: String,
+    /// The document's path below a Project checkout's `documents/`
+    /// (`Docket Filings/pleadings/motion.pdf`), by the layout `navigator
+    /// project sync` writes.
+    #[serde(default)]
+    pub path: String,
+    /// The top folder of [`Self::path`]: a matter folder such as `Work
+    /// Product`, or a sibling folder such as `onboarding`.
+    #[serde(default)]
+    pub folder: String,
     /// Newest-first revisions for a slugged document. Empty for one-off assets.
     pub revisions: Vec<LawyerDocRevision>,
     /// The Service recorded on any revision of this document, one
@@ -390,6 +399,10 @@ pub struct LawyerDetailView {
     #[serde(default)]
     pub testimonial: Option<AdminTestimonialView>,
     pub documents: Vec<LawyerDocRow>,
+    /// Every matter folder a checkout's `documents/` holds, in Finder order,
+    /// so the table lists each one even while it is empty.
+    #[serde(default)]
+    pub document_folders: Vec<String>,
     #[serde(default)]
     pub notations: Vec<ProjectNotationRow>,
     /// The document-upload form's `?error=` flash, set when a re-upload's
@@ -713,9 +726,13 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
                 .flatten()
                 .cloned()
                 .collect();
+            let path = group.current.documents_path();
+            let folder = path.split('/').next().unwrap_or_default().to_string();
             LawyerDocRow {
                 id: group.current.id.to_string(),
                 filename: group.current.filename.unwrap_or_default(),
+                path,
+                folder,
                 visibility: visibility_word(&group.current.visibility),
                 revisions: group
                     .revisions
@@ -812,6 +829,10 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         participations,
         testimonial,
         documents,
+        document_folders: store::document_pointers::MatterFolder::ALL
+            .iter()
+            .map(|folder| folder.as_str().to_string())
+            .collect(),
         notations,
         error,
         asset_kind_choices: asset_kind_choices(),
@@ -920,9 +941,12 @@ fn not_found(
 
 /// The documents table: any `?error=` flash, then either the empty notice or
 /// the grouped table with its Visibility column — the operative revision's
-/// value in the row. A chain with earlier revisions expands into a Previous
-/// versions table giving each one's created-at time and its own visibility.
+/// value in the row. Documents are grouped under the folders of a checkout's
+/// `documents/`, every matter folder listed even while empty. A chain with
+/// earlier revisions expands into a Previous versions table giving each
+/// one's created-at time and its own visibility.
 fn documents_table(view: &LawyerDetailView) -> Element {
+    let groups = document_groups(&view.document_folders, &view.documents);
     rsx! {
         if let Some(error) = view.error.as_ref() {
             p { class: "nav-form-error", role: "alert", "{error}" }
@@ -940,16 +964,23 @@ fn documents_table(view: &LawyerDetailView) -> Element {
                             th { scope: "col", "Download" }
                         }
                     }
-                    tbody {
-                        for doc in view.documents.iter() {
+                    for (folder, docs) in groups.iter() {
+                        tbody {
+                            tr {
+                                th { scope: "colgroup", colspan: "4", "documents/{folder}/" }
+                            }
+                            if docs.is_empty() {
+                                tr { td { colspan: "4", class: "nav-muted", "Empty" } }
+                            }
+                            for (name, doc) in docs.iter() {
                             tr {
                                 td {
                                     if doc.revisions.len() < 2 {
-                                        a { class: "nav-link", href: "/app/projects/{view.code}/documents/{doc.id}", "{doc.filename}" }
+                                        a { class: "nav-link", href: "/app/projects/{view.code}/documents/{doc.id}", "{name}" }
                                     } else {
                                         details {
                                             summary {
-                                                a { class: "nav-link", href: "/app/projects/{view.code}/documents/{doc.id}", "{doc.filename}" }
+                                                a { class: "nav-link", href: "/app/projects/{view.code}/documents/{doc.id}", "{name}" }
                                             }
                                             table { class: "nav-table",
                                                 caption { "Previous versions" }
@@ -997,12 +1028,53 @@ fn documents_table(view: &LawyerDetailView) -> Element {
                                 }
                                 td { a { class: "nav-link", href: "/app/projects/{view.code}/documents/{doc.id}/download", "Download" } }
                             }
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+/// The documents table's folders, in order: every matter folder the view
+/// names, then any other top folder a document sits in (a sibling folder
+/// such as `onboarding`), alphabetically. Each folder's documents are sorted
+/// by path and paired with the path below that folder they are shown as.
+fn document_groups<'a>(
+    folders: &[String],
+    documents: &'a [LawyerDocRow],
+) -> Vec<(String, Vec<(String, &'a LawyerDocRow)>)> {
+    let mut names: Vec<String> = folders.to_vec();
+    let mut others: Vec<String> = documents
+        .iter()
+        .map(|doc| doc.folder.clone())
+        .filter(|folder| !names.contains(folder))
+        .collect();
+    others.sort();
+    others.dedup();
+    names.extend(others);
+    names
+        .into_iter()
+        .map(|folder| {
+            let mut docs: Vec<&LawyerDocRow> =
+                documents.iter().filter(|doc| doc.folder == folder).collect();
+            docs.sort_by(|a, b| a.path.cmp(&b.path));
+            let docs = docs
+                .into_iter()
+                .map(|doc| {
+                    let name = doc
+                        .path
+                        .strip_prefix(&format!("{folder}/"))
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or(&doc.filename)
+                        .to_string();
+                    (name, doc)
+                })
+                .collect();
+            (folder, docs)
+        })
+        .collect()
 }
 
 /// The admin-only testimonial entry card. Its copy makes the attribution
@@ -1852,6 +1924,8 @@ mod tests {
             id: "00000000-0000-0000-0000-0000000000aa".to_string(),
             filename: "memo.pdf".to_string(),
             visibility: "internal".to_string(),
+            path: String::new(),
+            folder: String::new(),
             revisions: Vec::new(),
             service: Vec::new(),
         }]);
@@ -1864,6 +1938,8 @@ mod tests {
             id: "00000000-0000-0000-0000-0000000000aa".to_string(),
             filename: "retainer.pdf".to_string(),
             visibility: "shared".to_string(),
+            path: String::new(),
+            folder: String::new(),
             revisions: Vec::new(),
             service: Vec::new(),
         }]);
@@ -1878,6 +1954,8 @@ mod tests {
             id: "a".into(),
             filename: "motion.pdf".into(),
             visibility: "internal".into(),
+            path: String::new(),
+            folder: String::new(),
             revisions: Vec::new(),
             service: vec![
                 "Served by mail on 2026-03-05 on Example Counsel, counsel for Defendant (D.I. 12)"
@@ -1892,6 +1970,8 @@ mod tests {
             id: "b".into(),
             filename: "letter.pdf".into(),
             visibility: "internal".into(),
+            path: String::new(),
+            folder: String::new(),
             revisions: Vec::new(),
             service: Vec::new(),
         }]);
@@ -1906,6 +1986,8 @@ mod tests {
             id: "00000000-0000-0000-0000-0000000000aa".to_string(),
             filename: "inbound-attachment.pdf".to_string(),
             visibility: "internal".to_string(),
+            path: String::new(),
+            folder: String::new(),
             revisions: Vec::new(),
             service: Vec::new(),
         }]);
@@ -2037,6 +2119,8 @@ mod tests {
             filename: "agreement.pdf".to_string(),
             // The operative (newest) revision is shared…
             visibility: "shared".to_string(),
+            path: String::new(),
+            folder: String::new(),
             revisions: vec![
                 LawyerDocRevision {
                     id: "00000000-0000-0000-0000-0000000000aa".to_string(),
@@ -2070,6 +2154,8 @@ mod tests {
             id: "00000000-0000-0000-0000-0000000000aa".to_string(),
             filename: "agreement.pdf".to_string(),
             visibility: "internal".to_string(),
+            path: String::new(),
+            folder: String::new(),
             revisions: vec![LawyerDocRevision {
                 id: "00000000-0000-0000-0000-0000000000aa".to_string(),
                 filename: "agreement.pdf".to_string(),
@@ -2080,5 +2166,33 @@ mod tests {
         }]);
         assert!(html.contains("1 revision"), "{html}");
         assert!(!html.contains("Previous versions"), "{html}");
+    }
+
+    #[test]
+    fn documents_sit_under_their_documents_folders_with_every_matter_folder_listed() {
+        let row = |id: &str, path: &str| LawyerDocRow {
+            id: id.to_string(),
+            filename: path.rsplit('/').next().unwrap().to_string(),
+            visibility: "internal".to_string(),
+            path: path.to_string(),
+            folder: path.split('/').next().unwrap().to_string(),
+            revisions: Vec::new(),
+            service: Vec::new(),
+        };
+        let view = LawyerDetailView {
+            document_folders: vec!["Docket Filings".to_string(), "Work Product".to_string()],
+            ..view_with_documents(vec![
+                row("00000000-0000-0000-0000-0000000000a1", "onboarding/engagement.pdf"),
+                row("00000000-0000-0000-0000-0000000000a2", "Docket Filings/pleadings/motion.pdf"),
+            ])
+        };
+        let html = dioxus_ssr::render_element(documents_table(&view));
+        let docket = html.find("documents/Docket Filings/").expect("docket folder");
+        let work = html.find("documents/Work Product/").expect("work product folder");
+        let onboarding = html.find("documents/onboarding/").expect("sibling folder");
+        assert!(docket < work && work < onboarding, "{html}");
+        assert!(html.contains(">pleadings/motion.pdf<"), "{html}");
+        assert!(html.contains(">engagement.pdf<"), "{html}");
+        assert!(html.contains("Empty"), "the empty matter folder is still listed: {html}");
     }
 }

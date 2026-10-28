@@ -24,9 +24,7 @@ use store::document_pointers::{DocumentPointer, MatterFolder};
 
 use crate::document_sync::{DOCUMENT_DIRECTORY, POINTER_DIRECTORY};
 
-/// The folders below `documents/` that keep their bytes at the slug itself.
-pub(crate) const SIBLING_FOLDERS: &[&str] =
-    &["onboarding", "offboarding", "invoices", "cases", "rules"];
+pub(crate) use store::document_pointers::SIBLING_FOLDERS;
 
 fn first_component(relative: &Path) -> Option<&str> {
     relative
