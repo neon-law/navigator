@@ -1680,6 +1680,11 @@ mod tests {
     /// was gone. Applying merges them and the index comes back.
     #[tokio::test]
     async fn applying_merges_split_visitor_buckets_and_restores_the_unique_index() {
+        #[derive(SurrealValue)]
+        struct Bucket {
+            route_pattern: String,
+            visits: i64,
+        }
         let db = unmigrated().await;
         apply(&db).await.unwrap();
         db.query("REMOVE INDEX visitor_route_count_bucket ON visitor_route_count")
@@ -1701,11 +1706,6 @@ mod tests {
 
         apply(&db).await.unwrap();
 
-        #[derive(SurrealValue)]
-        struct Bucket {
-            route_pattern: String,
-            visits: i64,
-        }
         let mut buckets: Vec<(String, i64)> = db
             .query("SELECT route_pattern, visits FROM visitor_route_count")
             .await
