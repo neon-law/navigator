@@ -449,11 +449,13 @@ async fn a_document_token_reads_only_its_project_surface_coordinates() {
             "https://notion.example/sample-page"
         );
         assert_eq!(body["dangling_dri_person_ids"], serde_json::json!([]));
+        assert_eq!(body["calendar_id"], serde_json::Value::Null);
         let mut keys: Vec<_> = body.as_object().unwrap().keys().cloned().collect();
         keys.sort();
         assert_eq!(
             keys,
             vec![
+                "calendar_id".to_string(),
                 "client_dri".to_string(),
                 "code".to_string(),
                 "dangling_dri_person_ids".to_string(),
