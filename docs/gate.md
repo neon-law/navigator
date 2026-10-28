@@ -17,6 +17,17 @@ It takes no path. The gate runs on a whole repository, and it finds that reposit
 beside it in the directory it was started from; anywhere else it refuses (exit `2`) rather than reporting a clean scan
 over the files it never read. Run it from the root.
 
+A Project repository's top-level `version:` in `navigator.yaml` selects the exact gate release. When the installed CLI
+is not that published release, it runs the pinned release before checking or fixing content, including under
+`--tracked-files`. It forwards the gate flags, output, and exit status. Local checks therefore use the same rules as the
+pinned CI gate.
+
+The CLI downloads a missing release from the public Navigator release, verifies its archive checksum and executable
+version, and caches it under `$XDG_CACHE_HOME/navigator/releases/` (or `$HOME/.cache/navigator/releases/`). Later runs
+can use that cached executable offline. An unavailable release, invalid pin, or wrong cached version stops the gate
+before content changes. Remove the named cached executable and retry if its version is wrong. A repository without a pin
+continues to use the installed CLI's rules; `navigator validate` also uses the installed rules.
+
 `--check` compares committed document pointers with the live record. The host and Project code come from
 `navigator.yaml`. It moves a legacy layout's pointers from `documents/` to `blobs/` (rule `Y014`), rewrites a drifted
 pointer, and writes a missing pointer under `blobs/`. It never writes to the live site. A missing or corrupt object

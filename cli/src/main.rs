@@ -61,6 +61,7 @@ mod video_prepare;
 use cli::import;
 use devx::brand::BrandCmd;
 use devx::{DnsCmd, GcpCmd, RestateCmd, StagingAction, WorktreeEnvCmd};
+use projects::pinned_gate::GateMode;
 use projects::repository::is_project_repository;
 
 /// The version `navigator --version` / `-V` reports.
@@ -1290,6 +1291,9 @@ enum ProjectsCmd {
     /// blockquote spacing, S102 paragraph packing) are applied in place; what
     /// is left needs a human. Every Project repository's CI runs this command.
     ///
+    /// A Project uses the exact release pinned in `navigator.yaml`. A missing
+    /// release is downloaded, verified, and cached before any content check or fix.
+    ///
     /// `--check` (LAW-62) runs only the live document check, comparing
     /// committed pointers with the live record and checking transcript source
     /// revisions, and skips every offline pass above entirely — a separate CI
@@ -1298,8 +1302,9 @@ enum ProjectsCmd {
     Gate {
         /// Run only `Y024`: every git-tracked or stageable file must be
         /// Markdown or YAML, or one of the canonical files at its release
-        /// bytes. Writes nothing and reads no network; each offending path
-        /// is named. The shared workflow's required `ci` job runs this.
+        /// bytes. Writes no repository content; each offending path is named.
+        /// Downloads the pinned release if it is not cached. The shared
+        /// workflow's required `ci` job runs this.
         #[arg(long, conflicts_with_all = ["check", "deep", "ci"])]
         tracked_files: bool,
         /// Never writes to the live site.
@@ -1320,8 +1325,8 @@ enum ProjectsCmd {
         /// downloaded are reported and pass.
         #[arg(long, requires = "check")]
         deep: bool,
-        /// Hold the run to what CI can prove. Nothing is written, so a file the
-        /// gate would have fixed is a finding rather than a silent rewrite of a
+        /// Hold the run to what CI can prove. No repository content is written,
+        /// so a file the gate would have fixed is a finding rather than a silent rewrite of a
         /// checkout about to be discarded. On a push to
         /// `main` (or a pull request merge ref) the live-status door opens,
         /// exchanging GitHub Actions OIDC at `POST /auth/ci/document-token` to
@@ -5419,10 +5424,10 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
         ProjectsCmd::Gate {
             tracked_files: true,
             ..
-        } => run_tracked_files_gate(),
+        } => projects::pinned_gate::dispatch(GateMode::TrackedFiles).await,
         ProjectsCmd::Gate {
             ci, check, deep, ..
-        } => run_gate(ci, check, deep).await,
+        } => projects::pinned_gate::dispatch(GateMode::Content { ci, check, deep }).await,
         ProjectsCmd::Preview { port } => projects::preview::run(port).await,
         ProjectsCmd::Pages { action } => projects::pages_init::run(action).await,
         ProjectsCmd::Setup {
