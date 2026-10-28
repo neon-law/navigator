@@ -152,7 +152,9 @@ impl Asset {
             .unwrap_or_default();
         crate::document_pointers::documents_path(
             name,
-            crate::document_pointers::MatterFolder::for_kind(self.kind.as_deref().unwrap_or_default()),
+            crate::document_pointers::MatterFolder::for_kind(
+                self.kind.as_deref().unwrap_or_default(),
+            ),
         )
     }
 }

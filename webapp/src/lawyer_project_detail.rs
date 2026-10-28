@@ -1057,8 +1057,10 @@ fn document_groups<'a>(
     names
         .into_iter()
         .map(|folder| {
-            let mut docs: Vec<&LawyerDocRow> =
-                documents.iter().filter(|doc| doc.folder == folder).collect();
+            let mut docs: Vec<&LawyerDocRow> = documents
+                .iter()
+                .filter(|doc| doc.folder == folder)
+                .collect();
             docs.sort_by(|a, b| a.path.cmp(&b.path));
             let docs = docs
                 .into_iter()
@@ -2182,17 +2184,30 @@ mod tests {
         let view = LawyerDetailView {
             document_folders: vec!["Docket Filings".to_string(), "Work Product".to_string()],
             ..view_with_documents(vec![
-                row("00000000-0000-0000-0000-0000000000a1", "onboarding/engagement.pdf"),
-                row("00000000-0000-0000-0000-0000000000a2", "Docket Filings/pleadings/motion.pdf"),
+                row(
+                    "00000000-0000-0000-0000-0000000000a1",
+                    "onboarding/engagement.pdf",
+                ),
+                row(
+                    "00000000-0000-0000-0000-0000000000a2",
+                    "Docket Filings/pleadings/motion.pdf",
+                ),
             ])
         };
         let html = dioxus_ssr::render_element(documents_table(&view));
-        let docket = html.find("documents/Docket Filings/").expect("docket folder");
-        let work = html.find("documents/Work Product/").expect("work product folder");
+        let docket = html
+            .find("documents/Docket Filings/")
+            .expect("docket folder");
+        let work = html
+            .find("documents/Work Product/")
+            .expect("work product folder");
         let onboarding = html.find("documents/onboarding/").expect("sibling folder");
         assert!(docket < work && work < onboarding, "{html}");
         assert!(html.contains(">pleadings/motion.pdf<"), "{html}");
         assert!(html.contains(">engagement.pdf<"), "{html}");
-        assert!(html.contains("Empty"), "the empty matter folder is still listed: {html}");
+        assert!(
+            html.contains("Empty"),
+            "the empty matter folder is still listed: {html}"
+        );
     }
 }

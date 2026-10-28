@@ -1435,9 +1435,15 @@ mod render_tests {
             ],
             ..ProjectDetailView::default()
         });
-        let docket = html.find("documents/Docket Filings/").expect("docket folder");
-        let work = html.find("documents/Work Product/").expect("work product folder");
-        let onboarding = html.find("documents/onboarding/").expect("onboarding folder");
+        let docket = html
+            .find("documents/Docket Filings/")
+            .expect("docket folder");
+        let work = html
+            .find("documents/Work Product/")
+            .expect("work product folder");
+        let onboarding = html
+            .find("documents/onboarding/")
+            .expect("onboarding folder");
         assert!(docket < work && work < onboarding, "{html}");
         assert!(html.contains("<td>pleadings/complaint.pdf</td>"), "{html}");
         assert!(!html.contains("documents/Discovery/"), "{html}");
