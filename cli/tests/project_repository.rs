@@ -116,6 +116,7 @@ const SYNCED_SKILL_NAMES: &[&str] = &[
     "record-search",
     "working-notes",
     "pull-changes",
+    "word-editing",
 ];
 
 fn workspace_root() -> PathBuf {

@@ -302,6 +302,8 @@ const FORBIDDEN_DOCUMENT_EXTENSIONS: &[&str] = &["doc", "docx", "odt", "pdf"];
 /// `opposing-communication-review` gives every Project the recipient-side
 /// review discipline for opposing-party correspondence. `pull-changes` is the
 /// one meaning of "pull changes": rebase the branch onto the latest `origin/main`.
+/// `word-editing` (LAW-229) carries a lawyer's edits in local Word back into
+/// the notation template, with the template kept the source of truth.
 pub(crate) const SYNCED_SKILLS: &[(&str, &str)] = &[
     (
         "council",
@@ -362,6 +364,10 @@ pub(crate) const SYNCED_SKILLS: &[(&str, &str)] = &[
     (
         "pull-changes",
         include_str!("../../../.agents/skills/pull-changes/SKILL.md"),
+    ),
+    (
+        "word-editing",
+        include_str!("../../../.agents/skills/word-editing/SKILL.md"),
     ),
 ];
 
