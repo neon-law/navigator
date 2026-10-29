@@ -1659,7 +1659,7 @@ const DIGEST_REF: &str =
 /// Runs `scripts/cosign-sign.sh` against a fake `cosign` that fails its first
 /// `failures` calls with the 26.10.29 Rekor conflict. Returns the exit status
 /// and how many times the fake was called.
-fn run_cosign_sign(reference: &str, failures: u32) -> (std::process::ExitStatus, u32) {
+fn run_cosign_sign(reference: &str, failures: usize) -> (std::process::ExitStatus, usize) {
     use std::os::unix::fs::PermissionsExt;
     let scratch = tempfile::tempdir().expect("scratch dir");
     let calls = scratch.path().join("calls");
@@ -1691,9 +1691,7 @@ fn run_cosign_sign(reference: &str, failures: u32) -> (std::process::ExitStatus,
         .output()
         .expect("run cosign-sign.sh")
         .status;
-    let count = std::fs::read_to_string(&calls)
-        .map(|text| text.lines().count() as u32)
-        .unwrap_or(0);
+    let count = std::fs::read_to_string(&calls).map_or(0, |text| text.lines().count());
     (status, count)
 }
 
