@@ -420,8 +420,11 @@ async fn the_admin_alias_admits_and_refuses_exactly_as_the_canonical_listing_doe
 #[tokio::test]
 async fn the_alias_is_answered_the_same_on_every_brand_host() {
     let app = app().await;
+    // A moved brand's hosts 301 every path to the brand it moved to before
+    // any route answers; `server/tests/routes.rs` pins that redirect.
     let mut hosts: Vec<String> = views::brand::live_brand_hosts()
         .into_iter()
+        .filter(|(key, _)| key.moved_to().is_none())
         .map(|(_, host)| host.to_string())
         .collect();
     hosts.push("unregistered.example".to_string());
