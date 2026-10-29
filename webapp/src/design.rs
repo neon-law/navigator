@@ -451,8 +451,7 @@ pub fn DesignGallery() -> Element {
             ConfirmDeleteShowcase {}
             PricingShowcase {}
             TestimonialShowcase {}
-            AvatarShowcase {}
-            AsterShowcase {}
+            IdentityShowcase {}
             DisclaimerShowcase {}
             ClientDriViewShowcase {}
             SampleMattersShowcase {}
@@ -726,6 +725,8 @@ fn NavigatorChromeShowcase() -> Element {
 pub struct SocialBranding {
     pub site_name: String,
     pub image: String,
+    /// The canonical board resolved through the same public asset lane as Vesta.
+    pub aster_image: String,
     /// The resolved brand's tokens stylesheet href, so `/design` paints each
     /// swatch from the host's own palette rather than always the default's —
     /// the whole point of the gallery being able to show a second brand's
@@ -743,6 +744,7 @@ pub async fn design_social_branding() -> Result<SocialBranding, ServerFnError> {
     Ok(SocialBranding {
         site_name: views::brand::FIRM_BRAND.site_name.to_string(),
         image: views::assets::absolute_url(views::brand::FIRM_BRAND.social_image),
+        aster_image: views::assets::asset_url(views::assets::ASTER_BOARD_KEY),
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
     })
 }
@@ -916,10 +918,9 @@ fn TestimonialShowcase() -> Element {
     }
 }
 
-/// The avatar (image, or generated-initials fallback) used by the profile menu
-/// and the admin Person edit page.
+/// Identity illustrations: profile avatars and the canonical Aster character.
 #[component]
-fn AvatarShowcase() -> Element {
+fn IdentityShowcase() -> Element {
     rsx! {
         section {
             h2 { "Avatar" }
@@ -943,21 +944,16 @@ fn AvatarShowcase() -> Element {
                 }
             }
         }
+        AsterShowcase {}
     }
-}
-
-/// Resolve the same public board used by Vesta for the component gallery.
-#[server]
-pub async fn design_aster_source() -> Result<String, ServerFnError> {
-    Ok(views::assets::asset_url(views::assets::ASTER_BOARD_KEY))
 }
 
 /// The canonical character component, supplied through the public asset resolver.
 #[component]
 fn AsterShowcase() -> Element {
-    let resource = use_server_future(design_aster_source)?;
+    let resource = use_server_future(design_social_branding)?;
     let source = match &*resource.read() {
-        Some(Ok(source)) => source.clone(),
+        Some(Ok(branding)) => branding.aster_image.clone(),
         _ => return rsx! {},
     };
     rsx! {
