@@ -1,4 +1,4 @@
-//! Asset drift checks, not a perceptual certification of the web translation.
+//! Pin the approved original pixels; the website frames them without redrawing Aster.
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -11,17 +11,10 @@ struct Canon {
     name: String,
     reference_url: String,
     reference_sha256: String,
+    asset_key: String,
+    width: u32,
+    height: u32,
     palette: Vec<String>,
-    asset: Vec<Asset>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Asset {
-    path: String,
-    sha256: String,
-    visual_status: String,
-    required_groups: Vec<String>,
 }
 
 fn directory() -> PathBuf {
@@ -44,6 +37,8 @@ fn approved_board_and_palette_remain_the_authority() {
         canon.reference_url,
         "https://github.com/user-attachments/assets/95033122-1aa8-415e-bcb4-11d1709e81cd"
     );
+    assert_eq!(canon.asset_key, views::assets::ASTER_BOARD_KEY);
+    assert_eq!((canon.width, canon.height), (1774, 887));
     assert_eq!(
         canon.palette,
         ["#E9B949", "#236B70", "#D9826B", "#182A3A", "#F5EEDF"]
@@ -51,73 +46,36 @@ fn approved_board_and_palette_remain_the_authority() {
 }
 
 #[test]
-fn every_character_asset_is_registered_and_unchanged() {
-    let canon = canon();
-    assert_eq!(
-        canon.asset.len(),
-        1,
-        "Use one master; review new variants against the board"
-    );
-    assert_eq!(canon.asset[0].path, "aster.svg");
-    let mut files: Vec<_> = std::fs::read_dir(directory())
+fn there_are_no_separately_redrawn_character_assets() {
+    let files: Vec<_> = std::fs::read_dir(directory())
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    files.sort();
     assert_eq!(
         files,
-        ["CANON.toml", "aster.svg"],
-        "Unregistered character asset"
+        ["CANON.toml"],
+        "Use the approved board rather than an unreviewed redraw"
     );
-    for asset in canon.asset {
-        let bytes = std::fs::read(directory().join(&asset.path)).unwrap();
-        let mut checksum = String::with_capacity(64);
-        for byte in Sha256::digest(bytes) {
-            write!(&mut checksum, "{byte:02x}").unwrap();
-        }
-        assert_eq!(checksum, asset.sha256,
-            "Aster artwork changed: compare it against the canonical board before updating the checksum");
-        // This is intentionally not an approval of the existing simplified redraw.
-        assert_eq!(asset.visual_status, "simplified_translation_needs_review",
-            "Automated drift checks cannot grant visual approval; record a human comparison before changing this guard");
-    }
 }
 
+/// Public raster assets stay outside Git. Run this after restoring or publishing the original asset.
 #[test]
-fn the_shared_master_keeps_both_hands_both_legs_and_accessories() {
+#[ignore = "requires the approved PNG restored through the public asset lane"]
+fn restored_board_is_byte_for_byte_the_user_approved_attachment() {
     let canon = canon();
-    let asset = &canon.asset[0];
-    let mut groups = asset.required_groups.clone();
-    groups.sort();
-    assert_eq!(
-        groups,
-        [
-            "aster",
-            "body",
-            "brush",
-            "face",
-            "left-arm",
-            "left-hand",
-            "left-leg",
-            "right-arm",
-            "right-hand",
-            "right-leg",
-            "satchel",
-            "scarf"
-        ]
-    );
-    let svg = std::fs::read_to_string(directory().join(&asset.path)).unwrap();
-    for group in groups {
-        assert_eq!(
-            svg.matches(&format!("id=\"{group}\"")).count(),
-            1,
-            "Missing or duplicated {group}"
-        );
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("public")
+        .join(&canon.asset_key);
+    let bytes =
+        std::fs::read(path).expect("restore the original canonical board before verifying it");
+    let mut checksum = String::with_capacity(64);
+    for byte in Sha256::digest(&bytes) {
+        write!(&mut checksum, "{byte:02x}").unwrap();
     }
-    assert!(svg.contains(&format!("<title>{}</title>", canon.name)));
-    assert!(
-        !svg.contains("<image"),
-        "Keep the master editable rather than embedding a different character"
+    assert_eq!(
+        checksum, canon.reference_sha256,
+        "Aster's original eyes, texture and artwork must remain unchanged"
     );
-    assert!(!svg.contains("<script"));
+    let image = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((image.width(), image.height()), (canon.width, canon.height));
 }

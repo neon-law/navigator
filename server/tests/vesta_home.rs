@@ -178,11 +178,12 @@ async fn vesta_leads_with_tailored_planning_and_explains_nevada_trusts() {
 }
 
 #[tokio::test]
-async fn vesta_services_describe_tailored_planning_without_a_starting_price() {
+async fn vesta_services_describe_tailored_planning_with_a_starting_price() {
     let html = preview(BrandKey::Vesta, "/services").await;
     assert!(html.contains("We listen to what matters to you"));
-    assert!(html.contains("Basic estate plans for one person include a will"));
-    assert!(!html.contains("$1,111"));
+    assert!(html.contains("Basic estate plans for one person start from $1,111"));
+    let home = preview(BrandKey::Vesta, "/").await;
+    assert!(home.contains("From $1,111"));
     assert!(html.contains("Nicholas Shook may accept appointment"));
     assert!(html.contains("qualified Nevada trustee"));
     assert!(html.contains("Life-insurance trusts"));
@@ -330,6 +331,9 @@ async fn vesta_cosmos_keeps_rotating_planets_and_reflection_available_without_sc
         "vesta-orbit--inner",
         "An imagined sky.",
         "North Node",
+        "Mercury",
+        "Neptune",
+        "Chiron",
         "Venus",
         "Mars",
         "Jupiter",
@@ -340,8 +344,8 @@ async fn vesta_cosmos_keeps_rotating_planets_and_reflection_available_without_sc
     }
     assert!(!html.contains("vesta-pause"));
     assert!(!html.contains("Still the cosmos"));
-    assert_eq!(html.matches("class=\"vesta-theme\"").count(), 5);
-    assert_eq!(html.matches("name=\"vesta-reflections\"").count(), 5);
+    assert_eq!(html.matches("class=\"vesta-theme\"").count(), 8);
+    assert_eq!(html.matches("name=\"vesta-reflections\"").count(), 8);
     assert!(html.find("vesta-cosmos").unwrap() < html.find("vesta-offer").unwrap());
 }
 
@@ -349,18 +353,16 @@ async fn vesta_cosmos_keeps_rotating_planets_and_reflection_available_without_sc
 async fn aster_illustrates_vesta_without_replacing_the_brand_or_optional_reflection() {
     let html = preview(BrandKey::Vesta, "/").await;
     assert!(html.contains("Aster the Astrocartographer"));
-    // Every placement shares one character asset, including the shared footer.
-    assert_eq!(
-        html.matches("src=\"/public/brand/aster/aster.svg\"")
-            .count(),
-        5
-    );
-    let svg = std::fs::read_to_string("public/brand/aster/aster.svg").unwrap();
-    for layer in ["body", "face", "scarf", "satchel", "brush"] {
-        assert!(svg.contains(&format!("id=\"{layer}\"")), "{layer}");
+    // SVG viewports frame the exact approved raster, retaining its original eyes and texture.
+    let source = views::assets::asset_url(views::assets::ASTER_BOARD_KEY);
+    assert_eq!(html.matches(&format!("href=\"{source}\"")).count(), 5);
+    for pose in ["standing", "explore", "illustrate", "guide"] {
+        assert!(
+            html.contains(&format!("data-aster-pose=\"{pose}\"")),
+            "{pose}"
+        );
     }
-    assert!(!svg.contains("<script"));
-    assert!(!svg.contains("<image"));
+    assert!(!html.contains("/public/brand/aster/aster.svg"));
     assert!(html.contains("/public/brand/vesta.svg"));
     assert!(html.contains("Readings are optional personal reflection"));
     assert!(!preview(BrandKey::LawyerShook, "/")
@@ -368,5 +370,5 @@ async fn aster_illustrates_vesta_without_replacing_the_brand_or_optional_reflect
         .contains("/public/brand/aster/"));
     let services = preview(BrandKey::Vesta, "/services").await;
     assert!(services.contains("public-brand-companion"));
-    assert!(services.contains("/public/brand/aster/aster.svg"));
+    assert!(services.contains(&source));
 }

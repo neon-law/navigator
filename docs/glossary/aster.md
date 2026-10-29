@@ -11,5 +11,6 @@ Aster introduces the practice’s optional reflection on places, relationships, 
 [Astrocartography](astrocartography.md).
 
 The character is a public illustration, not a Person, legal adviser, or calculated astrology chart. Every website
-placement uses the same editable master, `server/public/brand/aster/aster.svg`. Its limb, face, scarf, satchel and brush
-groups support pose changes without redrawing the character. See the [character guide](../aster-character.md).
+placement frames the same original design board through an SVG viewport, preserving its painted eyes and texture. The
+approved board is a public asset rather than a separately redrawn vector character. See the [character
+guide](../aster-character.md).

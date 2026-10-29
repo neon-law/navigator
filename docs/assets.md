@@ -39,6 +39,14 @@ key when replacing the main photograph so existing home-page references continue
 both staging and production through `navigator site asset upload`; its byte-for-byte readback verifies each published
 copy.
 
+## Aster artwork
+
+The user-approved Aster design board lives at `img/vesta-aster/aster-canon-7d379560.png`. Its SHA-256 and dimensions are
+pinned in `server/public/brand/aster/CANON.toml`. Every character placement frames the original PNG through an inline
+SVG viewport; the painted eyes, limbs and texture remain unchanged. `views::assets::ASTER_BOARD_KEY` joins the public
+asset inventory for restoration, publication verification and orphan protection. Publish the original PNG through
+`navigator site asset upload`, and run the explicit byte check in the [character guide](aster-character.md).
+
 ## Architectural photographs
 
 Five user-supplied photographs live under `img/architecture/`: `civic-building.jpg`, `library-tower.jpg`,

@@ -92,6 +92,9 @@ pub const WIDTHS: [u32; 3] = [400, 800, 1200];
 /// `srcset` support, and the resource the preload scanner fetches).
 pub const FALLBACK_WIDTH: u32 = 1200;
 
+/// User-approved Aster board. Every pose frames these same original pixels.
+pub const ASTER_BOARD_KEY: &str = "img/vesta-aster/aster-canon-7d379560.png";
+
 /// Approved `CyberInjuryLaw` campaign assets, restored through the public asset lane.
 pub const CYBER_INJURY_HERO_KEY: &str = "img/cyber-injury-law/cyber-warrior-ferris.png";
 /// Flat subway-ad artwork for the `CyberInjuryLaw` campaign.

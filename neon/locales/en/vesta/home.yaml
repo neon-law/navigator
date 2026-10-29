@@ -14,6 +14,7 @@ estate:
   eyebrow: Vesta Estate Planning
   process_link: Explore your estate plan
   plan_label: Your estate plan
+  price: From $1,111
   plan_description: For a basic estate plan for one person, shaped around your life.
   features:
     - A get-to-know-you session with an optional astrology reading
@@ -86,6 +87,13 @@ estate:
         Use the North Node as a prompt to reflect on direction and possibility.
         What do you still hope to nurture, and what would you like to carry
         forward through the people and causes you care about?
+    - - "☿"
+      - Mercury
+      - What do you want them to understand?
+      - >-
+        Reflect on the words, stories, and guidance you want to share.
+        What should the people you trust know about your wishes?
+        We help you put your choices into clear planning documents.
     - - "♀"
       - Venus
       - Who is in your orbit?
@@ -115,6 +123,21 @@ estate:
         invite a conversation about places that matter to you. An ephemeris
         records celestial positions; your life gives those reflections meaning.
         We bring the conversation back to your wishes and the documents that hold them.
+    - - "♆"
+      - Neptune
+      - What gives your wishes meaning?
+      - >-
+        Make room for imagination, spiritual beliefs, and the hopes you hold
+        for those you love. Tell us what matters to you so your plan can
+        reflect your values and the care you want to receive.
+    - - "⚷"
+      - Chiron
+      - Where would a little care help?
+      - >-
+        Consider the experiences that have shaped how you care for yourself
+        and others. You can share as much or as little as you wish.
+        We bring the conversation back to the support and choices you want
+        your estate plan to hold.
   probate_label: Probate
   probate_heading: Help after a loss.
   probate_body: >-
