@@ -3289,6 +3289,9 @@ enum EmailSummaryCmd {
 #[derive(Subcommand)]
 enum ForgejoPolicyCmd {
     /// Run one repository-scoped Actions job in a disposable, network-isolated Kubernetes pod.
+    #[command(
+        after_help = "Run only from a trusted operator host. FORGEJO_TOKEN must never enter a pull-request-controlled job."
+    )]
     RunnerOnce(ForgejoRunnerArgs),
     /// Back up a local mirror and prove every ref restores. Excludes LFS and forge metadata.
     Bundle {
