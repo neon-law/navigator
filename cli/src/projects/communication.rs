@@ -1,6 +1,6 @@
 //! `navigator project communication create|list` — log a call as an
 //! internal-note [Communication](../../../docs/glossary/communication.md),
-//! or an email that confirms a call's agreements, and read the firm view of
+//! or an email with its source and receipt relation, and read the firm view of
 //! the log back.
 //!
 //! Communications stay server-only: no pointer is written under
@@ -103,6 +103,8 @@ pub struct NewCommunication {
     pub meet_and_confer: Option<String>,
     pub agreements: Vec<String>,
     pub confirms: Option<Uuid>,
+    pub acknowledges: Option<Uuid>,
+    pub source_ref: Option<String>,
     pub client_visible: bool,
     pub subject: Option<String>,
 }
@@ -120,6 +122,15 @@ fn create_body(new: &NewCommunication) -> Result<Value> {
         "at": new.at,
         "body": body,
     });
+    if let Some(role) = &new.role {
+        request["role"] = json!(role);
+    }
+    if let Some(source_ref) = &new.source_ref {
+        request["source_ref"] = json!(source_ref);
+    }
+    if let Some(acknowledges) = new.acknowledges {
+        request["acknowledges"] = json!(acknowledges);
+    }
     if new.channel == "call" {
         request["role"] = json!(new.role.clone().unwrap_or_else(|| "other".to_string()));
         request["recorded"] = json!(new.recorded);
@@ -222,5 +233,25 @@ mod tests {
             ..NewCommunication::default()
         })
         .is_err());
+    }
+    #[test]
+    fn email_request_preserves_source_role_and_receipt_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = dir.path().join("receipt.md");
+        std::fs::write(&body, "Receipt acknowledged.").unwrap();
+        let target = uuid::Uuid::now_v7();
+        let email = create_body(&NewCommunication {
+            channel: "email_inbound".into(),
+            direction: "inbound".into(),
+            role: Some("opposing_counsel".into()),
+            source_ref: Some("gmail:synthetic/receipt".into()),
+            acknowledges: Some(target),
+            body_file: body,
+            ..NewCommunication::default()
+        })
+        .unwrap();
+        assert_eq!(email["role"], "opposing_counsel");
+        assert_eq!(email["source_ref"], "gmail:synthetic/receipt");
+        assert_eq!(email["acknowledges"], target.to_string());
     }
 }

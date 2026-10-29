@@ -2243,3 +2243,8 @@ ALTER TABLE project_deadlines ADD COLUMN description TEXT;
 -- A Project's shared Google Calendar id and its client booking link. NULL until recorded.
 ALTER TABLE project ADD COLUMN calendar_id TEXT;
 ALTER TABLE project ADD COLUMN booking_url TEXT;
+
+-- Migration: 20261029010000_add_communication_receipts.sql
+ALTER TABLE communication ADD COLUMN counterparty_role TEXT CHECK (counterparty_role IN ('opposing_counsel', 'client', 'court', 'other'));
+ALTER TABLE communication ADD COLUMN acknowledges UUID REFERENCES communication(id) ON DELETE SET NULL;
+CREATE INDEX communication_acknowledges ON communication (project_id, acknowledges);

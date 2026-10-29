@@ -514,6 +514,7 @@
         "why": "string"
       },
       "communication": {
+        "acknowledges": "option<record<communication>>",
         "agreements": "any",
         "asset_id": "option<record<asset>>",
         "author_person_id": "option<record<person>>",
@@ -521,6 +522,7 @@
         "call": "any",
         "channel": "string",
         "counterparty": "option<string>",
+        "counterparty_role": "option<string>",
         "direction": "string",
         "id": "record",
         "inserted_at": "datetime",
@@ -1973,6 +1975,7 @@
       },
       "communication": {
         "columns": {
+          "acknowledges": "UUID",
           "agreements": "JSONB",
           "asset_id": "UUID",
           "author_person_id": "UUID",
@@ -1980,6 +1983,7 @@
           "call": "JSONB",
           "channel": "TEXT",
           "counterparty": "TEXT",
+          "counterparty_role": "TEXT",
           "direction": "TEXT",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
@@ -1990,6 +1994,10 @@
           "updated_at": "TIMESTAMPTZ"
         },
         "foreign_keys": [
+          [
+            "acknowledges",
+            "communication"
+          ],
           [
             "asset_id",
             "asset"
@@ -2006,6 +2014,7 @@
         "name": "communication",
         "references": [
           "asset",
+          "communication",
           "person",
           "project"
         ]

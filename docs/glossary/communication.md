@@ -16,5 +16,11 @@ always internal. `navigator project communication create|list` writes and reads 
 /app/api/projects/{id}/communications`, at Lawyer tier and scoped to a participant. Communications stay server-only: a
 Project repository carries no pointer for one.
 
+An email may record the counterparty's role and an external source message identifier (`--source-ref`). Replaying the
+same channel and source identifier returns the existing Communication in that Project. An inbound email may acknowledge
+receipt of an outbound email in the same Project through `--acknowledges`. The sent Communication's
+`receipt_acknowledged_at` in the conversation list is the earliest linked inbound acknowledgment time, distinct from its
+sent time. This records an acknowledgment; it does not independently verify delivery with an email provider.
+
 - Schema and queries: [`store::communications`](../../store/src/communications.rs) —
   [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)

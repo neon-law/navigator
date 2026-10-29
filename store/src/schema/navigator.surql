@@ -2430,6 +2430,9 @@ DEFINE FIELD OVERWRITE subject ON communication TYPE option<string>;
 -- arrived over a transport or was typed into the portal composer.
 DEFINE FIELD OVERWRITE body ON communication TYPE string;
 DEFINE FIELD OVERWRITE source_ref ON communication TYPE option<string>;
+DEFINE FIELD OVERWRITE counterparty_role ON communication TYPE option<string>
+    ASSERT $value = NONE OR $value IN ['opposing_counsel', 'client', 'court', 'other'];
+DEFINE FIELD OVERWRITE acknowledges ON communication TYPE option<record<communication>>;
 DEFINE FIELD OVERWRITE asset_id ON communication TYPE option<record<asset>>;
 -- When the message actually happened, distinct from when the row landed.
 DEFINE FIELD OVERWRITE occurred_at ON communication TYPE string;

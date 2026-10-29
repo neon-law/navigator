@@ -25,6 +25,8 @@ pub(super) struct CommunicationImage {
     subject: Option<String>,
     body: String,
     source_ref: Option<String>,
+    counterparty_role: Option<String>,
+    acknowledges: Option<Uuid>,
     asset_id: Option<Uuid>,
     occurred_at: DateTime<Utc>,
     call: Option<Value>,
@@ -75,6 +77,8 @@ struct CommRow {
     subject: Option<String>,
     body: String,
     source_ref: Option<String>,
+    counterparty_role: Option<String>,
+    acknowledges: Option<RecordId>,
     asset_id: Option<RecordId>,
     occurred_at: String,
     call: Option<Value>,
@@ -136,6 +140,8 @@ fn source_image(row: CommRow) -> Result<CommunicationImage, MirrorError> {
         subject: row.subject,
         body: row.body,
         source_ref: row.source_ref,
+        counterparty_role: row.counterparty_role,
+        acknowledges: optional(row.acknowledges.as_ref())?,
         asset_id: optional(row.asset_id.as_ref())?,
         occurred_at: date(&row.occurred_at)?,
         call: row.call,
@@ -217,6 +223,8 @@ async fn target_comms(pg: &PostgresDb) -> Result<BTreeMap<MirrorKey, Columns>, M
                 subject: r.try_get("subject")?,
                 body: r.try_get("body")?,
                 source_ref: r.try_get("source_ref")?,
+                counterparty_role: r.try_get("counterparty_role")?,
+                acknowledges: r.try_get("acknowledges")?,
                 asset_id: r.try_get("asset_id")?,
                 occurred_at: r.try_get("occurred_at")?,
                 call: r.try_get("call")?,
@@ -296,7 +304,7 @@ async fn source_all(
     ),
     MirrorError,
 > {
-    let c=source(db,"communication","id, project_id, channel, direction, author_person_id, counterparty, subject, body, source_ref, asset_id, occurred_at, call, agreements, inserted_at, updated_at",|r:CommRow| { let i=source_image(r)?; Ok((MirrorKey::Communication(i.id),Columns::Communication(Box::new(i)))) }).await?;
+    let c=source(db,"communication","id, project_id, channel, direction, author_person_id, counterparty, subject, body, source_ref, counterparty_role, acknowledges, asset_id, occurred_at, call, agreements, inserted_at, updated_at",|r:CommRow| { let i=source_image(r)?; Ok((MirrorKey::Communication(i.id),Columns::Communication(Box::new(i)))) }).await?;
     let v=source(db,"email_conversation","id, token, external_email, external_name, person_id, subject, status, notation_id, firm_id, project_id, inserted_at, updated_at",|r:ConvRow| { let i=conversation_image(r)?; Ok((MirrorKey::EmailConversation(i.id),Columns::EmailConversation(Box::new(i)))) }).await?;
     let m=source(db,"email_conversation_message","id, conversation_id, direction, from_addr, to_addr, subject, body_text, raw_storage_key, provider_message_id, in_reply_to, command_payload, inserted_at, updated_at",|r:MsgRow| { let i=message_image(r)?; Ok((MirrorKey::EmailConversationMessage(i.id),Columns::EmailConversationMessage(Box::new(i)))) }).await?;
     Ok((c, v, m))
@@ -306,8 +314,8 @@ async fn upsert_communication(
     pg: &PostgresDb,
     i: &CommunicationImage,
 ) -> Result<Mirrored, MirrorError> {
-    let r=sqlx::query("INSERT INTO communication (id,project_id,channel,direction,author_person_id,counterparty,subject,body,source_ref,asset_id,occurred_at,call,agreements,inserted_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT (id) DO UPDATE SET project_id=EXCLUDED.project_id,channel=EXCLUDED.channel,direction=EXCLUDED.direction,author_person_id=EXCLUDED.author_person_id,counterparty=EXCLUDED.counterparty,subject=EXCLUDED.subject,body=EXCLUDED.body,source_ref=EXCLUDED.source_ref,asset_id=EXCLUDED.asset_id,occurred_at=EXCLUDED.occurred_at,call=EXCLUDED.call,agreements=EXCLUDED.agreements,inserted_at=EXCLUDED.inserted_at,updated_at=EXCLUDED.updated_at WHERE (communication.project_id,communication.channel,communication.direction,communication.author_person_id,communication.counterparty,communication.subject,communication.body,communication.source_ref,communication.asset_id,communication.occurred_at,communication.call,communication.agreements,communication.inserted_at,communication.updated_at) IS DISTINCT FROM (EXCLUDED.project_id,EXCLUDED.channel,EXCLUDED.direction,EXCLUDED.author_person_id,EXCLUDED.counterparty,EXCLUDED.subject,EXCLUDED.body,EXCLUDED.source_ref,EXCLUDED.asset_id,EXCLUDED.occurred_at,EXCLUDED.call,EXCLUDED.agreements,EXCLUDED.inserted_at,EXCLUDED.updated_at)")
-      .bind(i.id).bind(i.project_id).bind(&i.channel).bind(&i.direction).bind(i.author_person_id).bind(&i.counterparty).bind(&i.subject).bind(&i.body).bind(&i.source_ref).bind(i.asset_id).bind(i.occurred_at).bind(&i.call).bind(&i.agreements).bind(i.inserted_at).bind(i.updated_at).execute(&pg.0).await?;
+    let r=sqlx::query("INSERT INTO communication (id,project_id,channel,direction,author_person_id,counterparty,subject,body,source_ref,asset_id,occurred_at,call,agreements,inserted_at,updated_at,counterparty_role,acknowledges) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (id) DO UPDATE SET project_id=EXCLUDED.project_id,channel=EXCLUDED.channel,direction=EXCLUDED.direction,author_person_id=EXCLUDED.author_person_id,counterparty=EXCLUDED.counterparty,subject=EXCLUDED.subject,body=EXCLUDED.body,counterparty_role=EXCLUDED.counterparty_role,acknowledges=EXCLUDED.acknowledges,source_ref=EXCLUDED.source_ref,asset_id=EXCLUDED.asset_id,occurred_at=EXCLUDED.occurred_at,call=EXCLUDED.call,agreements=EXCLUDED.agreements,inserted_at=EXCLUDED.inserted_at,updated_at=EXCLUDED.updated_at WHERE (communication.project_id,communication.channel,communication.direction,communication.author_person_id,communication.counterparty,communication.subject,communication.body,communication.source_ref,communication.counterparty_role,communication.acknowledges,communication.asset_id,communication.occurred_at,communication.call,communication.agreements,communication.inserted_at,communication.updated_at) IS DISTINCT FROM (EXCLUDED.project_id,EXCLUDED.channel,EXCLUDED.direction,EXCLUDED.author_person_id,EXCLUDED.counterparty,EXCLUDED.subject,EXCLUDED.body,EXCLUDED.source_ref,EXCLUDED.counterparty_role,EXCLUDED.acknowledges,EXCLUDED.asset_id,EXCLUDED.occurred_at,EXCLUDED.call,EXCLUDED.agreements,EXCLUDED.inserted_at,EXCLUDED.updated_at)")
+      .bind(i.id).bind(i.project_id).bind(&i.channel).bind(&i.direction).bind(i.author_person_id).bind(&i.counterparty).bind(&i.subject).bind(&i.body).bind(&i.source_ref).bind(i.asset_id).bind(i.occurred_at).bind(&i.call).bind(&i.agreements).bind(i.inserted_at).bind(i.updated_at).bind(&i.counterparty_role).bind(i.acknowledges).execute(&pg.0).await?;
     Ok(changed(r.rows_affected(), Mirrored::Written))
 }
 async fn upsert_conversation(
@@ -335,37 +343,46 @@ async fn ensure_parent(s: &SurrealDb, pg: &PostgresDb, key: MirrorKey) -> Result
     Ok(())
 }
 
+async fn mirror_communication(
+    s: &SurrealDb,
+    pg: &PostgresDb,
+    id: Uuid,
+) -> Result<Mirrored, MirrorError> {
+    let rows: Vec<CommRow> = s.query("SELECT id, project_id, channel, direction, author_person_id, counterparty, subject, body, source_ref, counterparty_role, acknowledges, asset_id, occurred_at, call, agreements, inserted_at, updated_at FROM communication WHERE id=$id")
+        .bind(("id", crate::surreal::record_id("communication", id))).await
+        .and_then(surrealdb::IndexedResults::check).map_err(|_| MirrorError::Source)?
+        .take(0).map_err(|_| MirrorError::Source)?;
+    let Some(row) = rows.into_iter().next() else {
+        return Ok(changed(
+            sqlx::query("DELETE FROM communication WHERE id=$1")
+                .bind(id)
+                .execute(&pg.0)
+                .await?
+                .rows_affected(),
+            Mirrored::Deleted,
+        ));
+    };
+    let image = source_image(row)?;
+    ensure_parent(s, pg, MirrorKey::Project(image.project_id)).await?;
+    if let Some(id) = image.author_person_id {
+        ensure_parent(s, pg, MirrorKey::Person(id)).await?;
+    }
+    if let Some(id) = image.asset_id {
+        ensure_parent(s, pg, MirrorKey::Asset(id)).await?;
+    }
+    if let Some(id) = image.acknowledges {
+        Box::pin(mirror_communication(s, pg, id)).await?;
+    }
+    upsert_communication(pg, &image).await
+}
+
 pub async fn mirror(
     s: &SurrealDb,
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
     match key {
-        MirrorKey::Communication(id) => {
-            let rows: Vec<CommRow> = s.query("SELECT id, project_id, channel, direction, author_person_id, counterparty, subject, body, source_ref, asset_id, occurred_at, call, agreements, inserted_at, updated_at FROM communication WHERE id=$id")
-                .bind(("id", crate::surreal::record_id("communication", *id))).await
-                .and_then(surrealdb::IndexedResults::check).map_err(|_| MirrorError::Source)?
-                .take(0).map_err(|_| MirrorError::Source)?;
-            let Some(row) = rows.into_iter().next() else {
-                return Ok(changed(
-                    sqlx::query("DELETE FROM communication WHERE id=$1")
-                        .bind(id)
-                        .execute(&pg.0)
-                        .await?
-                        .rows_affected(),
-                    Mirrored::Deleted,
-                ));
-            };
-            let image = source_image(row)?;
-            ensure_parent(s, pg, MirrorKey::Project(image.project_id)).await?;
-            if let Some(id) = image.author_person_id {
-                ensure_parent(s, pg, MirrorKey::Person(id)).await?;
-            }
-            if let Some(id) = image.asset_id {
-                ensure_parent(s, pg, MirrorKey::Asset(id)).await?;
-            }
-            upsert_communication(pg, &image).await
-        }
+        MirrorKey::Communication(id) => mirror_communication(s, pg, *id).await,
         MirrorKey::EmailConversation(id) => {
             let rows: Vec<ConvRow> = s.query("SELECT id, token, external_email, external_name, person_id, subject, status, notation_id, firm_id, project_id, inserted_at, updated_at FROM email_conversation WHERE id=$id")
                 .bind(("id", crate::surreal::record_id("email_conversation", *id))).await

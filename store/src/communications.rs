@@ -155,6 +155,12 @@ pub struct Communication {
     /// External id for idempotent ingest: email `Message-ID`, the comment
     /// id, the SMS provider id.
     pub source_ref: Option<String>,
+    /// The email counterparty's role, when recorded.
+    pub counterparty_role: Option<String>,
+    /// Outbound email whose receipt this inbound email acknowledges.
+    pub acknowledges: Option<Uuid>,
+    /// Earliest linked inbound receipt timestamp, derived within this Project.
+    pub receipt_acknowledged_at: Option<String>,
     /// Raw payload (verbatim `.eml`, …); `None` for comments.
     pub asset_id: Option<Uuid>,
     /// RFC 3339 timestamp of when the message actually happened.
@@ -189,6 +195,8 @@ struct CommunicationRow {
     subject: Option<String>,
     body: String,
     source_ref: Option<String>,
+    counterparty_role: Option<String>,
+    acknowledges: Option<surrealdb::types::RecordId>,
     asset_id: Option<surrealdb::types::RecordId>,
     occurred_at: String,
     call: Option<CallDetails>,
@@ -209,6 +217,9 @@ impl CommunicationRow {
             subject: self.subject,
             body: self.body,
             source_ref: self.source_ref,
+            counterparty_role: self.counterparty_role,
+            acknowledges: self.acknowledges.as_ref().and_then(record_uuid),
+            receipt_acknowledged_at: None,
             asset_id: self.asset_id.as_ref().and_then(record_uuid),
             occurred_at: self.occurred_at,
             call: self.call,
@@ -221,7 +232,7 @@ impl CommunicationRow {
 
 /// The projection every read shares.
 const SELECT: &str = "id, project_id, channel, direction, author_person_id, counterparty, \
-                      subject, body, source_ref, asset_id, occurred_at, call, agreements, \
+                      subject, body, source_ref, counterparty_role, acknowledges, asset_id, occurred_at, call, agreements, \
                       inserted_at, updated_at";
 
 /// What can go wrong reading or writing the conversation log.
@@ -478,6 +489,76 @@ pub struct Ingested {
     pub deduped: bool,
 }
 
+fn validate_replayed_details(
+    row: &Communication,
+    details: EmailDetails<'_>,
+) -> Result<(), CommunicationError> {
+    if details
+        .acknowledges
+        .is_some_and(|id| row.acknowledges != Some(id))
+        || details
+            .counterparty_role
+            .is_some_and(|role| row.counterparty_role.as_deref() != Some(role))
+    {
+        return Err(CommunicationError::Invalid(
+            "source reference already has different email metadata".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Optional metadata recorded with an email Communication.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EmailDetails<'a> {
+    pub counterparty_role: Option<&'a str>,
+    pub acknowledges: Option<Uuid>,
+}
+
+/// Ingest an email with its counterparty role and receipt relation.
+///
+/// # Errors
+/// Rejects invalid roles, receipt directions, and targets outside the Project.
+/// Propagates database errors.
+pub async fn ingest_email(
+    db: &SurrealDb,
+    args: &IngestArgs<'_>,
+    details: EmailDetails<'_>,
+) -> Result<Ingested, CommunicationError> {
+    if !matches!(
+        (args.channel, args.direction),
+        (channel::EMAIL_INBOUND, direction::INBOUND)
+            | (channel::EMAIL_OUTBOUND, direction::OUTBOUND)
+    ) {
+        return Err(CommunicationError::Invalid(
+            "email channel and direction must agree".into(),
+        ));
+    }
+    if details
+        .counterparty_role
+        .is_some_and(|role| !counterparty_role::ALL.contains(&role))
+    {
+        return Err(CommunicationError::Invalid(
+            "invalid counterparty role".into(),
+        ));
+    }
+    if let Some(id) = details.acknowledges {
+        if args.channel != channel::EMAIL_INBOUND {
+            return Err(CommunicationError::Invalid(
+                "only inbound email can acknowledge receipt".into(),
+            ));
+        }
+        let target = find(db, args.project_id, id)
+            .await?
+            .ok_or(CommunicationError::NotFound)?;
+        if target.channel != channel::EMAIL_OUTBOUND || target.direction != direction::OUTBOUND {
+            return Err(CommunicationError::Invalid(
+                "receipt must acknowledge an outbound email".into(),
+            ));
+        }
+    }
+    ingest_with_details(db, args, details).await
+}
+
 /// Ingest one message into the conversation log. Idempotent on
 /// `(channel, source_ref)` when `source_ref` is `Some`.
 ///
@@ -496,6 +577,14 @@ pub struct Ingested {
 ///
 /// Propagates any database error.
 pub async fn ingest(db: &SurrealDb, args: &IngestArgs<'_>) -> Result<Ingested, CommunicationError> {
+    ingest_with_details(db, args, EmailDetails::default()).await
+}
+
+async fn ingest_with_details(
+    db: &SurrealDb,
+    args: &IngestArgs<'_>,
+    details: EmailDetails<'_>,
+) -> Result<Ingested, CommunicationError> {
     if let Some(source_ref) = args.source_ref {
         if let Some(row) = find_by_source(db, args.channel, source_ref).await? {
             if row.project_id != args.project_id {
@@ -503,6 +592,7 @@ pub async fn ingest(db: &SurrealDb, args: &IngestArgs<'_>) -> Result<Ingested, C
                     "source reference already belongs to another Project".into(),
                 ));
             }
+            validate_replayed_details(&row, details)?;
             return Ok(Ingested {
                 communication_id: row.id,
                 deduped: true,
@@ -517,6 +607,7 @@ pub async fn ingest(db: &SurrealDb, args: &IngestArgs<'_>) -> Result<Ingested, C
              project_id = $project_id, channel = $channel, direction = $direction, \
              author_person_id = $author, counterparty = $counterparty, subject = $subject, \
              body = $body, source_ref = $source_ref, asset_id = $asset_id, \
+             counterparty_role = $counterparty_role, acknowledges = $acknowledges, \
              occurred_at = $occurred_at \
              RETURN {SELECT}"
         ))
@@ -535,6 +626,14 @@ pub async fn ingest(db: &SurrealDb, args: &IngestArgs<'_>) -> Result<Ingested, C
         .bind(("subject", args.subject.map(str::to_string)))
         .bind(("body", args.body.to_string()))
         .bind(("source_ref", args.source_ref.map(str::to_string)))
+        .bind((
+            "counterparty_role",
+            details.counterparty_role.map(str::to_string),
+        ))
+        .bind((
+            "acknowledges",
+            details.acknowledges.map(|id| record_id(TABLE, id)),
+        ))
         .bind((
             "asset_id",
             args.asset_id.map(|a| record_id(crate::assets::TABLE, a)),
@@ -560,6 +659,9 @@ pub async fn ingest(db: &SurrealDb, args: &IngestArgs<'_>) -> Result<Ingested, C
                 return Err(CommunicationError::Invalid(
                     "source reference already belongs to another Project".into(),
                 ));
+            }
+            if let Some(row) = &existing {
+                validate_replayed_details(row, details)?;
             }
             return existing
                 .map(|row| Ingested {
@@ -728,10 +830,33 @@ async fn read_thread(
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let rows: Vec<CommunicationRow> = response.take(0)?;
-    Ok(rows
+    let mut rows: Vec<_> = rows
         .into_iter()
         .filter_map(CommunicationRow::into_communication)
-        .collect())
+        .collect();
+    let mut receipts = std::collections::HashMap::<Uuid, String>::new();
+    for row in &rows {
+        if row.channel == channel::EMAIL_INBOUND && row.direction == direction::INBOUND {
+            if let Some(id) = row.acknowledges {
+                receipts
+                    .entry(id)
+                    .and_modify(|at| {
+                        if chrono::DateTime::parse_from_rfc3339(&row.occurred_at).ok()
+                            < chrono::DateTime::parse_from_rfc3339(at).ok()
+                        {
+                            at.clone_from(&row.occurred_at);
+                        }
+                    })
+                    .or_insert_with(|| row.occurred_at.clone());
+            }
+        }
+    }
+    for row in &mut rows {
+        if row.channel == channel::EMAIL_OUTBOUND && row.direction == direction::OUTBOUND {
+            row.receipt_acknowledged_at = receipts.remove(&row.id);
+        }
+    }
+    Ok(rows)
 }
 
 /// Errors from a retention purge — the DB deletes and the storage-object
@@ -953,6 +1078,92 @@ mod tests {
             asset_id: None,
             occurred_at: "2026-06-08T10:00:00Z",
         }
+    }
+
+    #[tokio::test]
+    async fn historical_messages_without_email_metadata_remain_readable() {
+        let db = crate::surreal::test_support::mem().await;
+        let project = seed_project(&db).await;
+        let created = ingest(
+            &db,
+            &args(
+                project,
+                channel::EMAIL_OUTBOUND,
+                direction::OUTBOUND,
+                "Sent",
+            ),
+        )
+        .await
+        .unwrap();
+        db.query("UPDATE $id UNSET counterparty_role, acknowledges")
+            .bind((
+                "id",
+                crate::surreal::record_id(super::TABLE, created.communication_id),
+            ))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let row = super::find(&db, project, created.communication_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(row.counterparty_role.is_none());
+        assert!(row.acknowledges.is_none());
+        assert!(row.receipt_acknowledged_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn receipt_projection_uses_earliest_instant_and_only_the_same_project() {
+        let db = crate::surreal::test_support::mem().await;
+        let project = seed_project(&db).await;
+        let outbound = ingest(
+            &db,
+            &args(
+                project,
+                channel::EMAIL_OUTBOUND,
+                direction::OUTBOUND,
+                "Sent",
+            ),
+        )
+        .await
+        .unwrap();
+        let mut receipt = args(
+            project,
+            channel::EMAIL_INBOUND,
+            direction::INBOUND,
+            "Acknowledged",
+        );
+        let metadata = super::EmailDetails {
+            counterparty_role: Some("court"),
+            acknowledges: Some(outbound.communication_id),
+        };
+        receipt.occurred_at = "2026-06-08T12:00:00+03:00";
+        let earliest = super::ingest_email(&db, &receipt, metadata).await.unwrap();
+        receipt.occurred_at = "2026-06-08T10:00:00Z";
+        super::ingest_email(&db, &receipt, metadata).await.unwrap();
+        let rows = super::for_project(&db, project).await.unwrap();
+        let sent = rows
+            .iter()
+            .find(|row| row.id == outbound.communication_id)
+            .unwrap();
+        assert_eq!(
+            sent.receipt_acknowledged_at.as_deref(),
+            Some("2026-06-08T12:00:00+03:00")
+        );
+        let other = seed_project(&db).await;
+        super::move_to_project(&db, earliest.communication_id, other)
+            .await
+            .unwrap();
+        let rows = super::for_project(&db, project).await.unwrap();
+        let sent = rows
+            .iter()
+            .find(|row| row.id == outbound.communication_id)
+            .unwrap();
+        assert_eq!(
+            sent.receipt_acknowledged_at.as_deref(),
+            Some("2026-06-08T10:00:00Z")
+        );
     }
 
     #[tokio::test]
