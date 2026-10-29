@@ -343,40 +343,46 @@ async fn ensure_parent(s: &SurrealDb, pg: &PostgresDb, key: MirrorKey) -> Result
     Ok(())
 }
 
+async fn mirror_communication(
+    s: &SurrealDb,
+    pg: &PostgresDb,
+    id: Uuid,
+) -> Result<Mirrored, MirrorError> {
+    let rows: Vec<CommRow> = s.query("SELECT id, project_id, channel, direction, author_person_id, counterparty, subject, body, source_ref, counterparty_role, acknowledges, asset_id, occurred_at, call, agreements, inserted_at, updated_at FROM communication WHERE id=$id")
+        .bind(("id", crate::surreal::record_id("communication", id))).await
+        .and_then(surrealdb::IndexedResults::check).map_err(|_| MirrorError::Source)?
+        .take(0).map_err(|_| MirrorError::Source)?;
+    let Some(row) = rows.into_iter().next() else {
+        return Ok(changed(
+            sqlx::query("DELETE FROM communication WHERE id=$1")
+                .bind(id)
+                .execute(&pg.0)
+                .await?
+                .rows_affected(),
+            Mirrored::Deleted,
+        ));
+    };
+    let image = source_image(row)?;
+    ensure_parent(s, pg, MirrorKey::Project(image.project_id)).await?;
+    if let Some(id) = image.author_person_id {
+        ensure_parent(s, pg, MirrorKey::Person(id)).await?;
+    }
+    if let Some(id) = image.asset_id {
+        ensure_parent(s, pg, MirrorKey::Asset(id)).await?;
+    }
+    if let Some(id) = image.acknowledges {
+        Box::pin(mirror_communication(s, pg, id)).await?;
+    }
+    upsert_communication(pg, &image).await
+}
+
 pub async fn mirror(
     s: &SurrealDb,
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
     match key {
-        MirrorKey::Communication(id) => {
-            let rows: Vec<CommRow> = s.query("SELECT id, project_id, channel, direction, author_person_id, counterparty, subject, body, source_ref, counterparty_role, acknowledges, asset_id, occurred_at, call, agreements, inserted_at, updated_at FROM communication WHERE id=$id")
-                .bind(("id", crate::surreal::record_id("communication", *id))).await
-                .and_then(surrealdb::IndexedResults::check).map_err(|_| MirrorError::Source)?
-                .take(0).map_err(|_| MirrorError::Source)?;
-            let Some(row) = rows.into_iter().next() else {
-                return Ok(changed(
-                    sqlx::query("DELETE FROM communication WHERE id=$1")
-                        .bind(id)
-                        .execute(&pg.0)
-                        .await?
-                        .rows_affected(),
-                    Mirrored::Deleted,
-                ));
-            };
-            let image = source_image(row)?;
-            ensure_parent(s, pg, MirrorKey::Project(image.project_id)).await?;
-            if let Some(id) = image.author_person_id {
-                ensure_parent(s, pg, MirrorKey::Person(id)).await?;
-            }
-            if let Some(id) = image.asset_id {
-                ensure_parent(s, pg, MirrorKey::Asset(id)).await?;
-            }
-            if let Some(id) = image.acknowledges {
-                Box::pin(mirror(s, pg, &MirrorKey::Communication(id))).await?;
-            }
-            upsert_communication(pg, &image).await
-        }
+        MirrorKey::Communication(id) => mirror_communication(s, pg, *id).await,
         MirrorKey::EmailConversation(id) => {
             let rows: Vec<ConvRow> = s.query("SELECT id, token, external_email, external_name, person_id, subject, status, notation_id, firm_id, project_id, inserted_at, updated_at FROM email_conversation WHERE id=$id")
                 .bind(("id", crate::surreal::record_id("email_conversation", *id))).await

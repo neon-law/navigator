@@ -111,6 +111,71 @@ pub(crate) async fn list_communications(
     Ok(Json(rows).into_response())
 }
 
+/// Logs an email Communication, then links any call it confirms.
+async fn create_email(
+    state: &ApiState,
+    author_person_id: Option<Uuid>,
+    project_id: Uuid,
+    channel: &str,
+    source_ref: Option<&str>,
+    input: &CreateCommunicationRequest,
+) -> Result<store::communications::Communication, ApiError> {
+    let direction = match input.direction.trim() {
+        "inbound" => store::communications::direction::INBOUND,
+        "outbound" => store::communications::direction::OUTBOUND,
+        _ => {
+            return Err(ApiError::CommunicationInvalid(
+                "direction must be inbound or outbound".into(),
+            ))
+        }
+    };
+    let at = chrono::DateTime::parse_from_rfc3339(input.at.trim())
+        .map(|at| at.to_rfc3339())
+        .map_err(|_| {
+            ApiError::CommunicationInvalid(
+                "at must be an RFC 3339 timestamp with an explicit offset".into(),
+            )
+        })?;
+    if input.body.trim().is_empty() {
+        return Err(ApiError::CommunicationInvalid("the body is empty".into()));
+    }
+    let ingested = store::communications::ingest_email(
+        &state.surreal,
+        &store::communications::IngestArgs {
+            project_id,
+            channel,
+            direction,
+            author_person_id,
+            counterparty: Some(input.counterparty.trim()),
+            subject: input.subject.as_deref(),
+            body: input.body.trim(),
+            source_ref,
+            asset_id: None,
+            occurred_at: &at,
+        },
+        store::communications::EmailDetails {
+            counterparty_role: input.role.as_deref().map(str::trim),
+            acknowledges: input.acknowledges,
+        },
+    )
+    .await
+    .map_err(map_communication)?;
+    if let Some(call_id) = input.confirms {
+        store::communications::confirm_agreements(
+            &state.surreal,
+            project_id,
+            call_id,
+            ingested.communication_id,
+        )
+        .await
+        .map_err(map_communication)?;
+    }
+    store::communications::find(&state.surreal, project_id, ingested.communication_id)
+        .await
+        .map_err(map_communication)?
+        .ok_or_else(|| ApiError::Db("the email could not be read back".into()))
+}
+
 /// `POST /app/api/projects/{id}/communications`
 pub(crate) async fn create_communication(
     State(state): State<ApiState>,
@@ -161,60 +226,7 @@ pub(crate) async fn create_communication(
         .map_err(map_communication)?,
         channel @ (store::communications::channel::EMAIL_INBOUND
         | store::communications::channel::EMAIL_OUTBOUND) => {
-            let direction = match input.direction.trim() {
-                "inbound" => store::communications::direction::INBOUND,
-                "outbound" => store::communications::direction::OUTBOUND,
-                _ => {
-                    return Err(ApiError::CommunicationInvalid(
-                        "direction must be inbound or outbound".into(),
-                    ))
-                }
-            };
-            let at = chrono::DateTime::parse_from_rfc3339(input.at.trim())
-                .map(|at| at.to_rfc3339())
-                .map_err(|_| {
-                    ApiError::CommunicationInvalid(
-                        "at must be an RFC 3339 timestamp with an explicit offset".into(),
-                    )
-                })?;
-            if input.body.trim().is_empty() {
-                return Err(ApiError::CommunicationInvalid("the body is empty".into()));
-            }
-            let ingested = store::communications::ingest_email(
-                &state.surreal,
-                &store::communications::IngestArgs {
-                    project_id: id,
-                    channel,
-                    direction,
-                    author_person_id: session.person_id,
-                    counterparty: Some(input.counterparty.trim()),
-                    subject: input.subject.as_deref(),
-                    body: input.body.trim(),
-                    source_ref,
-                    asset_id: None,
-                    occurred_at: &at,
-                },
-                store::communications::EmailDetails {
-                    counterparty_role: input.role.as_deref().map(str::trim),
-                    acknowledges: input.acknowledges,
-                },
-            )
-            .await
-            .map_err(map_communication)?;
-            if let Some(call_id) = input.confirms {
-                store::communications::confirm_agreements(
-                    &state.surreal,
-                    id,
-                    call_id,
-                    ingested.communication_id,
-                )
-                .await
-                .map_err(map_communication)?;
-            }
-            store::communications::find(&state.surreal, id, ingested.communication_id)
-                .await
-                .map_err(map_communication)?
-                .ok_or_else(|| ApiError::Db("the email could not be read back".into()))?
+            create_email(&state, session.person_id, id, channel, source_ref, &input).await?
         }
         other => {
             return Err(ApiError::CommunicationInvalid(format!(
