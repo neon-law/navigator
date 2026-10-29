@@ -25,7 +25,9 @@ none fits, add a term under `docs/glossary/` in the same Navigator change rather
 5. Open a pull request. Merging it publishes.
 
 For architecture or process questions, convene the `council` skill; for how a client will read a page or letter,
-`client-council`; for the legal substance, `legal-council`. Keep each answer terse.
+`client-council`; for the legal substance, `legal-council`. Review a finished memo or letter with `analyze-memo`
+(`.agents/skills/analyze-memo/SKILL.md`); report findings before applying corrections on the lawyer's go-ahead. Keep
+each answer terse.
 
 `navigator project onboard` and `navigator project offboard` draft or open the engagement and offboarding letters from
 `navigator.yaml`. `navigator project repository sync-skills` restores missing or drifted canonical Agent Skills and this
