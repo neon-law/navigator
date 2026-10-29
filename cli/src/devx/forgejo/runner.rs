@@ -177,6 +177,7 @@ impl RunnerApi {
         );
         Ok(Self {
             client: reqwest::Client::builder()
+                .https_only(true)
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(30))
                 .build()?,
@@ -459,6 +460,29 @@ mod tests {
     use super::*;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn operator_client_refuses_cleartext_transport_before_sending_credentials() {
+        let server = MockServer::start().await;
+        let api = RunnerApi::new(
+            "https://forge.example.test/",
+            "example/sample",
+            "synthetic-operator-token".into(),
+        )
+        .unwrap();
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+        assert!(api
+            .client
+            .delete(server.uri())
+            .bearer_auth(&api.token)
+            .send()
+            .await
+            .is_err());
+    }
 
     fn test_api(server: &MockServer) -> RunnerApi {
         RunnerApi {
