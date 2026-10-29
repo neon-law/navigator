@@ -173,6 +173,9 @@ pub struct PublicChrome {
     /// registry key that produced the rest of this chrome, so the palette
     /// always matches the identity the header and footer already carry.
     pub tokens_href: String,
+    /// Optional decorative character for this brand's public pages.
+    #[serde(default)]
+    pub companion_image: Option<String>,
     /// Whether the request's header is one of the firm's launched practice
     /// brands. The server resolves this from the closed brand registry so the
     /// wasm client does not need to link the `views` crate.
@@ -220,6 +223,11 @@ pub fn PublicFooter(chrome: PublicChrome) -> Element {
         // including `/contact`, `/blog`, and the legal pages, which hoist no
         // marketing layer.
         document::Stylesheet { href: "{chrome.tokens_href}" }
+        if let Some(src) = &chrome.companion_image {
+            div { class: "public-brand-companion", "aria-hidden": "true",
+                img { src: "{src}", alt: "", width: "128", height: "128", loading: "lazy" }
+            }
+        }
         SiteFooterLegal {
             // The copyright names the legal person that renders the legal
             // services, resolved from the firm brand, so it is the same name at
@@ -439,6 +447,8 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         navigator_version: crate::cli_release::release_version(),
         github_stars: crate::source_repository::known_stars(),
         tokens_href: crate::brand_style::brand_tokens_href(views::brand::brand_key().as_str()),
+        companion_image: (views::brand::brand_key() == views::brand::BrandKey::Vesta)
+            .then(|| "/public/brand/aster/aster-guide.svg".to_owned()),
         is_practice: views::brand::BrandKey::LIVE.contains(&views::brand::brand_key()),
         // The compiled family — every house brand the firm trades under, the
         // request's own key marked current — so the "Our Family" row is on

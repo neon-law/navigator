@@ -892,6 +892,8 @@ fn estate_content(
         astrology_body: copy.astrology_body,
         cosmos_label: copy.cosmos_label,
         cosmos_note: copy.cosmos_note,
+        aster_name: copy.aster_name,
+        aster_description: copy.aster_description,
         cosmos_themes: copy.cosmos_themes,
         probate_label: copy.probate_label,
         probate_heading: copy.probate_heading,
