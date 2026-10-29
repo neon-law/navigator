@@ -141,6 +141,61 @@ const FORGEJO_OIDC_KEYS: &[&str] = &["NAVIGATOR_FORGEJO_OIDC_CLIENT_SECRET"];
 /// The deployment coordinate naming Forgejo's public OIDC client id.
 const FORGEJO_OIDC_CLIENT_ID: &str = "NAVIGATOR_FORGEJO_OIDC_CLIENT_ID";
 
+const FORGEJO_ACTIONS_ENABLED: &str = "NAVIGATOR_FORGEJO_ACTIONS_ENABLED";
+const FORGEJO_SIGNING_KEYS: &[&str] = &[
+    "NAVIGATOR_FORGEJO_SIGNING_PRIVATE_KEY",
+    "NAVIGATOR_FORGEJO_SIGNING_PUBLIC_KEY",
+];
+const FORGEJO_SIGNING_NAME: &str = "NAVIGATOR_FORGEJO_SIGNING_NAME";
+const FORGEJO_SIGNING_EMAIL: &str = "NAVIGATOR_FORGEJO_SIGNING_EMAIL";
+
+fn forgejo_actions_enabled(deployment: &Deployment) -> Result<bool> {
+    match deployment
+        .coordinates
+        .get(FORGEJO_ACTIONS_ENABLED)
+        .map(String::as_str)
+    {
+        None | Some("false") => Ok(false),
+        Some("true") => Ok(true),
+        Some(_) => bail!("{FORGEJO_ACTIONS_ENABLED} must be true or false"),
+    }
+}
+
+fn forgejo_signing_identity(deployment: &Deployment) -> Result<Option<(&str, &str)>> {
+    let signing = FORGEJO_SIGNING_KEYS
+        .iter()
+        .any(|key| deployment.forgejo_encrypted_keys.contains(*key));
+    ensure!(
+        !forgejo_actions_enabled(deployment)? || signing,
+        "enabling Forgejo Actions requires the instance signing key pair and identity"
+    );
+    if !signing {
+        return Ok(None);
+    }
+    ensure!(
+        FORGEJO_SIGNING_KEYS
+            .iter()
+            .all(|key| deployment.forgejo_encrypted_keys.contains(*key)),
+        "Forgejo instance signing requires both private and public keys"
+    );
+    let coordinate = |key| -> Result<&str> {
+        let value = deployment
+            .coordinates
+            .get(key)
+            .map(String::as_str)
+            .unwrap_or_default();
+        ensure!(
+            !value.trim().is_empty() && !value.contains(['\n', '\r', '\0', ';', '#', '[', ']']),
+            "{key} must be a nonempty single-line signing identity"
+        );
+        Ok(value)
+    };
+    Ok(Some((
+        coordinate(FORGEJO_SIGNING_NAME)?,
+        coordinate(FORGEJO_SIGNING_EMAIL)?,
+    )))
+}
+
 /// Opt-in service whose credentials are projected only as a mounted file Secret.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceSecrets {
@@ -185,7 +240,7 @@ impl ServiceSecrets {
     fn optional_key_sets(self) -> &'static [&'static [&'static str]] {
         match self {
             Self::Postgres => &[POSTGRES_CLIENT_KEYS, POSTGRES_DBOS_KEYS],
-            Self::Forgejo => &[FORGEJO_OIDC_KEYS],
+            Self::Forgejo => &[FORGEJO_OIDC_KEYS, FORGEJO_SIGNING_KEYS],
         }
     }
 
@@ -217,6 +272,9 @@ impl ServiceSecrets {
                 ];
                 if keys.contains(FORGEJO_OIDC_KEYS[0]) {
                     targets.push("navigator-forgejo-oidc");
+                }
+                if keys.contains(FORGEJO_SIGNING_KEYS[0]) {
+                    targets.push("navigator-forgejo-signing");
                 }
                 targets
             }
@@ -1152,6 +1210,7 @@ fn service_plan(deployment: &Deployment, service: ServiceSecrets) -> Result<BTre
         );
     }
     if service == ServiceSecrets::Forgejo {
+        forgejo_signing_identity(deployment)?;
         let root_url = deployment
             .coordinates
             .get("NAVIGATOR_FORGEJO_ROOT_URL")
@@ -1284,7 +1343,8 @@ fn build_service_secrets(
                 .coordinates
                 .get("NAVIGATOR_FORGEJO_ROOT_URL")
                 .expect("service_plan validates the Forgejo URL");
-            let app_ini = render_forgejo_app_ini(root_url, namespace, payloads)?;
+            let app_ini =
+                render_service_forgejo_app_ini(deployment, root_url, namespace, payloads)?;
             let mut secrets = vec![
                 KubernetesSecretPayload {
                     name: "navigator-forgejo-config",
@@ -1334,9 +1394,29 @@ fn build_service_secrets(
                     ]),
                 });
             }
+            if forgejo_signing_identity(deployment)?.is_some() {
+                secrets.push(forgejo_signing_secret(payloads)?);
+            }
             Ok(secrets)
         }
     }
+}
+
+fn forgejo_signing_secret(payloads: &BTreeMap<String, String>) -> Result<KubernetesSecretPayload> {
+    Ok(KubernetesSecretPayload {
+        name: "navigator-forgejo-signing",
+        secret_type: "Opaque",
+        data: BTreeMap::from([
+            (
+                "signing_key".to_owned(),
+                required_payload(payloads, FORGEJO_SIGNING_KEYS[0])?,
+            ),
+            (
+                "signing_key.pub".to_owned(),
+                required_payload(payloads, FORGEJO_SIGNING_KEYS[1])?,
+            ),
+        ]),
+    })
 }
 
 fn required_payload(payloads: &BTreeMap<String, String>, key: &str) -> Result<String> {
@@ -1348,6 +1428,33 @@ fn required_payload(payloads: &BTreeMap<String, String>, key: &str) -> Result<St
 }
 
 const FORGEJO_APP_INI_TEMPLATE: &str = include_str!("../../../k8s/forgejo/app.ini.example");
+
+fn render_service_forgejo_app_ini(
+    deployment: &Deployment,
+    root_url: &str,
+    namespace: &str,
+    payloads: &BTreeMap<String, String>,
+) -> Result<String> {
+    let signing = forgejo_signing_identity(deployment)?;
+    let mut rendered = render_forgejo_app_ini(root_url, namespace, payloads)?;
+    let disabled = "[actions]\nENABLED = false\n";
+    ensure!(
+        rendered.matches(disabled).count() == 1,
+        "Forgejo Actions default must appear exactly once"
+    );
+    if forgejo_actions_enabled(deployment)? {
+        rendered = rendered.replacen(disabled, "[actions]\nENABLED = true\n", 1);
+    }
+    if let Some((name, email)) = signing {
+        use std::fmt::Write as _;
+        write!(rendered,
+            "[repository.signing]\nFORMAT = ssh\nSIGNING_KEY = /etc/forgejo-signing/signing_key.pub\n\
+             SIGNING_NAME = {name}\nSIGNING_EMAIL = {email}\n\
+             INITIAL_COMMIT = always\nCRUD_ACTIONS = always\nMERGES = always\n"
+        )?;
+    }
+    Ok(rendered)
+}
 
 pub(super) fn render_forgejo_app_ini(
     root_url: &str,
@@ -2690,6 +2797,104 @@ sops:
                 && app_ini.contains("ENABLE_AUTO_REGISTRATION = false")
                 && app_ini.contains("EMAIL_DOMAIN_ALLOWLIST =\n"),
             "the deployment's base configuration keeps every registration path closed"
+        );
+    }
+
+    #[test]
+    fn forgejo_actions_requires_explicit_opt_in_and_instance_signing() {
+        let mut deployment = service_deployment(ServiceSecrets::Forgejo);
+        let payloads = synthetic_service_payloads(ServiceSecrets::Forgejo);
+        let render = |deployment: &Deployment| {
+            build_service_secrets(ServiceSecrets::Forgejo, deployment, "navigator", &payloads)
+        };
+        assert!(render(&deployment).unwrap()[0].data["app.ini"]
+            .contains("[actions]\nENABLED = false\n"));
+        deployment
+            .coordinates
+            .insert("NAVIGATOR_FORGEJO_ACTIONS_ENABLED".into(), "yes".into());
+        assert!(
+            render(&deployment).is_err(),
+            "an invalid opt-in must fail closed"
+        );
+        deployment
+            .coordinates
+            .insert("NAVIGATOR_FORGEJO_ACTIONS_ENABLED".into(), "true".into());
+        assert!(
+            render(&deployment).is_err(),
+            "Actions requires the signing prerequisites"
+        );
+    }
+
+    #[test]
+    fn forgejo_signing_projects_a_complete_key_pair_without_exposing_it_in_config() {
+        let mut deployment = service_deployment(ServiceSecrets::Forgejo);
+        let mut payloads = synthetic_service_payloads(ServiceSecrets::Forgejo);
+        for (key, value) in [
+            (
+                "NAVIGATOR_FORGEJO_SIGNING_PRIVATE_KEY",
+                "synthetic-private-signing-key",
+            ),
+            (
+                "NAVIGATOR_FORGEJO_SIGNING_PUBLIC_KEY",
+                "synthetic-public-signing-key",
+            ),
+        ] {
+            deployment.forgejo_encrypted_keys.insert(key.into());
+            payloads.insert(key.into(), value.into());
+        }
+        for (key, value) in [
+            ("NAVIGATOR_FORGEJO_SIGNING_NAME", "Example Forge"),
+            ("NAVIGATOR_FORGEJO_SIGNING_EMAIL", "forge@example.test"),
+            ("NAVIGATOR_FORGEJO_ACTIONS_ENABLED", "true"),
+        ] {
+            deployment.coordinates.insert(key.into(), value.into());
+        }
+        let keys = service_plan(&deployment, ServiceSecrets::Forgejo).unwrap();
+        let secrets =
+            build_service_secrets(ServiceSecrets::Forgejo, &deployment, "navigator", &payloads)
+                .unwrap();
+        let signing = secrets
+            .iter()
+            .find(|secret| secret.name == "navigator-forgejo-signing")
+            .expect("instance signing Secret");
+        assert_eq!(signing.data["signing_key"], "synthetic-private-signing-key");
+        assert_eq!(
+            signing.data["signing_key.pub"],
+            "synthetic-public-signing-key"
+        );
+        assert!(ServiceSecrets::Forgejo
+            .targets(&keys)
+            .contains(&"navigator-forgejo-signing"));
+        let ini = &secrets[0].data["app.ini"];
+        assert!(ini.contains("[actions]\nENABLED = true\n"));
+        assert!(ini.contains("SIGNING_KEY = /etc/forgejo-signing/signing_key.pub"));
+        assert!(ini.contains("SIGNING_NAME = Example Forge\nSIGNING_EMAIL = forge@example.test\n"));
+        assert!(
+            ini.contains("INITIAL_COMMIT = always\nCRUD_ACTIONS = always\nMERGES = always\n"),
+            "server signing must not require a separate human key or second factor"
+        );
+        assert!(!ini.contains("synthetic-private-signing-key"));
+        assert!(!ini.contains("synthetic-public-signing-key"));
+
+        deployment.coordinates.insert(
+            "NAVIGATOR_FORGEJO_SIGNING_NAME".into(),
+            "Example\n[service]\nDISABLE_REGISTRATION=false".into(),
+        );
+        assert!(
+            service_plan(&deployment, ServiceSecrets::Forgejo).is_err(),
+            "signing identity must not inject configuration sections"
+        );
+        deployment.coordinates.insert(
+            "NAVIGATOR_FORGEJO_SIGNING_NAME".into(),
+            "Example Forge".into(),
+        );
+
+        deployment
+            .forgejo_encrypted_keys
+            .remove("NAVIGATOR_FORGEJO_SIGNING_PUBLIC_KEY");
+        assert!(
+            service_plan(&deployment, ServiceSecrets::Forgejo).is_err(),
+            "partial signing pairs must be refused before reading credentials"
         );
     }
 

@@ -68,6 +68,7 @@ source_id() {
 # change to that formatting fails closed and is caught there.
 set -- --name "$name" --provider openidConnect --key "$client_id" --secret "$client_secret" \
   --auto-discover-url "$discovery_url" --scopes email --scopes profile \
+  --skip-local-2fa \
   --required-claim-name email_verified --required-claim-value '%!s(bool=true)'
 
 # Adding or updating the source fetches the discovery document, so an issuer

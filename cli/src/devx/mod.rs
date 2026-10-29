@@ -901,6 +901,9 @@ fn dispatch_with_dns_provider(
         crate::Command::Ops(crate::OpsCmd::SurrealArchive(
             crate::SurrealArchiveCmd::RestoreDrill { key },
         )) => crate::surreal_archive::restore_drill(&key),
+        crate::Command::Ops(crate::OpsCmd::Forgejo(crate::ForgejoPolicyCmd::RunnerOnce(
+            options,
+        ))) => forgejo::runner::run(&options),
         crate::Command::Ops(crate::OpsCmd::Forgejo(crate::ForgejoPolicyCmd::Bundle {
             mirror,
             output,

@@ -11,8 +11,7 @@ use reqwest::header::{HeaderMap, COOKIE, LOCATION, SET_COOKIE};
 use reqwest::{Client, Response, StatusCode};
 
 use super::{
-    enrollment_secret, forgejo_csrf, path_and_query, rauthy_template, solve_pow, CookieJar,
-    FIXTURE_PASSWORD,
+    forgejo_csrf, path_and_query, rauthy_template, solve_pow, CookieJar, FIXTURE_PASSWORD,
 };
 
 /// The Forgejo `OAuth2` source name in the KIND identity wiring.
@@ -25,9 +24,6 @@ pub(super) enum Outcome {
     SignedIn,
     /// No account and no auto-registration: offered the link-account page.
     LinkAccount,
-    /// The identity provider vouched for the user, and Forgejo now asks for
-    /// the account's TOTP code before it opens a session.
-    TwoFactor,
     /// Refused outright, with the HTTP status and page title.
     Refused(u16, String),
 }
@@ -168,7 +164,6 @@ pub(super) async fn sign_in(
         return Ok(match path {
             path if path == "/" => Outcome::SignedIn,
             path if path.starts_with("/user/link_account") => Outcome::LinkAccount,
-            path if path.starts_with("/user/two_factor") => Outcome::TwoFactor,
             path => Outcome::Refused(status.as_u16(), format!("redirect to {path}")),
         });
     }
@@ -268,75 +263,4 @@ pub(super) async fn try_local_signup(client: &Client, forge: &str) -> Result<(St
     )
     .await?;
     Ok((html, response.status().as_u16()))
-}
-
-/// Read the TOTP secret Forgejo offers on its enrollment page.
-pub(super) async fn enrollment_page_secret(
-    client: &Client,
-    forge: &str,
-    jar: &mut CookieJar,
-) -> Result<String> {
-    let page = get(
-        client,
-        &format!("{forge}/user/settings/security/two_factor/enroll"),
-        jar,
-    )
-    .await?;
-    ensure!(
-        page.status() == StatusCode::OK,
-        "the TOTP enrollment page answered {}",
-        page.status()
-    );
-    let html = page.text().await.context("read the enrollment page")?;
-    enrollment_secret(&html).context("the enrollment page shows no TOTP secret")
-}
-
-/// Confirm TOTP enrollment with a code. Returns the status and redirect.
-pub(super) async fn enroll(
-    client: &Client,
-    forge: &str,
-    jar: &mut CookieJar,
-    code: &str,
-) -> Result<(u16, String)> {
-    let response = post_form(
-        client,
-        forge,
-        "/user/settings/security/two_factor/enroll",
-        jar,
-        &[("passcode", code)],
-    )
-    .await?;
-    let status = response.status().as_u16();
-    let target = response
-        .headers()
-        .get(LOCATION)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_owned();
-    Ok((status, target))
-}
-
-/// Answer the sign-in TOTP prompt. Returns the status and redirect.
-pub(super) async fn submit_two_factor(
-    client: &Client,
-    forge: &str,
-    jar: &mut CookieJar,
-    code: &str,
-) -> Result<(u16, String)> {
-    let response = post_form(
-        client,
-        forge,
-        "/user/two_factor",
-        jar,
-        &[("passcode", code)],
-    )
-    .await?;
-    let status = response.status().as_u16();
-    let target = response
-        .headers()
-        .get(LOCATION)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_owned();
-    Ok((status, target))
 }

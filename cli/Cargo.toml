@@ -30,8 +30,6 @@ flate2.workspace = true
 futures.workspace = true
 google-cloud-auth.workspace = true
 google-cloud-token.workspace = true
-# `dev forgejo smoke` computes RFC 6238 TOTP codes for its synthetic user.
-hmac.workspace = true
 image.workspace = true
 import.workspace = true
 include_dir.workspace = true
@@ -58,7 +56,6 @@ solana-attestation-service-client.workspace = true
 # newest published image tag. All three are semver questions, so all three ask
 # the semver crate rather than a grammar written here.
 semver.workspace = true
-sha1.workspace = true
 sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true

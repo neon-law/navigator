@@ -203,8 +203,8 @@ extension's own, not as application keys.
 The opt-in `k8s/forgejo/` StatefulSet runs Forgejo beside Navigator, with its own `forgejo` database and login on the
 same PostgreSQL server. [`forgejo-deployment.md`](forgejo-deployment.md) is the operator guide. It covers:
 
-- **Sign-in.** Forgejo uses the installation's existing OIDC issuer with its own client and callback, requires a TOTP
-  second factor, and keeps registration closed until the email-domain allowlist is synced.
+- **Sign-in.** Forgejo uses Google OAuth with its own client and callback, without a separate local password or factor,
+  and keeps registration closed until the email-domain allowlist is synced. KIND uses the synthetic Rauthy OIDC fixture.
 - **The Project gate.** `navigator project scaffold` writes `.forgejo/workflows/gate.yml` for a Forgejo-backed Project.
 - **Git bundle archive and restore.** `navigator ops forgejo archive` and `navigator ops forgejo restore` prove one Git
   bundle round trip per invocation.

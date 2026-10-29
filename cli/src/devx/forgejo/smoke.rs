@@ -7,9 +7,8 @@
 //! 3. Admission: with `example.test` allowed, a verified allowed address gets
 //!    an account bound to its issuer subject; another domain, a suffix
 //!    lookalike, and an unverified address get none.
-//! 4. Two factors: the new account is held at TOTP enrollment, and git and
-//!    the API refuse it, until it enrolls; after that, OIDC sign-in without a
-//!    code or with a wrong code opens no session, and the right code does.
+//! 4. OIDC sign-in opens settings directly without a local second-factor
+//!    enrollment, and the account can use its scoped API credential.
 //! 5. Git and Actions: the account clones, commits, and pushes a private
 //!    repository over HTTP, and the pushed workflow runs on the KIND runner.
 //! 6. Merge policy: drift-only reads, convergent protection, removed-check
@@ -29,14 +28,14 @@
 //!    deletion, then scale-to-zero and back; the account still signs in by
 //!    the same issuer subject once the allowlist is closed again.
 //!
-//! It finishes with the allowlist empty. Every identity, repository, TOTP
-//! secret, and credential is synthetic. Shells out to `kubectl` and `git`
+//! It finishes with the allowlist empty. Every identity, repository,
+//! and credential is synthetic. Shells out to `kubectl` and `git`
 //! and talks HTTP to a port-forward, so it is excluded from the coverage gate.
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
 
@@ -44,9 +43,9 @@ use super::super::KindConfig;
 use super::cluster::Kube;
 use super::oidc::{self, Outcome};
 use super::{
-    actions_context, forwarded_port, totp, wrong_totp, CookieJar, Seed, ADMISSION_CONFIG_MAP,
-    ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW, DATA_CLAIM, DENIED_IDENTITIES,
-    GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, SEED_SECRET, SMOKE_ALLOWLIST, STATEFULSET,
+    actions_context, forwarded_port, CookieJar, Seed, ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY,
+    ALLOWLIST_KEY, BOT_PUSH_WORKFLOW, DATA_CLAIM, DENIED_IDENTITIES, GATE_WORKFLOW, POD,
+    POSTGRES_POD, PUBLISH_WORKFLOW, SEED_SECRET, SMOKE_ALLOWLIST, STATEFULSET,
 };
 
 /// The allowed identity's Forgejo user name (`USERNAME = email` keeps the
@@ -146,16 +145,13 @@ pub(in crate::devx) fn smoke(cfg: &KindConfig) -> Result<()> {
     let mut session = CookieJar::default();
     let subject = runtime.block_on(admission_open(&kube, &http, &forward.origin, &mut session))?;
 
-    step("two factors: enrollment first, then a TOTP code on every sign-in");
+    step("OIDC: the provider session opens settings and permits API access directly");
     let token = user_token(&kube)?;
-    let mut totp_clock = TotpClock::default();
-    let secret = runtime.block_on(two_factor_proofs(
-        &kube,
+    runtime.block_on(provider_session_proofs(
         &http,
         &forward.origin,
         &mut session,
         &token,
-        &mut totp_clock,
     ))?;
 
     step("git: clone, commit, and push a private repository over HTTP");
@@ -253,13 +249,11 @@ pub(in crate::devx) fn smoke(cfg: &KindConfig) -> Result<()> {
         &http,
         &forward.origin,
         &subject,
-        &secret,
-        &mut totp_clock,
     ))?;
 
     println!(
         "PASS: Forgejo on KIND PostgreSQL (TLS, isolated login), closed registration, \
-         email-domain admission through Rauthy, mandatory TOTP, git clone/push, an Actions \
+         email-domain admission through Rauthy, direct OIDC sign-in, git clone/push, an Actions \
          run, protected main with rejected ordinary/admin pushes, a signed green PR \
          squash-merging itself with publication on its merge commit while red, draft, direct, \
          and bot paths are refused, a Firm organization's \
@@ -1404,8 +1398,7 @@ fn set_site_admin(kube: &Kube, admin: bool) -> Result<()> {
 /// `path`, then read both back.
 ///
 /// Organization creation is closed to regular accounts
-/// (`DISABLE_REGULAR_ORG_CREATION`) and every account needs a second factor,
-/// so the enrolled smoke account stands in for Navigator's provisioning
+/// (`DISABLE_REGULAR_ORG_CREATION`), so the admitted smoke account stands in for Navigator's provisioning
 /// identity as a site administrator for this phase only, and is demoted
 /// again whatever the outcome.
 fn provision_firm_repository(
@@ -1641,8 +1634,8 @@ fn linked_subject(kube: &Kube) -> Result<String> {
     Ok(subject)
 }
 
-/// A personal access token for the allowed account, minted by the admin CLI
-/// so the two-factor gate on token use can be observed before enrollment.
+/// A synthetic API credential for the admitted smoke account, minted by the
+/// admin CLI; people authenticate through OIDC.
 fn user_token(kube: &Kube) -> Result<String> {
     let name = format!("smoke-{}", super::hex(&rand::random::<[u8; 6]>()));
     let token = kube.forgejo(
@@ -1675,7 +1668,7 @@ async fn admission_open(
     for (email, why) in DENIED_IDENTITIES {
         let outcome = oidc::sign_in(http, forge, email, &mut CookieJar::default()).await?;
         ensure!(
-            !matches!(outcome, Outcome::SignedIn | Outcome::TwoFactor),
+            outcome != Outcome::SignedIn,
             "{why} ({email}) signed in: {outcome:?}"
         );
         ensure!(
@@ -1704,181 +1697,54 @@ async fn admission_open(
     linked_subject(kube)
 }
 
-/// TOTP codes for the smoke account. Forgejo refuses a code it has already
-/// accepted, so each use waits for a step whose code is new.
-#[derive(Default)]
-struct TotpClock {
-    used: Vec<String>,
-}
-
-impl TotpClock {
-    fn now() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_secs())
-            .unwrap_or_default()
-    }
-
-    async fn fresh(&mut self, secret: &str) -> Result<String> {
-        loop {
-            let code = totp(secret, Self::now())?;
-            if !self.used.contains(&code) {
-                self.used.push(code.clone());
-                return Ok(code);
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
-    }
-}
-
-/// The five two-factor cases, in order. Returns the enrolled TOTP secret.
-async fn two_factor_proofs(
-    kube: &Kube,
+/// Provider sign-in opens a session without a local enrollment or challenge.
+async fn provider_session_proofs(
     http: &reqwest::Client,
     forge: &str,
     session: &mut CookieJar,
     token: &str,
-    clock: &mut TotpClock,
-) -> Result<String> {
-    // 1. Signed in through Rauthy but not enrolled: every page sends the
-    //    account to its security settings, where enrollment is offered.
-    for path in ["/", "/explore/repos", "/user/settings"] {
-        let (status, target) = oidc::landing(http, forge, path, session).await?;
-        ensure!(
-            status == 303 && target.ends_with("/user/settings/security"),
-            "before enrollment {path} answered {status} {target}"
-        );
-    }
-    let secret = oidc::enrollment_page_secret(http, forge, session).await?;
-
-    // 2. Git over HTTP and the API refuse the account's token until it
-    //    enrolls. A git request for a repository that does not exist yet
-    //    answers 404 to an admitted caller, so any other refusal is the gate.
-    let (api_status, api_body) = api_user(http, forge, token).await?;
-    ensure!(
-        api_status == 403 && api_body.contains("two-factor"),
-        "before enrollment the API answered {api_status}: {api_body}"
-    );
-    let git_status = git_refs_status(http, forge, token).await?;
-    ensure!(
-        !matches!(git_status, 200 | 404),
-        "before enrollment git over HTTP admitted the token ({git_status})"
-    );
-    let gate = api(
-        http,
-        token,
-        reqwest::Method::POST,
-        &format!("{forge}/api/v1/user/repos"),
-    )
-    .json(&serde_json::json!({"name": "before-enrollment", "private": true}))
-    .send()
-    .await
-    .context("POST /api/v1/user/repos")?;
-    ensure!(
-        !gate.status().is_success(),
-        "the API created a repository for an account without a second factor"
-    );
-
-    let code = clock.fresh(&secret).await?;
-    let (status, target) = oidc::enroll(http, forge, session, &code).await?;
-    ensure!(status == 303, "TOTP enrollment answered {status} {target}");
-    let enrolled = psql(
-        kube,
-        "forgejo",
-        &format!(
-            "SELECT count(*) FROM two_factor t JOIN \"user\" u ON u.id = t.uid \
-             WHERE u.lower_name = '{OWNER}'"
-        ),
-    )?;
-    ensure!(
-        enrolled == "1",
-        "the account has {enrolled} TOTP enrollments"
-    );
-    let (api_status, api_body) = api_user(http, forge, token).await?;
-    ensure!(
-        api_status == 200,
-        "after enrollment the API answered {api_status}: {api_body}"
-    );
-    let git_status = git_refs_status(http, forge, token).await?;
-    ensure!(
-        git_status == 404,
-        "after enrollment git over HTTP answered {git_status} for a missing repository"
-    );
-
-    // 3. Enrolled: Rauthy's sign-in alone opens no session.
-    let mut fresh = CookieJar::default();
-    let outcome = oidc::sign_in(http, forge, ALLOWED_IDENTITY, &mut fresh).await?;
-    ensure!(
-        outcome == Outcome::TwoFactor,
-        "an enrolled account skipped the TOTP prompt: {outcome:?}"
-    );
-    let (status, target) = oidc::landing(http, forge, "/user/settings", &mut fresh).await?;
-    ensure!(
-        status == 303 && target.contains("/user/login"),
-        "without a code /user/settings answered {status} {target}"
-    );
-
-    // 4. A wrong code opens no session.
-    let mut wrong = CookieJar::default();
-    ensure!(
-        oidc::sign_in(http, forge, ALLOWED_IDENTITY, &mut wrong).await? == Outcome::TwoFactor,
-        "the TOTP prompt did not return"
-    );
-    let bad = wrong_totp(&secret, TotpClock::now())?;
-    let (status, target) = oidc::submit_two_factor(http, forge, &mut wrong, &bad).await?;
-    ensure!(
-        !(status == 303 && target == "/"),
-        "a wrong TOTP code signed in"
-    );
-    let (status, target) = oidc::landing(http, forge, "/user/settings", &mut wrong).await?;
-    ensure!(
-        status == 303 && target.contains("/user/login"),
-        "after a wrong code /user/settings answered {status} {target}"
-    );
-
-    // 5. The right code opens the session.
-    sign_in_with_code(http, forge, &secret, clock).await?;
-    Ok(secret)
-}
-
-/// Sign the allowed account in through Rauthy and its TOTP prompt.
-async fn sign_in_with_code(
-    http: &reqwest::Client,
-    forge: &str,
-    secret: &str,
-    clock: &mut TotpClock,
-) -> Result<CookieJar> {
-    let mut jar = CookieJar::default();
-    let outcome = oidc::sign_in(http, forge, ALLOWED_IDENTITY, &mut jar).await?;
-    ensure!(
-        outcome == Outcome::TwoFactor,
-        "the enrolled account was not asked for a code: {outcome:?}"
-    );
-    let code = clock.fresh(secret).await?;
-    let (status, target) = oidc::submit_two_factor(http, forge, &mut jar, &code).await?;
-    ensure!(
-        status == 303 && target == "/",
-        "the right TOTP code answered {status} {target}"
-    );
-    let (status, _) = oidc::landing(http, forge, "/user/settings", &mut jar).await?;
+) -> Result<()> {
+    let (status, target) = oidc::landing(http, forge, "/user/settings", session).await?;
     ensure!(
         status == 200,
-        "the signed-in account cannot open its settings ({status})"
+        "OIDC session cannot open settings directly: {status} {target}"
     );
-    Ok(jar)
+    let (status, _) = api_user(http, forge, token).await?;
+    ensure!(
+        status == 200,
+        "admitted account API access was refused: {status}"
+    );
+    ensure!(
+        git_refs_status(http, forge, token).await? == 404,
+        "admitted git access did not reach the missing repository"
+    );
+    Ok(())
+}
+
+/// Sign in directly through the configured OIDC provider.
+async fn provider_sign_in(http: &reqwest::Client, forge: &str) -> Result<()> {
+    let mut jar = CookieJar::default();
+    ensure!(
+        oidc::sign_in(http, forge, ALLOWED_IDENTITY, &mut jar).await? == Outcome::SignedIn,
+        "provider sign-in did not open a session directly"
+    );
+    let (status, target) = oidc::landing(http, forge, "/user/settings", &mut jar).await?;
+    ensure!(
+        status == 200,
+        "OIDC session cannot open settings directly: {status} {target}"
+    );
+    Ok(())
 }
 
 /// With the allowlist closed again, the existing account still signs in by
-/// its issuer subject and its second factor, and no second account appears.
+/// its issuer subject, and no second account appears.
 async fn existing_account_keeps_its_subject(
     kube: &Kube,
     http: &reqwest::Client,
     forge: &str,
     subject: &str,
-    secret: &str,
-    clock: &mut TotpClock,
 ) -> Result<()> {
-    sign_in_with_code(http, forge, secret, clock).await?;
+    provider_sign_in(http, forge).await?;
     ensure!(
         count_users(kube, ALLOWED_IDENTITY)? == 1,
         "a second account appeared for {ALLOWED_IDENTITY}"

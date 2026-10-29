@@ -105,6 +105,9 @@ spec:
             limits:
               memory: 512Mi
           volumeMounts:
+            - name: signing
+              mountPath: /etc/forgejo-signing
+              readOnly: true
             - name: scripts
               mountPath: /etc/navigator/forgejo/scripts
               readOnly: true
@@ -173,6 +176,9 @@ spec:
               cpu: "1"
               memory: 1Gi
           volumeMounts:
+            - name: signing
+              mountPath: /etc/forgejo-signing
+              readOnly: true
             - name: data
               mountPath: /var/lib/gitea
             - name: config
@@ -184,6 +190,13 @@ spec:
             - name: tmp
               mountPath: /tmp
       volumes:
+        # Optional until the operator provisions instance commit signing.
+        # Enabling Actions through the cloud record requires the key pair.
+        - name: signing
+          secret:
+            secretName: navigator-forgejo-signing
+            optional: true
+            defaultMode: 0440
         # The deployment's base app.ini and OAuth2 JWT secret, rendered by
         # `navigator ops secrets apply --service forgejo`.
         - name: config-base

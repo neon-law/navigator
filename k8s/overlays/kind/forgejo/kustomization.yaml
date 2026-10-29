@@ -59,17 +59,6 @@ patches:
             - name: loopback-tmp
               mountPath: /run
               subPath: run
-      # Forgejo loads the signing key with its settings, so the migrating
-      # `identity` init container mounts it too.
-      - op: test
-        path: /spec/template/spec/initContainers/2/name
-        value: identity
-      - op: add
-        path: /spec/template/spec/initContainers/2/volumeMounts/-
-        value:
-          name: signing
-          mountPath: /etc/forgejo-signing
-          readOnly: true
       - op: add
         path: /spec/template/spec/volumes/-
         value:
