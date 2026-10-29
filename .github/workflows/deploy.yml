@@ -2064,7 +2064,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${IMAGE_DIGEST}"
-          cosign sign --yes "${IMAGE_REF}@${IMAGE_DIGEST}"
+          scripts/cosign-sign.sh "${IMAGE_REF}@${IMAGE_DIGEST}"
           echo "digest=${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
@@ -2144,7 +2144,7 @@ jobs:
           echo "${{ matrix.image }} -> ${src}"
           echo "${{ matrix.alias }} -> ${dst}"
           test "${src}" = "${dst}"
-          cosign sign --yes "${registry}/${{ matrix.alias }}@$(docker buildx imagetools inspect --raw "${registry}/${{ matrix.alias }}:${{ needs.release-version.outputs.tag }}" | sha256sum | cut -d' ' -f1 | sed 's/^/sha256:/')"
+          scripts/cosign-sign.sh "${registry}/${{ matrix.alias }}@$(docker buildx imagetools inspect --raw "${registry}/${{ matrix.alias }}:${{ needs.release-version.outputs.tag }}" | sha256sum | cut -d' ' -f1 | sed 's/^/sha256:/')"
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -2420,7 +2420,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${IMAGE_DIGEST}"
-          cosign sign --yes "${IMAGE_REF}@${IMAGE_DIGEST}"
+          scripts/cosign-sign.sh "${IMAGE_REF}@${IMAGE_DIGEST}"
           echo "digest=${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
@@ -3738,7 +3738,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
         run: |
           set -euo pipefail
-          cosign sign --yes "${IMAGE_REF}@${IMAGE_DIGEST}"
+          scripts/cosign-sign.sh "${IMAGE_REF}@${IMAGE_DIGEST}"
           jq -n --arg image "navigator-cli" --arg digest "${IMAGE_DIGEST}" '{($image): $digest}' > image-digest.json
       - name: mirror the same digest to public GHCR
         timeout-minutes: 5
