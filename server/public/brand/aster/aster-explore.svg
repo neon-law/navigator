@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" fill="none">
   <title>Aster the Astrocartographer</title>
-  <desc>A golden star wearing a teal scarf and a satchel, with a paintbrush as tall as a walking staff.</desc>
+  <desc>A golden star with distinct arms, hands, legs and bare feet, wearing a teal scarf and a satchel, with a paintbrush as tall as a walking staff.</desc>
   <defs>
     <linearGradient id="gold" x1="0" y1="0" x2=".8" y2="1"><stop stop-color="#FFE7A3"/><stop offset=".52" stop-color="#E9B949"/><stop offset="1" stop-color="#C88529"/></linearGradient>
     <linearGradient id="teal" x2="1" y2="1"><stop stop-color="#438D8B"/><stop offset="1" stop-color="#164B55"/></linearGradient>
@@ -9,10 +9,20 @@
   </defs>
   <g id="paint-trail" fill="none" stroke-linecap="round"><path d="M97 369 C16 413 145 452 284 424 S458 434 408 468" stroke="#236B70" stroke-width="12" opacity=".65"/><path d="M91 389 C27 437 224 456 307 437" stroke="#D9826B" stroke-width="6"/></g>
   <g id="aster" transform="translate(35 -20) rotate(12 250 260)">
+    <g id="left-leg" fill="url(#gold)" stroke="#B8792A" stroke-width="3" stroke-linejoin="round">
+      <path d="M195 362 Q184 391 207 412 L237 433 Q247 441 257 430 Q266 419 251 410 L230 393 L230 371Z"/>
+      <path d="M244 419 L252 424" stroke="#CB9135" stroke-width="2" stroke-linecap="round"/>
+    </g>
     <g id="body">
     <path d="M239 132 Q251 109 261 135 L294 203 Q298 211 310 213 L382 222 Q408 225 390 244 L335 296 Q327 304 330 317 L343 390 Q347 415 325 403 L260 368 Q250 362 239 369 L176 404 Q153 417 158 390 L172 317 Q175 304 165 295 L111 244 Q93 226 118 222 L192 212 Q204 211 209 199Z" fill="url(#gold)" stroke="#B8792A" stroke-width="3" stroke-linejoin="round"/>
     <path d="M221 190 L247 139 M130 237 L189 230" fill="none" stroke="#FFF0BE" stroke-width="7" stroke-linecap="round" opacity=".7"/>
-  </g><g id="satchel">
+  </g><g id="left-arm" fill="url(#gold)" stroke="#B8792A" stroke-width="3">
+      <path d="M183 291 Q166 315 176 344 L194 373 L212 363 L198 337 L203 310"/>
+    </g>
+    <g id="right-arm" fill="url(#gold)" stroke="#B8792A" stroke-width="3">
+      <path d="M322 284 Q343 282 356 258 L372 263 Q364 297 337 308"/>
+    </g>
+    <g id="satchel">
     <path d="M199 321 L299 378" fill="none" stroke="#795332" stroke-width="10"/>
     <rect x="281" y="355" width="59" height="57" rx="12" fill="#805533" stroke="#503B2C" stroke-width="3"/>
     <path d="M283 368 Q309 393 338 368" fill="#A57542" stroke="#503B2C" stroke-width="3"/>
@@ -28,12 +38,24 @@
     <circle cx="229" cy="259" r="3" fill="#FFF8E6"/><circle cx="284" cy="256" r="3" fill="#FFF8E6"/>
     <ellipse cx="203" cy="284" rx="16" ry="8" fill="#D9826B" opacity=".52"/><ellipse cx="304" cy="280" rx="15" ry="8" fill="#D9826B" opacity=".52"/>
     <path d="M239 288 Q254 303 273 285" fill="none" stroke="#79502B" stroke-width="4" stroke-linecap="round"/>
-  </g><g transform="translate(20 150) rotate(-77 150 180)"><g id="brush">
+  </g><g transform="translate(15 195) rotate(-77 150 180)"><g id="brush">
     <path d="M139 443 L144 181 L157 181 L153 443 Q147 454 139 443" fill="url(#wood)" stroke="#62452E" stroke-width="2"/>
     <path d="M141 190 L138 149 L162 149 L161 190Z" fill="url(#brass)" stroke="#A57637" stroke-width="2"/>
     <path d="M137 156 H163 M140 183 H162" stroke="#65462B" stroke-width="3"/>
     <path d="M139 149 C104 112 134 66 168 39 C155 77 188 118 162 149Z" fill="url(#teal)" stroke="#26575A" stroke-width="2"/>
     <path d="M141 140 Q124 108 156 62 M150 144 Q141 101 163 78 M159 141 Q172 114 160 100" fill="none" stroke="#E9B949" stroke-width="3" stroke-linecap="round"/>
   </g></g>
+    <g id="right-leg" fill="url(#gold)" stroke="#B8792A" stroke-width="3" stroke-linejoin="round">
+      <path d="M264 351 Q302 368 294 400 L280 436 L293 445 Q308 456 295 466 Q284 474 270 463 L251 450 Q243 443 249 429 L262 394 Q269 382 251 377Z"/>
+      <path d="M280 451 Q287 447 292 454 M272 455 Q279 452 283 459" fill="none" stroke="#CB9135" stroke-width="2" stroke-linecap="round"/>
+    </g>
+    <g id="left-hand" fill="url(#gold)" stroke="#B8792A" stroke-width="3" stroke-linecap="round">
+      <path d="M193 362 Q204 353 215 365 L226 374 Q236 383 225 392 Q216 400 205 390 L194 382 Q184 374 193 362"/>
+      <path d="M211 374 L220 382 M207 381 L215 387" stroke="#CB9135" stroke-width="2"/>
+    </g>
+    <g id="right-hand" fill="url(#gold)" stroke="#B8792A" stroke-width="3" stroke-linecap="round">
+      <path d="M354 261 L357 241 Q357 232 364 234 L366 246 L378 234 Q384 230 389 237 Q394 246 384 256 L376 268 Q362 279 354 261"/>
+      <path d="M368 253 L377 248" stroke="#CB9135" stroke-width="2"/>
+    </g>
   </g>
 </svg>
