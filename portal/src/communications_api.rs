@@ -5,7 +5,7 @@
 //! participant. A client reads the conversation through
 //! `GET .../conversation`, which excludes internal notes in the query. The
 //! write logs a call as an internal-note Communication with its structure,
-//! or an email that confirms a call's agreements.
+//! or an email with its source, counterparty role, and optional call confirmation or receipt relation.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -25,7 +25,7 @@ pub(crate) struct CreateCommunicationRequest {
     /// `inbound` or `outbound`.
     direction: String,
     counterparty: String,
-    /// A call's `opposing_counsel`, `client`, `court`, or `other`.
+    /// The counterparty's `opposing_counsel`, `client`, `court`, or `other` role.
     role: Option<String>,
     /// RFC 3339: when the call or email happened.
     at: String,
@@ -42,6 +42,8 @@ pub(crate) struct CreateCommunicationRequest {
     agreements: Vec<String>,
     /// The call whose agreements this email confirms.
     confirms: Option<Uuid>,
+    /// Outbound email whose receipt this inbound email acknowledges.
+    acknowledges: Option<Uuid>,
     #[serde(default)]
     client_visible: bool,
 }
@@ -118,6 +120,12 @@ pub(crate) async fn create_communication(
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
     let source_ref = validate_source_ref(input.channel.trim(), input.source_ref.as_deref())?;
+    if input.channel.trim() == store::communications::channel::CALL && input.acknowledges.is_some()
+    {
+        return Err(ApiError::CommunicationInvalid(
+            "only inbound email can acknowledge receipt".into(),
+        ));
+    }
     let row = match input.channel.trim() {
         store::communications::channel::CALL => store::communications::record_call(
             &state.surreal,
@@ -172,7 +180,7 @@ pub(crate) async fn create_communication(
             if input.body.trim().is_empty() {
                 return Err(ApiError::CommunicationInvalid("the body is empty".into()));
             }
-            let ingested = store::communications::ingest(
+            let ingested = store::communications::ingest_email(
                 &state.surreal,
                 &store::communications::IngestArgs {
                     project_id: id,
@@ -185,6 +193,10 @@ pub(crate) async fn create_communication(
                     source_ref,
                     asset_id: None,
                     occurred_at: &at,
+                },
+                store::communications::EmailDetails {
+                    counterparty_role: input.role.as_deref().map(str::trim),
+                    acknowledges: input.acknowledges,
                 },
             )
             .await

@@ -189,3 +189,76 @@ async fn email_threads_preserve_unassigned_scope_and_repeated_provider_ids() {
     assert!(parity(&surreal, &pg).await.unwrap().is_clean());
     pg.0.close().await;
 }
+
+#[tokio::test]
+async fn email_receipt_mirror_preserves_link_role_and_reconciles_metadata() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let surreal = mem_surreal().await;
+    let project = crate::test_support::seed_project_surreal(&surreal, "Synthetic receipt").await;
+    let mut args = IngestArgs {
+        project_id: project,
+        channel: "email_outbound",
+        direction: "outbound",
+        author_person_id: None,
+        counterparty: Some("counsel@example.test"),
+        subject: None,
+        body: "Synthetic message",
+        source_ref: Some("synthetic:sent"),
+        asset_id: None,
+        occurred_at: "2026-10-16T10:00:00Z",
+    };
+    let sent = communications::ingest_email(
+        &surreal,
+        &args,
+        communications::EmailDetails {
+            counterparty_role: Some("opposing_counsel"),
+            acknowledges: None,
+        },
+    )
+    .await
+    .unwrap();
+    args.channel = "email_inbound";
+    args.direction = "inbound";
+    args.source_ref = Some("synthetic:receipt");
+    args.occurred_at = "2026-10-16T11:00:00Z";
+    let receipt = communications::ingest_email(
+        &surreal,
+        &args,
+        communications::EmailDetails {
+            counterparty_role: Some("opposing_counsel"),
+            acknowledges: Some(sent.communication_id),
+        },
+    )
+    .await
+    .unwrap();
+    let key = MirrorKey::Communication(receipt.communication_id);
+    assert_eq!(
+        mirror(&surreal, &pg, &key).await.unwrap(),
+        Mirrored::Written
+    );
+    let row: (Option<String>, Option<Uuid>) =
+        sqlx::query_as("SELECT counterparty_role, acknowledges FROM communication WHERE id=$1")
+            .bind(receipt.communication_id)
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
+    assert_eq!(
+        row,
+        (Some("opposing_counsel".into()), Some(sent.communication_id))
+    );
+    assert_eq!(
+        mirror(&surreal, &pg, &key).await.unwrap(),
+        Mirrored::Unchanged
+    );
+    sqlx::query("UPDATE communication SET counterparty_role=NULL, acknowledges=NULL WHERE id=$1")
+        .bind(receipt.communication_id)
+        .execute(&pg.0)
+        .await
+        .unwrap();
+    assert!(!parity(&surreal, &pg).await.unwrap().is_clean());
+    assert!(reconcile(&surreal, &pg).await.unwrap().is_clean());
+    pg.0.close().await;
+}

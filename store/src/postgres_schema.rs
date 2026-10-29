@@ -1160,6 +1160,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261026130000_add_deadline_description.sql"),
             ),
             (
+                "20261029010000_add_communication_receipts.sql",
+                include_str!("../postgres/migrations/20261029010000_add_communication_receipts.sql"),
+            ),
+            (
                 "20261027120000_add_project_calendar_and_booking_url.sql",
                 include_str!(
                     "../postgres/migrations/20261027120000_add_project_calendar_and_booking_url.sql"

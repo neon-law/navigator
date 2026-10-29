@@ -180,6 +180,7 @@ erDiagram
     }
     communication {
         string id
+        uuid acknowledges
         json agreements
         uuid asset_id
         uuid author_person_id
@@ -187,6 +188,7 @@ erDiagram
         json call
         string channel
         string counterparty
+        string counterparty_role
         string direction
         datetime inserted_at
         string occurred_at
@@ -1311,6 +1313,7 @@ erDiagram
     notation }o--|| case_docket_entry : notation_id
     case_docket_entry }o--|| case_docket_entry : supersedes
     authority_use }o--|| citation : authority_use_id
+    communication }o--|| communication : acknowledges
     asset }o--|| communication : asset_id
     person }o--|| communication : author_person_id
     project }o--|| communication : project_id

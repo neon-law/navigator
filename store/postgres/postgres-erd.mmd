@@ -197,6 +197,7 @@ erDiagram
         int version
     }
     communication {
+        uuid acknowledges
         json agreements
         uuid asset_id
         uuid author_person_id
@@ -204,6 +205,7 @@ erDiagram
         json call
         string channel
         string counterparty
+        string counterparty_role
         string direction
         uuid id
         datetime inserted_at
@@ -1541,6 +1543,7 @@ erDiagram
     brand }o--|| blog_video : references
     firm }o--|| brand : references
     asset }o--|| communication : references
+    communication }o--|| communication : references
     person }o--|| communication : references
     project }o--|| communication : references
     jurisdiction }o--|| credential : references

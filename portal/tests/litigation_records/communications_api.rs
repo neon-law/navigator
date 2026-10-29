@@ -261,3 +261,82 @@ async fn an_opposing_counsel_call_cannot_be_client_visible_and_bad_values_are_re
         "a confirmation of no call is not found: {body}"
     );
 }
+
+#[tokio::test]
+async fn email_receipt_links_preserve_roles_and_reject_invalid_targets_before_writing() {
+    let f = fixture().await;
+    let uri = format!("/app/api/projects/{}/communications", f.project_id);
+    let sent = json!({"channel":"email_outbound", "direction":"outbound",
+        "counterparty":"counsel@example.com", "role":"opposing_counsel",
+        "at":"2026-10-09T15:00:00Z", "body":"Sent message", "source_ref":"gmail:synthetic/sent"});
+    let (status, outbound) = send(&f.app, "POST", &uri, &f.participant, sent.clone()).await;
+    assert_eq!(status, 201, "{outbound}");
+    assert_eq!(outbound["counterparty_role"], "opposing_counsel");
+    let mut receipt = sent.clone();
+    receipt["channel"] = json!("email_inbound");
+    receipt["direction"] = json!("inbound");
+    receipt["at"] = json!("2026-10-09T16:00:00Z");
+    receipt["source_ref"] = json!("gmail:synthetic/receipt");
+    receipt["acknowledges"] = outbound["id"].clone();
+    let (status, inbound) = send(&f.app, "POST", &uri, &f.participant, receipt.clone()).await;
+    assert_eq!(status, 201, "{inbound}");
+    assert_eq!(inbound["acknowledges"], outbound["id"]);
+    assert_eq!(inbound["counterparty_role"], "opposing_counsel");
+    let (status, replay) = send(&f.app, "POST", &uri, &f.participant, receipt.clone()).await;
+    assert_eq!(status, 201, "{replay}");
+    assert_eq!(replay["id"], inbound["id"]);
+    let (_, rows) = send(&f.app, "GET", &uri, &f.participant, Value::Null).await;
+    assert_eq!(rows.as_array().unwrap().len(), 2);
+    assert_eq!(
+        rows[0]["receipt_acknowledged_at"],
+        "2026-10-09T16:00:00+00:00"
+    );
+
+    let other_project =
+        store::test_support::seed_project_surreal(&f.surreal, "Other synthetic project").await;
+    let other = store::communications::ingest(
+        &f.surreal,
+        &store::communications::IngestArgs {
+            project_id: other_project,
+            channel: "email_outbound",
+            direction: "outbound",
+            author_person_id: None,
+            counterparty: None,
+            subject: None,
+            body: "Other message",
+            source_ref: None,
+            asset_id: None,
+            occurred_at: "2026-10-09T15:00:00Z",
+        },
+    )
+    .await
+    .unwrap();
+    for target in [
+        json!(Uuid::now_v7()),
+        json!(other.communication_id),
+        inbound["id"].clone(),
+    ] {
+        receipt["source_ref"] = Value::Null;
+        receipt["acknowledges"] = target;
+        let (status, error) = send(&f.app, "POST", &uri, &f.participant, receipt.clone()).await;
+        assert!(status == 400 || status == 404, "{status}: {error}");
+    }
+    receipt["acknowledges"] = outbound["id"].clone();
+    for (channel, direction, role) in [
+        ("email_outbound", "outbound", "other"),
+        ("email_inbound", "outbound", "other"),
+        ("email_inbound", "inbound", "invalid"),
+    ] {
+        receipt["channel"] = json!(channel);
+        receipt["direction"] = json!(direction);
+        receipt["role"] = json!(role);
+        let (status, error) = send(&f.app, "POST", &uri, &f.participant, receipt.clone()).await;
+        assert_eq!(status, 400, "{error}");
+    }
+    let (_, rows) = send(&f.app, "GET", &uri, &f.participant, Value::Null).await;
+    assert_eq!(
+        rows.as_array().unwrap().len(),
+        2,
+        "invalid requests must not insert rows"
+    );
+}

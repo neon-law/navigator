@@ -1599,13 +1599,12 @@ enum CommunicationCmd {
         #[command(flatten)]
         host: HostOpt,
     },
-    /// Log a call as an internal-note Communication, or an email that
-    /// confirms a call's agreements, and print the row that was written.
+    /// Log a call or email and print the stored Communication.
     ///
     /// Communications stay server-only: nothing is written under
     /// `documents/`, and `project sync` writes no pointer for one.
     Create {
-        /// `call`, or `email_inbound` / `email_outbound` with `--confirms`.
+        /// `call`, `email_inbound`, or `email_outbound`.
         #[arg(long, default_value = "call")]
         channel: String,
         /// `inbound` or `outbound`: who placed the call or sent the email.
@@ -1618,7 +1617,7 @@ enum CommunicationCmd {
         /// opposing counsel is always internal.
         #[arg(long)]
         role: Option<String>,
-        /// RFC 3339 with an explicit offset: when the call started.
+        /// RFC 3339 with an explicit offset: when the call or email happened.
         #[arg(long)]
         at: String,
         /// Whole minutes.
@@ -1640,6 +1639,12 @@ enum CommunicationCmd {
         /// The call whose agreements this email confirms.
         #[arg(long)]
         confirms: Option<uuid::Uuid>,
+        /// Outbound email whose receipt this inbound email acknowledges.
+        #[arg(long)]
+        acknowledges: Option<uuid::Uuid>,
+        /// External message identity for traceability and idempotent ingest.
+        #[arg(long)]
+        source_ref: Option<String>,
         /// Share the note with the client. Refused for `--role opposing_counsel`.
         #[arg(long)]
         client_visible: bool,
@@ -5009,6 +5014,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 meet_and_confer,
                 agreement,
                 confirms,
+                acknowledges,
+                source_ref,
                 client_visible,
                 subject,
                 dry_run,
@@ -5030,6 +5037,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                         meet_and_confer,
                         agreements: agreement,
                         confirms,
+                        acknowledges,
+                        source_ref,
                         client_visible,
                         subject,
                     },
