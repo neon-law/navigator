@@ -193,3 +193,7 @@ values = ["John Smith", "Zelda Quillstone", "Fixture Person"]
 [[names]]
 reason = "Corporate party in the published Nevada case citation used by the synthetic litigation fixture."
 values = ["D.R. Horton"]
+
+[[names]]
+reason = "Vesta's public fictional mascot introduction, not a person's name."
+values = ["Meet Aster"]

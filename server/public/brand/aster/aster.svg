@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" fill="none">
+  <title>Aster the Astrocartographer</title>
+  <desc>A golden star with distinct arms, hands, legs and bare feet, wearing a teal scarf and a satchel, with a paintbrush as tall as a walking cane.</desc>
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2=".8" y2="1"><stop stop-color="#FFE7A3"/><stop offset=".52" stop-color="#E9B949"/><stop offset="1" stop-color="#C88529"/></linearGradient>
+    <linearGradient id="teal" x2="1" y2="1"><stop stop-color="#438D8B"/><stop offset="1" stop-color="#164B55"/></linearGradient>
+    <linearGradient id="wood" x2="1"><stop stop-color="#734731"/><stop offset=".45" stop-color="#BF8D53"/><stop offset="1" stop-color="#583A2C"/></linearGradient>
+    <linearGradient id="brass" x2="1"><stop stop-color="#9C672D"/><stop offset=".45" stop-color="#F2D78C"/><stop offset="1" stop-color="#B98637"/></linearGradient>
+  </defs>
+
+  <g id="aster" transform="translate(0 0)">
+    <g id="left-leg" fill="url(#gold)" stroke="#B8792A" stroke-width="3" stroke-linejoin="round">
+      <path d="M192 366 Q185 402 177 436 L164 449 Q151 465 172 470 Q189 474 207 465 Q215 459 211 448 L225 380Z"/>
+      <path d="M164 458 Q173 453 181 456 M177 464 Q184 459 190 461" fill="none" stroke="#CB9135" stroke-width="2" stroke-linecap="round"/>
+    </g>
+    <g id="right-leg" fill="url(#gold)" stroke="#B8792A" stroke-width="3" stroke-linejoin="round">
+      <path d="M273 375 L284 429 Q285 446 302 453 L329 466 Q349 474 354 459 Q357 448 341 441 L315 424 L308 378Z"/>
+      <path d="M332 449 Q340 446 344 452 M322 451 Q330 450 333 457" fill="none" stroke="#CB9135" stroke-width="2" stroke-linecap="round"/>
+    </g>
+    <g id="body">
+    <path d="M239 132 Q251 109 261 135 L294 203 Q298 211 310 213 L382 222 Q408 225 390 244 L335 296 Q327 304 330 317 L343 390 Q347 415 325 403 L260 368 Q250 362 239 369 L176 404 Q153 417 158 390 L172 317 Q175 304 165 295 L111 244 Q93 226 118 222 L192 212 Q204 211 209 199Z" fill="url(#gold)" stroke="#B8792A" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M221 190 L247 139 M130 237 L189 230" fill="none" stroke="#FFF0BE" stroke-width="7" stroke-linecap="round" opacity=".7"/>
+  </g><g id="left-arm" fill="url(#gold)" stroke="#B8792A" stroke-width="3">
+      <path d="M184 286 Q166 289 154 306 L161 329 Q185 328 202 306"/>
+    </g>
+    <g id="right-arm" fill="url(#gold)" stroke="#B8792A" stroke-width="3">
+      <path d="M323 292 Q352 300 358 326 L348 352 L328 345 L334 324 L314 312"/>
+    </g>
+    <g id="satchel">
+    <path d="M199 321 L299 378" fill="none" stroke="#795332" stroke-width="10"/>
+    <rect x="281" y="355" width="59" height="57" rx="12" fill="#805533" stroke="#503B2C" stroke-width="3"/>
+    <path d="M283 368 Q309 393 338 368" fill="#A57542" stroke="#503B2C" stroke-width="3"/>
+    <rect x="306" y="372" width="10" height="18" rx="2" fill="url(#brass)"/>
+    <circle cx="333" cy="416" r="10" fill="none" stroke="#C69747" stroke-width="2"/><path d="M333 406 V426 M323 416 H343" stroke="#C69747" stroke-width="2"/>
+  </g><g id="scarf">
+    <path d="M278 310 Q335 279 380 301 L405 294 L394 318 L410 332 Q358 307 294 335Z" fill="url(#teal)" stroke="#164B55" stroke-width="2"/>
+    <path d="M184 301 Q239 330 304 297 L312 316 Q245 355 181 323Z" fill="url(#teal)" stroke="#164B55" stroke-width="2"/>
+    <path d="M193 311 Q240 335 293 311 M317 317 Q352 302 379 310" fill="none" stroke="#83B7AC" stroke-width="3" opacity=".6"/>
+  </g><g id="face">
+    <path d="M214 249 Q224 238 234 247 M269 247 Q280 236 290 245" fill="none" stroke="#72502C" stroke-width="3" stroke-linecap="round"/>
+    <ellipse cx="226" cy="263" rx="9" ry="12" fill="#182A3A"/><ellipse cx="281" cy="260" rx="9" ry="12" fill="#182A3A"/>
+    <circle cx="229" cy="259" r="3" fill="#FFF8E6"/><circle cx="284" cy="256" r="3" fill="#FFF8E6"/>
+    <ellipse cx="203" cy="284" rx="16" ry="8" fill="#D9826B" opacity=".52"/><ellipse cx="304" cy="280" rx="15" ry="8" fill="#D9826B" opacity=".52"/>
+    <path d="M239 288 Q254 303 273 285" fill="none" stroke="#79502B" stroke-width="4" stroke-linecap="round"/>
+  </g><g id="brush">
+    <path d="M139 443 L144 181 L157 181 L153 443 Q147 454 139 443" fill="url(#wood)" stroke="#62452E" stroke-width="2"/>
+    <path d="M141 190 L138 149 L162 149 L161 190Z" fill="url(#brass)" stroke="#A57637" stroke-width="2"/>
+    <path d="M137 156 H163 M140 183 H162" stroke="#65462B" stroke-width="3"/>
+    <path d="M139 149 C104 112 134 66 168 39 C155 77 188 118 162 149Z" fill="url(#teal)" stroke="#26575A" stroke-width="2"/>
+    <path d="M141 140 Q124 108 156 62 M150 144 Q141 101 163 78 M159 141 Q172 114 160 100" fill="none" stroke="#E9B949" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+    <g id="left-hand" fill="url(#gold)" stroke="#B8792A" stroke-width="3" stroke-linecap="round">
+      <path d="M161 305 Q150 295 138 304 Q130 311 135 322 Q133 335 145 339 Q159 342 172 328 L169 315 Q164 309 155 315 L149 320"/>
+      <path d="M139 322 L149 325 M140 329 L149 331" fill="none" stroke="#CB9135" stroke-width="2"/>
+    </g>
+    <g id="right-hand" fill="url(#gold)" stroke="#B8792A" stroke-width="3" stroke-linecap="round">
+      <path d="M331 339 Q343 332 351 343 Q358 354 348 363 L339 367 Q328 366 325 356 Q322 349 331 339"/>
+      <path d="M339 345 L337 355 M345 348 L344 357" stroke="#CB9135" stroke-width="2"/>
+    </g>
+  </g>
+</svg>

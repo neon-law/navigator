@@ -95,6 +95,7 @@ cannot decay the way the old seven-line stub did.
 - [`design-mockups.md`](design-mockups.md) — the one UX lane: an approved design translated into Dioxus.
 - [`design.md`](design.md) — the design system.
 - [`assets.md`](assets.md) — public asset references and the approved workflow.
+- [`aster-character.md`](aster-character.md) — Aster’s canonical artwork, poses and consistency checks.
 - [`signed-url-delivery-audit.md`](signed-url-delivery-audit.md) — the signed-URL document delivery audit: TTLs,
   authorization, `project sync` downloads, portal CSP, and publisher identity.
 - [`bulk-contact-import.md`](bulk-contact-import.md) — turning a raw contact list into seeded Persons.

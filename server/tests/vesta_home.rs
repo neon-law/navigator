@@ -344,3 +344,29 @@ async fn vesta_cosmos_keeps_rotating_planets_and_reflection_available_without_sc
     assert_eq!(html.matches("name=\"vesta-reflections\"").count(), 5);
     assert!(html.find("vesta-cosmos").unwrap() < html.find("vesta-offer").unwrap());
 }
+
+#[tokio::test]
+async fn aster_illustrates_vesta_without_replacing_the_brand_or_optional_reflection() {
+    let html = preview(BrandKey::Vesta, "/").await;
+    assert!(html.contains("Aster the Astrocartographer"));
+    // Every placement shares one character asset, including the shared footer.
+    assert_eq!(
+        html.matches("src=\"/public/brand/aster/aster.svg\"")
+            .count(),
+        5
+    );
+    let svg = std::fs::read_to_string("public/brand/aster/aster.svg").unwrap();
+    for layer in ["body", "face", "scarf", "satchel", "brush"] {
+        assert!(svg.contains(&format!("id=\"{layer}\"")), "{layer}");
+    }
+    assert!(!svg.contains("<script"));
+    assert!(!svg.contains("<image"));
+    assert!(html.contains("/public/brand/vesta.svg"));
+    assert!(html.contains("Readings are optional personal reflection"));
+    assert!(!preview(BrandKey::LawyerShook, "/")
+        .await
+        .contains("/public/brand/aster/"));
+    let services = preview(BrandKey::Vesta, "/services").await;
+    assert!(services.contains("public-brand-companion"));
+    assert!(services.contains("/public/brand/aster/aster.svg"));
+}

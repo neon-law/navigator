@@ -1,0 +1,12 @@
+# The user-approved board is authoritative; an SVG checksum records drift, not visual approval.
+name = "Aster the Astrocartographer"
+reference_url = "https://github.com/user-attachments/assets/95033122-1aa8-415e-bcb4-11d1709e81cd"
+# Exact PNG attached when the user declared the board canon.
+reference_sha256 = "7d37956017b0eab42e899a0ab63e29651b974a2c5dbb4fe2bfb77dc86a96f8bf"
+palette = ["#E9B949", "#236B70", "#D9826B", "#182A3A", "#F5EEDF"]
+
+[[asset]]
+path = "aster.svg"
+sha256 = "b1417176992a183c524c61791bb6c1fa78c0ba9418a49e3101f82e655114ec42"
+visual_status = "simplified_translation_needs_review"
+required_groups = ["aster", "body", "face", "left-arm", "right-arm", "left-hand", "right-hand", "left-leg", "right-leg", "scarf", "satchel", "brush"]

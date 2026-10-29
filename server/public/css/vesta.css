@@ -151,7 +151,6 @@
 .vesta-planet--jupiter { width: 2.7rem; height: 2.7rem; background: repeating-linear-gradient(12deg, #b58761, #e2c3a0 5px, #8c6048 9px, #d2b18e 13px); box-shadow: inset -9px -5px 12px #0009, 0 0 24px #d7a46b33; }
 .vesta-planet--mars { width: 1.3rem; height: 1.3rem; background: radial-gradient(circle at 30% 25%, #e4b081, #b3664f 45%, #4f302e); }
 .vesta-planet--venus { width: 1rem; height: 1rem; background: radial-gradient(circle at 30% 25%, #f2e1c1, #bda27d 50%, #4d4242); }
-.vesta-sun { position: absolute; inset: 44%; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fff1cb, #d9a56a 60%, #9c613d); box-shadow: 0 0 35px #d99e6b66, 0 0 90px #d99e6b22; }
 .vesta-zodiac { position: absolute; font-size: 1.1rem; color: #deb382; line-height: 1; }
 .vesta-zodiac--north { top: 2%; left: 48%; }
 .vesta-zodiac--south { bottom: 2%; left: 48%; }
@@ -219,4 +218,19 @@
 .vesta-zodiac { font-variant-emoji: text; font-family: 'Apple Symbols', 'Segoe UI Symbol', serif; }
 @media (max-width: 600px) {
   .vesta-hero h1 { font-size: clamp(3.2rem, 14vw, 5rem); }
+}
+
+/* Aster shares the celestial scene; artwork stays still while the planets orbit. */
+.vesta-aster { display: block; object-fit: contain; max-width: 100%; height: auto; }
+.vesta-aster--hero { position: absolute; inset: 2% 0 0; width: 100%; height: 100%; z-index: 1; }
+.vesta-aster__name { font-family: var(--brand-font-display); font-size: clamp(1.5rem, 3vw, 2rem); color: #f3e9d8; margin: 0 0 .6rem; }
+.vesta-cosmos-note--sky { margin-top: .8rem; font-size: .8rem; }
+.vesta-aster--illustrate { float: right; width: min(30%, 18rem); margin: -1rem 0 1rem 2rem; }
+.vesta-themes { clear: both; }
+.vesta-aster--explore { float: right; width: min(30%, 16rem); margin: -2rem 0 1rem 2rem; }
+.vesta-steps { clear: both; }
+.vesta-aster--closing { width: clamp(6rem, 14vw, 11rem); flex: 0 0 auto; }
+@media (max-width: 600px) {
+  .vesta-aster--illustrate, .vesta-aster--explore { float: none; width: 13rem; margin: 0 auto 1.5rem; }
+  .vesta-closing .vesta-aster--closing { align-self: center; width: 10rem; }
 }

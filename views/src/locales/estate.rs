@@ -35,6 +35,8 @@ pub struct EstateCopy {
     pub astrology_body: String,
     pub cosmos_label: String,
     pub cosmos_note: String,
+    pub aster_name: String,
+    pub aster_description: String,
     pub cosmos_themes: Vec<[String; 4]>,
     pub probate_label: String,
     pub probate_heading: String,
