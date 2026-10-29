@@ -14,5 +14,10 @@ Correspondence (Served), `pleading`, `filing`, and `order` → [Docket Filings](
 Product. A subfolder inside a Matter Folder is part of the [Document Identity](document-identity.md) slug; the Matter
 Folder itself is not.
 
+The Project page shows the same layout. A lawyer sees every Matter Folder, empty ones included, with each document at
+its path below `documents/`. A client sees only the documents shared with them, each once as its newest shared revision,
+under only the folders that hold one. The page reads the folder from `kind`, because a pointer's `folder:` lives in the
+repository.
+
 - Vocabulary: [`store::document_pointers::MatterFolder`](../../store/src/document_pointers.rs) · Layout:
   [`cli/src/document_layout.rs`](../../cli/src/document_layout.rs)

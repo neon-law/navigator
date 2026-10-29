@@ -158,6 +158,7 @@ async fn seed_deal(
     )
     .await
     .unwrap();
+    let mut shared = Vec::new();
     for (filename, visibility, published) in [
         (
             "ira-v1.docx",
@@ -171,7 +172,7 @@ async fn seed_deal(
         ),
         (DRAFT_REDLINE, store::documents::visibility::INTERNAL, None),
     ] {
-        store::assets::file_revision(
+        let filed = store::assets::file_revision(
             surreal,
             storage,
             &store::documents::IngestArgs {
@@ -190,6 +191,25 @@ async fn seed_deal(
                 ..Default::default()
             },
             filename.as_bytes(),
+        )
+        .await
+        .unwrap();
+        if visibility == store::documents::visibility::CLIENT {
+            shared.push(match filed {
+                store::assets::Filed::Revision(doc) => doc.asset_id,
+                store::assets::Filed::Unchanged { asset_id } => asset_id,
+            });
+        }
+    }
+    // Each later filing made the revisions beneath it internal; the lawyer
+    // shares the executed copies again so the client keeps reading them
+    // beneath the unpublished draft.
+    for asset_id in shared {
+        store::assets::set_visibility(
+            surreal,
+            project_id,
+            asset_id,
+            store::documents::visibility::CLIENT,
         )
         .await
         .unwrap();

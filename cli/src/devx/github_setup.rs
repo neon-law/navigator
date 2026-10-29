@@ -291,6 +291,7 @@ const COMMON_POLICY: RepositoryPolicy = RepositoryPolicy {
     branch_protections: true,
     code_scanning: false,
     deploy_environments: false,
+    secret_scanning: true,
 };
 
 /// The same gate, with client-confidential defaults: what every repository
@@ -315,6 +316,7 @@ const CLIENT_POLICY: RepositoryPolicy = RepositoryPolicy {
     branch_protections: true,
     code_scanning: false,
     deploy_environments: false,
+    secret_scanning: false,
 };
 
 /// Navigator's own policy: the common gate plus cutting release tags, the one
@@ -328,6 +330,7 @@ const NAVIGATOR_POLICY: RepositoryPolicy = RepositoryPolicy {
     branch_protections: true,
     code_scanning: true,
     deploy_environments: true,
+    secret_scanning: true,
 };
 
 /// The Homebrew tap's policy: nothing on `main` at all.
@@ -360,6 +363,7 @@ const TAP_POLICY: RepositoryPolicy = RepositoryPolicy {
     branch_protections: false,
     code_scanning: false,
     deploy_environments: false,
+    secret_scanning: true,
 };
 
 /// The policy a repository is reconciled against, forked by organization first.
@@ -413,6 +417,7 @@ fn posture_for_live_visibility(
         RepositoryPolicy {
             default_visibility: Visibility::Private,
             open_source_governance: false,
+            secret_scanning: false,
             ..policy
         }
     } else {
@@ -620,6 +625,11 @@ struct RepositoryPolicy {
     /// Environments, reconciled to roll a stable release to production with no
     /// reviewer. See [`deploy_environments`].
     deploy_environments: bool,
+    /// Whether this command asserts secret scanning and its push protection.
+    /// True on a published repository; narrowed off where the repository is
+    /// private today, or where an enforced organization code-security
+    /// configuration owns the setting. See [`desired_security_and_analysis`].
+    secret_scanning: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2210,7 +2220,7 @@ async fn reconcile(
     eprintln!("==> reconciling {}", client.repository);
     let repository: Repository = client.get_json(&client.repo_path("")).await?;
     report_visibility_finding(dry_run, policy, &repository);
-    let settings_policy = posture_for_live_visibility(policy, &repository);
+    let settings_policy = settings_posture(policy, &repository, client).await?;
 
     let required_check_context =
         resolve_required_check_context(policy, client, workflow_home).await?;
@@ -2473,17 +2483,74 @@ fn desired_repository_settings(policy: RepositoryPolicy) -> RepositorySettings {
 /// commit does not undo that. Refusing the push is the only mitigation that
 /// happens before the disclosure.
 fn desired_security_and_analysis(policy: RepositoryPolicy) -> Option<SecurityAndAnalysis> {
-    match policy.default_visibility {
-        Visibility::Public => Some(SecurityAndAnalysis {
-            secret_scanning: FeatureStatus {
-                status: "enabled".to_string(),
-            },
-            secret_scanning_push_protection: FeatureStatus {
-                status: "enabled".to_string(),
-            },
-        }),
-        Visibility::Private => None,
+    policy.secret_scanning.then(|| SecurityAndAnalysis {
+        secret_scanning: FeatureStatus {
+            status: "enabled".to_string(),
+        },
+        secret_scanning_push_protection: FeatureStatus {
+            status: "enabled".to_string(),
+        },
+    })
+}
+
+/// The name of the organization code-security configuration attached to this
+/// repository with `enforcement: enforced`, or `None` when nothing enforced is
+/// attached.
+///
+/// An enforced configuration owns secret scanning: GitHub answers 422 to any
+/// repository-level write of it, so the settings PATCH would fail and take
+/// every later action of the reconcile with it. GitHub answers 204 with no body
+/// when no configuration is attached.
+async fn enforced_security_configuration(client: &GitHubClient) -> Result<Option<String>> {
+    #[derive(Deserialize)]
+    struct Attached {
+        configuration: Option<Configuration>,
     }
+    #[derive(Deserialize)]
+    struct Configuration {
+        name: String,
+        enforcement: Option<String>,
+    }
+    let Some(body) = client
+        .get_optional_text(&client.repo_path("/code-security-configuration"))
+        .await?
+    else {
+        return Ok(None);
+    };
+    if body.trim().is_empty() {
+        return Ok(None);
+    }
+    let attached: Attached = serde_json::from_str(&body)?;
+    Ok(attached
+        .configuration
+        .filter(|configuration| configuration.enforcement.as_deref() == Some("enforced"))
+        .map(|configuration| configuration.name))
+}
+
+/// The policy the settings half reconciles against: narrowed by
+/// [`posture_for_live_visibility`], then with secret scanning left to the
+/// organization when an enforced code-security configuration owns it. The rest
+/// of the settings still reconcile.
+async fn settings_posture(
+    policy: RepositoryPolicy,
+    repository: &Repository,
+    client: &GitHubClient,
+) -> Result<RepositoryPolicy> {
+    let policy = posture_for_live_visibility(policy, repository);
+    if !policy.secret_scanning {
+        return Ok(policy);
+    }
+    let Some(name) = enforced_security_configuration(client).await? else {
+        return Ok(policy);
+    };
+    eprintln!(
+        "==> secret scanning is owned by the enforced organization configuration {name:?}; \
+         not asserting it here"
+    );
+    Ok(RepositoryPolicy {
+        secret_scanning: false,
+        ..policy
+    })
 }
 
 impl RepositorySettings {
@@ -2536,7 +2603,7 @@ impl RepositorySettings {
             has_issues: repository.has_issues,
             has_projects: repository.has_projects,
             has_wiki: repository.has_wiki,
-            // Read against the same visibility branch the desired side takes,
+            // Read against the same policy branch the desired side takes,
             // so the two compare with `==`. An omitted object is `disabled`
             // rather than a match: GitHub omits it for exactly the repository
             // that has never had push protection configured.
@@ -3785,6 +3852,7 @@ mod tests {
         branch_protections: true,
         code_scanning: false,
         deploy_environments: false,
+        secret_scanning: true,
     };
 
     /// LAW-10: a Project repository that already has its `production` ruleset
@@ -4581,6 +4649,131 @@ mod tests {
         Mock::given(method("PATCH"))
             .and(path("/repos/acme/navigator"))
             .and(header("authorization", "Bearer token"))
+            .and(body_json(
+                serde_json::to_value(desired_repository_settings(NAVIGATOR_POLICY)).unwrap(),
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        reconcile(
+            NAVIGATOR_POLICY,
+            &client,
+            false,
+            "",
+            project_repository::DEFAULT_WORKFLOW_HOME,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Mounts the push-protection drift above, with an organization
+    /// code-security configuration attached at `enforcement`.
+    async fn mount_with_security_configuration(
+        server: &MockServer,
+        enforcement: &str,
+        repository: serde_json::Value,
+    ) {
+        mount_reads_with_repository(
+            server,
+            &desired_branch_ruleset(
+                TEST_ACTIONS_APP_ID,
+                REQUIRED_CHECK,
+                &[
+                    codeql_check(),
+                    serde_json::json!({
+                        "context": "security-scan",
+                        "integration_id": TEST_EXTRA_CHECK_INTEGRATION_ID
+                    }),
+                ],
+            ),
+            vec![],
+            REQUIRED_CHECK_WORKFLOW,
+            repository,
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/navigator/code-security-configuration"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "state": "attached",
+                "configuration": {"name": "org-config", "enforcement": enforcement}
+            })))
+            .mount(server)
+            .await;
+    }
+
+    /// An enforced organization configuration owns secret scanning, and GitHub
+    /// answers 422 to a repository-level write of it. Push-protection drift
+    /// alone therefore draws no settings `PATCH`.
+    #[tokio::test]
+    async fn an_enforced_org_configuration_leaves_secret_scanning_alone() {
+        let server = MockServer::start().await;
+        let client = test_client(&server);
+        mount_with_security_configuration(&server, "enforced", live_repository_json("disabled"))
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/repos/acme/navigator"))
+            .respond_with(ResponseTemplate::new(422))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        reconcile(
+            NAVIGATOR_POLICY,
+            &client,
+            false,
+            "",
+            project_repository::DEFAULT_WORKFLOW_HOME,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Under an enforced configuration the rest of the settings still
+    /// reconcile, with `security_and_analysis` left out of the body.
+    #[tokio::test]
+    async fn an_enforced_org_configuration_still_patches_other_settings() {
+        let server = MockServer::start().await;
+        let client = test_client(&server);
+        let mut repository = live_repository_json("disabled");
+        repository["has_wiki"] = serde_json::json!(true);
+        mount_with_security_configuration(&server, "enforced", repository).await;
+        let desired = serde_json::to_value(desired_repository_settings(RepositoryPolicy {
+            secret_scanning: false,
+            ..NAVIGATOR_POLICY
+        }))
+        .unwrap();
+        assert!(desired.get("security_and_analysis").is_none());
+        Mock::given(method("PATCH"))
+            .and(path("/repos/acme/navigator"))
+            .and(body_json(desired))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        reconcile(
+            NAVIGATOR_POLICY,
+            &client,
+            false,
+            "",
+            project_repository::DEFAULT_WORKFLOW_HOME,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// An attached configuration that is not enforced leaves the repository
+    /// free to set secret scanning, so the reconcile still asserts it.
+    #[tokio::test]
+    async fn an_unenforced_org_configuration_still_asserts_secret_scanning() {
+        let server = MockServer::start().await;
+        let client = test_client(&server);
+        mount_with_security_configuration(&server, "unenforced", live_repository_json("disabled"))
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/repos/acme/navigator"))
             .and(body_json(
                 serde_json::to_value(desired_repository_settings(NAVIGATOR_POLICY)).unwrap(),
             ))

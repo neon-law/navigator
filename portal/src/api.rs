@@ -5301,12 +5301,17 @@ async fn populate_docket_name_checks(
             .collect();
         row.docket_name_matches = Some(match linked.as_slice() {
             [entry] => row.slug.as_deref().is_some_and(|slug| {
-                let ext = std::path::Path::new(slug)
+                let path = std::path::Path::new(slug);
+                let ext = path
                     .extension()
                     .and_then(|ext| ext.to_str())
                     .unwrap_or("pdf");
-                store::cases::filing_name(&entry.entry_number, &entry.title, ext)
-                    .is_ok_and(|expected| expected == slug)
+                store::cases::filing_name(&entry.entry_number, &entry.title, ext).is_ok_and(
+                    |expected| {
+                        path.file_name()
+                            .is_some_and(|name| name == expected.as_str())
+                    },
+                )
             }),
             _ => false,
         });

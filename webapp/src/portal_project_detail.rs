@@ -228,6 +228,8 @@ pub struct ProjectDetailView {
     #[serde(default)]
     pub trust: TrustView,
     pub notations: Vec<NotationRow>,
+    /// Each shared document's path below `documents/`
+    /// (`Work Product/memo.pdf`), one per document.
     pub documents: Vec<String>,
     pub review_docs: Vec<ReviewDocRow>,
     /// The matter's collaboration resources, filtered to a client's audience:
@@ -518,16 +520,24 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
         })
         .collect();
 
-    // Documents (read-only list of filenames) — gated to the assets a
-    // lawyer has explicitly marked client-visible. Internal work product
-    // (`review_memo`, `unclassified` lawyer/email uploads) never reaches
-    // this list (#782).
-    let documents = store::assets::for_project(&surreal, id)
+    // Documents (read-only, each at its path below `documents/`) — gated to
+    // the assets a lawyer has explicitly marked client-visible. Internal work
+    // product (`review_memo`, `unclassified` lawyer/email uploads) never
+    // reaches this list (#782). A document lists once, as its newest shared
+    // revision; an older shared copy is history, not a second document.
+    let shared = store::documents::visibility::CLIENT;
+    let documents = store::assets::grouped_for_project(&surreal, id)
         .await
         .map_err(server_error)?
         .into_iter()
-        .filter(|d| d.visibility == store::documents::visibility::CLIENT)
-        .map(|d| d.filename.unwrap_or_default())
+        .filter_map(|group| {
+            if group.revisions.is_empty() {
+                Some(group.current).filter(|d| d.visibility == shared)
+            } else {
+                group.revisions.into_iter().find(|d| d.visibility == shared)
+            }
+        })
+        .map(|d| d.documents_path())
         .collect();
 
     // Every invoice from the local mirror, newest first; only client-facing
@@ -992,6 +1002,28 @@ fn testimonial_fields(view: &ProjectDetailView) -> Vec<Field> {
     ]
 }
 
+/// The client's shared documents grouped by top folder, folders and the
+/// names below them in alphabetical order. Only a folder holding a shared
+/// document appears: the client never sees the shape of the internal tree.
+fn shared_document_folders(paths: &[String]) -> Vec<(String, Vec<String>)> {
+    let mut groups: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for path in paths {
+        let (folder, name) = path.split_once('/').unwrap_or(("", path));
+        groups
+            .entry(folder.to_string())
+            .or_default()
+            .push(name.to_string());
+    }
+    groups
+        .into_iter()
+        .map(|(folder, mut names)| {
+            names.sort();
+            (folder, names)
+        })
+        .collect()
+}
+
 /// The pure matter-detail page. Prop-driven so SSR tests can render it without
 /// a server future.
 #[component]
@@ -1199,9 +1231,14 @@ pub fn ClientProjectDetailPage(view: ProjectDetailView) -> Element {
                             thead {
                                 tr { th { scope: "col", "Document" } }
                             }
-                            tbody {
-                                for filename in view.documents.iter() {
-                                    tr { td { "{filename}" } }
+                            for (folder, names) in shared_document_folders(&view.documents) {
+                                tbody {
+                                    if !folder.is_empty() {
+                                        tr { th { scope: "colgroup", "documents/{folder}/" } }
+                                    }
+                                    for name in names {
+                                        tr { td { "{name}" } }
+                                    }
                                 }
                             }
                         }
@@ -1383,6 +1420,34 @@ mod render_tests {
         assert!(!html.contains("portal-form"), "{html}");
         assert!(!html.contains("testimonial-form"), "{html}");
         assert!(!html.contains("Your documents"), "{html}");
+    }
+
+    #[test]
+    fn shared_documents_are_grouped_under_only_the_folders_that_hold_them() {
+        let html = render_page(ProjectDetailView {
+            code: "acme".into(),
+            name: "Sample Matter".into(),
+            selected_tab: MatterDetailTab::Documents,
+            documents: vec![
+                "Work Product/memo.pdf".into(),
+                "onboarding/engagement.pdf".into(),
+                "Docket Filings/pleadings/complaint.pdf".into(),
+            ],
+            ..ProjectDetailView::default()
+        });
+        let docket = html
+            .find("documents/Docket Filings/")
+            .expect("docket folder");
+        let work = html
+            .find("documents/Work Product/")
+            .expect("work product folder");
+        let onboarding = html
+            .find("documents/onboarding/")
+            .expect("onboarding folder");
+        assert!(docket < work && work < onboarding, "{html}");
+        assert!(html.contains("<td>pleadings/complaint.pdf</td>"), "{html}");
+        assert!(!html.contains("documents/Discovery/"), "{html}");
+        assert!(!html.contains("documents/Client Production/"), "{html}");
     }
 
     #[test]

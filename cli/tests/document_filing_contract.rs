@@ -51,6 +51,8 @@ fn memo_authoring_contract_preserves_the_source_and_storage_boundary() {
 fn navigator() -> Command {
     let mut command = Command::cargo_bin("navigator").unwrap();
     command.env_remove("GITHUB_REPOSITORY");
+    // Exercise this build's rules; mismatched-release dispatch has its own suite.
+    command.env("NAVIGATOR_RELEASE_TAG", env!("CARGO_PKG_VERSION"));
     command.env_remove("GITHUB_REF");
     command.env_remove("GITHUB_EVENT_NAME");
     command
@@ -68,7 +70,10 @@ fn manifest(root: &Path, host: &str) {
     write(
         root,
         "navigator.yaml",
-        format!("version: \"26.9.17\"\nproject:\n  host: {host}\n  name: acme\n"),
+        format!(
+            "version: \"{}\"\nproject:\n  host: {host}\n  name: acme\n",
+            env!("CARGO_PKG_VERSION")
+        ),
     );
 }
 
