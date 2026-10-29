@@ -18,8 +18,9 @@
 .vesta-plan__mark { width: 36px; height: 50px; object-fit: contain; float: right; }
 .vesta-plan__term { margin: 0 0 2rem; font-size: 1.1rem; }
 .vesta-plan ul { list-style: none; padding: 0; margin: 0; }
-.vesta-plan li { border-top: 1px solid var(--vesta-rule); padding: .8rem 0; }
-.vesta-plan li::before { content: '+'; color: var(--nav-color-primary); margin-right: .75rem; }
+.vesta-plan li { padding: .8rem 0; }
+.vesta-plan li + li { border-top: 1px solid var(--vesta-rule); }
+.vesta-plan li::before { content: '✦'; color: var(--nav-color-primary); margin-right: .75rem; }
 .vesta-note { font-size: .85rem; color: var(--nav-color-text-muted); }
 .vesta-nevada, .vesta-administration { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(2rem, 6vw, 5rem); padding: clamp(3rem, 6vw, 6rem) 0; border-top: 1px solid var(--vesta-rule); scroll-margin-top: 6rem; }
 .vesta-nevada__intro > p:not(.vesta-eyebrow) { max-width: 36rem; color: var(--nav-color-text-muted); }
@@ -161,7 +162,7 @@
 .vesta-reflection { border-left: 0; padding: 5rem 0; background: transparent; }
 .vesta-reflection > h2 { max-width: 19ch; font-size: clamp(2.8rem, 5vw, 4.8rem); }
 .vesta-reflection > p:not(.vesta-eyebrow) { max-width: 46rem; color: #c1b9ad; }
-.vesta-themes { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1rem; align-items: start; margin-top: 3rem; }
+.vesta-themes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; align-items: start; margin-top: 3rem; }
 .vesta-theme { border-block: 1px solid var(--vesta-rule); min-width: 0; }
 .vesta-theme summary { padding: 1.5rem .5rem; cursor: pointer; text-align: center; list-style: none; color: #f3e9d8; }
 .vesta-theme summary::-webkit-details-marker { display: none; }

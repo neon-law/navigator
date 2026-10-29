@@ -331,6 +331,9 @@ async fn vesta_cosmos_keeps_rotating_planets_and_reflection_available_without_sc
         "vesta-orbit--inner",
         "An imagined sky.",
         "North Node",
+        "Mercury",
+        "Neptune",
+        "Chiron",
         "Venus",
         "Mars",
         "Jupiter",
@@ -341,8 +344,8 @@ async fn vesta_cosmos_keeps_rotating_planets_and_reflection_available_without_sc
     }
     assert!(!html.contains("vesta-pause"));
     assert!(!html.contains("Still the cosmos"));
-    assert_eq!(html.matches("class=\"vesta-theme\"").count(), 5);
-    assert_eq!(html.matches("name=\"vesta-reflections\"").count(), 5);
+    assert_eq!(html.matches("class=\"vesta-theme\"").count(), 8);
+    assert_eq!(html.matches("name=\"vesta-reflections\"").count(), 8);
     assert!(html.find("vesta-cosmos").unwrap() < html.find("vesta-offer").unwrap());
 }
 
