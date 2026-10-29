@@ -751,6 +751,7 @@ fn reachable_image_keys(content_root: &Path) -> anyhow::Result<BTreeSet<String>>
             .iter()
             .map(|(key, _)| (*key).to_owned()),
     );
+    keys.insert(views::assets::ASTER_BOARD_KEY.to_owned());
     keys.insert(views::assets::CYBER_INJURY_HERO_KEY.to_owned());
     keys.insert(views::assets::CYBER_INJURY_AD_KEY.to_owned());
     keys.insert(views::assets::DEATH_AND_DIVORCE_HERO_KEY.to_owned());
@@ -1240,6 +1241,7 @@ pub(crate) fn embedded_asset_refs() -> BTreeSet<String> {
             .iter()
             .map(|(key, _)| (*key).to_owned()),
     );
+    refs.insert(views::assets::ASTER_BOARD_KEY.to_owned());
     refs.insert(views::assets::CYBER_INJURY_HERO_KEY.to_owned());
     refs.insert(views::assets::CYBER_INJURY_AD_KEY.to_owned());
     refs.insert(views::assets::DEATH_AND_DIVORCE_HERO_KEY.to_owned());
@@ -2353,6 +2355,7 @@ Inline raw-HTML tile: <div>![Team](img/thanks-apple/team-lunch.jpg)</div>\n";
         let mut keys = vec![
             views::assets::HOME_PRESENTATION_KEY,
             views::assets::VESTA_EXPLAINER_KEY,
+            views::assets::ASTER_BOARD_KEY,
             views::assets::CYBER_INJURY_HERO_KEY,
             views::assets::CYBER_INJURY_AD_KEY,
             views::assets::DEATH_AND_DIVORCE_HERO_KEY,

@@ -29,6 +29,7 @@
 pub mod accordion;
 pub mod action_list;
 pub mod app_navbar;
+pub mod aster;
 pub mod avatar;
 pub mod badge;
 pub mod bill_mark;

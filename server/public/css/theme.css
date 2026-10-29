@@ -5665,4 +5665,5 @@ a.nav-steps__step:focus-visible {
 }
 
 .public-brand-companion { display: flex; justify-content: center; padding: 2rem 1rem 0; }
-.public-brand-companion img { display: block; width: 8rem; height: 8rem; object-fit: contain; }
+.aster-artwork { display: block; max-width: 100%; height: auto; overflow: hidden; border-radius: 1rem; }
+.public-brand-companion .aster-artwork { width: 8rem; }

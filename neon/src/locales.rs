@@ -893,6 +893,7 @@ fn estate_content(
         cosmos_label: copy.cosmos_label,
         cosmos_note: copy.cosmos_note,
         aster_name: copy.aster_name,
+        aster_image: views::assets::asset_url(views::assets::ASTER_BOARD_KEY),
         aster_description: copy.aster_description,
         cosmos_themes: copy.cosmos_themes,
         probate_label: copy.probate_label,

@@ -1,6 +1,7 @@
 //! Estate planning and custom trust administration, with a shared contact path.
 use super::sibling_practice::{SiblingPractice, SiblingPractices};
 use super::HomeContent;
+use crate::components::aster::{AsterArtwork, AsterPose};
 use crate::components::is_external_href;
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,7 @@ pub struct EstateContent {
     pub cosmos_label: String,
     pub cosmos_note: String,
     pub aster_name: String,
+    pub aster_image: String,
     pub aster_description: String,
     pub cosmos_themes: Vec<[String; 4]>,
     pub probate_label: String,
@@ -102,8 +104,7 @@ pub(super) fn EstateHome(
                         div { class: "vesta-orbit vesta-orbit--outer", span { class: "vesta-planet vesta-planet--jupiter" } }
                         div { class: "vesta-orbit vesta-orbit--middle", span { class: "vesta-planet vesta-planet--mars" } }
                         div { class: "vesta-orbit vesta-orbit--inner", span { class: "vesta-planet vesta-planet--venus" } }
-                        img { class: "vesta-aster vesta-aster--hero", src: "/public/brand/aster/aster.svg",
-                            alt: "", width: "500", height: "500", fetchpriority: "high" }
+                        AsterArtwork { class: "vesta-aster vesta-aster--hero", src: estate.aster_image.clone(), pose: AsterPose::Standing }
                         span { class: "vesta-zodiac vesta-zodiac--north", "♋" }
                         span { class: "vesta-zodiac vesta-zodiac--east", "♎" }
                         span { class: "vesta-zodiac vesta-zodiac--south", "♑" }
@@ -115,8 +116,7 @@ pub(super) fn EstateHome(
                 }
             }
             section { id: "astrology", class: "vesta-reflection", "aria-labelledby": "vesta-astrology-title",
-                img { class: "vesta-aster vesta-aster--illustrate", src: "/public/brand/aster/aster.svg",
-                    alt: "", width: "500", height: "500", loading: "lazy" }
+                AsterArtwork { class: "vesta-aster vesta-aster--illustrate", src: estate.aster_image.clone(), pose: AsterPose::Illustrate }
                 p { class: "vesta-eyebrow", "{estate.astrology_label}" }
                 h2 { id: "vesta-astrology-title", "{estate.astrology_heading}" }
                 p { "{estate.astrology_body}" }
@@ -150,8 +150,7 @@ pub(super) fn EstateHome(
                 }
             }
             section { id: "your-plan", class: "vesta-process", "aria-labelledby": "vesta-process-title",
-                img { class: "vesta-aster vesta-aster--explore", src: "/public/brand/aster/aster.svg",
-                    alt: "", width: "500", height: "500", loading: "lazy" }
+                AsterArtwork { class: "vesta-aster vesta-aster--explore", src: estate.aster_image.clone(), pose: AsterPose::Explore }
                 p { class: "vesta-eyebrow", "{estate.process_label}" }
                 h2 { id: "vesta-process-title", "{estate.process_heading}" }
                 ol { class: "vesta-steps",
@@ -287,8 +286,7 @@ pub(super) fn EstateHome(
                 heading: estate.testimonials_label.clone(), lead: String::new(), cards: testimonials,
             }
             section { class: "vesta-closing", "aria-labelledby": "vesta-closing-title",
-                img { class: "vesta-aster vesta-aster--closing", src: "/public/brand/aster/aster.svg",
-                    alt: "", width: "500", height: "500", loading: "lazy" }
+                AsterArtwork { class: "vesta-aster vesta-aster--closing", src: estate.aster_image.clone(), pose: AsterPose::Guide }
                 div {
                     h2 { id: "vesta-closing-title", "{estate.closing_heading}" }
                     p { "{estate.closing_body}" }

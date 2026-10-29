@@ -222,12 +222,17 @@
 
 /* Aster shares the celestial scene; artwork stays still while the planets orbit. */
 .vesta-aster { display: block; object-fit: contain; max-width: 100%; height: auto; }
-.vesta-aster--hero { position: absolute; inset: 2% 0 0; width: 100%; height: 100%; z-index: 1; }
+.vesta-aster--hero { position: absolute; inset: 2% 18% 0; width: 64%; height: 96%; z-index: 1; }
 .vesta-aster__name { font-family: var(--brand-font-display); font-size: clamp(1.5rem, 3vw, 2rem); color: #f3e9d8; margin: 0 0 .6rem; }
 .vesta-cosmos-note--sky { margin-top: .8rem; font-size: .8rem; }
 .vesta-aster--illustrate { float: right; width: min(30%, 18rem); margin: -1rem 0 1rem 2rem; }
 .vesta-themes { clear: both; }
 .vesta-aster--explore { float: right; width: min(30%, 16rem); margin: -2rem 0 1rem 2rem; }
+/* Trim neighboring board artwork while preserving the complete characters and brushes. */
+.vesta-aster--illustrate { background: #F5EEDF; }
+.vesta-aster--illustrate image { clip-path: polygon(860px 232px, 1110px 232px, 1110px 497px, 815px 497px, 815px 400px, 845px 345px, 860px 325px); }
+.vesta-aster--explore { background: #F5EEDF; }
+.vesta-aster--explore image { clip-path: polygon(570px 205px, 855px 205px, 855px 295px, 830px 295px, 810px 360px, 810px 490px, 570px 490px); }
 .vesta-steps { clear: both; }
 .vesta-aster--closing { width: clamp(6rem, 14vw, 11rem); flex: 0 0 auto; }
 @media (max-width: 600px) {

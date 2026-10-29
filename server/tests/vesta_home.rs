@@ -349,18 +349,16 @@ async fn vesta_cosmos_keeps_rotating_planets_and_reflection_available_without_sc
 async fn aster_illustrates_vesta_without_replacing_the_brand_or_optional_reflection() {
     let html = preview(BrandKey::Vesta, "/").await;
     assert!(html.contains("Aster the Astrocartographer"));
-    // Every placement shares one character asset, including the shared footer.
-    assert_eq!(
-        html.matches("src=\"/public/brand/aster/aster.svg\"")
-            .count(),
-        5
-    );
-    let svg = std::fs::read_to_string("public/brand/aster/aster.svg").unwrap();
-    for layer in ["body", "face", "scarf", "satchel", "brush"] {
-        assert!(svg.contains(&format!("id=\"{layer}\"")), "{layer}");
+    // SVG viewports frame the exact approved raster, retaining its original eyes and texture.
+    let source = views::assets::asset_url(views::assets::ASTER_BOARD_KEY);
+    assert_eq!(html.matches(&format!("href=\"{source}\"")).count(), 5);
+    for pose in ["standing", "explore", "illustrate", "guide"] {
+        assert!(
+            html.contains(&format!("data-aster-pose=\"{pose}\"")),
+            "{pose}"
+        );
     }
-    assert!(!svg.contains("<script"));
-    assert!(!svg.contains("<image"));
+    assert!(!html.contains("/public/brand/aster/aster.svg"));
     assert!(html.contains("/public/brand/vesta.svg"));
     assert!(html.contains("Readings are optional personal reflection"));
     assert!(!preview(BrandKey::LawyerShook, "/")
@@ -368,5 +366,5 @@ async fn aster_illustrates_vesta_without_replacing_the_brand_or_optional_reflect
         .contains("/public/brand/aster/"));
     let services = preview(BrandKey::Vesta, "/services").await;
     assert!(services.contains("public-brand-companion"));
-    assert!(services.contains("/public/brand/aster/aster.svg"));
+    assert!(services.contains(&source));
 }

@@ -225,7 +225,7 @@ pub fn PublicFooter(chrome: PublicChrome) -> Element {
         document::Stylesheet { href: "{chrome.tokens_href}" }
         if let Some(src) = &chrome.companion_image {
             div { class: "public-brand-companion", "aria-hidden": "true",
-                img { src: "{src}", alt: "", width: "128", height: "128", loading: "lazy" }
+                crate::components::aster::AsterArtwork { src: src.clone(), pose: crate::components::aster::AsterPose::Guide }
             }
         }
         SiteFooterLegal {
@@ -470,7 +470,7 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         github_stars: crate::source_repository::known_stars(),
         tokens_href: crate::brand_style::brand_tokens_href(views::brand::brand_key().as_str()),
         companion_image: (views::brand::brand_key() == views::brand::BrandKey::Vesta)
-            .then(|| "/public/brand/aster/aster.svg".to_owned()),
+            .then(|| views::assets::asset_url(views::assets::ASTER_BOARD_KEY)),
         is_practice: views::brand::BrandKey::LIVE.contains(&views::brand::brand_key()),
         // The compiled family — every house brand the firm trades under, the
         // request's own key marked current — so the "Our Family" row is on
