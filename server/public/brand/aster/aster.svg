@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" fill="none">
   <title>Aster the Astrocartographer</title>
-  <desc>A golden star with distinct arms, hands, legs and bare feet, wearing a teal scarf and a satchel, with a paintbrush as tall as a walking staff.</desc>
+  <desc>A golden star with distinct arms, hands, legs and bare feet, wearing a teal scarf and a satchel, with a paintbrush as tall as a walking cane.</desc>
   <defs>
     <linearGradient id="gold" x1="0" y1="0" x2=".8" y2="1"><stop stop-color="#FFE7A3"/><stop offset=".52" stop-color="#E9B949"/><stop offset="1" stop-color="#C88529"/></linearGradient>
     <linearGradient id="teal" x2="1" y2="1"><stop stop-color="#438D8B"/><stop offset="1" stop-color="#164B55"/></linearGradient>

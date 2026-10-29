@@ -7,6 +7,6 @@ palette = ["#E9B949", "#236B70", "#D9826B", "#182A3A", "#F5EEDF"]
 
 [[asset]]
 path = "aster.svg"
-sha256 = "540624d89fb0aa321ab68f387f5b68f6f59eaa0b2aa886972088e0335e8c8db2"
+sha256 = "b1417176992a183c524c61791bb6c1fa78c0ba9418a49e3101f82e655114ec42"
 visual_status = "simplified_translation_needs_review"
 required_groups = ["aster", "body", "face", "left-arm", "right-arm", "left-hand", "right-hand", "left-leg", "right-leg", "scarf", "satchel", "brush"]

@@ -6,7 +6,7 @@ description: Aster the Astrocartographer is Vesta Estate Planning’s illustrate
 ## Aster
 
 Aster the Astrocartographer is [Vesta Estate Planning](vesta-estate-planning.md)’s illustrated star companion: a golden
-star with distinct arms, hands, legs and feet, a teal scarf, a satchel, and a paintbrush as tall as a walking staff.
+star with distinct arms, hands, legs and feet, a teal scarf, a satchel, and a paintbrush as tall as a walking cane.
 Aster introduces the practice’s optional reflection on places, relationships, and possibilities through
 [Astrocartography](astrocartography.md).
 
