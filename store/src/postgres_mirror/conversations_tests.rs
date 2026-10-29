@@ -198,6 +198,12 @@ async fn email_receipt_mirror_preserves_link_role_and_reconciles_metadata() {
     let pg = connect(&options, &database).await;
     let surreal = mem_surreal().await;
     let project = crate::test_support::seed_project_surreal(&surreal, "Synthetic receipt").await;
+    let entity = crate::projects::find_by_id(&surreal, project)
+        .await
+        .unwrap()
+        .unwrap()
+        .entity_id;
+    mirror_identity(&pg, &[entity], &[]).await;
     let mut args = IngestArgs {
         project_id: project,
         channel: "email_outbound",
