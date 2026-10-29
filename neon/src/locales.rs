@@ -716,8 +716,7 @@ fn app_preview_band(copy: BandCopy) -> Band {
         app_name,
         app_subtitle,
         price,
-        install_ios_label,
-        install_android_label,
+        install_label,
         checks_heading,
         checks,
         app_store_label,
@@ -735,8 +734,7 @@ fn app_preview_band(copy: BandCopy) -> Band {
         app_name,
         app_subtitle,
         price,
-        install_ios_label,
-        install_android_label,
+        install_label,
         checks_heading,
         checks: checks
             .into_iter()

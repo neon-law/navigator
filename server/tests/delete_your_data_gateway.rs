@@ -131,9 +131,8 @@ async fn the_gateway_is_404_on_every_non_neon_brand_host() {
 }
 
 /// `GET /nautilus` on a Neon host describes Nautilus plainly: the checks it
-/// runs, drawn as an iPhone and an Android app listing, monthly and prepaid
-/// annual pricing, lawyer review and the private legal sandbox, and the public
-/// intake.
+/// runs, drawn as one iPhone app listing, monthly and prepaid annual pricing,
+/// lawyer review and the private legal sandbox, and the public intake.
 #[tokio::test]
 async fn the_nautilus_page_renders_on_neon_hosts_with_the_app_checks_and_pricing() {
     let app = app(state().await);
@@ -143,7 +142,6 @@ async fn the_nautilus_page_renders_on_neon_hosts_with_the_app_checks_and_pricing
         for expected in [
             "<title>Neon Law | Nautilus</title>",
             r#"data-phone="ios""#,
-            r#"data-phone="android""#,
             r#"data-store="ios""#,
             r#"data-store="android""#,
             "Identity theft insurance",

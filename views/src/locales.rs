@@ -528,8 +528,8 @@ pub enum BandCopy {
         #[serde(default)]
         package: Option<PackageInstallCopy>,
     },
-    /// A subscription's phone app, drawn as an iPhone and an Android phone
-    /// listing the checks it runs, beside the two store badges.
+    /// A subscription's phone app, drawn as one iPhone listing the checks it
+    /// runs, beside the two store badges.
     AppPreview {
         #[serde(default)]
         anchor: String,
@@ -543,8 +543,7 @@ pub enum BandCopy {
         /// subscription's own catalog.
         #[serde(default)]
         price: String,
-        install_ios_label: String,
-        install_android_label: String,
+        install_label: String,
         checks_heading: String,
         checks: Vec<AppCheckCopy>,
         app_store_label: String,

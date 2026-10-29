@@ -26,8 +26,7 @@ bands:
       $29/mo. Each check runs for you and reports back in the app.
     app_name: Nautilus
     app_subtitle: Privacy checks
-    install_ios_label: Get
-    install_android_label: Install
+    install_label: Get
     checks_heading: Your checks
     checks:
       - title: Data removal

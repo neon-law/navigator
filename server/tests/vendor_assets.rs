@@ -931,33 +931,29 @@ fn the_services_package_badge_clears_wcag_aa_on_its_tinted_panel() {
     }
 }
 
-/// `/nautilus` paints each store-listing Install pill in the platform's own
-/// ink on white. Apple's `#007aff` is 4.02:1 against `#fff` — under the 4.5:1
+/// `/nautilus` paints the iPhone's store-listing Get pill in Apple's ink on
+/// white. Apple's `#007aff` is 4.02:1 against `#fff` — under the 4.5:1
 /// floor for the 13.6px label — and axe failed the `26.10.26` cut on
-/// `.fm-phone__install`. This reads both pills and does the arithmetic.
+/// `.fm-phone__install`. This reads the pill and does the arithmetic.
 #[test]
-fn the_nautilus_phone_install_pills_clear_wcag_aa() {
+fn the_nautilus_phone_install_pill_clears_wcag_aa() {
     let css = std::fs::read_to_string(public_dir().join("css/marketing-page.css"))
         .expect("read the marketing-page stylesheet");
-    for selector in [
-        ".fm-phone[data-phone=\"ios\"] .fm-phone__install",
-        ".fm-phone[data-phone=\"android\"] .fm-phone__install",
-    ] {
-        let body = rule_body(&css, selector);
-        let ink = hex_in(body, "color");
-        let ground = hex_in(body, "background");
-        let ink_rgb = views::brand_presentation::parse_hex(&ink)
-            .unwrap_or_else(|| panic!("{selector} color {ink}"));
-        let ground_rgb = views::brand_presentation::parse_hex(&ground)
-            .unwrap_or_else(|| panic!("{selector} background {ground}"));
-        let ratio = views::brand_presentation::contrast_ratio(ink_rgb, ground_rgb);
-        assert!(
-            ratio >= 4.5,
-            "{selector}: {ink} on {ground} is {ratio:.2}:1 — under the 4.5:1 floor \
-             for the Install label. Darken the platform ink rather than lightening \
-             the type."
-        );
-    }
+    let selector = ".fm-phone[data-phone=\"ios\"] .fm-phone__install";
+    let body = rule_body(&css, selector);
+    let ink = hex_in(body, "color");
+    let ground = hex_in(body, "background");
+    let ink_rgb = views::brand_presentation::parse_hex(&ink)
+        .unwrap_or_else(|| panic!("{selector} color {ink}"));
+    let ground_rgb = views::brand_presentation::parse_hex(&ground)
+        .unwrap_or_else(|| panic!("{selector} background {ground}"));
+    let ratio = views::brand_presentation::contrast_ratio(ink_rgb, ground_rgb);
+    assert!(
+        ratio >= 4.5,
+        "{selector}: {ink} on {ground} is {ratio:.2}:1 — under the 4.5:1 floor \
+         for the Get label. Darken the platform ink rather than lightening the \
+         type."
+    );
 }
 
 /// The `#rrggbb` (or `#rgb`) a declaration paints, expanded to six digits.
