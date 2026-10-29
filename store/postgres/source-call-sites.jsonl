@@ -288,7 +288,7 @@
 {"file":"cli/src/projects/matter.rs","line":108,"function":"caption_for_export","operation":"insert","sql_operations":[],"tables":["message"],"transaction":false}
 {"file":"cli/src/projects/matter.rs","line":185,"function":"caption_for_preview","operation":"insert","sql_operations":[],"tables":["message"],"transaction":false}
 {"file":"cli/src/projects/preview.rs","line":851,"function":"respond","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/repository.rs","line":2599,"function":"lint_project_template","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/repository.rs","line":2605,"function":"lint_project_template","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/search.rs","line":214,"function":"search_file","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/search.rs","line":545,"function":"two_page_pdf","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/set.rs","line":193,"function":"live_patch","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
