@@ -448,7 +448,7 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         github_stars: crate::source_repository::known_stars(),
         tokens_href: crate::brand_style::brand_tokens_href(views::brand::brand_key().as_str()),
         companion_image: (views::brand::brand_key() == views::brand::BrandKey::Vesta)
-            .then(|| "/public/brand/aster/aster-guide.svg".to_owned()),
+            .then(|| "/public/brand/aster/aster.svg".to_owned()),
         is_practice: views::brand::BrandKey::LIVE.contains(&views::brand::brand_key()),
         // The compiled family — every house brand the firm trades under, the
         // request's own key marked current — so the "Our Family" row is on
