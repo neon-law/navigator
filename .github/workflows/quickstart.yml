@@ -66,8 +66,14 @@ jobs:
         run: |
           tail -200 /tmp/quickstart.log || true
           set -a; source .devx/env || true; set +a
+          if [ -s "$PWD/.devx/kubeconfig" ]; then
+            export KUBECONFIG="$PWD/.devx/kubeconfig"
+          fi
           kubectl -n navigator get pods,jobs,pvc -o wide || true
           kubectl -n navigator describe pod navigator-forgejo-0 || true
+          kubectl -n navigator describe deployment openobserve || true
+          kubectl -n navigator logs deployment/openobserve --all-containers --tail=100 || true
+          kubectl -n navigator get events --sort-by=.lastTimestamp || true
       - name: Cleanup
         if: always()
         run: |
