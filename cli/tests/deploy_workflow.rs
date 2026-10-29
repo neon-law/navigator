@@ -1620,10 +1620,102 @@ fn image_publishers_require_signed_digest_verified_ghcr_mirrors() {
         if job != "publish-cli-image" {
             assert!(text.contains("steps.build-push.outputs.digest"));
         }
-        assert!(text.contains("cosign sign --yes \"${IMAGE_REF}@${IMAGE_DIGEST}\""));
+        assert!(
+            text.contains("scripts/cosign-sign.sh \"${IMAGE_REF}@${IMAGE_DIGEST}\""),
+            "{job} must sign its private digest through the retrying wrapper"
+        );
+        assert!(
+            !text.contains("cosign sign --yes \"${IMAGE_REF}@${IMAGE_DIGEST}\""),
+            "{job} must not sign its private digest with a bare, unretried cosign"
+        );
         assert!(text.contains("actions/upload-artifact@v7"));
     }
     assert!(workflow.contains("ghcr.io/${{ github.repository_owner }}/navigator"));
+}
+
+/// Release 26.10.29 failed when Rekor answered a slow upload's retry with
+/// `409 createLogEntryConflict`. Every standalone signature now goes through
+/// `scripts/cosign-sign.sh`, which reruns `cosign sign` with fresh ephemeral
+/// keys. The GHCR mirror loops already retry their own signature.
+#[test]
+fn every_standalone_signature_retries_through_the_wrapper() {
+    let workflow = deploy_workflow();
+    let bare: Vec<&str> = workflow
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("cosign sign"))
+        .collect();
+    assert!(
+        bare.is_empty(),
+        "sign through scripts/cosign-sign.sh, not bare cosign: {bare:?}"
+    );
+    let alias = job_text(&workflow, "publish-service");
+    assert!(alias.contains("scripts/cosign-sign.sh \"${registry}/${{ matrix.alias }}@"));
+}
+
+const DIGEST_REF: &str =
+    "registry.example/navigator-billing-digest-trigger@sha256:8475ff4278c29e70c1f1db536a2a4399c2e7910c680d506bdd8f0c8df7790e18";
+
+/// Runs `scripts/cosign-sign.sh` against a fake `cosign` that fails its first
+/// `failures` calls with the 26.10.29 Rekor conflict. Returns the exit status
+/// and how many times the fake was called.
+fn run_cosign_sign(reference: &str, failures: u32) -> (std::process::ExitStatus, u32) {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = tempfile::tempdir().expect("scratch dir");
+    let calls = scratch.path().join("calls");
+    let fake = scratch.path().join("cosign");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/usr/bin/env bash\n\
+             [ \"$1 $2\" = \"sign --yes\" ] || exit 64\n\
+             echo x >> '{calls}'\n\
+             if [ \"$(wc -l < '{calls}')\" -le {failures} ]; then\n\
+             echo 'createLogEntryConflict {{\"code\":409}}' >&2; exit 1\n\
+             fi\n",
+            calls = calls.display(),
+        ),
+    )
+    .expect("write fake cosign");
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let path = format!(
+        "{}:{}",
+        scratch.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let status = std::process::Command::new(repo_file_path("scripts/cosign-sign.sh"))
+        .arg(reference)
+        .env("PATH", path)
+        .env("COSIGN_SIGN_ATTEMPTS", "3")
+        .env("COSIGN_SIGN_BACKOFF_SECONDS", "0")
+        .output()
+        .expect("run cosign-sign.sh")
+        .status;
+    let count = std::fs::read_to_string(&calls)
+        .map(|text| text.lines().count() as u32)
+        .unwrap_or(0);
+    (status, count)
+}
+
+#[test]
+fn cosign_sign_retries_a_rekor_conflict_until_it_signs() {
+    let (status, calls) = run_cosign_sign(DIGEST_REF, 2);
+    assert!(status.success(), "two conflicts then a signature must pass");
+    assert_eq!(calls, 3);
+}
+
+#[test]
+fn cosign_sign_gives_up_after_its_attempts() {
+    let (status, calls) = run_cosign_sign(DIGEST_REF, 99);
+    assert_eq!(status.code(), Some(1));
+    assert_eq!(calls, 3, "COSIGN_SIGN_ATTEMPTS bounds the retries");
+}
+
+#[test]
+fn cosign_sign_refuses_a_tag_reference() {
+    let (status, calls) = run_cosign_sign("registry.example/neon-server:latest", 0);
+    assert_eq!(status.code(), Some(2), "only a digest may be signed");
+    assert_eq!(calls, 0);
 }
 
 #[test]
@@ -1633,7 +1725,7 @@ fn the_cli_image_uses_the_published_archive_and_joins_the_digest_manifest() {
     assert!(cli.contains("actions/download-artifact@v8"));
     assert!(cli.contains("navigator-linux-cli"));
     assert!(cli.contains("FROM scratch"));
-    assert!(cli.contains("cosign sign --yes"));
+    assert!(cli.contains("scripts/cosign-sign.sh"));
     assert!(cli.contains("image-digest-navigator-cli"));
     let dispatcher = job_text(&workflow, "release-deploy");
     assert!(dispatcher.contains("jq -s 'add'"));
