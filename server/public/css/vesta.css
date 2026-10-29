@@ -239,3 +239,5 @@
   .vesta-aster--illustrate, .vesta-aster--explore { float: none; width: 13rem; margin: 0 auto 1.5rem; }
   .vesta-closing .vesta-aster--closing { align-self: center; width: 10rem; }
 }
+
+.vesta-offer .vesta-plan__price { grid-column: 1; margin: 0; font-size: clamp(2.5rem, 5vw, 4rem); line-height: 1.1; }

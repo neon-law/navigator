@@ -858,6 +858,7 @@ fn estate_content(
         eyebrow: copy.eyebrow,
         process_link: copy.process_link,
         plan_label: copy.plan_label,
+        price: copy.price,
         plan_description: copy.plan_description,
         features: copy.features,
         fee_note: copy.fee_note,
@@ -2276,9 +2277,10 @@ mod tests {
     }
 
     #[test]
-    fn vesta_offer_omits_a_starting_price_and_separates_administration() {
+    fn vesta_offer_publishes_starting_price_and_separates_administration() {
         let content = home(&views::brand::VESTA_BRANDING);
         let estate = content.estate.expect("estate offer");
+        assert_eq!(estate.price, "From $1,111");
         assert!(estate.fee_note.starts_with("Fees depend on the scope"));
         assert!(estate
             .plan_description

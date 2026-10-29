@@ -18,6 +18,7 @@ pub struct EstateContent {
     pub eyebrow: String,
     pub process_link: String,
     pub plan_label: String,
+    pub price: String,
     pub plan_description: String,
     pub features: Vec<String>,
     pub fee_note: String,
@@ -139,6 +140,7 @@ pub(super) fn EstateHome(
                 aside { class: "vesta-plan", "aria-label": "{estate.plan_label}",
                     img { class: "vesta-plan__mark", src: "/public/brand/vesta.svg", alt: "", width: "36", height: "50" }
                     p { class: "vesta-eyebrow", "{estate.plan_label}" }
+                    p { class: "vesta-plan__price", "{estate.price}" }
                     p { class: "vesta-plan__term", "{estate.plan_description}" }
                     ul { for feature in &estate.features { li { "{feature}" } } }
                     p { class: "vesta-note", "{estate.fee_note}" }

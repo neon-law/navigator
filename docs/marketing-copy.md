@@ -110,7 +110,7 @@ LinkedIn link. The profile does not repeat the directory's heading or copy a ful
 
 Vesta's `home.yaml` leads with support in life and death and welcomes the person's values and spiritual beliefs. It
 explains that Nevada Asset Protection Trust planning may fit after reviewing the person's circumstances and applicable
-law. The page publishes no starting price; services and fees are agreed in writing. The basic package for one person
+law. The basic plan starts from $1,111; services and fees are agreed in writing. The basic package for one person
 includes a will, financial power of attorney, health-care directive, health-care power of attorney, a planning meeting,
 attorney preparation and review, one round of revisions before signing, and signing guidance. Living trusts, advanced
 planning, property transfers, probate, administration, and later updates require a separate quote. The home page puts an

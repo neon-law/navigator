@@ -178,11 +178,12 @@ async fn vesta_leads_with_tailored_planning_and_explains_nevada_trusts() {
 }
 
 #[tokio::test]
-async fn vesta_services_describe_tailored_planning_without_a_starting_price() {
+async fn vesta_services_describe_tailored_planning_with_a_starting_price() {
     let html = preview(BrandKey::Vesta, "/services").await;
     assert!(html.contains("We listen to what matters to you"));
-    assert!(html.contains("Basic estate plans for one person include a will"));
-    assert!(!html.contains("$1,111"));
+    assert!(html.contains("Basic estate plans for one person start from $1,111"));
+    let home = preview(BrandKey::Vesta, "/").await;
+    assert!(home.contains("From $1,111"));
     assert!(html.contains("Nicholas Shook may accept appointment"));
     assert!(html.contains("qualified Nevada trustee"));
     assert!(html.contains("Life-insurance trusts"));
