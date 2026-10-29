@@ -1,4 +1,5 @@
 //! Asset drift checks, not a perceptual certification of the web translation.
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -70,7 +71,11 @@ fn every_character_asset_is_registered_and_unchanged() {
     );
     for asset in canon.asset {
         let bytes = std::fs::read(directory().join(&asset.path)).unwrap();
-        assert_eq!(Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), asset.sha256,
+        let mut checksum = String::with_capacity(64);
+        for byte in Sha256::digest(bytes) {
+            write!(&mut checksum, "{byte:02x}").unwrap();
+        }
+        assert_eq!(checksum, asset.sha256,
             "Aster artwork changed: compare it against the canonical board before updating the checksum");
         // This is intentionally not an approval of the existing simplified redraw.
         assert_eq!(asset.visual_status, "simplified_translation_needs_review",
