@@ -105,6 +105,7 @@ jobs:
 const SYNCED_SKILL_NAMES: &[&str] = &[
     "council",
     "legal-council",
+    "analyze-memo",
     "client-council",
     "human-readable",
     "stay-in-repo",
