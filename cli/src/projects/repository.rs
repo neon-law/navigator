@@ -314,6 +314,10 @@ pub(crate) const SYNCED_SKILLS: &[(&str, &str)] = &[
         include_str!("../../../.agents/skills/legal-council/SKILL.md"),
     ),
     (
+        "analyze-memo",
+        include_str!("../../../.agents/skills/analyze-memo/SKILL.md"),
+    ),
+    (
         "client-council",
         include_str!("../../../.agents/skills/client-council/SKILL.md"),
     ),
@@ -3806,6 +3810,44 @@ jobs:
                 "synced skill `{name}` documents a command that does not resolve: {found:?}"
             );
         }
+    }
+
+    #[test]
+    fn analyze_memo_is_restored_and_admitted_by_the_project_gate() {
+        let (_, canonical) = SYNCED_SKILLS
+            .iter()
+            .find(|(name, _)| *name == "analyze-memo")
+            .expect("analyze-memo is a synced skill");
+        let root = tempfile::tempdir().unwrap();
+        emit_scaffold(
+            root.path(),
+            "matter-one",
+            "staging.neonlaw.com",
+            "lawyer@example.com",
+            "client@example.com",
+        )
+        .unwrap();
+        let path = root.path().join(".agents/skills/analyze-memo/SKILL.md");
+        assert_eq!(fs::read_to_string(&path).unwrap(), *canonical);
+        fs::write(&path, "drift").unwrap();
+        let mut findings = Vec::new();
+        validate_skills(root.path(), &mut findings);
+        assert!(findings
+            .iter()
+            .any(|finding| finding.message.contains("analyze-memo")));
+        repair_skills(root.path()).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), *canonical);
+        findings.clear();
+        validate_skills(root.path(), &mut findings);
+        assert!(findings.is_empty(), "{findings:?}");
+        assert_eq!(
+            validate_gate(root.path(), Some("matter-one"), false).errors,
+            0
+        );
+        fs::remove_file(&path).unwrap();
+        repair_skills(root.path()).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), *canonical);
+        assert!(AGENT_CONTRACT_BASE.contains(".agents/skills/analyze-memo/SKILL.md"));
     }
 
     #[test]
