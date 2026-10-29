@@ -344,6 +344,37 @@ pub(crate) fn marketing_copy(key: &str) -> String {
     .to_string()
 }
 
+/// The firm's own page speaks for itself: no provider credit, no Neon mark.
+#[cfg(feature = "server")]
+fn firm_own_page() -> bool {
+    views::brand::brand_key() == views::brand::BrandKey::GuiebShook
+}
+
+/// The footer's mark notice, empty on the firm's own page.
+#[cfg(feature = "server")]
+fn footer_trademark() -> (&'static str, &'static str, &'static str) {
+    if firm_own_page() {
+        ("", "", "")
+    } else {
+        views::brand::firm_trademark()
+    }
+}
+
+/// The provider and ownership notices, empty on the firm's own page.
+#[cfg(feature = "server")]
+fn footer_disclosure() -> crate::components::site_footer::FooterDisclosure {
+    if views::brand::FIRM_BRAND.legal_entity == "Guieb & Shook PC" && !firm_own_page() {
+        crate::components::site_footer::FooterDisclosure {
+            prefix: marketing_copy("footer.provider_prefix"),
+            provider: marketing_copy("footer.provider_name"),
+            href: marketing_copy("footer.provider_href"),
+            ownership: marketing_copy("footer.ownership"),
+        }
+    } else {
+        crate::components::site_footer::FooterDisclosure::default()
+    }
+}
+
 /// Build the public chrome for `brand`'s header, with the firm's footer data.
 ///
 /// One brand reaches this — the firm's — because the site publishes one
@@ -356,7 +387,7 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
     // The mark, its registration, and the register's record, resolved together
     // — the notice is one claim and a footer holding two thirds of it makes an
     // ownership statement a reader cannot check.
-    let (trademark, registration, record) = views::brand::firm_trademark();
+    let (trademark, registration, record) = footer_trademark();
 
     let destinations = brand
         .nav
@@ -385,16 +416,7 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         firm_logo_href: FIRM_BRAND.logo_href.to_string(),
         firm_home_href: FIRM_BRAND.home_href.to_string(),
         legal_entity: FIRM_BRAND.legal_entity.to_string(),
-        disclosure: if FIRM_BRAND.legal_entity == "Guieb & Shook PC" {
-            crate::components::site_footer::FooterDisclosure {
-                prefix: marketing_copy("footer.provider_prefix"),
-                provider: marketing_copy("footer.provider_name"),
-                href: marketing_copy("footer.provider_href"),
-                ownership: marketing_copy("footer.ownership"),
-            }
-        } else {
-            crate::components::site_footer::FooterDisclosure::default()
-        },
+        disclosure: footer_disclosure(),
         attribution: firm_attribution(brand),
         disclaimer: views::brand::firm_disclaimer().to_string(),
         trademark: trademark.to_string(),
@@ -965,6 +987,22 @@ mod tests {
         assert!(chrome.trademark.is_empty());
         assert!(chrome.trademark_registration.is_empty());
         assert!(chrome.trademark_record_url.is_empty());
+    }
+
+    /// Guieb & Shook's own page names no provider and no Neon Law mark.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn guieb_shook_footer_omits_the_provider_and_neon_mark() {
+        let branding =
+            views::brand::BrandKey::GuiebShook.resolve_branding(&views::brand::DEFAULT_BRANDING);
+        let chrome =
+            views::brand::scope(branding, async { chrome_for(&branding.firm, Vec::new()) }).await;
+        let mut dom = VirtualDom::new_with_props(PublicFooter, PublicFooterProps { chrome });
+        dom.rebuild_in_place();
+        let out = dioxus_ssr::render(&dom);
+        assert!(!out.contains("site-footer__provider"), "{out}");
+        assert!(!out.contains("site-footer__ownership"), "{out}");
+        assert!(!out.contains("site-footer__trademark"), "{out}");
     }
 
     /// The public footer carries the firm's own disclaimer.

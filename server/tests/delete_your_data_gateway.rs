@@ -113,7 +113,7 @@ async fn the_gateway_is_404_on_every_non_neon_brand_host() {
     for host in [
         "www.deleteyourdata.com",
         "staging.deleteyourdata.com",
-        "www.lawyershook.com",
+        "www.guiebandshook.com",
         "www.vestaestateplanning.com",
         "www.misericordialaw.com",
         "www.abhayaimmigration.com",
@@ -182,7 +182,7 @@ async fn the_nautilus_page_is_404_on_every_non_neon_brand_host() {
         "www.deleteyourdata.com",
         "www.vestaestateplanning.com",
         "www.cyberinjurylaw.com",
-        "www.lawyershook.com",
+        "www.guiebandshook.com",
     ] {
         let (status, _) = get_on_host(&app, "/nautilus", Some(host)).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{host}");

@@ -1149,6 +1149,16 @@ impl BrandKey {
         format!("https://{}", self.hosts()[0])
     }
 
+    /// The brand this key's site moved to, if it moved: every served host
+    /// 301s to the matching host of the brand named here.
+    #[must_use]
+    pub const fn moved_to(self) -> Option<Self> {
+        match self {
+            Self::LawyerShook => Some(Self::GuiebShook),
+            _ => None,
+        }
+    }
+
     /// This key's home in the deployment named by `deployment_host`.
     ///
     /// Persistent staging runs the production runtime profile, so the

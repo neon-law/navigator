@@ -7768,6 +7768,44 @@ async fn the_apex_redirect_keeps_the_path_and_query() {
     );
 }
 
+/// Lawyer Shook's site moved to Guieb & Shook's: each served host 301s to the
+/// same environment's Guieb & Shook host, path and query intact.
+#[tokio::test]
+async fn lawyer_shook_hosts_redirect_to_guieb_shook() {
+    let state = empty_state().await;
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+
+    for (host, expected) in [
+        (
+            "www.lawyershook.com",
+            "https://www.guiebandshook.com/testimonials?ref=x",
+        ),
+        (
+            "staging.lawyershook.com",
+            "https://staging.guiebandshook.com/testimonials?ref=x",
+        ),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/testimonials?ref=x")
+                    .header(header::HOST, host)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY, "{host}");
+        assert_eq!(
+            resp.headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some(expected),
+        );
+    }
+}
+
 #[tokio::test]
 async fn visitor_analytics_counts_public_routes_and_excludes_private_surfaces() {
     let state = empty_state().await;
@@ -10857,7 +10895,7 @@ async fn assert_unregistered_host_redirects(
 /// holds on every host regardless of session.
 /// The holding host's chrome: no header and no public shell — but the one
 /// shared footer, with the firm's office
-/// and association affiliation, is under the notice along with its two practice cards.
+/// and association affiliation, is under the notice.
 fn assert_holding_host_chrome(body: &str) {
     let standing_line = views::brand::JTA_STANDING.to_string();
     for (marker, present) in [
@@ -10866,8 +10904,6 @@ fn assert_holding_host_chrome(body: &str) {
         (r#"class="site-footer""#, true),
         ("Ste 405-9002", true),
         (r#"aria-label="Our family""#, false),
-        (r#"class="home-practices__grid""#, true),
-        ("Vesta Estate Planning", true),
         (standing_line.as_str(), true),
     ] {
         assert_eq!(
@@ -10882,7 +10918,7 @@ fn assert_holding_host_chrome(body: &str) {
 async fn host_brand_path_matrix_resolves_every_combination() {
     let default_host = "www.neonlaw.com";
     let delete_your_data_host = "staging.deleteyourdata.com";
-    let lawyer_shook_host = "staging.lawyershook.com";
+    let holding_host = "staging.guiebandshook.com";
     let unknown_host = "unregistered.example";
     let state =
         empty_state_with_canonical_host(CanonicalHost::new(Some(default_host.into()))).await;
@@ -10890,19 +10926,19 @@ async fn host_brand_path_matrix_resolves_every_combination() {
 
     // Marketing path: 200 on every registered host with its own
     // `og:site_name`; the unknown host's redirect target renders the
-    // default brand's chrome, not merely a 301. Lawyer Shook keeps its
-    // holding notice and practice cards on `/` — `/contact` is unpublished
+    // default brand's chrome, not merely a 301. Guieb & Shook keeps its
+    // holding notice on `/` — `/contact` is unpublished
     // and 404s.
     for (host, path, brand) in [
         (default_host, "/contact", "Neon Law"),
         (delete_your_data_host, "/contact", "DeleteYourData.com"),
-        (lawyer_shook_host, "/", "Lawyer Shook"),
+        (holding_host, "/", "Guieb & Shook"),
     ] {
         let resp = get_on_host(&app, path, host).await;
         assert_eq!(resp.status(), StatusCode::OK, "{host} {path}");
         let body = body_string(resp).await;
         assert!(page_declares_og_site_name(&body, brand), "{host}: {body}");
-        for other_brand in ["Neon Law", "DeleteYourData.com", "Lawyer Shook"] {
+        for other_brand in ["Neon Law", "DeleteYourData.com", "Guieb & Shook"] {
             if other_brand != brand {
                 assert!(
                     !page_declares_og_site_name(&body, other_brand),
@@ -10910,7 +10946,7 @@ async fn host_brand_path_matrix_resolves_every_combination() {
                 );
             }
         }
-        if host == lawyer_shook_host {
+        if host == holding_host {
             assert!(
                 body.contains(r#"class="holding-page""#)
                     && body.contains(r#"class="holding-page__heading""#),
@@ -10929,14 +10965,14 @@ async fn host_brand_path_matrix_resolves_every_combination() {
     );
     assert!(
         !page_declares_og_site_name(&followed_body, "DeleteYourData.com")
-            && !page_declares_og_site_name(&followed_body, "Lawyer Shook"),
+            && !page_declares_og_site_name(&followed_body, "Guieb & Shook"),
         "{followed_body}"
     );
 
     // `/app`: session-gated on every host. The host layer runs outside the
     // session boundary, so the unauthenticated status is identical on both
     // registered hosts — no brand leaks through an anonymous redirect.
-    for host in [default_host, delete_your_data_host, lawyer_shook_host] {
+    for host in [default_host, delete_your_data_host, holding_host] {
         let resp = get_on_host(&app, "/app/projects", host).await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER, "{host} /app/projects");
         assert_eq!(
@@ -10957,7 +10993,7 @@ async fn host_brand_path_matrix_resolves_every_combination() {
 
     // `/public/*` asset: served on every registered host; the unknown host's
     // redirect target actually serves the file.
-    for host in [default_host, delete_your_data_host, lawyer_shook_host] {
+    for host in [default_host, delete_your_data_host, holding_host] {
         let resp = get_on_host(&app, "/public/favicon.svg", host).await;
         assert_eq!(resp.status(), StatusCode::OK, "{host} /public/favicon.svg");
     }
@@ -10978,7 +11014,7 @@ async fn host_brand_path_matrix_resolves_every_combination() {
     for host in [
         default_host,
         delete_your_data_host,
-        lawyer_shook_host,
+        holding_host,
         unknown_host,
     ] {
         for path in ["/app/health", "/app/readyz"] {
@@ -11001,6 +11037,9 @@ async fn every_brand_home_publishes_one_lead_form() {
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
     for &brand in views::brand::BrandKey::LIVE {
+        if brand.moved_to().is_some() {
+            continue;
+        }
         assert_brand_home_lead_capture(&app, &db, brand).await;
     }
 }
@@ -11181,6 +11220,15 @@ async fn every_registered_host_serves_its_brand_and_its_apex_redirects_home() {
                         Some(format!("https://{}/", key.canonical_host()).as_str()),
                         "{host} redirects to its own brand's home"
                     );
+                } else if let Some(target) = key.moved_to() {
+                    assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY, "{host} moved");
+                    assert_eq!(
+                        resp.headers()
+                            .get(header::LOCATION)
+                            .and_then(|v| v.to_str().ok()),
+                        Some(format!("{}/", target.public_home_href_for(Some(host))).as_str()),
+                        "{host} redirects to the brand it moved to"
+                    );
                 } else {
                     assert_eq!(resp.status(), StatusCode::OK, "{host} /");
                     let body = body_string(resp).await;
@@ -11233,7 +11281,10 @@ async fn every_registered_host_serves_its_brand_and_its_apex_redirects_home() {
     // A live host's crawler documents still name that host as their own
     // absolute base — the gate refuses held-out hosts without collapsing
     // every brand onto the deployment's canonical host.
-    for (_, host) in views::brand::live_brand_hosts() {
+    for (key, host) in views::brand::live_brand_hosts() {
+        if key.moved_to().is_some() {
+            continue;
+        }
         let body = body_string(get_on_host(&app, "/robots.txt", host).await).await;
         assert!(
             body.contains(&format!("Sitemap: https://{host}/sitemap.xml")),

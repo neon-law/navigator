@@ -119,7 +119,7 @@ async fn the_gateway_is_404_on_every_non_neon_brand_host() {
     let app = app(state().await);
     for host in [
         "www.deleteyourdata.com",
-        "www.lawyershook.com",
+        "www.guiebandshook.com",
         "www.vestaestateplanning.com",
         "www.misericordialaw.com",
         "www.abhayaimmigration.com",

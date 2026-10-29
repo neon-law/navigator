@@ -208,7 +208,7 @@ async fn only_neon_advertises_the_delete_your_debt_gateway() {
     let app = app().await;
     for host in [
         "staging.deleteyourdata.com",
-        "staging.lawyershook.com",
+        "staging.guiebandshook.com",
         "staging.deleteyourdebt.com",
     ] {
         let (status, body) = get_on_host(&app, "/sitemap.xml", Some(host)).await;
@@ -226,7 +226,7 @@ async fn only_neon_advertises_the_delete_your_data_gateway() {
     let app = app().await;
     for host in [
         "staging.deleteyourdata.com",
-        "staging.lawyershook.com",
+        "staging.guiebandshook.com",
         "staging.deleteyourdebt.com",
     ] {
         let (status, body) = get_on_host(&app, "/sitemap.xml", Some(host)).await;
@@ -244,7 +244,7 @@ async fn only_neon_advertises_the_immigration_gateway() {
     let app = app().await;
     for host in [
         "staging.deleteyourdata.com",
-        "staging.lawyershook.com",
+        "staging.guiebandshook.com",
         "staging.abhayaimmigration.com",
     ] {
         let (status, body) = get_on_host(&app, "/sitemap.xml", Some(host)).await;
@@ -262,7 +262,7 @@ async fn only_neon_advertises_the_estate_planning_gateway() {
     let app = app().await;
     for host in [
         "staging.deleteyourdata.com",
-        "staging.lawyershook.com",
+        "staging.guiebandshook.com",
         "staging.vestaestateplanning.com",
     ] {
         let (status, body) = get_on_host(&app, "/sitemap.xml", Some(host)).await;
@@ -280,7 +280,7 @@ async fn only_neon_advertises_the_accidents_gateway() {
     let app = app().await;
     for host in [
         "staging.deleteyourdata.com",
-        "staging.lawyershook.com",
+        "staging.guiebandshook.com",
         "staging.misericordialaw.com",
     ] {
         let (status, body) = get_on_host(&app, "/sitemap.xml", Some(host)).await;
@@ -298,7 +298,7 @@ async fn only_neon_advertises_the_divorce_gateway() {
     let app = app().await;
     for host in [
         "staging.deleteyourdata.com",
-        "staging.lawyershook.com",
+        "staging.guiebandshook.com",
         "staging.daybridgedivorce.com",
     ] {
         let (status, body) = get_on_host(&app, "/sitemap.xml", Some(host)).await;
@@ -377,9 +377,9 @@ async fn the_delete_your_data_sitemap_lists_only_that_brands_pages_under_its_hos
 }
 
 #[tokio::test]
-async fn the_lawyer_shook_sitemap_lists_only_that_brands_pages_under_its_host() {
+async fn the_guieb_shook_sitemap_lists_only_that_brands_pages_under_its_host() {
     let app = app().await;
-    let host = "staging.lawyershook.com";
+    let host = "staging.guiebandshook.com";
     let (status, body) = get_on_host(&app, "/sitemap.xml", Some(host)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.contains(&format!("https://{host}/</loc>")), "{body}");
