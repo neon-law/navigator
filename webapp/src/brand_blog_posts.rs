@@ -4,10 +4,13 @@
 //! `social_publication` tables. The native form schedules approved Posts through
 //! the same command as the CLI. These pages show the
 //! declared video and orientation, the measured orientation, and why each
-//! provider would refuse the Post. The schedule at the top of each page is read
+//! provider would refuse the Post. The schedule on each page is read
 //! from those tables alone, so it does not depend on which durable workflow
 //! engine sends the Posts. A cancellation holds a future schedule.
 
+use chrono::Utc;
+#[cfg(any(feature = "server", test))]
+use chrono::{Datelike, NaiveDate};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -126,6 +129,170 @@ pub struct BlogCatalogPage {
     pub brand_filter: Option<String>,
     pub tokens_href: String,
     pub firm_name: String,
+    #[serde(default)]
+    pub calendar: CalendarMonth,
+}
+
+/// A UTC calendar month carried with the authorized catalog response.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CalendarMonth {
+    label: String,
+    month: String,
+    previous: String,
+    next: String,
+    today: String,
+    days: Vec<Option<String>>,
+    compose_at: String,
+}
+
+#[cfg(any(feature = "server", test))]
+fn calendar_month(month: Option<&str>, day: Option<&str>, today: NaiveDate) -> CalendarMonth {
+    let first = month
+        .and_then(|value| {
+            NaiveDate::parse_from_str(&format!("{value}-01"), "%Y-%m-%d")
+                .ok()
+                .filter(|date| date.format("%Y-%m").to_string() == value)
+        })
+        .filter(|date| (1900..=9998).contains(&date.year()))
+        .unwrap_or(today.with_day(1).unwrap_or(today));
+    let previous = first
+        .checked_sub_months(chrono::Months::new(1))
+        .unwrap_or(first);
+    let next = first
+        .checked_add_months(chrono::Months::new(1))
+        .unwrap_or(first);
+    let mut days = vec![None; first.weekday().num_days_from_sunday() as usize];
+    let mut date = first;
+    while date < next {
+        days.push(Some(date.to_string()));
+        let Some(next_day) = date.succ_opt() else {
+            break;
+        };
+        date = next_day;
+    }
+    while !days.len().is_multiple_of(7) {
+        days.push(None);
+    }
+    let compose_at = day
+        .and_then(|value| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+        .filter(|date| *date >= first && *date < next)
+        .map_or_else(String::new, |date| format!("{date}T09:00:00+00:00"));
+    CalendarMonth {
+        label: first.format("%B %Y").to_string(),
+        month: first.format("%Y-%m").to_string(),
+        previous: previous.format("%Y-%m").to_string(),
+        next: next.format("%Y-%m").to_string(),
+        today: today.to_string(),
+        days,
+        compose_at,
+    }
+}
+
+fn calendar_href(page: &BlogCatalogPage, month: &str, day: Option<&str>) -> String {
+    let mut url = format!("/app/social/calendar?month={month}");
+    if let Some(brand) = page.brand_filter.as_ref() {
+        let encoded =
+            percent_encoding::utf8_percent_encode(brand, percent_encoding::NON_ALPHANUMERIC);
+        url = format!("{url}&brand_key={encoded}");
+    }
+    if let Some(day) = day {
+        url = format!("{url}&day={day}#compose-post");
+    }
+    url
+}
+
+fn post_utc_date(row: &BlogPostRow) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(&row.publish_at)
+        .ok()
+        .map(|date| date.with_timezone(&Utc).format("%Y-%m-%d").to_string())
+}
+
+fn post_utc_time(row: &BlogPostRow) -> String {
+    chrono::DateTime::parse_from_rfc3339(&row.publish_at)
+        .map(|date| date.with_timezone(&Utc).format("%H:%M UTC").to_string())
+        .unwrap_or_default()
+}
+
+fn post_providers(page: &BlogCatalogPage, row: &BlogPostRow) -> String {
+    let providers = page
+        .social_accounts
+        .iter()
+        .filter(|account| row.selected_social_accounts.contains(&account.id))
+        .map(|account| account.provider.as_str())
+        .chain(row.social_links.iter().map(|link| link.provider.as_str()))
+        .chain(
+            page.publications
+                .iter()
+                .filter(|item| item.post_id == row.id)
+                .map(|item| item.provider.as_str()),
+        )
+        .collect::<std::collections::BTreeSet<_>>();
+    if providers.is_empty() {
+        return "Website only".into();
+    }
+    providers
+        .into_iter()
+        .map(provider_label)
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn month_calendar(page: &BlogCatalogPage) -> Element {
+    let calendar = &page.calendar;
+    rsx! {
+        section { class: "social-month", aria_label: "Monthly publishing calendar",
+            header { class: "social-month__toolbar",
+                h2 { "{calendar.label}" }
+                nav { aria_label: "Calendar month",
+                    a { href: calendar_href(page, &calendar.previous, None), aria_label: "Previous month", "← Previous" }
+                    a { href: calendar_href(page, calendar.today.get(..7).unwrap_or(&calendar.month), None), "Today" }
+                    a { href: calendar_href(page, &calendar.next, None), aria_label: "Next month", "Next →" }
+                }
+            }
+            p { "All calendar dates and times are UTC. Choose a day to prepare a Post; publishing still requires approval." }
+            div { class: "social-month__scroll", role: "region", aria_label: "Calendar days; scroll horizontally on narrow screens", tabindex: "0",
+                div { class: "social-month__grid",
+                    for weekday in ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] {
+                        div { class: "social-month__weekday", "{weekday}" }
+                    }
+                    for (index, day) in calendar.days.iter().enumerate() {
+                        if let Some(day) = day {
+                            section { key: "{day}", class: "social-month__day", aria_label: "{day}",
+                                a { class: "social-month__date", href: calendar_href(page, &calendar.month, Some(day)),
+                                    aria_label: "Prepare a Post for {day} UTC",
+                                    time { datetime: "{day}", "{day.get(8..).unwrap_or(day)}" }
+                                    if day == &calendar.today { " · Today" }
+                                    span { " +" }
+                                }
+                                for row in page.rows.iter().filter(|row| post_utc_date(row).as_ref() == Some(day)) {
+                                    details { class: "social-month__post", key: "{row.id}",
+                                        summary {
+                                            strong { "{row.title}" }
+                                            span { "{row.brand} · {row.status}" }
+                                            time { datetime: "{row.publish_at}", "{post_utc_time(row)}" }
+                                            span { "{post_providers(page, row)}" }
+                                        }
+                                        {media_and_eligibility(row)}
+                                        {social_links_list(row)}
+                                        for publication in page.publications.iter().filter(|item| item.post_id == row.id) {
+                                            p { "{provider_label(&publication.provider)}: {publication.state}" }
+                                        }
+                                        if row.status == "scheduled" {
+                                            a { href: "#scheduled-post-{row.id}", "Review schedule" }
+                                        } else {
+                                            a { href: "/app/social", "Review publication" }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            div { key: "blank-{index}", class: "social-month__blank", aria_hidden: "true" }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[server]
@@ -213,6 +380,11 @@ pub async fn blog_catalog_page() -> Result<BlogCatalogPage, ServerFnError> {
     .await
     .map(|axum::Extension(token)| token.0)
     .unwrap_or_default();
+    let calendar = calendar_month(
+        query.month.as_deref(),
+        query.day.as_deref(),
+        Utc::now().date_naive(),
+    );
     Ok(BlogCatalogPage {
         role,
         brands,
@@ -273,6 +445,7 @@ pub async fn blog_catalog_page() -> Result<BlogCatalogPage, ServerFnError> {
         brand_filter,
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
         firm_name: crate::app_chrome::firm_name_from_context().await,
+        calendar,
     })
 }
 
@@ -525,7 +698,7 @@ fn social_calendar_body(page: &BlogCatalogPage) -> Element {
             let brand = row.brand.clone();
             let publish_at = row.publish_at.clone();
             rsx! {
-                article { class: "team-home__card", key: "{row.id}",
+                article { id: "scheduled-post-{row.id}", class: "team-home__card", key: "{row.id}",
                     h2 { "{title}" }
                     p { "Brand: {brand}. Scheduled: {publish_at}." }
                     {media_and_eligibility(row)}
@@ -549,14 +722,15 @@ fn social_calendar_body(page: &BlogCatalogPage) -> Element {
             header { class: "page-header", h1 { "Publishing calendar" },
                 p { "When Brand content goes out and when it went out. Cancel holds a scheduled Post before it is sent." }
                 nav { aria_label: "Filter calendar by Brand",
-                    a { href: "/app/social/calendar", "All Brands" }
+                    a { href: "/app/social/calendar?month={page.calendar.month}", "All Brands" }
                     for brand in page.brands.iter() {
-                        " · " a { href: "/app/social/calendar?brand_key={brand}", "{brand}" }
+                        " · " a { href: "/app/social/calendar?month={page.calendar.month}&brand_key={brand}", "{brand}" }
                     }
                 }
                 p { a { href: "/app/social", "Back to social" } }
             }
             if let Some(error) = page.error.as_ref() { p { class: "page-subtitle", "{error}" } }
+            {month_calendar(page)}
             {schedule_section(page)}
             {schedule_post_form(page)}
             div { class: "team-home__cards", "aria-label": "Scheduled publications", {rows} }
@@ -598,7 +772,7 @@ fn schedule_post_form(page: &BlogCatalogPage) -> Element {
             .is_none_or(|selected| selected == *brand)
     });
     rsx! {
-        section { aria_label: "Schedule a Post",
+        section { id: "compose-post", aria_label: "Schedule a Post",
             h2 { "Schedule a Post" }
             p { "Choose connected destinations and approve the copy before scheduling. A blank time queues publication now. Times must include the UTC offset." }
             p { "Provider captions are optional and preserve longer copy separately from the website description. TikTok, LinkedIn and X currently use the website description as their caption." }
@@ -617,7 +791,7 @@ fn schedule_post_form(page: &BlogCatalogPage) -> Element {
                         Field::textarea("Threads caption", "threads_caption", "", 4),
                         Field::textarea("YouTube caption", "youtube_caption", "", 4),
                         Field::textarea("Website Post", "body_markdown", "", 5).required(),
-                        Field::text("Publication time (with UTC offset)", "publish_at", "").help("For example: 2026-10-19T09:00:00-05:00. Leave blank to publish now."),
+                        Field::text("Publication time (with UTC offset)", "publish_at", &page.calendar.compose_at).help("For example: 2026-10-19T09:00:00-05:00. Leave blank to publish now."),
                         Field::text("Uploaded video asset", "video_asset", page.uploaded_video.as_ref().filter(|video| video.key.starts_with(&format!("img/{brand}/"))).map_or("", |video| video.key.as_str())),
                         Field::select("AI-generated video", "tiktok_ai_generated", vec![Choice::new("", "Choose for TikTok"), Choice::new("false", "No"), Choice::new("true", "Yes")], None),
                     ];
@@ -647,6 +821,8 @@ pub struct ErrorQuery {
     pub error: Option<String>,
     pub video_asset: Option<String>,
     pub brand_key: Option<String>,
+    pub month: Option<String>,
+    pub day: Option<String>,
 }
 
 #[component]
@@ -850,7 +1026,89 @@ mod tests {
             brand_filter: Some("neon".into()),
             tokens_href: "/assets/brand.css".into(),
             firm_name: "Neon Law".into(),
+            calendar: calendar_month(
+                Some("2026-10"),
+                None,
+                NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(),
+            ),
         }
+    }
+
+    #[test]
+    fn calendar_query_and_catalog_remain_compatible_with_older_fields() {
+        let query: ErrorQuery = serde_json::from_str(r#"{"brand_key":"neon"}"#).unwrap();
+        assert!(query.month.is_none());
+        assert!(query.day.is_none());
+        let mut payload = serde_json::to_value(page()).unwrap();
+        payload.as_object_mut().unwrap().remove("calendar");
+        let old: BlogCatalogPage = serde_json::from_value(payload).unwrap();
+        let html = dioxus_ssr::render_element(month_calendar(&old));
+        assert!(html.contains("Monthly publishing calendar"));
+    }
+
+    #[test]
+    fn month_grid_handles_leap_days_and_year_boundaries() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
+        let leap = calendar_month(Some("2028-02"), Some("2028-02-29"), today);
+        assert_eq!(leap.days.iter().flatten().count(), 29);
+        assert_eq!(leap.days.len() % 7, 0);
+        assert_eq!(leap.days[2].as_deref(), Some("2028-02-01"));
+        assert_eq!(leap.compose_at, "2028-02-29T09:00:00+00:00");
+        let january = calendar_month(Some("2027-01"), Some("2027-02-01"), today);
+        assert_eq!(january.previous, "2026-12");
+        assert_eq!(january.next, "2027-02");
+        assert_eq!(calendar_month(Some("2026-1"), None, today).month, "2026-10");
+        assert!(january.compose_at.is_empty());
+        assert_eq!(
+            calendar_month(Some("invalid"), None, today).month,
+            "2026-10"
+        );
+    }
+
+    #[test]
+    fn calendar_groups_posts_by_utc_day_and_day_links_preserve_brand() {
+        let mut calendar = page();
+        calendar.rows[0].publish_at = "2026-10-12T23:30:00-07:00".into();
+        assert_eq!(
+            post_utc_date(&calendar.rows[0]).as_deref(),
+            Some("2026-10-13")
+        );
+        let html = dioxus_ssr::render_element(month_calendar(&calendar));
+        for expected in [
+            "October 2026",
+            "Previous month",
+            "Next month",
+            "Today",
+            "month=2026-11",
+            "brand_key=neon",
+            "day=2026-10-13#compose-post",
+            "A welcome post",
+            "06:30 UTC",
+            "Facebook",
+            "Instagram: failed",
+        ] {
+            assert!(html.contains(expected), "missing {expected}: {html}");
+        }
+        assert!(!html.contains("A draft"));
+        assert!(
+            !html.contains("<form"),
+            "browsing the month never schedules a Post"
+        );
+    }
+
+    #[test]
+    fn choosing_a_day_prefills_explicit_utc_time_without_selecting_providers() {
+        let mut calendar = page();
+        calendar.calendar = calendar_month(
+            Some("2026-11"),
+            Some("2026-11-15"),
+            NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(),
+        );
+        let html = dioxus_ssr::render_element(schedule_post_form(&calendar));
+        assert!(html.contains("2026-11-15T09:00:00+00:00"), "{html}");
+        assert!(html.contains("Approve and schedule"));
+        assert!(html.contains("Do not publish here"));
+        assert!(html.contains("name=\"_csrf\""));
     }
 
     #[test]
@@ -1003,7 +1261,7 @@ mod tests {
     }
 
     #[test]
-    fn the_schedule_sits_at_the_top_of_every_social_page() {
+    fn the_schedule_precedes_the_detailed_cards_on_every_social_page() {
         for html in [
             dioxus_ssr::render_element(social_dashboard_body(&page())),
             dioxus_ssr::render_element(social_calendar_body(&page())),

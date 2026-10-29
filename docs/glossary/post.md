@@ -25,12 +25,15 @@ Public articles and homepage video cards also read confirmed [Social Publication
 that Post. Valid explicit links take precedence for the same provider; receipts fill missing providers without an
 invented handle or another copy of the link. Unconfirmed receipts and receipts with no public permalink stay hidden.
 
-The admin catalog, social dashboard, and calendar at `/app/admin/blog` and `/app/social` show a publishing schedule at
-the top: what will go out, soonest first, and what went out, most recent first. The schedule reads only the `post` and
-[`Social Publication`](social-publication.md) rows, so it does not depend on which durable workflow engine does the
-sending. The calendar and admin catalog also provide a native form to approve copy, choose connected destinations, and
-queue immediate or future publication through the same durable command as the CLI. A refused submission preserves the
-copy for correction. Cancel holds a future schedule before it is sent.
+The admin catalog, social dashboard, and calendar at `/app/admin/blog` and `/app/social` show a publishing schedule:
+what will go out, soonest first, and what went out, most recent first. The schedule reads only the `post` and [`Social
+Publication`](social-publication.md) rows, so it does not depend on which durable workflow engine does the sending. The
+calendar and admin catalog also provide a native form to approve copy, choose connected destinations, and queue
+immediate or future publication through the same durable command as the CLI. A refused submission preserves the copy for
+correction. Cancel holds a future schedule before it is sent. The calendar includes a month grid in UTC with
+previous/next month and Today navigation. Choose a date to prefill the approval form at 09:00 UTC, then review the time
+and destinations before submitting. Expand a Post to inspect its media, eligibility, provider outcomes, and links.
+Browsing or expanding the calendar never schedules delivery.
 
 - Schema, seed, and links: [`store::posts`](../../store/src/posts.rs)
 - Rendering: [`portal::blog`](../../portal/src/blog.rs)
