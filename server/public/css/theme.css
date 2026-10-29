@@ -5428,6 +5428,22 @@ a.nav-steps__step:focus-visible {
   word-break: break-all;
 }
 
+/* Social planning calendar: keep seven days visible and allow narrow screens to scroll. */
+.social-month { margin-block: 2rem; }
+.social-month__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.social-month__toolbar nav { display: flex; gap: 1rem; }
+.social-month__scroll { overflow-x: auto; }
+.social-month__grid { display: grid; grid-template-columns: repeat(7, minmax(140px, 1fr)); min-width: 980px; gap: 1px; background: var(--nav-color-border); border: 1px solid var(--nav-color-border); }
+.social-month__weekday { padding: .75rem; font-weight: 600; background: var(--nav-color-surface-subtle); }
+.social-month__day { min-height: 150px; padding: .6rem; background: var(--nav-color-surface); }
+.social-month__blank { background: var(--nav-color-surface-subtle); }
+.social-month__date { display: block; margin-bottom: .75rem; }
+.social-month__post { border: 1px solid var(--nav-color-border); border-radius: .4rem; margin-block: .5rem; padding: .5rem; overflow-wrap: anywhere; }
+.social-month__post summary { cursor: pointer; }
+.social-month__post summary span, .social-month__post summary strong, .social-month__post summary time { display: block; }
+.social-month__post summary span, .social-month__post summary time { font-size: .8rem; }
+.social-month__post video { width: 100%; max-height: 200px; }
+
 /* ============================================================================
  * Notation sections — `notation_list`, `notation_checklist`, and the client
  * lens's `decision_queue` (`webapp/src/sections/notations.rs`). One column
@@ -5647,19 +5663,3 @@ a.nav-steps__step:focus-visible {
   .astrology-chart__layout { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
   .astrology-chart__controls button, .astro-map-selection button { flex: 1 1 7rem; }
 }
-
-/* Social planning calendar: keep seven days visible and allow narrow screens to scroll. */
-.social-month { margin-block: 2rem; }
-.social-month__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-.social-month__toolbar nav { display: flex; gap: 1rem; }
-.social-month__scroll { overflow-x: auto; }
-.social-month__grid { display: grid; grid-template-columns: repeat(7, minmax(140px, 1fr)); min-width: 980px; gap: 1px; background: var(--nav-color-border); border: 1px solid var(--nav-color-border); }
-.social-month__weekday { padding: .75rem; font-weight: 600; background: var(--nav-color-surface-subtle); }
-.social-month__day { min-height: 150px; padding: .6rem; background: var(--nav-color-surface); }
-.social-month__blank { background: var(--nav-color-surface-subtle); }
-.social-month__date { display: block; margin-bottom: .75rem; }
-.social-month__post { border: 1px solid var(--nav-color-border); border-radius: .4rem; margin-block: .5rem; padding: .5rem; overflow-wrap: anywhere; }
-.social-month__post summary { cursor: pointer; }
-.social-month__post summary span, .social-month__post summary strong, .social-month__post summary time { display: block; }
-.social-month__post summary span, .social-month__post summary time { font-size: .8rem; }
-.social-month__post video { width: 100%; max-height: 200px; }
