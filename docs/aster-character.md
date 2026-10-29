@@ -27,6 +27,22 @@ body, face, limb, scarf, satchel and brush groups. Section-specific CSS controls
 The integration test verifies that all five homepage placements, including the shared footer, resolve to this one asset.
 Keep one master when changing the web translation so each page receives the same character.
 
+## Consistency checks
+
+`server/public/brand/aster/CANON.toml` records the approved board, its exact attached PNG checksum, the five palette
+colors, and the shared SVG checksum. The linked board is the visual reference; the checksum identifies the attachment
+and does not assert that a re-encoded download has identical bytes.
+
+Run `cargo test -p server --test aster_canon --test vesta_home`. These checks reject an unregistered variant, changed
+SVG bytes, missing or duplicated limb/accessory groups, a changed reference or palette, and inconsistent homepage or
+footer asset paths.
+
+The current SVG is a **simplified translation that needs visual review**. Its checksum freezes the current drawing; it
+does not certify that the drawing matches the painterly board. The manifest and tests preserve that distinction. Before
+changing the checksum or approval status, compare the proposed asset against the board side by side and record the
+review with the proposed artwork in the pull request. Match the face, silhouette, hands, feet, scarf, satchel, brush
+scale and painterly finish. A new pose or animation must go through the same comparison.
+
 ## Poses and animation
 
 Build poses from one layered character rig. A rig is the shared body, face, limbs and accessories with fixed attachment
