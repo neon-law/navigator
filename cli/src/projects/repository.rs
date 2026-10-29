@@ -304,6 +304,8 @@ const FORBIDDEN_DOCUMENT_EXTENSIONS: &[&str] = &["doc", "docx", "odt", "pdf"];
 /// one meaning of "pull changes": rebase the branch onto the latest `origin/main`.
 /// `word-editing` (LAW-229) carries a lawyer's edits in local Word back into
 /// the notation template, with the template kept the source of truth.
+/// `analyze-memo` (LAW-237) reviews a finished memo or letter and reports
+/// findings before any correction is applied.
 pub(crate) const SYNCED_SKILLS: &[(&str, &str)] = &[
     (
         "council",
