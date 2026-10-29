@@ -17,9 +17,9 @@ fn expected_gallery_placeholders() -> usize {
 /// holds the table itself to this same number.
 const EXPECTED_FONT_PLACEHOLDERS: usize = 23;
 
-/// Six fixed house-brand media files, plus the registered Vesta videos and
+/// Seven fixed house-brand media files, including the canonical Aster board, plus Vesta videos and
 /// photos, the Navigator page's Matter Page screenshots, and architecture photos.
-const EXPECTED_BRAND_MEDIA_PLACEHOLDERS: usize = 6
+const EXPECTED_BRAND_MEDIA_PLACEHOLDERS: usize = 7
     + views::assets::VESTA_UPDATE_VIDEO_KEYS.len()
     + views::assets::VESTA_PHOTOS.len()
     + views::assets::NAVIGATOR_MATTER_PAGE_SCREENSHOTS.len()
@@ -97,6 +97,12 @@ fn stub_referenced_writes_the_gallery_and_licensed_fonts_without_content_images(
         .path()
         .join(views::assets::VESTA_EXPLAINER_KEY)
         .is_file());
+    let aster = fs::read(out.path().join(views::assets::ASTER_BOARD_KEY)).unwrap();
+    assert_eq!(
+        &aster[..8],
+        b"\x89PNG\r\n\x1a\n",
+        "Aster needs a PNG placeholder"
+    );
     for key in views::assets::VESTA_UPDATE_VIDEO_KEYS {
         assert!(out.path().join(key).is_file());
     }

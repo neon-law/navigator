@@ -29,6 +29,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::components::aster::{AsterArtwork, AsterPose};
 use crate::components::{
     wire_runs, Accordion, ActionItem, ActionList, AppLogo, AppNavbar, AppProfileMenu, Avatar,
     BackBreadcrumb, Badge, BadgeTone, Callout, CalloutTone, Card, CatalogHero, Choice, ChoiceGroup,
@@ -451,6 +452,7 @@ pub fn DesignGallery() -> Element {
             PricingShowcase {}
             TestimonialShowcase {}
             AvatarShowcase {}
+            AsterShowcase {}
             DisclaimerShowcase {}
             ClientDriViewShowcase {}
             SampleMattersShowcase {}
@@ -939,6 +941,31 @@ fn AvatarShowcase() -> Element {
                     size: 56,
                     class: "design-avatar".to_string(),
                 }
+            }
+        }
+    }
+}
+
+/// Resolve the same public board used by Vesta for the component gallery.
+#[server]
+pub async fn design_aster_source() -> Result<String, ServerFnError> {
+    Ok(views::assets::asset_url(views::assets::ASTER_BOARD_KEY))
+}
+
+/// The canonical character component, supplied through the public asset resolver.
+#[component]
+fn AsterShowcase() -> Element {
+    let resource = use_server_future(design_aster_source)?;
+    let source = match &*resource.read() {
+        Some(Ok(source)) => source.clone(),
+        _ => return rsx! {},
+    };
+    rsx! {
+        section {
+            h2 { "Aster artwork" }
+            p { "The original approved character, framed from one canonical board. The illustration is decorative; adjacent text names Aster." }
+            div { style: "width:min(100%,14rem);",
+                AsterArtwork { src: source, pose: AsterPose::Standing, class: "design-aster" }
             }
         }
     }
