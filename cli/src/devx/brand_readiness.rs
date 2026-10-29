@@ -180,6 +180,9 @@ pub(crate) fn release_targets(public_host: &str) -> Vec<(BrandKey, &'static str)
     views::brand::release_brand_hosts()
         .into_iter()
         .filter(|(_, host)| host.starts_with("staging.") == staging)
+        // A moved brand's hosts 301 to the brand it moved to; that brand's
+        // own hosts carry the check.
+        .filter(|(key, _)| key.moved_to().is_none())
         .collect()
 }
 
@@ -484,7 +487,11 @@ mod tests {
     #[test]
     fn release_targets_covers_the_full_registry_not_only_live_brands() {
         let production = release_targets("navigator.example.invalid");
-        assert_eq!(production.len(), views::brand::BrandKey::ALL.len());
+        let served = views::brand::BrandKey::ALL
+            .iter()
+            .filter(|key| key.moved_to().is_none())
+            .count();
+        assert_eq!(production.len(), served);
         // The release inventory is `views::brand::release_brand_hosts`, the
         // full registry, unfiltered by `is_live()` — not merely the live set
         // with today's held-out brands mixed in. Comparing against that seam
@@ -492,7 +499,7 @@ mod tests {
         // to be live, rather than asserting on which ones currently aren't.
         let full_registry: Vec<(BrandKey, &str)> = views::brand::release_brand_hosts()
             .into_iter()
-            .filter(|(_, host)| !host.starts_with("staging."))
+            .filter(|(key, host)| !host.starts_with("staging.") && key.moved_to().is_none())
             .collect();
         assert_eq!(production, full_registry);
         assert!(production.contains(&(BrandKey::Daybridge, "www.daybridgedivorce.com")));
@@ -723,18 +730,22 @@ mod tests {
 
     #[test]
     fn run_with_checks_apexes_only_on_the_production_environment() {
-        // Staging: one call per release-inventory host (8), no apex calls.
+        // Staging: one call per served release-inventory host, no apex calls.
+        let served = views::brand::BrandKey::ALL
+            .iter()
+            .filter(|key| key.moved_to().is_none())
+            .count();
         let mut staging_runner = ScriptedRunner::new(
-            (0..views::brand::BrandKey::ALL.len())
+            (0..served)
                 .map(|_| ok_headers_and_body(200, r#"content="x" property="og:site_name""#))
                 .collect(),
         );
         let staging_cfg = ship_config_for("staging.navigator.example.invalid");
         let staging_reports = run_with(&mut staging_runner, &staging_cfg, 10);
-        assert_eq!(staging_reports.len(), views::brand::BrandKey::ALL.len());
+        assert_eq!(staging_reports.len(), served);
 
         // Production: the same host checks, plus one apex check per brand.
-        let host_count = views::brand::BrandKey::ALL.len();
+        let host_count = served;
         let live_count = views::brand::BrandKey::LIVE.len();
         let mut outcomes: Vec<CommandOutcome> = (0..host_count)
             .map(|_| ok_headers_and_body(200, r#"content="x" property="og:site_name""#))

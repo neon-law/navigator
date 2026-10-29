@@ -80,13 +80,34 @@ async fn assert_clean_empty(app: &axum::Router, host: &str, key: BrandKey) {
 #[tokio::test]
 async fn testimonials_and_home_are_cleanly_empty_for_every_brand() {
     let app = router(CanonicalHost::new(None)).await;
-    // A held-out brand's public hosts stay unpublished. The local port map is
-    // the door that still serves the brand, so the empty page is checked there.
+    // A held-out brand's public hosts stay unpublished, and a moved brand's
+    // 301 away. The local port map is the door that still serves either
+    // brand, so the empty page is checked there.
     let mut preview_ports = BTreeMap::new();
     let mut port = 20_710_u16;
 
     for key in BrandKey::ALL {
         let host = key.hosts()[0];
+        if let Some(target) = key.moved_to() {
+            for path in ["/", "/testimonials"] {
+                let response = get(&app, host, path).await;
+                assert_eq!(response.status(), 301, "{} moved at {path}", key.as_str());
+                let location = response
+                    .headers()
+                    .get("location")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or_default();
+                assert_eq!(
+                    location,
+                    format!("{}{path}", target.public_home_href_for(Some(host))),
+                    "{} {path} redirects to the brand it moved to",
+                    key.as_str()
+                );
+            }
+            preview_ports.insert(port, *key);
+            port += 1;
+            continue;
+        }
         if key.is_live() {
             assert_clean_empty(&app, host, *key).await;
             continue;

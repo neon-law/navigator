@@ -1048,6 +1048,7 @@ fn guieb_shook_holding_content(branding: &views::brand::Branding) -> webapp::hom
     content.meta_description = paragraph;
     content.practices_heading = String::new();
     content.practices = Vec::new();
+    content.signup = None;
     content
 }
 
@@ -1247,6 +1248,12 @@ mod lawyer_shook_holding_page_tests {
             .href
             .as_deref()
             .is_some_and(|href| href.ends_with("/auth/login"))));
+    }
+
+    #[test]
+    fn guieb_shook_home_does_not_open_the_account_invitation() {
+        let content = super::guieb_shook_holding_content(&views::brand::GUIEB_SHOOK_BRANDING);
+        assert!(content.signup.is_none());
     }
 }
 

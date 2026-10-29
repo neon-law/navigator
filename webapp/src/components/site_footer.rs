@@ -22,8 +22,11 @@
 
 use dioxus::prelude::*;
 
-/// The firm's final footer line, shared by public and authenticated pages.
-pub const FOOTER_TAGLINE: &str = "Everyone deserves access to justice. Made with ❤️ in 🗽.";
+/// The firm's final footer lines, shared by public and authenticated pages.
+pub const FOOTER_TAGLINE: [&str; 2] = [
+    "Everyone deserves access to justice.",
+    "Made with ❤️ in 🗽.",
+];
 
 use crate::components::{ExternalLink, Icon, IconName};
 
@@ -789,7 +792,7 @@ pub fn SiteFooterLegal(
                             }
                         }
                     }
-                    p { class: "site-footer__tagline", "{FOOTER_TAGLINE}" }
+                    p { class: "site-footer__tagline", "{FOOTER_TAGLINE[0]}" br {} "{FOOTER_TAGLINE[1]}" }
                 }
             }
         }
@@ -824,7 +827,11 @@ mod tests {
         let owner = html
             .find("Neon Law is a trademark of Neon Law IP LLC.")
             .expect("owner");
-        let mission = html.find(FOOTER_TAGLINE).expect("mission");
+        let mission = html.find(FOOTER_TAGLINE[0]).expect("mission");
+        assert!(
+            html.contains("access to justice.<br/>Made with"),
+            "two lines: {html}"
+        );
         assert!(provider < owner && owner < mission, "{html}");
         assert!(!html.contains("trademark of Example Practice PC"), "{html}");
     }
@@ -930,11 +937,11 @@ mod tests {
             .find("site-footer__legal-platform")
             .expect("the platform renders");
         let tagline = legal
-            .rfind(FOOTER_TAGLINE)
+            .rfind(FOOTER_TAGLINE[0])
             .expect("the final tagline renders");
         assert!(disclaimer < copyright && copyright < trademark && trademark < platform);
         assert!(platform < tagline);
-        assert_eq!(legal.matches(FOOTER_TAGLINE).count(), 1);
+        assert_eq!(legal.matches(FOOTER_TAGLINE[0]).count(), 1);
     }
 
     /// A deploy holding no registration notices none, and one that cites a

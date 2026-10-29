@@ -80,7 +80,7 @@ async fn vesta_shows_starting_price_and_shared_booking_calendar() {
 
 #[tokio::test]
 async fn lawyer_shook_lists_the_launched_family_and_keeps_the_firm_notice() {
-    let html = page("staging.lawyershook.com", "/").await;
+    let html = preview(BrandKey::LawyerShook, "/").await;
     for expected in [
         "holding-page",
         "Guieb &#38; Shook PC is an American law firm",
@@ -197,7 +197,7 @@ async fn vesta_services_describe_tailored_planning_without_a_starting_price() {
 async fn vesta_and_lawyer_shook_omit_the_lawyer_shook_trademark_notice() {
     for html in [
         preview(BrandKey::Vesta, "/").await,
-        page("staging.lawyershook.com", "/").await,
+        preview(BrandKey::LawyerShook, "/").await,
     ] {
         let footer = html.split("<footer").nth(1).expect("shared footer");
         assert!(footer.contains("https://www.guiebandshook.com"));

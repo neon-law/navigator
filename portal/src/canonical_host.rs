@@ -242,6 +242,22 @@ pub async fn resolve_brand_and_enforce_host(
             })
         })
     });
+    // A brand whose site moved 301s each public host to the same
+    // environment's host of the brand it moved to. A bound local port still
+    // serves the old brand, so it stays previewable in development.
+    if let Some((host, target)) = raw_host.zip(resolved.and_then(BrandKey::moved_to)) {
+        if cfg.resolve_local_port(host).is_none() {
+            let path_and_query = req
+                .uri()
+                .path_and_query()
+                .map_or("/", axum::http::uri::PathAndQuery::as_str);
+            let target = format!(
+                "{}{path_and_query}",
+                target.public_home_href_for(Some(strip_port(host)))
+            );
+            return (StatusCode::MOVED_PERMANENTLY, [(header::LOCATION, target)]).into_response();
+        }
+    }
     // A live brand's naked domain 301s to that brand's own `www`, before the
     // deployment-wide canonical fallback below can claim it. A held-out
     // brand's apex never reaches here: it was refused above. That ordering is
