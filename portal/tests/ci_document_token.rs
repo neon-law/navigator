@@ -920,6 +920,19 @@ async fn the_scoped_integrity_projection_checks_docket_names_without_returning_d
     for (index, slug, links, project) in [
         (2, "DKT 0002 - Order.pdf", 1, fixture.project_id),
         (3, "wrong-name.pdf", 1, fixture.project_id),
+        (
+            7,
+            "Docket Filings/DKT 0007 - Order.pdf",
+            1,
+            fixture.project_id,
+        ),
+        (
+            8,
+            "Docket Filings/orders/DKT 0008 - Order.pdf",
+            1,
+            fixture.project_id,
+        ),
+        (9, "Docket Filings/wrong-name.pdf", 1, fixture.project_id),
         (4, "DKT 0004 - Order.pdf", 0, fixture.project_id),
         (5, "DKT 0005 - Order.pdf", 2, fixture.project_id),
         (6, "DKT 0006 - Order.pdf", 1, fixture.other_project_id),
@@ -973,7 +986,7 @@ async fn the_scoped_integrity_projection_checks_docket_names_without_returning_d
             .unwrap();
         }
         if project == fixture.project_id {
-            expected.push((document_id, index == 2));
+            expected.push((document_id, matches!(index, 2 | 7 | 8)));
         }
     }
     let (_, minted) = mint(&fixture.app).await;
@@ -1003,7 +1016,7 @@ async fn the_scoped_integrity_projection_checks_docket_names_without_returning_d
         }
         assert_eq!(
             assets.len(),
-            5,
+            8,
             "the foreign Project's document must not be projected"
         );
         for asset in assets {
