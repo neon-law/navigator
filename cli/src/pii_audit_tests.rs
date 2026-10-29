@@ -259,3 +259,12 @@ fn firm_email_exemption_uses_the_checked_in_allowlist_and_domain_boundaries() {
         assert!(!allow.allows("EMAIL_ADDRESS", &email, &patterns));
     }
 }
+
+#[test]
+fn the_public_aster_introduction_does_not_allow_unrelated_names() {
+    let allow = Allowlist::parse(include_str!("../../.github/pii/allowlist.toml")).unwrap();
+    let patterns = Patterns::new().unwrap();
+    assert!(allow.allows("PERSON", "Meet Aster", &patterns));
+    assert!(!allow.allows("PERSON", "Meet Zelda", &patterns)); // pii-scan: allow — synthetic negative-test name
+    assert!(!allow.allows("PERSON", "Aster Quillstone", &patterns)); // pii-scan: allow — synthetic negative-test name
+}
