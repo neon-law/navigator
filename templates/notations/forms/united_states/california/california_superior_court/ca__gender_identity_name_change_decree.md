@@ -11,8 +11,8 @@ questionnaire:
   BEGIN:
     _: person__client
   person__client:
-    _: custom_text__name_changing_to
-  custom_text__name_changing_to:
+    _: person__new_name
+  person__new_name:
     _: custom_single_choice__sex_identifier
   custom_single_choice__sex_identifier:
     _: custom_datetime__date_of_birth
@@ -23,7 +23,7 @@ questionnaire:
   END: {}
 prompts:
   client_name: What is your current full legal name, as it appears on your identification?
-  name_changing_to: What new name are you asking the court for?
+  new_name: What new name are you asking the court for?
   sex_identifier: What sex identifier are you asking the court to recognize for you?
   date_of_birth: What is your date of birth?
   county_of_residence: In what California county do you live?
@@ -47,18 +47,14 @@ workflow:
   END: {}
 ---
 
-This Decree Changing Name (form NC-230, the 200-series decree) is the order the
-Superior Court of `{{custom_text__county_of_residence}}` County signs after the
-hearing, changing the legal name of `{{person__client.name}}` (the
-"Petitioner") to `{{custom_text__name_changing_to}}` to conform to the
-Petitioner's gender identity. The certified decree is the document the
-Petitioner takes to the DMV, the SSA, banks, and vital-records offices. Like
-the NC-200 petition it follows, no newspaper publication applies.
+This Decree Changing Name (form NC-230, the 200-series decree) is the order the Superior Court of
+`{{custom_text__county_of_residence}}` County signs after the hearing, changing the legal name of
+`{{person__client.name}}` (the "Petitioner") to `{{person__new_name.name}}` to conform to the Petitioner's gender
+identity. The certified decree is the document the Petitioner takes to the DMV, the SSA, banks, and vital-records
+offices. Like the NC-200 petition it follows, no newspaper publication applies.
 
-The court completes the decree at or after the hearing; the firm prepares it
-with the Petitioner's information so the judge's version needs only findings
-and a signature.
+The court completes the decree at or after the hearing; the firm prepares it with the Petitioner's information so the
+judge's version needs only findings and a signature.
 
-Your answers above are placed onto the court's own official blank and a
-licensed Neon Law attorney reviews the **filled decree** before the hearing.
-Nothing reaches the courthouse unreviewed.
+Your answers above are placed onto the court's own official blank and a licensed Neon Law attorney reviews the **filled
+decree** before the hearing. Nothing reaches the courthouse unreviewed.

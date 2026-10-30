@@ -1,9 +1,9 @@
 custom_datetime__date_of_birth
 custom_single_choice__current_sex_designation
-custom_text__name_changing_to
 custom_text__place_of_birth
 custom_text__reason_for_change
 person__client.name
+person__new_name.name
 unmapped__NC-110[0].#pageSet[0].MPLast[0].Print[0]
 unmapped__NC-110[0].#pageSet[0].MPLast[0].Reset[0]
 unmapped__NC-110[0].#pageSet[0].MPLast[0].Save[0]

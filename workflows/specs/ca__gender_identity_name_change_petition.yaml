@@ -2,8 +2,8 @@ questionnaire:
   BEGIN:
     _: person__client
   person__client:
-    _: custom_text__name_changing_to
-  custom_text__name_changing_to:
+    _: person__new_name
+  person__new_name:
     _: custom_single_choice__sex_identifier
   custom_single_choice__sex_identifier:
     _: custom_single_choice__current_sex_designation
@@ -18,7 +18,7 @@ questionnaire:
   END: {}
 prompts:
   client_name: What is your current full legal name, as it appears on your identification?
-  name_changing_to: What new name are you asking the court for, if any? Leave blank if you are only asking the court to recognize your gender.
+  new_name: What new name are you asking the court for, if any? Leave blank if you are only asking the court to recognize your gender.
   sex_identifier: What sex identifier are you asking the court to recognize for you?
   current_sex_designation: What is your current sex designation on existing documents?
   date_of_birth: What is your date of birth?

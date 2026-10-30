@@ -2,8 +2,8 @@ questionnaire:
   BEGIN:
     _: person__client
   person__client:
-    _: custom_text__name_changing_to
-  custom_text__name_changing_to:
+    _: person__new_name
+  person__new_name:
     _: custom_datetime__date_of_birth
   custom_datetime__date_of_birth:
     _: custom_text__county_of_residence
@@ -12,7 +12,7 @@ questionnaire:
   END: {}
 prompts:
   client_name: What is your current full legal name, as it appears on your identification?
-  name_changing_to: What new name are you asking the court for?
+  new_name: What new name are you asking the court for?
   date_of_birth: What is your date of birth?
   county_of_residence: In what California county do you live?
 workflow:

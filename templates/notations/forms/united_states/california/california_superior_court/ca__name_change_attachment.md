@@ -11,8 +11,8 @@ questionnaire:
   BEGIN:
     _: person__client
   person__client:
-    _: custom_text__name_changing_to
-  custom_text__name_changing_to:
+    _: person__new_name
+  person__new_name:
     _: custom_single_choice__current_sex_designation
   custom_single_choice__current_sex_designation:
     _: custom_datetime__date_of_birth
@@ -25,7 +25,7 @@ questionnaire:
   END: {}
 prompts:
   client_name: What is your current full legal name, as it appears on your identification?
-  name_changing_to: What new name are you asking the court for? Spell it exactly as you want it to read on the decree.
+  new_name: What new name are you asking the court for? Spell it exactly as you want it to read on the decree.
   current_sex_designation: What is your current sex designation, as the attachment prints it?
   date_of_birth: What is your date of birth?
   place_of_birth: Where were you born (city and state)?
@@ -51,19 +51,14 @@ workflow:
   END: {}
 ---
 
-This attachment to the Petition for Change of Name (form NC-110) gives the
-Superior Court of `{{custom_text__county_of_residence}}` County the identifying
-information about `{{person__client.name}}` (the "Petitioner") that the NC-100
-petition itself does not carry: the present legal name
-(`{{person__client.family}}, {{person__client.given}}`), the name the Petitioner
-is asking for (`{{custom_text__name_changing_to}}`), the Petitioner's date of
-birth, residence, and current sex designation.
+This attachment to the Petition for Change of Name (form NC-110) gives the Superior Court the identifying information
+about `{{person__client.name}}` (the "Petitioner") that the NC-100 petition itself does not carry: the present legal
+name, the name the Petitioner is asking for (`{{person__new_name.name}}`), the Petitioner's date of birth, residence,
+and current sex designation.
 
-It is filed together with the NC-100 petition, the NC-120 Order to Show Cause,
-and — after the hearing — the NC-130 Decree Changing Name. The same answers
-fill all four forms; you answer the questions once.
+It is filed together with the NC-100 petition, the NC-120 Order to Show Cause, and — after the hearing — the NC-130
+Decree Changing Name. The same answers fill all four forms; you answer the questions once.
 
-Your answers above are placed onto the court's own official blank and a
-licensed Neon Law attorney reviews the **filled attachment** before anything is
-filed. The declarations at the bottom of the attachment are confirmed with the
+Your answers above are placed onto the court's own official blank and a licensed Neon Law attorney reviews the **filled
+attachment** before anything is filed. The declarations at the bottom of the attachment are confirmed with the
 Petitioner at the review appointment and signed there.

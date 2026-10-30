@@ -49,15 +49,15 @@ question = "person__client.family"
 
 [[field]]
 name = "Petitioner.SEQ001.ChangeName.First"
-question = "custom_text__new_first_name"
+question = "person__new_name.given"
 
 [[field]]
 name = "Petitioner.SEQ001.ChangeName.Middle"
-question = "custom_text__new_middle_name"
+question = "person__new_name.middle"
 
 [[field]]
 name = "Petitioner.SEQ001.ChangeName.Last"
-question = "custom_text__new_last_name"
+question = "person__new_name.family"
 
 [[field]]
 name = "Petitioner.BirthDate"
@@ -69,7 +69,7 @@ question = "custom_text__birthplace_city"
 
 [[field]]
 name = "Petitioner.BirthLocation.State"
-question = "custom_text__birthplace_state_or_country"
+question = "jurisdiction__birthplace.name"
 
 [[field]]
 name = "State.Residence"

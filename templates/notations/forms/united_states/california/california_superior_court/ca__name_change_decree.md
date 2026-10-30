@@ -11,8 +11,8 @@ questionnaire:
   BEGIN:
     _: person__client
   person__client:
-    _: custom_text__name_changing_to
-  custom_text__name_changing_to:
+    _: person__new_name
+  person__new_name:
     _: custom_datetime__date_of_birth
   custom_datetime__date_of_birth:
     _: custom_text__county_of_residence
@@ -21,7 +21,7 @@ questionnaire:
   END: {}
 prompts:
   client_name: What is your current full legal name, as it appears on your identification?
-  name_changing_to: What new name are you asking the court for?
+  new_name: What new name are you asking the court for?
   date_of_birth: What is your date of birth?
   county_of_residence: In what California county do you live?
 workflow:
@@ -39,17 +39,13 @@ workflow:
   END: {}
 ---
 
-This Decree Changing Name (form NC-130) is the order the Superior Court of
-`{{custom_text__county_of_residence}}` County signs after the hearing, once the
-publication requirement is satisfied, changing the legal name of
-`{{person__client.name}}` (the "Petitioner") to
-`{{custom_text__name_changing_to}}`. The certified decree is the document the
+This Decree Changing Name (form NC-130) is the order the Superior Court of `{{custom_text__county_of_residence}}` County
+signs after the hearing, once the publication requirement is satisfied, changing the legal name of
+`{{person__client.name}}` (the "Petitioner") to `{{person__new_name.name}}`. The certified decree is the document the
 Petitioner takes to the DMV, the SSA, banks, and vital-records offices.
 
-The court completes the decree at or after the hearing; the firm prepares it
-with the Petitioner's information so the judge's version needs only findings
-and a signature.
+The court completes the decree at or after the hearing; the firm prepares it with the Petitioner's information so the
+judge's version needs only findings and a signature.
 
-Your answers above are placed onto the court's own official blank and a
-licensed Neon Law attorney reviews the **filled decree** before the hearing.
-Nothing reaches the courthouse unreviewed.
+Your answers above are placed onto the court's own official blank and a licensed Neon Law attorney reviews the **filled
+decree** before the hearing. Nothing reaches the courthouse unreviewed.

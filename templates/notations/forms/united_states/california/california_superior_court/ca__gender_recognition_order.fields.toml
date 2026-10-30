@@ -68,7 +68,7 @@ question = "person__client.name"
 
 [[field]]
 name = "NC-330[0].Page2[0].List10[0].Item10[0].Li10A[0].newName[0]"
-question = "custom_text__name_changing_to"
+question = "person__new_name.name"
 
 [[field]]
 name = "NC-330[0].Page2[0].List11[0].NewBCcb[0]"

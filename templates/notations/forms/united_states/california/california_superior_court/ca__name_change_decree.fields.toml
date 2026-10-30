@@ -31,7 +31,7 @@ question = "person__client.name"
 
 [[field]]
 name = "NC-130[0].Page1[0].List3[0].LI1[0].lia[0].NewName1[0]"
-question = "custom_text__name_changing_to"
+question = "person__new_name.name"
 
 [[field]]
 name = "NC-130[0].Page1[0].Caption[0].CourtInfo[0].CrtCounty[0]"

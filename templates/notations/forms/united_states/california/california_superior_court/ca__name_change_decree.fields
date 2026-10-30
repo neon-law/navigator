@@ -1,6 +1,6 @@
 custom_text__county_of_residence
-custom_text__name_changing_to
 person__client.name
+person__new_name.name
 unmapped__NC-130[0].#pageSet[0].MP1[0].Print[0]
 unmapped__NC-130[0].#pageSet[0].MP1[0].Reset[0]
 unmapped__NC-130[0].#pageSet[0].MP1[0].Save[0]

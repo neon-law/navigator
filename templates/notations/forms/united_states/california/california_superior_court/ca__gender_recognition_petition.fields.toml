@@ -95,7 +95,7 @@ question = "person__client.name"
 
 [[field]]
 name = "NC-300[0].Page2[0].List5[0].Item5[0].Li5a[0].Subli7b[0].Subli7b2[0].PropName[0]"
-question = "custom_text__name_changing_to"
+question = "person__new_name.name"
 
 [[field]]
 name = "NC-300[0].Page2[0].List5[0].Item5[0].Li5a[0].Subli7b[0].Subli7b3[0].petDOB[0]"

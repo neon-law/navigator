@@ -1,7 +1,7 @@
 custom_single_choice__new_certificates
 custom_single_choice__sex_identifier
-custom_text__name_changing_to
 person__client.name
+person__new_name.name
 unmapped__NC-330[0].#pageSet[0].MPLast[0].Print[0]
 unmapped__NC-330[0].#pageSet[0].MPLast[0].Reset[0]
 unmapped__NC-330[0].#pageSet[0].MPLast[0].Save[0]
