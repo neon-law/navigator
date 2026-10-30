@@ -34,3 +34,7 @@ written through the SurrealDB claim only; they are refused under PostgreSQL Peop
 
 - Schema: [`person` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
   [`store::persons`](../../store/src/persons.rs)
+
+The table is `person`.
+
+Schema: [`person`](../../store/src/schema/navigator.surql#L584).

@@ -11,3 +11,7 @@ A US state, federal jurisdiction, or foreign jurisdiction that an Entity can be 
 - Queries: [`store::jurisdictions`](../../store/src/jurisdictions.rs) Schema:
   [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql) Seed:
   [`store/seeds/Jurisdiction.yaml`](../../store/seeds/Jurisdiction.yaml)
+
+The table is `jurisdiction`.
+
+Schema: [`jurisdiction`](../../store/src/schema/navigator.surql#L776).

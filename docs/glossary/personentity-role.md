@@ -13,3 +13,7 @@ There is no surrogate key: a tie's identity is its two endpoints plus its `role`
 
 - Schema and queries: [`store::entity_roles`](../../store/src/entity_roles.rs) — Lives in the
   `entity_role` relation
+
+The table is `entity_role`.
+
+Schema: [`entity_role`](../../store/src/schema/navigator.surql#L1170).

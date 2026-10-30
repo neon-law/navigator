@@ -25,3 +25,7 @@ PC's.
 
 - Schema: [`firm_brand` in `navigator.surql`](../../store/src/schema/navigator.surql) ·
   [`store::firms`](../../store/src/firms.rs)
+
+The table is `firm_brand`.
+
+Schema: [`firm_brand`](../../store/src/schema/navigator.surql#L924).

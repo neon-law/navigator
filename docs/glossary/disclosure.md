@@ -9,3 +9,7 @@ finding when a new matter reaches that entity.
 
 - Commands: [`store::disclosures`](../../store/src/disclosures.rs) · Schema:
   [`disclosure`](../../store/src/schema/navigator.surql)
+
+The table is `disclosure`.
+
+Schema: [`disclosure`](../../store/src/schema/navigator.surql#L2389).

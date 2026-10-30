@@ -24,3 +24,7 @@ sent time. This records an acknowledgment; it does not independently verify deli
 
 - Schema and queries: [`store::communications`](../../store/src/communications.rs) —
   [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+
+The table is `communication`.
+
+Schema: [`communication`](../../store/src/schema/navigator.surql#L2415).

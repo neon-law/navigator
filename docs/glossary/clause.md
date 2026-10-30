@@ -19,3 +19,7 @@ table](../../store/src/notation_clauses.rs) and are inserted at `{{custom_clause
 library. Both uses name legal prose, with different scopes.
 
 See [Clause authoring](../clauses.md) for references, explicit jurisdiction inputs, and the source inventory.
+
+The table is `notation_clause`.
+
+Schema: [`notation_clause`](../../store/src/schema/navigator.surql#L1902).

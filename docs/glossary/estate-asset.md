@@ -13,7 +13,7 @@ One line of an estate plan's asset schedule on a [Project](project.md). A line n
 
 An optional note carries anything else. A Project holds one row for each category and description.
 
-An Estate Asset is property, not bytes. The table is `estate_asset` because `asset` is the byte-pointer table for stored
+An Estate Asset is property, not bytes. Its table name distinguishes it from `asset`, the byte-pointer table for stored
 documents and content (see [Asset](asset.md)); an Estate Asset never points at a stored file.
 
 The rows belong to the `estate` [Module](module.md). They are imported from a Project repository's
@@ -22,3 +22,7 @@ and for the matter's client while the module is enabled.
 
 - Store: [`store::estate_assets`](../../store/src/estate_assets.rs) · Schema:
   [`estate_asset`](../../store/src/schema/navigator.surql)
+
+The table is `estate_asset`.
+
+Schema: [`estate_asset`](../../store/src/schema/navigator.surql#L482).

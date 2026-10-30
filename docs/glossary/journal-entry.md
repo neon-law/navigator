@@ -21,3 +21,7 @@ providers, missing receipts, and incomplete period coverage cannot establish rec
 its allocations; it is not the Firm-wide IOLTA reconciliation.
 
 The store command is `store::firm_journal::post`; records live in `journal_entry`.
+
+The table is `journal_entry`.
+
+Schema: [`journal_entry`](../../store/src/schema/navigator.surql#L2643).

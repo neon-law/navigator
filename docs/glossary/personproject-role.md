@@ -24,3 +24,7 @@ Values are stored folded — trimmed, lowercased, separators as single underscor
 
 - Schema: [`store::projects`](../../store/src/projects.rs) ·
   [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+
+The table is `person_project_role`.
+
+Schema: [`person_project_role`](../../store/src/schema/navigator.surql#L284).

@@ -31,3 +31,5 @@ marks the row until the entered order is obtained.
 
 - Commands: `navigator project efiling record` and `navigator project efiling pair` · Store:
   [`store::efiling_transactions`](../../store/src/efiling_transactions.rs)
+
+Schema: [`efiling_transactions`](../../store/src/schema/navigator.surql#L441).

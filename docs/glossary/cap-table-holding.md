@@ -16,3 +16,7 @@ the firm, and for the matter's client while the module is enabled.
 
 - Store: [`store::cap_table_holdings`](../../store/src/cap_table_holdings.rs) · Schema:
   [`cap_table_holding`](../../store/src/schema/navigator.surql)
+
+The table is `cap_table_holding`.
+
+Schema: [`cap_table_holding`](../../store/src/schema/navigator.surql#L499).

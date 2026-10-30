@@ -9,3 +9,7 @@ Each admitted send records an [Email Delivery Attempt](email-delivery-attempt.md
 
 - Store: [`store::email_deliveries`](../../store/src/email_deliveries.rs)
 - PostgreSQL mirror: `email_delivery`.
+
+The table is `email_delivery`.
+
+Schema: [`email_delivery`](../../store/src/schema/navigator.surql#L1484).

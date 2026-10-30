@@ -21,3 +21,7 @@ relationship-log entry naming the module and the actor.
 
 - Commands and schema: [`store::project_modules`](../../store/src/project_modules.rs) ·
   [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+
+The table is `project_module`.
+
+Schema: [`project_module`](../../store/src/schema/navigator.surql#L319).

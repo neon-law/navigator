@@ -10,3 +10,7 @@ contains no Social Account credentials.
 
 - Schema and lifecycle: [`store::social_oauth_attempts`](../../store/src/social_oauth_attempts.rs) —
   [`social_oauth_attempt`](../../store/src/schema/navigator.surql)
+
+The table is `social_oauth_attempt`.
+
+Schema: [`social_oauth_attempt`](../../store/src/schema/navigator.surql#L1107).

@@ -8,3 +8,7 @@ The kind of legal Entity (`LLC`, `Trust`, `Corporation`, `Foundation`, …). Ref
 
 - Schema and queries: [`store::entity_types`](../../store/src/entity_types.rs) —
   [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+
+The table is `entity_type`.
+
+Schema: [`entity_type`](../../store/src/schema/navigator.surql#L815).

@@ -24,3 +24,7 @@ Project and refuses a row naming another; `docket ingest` stamps the checkout's 
 
 - Schema and queries: [`store::relationship_logs`](../../store/src/relationship_logs.rs) — Lives
   in: `relationship_log` table
+
+The table is `relationship_log`.
+
+Schema: [`relationship_log`](../../store/src/schema/navigator.surql#L1238).

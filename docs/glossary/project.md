@@ -108,3 +108,7 @@ calendar children. Today's single workflow performs membership repair and reposi
 
 - Schema and commands: [`store::projects`](../../store/src/projects.rs) ·
   [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+
+The table is `project`.
+
+Schema: [`project`](../../store/src/schema/navigator.surql#L40).

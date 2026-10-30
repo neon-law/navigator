@@ -17,3 +17,7 @@ Property in an estate plan is an [Estate Asset](estate-asset.md), a different ta
 - Schema: [`asset` in `navigator.surql`](../../store/src/schema/navigator.surql) · Write
   lanes: [`store::documents::ingest_bytes`](../../store/src/documents.rs) (document assets),
   [`store::assets::ingest_content`](../../store/src/assets.rs) (bare content).
+
+The table is `asset`.
+
+Schema: [`asset`](../../store/src/schema/navigator.surql#L1622).

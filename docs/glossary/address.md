@@ -8,3 +8,7 @@ exclusivity is enforced by the application, not the schema.
 
 - Schema and queries: [`store::addresses`](../../store/src/addresses.rs) —
   [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+
+The table is `address`.
+
+Schema: [`address`](../../store/src/schema/navigator.surql#L1384).

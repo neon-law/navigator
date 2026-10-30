@@ -17,3 +17,7 @@ Talking to a lead is attorney work under professional ethics (advertising and so
 
 - Schema: [`lead` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
   [`store::leads`](../../store/src/leads.rs)
+
+The table is `lead`.
+
+Schema: [`lead`](../../store/src/schema/navigator.surql#L537).

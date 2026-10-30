@@ -8,3 +8,7 @@ It survives cancelled authorization and provider failure. Saving another identit
 Account](social-account.md) or a scheduled Post. Connect verifies the saved identity through provider consent.
 
 - Persistence: `store::social_account_selections`
+
+The table is `social_account_selection`.
+
+Schema: [`social_account_selection`](../../store/src/schema/navigator.surql#L2650).

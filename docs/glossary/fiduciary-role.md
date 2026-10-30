@@ -20,3 +20,7 @@ firm, and for the matter's client while the module is enabled.
 
 - Store: [`store::fiduciary_roles`](../../store/src/fiduciary_roles.rs) · Schema:
   [`fiduciary_role`](../../store/src/schema/navigator.surql)
+
+The table is `fiduciary_role`.
+
+Schema: [`fiduciary_role`](../../store/src/schema/navigator.surql#L465).
