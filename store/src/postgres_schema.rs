@@ -1185,6 +1185,10 @@ mod tests {
                 "20261031010000_create_navigator_graph.sql",
                 include_str!("../postgres/migrations/20261031010000_create_navigator_graph.sql"),
             ),
+            (
+                "20261031120000_add_project_onboarding_jurisdiction.sql",
+                include_str!("../postgres/migrations/20261031120000_add_project_onboarding_jurisdiction.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
