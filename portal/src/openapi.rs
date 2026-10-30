@@ -753,6 +753,41 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/authorities/{id}": {
+          "get": {
+            "operationId": "readFiledAuthority",
+            "summary": "Read a filed Authority's canonical citation",
+            "description": "Resolves the Authority id and canonical citation only while its archived artifact remains available in storage. This is global reference data with no Project-scoped usage or disposition. Authorization: Lawyer tier only (Owner, Admin, or Lawyer); Clerk and Client are refused. Inherits the API's bearer-token or session-cookie authentication.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "responses": {
+              "200": { "description": "The filed Authority's id and canonical citation", "content": { "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["id", "citation"],
+                  "properties": {
+                    "id": { "type": "string", "format": "uuid" },
+                    "citation": { "type": "string" }
+                  }
+                }
+              } } },
+              "400": { "description": "The path id is not a valid UUID" },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "403": { "description": "Authenticated caller is below Lawyer tier", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "404": { "description": "The Authority, archive reference, asset record, or stored bytes are missing", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "500": { "description": "The Authority or its archived artifact could not be read", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
         "/app/api/authorities/{id}/archive": {
           "get": {
             "summary": "Read an Authority's archived artifact (LAW-93)",
