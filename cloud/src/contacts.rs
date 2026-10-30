@@ -421,7 +421,7 @@ mod tests {
                 "stranger@example.com",
                 "mobile",
                 &ContactPhone {
-                    value: "+17025550142".to_string(),
+                    value: "+15550142".to_string(),
                     label: "mobile".to_string(),
                 },
             )
@@ -437,11 +437,11 @@ mod tests {
             "client@example.com",
             vec![
                 ContactPhone {
-                    value: "+17025550142".to_string(),
+                    value: "+15550142".to_string(),
                     label: "mobile".to_string(),
                 },
                 ContactPhone {
-                    value: "+17025550100".to_string(),
+                    value: "+15550100".to_string(),
                     label: "work".to_string(),
                 },
             ],
@@ -450,7 +450,7 @@ mod tests {
             "Client@example.com",
             "mobile",
             &ContactPhone {
-                value: "+17025550999".to_string(),
+                value: "+15550199".to_string(),
                 label: "mobile".to_string(),
             },
         )
@@ -459,11 +459,11 @@ mod tests {
         let phones = fake.phones("client@example.com");
         assert_eq!(phones.len(), 2, "the work number survives");
         assert!(phones.contains(&ContactPhone {
-            value: "+17025550999".to_string(),
+            value: "+15550199".to_string(),
             label: "mobile".to_string(),
         }));
         assert!(phones.contains(&ContactPhone {
-            value: "+17025550100".to_string(),
+            value: "+15550100".to_string(),
             label: "work".to_string(),
         }));
     }
@@ -487,7 +487,7 @@ mod tests {
             "resourceName": resource_name,
             "etag": "%etag-1",
             "emailAddresses": [{ "value": email }],
-            "phoneNumbers": [{ "value": "+17025550100", "type": "work" }]
+            "phoneNumbers": [{ "value": "+15550100", "type": "work" }]
         })
     }
 
@@ -517,7 +517,7 @@ mod tests {
                 let etag = body["etag"].as_str().expect("etag present");
                 let phones = body["phoneNumbers"].as_array().expect("phones present");
                 let values: Vec<&str> = phones.iter().filter_map(|p| p["value"].as_str()).collect();
-                if etag != "%etag-1" || values != ["+17025550100", "+17025550999"] {
+                if etag != "%etag-1" || values != ["+15550100", "+15550199"] {
                     ResponseTemplate::new(400)
                 } else {
                     ResponseTemplate::new(200)
@@ -531,7 +531,7 @@ mod tests {
                 "client@example.com",
                 "mobile",
                 &ContactPhone {
-                    value: "+17025550999".to_string(),
+                    value: "+15550199".to_string(),
                     label: "mobile".to_string(),
                 },
             )
@@ -558,7 +558,7 @@ mod tests {
                 "client@example.com",
                 "mobile",
                 &ContactPhone {
-                    value: "+17025550999".to_string(),
+                    value: "+15550199".to_string(),
                     label: "mobile".to_string(),
                 },
             )
@@ -585,7 +585,7 @@ mod tests {
                 "client@example.com",
                 "mobile",
                 &ContactPhone {
-                    value: "+17025550999".to_string(),
+                    value: "+15550199".to_string(),
                     label: "mobile".to_string(),
                 },
             )
@@ -618,7 +618,7 @@ mod tests {
                 "client@example.com",
                 "mobile",
                 &ContactPhone {
-                    value: "+17025550999".to_string(),
+                    value: "+15550199".to_string(),
                     label: "mobile".to_string(),
                 },
             )
