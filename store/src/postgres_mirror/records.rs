@@ -563,6 +563,21 @@ pub(super) const TABLES: &[Table] = &[
         timestamps: &["inserted_at", "updated_at"],
     },
     Table {
+        name: "person_phone",
+        group: "source_domain_records",
+        columns: &[
+            "e164",
+            "id",
+            "inserted_at",
+            "is_primary",
+            "label",
+            "person_id",
+            "updated_at",
+        ],
+        references: &[("person_id", "person")],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
         name: "relationship",
         group: "source_domain_records",
         columns: &[

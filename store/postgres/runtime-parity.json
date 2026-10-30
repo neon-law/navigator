@@ -1207,5 +1207,18 @@
     "remaining": [
       "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
     ]
+  },
+  "person_phone": {
+    "scenario": "E.164 canonical spelling at the write boundary; one primary per Person; row identity stable across label and primary changes",
+    "runtime_tests": [
+      {
+        "file": "store/tests/person_phones.rs",
+        "function": "setting_a_number_primary_demotes_the_previous_primary",
+        "proves": "Row identity is stable across label and primary changes: differently formatted spellings converge on one row and exactly one primary survives each write, the facts the whole-row projection must reproduce."
+      }
+    ],
+    "remaining": [
+      "PostgreSQL-side whole-row convergence for person_phone is covered by the shared source_domain_records mirror machinery; a live-Postgres parity run for this table specifically is pending with the identity-storage slice."
+    ]
   }
 }
