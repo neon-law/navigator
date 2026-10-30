@@ -33,9 +33,11 @@
 //!   nothing else. Sanitization is the caller's job (the sandbox session
 //!   owns it); the gateway never receives a person id to leak.
 
+pub mod metered;
 pub mod stub;
 pub mod vertex;
 
+pub use metered::{MeteredError, MeteredOutcome, MeteredSession, StoreLedger, UsageLedger};
 pub use stub::StubModelProvider;
 pub use vertex::{adc_token_provider, StaticToken, TokenProvider, VertexProvider};
 

@@ -4957,17 +4957,21 @@ dependencies = [
 
 [[package]]
 name = "gateway"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "google-cloud-auth",
  "google-cloud-token",
  "reqwest 0.13.5",
  "sandbox-skills",
  "serde",
  "serde_json",
+ "store",
+ "thiserror 2.0.21",
  "tokio",
+ "uuid",
  "wiremock",
 ]
 
@@ -10580,7 +10584,7 @@ dependencies = [
 
 [[package]]
 name = "sandbox-skills"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "serde",
 ]

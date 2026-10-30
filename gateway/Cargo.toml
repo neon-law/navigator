@@ -30,11 +30,23 @@ reqwest.workspace = true
 # `sandbox_skills::render_system_context` — one `SkillId` type, one
 # renderer (glossary-first: the catalog owns the "Sandbox Skill" term).
 sandbox-skills.workspace = true
+# The Sandbox Usage ledger the metered session gates completions on:
+# `StoreLedger` delegates its reads and conditional debits to
+# `store::sandbox_usage`, keeping one money path (integer cents) for the
+# whole workspace.
 serde.workspace = true
 serde_json.workspace = true
+store.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# The in-memory SurrealDB engine the store's own ledger tests run on —
+# the integration tests drive `StoreLedger` against the real
+# conditional-debit semantics with it.
+store = { workspace = true, features = ["test-support"] }
 wiremock.workspace = true
 
 [lints]
