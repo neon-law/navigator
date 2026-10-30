@@ -585,6 +585,27 @@ async fn authorize_manage_firm(
     }
 }
 
+/// Gate an Owner-only brand-seat write through the capability resolver —
+/// the audit point every Firm-scoped allow/deny decision routes through.
+/// `MoveBrand` admits no membership tier: moving a Brand to another Firm
+/// re-points whose legal entity the public site's copyright names, an
+/// ownership decision only Owner makes, where `authorize_manage_firm`
+/// stays the gate for a Firm's own brand administration.
+async fn authorize_brand_ownership(
+    surreal: &SurrealDb,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    firm_id: Uuid,
+    capability: crate::firm_capability::FirmCapability,
+) -> Result<(), FirmError> {
+    use crate::firm_capability::{resolve, FirmCapabilityDecision};
+    match resolve(surreal, actor_role, actor_person_id, firm_id, capability).await? {
+        FirmCapabilityDecision::Allowed => Ok(()),
+        FirmCapabilityDecision::FirmNotFound => Err(FirmError::NoSuchFirm(firm_id)),
+        FirmCapabilityDecision::Forbidden => Err(FirmError::NotAuthorized),
+    }
+}
+
 /// Edit a Firm's own fields. Owner, or that Firm's own Admin membership,
 /// only (`authorize_manage_firm`). Refuses an `entity_id` that does not
 /// resolve, the same guarantee [`create`] gives; leaves the Admin DRI and

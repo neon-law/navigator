@@ -74,14 +74,19 @@ pub enum FirmCapability {
     /// authorize their governed retention purge. Owner holds it system-wide;
     /// an Admin needs an Admin membership row on the target Firm.
     ManageRecoveryArchives,
+    /// Move one of the deployment's Brands to a different Firm. No
+    /// membership tier admits it: a move re-points whose legal entity the
+    /// moved brand's public copyright names, which is an ownership decision
+    /// only Owner makes.
+    MoveBrand,
 }
 
 impl FirmCapability {
     /// Whether a `person_firm_role` row carrying this membership tier admits
     /// this capability. `ViewDirectory` is open to every firm tier; only
     /// `Admin` membership may manage who else belongs to the Firm.
-    /// `ManageAdminDri` admits no membership tier — Owner is the only actor
-    /// [`resolve`] ever grants it to.
+    /// `ManageAdminDri` and `MoveBrand` admit no membership tier — Owner is
+    /// the only actor [`resolve`] ever grants them to.
     #[must_use]
     fn admits(self, membership: FirmMembership) -> bool {
         match self {
@@ -93,7 +98,10 @@ impl FirmCapability {
             | Self::UseIntegrations
             | Self::ManageRecoveryArchives
             | Self::ManageBrand => membership == FirmMembership::Admin,
-            Self::ManageBrandContent | Self::ManageSummaryApprovals | Self::ManageAdminDri => false,
+            Self::ManageBrandContent
+            | Self::ManageSummaryApprovals
+            | Self::ManageAdminDri
+            | Self::MoveBrand => false,
         }
     }
 
@@ -114,6 +122,7 @@ impl FirmCapability {
             Self::ManageBrandContent => "manage_brand_content",
             Self::ManageSummaryApprovals => "manage_summary_approvals",
             Self::ManageRecoveryArchives => "manage_recovery_archives",
+            Self::MoveBrand => "move_brand",
         }
     }
 
