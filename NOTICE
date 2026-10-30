@@ -14,7 +14,9 @@ signed agreements remain separate; this notice creates no copyright assignment.
 
 Third-party components retain their own licenses and notices. Dependency
 attributions are in THIRD-PARTY-NOTICES.txt. SendGrid's MIT license is retained
-in vendor/sendgrid/LICENSE. Fonts retain their separate license records under
+in vendor/sendgrid/LICENSE. Bundled GeoNames geodata under geotime/data/ is
+licensed CC BY 4.0; see THIRD-PARTY-NOTICES.txt. Fonts retain their separate
+license records under
 pdf/assets/fonts/ and server/public/fonts/. GORP Serif is proprietary font
 software licensed separately from TrashType LLC; the project license does
 not cover it. Government form material remains subject to its issuing

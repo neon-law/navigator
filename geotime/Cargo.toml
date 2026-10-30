@@ -1,0 +1,21 @@
+[package]
+name = "geotime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Offline, deterministic resolution of (city, country, birth date) to
+# coordinates, an IANA zone, and the historical UTC offset — Layer 3 of the
+# Vesta /world pipeline. A leaf crate: the bundled GeoNames index and
+# chrono-tz only, no network, no store, no runtime.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+chrono.workspace = true
+chrono-tz.workspace = true
+
+[lints]
+workspace = true

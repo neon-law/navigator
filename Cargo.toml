@@ -25,6 +25,7 @@ members = [
     "billing-workflows",
     "telemetry",
     "word",
+    "geotime",
 ]
 
 [workspace.package]
@@ -247,6 +248,9 @@ dbos = { version = "=0.5.0", default-features = false, features = ["engine"] }
 restate-jwt = { package = "jsonwebtoken", version = "10.4", default-features = false, features = ["rust_crypto"] }
 serde_yaml = "0.9"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock", "std"] }
+# Historical IANA offsets for `geotime` — tzdata compiled into the crate, no
+# system tzdata dependency.
+chrono-tz = "0.10"
 cucumber = "0.23"
 # `dotenvy` loads `.env` files at process start in every binary main().
 # Real deployment values live in your local `.env` (gitignored); the
