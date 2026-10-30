@@ -21,6 +21,7 @@ pub mod dbos_inbound_message_alert;
 pub mod dbos_ingress;
 pub mod dbos_nightly_project_update;
 pub mod dbos_reconcile;
+pub mod dbos_social_publisher;
 pub mod dri_digest;
 pub mod email_config;
 pub mod email_summary;
