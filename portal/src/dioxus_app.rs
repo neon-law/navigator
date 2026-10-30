@@ -3764,6 +3764,105 @@ pub fn free_resources_json_router() -> Router {
     )
 }
 
+/// The catalog's match-the-data guards: the index, the jurisdiction pages,
+/// and the JSON twin render exactly the registry's rows, whatever size the
+/// registry is.
+#[cfg(test)]
+mod free_resources_guards {
+    use super::*;
+
+    /// The registry, once. Every guard iterates it, so a registry that
+    /// grows or shrinks never stale-dates a test.
+    fn registry() -> Vec<store::courts::Court> {
+        store::courts::embedded()
+            .expect("invariant: the shipped court registry parses; the store's tests are the gate")
+    }
+
+    /// The catalog copy, any valid instance — the guards are about which
+    /// rows render, not how the copy words them.
+    fn copy() -> views::locales::FreeResourcesCopy {
+        views::locales::FreeResourcesCopy {
+            head_title: "Free Legal Resources".to_string(),
+            meta_description: "Free court self-help forms.".to_string(),
+            title: "Free Legal Resources".to_string(),
+            lede: "The practical facts around every form.".to_string(),
+            free_statement: "Everything on these pages is free of charge.".to_string(),
+            no_outcome: "These pages promise no outcome.".to_string(),
+            courts_heading: "Courts and forms in {jurisdiction}".to_string(),
+            filing_office_label: "Filing office".to_string(),
+            fee_label: "Filing fee".to_string(),
+            fee_waiver_label: "Fee waiver".to_string(),
+            source_label: "Official source".to_string(),
+            blank_label: "Download blank".to_string(),
+            empty_court: "No forms yet.".to_string(),
+            empty_jurisdiction: "No forms yet.".to_string(),
+            footnote: "Links point to each court's official source.".to_string(),
+            json_label: "Machine-readable JSON".to_string(),
+        }
+    }
+
+    /// The JSON twin parses back to exactly the registry's courts.
+    #[test]
+    fn json_body_is_the_registry() {
+        let courts = registry();
+        let body = free_resources_json_body()
+            .expect("invariant: the registry serializes; its types derive Serialize");
+        let parsed: Vec<store::courts::Court> = serde_json::from_slice(&body)
+            .expect("the JSON twin parses back to the registry's courts");
+        assert_eq!(parsed, courts);
+    }
+
+    /// The index summarizes exactly the jurisdictions the registry covers,
+    /// with true court and form counts.
+    #[test]
+    fn index_summarizes_the_registry() {
+        let courts = registry();
+        let content = free_resources_index_content(&copy(), &courts);
+        let groups = jurisdiction_groups(&courts);
+        assert_eq!(content.jurisdictions.len(), groups.len());
+        for (summary, group) in content.jurisdictions.iter().zip(&groups) {
+            let form_count: usize = group.courts.iter().map(|court| court.forms.len()).sum();
+            assert_eq!(summary.name, group.name);
+            assert_eq!(summary.court_count, group.courts.len());
+            assert_eq!(summary.form_count, form_count);
+        }
+    }
+
+    /// Every jurisdiction page renders exactly the registry's rows: one row
+    /// per registry form, in registry order, with the fee the office
+    /// publishes, and the blank on the public assets bucket — never a
+    /// repository file.
+    #[test]
+    fn jurisdiction_pages_render_the_registry_rows() {
+        let courts = registry();
+        let copy = copy();
+        for group in jurisdiction_groups(&courts) {
+            let content = free_resources_jurisdiction_content(&copy, &group);
+            assert_eq!(content.courts.len(), group.courts.len());
+            for (page_court, registry_court) in content.courts.iter().zip(&group.courts) {
+                assert_eq!(page_court.name, registry_court.name);
+                assert_eq!(page_court.forms.len(), registry_court.forms.len());
+                for (row, form) in page_court.forms.iter().zip(&registry_court.forms) {
+                    assert_eq!(row.title, form.title);
+                    assert_eq!(row.filing_office, form.filing_office);
+                    assert_eq!(row.source_url, form.source_url);
+                    assert_eq!(
+                        row.fee,
+                        form.fee_note
+                            .clone()
+                            .or_else(|| form.filing_fee.as_ref().map(fee_display))
+                    );
+                    assert!(
+                        row.blank_url.starts_with("https://"),
+                        "the blank points at the public assets bucket, never a repository file: {}",
+                        row.blank_url
+                    );
+                }
+            }
+        }
+    }
+}
+
 
 
 /// The public show page for one bundled notation — the `/notations`
