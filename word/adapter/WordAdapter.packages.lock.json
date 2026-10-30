@@ -15,7 +15,7 @@
         "type": "Direct",
         "requested": "[8.0.33, )",
         "resolved": "8.0.33",
-        "contentHash": "vtHOb5B7NHm4HenhxTYi2TP18wvKCSYknMmS1fKTKW8xWPYkzc240HocCrSckaBFIjwkSj1bA5VsfPJF7emexQ=="
+        "contentHash": "dG9SM/0/zOTIE1UvSrveD1iDyEJjThqPqSnreExgqQWSoGWvze0esDi0faRk3C44IO1kqCeEX6AeCxWmBOppfw=="
       },
       "DocumentFormat.OpenXml.Framework": {
         "type": "Transitive",
