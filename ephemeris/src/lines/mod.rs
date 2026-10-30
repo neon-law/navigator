@@ -13,17 +13,20 @@
 //!   right ascension of date, so the MC meridian is λ = RA − GAST and the IC
 //!   meridian sits 180° away. Straight meridians in longitude.
 //! * **ASC/DSC** — the set of points where the body's altitude is exactly
-//!   zero, the "horizon locus". Solved per longitude λ from the hour angle
-//!   H = GAST + λ − RA and the declination δ:
-//!   sin φ · sin δ + cos φ · cos δ · cos H = 0, so
-//!   tan φ = −cos H / tan δ. Each locus spans 180° of longitude between the
-//!   culmination meridians and is sampled adaptively (finer where the curve
-//!   is steep), clipped along the pole margin, and split at the antimeridian.
+//!   zero, the "horizon locus": a great circle through every longitude once,
+//!   solved per longitude λ from the hour angle H = GAST + λ − RA and the
+//!   declination δ: sin φ · sin δ + cos φ · cos δ · cos H = 0, so
+//!   tan φ = −cos H / tan δ. The culmination meridian cuts it into the
+//!   eastern ASC and western DSC semicircles, each spanning 180° of
+//!   longitude between the two meridians. Sampled adaptively (finer where
+//!   the curve is steep) and split at the antimeridian; an exactly
+//!   equatorial body degenerates to two meridians.
 //!
 //! Nothing here touches the webapp, I/O, or persistence: the module consumes
 //! an [`LoadedEphemeris`] and a civil instant and returns values.
 
 pub mod deltat;
+pub mod horizon;
 pub mod sidereal;
 pub mod vertical;
 
@@ -194,9 +197,9 @@ pub fn lines_for(
     let t = utc_to_tdb(utc);
     let gast = sidereal::gast_degrees(utc);
 
-    // MC and IC: two meridians per body in this commit; the ASC/DSC horizon
-    // curves join in the next commit, two more lines per body.
-    let mut lines = Vec::with_capacity(LINE_BODIES.len() * 2);
+    // Four lines per body: two culmination meridians and two horizon-curve
+    // semicircles.
+    let mut lines = Vec::with_capacity(LINE_BODIES.len() * 4);
     for body in LINE_BODIES {
         let position = match body.spk_body() {
             Some(spk_body) => apparent_geocentric(&loaded.ephemeris, spk_body, t)?,
@@ -206,6 +209,10 @@ pub fn lines_for(
         let (mc, ic) = vertical::mc_ic_longitudes(position.ra_deg, gast);
         lines.push(vertical::vertical_line(body, Angle::Mc, mc));
         lines.push(vertical::vertical_line(body, Angle::Ic, ic));
+
+        let (asc, dsc) = horizon::asc_dsc_curves(body, position.dec_deg, mc);
+        lines.push(asc);
+        lines.push(dsc);
     }
     Ok(lines)
 }
