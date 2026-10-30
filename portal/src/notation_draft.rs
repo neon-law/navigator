@@ -72,30 +72,10 @@ pub async fn create_notation_draft_post(
     session: Option<Extension<SessionData>>,
     Json(body): Json<NewNotationDraftBody>,
 ) -> Response {
-    let Some(project_id) = store::projects::id_for_code(&state.surreal, &project_code).await else {
-        return (StatusCode::NOT_FOUND, "matter not found").into_response();
+    let project_id = match scoped_project(&state.surreal, &project_code, session.as_deref()).await {
+        Ok(id) => id,
+        Err(response) => return response,
     };
-
-    // The route lives under `/app/projects` (require_auth already ran); the
-    // command re-checks matter scope from the session, matching
-    // `project_notation_new_post`. No session → no scope.
-    let (acting_person_id, acting_role) = match session.as_deref() {
-        Some(s) => (s.person_id, s.role),
-        None => (None, store::persons::Role::Client),
-    };
-    let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
-        acting_person_id,
-        acting_role,
-        project_id,
-    )
-    .await
-    .unwrap_or(false);
-    if !in_scope {
-        // Collapses with "matter not found" so this door never discloses a
-        // project outside the caller's scope, same as notation create.
-        return (StatusCode::NOT_FOUND, "matter not found").into_response();
-    }
 
     let slug = body.slug.trim();
     // The source is persisted as submitted: a template's bytes are its
@@ -111,86 +91,14 @@ pub async fn create_notation_draft_post(
     // caller happened to send.
     let doc = crate::notation_preview_doc::from_markdown(slug, "", source);
 
-    // Run-backed preview (LAW-203): persist the pushed source with the
-    // same `validate → persist` seam a checkout-read template goes through
-    // — bad paper refuses here, with the gate's own verdict — then open
-    // the real run. The template code a slug names is its kebab-case slug
-    // folded back to the `code` convention (the shelf separator doubles).
-
     let code = template_code_for_slug(slug);
-    match store::template_source::persist_contents(
-        &state.surreal,
-        &state.storage,
-        project_id,
-        &code,
-        source.to_string(),
-        PREVIEW_PROVENANCE.to_string(),
-    )
-    .await
-    {
-        Ok(_) => {}
-        Err(store::template_source::TemplateSourceError::Invalid { code, violations }) => {
-            tracing::warn!(%code, count = violations.len(), "notation draft push: template refused");
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                format!(
-                    "template `{code}` has {} blocking rule violation(s); fix it and retry — \
-                     or lint it with `navigator notation preview --offline`",
-                    violations.len()
-                ),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            tracing::error!(error = %e, %project_id, "notation draft push: template persist failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
-        }
+    if let Err(response) = persist_pushed_template(&state, project_id, &code, source).await {
+        return response;
     }
 
-    // The same engagement-first rule every other run-opening door
-    // enforces — a preview is not a way around it.
-    if let Err(e) = workflows::enforce_engagement_first(&state.surreal, project_id, &code).await {
-        return match e {
-            workflows::NotationSessionError::EngagementMustBeFirst { code, kind } => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                format!(
-                    "the first notation on this matter must be the engagement that opens it — \
-                     a retainer or an onboarding — `{code}` is kind `{kind}`. Open the \
-                     engagement first, then preview this."
-                ),
-            )
-                .into_response(),
-            e => {
-                tracing::error!(error = %e, %project_id, "notation draft push: engagement gate failed");
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response()
-            }
-        };
-    }
-
-    let Some(person_id) = acting_person(&state.surreal, session.as_deref()).await else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "the session names no person to run the preview as",
-        )
-            .into_response();
-    };
-
-    let outcome = match workflows::start_notation(
-        &state.surreal,
-        state.questionnaire_runtime.as_ref(),
-        Some(&state.storage),
-        &code,
-        person_id,
-        project_id,
-        None,
-    )
-    .await
-    {
+    let outcome = match open_preview_run(&state, project_id, &code, session.as_deref()).await {
         Ok(outcome) => outcome,
-        Err(e) => {
-            tracing::error!(error = %e, %project_id, "notation draft push: run failed to start");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
-        }
+        Err(response) => return response,
     };
 
     match store::notation_drafts::create(
@@ -227,6 +135,131 @@ pub async fn create_notation_draft_post(
     }
 }
 
+/// The Project a pushed draft targets, only when the acting session may see
+/// it. "No such matter" and "not yours" collapse to the same NOT_FOUND so
+/// this door never discloses a project outside the caller's scope, same as
+/// notation create. The route lives under `/app/projects` (require_auth
+/// already ran); the command re-checks matter scope from the session,
+/// matching `project_notation_new_post`. No session → no scope.
+async fn scoped_project(
+    surreal: &store::surreal::SurrealDb,
+    project_code: &str,
+    session: Option<&SessionData>,
+) -> Result<uuid::Uuid, Response> {
+    let Some(project_id) = store::projects::id_for_code(surreal, project_code).await else {
+        return Err((StatusCode::NOT_FOUND, "matter not found").into_response());
+    };
+    let (acting_person_id, acting_role) = match session {
+        Some(s) => (s.person_id, s.role),
+        None => (None, store::persons::Role::Client),
+    };
+    let in_scope = store::access::can_see_project_as_lawyer(
+        surreal,
+        acting_person_id,
+        acting_role,
+        project_id,
+    )
+    .await
+    .unwrap_or(false);
+    if !in_scope {
+        return Err((StatusCode::NOT_FOUND, "matter not found").into_response());
+    }
+    Ok(project_id)
+}
+
+/// Persist the pushed source through the same `validate → persist` seam a
+/// checkout-read template goes through — bad paper refuses here, with the
+/// gate's own verdict.
+async fn persist_pushed_template(
+    state: &AdminState,
+    project_id: uuid::Uuid,
+    code: &str,
+    source: &str,
+) -> Result<(), Response> {
+    match store::template_source::persist_contents(
+        &state.surreal,
+        &state.storage,
+        project_id,
+        code,
+        source.to_string(),
+        PREVIEW_PROVENANCE.to_string(),
+    )
+    .await
+    {
+        Ok(_) => Ok(()),
+        Err(store::template_source::TemplateSourceError::Invalid { code, violations }) => {
+            tracing::warn!(%code, count = violations.len(), "notation draft push: template refused");
+            Err((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!(
+                    "template `{code}` has {} blocking rule violation(s); fix it and retry — \
+                     or lint it with `navigator notation preview --offline`",
+                    violations.len()
+                ),
+            )
+                .into_response())
+        }
+        Err(e) => {
+            tracing::error!(error = %e, %project_id, "notation draft push: template persist failed");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response())
+        }
+    }
+}
+
+/// Open the real notation run a pushed preview backs: the same
+/// engagement-first rule every other run-opening door enforces — a preview
+/// is not a way around it — then the run, bound to the acting person.
+async fn open_preview_run(
+    state: &AdminState,
+    project_id: uuid::Uuid,
+    code: &str,
+    session: Option<&SessionData>,
+) -> Result<workflows::StartOutcome, Response> {
+    if let Err(e) = workflows::enforce_engagement_first(&state.surreal, project_id, code).await {
+        return Err(match e {
+            workflows::NotationSessionError::EngagementMustBeFirst { code, kind } => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!(
+                    "the first notation on this matter must be the engagement that opens it — \
+                     a retainer or an onboarding — `{code}` is kind `{kind}`. Open the \
+                     engagement first, then preview this."
+                ),
+            )
+                .into_response(),
+            e => {
+                tracing::error!(error = %e, %project_id, "notation draft push: engagement gate failed");
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response()
+            }
+        });
+    }
+
+    let Some(person_id) = acting_person(&state.surreal, session).await else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "the session names no person to run the preview as",
+        )
+            .into_response());
+    };
+
+    match workflows::start_notation(
+        &state.surreal,
+        state.questionnaire_runtime.as_ref(),
+        Some(&state.storage),
+        code,
+        person_id,
+        project_id,
+        None,
+    )
+    .await
+    {
+        Ok(outcome) => Ok(outcome),
+        Err(e) => {
+            tracing::error!(error = %e, %project_id, "notation draft push: run failed to start");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response())
+        }
+    }
+}
+
 /// Provenance recorded on a template version persisted by a preview push:
 /// the push carries a working-tree source, not a commit, so the content
 /// hash is the identity and this marker is the provenance.
@@ -259,7 +292,7 @@ async fn acting_person(
     let email = session.email.as_deref()?;
     match store::persons::find_or_create(
         surreal,
-        &store::persons::NewPerson::with_role(email, email, session.role.clone()),
+        &store::persons::NewPerson::with_role(email, email, session.role),
     )
     .await
     {
