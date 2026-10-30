@@ -156,8 +156,15 @@ fn identity_seeds_hold_only_the_inventoried_public_firm_facts() {
     assert_eq!(text(&users[0], "role"), "admin");
 
     let entities = records("Entity.yaml");
-    assert_eq!(entities.len(), 1);
-    assert_eq!(text(&entities[0], "name"), store::seed::FIRM_ENTITY_NAME);
+    assert_eq!(entities.len(), 2);
+    let mut entity_names: Vec<String> = entities.iter().map(|e| text(e, "name")).collect();
+    entity_names.sort();
+    let mut anchors = store::seed::FIRM_ENTITY_NAMES
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>();
+    anchors.sort();
+    assert_eq!(entity_names, anchors);
 
     let mut credentials: Vec<(String, String)> = records("Credential.yaml")
         .iter()
@@ -180,6 +187,7 @@ fn identity_seeds_hold_only_the_inventoried_public_firm_facts() {
 
     for fact in [
         "Guieb & Shook PC",
+        "Lex Tecnica LLP",
         "Nick Shook",
         "13400",
         "337252",
