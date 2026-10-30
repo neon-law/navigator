@@ -24,3 +24,7 @@ Each row carries `body_sha256`, the SHA-256 of its body. A row synced from a Pro
 `source_commit_sha`, the commit it was read from; the store refuses a project-scoped row without both. A shared-catalog
 row carries no commit. Opening a Notation copies both values onto it, and the renderer refuses a body whose bytes do not
 match the copied digest.
+
+The table is `template`.
+
+Schema: [`template`](../../store/src/schema/navigator.surql#L1707).

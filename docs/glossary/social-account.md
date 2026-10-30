@@ -18,3 +18,7 @@ username with publishing and readback permissions; expiring tokens refresh with 
 
 - Schema and credential lifecycle: [`store::social_accounts`](../../store/src/social_accounts.rs) —
   [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+
+The table is `social_account`.
+
+Schema: [`social_account`](../../store/src/schema/navigator.surql#L1081).

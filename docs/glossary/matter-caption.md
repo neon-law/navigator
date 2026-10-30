@@ -18,3 +18,7 @@ and grants nothing.
 - Shape: [`word::matter`](../../word/src/matter.rs) · Store:
   [`store::matter_captions`](../../store/src/matter_captions.rs) · Schema:
   [`matter_caption`](../../store/src/schema/navigator.surql) · Contract: [the gate](../gate.md#y-family--yaml-documents)
+
+The table is `matter_caption`.
+
+Schema: [`matter_caption`](../../store/src/schema/navigator.surql#L388).

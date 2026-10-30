@@ -26,3 +26,7 @@ axis, the outcome, the verifier, the revision SHA, and a duration. No quote, no 
 - Vocabulary: [`rules::citation`](../../rules/src/citation.rs) · Schema:
   [`verification` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
   [`store::verifications`](../../store/src/verifications.rs) Lives in: the `verification` table in SurrealDB
+
+The table is `verification`.
+
+Schema: [`verification`](../../store/src/schema/navigator.surql#L2176).

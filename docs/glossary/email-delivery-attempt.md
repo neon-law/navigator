@@ -8,3 +8,7 @@ request does not create an attempt unless the delivery state permits a new send.
 
 - Store: [`store::email_deliveries`](../../store/src/email_deliveries.rs)
 - PostgreSQL mirror: `email_delivery_attempt`.
+
+The table is `email_delivery_attempt`.
+
+Schema: [`email_delivery_attempt`](../../store/src/schema/navigator.surql#L1500).

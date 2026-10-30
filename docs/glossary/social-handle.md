@@ -15,3 +15,7 @@ Neon Law's handles are seed data in [`store/seeds/neon/SocialHandle.yaml`](../..
 `navigator site blog handle <brand> <provider> <handle>` records another.
 
 - Schema and derivation: [`store::social_handles`](../../store/src/social_handles.rs)
+
+The table is `social_handle`.
+
+Schema: [`social_handle`](../../store/src/schema/navigator.surql#L1069).

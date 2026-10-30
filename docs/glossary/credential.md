@@ -8,3 +8,7 @@ pair `(person, jurisdiction)` is unique so the same attorney can't be double-lis
 
 - Schema and queries: [`store::credentials`](../../store/src/credentials.rs) —
   [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+
+The table is `credential`.
+
+Schema: [`credential`](../../store/src/schema/navigator.surql#L795).

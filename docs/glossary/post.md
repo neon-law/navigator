@@ -54,3 +54,7 @@ receipts; `link` records a public provider permalink without sending. See
 requires approved website copy and an actual publication time no later than now. An optional uploaded video is measured
 and checked against the owning Brand. Provider connections are unnecessary; verified public links can be recorded
 afterward. An existing Post is refused so a retry cannot replace content or change its delivery schedule.
+
+The table is `post`.
+
+Schema: [`post`](../../store/src/schema/navigator.surql#L1002).

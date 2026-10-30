@@ -14,3 +14,7 @@ the receipt reports its initial `not_attempted` value.
 - Store: [`store::email_receipts`](../../store/src/email_receipts.rs)
 - Delivery: [`store::email_deliveries`](../../store/src/email_deliveries.rs)
 - Operations: [Email pipeline](../observability.md#email-pipeline)
+
+The table is `email_receipt`.
+
+Schema: [`email_receipt`](../../store/src/schema/navigator.surql#L1441).

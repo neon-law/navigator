@@ -25,3 +25,7 @@ adds the firm's "where it leaves us" note on the lawyer [Lens](lens.md) only.
 
 - Commands: [`store::cases`](../../store/src/cases.rs) · Schema: [`discovery_request`,
   `discovery_item`](../../store/src/schema/navigator.surql)
+
+The table is `discovery_request`.
+
+Schema: [`discovery_request`](../../store/src/schema/navigator.surql#L2349).

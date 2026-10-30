@@ -40,3 +40,7 @@ their own meanings:
 - `review_document.status`, whose default is `draft` — the status of one attorney-reviewed instrument a client reads,
   not of the authored source it was rendered from. Schema: [`review_document` in
   `navigator.surql`](../../store/src/schema/navigator.surql).
+
+The table is `draft`.
+
+Schema: [`draft`](../../store/src/schema/navigator.surql#L1752).

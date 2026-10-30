@@ -13,3 +13,7 @@ layers stay in sync because the worker writes them through `ctx.run`.
 
 - Schema: [`notation_event` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
   [`store::notation_events`](../../store/src/notation_events.rs) Lives in: the `notation_event` table in SurrealDB
+
+The table is `notation_event`.
+
+Schema: [`notation_event`](../../store/src/schema/navigator.surql#L1985).

@@ -22,3 +22,7 @@ each page with a face for the reader follows it in declared order.
 - Rules: [`rules::pages`](../../rules/src/pages.rs) · Store: [`store::matter_pages`](../../store/src/matter_pages.rs) ·
   Schema: [`matter_page`](../../store/src/schema/navigator.surql) · Contract: [the
   gate](../gate.md#declaring-a-matter-page)
+
+The table is `matter_page`.
+
+Schema: [`matter_page`](../../store/src/schema/navigator.surql#L371).

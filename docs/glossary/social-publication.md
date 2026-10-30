@@ -20,3 +20,7 @@ Handle](social-handle.md).
 
 - Schema and transitions: [`store::social_publications`](../../store/src/social_publications.rs) —
   [`social_publication`](../../store/src/schema/navigator.surql)
+
+The table is `social_publication`.
+
+Schema: [`social_publication`](../../store/src/schema/navigator.surql#L1051).

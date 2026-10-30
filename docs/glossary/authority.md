@@ -27,3 +27,7 @@ instead is the failure mode: it drifts from the record and cannot be re-verified
 - Vocabulary: [`rules::citation`](../../rules/src/citation.rs) · Schema:
   [`authority` in `navigator.surql`](../../store/src/schema/navigator.surql) Queries:
   [`store::authorities`](../../store/src/authorities.rs) Lives in: the `authority` table in SurrealDB
+
+The table is `authority`.
+
+Schema: [`authority`](../../store/src/schema/navigator.surql#L2120).

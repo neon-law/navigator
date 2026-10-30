@@ -23,3 +23,7 @@ that lived the adversity.
 
 - Schema and queries: [`store::relationships`](../../store/src/relationships.rs) — Lives in the
   `relationship` relation
+
+The table is `relationship`.
+
+Schema: [`relationship`](../../store/src/schema/navigator.surql#L1210).

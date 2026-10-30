@@ -105,3 +105,7 @@ names *the serving binary's own composition*, and `SiteBrand` names *what the pa
 those three: it is the owning practice beneath the brand registry.
 
 - Deployment map: [`environments`](../environments.md#why-the-brand-is-the-image)
+
+The table is `brand`.
+
+Schema: [`brand`](../../store/src/schema/navigator.surql#L950).

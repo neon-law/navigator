@@ -42,3 +42,7 @@ A client's lens shows an entry only when its document is client-visible.
 
 - Commands: [`store::cases`](../../store/src/cases.rs) · Schema:
   [`case_docket_entry`](../../store/src/schema/navigator.surql)
+
+The table is `case_docket_entry`.
+
+Schema: [`case_docket_entry`](../../store/src/schema/navigator.surql#L2306).

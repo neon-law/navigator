@@ -8,3 +8,7 @@ sees it only after a separate attribution operation, and a reassignment moves th
 
 - Schema and queries: [`store::inbox`](../../store/src/inbox.rs) —
   [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+
+The table is `inbox_conversation`.
+
+Schema: [`inbox_conversation`](../../store/src/schema/navigator.surql#L2521).

@@ -31,3 +31,7 @@ and is conflicts data rather than a record of service by the firm.
 - Store: [`store::project_service`](../../store/src/project_service.rs) · Schema:
   [`project_service`](../../store/src/schema/navigator.surql) · Certificate:
   [`word::service`](../../word/src/service.rs)
+
+The table is `project_service`.
+
+Schema: [`project_service`](../../store/src/schema/navigator.surql#L418).

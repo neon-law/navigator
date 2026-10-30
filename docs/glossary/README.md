@@ -18,3 +18,8 @@ frontmatter requires a `description:` with one plain-text sentence ending in a p
 lists the title and description; `show` accepts the quoted title, regardless of case. Link other entries as siblings
 (`[Matter](matter.md)`). When a table matters to a definition, link to its `DEFINE TABLE` statement in
 `store/src/schema/navigator.surql` instead of copying the schema into the glossary.
+
+Every SurrealDB table has exactly one owning entry. State its attribution on a line beginning `The table is`, followed
+by the table name in backticks and a period. Include internal tables, explaining which term they serve. The store's
+`glossary_table_coverage` test checks these attributions against every `DEFINE TABLE` in the schema, including views,
+and rejects missing, duplicate, and unknown table names. Other entries may mention a table without claiming it.

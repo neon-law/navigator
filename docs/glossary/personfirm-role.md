@@ -38,3 +38,7 @@ they are seeded `client` and promoted afterward, past the point this rule can se
 
 - Schema: [`store::firms`](../../store/src/firms.rs) ·
   [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
+
+The table is `person_firm_role`.
+
+Schema: [`person_firm_role`](../../store/src/schema/navigator.surql#L309).

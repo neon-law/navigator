@@ -56,3 +56,7 @@ id, which stay out of this surface entirely.
 
 - Schema: [`firm` in `navigator.surql`](../../store/src/schema/navigator.surql) ·
   [`store::firms`](../../store/src/firms.rs)
+
+The table is `firm`.
+
+Schema: [`firm`](../../store/src/schema/navigator.surql#L880).

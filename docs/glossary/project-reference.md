@@ -28,3 +28,7 @@ row the write appends on the Project.
 
 - Schema and commands: [`store::project_references`](../../store/src/project_references.rs) — Lives in the
   `project_reference` relation
+
+The table is `project_reference`.
+
+Schema: [`project_reference`](../../store/src/schema/navigator.surql#L1187).

@@ -1,9 +1,11 @@
 ---
 title: "Notarization"
 description: >-
-  The workflow prefix notarization records a respondent signing or refusing in front of a notary; on a Document, it is
-  the list of notarial acknowledgments.
+  A Notarization records a provider request or execution for a Notation's document.
 ---
+
+A stored Notarization is one provider request or execution for a [Notation](notation.md)'s document. The provider
+reference connects its result to the request; an executed Document can also carry its notarial acknowledgments.
 
 The workflow prefix `notarization` records a respondent signing or refusing in front of a notary. See
 [`notation-authoring`](../notation-authoring.md#what-runs-after-intake--the-step-registry) and
@@ -16,3 +18,7 @@ commission number. It is recorded at upload with a repeatable `navigator site do
 no gate requires it.
 
 - Shape: [`store::documents::Notarization`](../../store/src/documents.rs)
+
+The table is `notarization`.
+
+Schema: [`notarization`](../../store/src/schema/navigator.surql#L2104).
