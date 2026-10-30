@@ -238,8 +238,7 @@ pub async fn project_notation_board(
             .get(&notation.state)
             .cloned()
             .or_else(|| Some(notation.updated_at.to_rfc3339()));
-        let template_stale =
-            notation_run_is_stale(&notation, &template, &repository_templates);
+        let template_stale = notation_run_is_stale(&notation, &template, &repository_templates);
         started.insert(notation.template_id);
         rows.push(ProjectNotationRow {
             template_code: template.code,
