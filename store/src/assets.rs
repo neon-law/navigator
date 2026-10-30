@@ -428,6 +428,44 @@ pub async fn for_project(db: &SurrealDb, project_id: Uuid) -> Result<Vec<Asset>,
     many(response)
 }
 
+/// The attachments one Message filed onto a Project, in attachment order —
+/// the `mail/{message_id}/{index}` revisions stamped with
+/// [`crate::documents::MailProvenance`] (LAW-238 D1). Project-scoped: a
+/// matching `source_message_id` on another matter never enters the list.
+/// Ordering is by the slug's trailing index, numerically — a message with
+/// more than nine attachments still reads 1, 2, … 10, not 1, 10, 2.
+///
+/// # Errors
+/// [`AssetError::Db`] if the lookup fails.
+pub async fn find_by_source_message_id(
+    db: &SurrealDb,
+    project_id: Uuid,
+    source_message_id: &str,
+) -> Result<Vec<Asset>, AssetError> {
+    let mut assets = many(
+        db.query(format!(
+            "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project \
+             AND source_message_id = $message AND {LIVE}"
+        ))
+        .bind((
+            "project",
+            record_id(crate::projects::PROJECT_TABLE, project_id),
+        ))
+        .bind(("message", source_message_id))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?,
+    )?;
+    assets.sort_by_key(|asset| {
+        asset
+            .slug
+            .as_deref()
+            .and_then(|slug| slug.rsplit('/').next())
+            .and_then(|index| index.parse::<u64>().ok())
+            .unwrap_or(u64::MAX)
+    });
+    Ok(assets)
+}
+
 /// Every asset on a Project, soft-deleted ones included, newest first — what
 /// a lawyer reads to find a document to restore.
 ///

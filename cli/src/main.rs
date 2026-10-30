@@ -1593,6 +1593,12 @@ enum CommunicationCmd {
         /// Only this channel, such as `call`.
         #[arg(long)]
         channel: Option<String>,
+        /// Only this direction: `inbound`, `outbound`, or `internal`.
+        #[arg(long)]
+        direction: Option<String>,
+        /// Only Communications with a filed attachment.
+        #[arg(long)]
+        attachments: bool,
         /// Project code. Defaults to project.name in navigator.yaml.
         #[arg(long)]
         project: Option<String>,
@@ -5037,6 +5043,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
         ProjectsCmd::Communication { action } => match action {
             CommunicationCmd::List {
                 channel,
+                direction,
+                attachments,
                 host,
                 project,
             } => {
@@ -5044,6 +5052,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     host.host.as_deref(),
                     project.as_deref(),
                     channel.as_deref(),
+                    direction.as_deref(),
+                    attachments,
                 )
                 .await
             }

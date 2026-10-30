@@ -43,6 +43,14 @@ pub struct InboxRowView {
     /// Last activity as RFC 3339, for the `<time>` element.
     #[serde(default)]
     pub updated_iso: String,
+    /// The direction of the conversation's most recent message — what the
+    /// `?direction=` filter matches rows on (LAW-238 D3).
+    #[serde(default)]
+    pub direction: String,
+    /// Whether any message on the conversation carries a filed attachment —
+    /// what the `?attachments=true` filter matches rows on.
+    #[serde(default)]
+    pub has_attachments: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +85,12 @@ pub struct InboxPage {
     pub unread_only: bool,
     #[serde(default)]
     pub brand_filter: Option<String>,
+    #[serde(default)]
+    pub direction_filter: Option<String>,
+    /// Whether the `?attachments=true` filter is on — rows with a filed
+    /// attachment only (LAW-238 D3).
+    #[serde(default)]
+    pub attachments_only: bool,
     #[serde(default)]
     pub brands: Vec<String>,
     #[serde(default)]
@@ -232,9 +246,54 @@ async fn unread_only() -> bool {
         .unwrap_or(false)
 }
 
-fn filter_href(base: &str, channel: Option<&str>, brand: Option<&str>, unread: bool) -> String {
+#[cfg(feature = "server")]
+async fn selected_direction() -> Option<String> {
+    #[derive(serde::Deserialize, Default)]
+    struct Filter {
+        direction: Option<String>,
+    }
+    let filter =
+        dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<Filter>, _>()
+            .await
+            .ok()
+            .map(|axum::extract::Query(filter)| filter)?;
+    filter.direction.filter(|direction| {
+        matches!(
+            direction.as_str(),
+            store::inbox::direction::INBOUND
+                | store::inbox::direction::OUTBOUND
+                | store::inbox::direction::INTERNAL
+        )
+    })
+}
+
+#[cfg(feature = "server")]
+async fn attachments_only() -> bool {
+    #[derive(serde::Deserialize, Default)]
+    struct Filter {
+        attachments: Option<bool>,
+    }
+    dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<Filter>, _>()
+        .await
+        .ok()
+        .and_then(|axum::extract::Query(filter)| filter.attachments)
+        .unwrap_or(false)
+}
+
+fn filter_href(
+    base: &str,
+    channel: Option<&str>,
+    brand: Option<&str>,
+    unread: bool,
+    direction: Option<&str>,
+    attachments: bool,
+) -> String {
     let mut parameters = Vec::new();
-    for (key, value) in [("channel", channel), ("brand", brand)] {
+    for (key, value) in [
+        ("channel", channel),
+        ("brand", brand),
+        ("direction", direction),
+    ] {
         if let Some(value) = value {
             let encoded =
                 percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC);
@@ -243,6 +302,9 @@ fn filter_href(base: &str, channel: Option<&str>, brand: Option<&str>, unread: b
     }
     if unread {
         parameters.push("unread=true".into());
+    }
+    if attachments {
+        parameters.push("attachments=true".into());
     }
     if parameters.is_empty() {
         base.to_string()
@@ -259,6 +321,11 @@ fn channel_matches(row_channel: &str, selected: Option<&str>) -> bool {
 #[cfg(any(feature = "server", test))]
 fn brand_matches(row_brand: Option<&str>, selected: Option<&str>) -> bool {
     selected.is_none_or(|brand| row_brand == Some(brand))
+}
+
+#[cfg(any(feature = "server", test))]
+fn direction_matches(row_direction: &str, selected: Option<&str>) -> bool {
+    selected.is_none_or(|direction| direction == row_direction)
 }
 
 #[cfg(feature = "server")]
@@ -312,6 +379,8 @@ fn row_view(row: &store::inbox::IntakeRow, href: String) -> InboxRowView {
         ),
         updated: row.updated_at.format("%b %-d, %H:%M UTC").to_string(),
         updated_iso: row.updated_at.to_rfc3339(),
+        direction: row.direction.clone(),
+        has_attachments: row.has_attachments,
     }
 }
 
@@ -359,6 +428,8 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
     let channel_filter = selected_channel().await;
     let unread_only = unread_only().await;
     let brand_filter = selected_brand().await;
+    let direction_filter = selected_direction().await;
+    let attachments_only = attachments_only().await;
     let all_rows = store::inbox::list_intake(&surreal, actor)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
@@ -370,6 +441,8 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
             channel_matches(&row.channel, channel_filter.as_deref())
                 && brand_matches(row.brand_key.as_deref(), brand_filter.as_deref())
                 && (!unread_only || row.unread)
+                && direction_matches(&row.direction, direction_filter.as_deref())
+                && (!attachments_only || row.has_attachments)
         })
         .collect::<Vec<_>>();
     let (logo, tokens_href, firm_name) = chrome().await;
@@ -380,6 +453,8 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
         channel_filter,
         unread_only,
         brand_filter,
+        direction_filter,
+        attachments_only,
         brands,
         channels: inbox_channels(),
         rows: rows
@@ -507,6 +582,8 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
     let channel_filter = selected_channel().await;
     let unread_only = unread_only().await;
     let brand_filter = selected_brand().await;
+    let direction_filter = selected_direction().await;
+    let attachments_only = attachments_only().await;
     let all_rows = store::inbox::list_project(&surreal, actor, project.id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
@@ -518,6 +595,8 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
             channel_matches(&row.channel, channel_filter.as_deref())
                 && brand_matches(row.brand_key.as_deref(), brand_filter.as_deref())
                 && (!unread_only || row.unread)
+                && direction_matches(&row.direction, direction_filter.as_deref())
+                && (!attachments_only || row.has_attachments)
         })
         .collect::<Vec<_>>();
     let (logo, tokens_href, firm_name) = chrome().await;
@@ -528,6 +607,8 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
         channel_filter,
         unread_only,
         brand_filter,
+        direction_filter,
+        attachments_only,
         brands,
         channels: inbox_channels(),
         rows: rows
@@ -743,19 +824,19 @@ pub fn inbox_list_body(page: &InboxPage) -> Element {
                     "Every email, text, and message to the firm, newest first."
                 }
                 nav { aria_label: "Filter inbox by channel",
-                    a { href: filter_href(&page.base_href, None, page.brand_filter.as_deref(), page.unread_only), "All channels" }
+                    a { href: filter_href(&page.base_href, None, page.brand_filter.as_deref(), page.unread_only, page.direction_filter.as_deref(), page.attachments_only), "All channels" }
                     for channel in page.channels.iter() {
                         " · "
-                        a { href: filter_href(&page.base_href, Some(channel), page.brand_filter.as_deref(), page.unread_only), "{channel}" }
+                        a { href: filter_href(&page.base_href, Some(channel), page.brand_filter.as_deref(), page.unread_only, page.direction_filter.as_deref(), page.attachments_only), "{channel}" }
                     }
                     if let Some(selected) = page.channel_filter.as_ref() {
                         " · Showing {selected}"
                     }
                 }
                 nav { aria_label: "Filter inbox by Brand",
-                    a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), None, page.unread_only), "All Brands" }
+                    a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), None, page.unread_only, page.direction_filter.as_deref(), page.attachments_only), "All Brands" }
                     for brand in page.brands.iter() {
-                        " · " a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), Some(brand), page.unread_only), "{brand}" }
+                        " · " a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), Some(brand), page.unread_only, page.direction_filter.as_deref(), page.attachments_only), "{brand}" }
                     }
                     if let Some(selected) = page.brand_filter.as_ref() {
                         " · Showing Brand {selected}"
@@ -763,9 +844,24 @@ pub fn inbox_list_body(page: &InboxPage) -> Element {
                 }
             }
             nav { aria_label: "Inbox unread filter",
-                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), false), "All messages" }
+                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), false, page.direction_filter.as_deref(), page.attachments_only), "All messages" }
                 " · "
-                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), true), "Unread only" }
+                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), true, page.direction_filter.as_deref(), page.attachments_only), "Unread only" }
+            }
+            nav { aria_label: "Inbox direction filter",
+                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), page.unread_only, None, page.attachments_only), "Any direction" }
+                for direction in ["inbound", "outbound", "internal"] {
+                    " · "
+                    a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), page.unread_only, Some(direction), page.attachments_only), "{direction}" }
+                }
+                if let Some(selected) = page.direction_filter.as_ref() {
+                    " · Showing {selected}"
+                }
+            }
+            nav { aria_label: "Inbox attachments filter",
+                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), page.unread_only, page.direction_filter.as_deref(), false), "Any attachment state" }
+                " · "
+                a { href: filter_href(&page.base_href, page.channel_filter.as_deref(), page.brand_filter.as_deref(), page.unread_only, page.direction_filter.as_deref(), true), "With attachments" }
             }
             if let Some(error) = page.error.clone() {
                 p { class: "page-subtitle", "{error}" }
@@ -986,6 +1082,95 @@ mod tests {
     }
 
     #[test]
+    fn direction_and_attachment_filters_compose_with_the_existing_ones() {
+        let mut view = page(
+            ViewerRole::Lawyer,
+            vec![
+                InboxRowView {
+                    id: "c1".into(),
+                    href: "/app/inbox/c1".into(),
+                    channel: "email".into(),
+                    brand_key: Some("neon".into()),
+                    assignee: "Unassigned".into(),
+                    unread: true,
+                    delivery: "received".into(),
+                    next_action: String::new(),
+                    subject: "Notice".into(),
+                    sender: "court@example.com".into(),
+                    updated: "Oct 11, 04:06 UTC".into(),
+                    updated_iso: "2026-10-11T04:06:15+00:00".into(),
+                    direction: store::inbox::direction::INBOUND.into(),
+                    has_attachments: true,
+                },
+                InboxRowView {
+                    id: "c2".into(),
+                    href: "/app/inbox/c2".into(),
+                    channel: "email".into(),
+                    brand_key: Some("neon".into()),
+                    assignee: "Unassigned".into(),
+                    unread: false,
+                    delivery: "sent".into(),
+                    next_action: String::new(),
+                    subject: "Reply".into(),
+                    sender: "firm@example.com".into(),
+                    updated: "Oct 12, 04:06 UTC".into(),
+                    updated_iso: "2026-10-12T04:06:15+00:00".into(),
+                    direction: store::inbox::direction::OUTBOUND.into(),
+                    has_attachments: false,
+                },
+            ],
+        );
+        // All five filters at once: the channel/brand/unread trio from
+        // before, plus direction and has-attachments (LAW-238 D3).
+        view.channel_filter = Some("email".into());
+        view.brand_filter = Some("neon".into());
+        view.unread_only = true;
+        view.direction_filter = Some(store::inbox::direction::INBOUND.into());
+        view.attachments_only = true;
+        let html = dioxus_ssr::render_element(inbox_list_body(&view));
+        // Every filter link preserves the other four selections.
+        assert!(
+            html.contains("channel=email&#38;brand=neon&#38;direction=inbound&#38;unread=true&#38;attachments=true"),
+            "{html}"
+        );
+        // The row filter keeps only rows matching all selected filters —
+        // c1 is inbound with an attachment; c2 is neither.
+        let rendered = render_rows(&view);
+        assert_eq!(rendered, vec!["c1"]);
+        // Each filter survives alone, too.
+        view.unread_only = false;
+        view.brand_filter = None;
+        assert_eq!(render_rows(&view), vec!["c1"]);
+        view.direction_filter = Some(store::inbox::direction::OUTBOUND.into());
+        view.attachments_only = false;
+        assert_eq!(render_rows(&view), vec!["c2"]);
+        // An unknown direction never renders as a filter link.
+        view.direction_filter = Some("sent".into());
+        view.attachments_only = false;
+        let html = dioxus_ssr::render_element(inbox_list_body(&view));
+        assert!(!html.contains("direction=sent"), "{html}");
+    }
+
+    /// The distinct row ids `inbox_list_body` renders — what a filter
+    /// assertion reads instead of parsing the whole table.
+    fn render_rows(view: &InboxPage) -> Vec<String> {
+        let html = dioxus_ssr::render_element(inbox_list_body(view));
+        let mut ids = html
+            .matches("/app/inbox/c")
+            .map(|rest| {
+                rest.split('"')
+                    .next()
+                    .unwrap_or_default()
+                    .trim_start_matches("/app/inbox/")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    #[test]
     fn unread_links_keep_channel_and_brand_and_thread_shows_the_source() {
         let mut view = page(ViewerRole::Lawyer, Vec::new());
         view.brand_filter = Some("neon".into());
@@ -1058,6 +1243,8 @@ mod tests {
             channel_filter: None,
             unread_only: false,
             brand_filter: None,
+            direction_filter: None,
+            attachments_only: false,
             brands,
             compose_action: None,
             csrf_token: String::new(),
@@ -1178,6 +1365,8 @@ mod tests {
             external_address: "+15555550123".into(),
             external_name: None,
             subject: None,
+            direction: store::inbox::direction::INBOUND.into(),
+            has_attachments: false,
             updated_at: chrono::Utc::now(),
         };
         assert_eq!(row_view(&row, "/x".into()).sender, "Pat Client (client)");
@@ -1210,6 +1399,8 @@ mod tests {
                 sender: "Pat Client".into(),
                 updated: "Oct 11, 04:06 UTC".into(),
                 updated_iso: "2026-10-11T04:06:15+00:00".into(),
+                direction: store::inbox::direction::INBOUND.into(),
+                has_attachments: false,
             }],
         )));
         assert!(html.contains("<table"), "{html}");
