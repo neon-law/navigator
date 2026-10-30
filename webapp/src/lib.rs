@@ -87,6 +87,7 @@ pub mod keyboard;
 pub mod lawyer_dashboard;
 pub mod lawyer_project_detail;
 pub mod lead_capture;
+pub mod lead_sources;
 pub mod legal_page;
 pub mod letter_detail;
 pub mod litigation_page;

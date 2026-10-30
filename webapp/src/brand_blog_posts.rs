@@ -672,6 +672,7 @@ fn social_dashboard_body(page: &BlogCatalogPage) -> Element {
                     a { href: "/app/admin/blog", "Manage Blog Posts" } }
             }
             {schedule_section(page)}
+            crate::lead_sources::LeadSourcesSection {}
             div { class: "team-home__cards", "aria-label": "Brand publications", {rows} }
         }
     }
