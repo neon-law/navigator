@@ -16,6 +16,7 @@ pub(in crate::devx) mod bundle;
 mod cluster;
 mod oidc;
 pub(in crate::devx) mod policy;
+pub(in crate::devx) mod runner;
 mod smoke;
 
 use std::collections::BTreeMap;
@@ -205,12 +206,12 @@ fn kind_app_ini(seed: &Seed, namespace: &str, forgejo_port: u16) -> Result<Strin
         rendered.matches(disabled).count() == 1,
         "the Forgejo app.ini template must disable Actions exactly once"
     );
-    // Forgejo signs merges and initial commits with the mounted SSH key; its
-    // default merge rules still require a signer key, a second factor, and
-    // verified base and head commits.
+    // Forgejo signs authorized operations with its instance key; people sign
+    // in through OIDC without enrolling a separate local factor or key.
     Ok(format!(
         "{}[repository.signing]\nFORMAT = ssh\nSIGNING_KEY = {SIGNING_PUBLIC_KEY}\n\
-         SIGNING_NAME = {SIGNING_NAME}\nSIGNING_EMAIL = {SIGNING_EMAIL}\n",
+         SIGNING_NAME = {SIGNING_NAME}\nSIGNING_EMAIL = {SIGNING_EMAIL}\n\
+         INITIAL_COMMIT = always\nCRUD_ACTIONS = always\nMERGES = always\n",
         rendered.replacen(disabled, "[actions]\nENABLED = true\n", 1)
     ))
 }
@@ -375,74 +376,6 @@ fn path_and_query(location: &str) -> Result<String> {
     })
 }
 
-/// Decode RFC 4648 base32 (no padding required), as TOTP apps read secrets.
-fn base32_decode(encoded: &str) -> Result<Vec<u8>> {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-    let mut bits: u64 = 0;
-    let mut width = 0;
-    let mut out = Vec::new();
-    for symbol in encoded.trim().trim_end_matches('=').bytes() {
-        let value = ALPHABET
-            .iter()
-            .position(|candidate| *candidate == symbol.to_ascii_uppercase())
-            .with_context(|| format!("{:?} is not base32", symbol as char))?;
-        bits = (bits << 5) | value as u64;
-        width += 5;
-        if width >= 8 {
-            width -= 8;
-            out.push(u8::try_from((bits >> width) & 0xff).expect("masked to a byte"));
-            bits &= (1 << width) - 1;
-        }
-    }
-    ensure!(!out.is_empty(), "an empty TOTP secret");
-    Ok(out)
-}
-
-/// The RFC 6238 code (SHA-1, 30-second step, 6 digits) a TOTP app such as
-/// Google Authenticator shows for `secret` at `unix_seconds`.
-fn totp(secret: &str, unix_seconds: u64) -> Result<String> {
-    use hmac::digest::KeyInit;
-    use hmac::{Hmac, Mac};
-    let key = base32_decode(secret)?;
-    let mut mac = Hmac::<sha1::Sha1>::new_from_slice(&key).expect("HMAC accepts any key");
-    mac.update(&(unix_seconds / 30).to_be_bytes());
-    let digest = mac.finalize().into_bytes();
-    let offset = usize::from(digest[digest.len() - 1] & 0x0f);
-    let truncated = u32::from_be_bytes(digest[offset..offset + 4].try_into().expect("four bytes"))
-        & 0x7fff_ffff;
-    Ok(format!("{:06}", truncated % 1_000_000))
-}
-
-/// A six-digit code that no clock-skew window around `unix_seconds` accepts.
-fn wrong_totp(secret: &str, unix_seconds: u64) -> Result<String> {
-    let nearby = [
-        totp(secret, unix_seconds.saturating_sub(60))?,
-        totp(secret, unix_seconds.saturating_sub(30))?,
-        totp(secret, unix_seconds)?,
-        totp(secret, unix_seconds + 30)?,
-        totp(secret, unix_seconds + 60)?,
-    ];
-    let mut candidate: u32 = nearby[2].parse().expect("six digits");
-    loop {
-        candidate = (candidate + 1) % 1_000_000;
-        let code = format!("{candidate:06}");
-        if !nearby.contains(&code) {
-            return Ok(code);
-        }
-    }
-}
-
-/// The base32 secret Forgejo's TOTP enrollment page prints for manual entry.
-fn enrollment_secret(html: &str) -> Option<String> {
-    let rest = &html[html.find("Or enter the secret:")? + "Or enter the secret:".len()..];
-    let secret: String = rest
-        .trim_start()
-        .chars()
-        .take_while(char::is_ascii_alphanumeric)
-        .collect();
-    (secret.len() >= 16).then_some(secret)
-}
-
 /// The synthetic email-domain policy the smoke opens, and the identities it
 /// signs in with. Each pairs with a user in the Rauthy KIND fixture.
 const SMOKE_ALLOWLIST: &str = "example.test";
@@ -521,7 +454,8 @@ mod tests {
             "[repository.signing]\nFORMAT = ssh\n\
              SIGNING_KEY = /etc/forgejo-signing/signing_key.pub\n\
              SIGNING_NAME = Navigator Forgejo KIND\n\
-             SIGNING_EMAIL = forgejo-signing@example.test\n"
+             SIGNING_EMAIL = forgejo-signing@example.test\n\
+             INITIAL_COMMIT = always\nCRUD_ACTIONS = always\nMERGES = always\n"
         ));
         // Registration stays exactly as closed as a deployment's.
         assert!(ini.contains("DISABLE_REGISTRATION = true"));
@@ -689,63 +623,8 @@ mod tests {
         assert_eq!(path_and_query("http://localhost:3300/").unwrap(), "/");
     }
 
-    /// RFC 6238 Appendix B's SHA-1 seed, "12345678901234567890".
-    const RFC_6238_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
-
     #[test]
-    fn totp_matches_the_rfc_6238_vectors() {
-        // The RFC's eight-digit values, truncated to the six an app shows.
-        for (time, code) in [
-            (59, "287082"),
-            (1_111_111_109, "081804"),
-            (1_111_111_111, "050471"),
-            (1_234_567_890, "005924"),
-            (2_000_000_000, "279037"),
-        ] {
-            assert_eq!(totp(RFC_6238_SECRET, time).unwrap(), code, "T = {time}");
-        }
-        assert_eq!(
-            totp(RFC_6238_SECRET, 30).unwrap(),
-            totp(RFC_6238_SECRET, 59).unwrap(),
-            "one code per 30-second step"
-        );
-        assert!(totp("not base32!", 59).is_err());
-    }
-
-    #[test]
-    fn a_wrong_totp_misses_every_skew_window() {
-        let time = 1_111_111_109;
-        let wrong = wrong_totp(RFC_6238_SECRET, time).unwrap();
-        assert_eq!(wrong.len(), 6);
-        for offset in [-60i64, -30, 0, 30, 60] {
-            let at = time.checked_add_signed(offset).unwrap();
-            assert_ne!(wrong, totp(RFC_6238_SECRET, at).unwrap());
-        }
-    }
-
-    #[test]
-    fn base32_decodes_with_or_without_padding() {
-        assert_eq!(
-            base32_decode(RFC_6238_SECRET).unwrap(),
-            b"12345678901234567890"
-        );
-        assert_eq!(base32_decode("MZXW6===").unwrap(), b"foo");
-        assert_eq!(base32_decode("mzxw6").unwrap(), b"foo");
-        assert!(base32_decode("").is_err());
-    }
-
-    #[test]
-    fn the_enrollment_secret_is_read_from_forgejos_page() {
-        let page = "<p>Or enter the secret: K5PXO7TLZFEZ35AAA4H5ROOBDAPGMQH5</p>";
-        assert_eq!(
-            enrollment_secret(page).as_deref(),
-            Some("K5PXO7TLZFEZ35AAA4H5ROOBDAPGMQH5")
-        );
-        assert_eq!(enrollment_secret("<p>no secret here</p>"), None);
-    }
-
-    #[test]
-    fn the_deployment_template_requires_two_factor_for_everyone() {
+    fn the_deployment_template_uses_oidc_without_a_local_second_factor() {
         let template =
             std::fs::read_to_string(workspace().join("k8s/forgejo/app.ini.example")).unwrap();
         let security = template
@@ -755,12 +634,12 @@ mod tests {
             .unwrap();
         assert!(security
             .lines()
-            .any(|line| line == "GLOBAL_TWO_FACTOR_REQUIREMENT = all"));
+            .any(|line| line == "GLOBAL_TWO_FACTOR_REQUIREMENT = none"));
         let identity =
             std::fs::read_to_string(workspace().join("k8s/forgejo/identity.sh")).unwrap();
         assert!(
-            !identity.contains("--skip-local-2fa"),
-            "the OIDC source must keep Forgejo's own TOTP prompt"
+            identity.contains("--skip-local-2fa"),
+            "the OIDC source must not add a local second-factor challenge"
         );
         // Forgejo checks the reserved administrator's address against
         // EMAIL_DOMAIN_ALLOWLIST, so a fixed `forgejo.invalid` crash-loops every

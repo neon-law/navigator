@@ -28,6 +28,13 @@ pub(super) struct Kube {
 }
 
 impl Kube {
+    pub(super) fn selected(context: &str, namespace: &str) -> Self {
+        Self {
+            context: context.to_owned(),
+            namespace: namespace.to_owned(),
+        }
+    }
+
     pub(super) fn new(cfg: &KindConfig) -> Self {
         Self {
             context: cfg.kind_context(),

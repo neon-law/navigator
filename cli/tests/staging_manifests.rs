@@ -1202,6 +1202,38 @@ fn forgejo_overlays_keep_oidc_coordinates_as_required_substitutions_and_actions_
             "{environment}: Actions stays off until runner isolation is proven"
         );
         let forgejo = resource(&resources, "StatefulSet", "navigator-forgejo");
+        let spec = &forgejo["spec"]["template"]["spec"];
+        let signing = spec["volumes"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|volume| volume["name"].as_str() == Some("signing"))
+            .expect("optional instance signing volume");
+        assert_eq!(
+            signing["secret"]["secretName"].as_str(),
+            Some("navigator-forgejo-signing")
+        );
+        assert_eq!(signing["secret"]["optional"].as_bool(), Some(true));
+        let identity = spec["initContainers"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|container| container["name"].as_str() == Some("identity"))
+            .unwrap();
+        for process in [identity, container(forgejo, "forgejo")] {
+            assert!(
+                process["volumeMounts"]
+                    .as_sequence()
+                    .unwrap()
+                    .iter()
+                    .any(|mount| {
+                        mount["name"].as_str() == Some("signing")
+                            && mount["mountPath"].as_str() == Some("/etc/forgejo-signing")
+                            && mount["readOnly"].as_bool() == Some(true)
+                    }),
+                "{environment}: settings and server need the same signing key mount"
+            );
+        }
         let init: Vec<&str> = forgejo["spec"]["template"]["spec"]["initContainers"]
             .as_sequence()
             .into_iter()

@@ -41,9 +41,9 @@ re-running `up` converges instead of rotating. The PostgreSQL server certificate
 generated once with `openssl`. The base `app.ini` is the deployment template rendered by the same code as `ops secrets
 apply --service forgejo`, with three KIND differences: a loopback `ROOT_URL`, Actions on, and an instance signing key.
 `up` generates that synthetic SSH key once into the `navigator-forgejo-signing` Secret and mounts it read-only; Forgejo
-signs initial commits and merges with it. A branch that requires signed commits accepts a merge only when Forgejo can
-sign it, and Forgejo's default merge rules also require the merging account to hold a public key and a second factor, a
-verified base, and verified pull-request commits.
+signs authorized initial commits, API edits and merges with it. The instance signing policy is `always` for these
+operations; signing requires no separate human key or local second-factor enrollment. Branch protection still governs
+which changes can reach `main`.
 
 `up` also applies the Rauthy fixture, aligned to the tier's Rauthy port, so the `navigator-forgejo` client and the
 synthetic smoke users exist. A bare cluster gets Rauthy itself. A changed fixture restarts Rauthy.
@@ -69,12 +69,13 @@ kubectl -n navigator patch configmap navigator-forgejo-admission \
 kubectl -n navigator delete pod navigator-forgejo-0
 ```
 
-Re-running `up` empties it again. Every account must then enroll a TOTP second factor before it can use Forgejo. The
-rules are in [OIDC](oidc.md#forgejo).
+Re-running `up` empties it again. People sign in through the identity provider without a separate Forgejo password or
+second-factor prompt. KIND uses synthetic Rauthy identities for the same OIDC contract that deployed Google sign-in
+uses. The rules are in [OIDC](oidc.md#forgejo).
 
 ## The smoke
 
-`dev forgejo smoke` uses only synthetic identities, repositories, and TOTP secrets. In order, it proves:
+`dev forgejo smoke` uses only synthetic identities, repositories, and credentials. In order, it proves:
 
 1. **PostgreSQL.** Forgejo holds TLS connections only. The `forgejo` login is unprivileged, owns exactly one database,
    reaches it with `verify-full`, cannot connect to `navigator`, and cannot connect without TLS.
@@ -84,9 +85,8 @@ rules are in [OIDC](oidc.md#forgejo).
 3. **Admission.** With `example.test` allowed, `forge-denied@example.org`, the suffix lookalike
    `forge-lookalike@notexample.test`, and the unverified `forge-unverified@example.test` get no account.
    `forge-allowed@example.test` gets exactly one, not an administrator, bound to its Rauthy subject.
-4. **Two factors.** Before enrollment every page redirects to the security settings, and the API and git over HTTP
-   refuse the account's token. The smoke enrolls a TOTP secret and computes RFC 6238 codes. Then a sign-in without a
-   code and one with a wrong code open no session; the right code does.
+4. **Provider sign-in.** The OIDC session opens account settings directly, and the admitted account can use its API
+   credential and git over HTTP without local second-factor enrollment.
 5. **Git and Actions.** The account creates a private repository, clones it, and pushes a commit with a workflow over
    HTTP. The workflow runs to success on the KIND runner.
 6. **Merge policy.** The smoke reports drift without writing, protects `main`, applies squash-only settings with zero
@@ -113,11 +113,11 @@ rules are in [OIDC](oidc.md#forgejo).
    in-memory store. The Firm's organization and the Project's private repository are created through the API, and the
    API and the database name it exactly `example-law-pc/sample-litigation`, the `<firm-slug>/<project-code>` that
    `store::firms::forgejo::repository_path` returns. Organization creation is closed to regular accounts, so the
-   enrolled smoke account is a site administrator for this phase only. The phase deletes the repository and organization
+   admitted smoke account is a site administrator for this phase only. The phase deletes the repository and organization
    when it finishes.
 9. **Retention.** The pod is deleted, then scaled to zero and back with the allowlist emptied in between. The pod UID
    changes and the claim UID does not. The commit, a fresh clone, and the repository row survive. The account still
-   signs in by the same issuer subject, with a new code.
+   signs in directly through the provider with the same issuer subject.
 
 It ends with the allowlist empty and purges its accounts at the start of the next run.
 

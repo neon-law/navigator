@@ -916,6 +916,7 @@ fn forgejo_policy_help_requires_explicit_targets_and_names_the_guarded_actions()
             "auto-merge",
             "bundle",
             "restore",
+            "runner-once",
             "schedule-open",
             "setup",
             "help"
@@ -972,6 +973,32 @@ fn forgejo_policy_help_requires_explicit_targets_and_names_the_guarded_actions()
     assert!(
         !schedule_open.contains("[env:"),
         "repository, URL and context must be explicit: {schedule_open}"
+    );
+}
+
+#[test]
+fn forgejo_runner_help_names_explicit_isolation_and_recovery_controls() {
+    let runner = help(&["ops", "forgejo", "runner-once", "--help"]);
+    for required in [
+        "<REPOSITORY>",
+        "--url <URL>",
+        "--context <CONTEXT>",
+        "--runner-namespace <RUNNER_NAMESPACE>",
+        "--egress-ip <EGRESS_IP>",
+        "--dns-ip <DNS_IP>",
+        "--cleanup-registration <CLEANUP_REGISTRATION>",
+        "--cleanup-job <CLEANUP_JOB>",
+        "FORGEJO_TOKEN",
+        "trusted operator host",
+    ] {
+        assert!(
+            unwrapped(&runner).contains(required),
+            "missing {required}: {runner}"
+        );
+    }
+    assert!(
+        !runner.contains("[env:"),
+        "runner targets and network destinations must be explicit: {runner}"
     );
 }
 

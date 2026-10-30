@@ -41,6 +41,25 @@ For each installation, the Deployment Operator must:
    for large clones and pushes. The load balancer terminates TLS and forwards the external scheme, and Forgejo builds
    its links from `ROOT_URL`.
 
+### Commit signing and Actions opt-in
+
+Use the deployment's published cloud record; no private deployment checkout is required. Store
+`NAVIGATOR_FORGEJO_SIGNING_NAME` and `NAVIGATOR_FORGEJO_SIGNING_EMAIL` as deployment coordinates with `navigator ops
+deployments set <row> --project-id <project>`. Supply the SSH signing key pair through `navigator ops secrets set <row>
+--project-id <project> --service forgejo`, using the key names `NAVIGATOR_FORGEJO_SIGNING_PRIVATE_KEY` and
+`NAVIGATOR_FORGEJO_SIGNING_PUBLIC_KEY` and reading their values from stdin. Both keys are required together. Keep
+earlier keys recoverable when rotating the pair.
+
+`navigator ops secrets apply --deployment <row> --project-id <project> --service forgejo` projects the pair into
+`navigator-forgejo-signing`. The server and identity initializer mount it read-only at `/etc/forgejo-signing`. The
+generated configuration names the public key file; private key bytes never enter `app.ini` or the application
+environment. A normal release applies the mount, and a Forgejo rollout loads the projected configuration.
+
+Actions defaults to disabled. Set the deployment coordinate `NAVIGATOR_FORGEJO_ACTIONS_ENABLED=true` only after isolated
+runner execution is verified for that installation. Other values than literal `true` and `false` are refused, and
+enabling Actions requires the complete signing pair and identity. This flag enables the server feature; it does not
+create a runner, grant repository access, configure Navigator's OIDC trust, or authorize source writes.
+
 Check the `forgejo` login's grants whenever Navigator adds tables: sharing a server is not permission to read
 application data.
 
@@ -58,11 +77,11 @@ Forgejo signs in through the installation's existing OIDC issuer with its own cl
 through the coordinates used to render the `navigator-forgejo-oidc` ConfigMap. The client id and secret are
 environment-owned. Sharing the issuer does not permit reusing Navigator's client secret or its callback registration.
 
-Every account must enroll a TOTP second factor, and password sign-in, local signup, and account linking stay off. The
-email-domain allowlist is the `email_domain_allowlist` key of the `navigator-forgejo-admission` ConfigMap; the overlays
-do not commit it, so registration stays closed until a sync from the database's Brand domains writes it. The full rules
-are in [OIDC](oidc.md#forgejo). Forgejo accounts and repository rights do not grant Navigator Project participation, and
-the reverse is also true.
+People sign in through Google OAuth without separate Forgejo two-factor enrollment. Password sign-in, local signup, and
+account linking stay off. The email-domain allowlist is the `email_domain_allowlist` key of the
+`navigator-forgejo-admission` ConfigMap; the overlays do not commit it, so registration stays closed until a sync from
+the database's Brand domains writes it. The full rules are in [OIDC](oidc.md#forgejo). Forgejo accounts and repository
+rights do not grant Navigator Project participation, and the reverse is also true.
 
 ### Navigator document-check tokens
 
@@ -203,10 +222,10 @@ gate (pull_request)` context becomes the required check. Then a ready, signed, g
 head branch is deleted. A `push` workflow then runs on the merge commit. A red pull request stays open through an
 immediate merge and the owner's forced merge; a draft is refused until it is marked ready. Signed direct pushes by the
 owner and an administrator, and an Actions job-token push, are rejected. See [Forgejo on
-KIND](forgejo-kind.md#the-smoke). The run depends on an instance signing key, a GPG key and second factor for the
-scheduling account, and signed history. No deployment overlay provisions an instance signing key yet, so a deployment
-cannot merge into signed-commit `main` until one is provisioned. Forgejo 15.0.9 lets an instance administrator's forced
-merge skip branch protection regardless of `apply_to_admins`
+KIND](forgejo-kind.md#the-smoke). The run depends on an instance signing key and signed history. Forgejo signs permitted
+initial commits, source edits and merges without separate human key or authenticator enrollment. A deployment cannot
+merge into signed-commit `main` until its instance signing key is provisioned through the service secret path above.
+Forgejo 15.0.9 lets an instance administrator's forced merge skip branch protection regardless of `apply_to_admins`
 ([`services/pull/check.go`](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.9/services/pull/check.go)), and the KIND
 run observed a site administrator force-merging a red pull request. Keep site administration out of operator and bot
 identities until a tested control closes that path. The smoke does not run the Project gate itself: the KIND runner
@@ -221,13 +240,53 @@ beneath it, named by its immutable `code`: `<firm-slug>/<project-code>` (`store:
 returns exactly that path. Concurrent creation, moves, and tenant isolation still need tests. Forgejo is one parallel
 service per installation, not a single central organization shared between installations.
 
-Actions stays disabled in the deployment overlays. The KIND tier runs one runner (Forgejo Runner 13.2.0, pinned by
-digest in `k8s/forgejo/runner/`) on the `host` executor to prove registration and a workflow run; it is not an isolation
-boundary. Before enabling Actions in a deployment, establish isolated, ephemeral execution for Project workflows,
-restrict repository write credentials to the owning Project, deny untrusted pull-request secret access, and test that
-another Brand/Project cannot read its source or publish its artifacts. Do not mount the host Docker socket or use
-privileged shared runners in the Navigator/PostgreSQL trust boundary. Preserve artifact provenance, workflow references,
-retries, and existing Project publisher behavior during migration.
+Deployment Actions defaults off. The KIND tier runs one runner (Forgejo Runner 13.2.0, pinned by digest in
+`k8s/forgejo/runner/`) on the `host` executor to prove registration and a workflow run; it is not an isolation boundary.
+Before enabling Actions in a deployment, establish isolated, ephemeral execution for Project workflows, restrict
+repository write credentials to the owning Project, deny untrusted pull-request secret access, and test that another
+Brand/Project cannot read its source or publish its artifacts. Do not mount the host Docker socket or use privileged
+shared runners in the Navigator/PostgreSQL trust boundary. Preserve artifact provenance, workflow references, retries,
+and existing Project publisher behavior during migration.
+
+## Disposable repository runners
+
+`navigator ops forgejo runner-once <owner/repository>` registers a repository-scoped ephemeral runner through the
+Forgejo 15 API, then starts the pinned runner image in a fresh Kubernetes Job. The trusted operator supplies
+`FORGEJO_TOKEN`, `--url <https-origin>`, `--context <context>`, `--runner-namespace <namespace>`, and repeated
+`--egress-ip <public-ipv4>` arguments. The operator credential stays on that host; the pod receives only its own
+single-job runner credential. Organization and global runner scopes are refused.
+
+Use a dedicated namespace with restricted Pod Security admission and a NetworkPolicy-enforcing cluster. Verify actual
+denial of metadata, Kubernetes API, database, object-store and other internal endpoints before declaring the namespace
+with `navigator.neonlaw.org/runner-network-policy=enforced` and `pod-security.kubernetes.io/enforce=restricted`. The
+label records the operator's verified configuration; it does not enable network enforcement. The command refuses
+preexisting broad policies because Kubernetes adds their permissions together.
+
+Only the explicitly supplied public IPv4 destinations on TCP 443 and the cluster's `kube-dns` pods on TCP/UDP 53 are
+allowed. Supply current public addresses for the Forgejo and Navigator endpoints and every pinned release-download
+redirect, including `release-assets.githubusercontent.com`. Missing or changed destinations fail the job; private
+addresses, metadata addresses and CIDRs are refused. This command neither discovers destinations nor broadens egress.
+For a verified NodeLocal DNS topology, pass `--dns-ip <cluster-dns-ipv4>` from the runner pod's resolver configuration.
+This adds only that exact `/32` address on TCP/UDP 53; it grants no metadata HTTP access. Metadata endpoints, CIDRs and
+non-unicast DNS addresses are refused. Without the option, the `kube-dns` pod selector remains the DNS policy.
+
+Each Job gets its own unannotated service account without an API token, read-only root filesystem, bounded ephemeral
+work and temporary volumes, and no host, persistent or Docker-socket mounts. Registration read-back must confirm the
+same repository-scoped ephemeral runner before the suspended Job starts. The Job has no retries, a thirty-minute
+deadline and a five-minute completed-Job TTL. The Secret, service account and policy belong to the Job for garbage
+collection. The runner executes `one-job --wait`; after it exits successfully, the API must show that Forgejo removed
+its registration. Runner completion does not mean the workflow passed: inspect that exact workflow result separately.
+
+Normal success and failure remove both the registration and Job. An interrupted operator process prints the Job name and
+numeric registration ID needed for recovery. Repeat the same command with `--cleanup-registration <id>` and
+`--cleanup-job <exact-job-name>`, omitting egress arguments, to remove only that invocation's resources. A Job deadline
+or TTL does not remove an idle server registration; run recovery cleanup after an interrupted invocation.
+
+This is an operator-started execution primitive. It does not install a runner autoscaler, enable deployment Actions,
+grant source-application writes, or prove the staging gate or delivery loop. The KIND smoke keeps its separate shared
+runner for synthetic fixtures. Server-enforced ephemeral registration and one-job execution are documented in the
+[Forgejo 15 security guide](https://forgejo.org/docs/v15.0/admin/actions/security/#ephemeral-runners) and [registration
+guide](https://forgejo.org/docs/v15.0/admin/actions/registration/#runner-modes).
 
 ## Git bundle archive and restore
 
@@ -252,7 +311,7 @@ existing path.
 
 [`forgejo-postgres.yml`](../.github/workflows/forgejo-postgres.yml) renders both GKE overlays and runs `navigator dev
 forgejo up` and `smoke` on a task-owned KIND cluster: TLS and database isolation, closed registration, email-domain
-admission, mandatory TOTP, git clone and push, an Actions run, and retention across pod deletion and scale-to-zero.
+admission, OIDC-only sign-in, git clone and push, an Actions run, and retention across pod deletion and scale-to-zero.
 [Forgejo on KIND](forgejo-kind.md) lists every check. GKE storage provisioning, a deployment's identity-provider
 registration, and Actions isolation require separate evidence.
 

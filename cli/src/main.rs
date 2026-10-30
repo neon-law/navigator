@@ -3288,6 +3288,11 @@ enum EmailSummaryCmd {
 
 #[derive(Subcommand)]
 enum ForgejoPolicyCmd {
+    /// Run one repository-scoped Actions job in a disposable, network-isolated Kubernetes pod.
+    #[command(
+        after_help = "Run only from a trusted operator host. FORGEJO_TOKEN must never enter a pull-request-controlled job."
+    )]
+    RunnerOnce(ForgejoRunnerArgs),
     /// Back up a local mirror and prove every ref restores. Excludes LFS and forge metadata.
     Bundle {
         /// Local bare mirror made with `git clone --mirror`.
@@ -3350,6 +3355,37 @@ enum ForgejoPolicyCmd {
         #[arg(long)]
         check_context: String,
     },
+}
+
+#[derive(clap::Args)]
+struct ForgejoRunnerArgs {
+    /// Explicit owner/repository; organization-wide and global runners are refused.
+    repository: String,
+    /// Public HTTPS Forgejo origin. `FORGEJO_TOKEN` stays on this trusted operator host.
+    #[arg(long)]
+    url: String,
+    /// Explicit Kubernetes context; never inferred from the active context.
+    #[arg(long)]
+    context: String,
+    /// Existing dedicated runner namespace, separate from Navigator's application namespace.
+    #[arg(long)]
+    runner_namespace: String,
+    /// Exact public IPv4 destinations permitted on TCP 443, including release-download redirects.
+    #[arg(
+        long,
+        required_unless_present = "cleanup_registration",
+        conflicts_with = "cleanup_registration"
+    )]
+    egress_ip: Vec<String>,
+    /// Explicit cluster DNS IPv4 for `NodeLocal` DNS; permits only TCP/UDP 53 to that exact address.
+    #[arg(long)]
+    dns_ip: Option<String>,
+    /// Recover an interrupted invocation's exact numeric runner registration.
+    #[arg(long, requires = "cleanup_job")]
+    cleanup_registration: Option<u64>,
+    /// Exact forgejo-job-<UUID> Job from the interrupted invocation; never a namespace-wide cleanup.
+    #[arg(long, requires = "cleanup_registration")]
+    cleanup_job: Option<String>,
 }
 
 #[derive(Subcommand)]

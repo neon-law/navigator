@@ -633,17 +633,16 @@ The allowlist is the seam a later sync fills from the database's Brand domains. 
 it, so a re-applied overlay never overwrites the sync. A change takes effect at the next pod start. Removing a domain
 stops new accounts on it; accounts that already exist keep signing in until an administrator suspends them.
 
-### Every account needs a TOTP second factor
+### Google sign-in without a second enrollment
 
-`GLOBAL_TWO_FACTOR_REQUIREMENT = all` in the base `app.ini` makes every Forgejo account enroll an RFC 6238 TOTP
-authenticator, such as Google Authenticator. Forgejo enforces it, not the identity provider: Rauthy offers passkeys but
-no TOTP, and Google's 2-Step Verification is a Workspace administrator policy outside Navigator's code. The OIDC source
-is created without `--skip-local-2fa`, so the TOTP prompt follows the Rauthy or Google sign-in in every environment.
+People sign in to deployed Forgejo through Google OAuth. The base `app.ini` sets `GLOBAL_TWO_FACTOR_REQUIREMENT = none`,
+and the OIDC source sets `--skip-local-2fa`, so Forgejo does not require its own authenticator enrollment or a second
+code after Google sign-in. Google's account and Workspace authentication policy remains at Google. KIND uses Rauthy as
+the synthetic OIDC issuer for the same callback contract.
 
-Until an account enrolls, every page redirects to its security settings, and its tokens are refused by the API and by
-git over HTTP. After enrollment, the identity provider's sign-in alone opens no session; Forgejo asks for the current
-code and refuses a wrong one. Production Google accounts should also enforce 2-Step Verification in the Workspace admin
-console; that is an administrator setting, not something this repository configures.
+Verified-email and exact-domain admission remain required. Local password sign-in, basic authentication and local signup
+stay disabled. Repository access remains a separate authorization decision; signing in grants no Project membership or
+repository administration.
 
 `navigator dev forgejo smoke` proves each rule above against the KIND Rauthy with synthetic users only ([Forgejo on
 KIND](forgejo-kind.md#the-smoke)).
