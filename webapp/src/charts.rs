@@ -768,3 +768,473 @@ pub fn Sparkline(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn render(component: Element) -> String {
+        dioxus_ssr::render_element(component)
+    }
+
+    fn close(actual: f64, expected: f64) -> bool {
+        (actual - expected).abs() < 1.0e-9
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            close(actual, expected),
+            "expected {actual} to be within 1e-9 of {expected}"
+        );
+    }
+
+    // -- fixtures ---------------------------------------------------------
+
+    fn line_series() -> Vec<Series> {
+        vec![
+            Series::new(
+                "Signed retainers",
+                0,
+                vec![
+                    SeriesPoint::new("2026-07-07", 4.0),
+                    SeriesPoint::new("2026-07-08", 8.0),
+                    SeriesPoint::new("2026-07-09", 6.0),
+                ],
+            ),
+            Series::new(
+                "Open matters",
+                1,
+                vec![
+                    SeriesPoint::new("2026-07-07", 2.0),
+                    SeriesPoint::new("2026-07-08", 5.0),
+                    SeriesPoint::new("2026-07-09", 9.0),
+                ],
+            ),
+        ]
+    }
+
+    fn category_series() -> Series {
+        Series::new(
+            "Matters by practice",
+            0,
+            vec![
+                SeriesPoint::new("Estate planning", 12.0),
+                SeriesPoint::new("Tenant defense", 7.0),
+                SeriesPoint::new("Immigration", 3.0),
+            ],
+        )
+    }
+
+    // -- scale helpers ----------------------------------------------------
+
+    #[test]
+    fn value_domain_includes_zero_only_when_floored() {
+        let values = [5.0, 8.0];
+        assert_eq!(value_domain(&values, true), (0.0, 8.0));
+        assert_eq!(value_domain(&values, false), (5.0, 8.0));
+    }
+
+    #[test]
+    fn value_domain_handles_empty_input() {
+        assert_eq!(value_domain(&[], true), (0.0, 1.0));
+    }
+
+    #[test]
+    fn value_domain_pads_a_single_point() {
+        let (lo, hi) = value_domain(&[4.0], false);
+        assert_close(lo, 2.0);
+        assert_close(hi, 6.0);
+        // A floored chart keeps the baseline at zero and pads upward.
+        assert_eq!(value_domain(&[4.0], true), (0.0, 4.0));
+    }
+
+    #[test]
+    fn value_domain_pads_all_equal_values() {
+        let (lo, hi) = value_domain(&[3.0, 3.0, 3.0], false);
+        assert!(hi > lo, "domain must have width to avoid dividing by zero");
+        assert_close(lo, 1.5);
+        assert_close(hi, 4.5);
+        let (lo, hi) = value_domain(&[0.0, 0.0], true);
+        assert_eq!((lo, hi), (0.0, 1.0));
+    }
+
+    #[test]
+    fn scaled_value_maps_domain_onto_the_range() {
+        let domain = (0.0, 8.0);
+        assert_close(scaled_value(0.0, domain, 0.0, 100.0), 0.0);
+        assert_close(scaled_value(8.0, domain, 0.0, 100.0), 100.0);
+        assert_close(scaled_value(4.0, domain, 0.0, 100.0), 50.0);
+        // A y axis reverses the pixel arguments (SVG y grows downward): the
+        // domain maximum lands at the top.
+        assert_close(scaled_value(8.0, domain, 280.0, 40.0), 40.0);
+    }
+
+    #[test]
+    fn scaled_value_maps_a_degenerate_domain_to_the_midpoint() {
+        assert_close(scaled_value(5.0, (5.0, 5.0), 0.0, 100.0), 50.0);
+    }
+
+    #[test]
+    fn x_at_centers_a_lone_point_and_spreads_the_rest() {
+        assert_close(x_at(0, 1, 10.0, 30.0), 20.0);
+        assert_close(x_at(0, 4, 10.0, 30.0), 10.0);
+        assert_close(x_at(3, 4, 10.0, 30.0), 30.0);
+        assert_close(x_at(1, 4, 10.0, 30.0), 10.0 + 20.0 / 3.0);
+    }
+
+    #[test]
+    fn donut_fraction_handles_a_zero_total() {
+        assert_close(donut_fraction(4.0, 8.0), 0.5);
+        assert_close(donut_fraction(4.0, 0.0), 0.0);
+        assert_close(donut_fraction(0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn format_value_omits_trailing_zeros() {
+        assert_eq!(format_value(4.0), "4");
+        assert_eq!(format_value(4.5), "4.5");
+        assert_eq!(format_value(4.25), "4.25");
+        assert_eq!(format_value(1234.0), "1234");
+        assert_eq!(format_value(-2.5), "-2.5");
+        assert_eq!(format_value(0.1 + 0.2), "0.3");
+    }
+
+    #[test]
+    fn truncate_label_marks_the_cut() {
+        assert_eq!(truncate_label("short", 12), "short");
+        assert_eq!(truncate_label("exactly-12-c", 12), "exactly-12-c");
+        assert_eq!(truncate_label("exactly-12-ch", 12), "exactly-12-…");
+        let cut = truncate_label("Probate administration", 12);
+        assert_eq!(cut.chars().count(), 12);
+        assert!(cut.ends_with('…'));
+    }
+
+    #[test]
+    fn tone_var_wraps_onto_the_ramp() {
+        assert_eq!(tone_var(0), "var(--nav-chart-1)");
+        assert_eq!(tone_var(5), "var(--nav-chart-6)");
+        assert_eq!(tone_var(6), "var(--nav-chart-1)");
+        assert_eq!(tone_var(7), "var(--nav-chart-2)");
+    }
+
+    #[test]
+    fn drawable_skips_non_finite_values() {
+        let points = vec![
+            SeriesPoint::new("a", 4.0),
+            SeriesPoint::new("b", f64::NAN),
+            SeriesPoint::new("c", 6.0),
+        ];
+        let drawn = drawable(&points);
+        assert_eq!(drawn.len(), 2);
+        assert_eq!(drawn[0].0, "a");
+        assert_eq!(drawn[1].0, "c");
+    }
+
+    // -- rendered output ---------------------------------------------------
+
+    #[test]
+    fn line_chart_ssrs_with_accessible_name_and_companion_table() {
+        let html = render(rsx! {
+            LineChart {
+                title: "Visits by day".to_string(),
+                description: "Daily visits for the trailing week.".to_string(),
+                series: line_series(),
+                area: false,
+                height: 280.0,
+            }
+        });
+        assert!(html.contains("role=\"img\""), "{html}");
+        assert!(html.contains("aria-label=\"Visits by day\""), "{html}");
+        assert!(html.contains("<title"), "{html}");
+        assert!(html.contains("<desc"), "{html}");
+        assert!(html.contains("nav-visually-hidden"), "{html}");
+        assert!(html.contains("<table"), "{html}");
+        assert!(html.contains("Signed retainers"), "{html}");
+        assert!(html.contains("Open matters"), "{html}");
+        assert!(html.contains("2026-07-09"), "{html}");
+        assert!(html.contains("<path"), "{html}");
+        assert!(html.contains("nav-chart__legend"), "{html}");
+        // Series colors are theme variables, never literals.
+        assert!(!html.contains("stroke=\"#"), "{html}");
+        assert!(!html.contains("NaN"), "{html}");
+    }
+
+    #[test]
+    fn line_chart_without_points_shows_the_empty_state() {
+        let html = render(rsx! {
+            LineChart {
+                title: "Visits by day".to_string(),
+                description: "Daily visits for the trailing week.".to_string(),
+                series: vec![Series::new("Empty", 0, vec![])],
+                area: false,
+                height: 280.0,
+            }
+        });
+        assert!(!html.contains("<svg"), "{html}");
+        assert!(html.contains("role=\"status\""), "{html}");
+        assert!(html.contains("No data for this period"), "{html}");
+    }
+
+    #[test]
+    fn line_chart_single_point_renders_a_dot_not_a_path() {
+        let html = render(rsx! {
+            LineChart {
+                title: "Visits by day".to_string(),
+                description: "Daily visits for the trailing week.".to_string(),
+                series: vec![Series::new(
+                    "Signed retainers",
+                    0,
+                    vec![SeriesPoint::new("2026-07-09", 4.0)],
+                )],
+                area: false,
+                height: 280.0,
+            }
+        });
+        assert!(html.contains("<circle"), "{html}");
+        assert!(!html.contains("<path"), "{html}");
+        assert!(!html.contains("NaN"), "{html}");
+    }
+
+    #[test]
+    fn line_chart_all_equal_values_render_finite_geometry() {
+        let html = render(rsx! {
+            LineChart {
+                title: "Flat line".to_string(),
+                description: "Same value every day.".to_string(),
+                series: vec![Series::new(
+                    "Flat",
+                    0,
+                    vec![
+                        SeriesPoint::new("2026-07-07", 3.0),
+                        SeriesPoint::new("2026-07-08", 3.0),
+                        SeriesPoint::new("2026-07-09", 3.0),
+                    ],
+                )],
+                area: false,
+                height: 280.0,
+            }
+        });
+        assert!(html.contains("<path"), "{html}");
+        assert!(!html.contains("NaN"), "{html}");
+        assert!(!html.contains("Infinity"), "{html}");
+    }
+
+    #[test]
+    fn line_chart_area_flag_fills_under_the_series() {
+        let html = render(rsx! {
+            LineChart {
+                title: "Visits by day".to_string(),
+                description: "Daily visits for the trailing week.".to_string(),
+                series: line_series(),
+                area: true,
+                height: 280.0,
+            }
+        });
+        assert!(html.contains("fill-opacity=\"0.15\""), "{html}");
+    }
+
+    #[test]
+    fn bar_chart_ssrs_bars_with_full_labels_in_the_table() {
+        let html = render(rsx! {
+            BarChart {
+                title: "Matters by practice".to_string(),
+                description: "Open matters grouped by practice area.".to_string(),
+                series: category_series(),
+                horizontal: false,
+                height: 280.0,
+            }
+        });
+        assert!(html.contains("role=\"img\""), "{html}");
+        assert!(html.contains("<rect"), "{html}");
+        assert!(html.contains("nav-chart__bar"), "{html}");
+        assert!(html.contains("<table"), "{html}");
+        assert!(html.contains("Estate planning"), "{html}");
+        assert!(html.contains("Matters by practice"), "{html}");
+    }
+
+    #[test]
+    fn bar_chart_truncates_long_axis_labels() {
+        let html = render(rsx! {
+            BarChart {
+                title: "Matters".to_string(),
+                description: "Open matters by practice.".to_string(),
+                series: Series::new(
+                    "Matters by practice",
+                    0,
+                    vec![SeriesPoint::new("Probate administration", 4.0)],
+                ),
+                horizontal: false,
+                height: 280.0,
+            }
+        });
+        // The axis shows the cut; the companion table carries the full label.
+        assert!(html.contains("…"), "{html}");
+        assert!(html.contains("Probate administration"), "{html}");
+    }
+
+    #[test]
+    fn bar_chart_horizontal_sizes_the_view_box_from_the_row_count() {
+        let html = render(rsx! {
+            BarChart {
+                title: "Matters by practice".to_string(),
+                description: "Open matters grouped by practice area.".to_string(),
+                series: category_series(),
+                horizontal: true,
+                height: 280.0,
+            }
+        });
+        // Three rows at 36 units plus the 16-unit margin.
+        assert!(html.contains("viewBox=\"0 0 600 124\""), "{html}");
+        assert!(html.contains("<rect"), "{html}");
+    }
+
+    #[test]
+    fn bar_chart_zero_values_render_zero_height_bars() {
+        let html = render(rsx! {
+            BarChart {
+                title: "Matters".to_string(),
+                description: "Open matters by practice.".to_string(),
+                series: Series::new(
+                    "Matters by practice",
+                    0,
+                    vec![
+                        SeriesPoint::new("Estate planning", 0.0),
+                        SeriesPoint::new("Tenant defense", 0.0),
+                    ],
+                ),
+                horizontal: false,
+                height: 280.0,
+            }
+        });
+        assert!(html.contains("<rect"), "{html}");
+        assert!(!html.contains("NaN"), "{html}");
+        assert!(!html.contains("Infinity"), "{html}");
+    }
+
+    #[test]
+    fn donut_chart_ssrs_slices_center_total_and_legend() {
+        let html = render(rsx! {
+            DonutChart {
+                title: "Matters by practice".to_string(),
+                description: "Share of open matters by practice area.".to_string(),
+                series: Series::new(
+                    "Matters by practice",
+                    0,
+                    vec![
+                        SeriesPoint::new("Estate planning", 3.0),
+                        SeriesPoint::new("Tenant defense", 1.0),
+                        SeriesPoint::new("Immigration", 2.0),
+                    ],
+                ),
+                size: 200.0,
+                thickness: 24.0,
+            }
+        });
+        assert!(html.contains("role=\"img\""), "{html}");
+        // One dashed circle per nonzero slice, over the track.
+        assert_eq!(html.matches("stroke-dasharray").count(), 3, "{html}");
+        assert!(html.contains("nav-chart__slice"), "{html}");
+        // The center shows the total.
+        assert!(html.contains("nav-chart__total"), "{html}");
+        assert!(html.contains("6</text>"), "{html}");
+        assert!(html.contains("nav-chart__legend"), "{html}");
+        assert!(!html.contains("NaN"), "{html}");
+    }
+
+    #[test]
+    fn donut_chart_zero_total_renders_the_track_honestly() {
+        let html = render(rsx! {
+            DonutChart {
+                title: "Matters by practice".to_string(),
+                description: "Share of open matters by practice area.".to_string(),
+                series: Series::new(
+                    "Matters by practice",
+                    0,
+                    vec![SeriesPoint::new("Estate planning", 0.0)],
+                ),
+                size: 200.0,
+                thickness: 24.0,
+            }
+        });
+        assert!(html.contains("nav-chart__total"), "{html}");
+        assert!(html.contains("0</text>"), "{html}");
+        assert_eq!(html.matches("stroke-dasharray").count(), 0, "{html}");
+        assert!(!html.contains("NaN"), "{html}");
+    }
+
+    #[test]
+    fn donut_chart_single_slice_spans_the_whole_ring() {
+        let html = render(rsx! {
+            DonutChart {
+                title: "Matters by practice".to_string(),
+                description: "Share of open matters by practice area.".to_string(),
+                series: Series::new(
+                    "Matters by practice",
+                    0,
+                    vec![SeriesPoint::new("Estate planning", 5.0)],
+                ),
+                size: 200.0,
+                thickness: 24.0,
+            }
+        });
+        assert!(html.contains("stroke-dasharray"), "{html}");
+        assert!(!html.contains("NaN"), "{html}");
+    }
+
+    #[test]
+    fn sparkline_ssrs_named_svg_with_companion_table() {
+        let html = render(rsx! {
+            Sparkline {
+                title: "Weekly visits".to_string(),
+                points: vec![
+                    SeriesPoint::new("2026-07-05", 1.0),
+                    SeriesPoint::new("2026-07-06", 3.0),
+                    SeriesPoint::new("2026-07-07", 2.0),
+                ],
+                tone: 0,
+                width: 96.0,
+                height: 28.0,
+            }
+        });
+        assert!(html.contains("role=\"img\""), "{html}");
+        assert!(html.contains("aria-label=\"Weekly visits\""), "{html}");
+        assert!(html.contains("<title"), "{html}");
+        assert!(html.contains("viewBox=\"0 0 96 28\""), "{html}");
+        assert!(html.contains("<path"), "{html}");
+        assert!(html.contains("<table"), "{html}");
+    }
+
+    #[test]
+    fn stat_card_renders_label_value_and_delta_tone() {
+        let html = render(rsx! {
+            StatCard {
+                label: "Weekly visits".to_string(),
+                value: "1,204".to_string(),
+                delta: Some("+12%".to_string()),
+                delta_tone: DeltaTone::Up,
+                sparkline: None,
+            }
+        });
+        assert!(html.contains("Weekly visits"), "{html}");
+        assert!(html.contains("1,204"), "{html}");
+        assert!(html.contains("+12%"), "{html}");
+        assert!(html.contains("nav-chart__delta--up"), "{html}");
+        // No sparkline, no SVG: a stat card is not a chart shell by itself.
+        assert!(!html.contains("<svg"), "{html}");
+    }
+
+    #[test]
+    fn stat_card_embeds_a_sparkline_when_given_points() {
+        let html = render(rsx! {
+            StatCard {
+                label: "Weekly visits".to_string(),
+                value: "1,204".to_string(),
+                delta: None,
+                delta_tone: DeltaTone::Flat,
+                sparkline: Some(vec![
+                    SeriesPoint::new("2026-07-05", 1.0),
+                    SeriesPoint::new("2026-07-06", 3.0),
+                ]),
+            }
+        });
+        assert!(html.contains("<svg"), "{html}");
+        assert!(html.contains("role=\"img\""), "{html}");
+        assert!(html.contains("Weekly visits trend"), "{html}");
+    }
+}
