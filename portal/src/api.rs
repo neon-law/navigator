@@ -2083,10 +2083,13 @@ async fn notation_inventory_door(
         return Err(ApiError::NotFound);
     }
 
-    let rows =
-        webapp::lawyer_project_detail::project_notation_board(&state.surreal, &state.storage, id)
-            .await
-            .map_err(ApiError::Db)?;
+    let rows = webapp::lawyer_project_notations::project_notation_board(
+        &state.surreal,
+        &state.storage,
+        id,
+    )
+    .await
+    .map_err(ApiError::Db)?;
     Ok((StatusCode::OK, Json(rows)).into_response())
 }
 
