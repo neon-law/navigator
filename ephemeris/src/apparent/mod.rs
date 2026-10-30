@@ -7,12 +7,16 @@
 //!    instant whose light reaches the geocenter at the requested time.
 //! 2. **Annual aberration** ([`aberration`]) — the geocenter's barycentric
 //!    velocity tilts the received direction by up to 20.5″.
+//! 3. **Bias-precession-nutation** ([`frame`]) — IAU 2006 precession with
+//!    frame bias and IAU 2000B nutation rotate the direction onto the true
+//!    equator and equinox of date.
 //!
-//! The frame layer (IAU 2006 precession and IAU 2000B nutation) completes the
-//! chain in the next commit; until then the seam reports the aberrated
-//! direction in ICRF/J2000 components.
+//! [`apparent_geocentric`] returns the resulting right ascension and
+//! declination of date, plus the ecliptic longitude and latitude of date
+//! (rotated by the true obliquity) used for zodiac positions.
 
 pub(crate) mod aberration;
+pub(crate) mod frame;
 pub(crate) mod light_time;
 
 use crate::error::EphemerisError;
@@ -23,15 +27,12 @@ use crate::time::TdbSeconds;
 /// evaluated at its light-time-corrected emission instant, in ICRF/J2000
 /// components.
 ///
-/// The precession-nutation frame layer rotates this direction onto the true
-/// equator and equinox of date in the next commit.
-///
 /// # Errors
 ///
 /// Returns SPK lookup errors when a body is unknown or the requested instant
 /// (including the light-time lookback) falls outside kernel coverage, and the
 /// light-time convergence error from [`light_time`].
-pub fn apparent_direction_icrf(
+pub(crate) fn direction_icrf(
     ephemeris: &Ephemeris,
     body: Body,
     t: TdbSeconds,
@@ -42,6 +43,86 @@ pub fn apparent_direction_icrf(
     let earth_velocity_km_s = aberration::earth_velocity_km_s(ephemeris, t)?;
     let unit = unit_vector(solution.geometric_km);
     Ok(aberration::aberrate(unit, &earth_velocity_km_s))
+}
+
+/// The apparent geocentric position of `body` at `t`: where it appears in the
+/// sky from the Earth's center.
+///
+/// Right ascension and declination refer to the true equator and equinox of
+/// date (IAU 2006/2000B); ecliptic longitude and latitude refer to the
+/// ecliptic of date, rotated from the equatorial components by the true
+/// obliquity. All angles are in degrees, with right ascension and longitude
+/// wrapped into \[0, 360).
+///
+/// # Errors
+///
+/// Returns the same errors as [`direction_icrf`] — SPK lookup failures and
+/// light-time non-convergence.
+pub fn apparent_geocentric(
+    ephemeris: &Ephemeris,
+    body: Body,
+    t: TdbSeconds,
+) -> Result<ApparentPosition, EphemerisError> {
+    let icrf = direction_icrf(ephemeris, body, t)?;
+    let rotation = frame::bias_precession_nutation(t);
+    let obliquity = frame::true_obliquity(t);
+    Ok(ApparentPosition::from_direction(&icrf, &rotation, obliquity))
+}
+
+/// Apparent geocentric position angles, all in degrees.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ApparentPosition {
+    /// Right ascension on the true equator of date, \[0, 360).
+    pub ra_deg: f64,
+    /// Declination on the true equator of date, \[−90, 90].
+    pub dec_deg: f64,
+    /// Ecliptic longitude of date, \[0, 360).
+    pub lon_deg: f64,
+    /// Ecliptic latitude of date, \[−90, 90].
+    pub lat_deg: f64,
+}
+
+impl ApparentPosition {
+    /// Decomposes a unit direction vector, expressed in the true equator and
+    /// equinox of date, into the equatorial and ecliptic angles of date.
+    /// `rotation` maps ICRF/J2000 components onto components of date, and
+    /// `obliquity` is the true obliquity used for the ecliptic rotation.
+    pub(crate) fn from_direction(
+        icrf: &[f64; 3],
+        rotation: &[[f64; 3]; 3],
+        obliquity: f64,
+    ) -> ApparentPosition {
+        let unit = unit_vector(*icrf);
+        let of_date = [
+            rotation[0][0] * unit[0] + rotation[0][1] * unit[1] + rotation[0][2] * unit[2],
+            rotation[1][0] * unit[0] + rotation[1][1] * unit[1] + rotation[1][2] * unit[2],
+            rotation[2][0] * unit[0] + rotation[2][1] * unit[1] + rotation[2][2] * unit[2],
+        ];
+        // Rotating the coordinate frame about the +x axis by the obliquity
+        // carries equatorial components onto the ecliptic of date; the
+        // solstice point at right ascension 90° picks up latitude −ε.
+        let (sin_obliquity, cos_obliquity) = obliquity.sin_cos();
+        let ecliptic_y = of_date[1] * cos_obliquity + of_date[2] * sin_obliquity;
+        let ecliptic_z = -of_date[1] * sin_obliquity + of_date[2] * cos_obliquity;
+        ApparentPosition {
+            ra_deg: wrap_degrees(of_date[1].atan2(of_date[0]).to_degrees()),
+            dec_deg: clamp_asin(of_date[2]).to_degrees(),
+            lon_deg: wrap_degrees(ecliptic_y.atan2(of_date[0]).to_degrees()),
+            lat_deg: clamp_asin(ecliptic_z).to_degrees(),
+        }
+    }
+}
+
+/// Wraps an angle in degrees into \[0, 360).
+fn wrap_degrees(angle: f64) -> f64 {
+    angle.rem_euclid(360.0)
+}
+
+/// The arcsine of a component, clamped into \[−1, 1]. A unit vector's
+/// components can exceed 1 by a few ulps after rotation arithmetic; clamping
+/// keeps the result finite instead of panicking or returning NaN.
+fn clamp_asin(component: f64) -> f64 {
+    component.clamp(-1.0, 1.0).asin()
 }
 
 /// Scales `v` to unit length. Division by zero is impossible for kernel
@@ -77,7 +158,7 @@ mod tests {
         let ephemeris = Ephemeris::new(vec![earth, moon]);
 
         let t = DAY / 2.0;
-        let direction = apparent_direction_icrf(&ephemeris, Body::Moon, TdbSeconds(t))
+        let direction = direction_icrf(&ephemeris, Body::Moon, TdbSeconds(t))
             .expect("synthetic bodies resolve");
         // The direction is exactly +x: the body is on the x axis, the observer
         // is fixed, and the aberration therefore contributes nothing.
@@ -95,5 +176,89 @@ mod tests {
             (length - 1.0).abs() < 1e-15,
             "unit vector length {length} must be 1"
         );
+    }
+
+    /// The J2000 anchor column: the ICRF +x direction carried onto the true
+    /// equator and equinox of date by the ERFA bias-precession-nutation
+    /// matrix (first column, from /tmp/erfa-anchor/anchor.c), and the ERFA
+    /// true obliquity at J2000 (mean obliquity minus Δε).
+    const J2000_COLUMN: [f64; 3] = [
+        9.999_999_977_212_139_51e-01,
+        6.189_911_088_842_041_94e-05,
+        -2.694_572_645_905_283_26e-05,
+    ];
+    /// ε_A(J2000) − Δε(J2000), from the ERFA anchor digits.
+    const J2000_TRUE_OBLIQUITY: f64 =
+        4.090_926_006_005_828_90e-01 + 2.797_092_331_098_565_26e-05;
+
+    /// The four angles of date expected for the ICRF +x direction at J2000,
+    /// computed from the transcribed anchor column rather than from the crate
+    /// under test.
+    fn j2000_plus_x_angles() -> [f64; 4] {
+        let [x, y, z] = J2000_COLUMN;
+        let (sin_o, cos_o) = J2000_TRUE_OBLIQUITY.sin_cos();
+        let ecliptic_y = y * cos_o + z * sin_o;
+        let ecliptic_z = -y * sin_o + z * cos_o;
+        [
+            y.atan2(x).to_degrees().rem_euclid(360.0),
+            z.asin().to_degrees(),
+            ecliptic_y.atan2(x).to_degrees().rem_euclid(360.0),
+            ecliptic_z.asin().to_degrees(),
+        ]
+    }
+
+    #[test]
+    fn from_direction_matches_the_j2000_anchor() {
+        let rotation = [
+            [9.999_999_977_212_139_51e-01, -6.189_835_627_658_323_68e-05, 2.694_745_986_990_679_44e-05],
+            [6.189_911_088_842_041_94e-05, 9.999_999_976_921_620_79e-01, -2.800_314_528_295_100_30e-05],
+            [-2.694_572_645_905_283_26e-05, 2.800_481_324_283_232_71e-05, 9.999_999_992_448_291_85e-01],
+        ];
+        let position =
+            ApparentPosition::from_direction(&[1.0, 0.0, 0.0], &rotation, J2000_TRUE_OBLIQUITY);
+        let expected = j2000_plus_x_angles();
+        let actual = [
+            position.ra_deg,
+            position.dec_deg,
+            position.lon_deg,
+            position.lat_deg,
+        ];
+        for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (a - e).abs() < 1e-7,
+                "angle {i} of date: {a} vs expected {e} degrees"
+            );
+        }
+    }
+
+    /// Through the full chain: the synthetic ephemeris holds Earth fixed at
+    /// the SSB and the Moon exactly on +x, so the ICRF apparent direction is
+    /// +x and the angles of date must equal the anchor decomposition.
+    #[test]
+    fn apparent_geocentric_matches_the_j2000_anchor() {
+        // Coverage straddles t = 0 so the light-time lookback (3.3 s) stays
+        // inside the kernel; the body is static at 1e6 km on +x.
+        let zero = [0.0, 0.0];
+        let x = [1_000_000.0, 0.0];
+        let segment = [(-DAY, 2.0 * DAY, 0.0, DAY)];
+        let earth = synthetic_type2(399, 0, segment[0].0, segment[0].1, &[(segment[0].2, segment[0].3, &zero, &zero, &zero)]);
+        let moon = synthetic_type2(301, 0, segment[0].0, segment[0].1, &[(segment[0].2, segment[0].3, &x, &zero, &zero)]);
+        let ephemeris = Ephemeris::new(vec![earth, moon]);
+
+        let position = apparent_geocentric(&ephemeris, Body::Moon, TdbSeconds(0.0))
+            .expect("synthetic bodies resolve");
+        let expected = j2000_plus_x_angles();
+        let actual = [
+            position.ra_deg,
+            position.dec_deg,
+            position.lon_deg,
+            position.lat_deg,
+        ];
+        for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (a - e).abs() < 1e-7,
+                "angle {i} of date: {a} vs expected {e} degrees"
+            );
+        }
     }
 }
