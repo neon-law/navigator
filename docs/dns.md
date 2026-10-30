@@ -74,8 +74,8 @@ The `iepdefenders.com` zone follows the same shape. Its `www`/`staging` DNS reco
 (`iepdefenders.com` → `https://www.iepdefenders.com`) are operator steps per the cutover recipe above, applied outside
 the deploy tree; the `ManagedCertificate`s for `www.iepdefenders.com` and `staging.iepdefenders.com` render from the
 registry's release inventory (`views::brand::release_brand_hosts()`), so they ship with the release and sit in
-`Provisioning` until DNS resolves and the HTTP-01 challenge validates. `navigator ops brand-readiness` reports each
-host `Ready` once issuance completes.
+`Provisioning` until DNS resolves and the HTTP-01 challenge validates. `navigator ops brand-readiness` reports each host
+`Ready` once issuance completes.
 
 `DNS_ACCT` is the DNSimple account that holds the zone. Read it from `dnsimple accounts list` — a user token can span
 several accounts, and a command run against the wrong one fails with `Zone not found` rather than a permission error,
