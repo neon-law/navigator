@@ -8,6 +8,12 @@ description: >
 
 # Push changes
 
+## Find the term first
+
+Before naming a table, field, state, or UI concept, follow the **Find the term first** section in `AGENTS.md`.
+
+## The rule
+
 "Push changes" means finish the pull request through merge. The job ends when the pull request is merged and local
 `main` is current.
 
