@@ -169,6 +169,7 @@ fn identity_seeds_hold_only_the_inventoried_public_firm_facts() {
         [
             ("California", "337252"),
             ("Nevada", "13400"),
+            ("New York", "6380059"),
             ("Washington", "63446")
         ]
         .map(|(j, n)| (j.to_string(), n.to_string())),
