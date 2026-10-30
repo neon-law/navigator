@@ -2119,6 +2119,47 @@ fn migrate_documents_moves_flat_pointers_offline_and_is_idempotent() {
     assert!(second.contains("0 file(s) moved"), "{second}");
 }
 
+/// Seeds a five-folder checkout for the offline migration: a bare
+/// `Discovery` pointer with its bytes, a memo under `Work Product`, and an
+/// orphan byte file no pointer names. Returns the served pointer.
+fn seed_five_folder_checkout(root: &Path) -> serde_json::Value {
+    let mut served = committed_pointer(Uuid::now_v7(), FILED, 1, None, "internal");
+    served["kind"] = "unclassified".into();
+    served["folder"] = "Discovery".into();
+    let mut memo = committed_pointer(Uuid::now_v7(), NEWER, 1, None, "internal");
+    memo["kind"] = "memo".into();
+    write(
+        root,
+        "blobs/set-one/responses.pdf.yaml",
+        serde_yaml::to_string(&served).unwrap(),
+    );
+    write(root, "documents/Discovery/set-one/responses.pdf", FILED);
+    write(
+        root,
+        "blobs/memo.pdf.yaml",
+        serde_yaml::to_string(&memo).unwrap(),
+    );
+    write(root, "documents/Work Product/memo.pdf", NEWER);
+    // Bytes no pointer names: the migration lists them, never guesses.
+    write(root, "documents/Discovery/orphan.pdf", FILED);
+    served
+}
+
+fn migrate_folders(root: &Path, extra: &[&str]) -> String {
+    String::from_utf8(
+        navigator()
+            .current_dir(root)
+            .args(["project", "repository", "migrate-folders"])
+            .args(extra)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap()
+}
+
 /// LAW-215: the offline one-shot refiles a five-folder checkout into the
 /// extended tree — bare `Discovery` pointers onto `Discovery (Served)` with
 /// their bytes, kind-default moves onto the new `Work Product` subfolders —
@@ -2128,46 +2169,9 @@ fn migrate_documents_moves_flat_pointers_offline_and_is_idempotent() {
 fn migrate_folders_reslugs_the_five_folder_tree_offline_and_is_idempotent() {
     let root = TempDir::new().unwrap();
     manifest(root.path(), "https://navigator.example.test");
-    let mut served = committed_pointer(Uuid::now_v7(), FILED, 1, None, "internal");
-    served["kind"] = "unclassified".into();
-    served["folder"] = "Discovery".into();
-    let mut memo = committed_pointer(Uuid::now_v7(), NEWER, 1, None, "internal");
-    memo["kind"] = "memo".into();
-    write(
-        root.path(),
-        "blobs/set-one/responses.pdf.yaml",
-        serde_yaml::to_string(&served).unwrap(),
-    );
-    write(
-        root.path(),
-        "documents/Discovery/set-one/responses.pdf",
-        FILED,
-    );
-    write(
-        root.path(),
-        "blobs/memo.pdf.yaml",
-        serde_yaml::to_string(&memo).unwrap(),
-    );
-    write(root.path(), "documents/Work Product/memo.pdf", NEWER);
-    // Bytes no pointer names: the migration lists them, never guesses.
-    write(root.path(), "documents/Discovery/orphan.pdf", FILED);
+    let served = seed_five_folder_checkout(root.path());
 
-    let migrate = |extra: &[&str]| {
-        String::from_utf8(
-            navigator()
-                .current_dir(root.path())
-                .args(["project", "repository", "migrate-folders"])
-                .args(extra)
-                .assert()
-                .success()
-                .get_output()
-                .stdout
-                .clone(),
-        )
-        .unwrap()
-    };
-
-    let preview = migrate(&["--dry-run"]);
+    let preview = migrate_folders(root.path(), &["--dry-run"]);
     assert!(
         preview.contains("would refile blobs/set-one/responses.pdf.yaml"),
         "{preview}"
@@ -2192,7 +2196,7 @@ fn migrate_folders_reslugs_the_five_folder_tree_offline_and_is_idempotent() {
         "a dry run rewrites nothing"
     );
 
-    let first = migrate(&[]);
+    let first = migrate_folders(root.path(), &[]);
     assert!(
         first.contains("1 pointer(s) refiled, 2 file(s) moved"),
         "{first}"
@@ -2240,7 +2244,7 @@ fn migrate_folders_reslugs_the_five_folder_tree_offline_and_is_idempotent() {
         "unplaced bytes stay where the lawyer can see them"
     );
 
-    let second = migrate(&[]);
+    let second = migrate_folders(root.path(), &[]);
     assert!(
         second.contains("0 pointer(s) refiled, 0 file(s) moved"),
         "{second}"
