@@ -16,7 +16,7 @@ The table is `sandbox_usage`.
 The month's credit is delivered by the **sandbox credit reset** — the `SandboxCreditReset` Restate workflow in
 `billing-workflows`, fired monthly by the `sandbox-credit-reset-trigger` `CronJob`. It grants every active subscriber
 the fresh period's credit and converts the closed month's overage rows into à la carte invoice lines through the
-[`billing`](../../billing/README.md) contract, keyed on a deterministic per-subscriber-month invoice id so a retry
-never bills twice.
+[`billing`](../../billing/README.md) contract, keyed on a deterministic per-subscriber-month invoice id so a retry never
+bills twice.
 
 Schema: [`sandbox_usage`](../../store/src/schema/navigator.surql#L2686).
