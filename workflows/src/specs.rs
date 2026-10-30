@@ -102,6 +102,7 @@ pub const BUNDLED_SPEC_YAML: &[(&str, &str)] = &[
         "privacy_policy",
         include_str!("../specs/privacy_policy.yaml"),
     ),
+    ("basic_will", include_str!("../specs/basic_will.yaml")),
     ("onboarding__letter", RETAINER_INTAKE_SPEC_YAML),
     (
         "nv__llc_formation",
