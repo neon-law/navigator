@@ -1,6 +1,6 @@
 //! Which document an upload files a revision of (LAW-102).
 //!
-//! The Blob mirroring the file (`documents/<slug>` has `blobs/<slug>.yaml`)
+//! The Pointer mirroring the file (`documents/<slug>` has `blobs/<slug>.yaml`)
 //! *is* the document's name: it carries no slug field, so its path below
 //! `blobs/` is the slug. An upload that ignores it and derives a slug from
 //! `--file` alone can start a second chain beside the first — one no
@@ -52,13 +52,9 @@ pub(crate) fn resolve(
 
     // A file outside `documents/` has no document pointer, so whatever sits
     // beside it is none of this command's business.
-    let sibling = if is_below_documents(&root, &file) {
-        match sibling_pointer(&root, &file)? {
-            Some(pointer) => pointer_slug(&root, &pointer)?.map(|slug| (pointer, slug)),
-            None => None,
-        }
-    } else {
-        None
+    let sibling = match sibling_pointer(&root, &file)? {
+        Some(pointer) => pointer_slug(&root, &pointer)?.map(|slug| (pointer, slug)),
+        None => None,
     };
     let Some((sibling, slug)) = sibling else {
         let folder = crate::remote::slug_from_documents_folder(&root, &file);
@@ -151,19 +147,9 @@ fn locate(cwd: &Path, file: &Path) -> PathBuf {
     std::fs::canonicalize(joined).unwrap_or(lexical)
 }
 
-/// Whether `file` sits below the checkout's `documents/`.
-fn is_below_documents(root: &Path, file: &Path) -> bool {
-    let (Ok(documents), Ok(file)) = (
-        std::fs::canonicalize(root.join(DOCUMENT_DIRECTORY)),
-        std::fs::canonicalize(file),
-    ) else {
-        return false;
-    };
-    file.starts_with(documents)
-}
-
-/// The Blob committed for `file` below `documents/`, in either written
-/// spelling.
+/// The Pointer committed for `file` below `documents/`, in either written
+/// spelling. Canonical paths keep the lookup inside `documents/`, including
+/// when `file` is a symlink.
 fn sibling_pointer(root: &Path, file: &Path) -> Result<Option<PathBuf>> {
     let (Ok(documents), Ok(canonical)) = (
         std::fs::canonicalize(root.join(DOCUMENT_DIRECTORY)),
@@ -407,6 +393,32 @@ mod tests {
         )
         .unwrap();
         assert_eq!(target.slug, None);
+    }
+
+    #[test]
+    fn a_symlink_out_of_documents_does_not_adopt_a_pointer() {
+        let dir = checkout();
+        let outside = dir.path().join("scratch.md");
+        std::fs::write(&outside, "x").unwrap();
+        let file = dir.path().join("documents/drafts/link.md");
+        std::os::unix::fs::symlink(&outside, &file).unwrap();
+        // A malformed pointer would refuse the upload if it were inspected.
+        std::fs::write(dir.path().join("blobs/drafts/link.md.yaml"), "kind: [x\n").unwrap();
+
+        let target = resolve(dir.path(), "acme", &file, Some("scratch.md")).unwrap();
+        assert_eq!(target.slug.as_deref(), Some("scratch.md"));
+        assert_eq!(target.notice, None);
+    }
+
+    #[test]
+    fn a_symlink_into_documents_adopts_the_target_pointer() {
+        let dir = checkout();
+        let file = dir.path().join("link.md");
+        std::os::unix::fs::symlink(dir.path().join("documents/drafts/n.md"), &file).unwrap();
+
+        let target = resolve(dir.path(), "acme", &file, None).unwrap();
+        assert_eq!(target.slug.as_deref(), Some("drafts/n.md"));
+        assert!(target.notice.unwrap().contains("`drafts/n.md`"));
     }
 
     #[test]
