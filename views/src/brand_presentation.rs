@@ -791,6 +791,9 @@ impl BrandKey {
             Self::DeathAndDivorce => {
                 palette_by_id("death-and-divorce").expect("death-and-divorce is catalogued")
             }
+            // IEP borrows the OATH charcoal as a placeholder palette; its
+            // own identity waits for its launch decisions.
+            Self::Iep => palette_by_id("oath").expect("oath is catalogued"),
         }
     }
 }

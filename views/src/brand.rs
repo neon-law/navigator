@@ -1210,6 +1210,7 @@ impl BrandKey {
             Self::Groundwork => "real estate transactions and property disputes",
             Self::GuiebShook => "attorneys at law",
             Self::CyberInjuryLaw => "injury claims and cybercrime",
+            Self::Iep => "special-education rights advocacy",
         }
     }
 
@@ -1354,6 +1355,10 @@ impl BrandKey {
             | Self::DeathAndDivorce => {
                 matches!(path, "/" | "/services" | "/contact" | "/testimonials")
             }
+            // Held out: IEP publishes no firm paths anywhere. The launch
+            // gate refuses its hosts outright, so this arm is the belt to
+            // the gate's suspenders.
+            Self::Iep => false,
         }
     }
 
@@ -1500,6 +1505,7 @@ impl BrandKey {
             Self::Groundwork => &GROUNDWORK_BRANDING,
             Self::GuiebShook => &GUIEB_SHOOK_BRANDING,
             Self::CyberInjuryLaw => &CYBER_INJURY_BRANDING,
+            Self::Iep => &IEP_BRANDING,
         }
     }
 
