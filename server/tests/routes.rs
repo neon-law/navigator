@@ -10561,9 +10561,9 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
     ),
     (
         views::brand::BrandKey::GuiebShook,
-        LiveHomeContract::Holding {
+        LiveHomeContract::Authored {
             title: "<title>Guieb & Shook | Home</title>",
-            marker: "Attorneys at Law.",
+            copy: "written engagement before work begins",
         },
     ),
 ];
@@ -11026,27 +11026,6 @@ async fn assert_unregistered_host_redirects(
 /// above (an authenticated request, since the anonymous redirect renders no
 /// chrome to check) — this matrix asserts the status/redirect shape that
 /// holds on every host regardless of session.
-/// The holding host's chrome: no header and no public shell — but the one
-/// shared footer, with the firm's office
-/// and association affiliation, is under the notice.
-fn assert_holding_host_chrome(body: &str) {
-    let standing_line = views::brand::JTA_STANDING.to_string();
-    for (marker, present) in [
-        (r#"class="site-header""#, false),
-        ("nav-theme public-shell", false),
-        (r#"class="site-footer""#, true),
-        ("Ste 405-9002", true),
-        (r#"aria-label="Our family""#, false),
-        (standing_line.as_str(), true),
-    ] {
-        assert_eq!(
-            body.contains(marker),
-            present,
-            "the holding host's chrome marker {marker:?}: {body}"
-        );
-    }
-}
-
 #[tokio::test]
 async fn host_brand_path_matrix_resolves_every_combination() {
     let default_host = "www.neonlaw.com";
@@ -11059,8 +11038,8 @@ async fn host_brand_path_matrix_resolves_every_combination() {
 
     // Marketing path: 200 on every registered host with its own
     // `og:site_name`; the unknown host's redirect target renders the
-    // default brand's chrome, not merely a 301. Guieb & Shook keeps its
-    // holding notice on `/` — `/contact` is unpublished
+    // default brand's chrome, not merely a 301. Guieb & Shook renders
+    // its authored homepage on `/`; `/contact` is unpublished
     // and 404s.
     for (host, path, brand) in [
         (default_host, "/contact", "Neon Law"),
@@ -11078,14 +11057,6 @@ async fn host_brand_path_matrix_resolves_every_combination() {
                     "{host}: page must not declare {other_brand:?} as its og:site_name: {body}"
                 );
             }
-        }
-        if host == holding_host {
-            assert!(
-                body.contains(r#"class="holding-page""#)
-                    && body.contains(r#"class="holding-page__heading""#),
-                "the holding host renders its notice: {body}"
-            );
-            assert_holding_host_chrome(&body);
         }
     }
     let followed =

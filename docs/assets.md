@@ -55,6 +55,16 @@ and EXIF metadata removed. `views::assets::ARCHITECTURE_PHOTOS` includes them in
 protection. The brand home catalogs select contextual images and carry their descriptive alt text. The photographs
 illustrate public architecture and do not imply that a pictured institution provides or endorses the services.
 
+## Guieb & Shook homepage photograph
+
+One Unsplash photograph illustrates the firm's home page under `img/guieb-shook/`.
+Source: [New York courthouse](https://unsplash.com/photos/photo-1559075403-a91eebbc7d03)
+(Unsplash License). Key: `img/guieb-shook/courthouse-columns.jpg`. Alt text: A New York
+courthouse of stone and columns, photographed in soft light.
+`views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY` includes it in publication checks and
+orphan protection. The photograph illustrates public architecture and does not imply
+that a pictured institution provides or endorses the services.
+
 ## Brand uploads
 
 Brand logo and font uploads share one UUID-scoped prefix in the public bucket: `brand-<Brand UUID>/logo.png` or

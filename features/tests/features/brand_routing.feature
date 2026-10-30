@@ -46,6 +46,7 @@ Feature: Public routing on the firm's own host
       | staging.misericordialaw.com     | Misericordia Injury Law  | Misericordia Injury Law \| Home  | You were hurt. We are here to listen.  |
       | staging.abhayaimmigration.com   | Abhaya Immigration       | Abhaya Immigration \| Home       | Your next chapter, without fear.       |
       | staging.deleteyourdebt.com      | DeleteYourDebt.com       | DeleteYourDebt.com \| Home        | A next step beyond debt.                |
+      | staging.guiebandshook.com       | Guieb & Shook            | Guieb & Shook \| Home                       | written engagement before work begins   |
 
   Scenario Outline: A live holding host serves its explicit holding page
     When a visitor opens / on host "<host>"
@@ -57,7 +58,6 @@ Feature: Public routing on the firm's own host
     Examples:
       | host                       | brand           | title                    | marker                                  |
       | staging.summonsdefense.nyc | Summons Defense | Summons Defense \| Home  | A city summons. A clear next step.      |
-      | staging.guiebandshook.com  | Guieb & Shook   | Guieb & Shook PC \| Home | Attorneys at Law.                       |
 
   Scenario Outline: The firm's published anonymous surface serves at the root
     # Each is anonymous: a stranger deciding whether to hire a lawyer must not

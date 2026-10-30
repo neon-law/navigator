@@ -274,7 +274,8 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
         | BrandKey::Aegis
         | BrandKey::Groundwork
         | BrandKey::DeathAndDivorce
-        | BrandKey::CyberInjuryLaw) => practice_brand_llms_txt(key),
+        | BrandKey::CyberInjuryLaw
+        | BrandKey::GuiebShook) => practice_brand_llms_txt(key),
         BrandKey::DeleteYourData => {
             let branding = &views::brand::DELETE_YOUR_DATA_BRANDING;
             let mark = branding.firm.site_name;
@@ -299,7 +300,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
                 sections: Vec::new(),
             }
         }
-        BrandKey::LawyerShook | BrandKey::GuiebShook => {
+        BrandKey::LawyerShook => {
             // A bare holding page: the same statement
             // `resolve_firm_home_content` puts on the screen is the whole of
             // what a crawler reads here too, so this reuses it rather than

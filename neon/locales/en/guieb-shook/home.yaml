@@ -1,7 +1,43 @@
 head_title: "{site_name} | Home"
-meta_description: Attorneys at Law. Guieb & Shook PC is an American law firm.
+meta_description: >-
+  Guieb & Shook PC is an American law firm. Plain-spoken counsel for
+  disputes, business decisions, and defined legal tasks. Reach the firm
+  about your next step.
+og_description: >-
+  Guieb & Shook PC is an American law firm. Plain-spoken counsel for
+  disputes, business decisions, and defined legal tasks.
 heading: Guieb & Shook PC
-lead: ""
-contact_label: ""
-practices_heading: ""
-practices: []
+lead: >-
+  Guieb & Shook PC is an American law firm. We help people and businesses
+  face a dispute, plan a decision, or complete a defined legal task, and
+  we confirm the lawyers, scope, and fees in a written engagement before
+  work begins.
+contact_label: Talk with the firm
+photo:
+  src: img/guieb-shook/courthouse-columns.jpg
+  alt: >-
+    A New York courthouse of stone and columns, photographed in soft light.
+  caption: Guieb & Shook PC, Attorneys at Law.
+practices_heading: What we can help with
+practices:
+  - mark: gavel
+    heading: Dispute assessment
+    body: >-
+      Something went wrong, or someone says it did. We look at your
+      position, explain your options in plain language, and tell you what
+      we would do next.
+    href: /services
+  - mark: handshake
+    heading: Business counsel
+    body: >-
+      Starting, running, or winding down a business raises legal
+      questions. We advise owners through formation, contracts, and the
+      decisions that follow.
+    href: /services
+  - mark: scales
+    heading: Defined legal task
+    body: >-
+      Some work is one thing: a form to file, a contract to review, a
+      letter to send. We price the task before we start, so you know the
+      cost in advance.
+    href: /services
