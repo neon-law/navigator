@@ -14,10 +14,16 @@
 //! [`apparent_geocentric`] returns the resulting right ascension and
 //! declination of date, plus the ecliptic longitude and latitude of date
 //! (rotated by the true obliquity) used for zodiac positions.
+//!
+//! The mean lunar node is a point of lunar orbital geometry rather than a
+//! physical body, so it bypasses that chain: [`node`] derives its longitude
+//! from Moshier's mean elements plus a DE431-fit correction and reports it in
+//! the Swiss Ephemeris `SE_MEAN_NODE` convention (see [`mean_node`]).
 
 pub(crate) mod aberration;
 pub(crate) mod frame;
 pub(crate) mod light_time;
+pub(crate) mod node;
 
 use crate::error::EphemerisError;
 use crate::spk::{Body, Ephemeris};
@@ -38,8 +44,7 @@ pub(crate) fn direction_icrf(
     t: TdbSeconds,
 ) -> Result<[f64; 3], EphemerisError> {
     let earth_bary_km = ephemeris.barycentric_position(Body::Earth, t)?;
-    let solution =
-        light_time::light_time_corrected(ephemeris, body, t, &earth_bary_km)?;
+    let solution = light_time::light_time_corrected(ephemeris, body, t, &earth_bary_km)?;
     let earth_velocity_km_s = aberration::earth_velocity_km_s(ephemeris, t)?;
     let unit = unit_vector(solution.geometric_km);
     Ok(aberration::aberrate(unit, &earth_velocity_km_s))
@@ -66,7 +71,22 @@ pub fn apparent_geocentric(
     let icrf = direction_icrf(ephemeris, body, t)?;
     let rotation = frame::bias_precession_nutation(t);
     let obliquity = frame::true_obliquity(t);
-    Ok(ApparentPosition::from_direction(&icrf, &rotation, obliquity))
+    Ok(ApparentPosition::from_direction(
+        &icrf, &rotation, obliquity,
+    ))
+}
+
+/// The apparent mean lunar node at `t`, in the Swiss Ephemeris
+/// `SE_MEAN_NODE` convention: the Moon's mean ascending node, referred to the
+/// true equinox of date, with latitude exactly zero and RA/Dec from the
+/// true-of-date ecliptic longitude. See [`node`] for the full convention and
+/// the Swiss Ephemeris equivalence proof.
+///
+/// Unlike [`apparent_geocentric`], no ephemeris kernels are involved: the
+/// node follows from lunar orbital geometry alone.
+#[must_use]
+pub fn mean_node(t: TdbSeconds) -> ApparentPosition {
+    node::mean_node(t)
 }
 
 /// Apparent geocentric position angles, all in degrees.
@@ -133,6 +153,11 @@ fn unit_vector(v: [f64; 3]) -> [f64; 3] {
 }
 
 #[cfg(test)]
+// Anchor digits are byte-exact liberfa %.17e printouts; regrouping or
+// shortening them would obscure provenance.
+#[allow(clippy::unreadable_literal)]
+#[allow(clippy::inconsistent_digit_grouping)]
+#[allow(clippy::excessive_precision)]
 mod tests {
     use super::*;
     use crate::spk::test_support::synthetic_type2;
@@ -163,7 +188,9 @@ mod tests {
         // The direction is exactly +x: the body is on the x axis, the observer
         // is fixed, and the aberration therefore contributes nothing.
         assert!(
-            direction[0] > 0.999_999_999 && direction[1].abs() < 1e-15 && direction[2].abs() < 1e-15,
+            direction[0] > 0.999_999_999
+                && direction[1].abs() < 1e-15
+                && direction[2].abs() < 1e-15,
             "expected the unit +x direction, got {direction:?}"
         );
     }
@@ -180,17 +207,18 @@ mod tests {
 
     /// The J2000 anchor column: the ICRF +x direction carried onto the true
     /// equator and equinox of date by the ERFA bias-precession-nutation
-    /// matrix (first column, from /tmp/erfa-anchor/anchor.c), and the ERFA
-    /// true obliquity at J2000 (mean obliquity minus Δε).
+    /// matrix (first column, from liberfa's `eraFw2m`), and the ERFA true
+    /// obliquity at J2000 (mean obliquity plus the nutation in obliquity;
+    /// the nutation term is negative here).
     const J2000_COLUMN: [f64; 3] = [
         9.999_999_977_212_139_51e-01,
-        6.189_911_088_842_041_94e-05,
+        -6.189_911_088_842_041_94e-05,
         -2.694_572_645_905_283_26e-05,
     ];
-    /// ε_A(J2000) + Δε(J2000), from the ERFA anchor digits; Δε is true minus
-    /// mean and negative here (ERFA's `deps`).
-    const J2000_TRUE_OBLIQUITY: f64 =
-        4.090_926_006_005_828_90e-01 - 2.797_092_331_098_565_26e-05;
+    /// The true obliquity at J2000, from the ERFA anchor digits: mean
+    /// obliquity plus the nutation in obliquity, which is negative here
+    /// (ERFA's `deps`).
+    const J2000_TRUE_OBLIQUITY: f64 = 4.090_926_006_005_828_90e-01 - 2.797_092_331_098_565_26e-05;
 
     /// The four angles of date expected for the ICRF +x direction at J2000,
     /// computed from the transcribed anchor column rather than from the crate
@@ -211,9 +239,21 @@ mod tests {
     #[test]
     fn from_direction_matches_the_j2000_anchor() {
         let rotation = [
-            [9.999_999_977_212_139_51e-01, -6.189_835_627_658_323_68e-05, 2.694_745_986_990_679_44e-05],
-            [6.189_911_088_842_041_94e-05, 9.999_999_976_921_620_79e-01, -2.800_314_528_295_100_30e-05],
-            [-2.694_572_645_905_283_26e-05, 2.800_481_324_283_232_71e-05, 9.999_999_992_448_291_85e-01],
+            [
+                9.999_999_977_212_139_51e-01,
+                6.189_835_627_658_323_68e-05,
+                2.694_745_986_990_679_44e-05,
+            ],
+            [
+                -6.189_911_088_842_041_94e-05,
+                9.999_999_976_921_620_79e-01,
+                2.800_314_528_295_100_30e-05,
+            ],
+            [
+                -2.694_572_645_905_283_26e-05,
+                -2.800_481_324_283_232_71e-05,
+                9.999_999_992_448_291_85e-01,
+            ],
         ];
         let position =
             ApparentPosition::from_direction(&[1.0, 0.0, 0.0], &rotation, J2000_TRUE_OBLIQUITY);
@@ -242,8 +282,20 @@ mod tests {
         let zero = [0.0, 0.0];
         let x = [1_000_000.0, 0.0];
         let segment = [(-DAY, 2.0 * DAY, 0.0, DAY)];
-        let earth = synthetic_type2(399, 0, segment[0].0, segment[0].1, &[(segment[0].2, segment[0].3, &zero, &zero, &zero)]);
-        let moon = synthetic_type2(301, 0, segment[0].0, segment[0].1, &[(segment[0].2, segment[0].3, &x, &zero, &zero)]);
+        let earth = synthetic_type2(
+            399,
+            0,
+            segment[0].0,
+            segment[0].1,
+            &[(segment[0].2, segment[0].3, &zero, &zero, &zero)],
+        );
+        let moon = synthetic_type2(
+            301,
+            0,
+            segment[0].0,
+            segment[0].1,
+            &[(segment[0].2, segment[0].3, &x, &zero, &zero)],
+        );
         let ephemeris = Ephemeris::new(vec![earth, moon]);
 
         let position = apparent_geocentric(&ephemeris, Body::Moon, TdbSeconds(0.0))
