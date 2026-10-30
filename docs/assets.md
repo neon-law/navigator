@@ -32,13 +32,13 @@ images of people helping one another, without implying a client relationship or 
 the published responsive variants follow the `GALLERY` entries in `views/src/assets.rs` and live under
 `img/<slug>/<slug>-{400,800,1200}w.{avif,webp,jpg}`. Source credits remain here for future reuse.
 
-- [Professional meeting with lawyer and clients discussing documents in a modern office](https://www.pexels.com/photo/a-man-talking-to-couple-7876052/)
+- [A man talking to a couple](https://www.pexels.com/photo/a-man-talking-to-couple-7876052/)
   by Karolina Grabowska (Kaboompics). Slug: `attorney-consultation`. Intended page: cybercrime (consulting a lawyer
   about online harm). Alt text: An attorney and a couple discussing documents together in a modern office.
-- [Man and woman giving medicine to their mother on a wheelchair](https://www.pexels.com/photo/man-and-woman-giving-medicine-to-their-mother-on-a-wheelchair-7446775/)
+- [Giving medicine](https://www.pexels.com/photo/man-and-woman-giving-medicine-to-their-mother-on-a-wheelchair-7446775/)
   by Gustavo Fring. Slug: `family-recovery`. Intended page: car-accidents (family supporting recovery at home). Alt
   text: Family members caring for a woman in a wheelchair in a bright kitchen.
-- [Top view of woman sitting at the desk with documents](https://www.pexels.com/photo/top-view-of-woman-sitting-at-the-desk-with-documents-7968075/)
+- [Desk with documents](https://www.pexels.com/photo/top-view-of-woman-sitting-at-the-desk-with-documents-7968075/)
   by Ron Lach. Slug: `records-organized`. Intended page: data-theft (reassembling records and account statements). Alt
   text: Hands organizing documents, a pen, and a notebook on a wooden desk.
 
