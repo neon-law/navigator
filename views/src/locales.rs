@@ -54,6 +54,7 @@ pub const KNOWN_PAGES: &[&str] = &[
     "gateway-estate-planning",
     "gateway-immigration",
     "home",
+    "legal-aid",
     "litigation",
     "nautilus",
     "navigator",
@@ -612,7 +613,8 @@ pub fn locale_page_kind(stem: &str) -> Option<LocalePageKind> {
         "team" => Some(LocalePageKind::Team),
         "litigation" => Some(LocalePageKind::Litigation),
         "fractional-gc" => Some(LocalePageKind::Transactional),
-        "navigator"
+        "legal-aid"
+        | "navigator"
         | "nautilus"
         | "notations"
         | "services"
