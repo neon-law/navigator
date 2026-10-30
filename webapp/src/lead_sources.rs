@@ -86,17 +86,16 @@ pub fn rows_from_response(brand: &str, body: &serde_json::Value) -> Vec<LeadSour
         let Some(platform) = platform_label(source) else {
             continue;
         };
-        let index = match rows.iter().position(|row| row.platform == platform) {
-            Some(index) => index,
-            None => {
-                rows.push(LeadSourceRow {
-                    brand: brand.to_string(),
-                    platform: platform.to_string(),
-                    contacts: 0,
-                    intakes: 0,
-                });
-                rows.len() - 1
-            }
+        let index = if let Some(index) = rows.iter().position(|row| row.platform == platform) {
+            index
+        } else {
+            rows.push(LeadSourceRow {
+                brand: brand.to_string(),
+                platform: platform.to_string(),
+                contacts: 0,
+                intakes: 0,
+            });
+            rows.len() - 1
         };
         match goal {
             CONTACT_GOAL => rows[index].contacts += count,
@@ -285,19 +284,19 @@ mod tests {
         assert!(rows_from_response("neon", &serde_json::json!({})).is_empty());
     }
 
-    fn render(view: LeadSourcesView) -> String {
-        dioxus_ssr::render_element(lead_sources_body(&view))
+    fn render(view: &LeadSourcesView) -> String {
+        dioxus_ssr::render_element(lead_sources_body(view))
     }
 
     #[test]
     fn the_section_explains_setup_empty_and_counted_states() {
-        assert!(render(LeadSourcesView::default()).contains("PLAUSIBLE_STATS_API_KEY"));
-        assert!(render(LeadSourcesView {
+        assert!(render(&LeadSourcesView::default()).contains("PLAUSIBLE_STATS_API_KEY"));
+        assert!(render(&LeadSourcesView {
             configured: true,
             rows: vec![]
         })
         .contains("No leads from social platforms"));
-        let html = render(LeadSourcesView {
+        let html = render(&LeadSourcesView {
             configured: true,
             rows: vec![LeadSourceRow {
                 brand: "neon".into(),
