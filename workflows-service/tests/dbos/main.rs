@@ -19,5 +19,6 @@ mod project_recovery;
 mod reconcile;
 mod retention_purge;
 mod schedules;
+mod social_publisher;
 mod source_imports;
 mod support;

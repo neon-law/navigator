@@ -200,6 +200,14 @@ async fn main() -> anyhow::Result<()> {
             workflows_service::dbos_nightly_project_update::enabled(lookup)
                 .map_err(anyhow::Error::msg)
                 .context("read NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED")?;
+        let social_publisher_enabled =
+            workflows_service::dbos_social_publisher::publisher_enabled(lookup)
+                .map_err(anyhow::Error::msg)
+                .context("read NAVIGATOR_DBOS_SOCIAL_PUBLISHER_ENABLED")?;
+        let social_reconciler_enabled =
+            workflows_service::dbos_social_publisher::reconciler_enabled(lookup)
+                .map_err(anyhow::Error::msg)
+                .context("read NAVIGATOR_DBOS_SOCIAL_PUBLISH_RECONCILER_ENABLED")?;
         let finance_claim_postgres = if finance_aggregate_enabled {
             Some(
                 store::postgres::PostgresDb::from_env()
@@ -232,6 +240,8 @@ async fn main() -> anyhow::Result<()> {
             || reconcile_enabled
             || finance_aggregate_enabled
             || nightly_project_update_enabled
+            || social_publisher_enabled
+            || social_reconciler_enabled
         {
             let surreal = store::surreal::connect_from_env()
                 .await
@@ -357,6 +367,13 @@ async fn main() -> anyhow::Result<()> {
             dbos_ingress_token,
             finance_claim_postgres,
             nightly_project_update_enabled,
+            if social_publisher_enabled {
+                surreal
+                    .clone()
+                    .map(|surreal| (surreal, social_reconciler_enabled))
+            } else {
+                None
+            },
         ))
     } else {
         None
@@ -469,6 +486,8 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("configure public assets storage")?;
     let kms = social_runtime_kms_from_env().await;
+    let dbos_social_kms = kms.clone();
+    let dbos_social_assets_storage = assets_storage.clone();
     // The nightly `repository` tag: on Forgejo each Project's own Firm
     // client, which also governs the repository and proposes the version
     // update; otherwise the deployment's GitHub forge, detection only.
@@ -571,6 +590,7 @@ async fn main() -> anyhow::Result<()> {
         dbos_ingress_token,
         finance_claim_postgres,
         nightly_project_update_enabled,
+        social_surreal,
     )) = dbos_hosting
     {
         let finance_aggregate_surreal_for_ingress = finance_aggregate_surreal.clone();
@@ -662,6 +682,47 @@ async fn main() -> anyhow::Result<()> {
                                 postgres,
                             );
                             registered_ingress.finance = Some(ingress);
+                        }
+                    }
+                    // Social publishing twins: the same SurrealDB handle the
+                    // Restate endpoint binds, plus the reconciler's flag.
+                    if let Some((social_surreal, social_reconciler_enabled)) = social_surreal {
+                        // The same publisher construction the Restate endpoint
+                        // uses, so both engines drive identical provider steps.
+                        let social_publisher = SocialPublisherService::new(
+                            social_surreal.clone(),
+                            dbos_social_kms.clone(),
+                            dbos_social_assets_storage.clone(),
+                        )
+                        .publisher();
+                        let social_workflow =
+                            workflows_service::dbos_social_publisher::register_publisher(
+                                dbos,
+                                workflows_service::dbos_social_publisher::PublisherContext::new(
+                                    social_publisher.clone(),
+                                ),
+                            )?;
+                        if social_reconciler_enabled {
+                            let reconciler = workflows_service::dbos_social_publisher
+                                ::register_reconciler(
+                                    dbos,
+                                    workflows_service::dbos_social_publisher
+                                        ::ReconcilerContext::from_lookup(
+                                            social_surreal,
+                                            social_publisher,
+                                            social_workflow.clone(),
+                                            lookup,
+                                        ),
+                                )?;
+                            launchers.push(Box::new(move |stop| {
+                                let clock: workflows_service::dbos_social_publisher::Clock =
+                                    Arc::new(chrono::Utc::now);
+                                tokio::spawn(async move {
+                                    workflows_service::dbos_social_publisher
+                                        ::schedule(&reconciler, clock, stop)
+                                        .await;
+                                })
+                            }));
                         }
                     }
                     *dbos_ingress_for_registration
