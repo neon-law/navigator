@@ -488,7 +488,7 @@ pub fn body_sha(deadline: &Deadline, project_code: &str, base_url: Option<&str>)
     });
     let digest = Sha256::digest(payload.to_string().as_bytes());
     let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest.iter() {
+    for byte in &digest {
         let _ = write!(hex, "{byte:02x}");
     }
     hex
@@ -660,7 +660,7 @@ mod tests {
             .await
             .unwrap();
         surreal
-            .query(format!("DELETE FROM project_deadlines WHERE id = $id"))
+            .query("DELETE FROM project_deadlines WHERE id = $id".to_string())
             .bind((
                 "id",
                 crate::surreal::record_id("project_deadlines", created.id),
@@ -888,9 +888,11 @@ mod tests {
     #[test]
     fn a_report_line_names_the_outcome_and_its_counts() {
         use crate::deadline_calendar::{MirrorOutcome, MirrorReport};
-        let mut report = MirrorReport::default();
-        report.upserted = vec![Uuid::now_v7(), Uuid::now_v7()];
-        report.in_sync = 3;
+        let mut report = MirrorReport {
+            upserted: vec![Uuid::now_v7(), Uuid::now_v7()],
+            in_sync: 3,
+            ..Default::default()
+        };
         assert_eq!(
             report_line(&report),
             "mirrored upserted=2 in_sync=3 deleted=0"
