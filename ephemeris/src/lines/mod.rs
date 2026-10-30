@@ -26,6 +26,7 @@
 //! an [`LoadedEphemeris`] and a civil instant and returns values.
 
 pub mod deltat;
+pub mod geojson;
 pub mod horizon;
 pub mod sidereal;
 pub mod vertical;
