@@ -73,6 +73,12 @@ pub mod channel {
     /// (`internal` unless the firm chose to share it); the call's own
     /// direction lives in [`super::CallDetails`].
     pub const CALL: &str = "call";
+    /// A lawyer's matter note (LAW-230): an observation filed on the matter
+    /// by the matter-note verb, with no counterparty and no external source.
+    /// Internal by definition — `direction` is always
+    /// [`super::direction::INTERNAL`] — so it renders on the workbench Notes
+    /// tab and never on a client view.
+    pub const NOTE: &str = "note";
 }
 
 /// Who was on the other end of a call.
@@ -449,6 +455,60 @@ pub async fn confirm_agreements(
         .ok_or(CommunicationError::NotFound)?;
     mirror_communication(db, call.id).await;
     Ok(call)
+}
+
+/// Inputs to [`log_note`].
+#[derive(Debug, Clone)]
+pub struct NewNote {
+    /// Matter the note is filed on.
+    pub project_id: Uuid,
+    /// The lawyer who wrote it, when there is a `persons` row.
+    pub author_person_id: Option<Uuid>,
+    /// Optional subject line.
+    pub subject: Option<String>,
+    /// The note's text.
+    pub body: String,
+}
+
+/// Log a lawyer's matter note as an internal Communication (LAW-230).
+///
+/// A note has no counterparty, no external source, and no client
+/// visibility: it is firm work product on the conversation spine, which
+/// makes the client view's exclusion structural (`for_project_client_visible`
+/// filters `direction = 'internal'`) rather than a convention each reader
+/// has to remember.
+///
+/// # Errors
+/// [`CommunicationError::Invalid`] when the body is empty; propagates
+/// database errors.
+pub async fn log_note(db: &SurrealDb, note: &NewNote) -> Result<Communication, CommunicationError> {
+    let body = note.body.trim();
+    if body.is_empty() {
+        return Err(CommunicationError::Invalid("the note is empty".into()));
+    }
+    let ingested = ingest(
+        db,
+        &IngestArgs {
+            project_id: note.project_id,
+            channel: channel::NOTE,
+            direction: direction::INTERNAL,
+            author_person_id: note.author_person_id,
+            counterparty: None,
+            subject: note
+                .subject
+                .as_deref()
+                .map(str::trim)
+                .filter(|subject| !subject.is_empty()),
+            body,
+            source_ref: None,
+            asset_id: None,
+            occurred_at: &chrono::Utc::now().to_rfc3339(),
+        },
+    )
+    .await?;
+    find(db, note.project_id, ingested.communication_id)
+        .await?
+        .ok_or_else(|| CommunicationError::Invalid("the note could not be read back".into()))
 }
 
 /// Inputs to [`ingest`]. Held in a struct (not a positional list) so future
@@ -1296,6 +1356,53 @@ mod tests {
                 .await
                 .is_err(),
             "only a call carries agreements"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_note_is_internal_without_a_counterparty_and_never_client_visible() {
+        use super::{for_project, log_note, NewNote};
+        let surreal = crate::surreal::test_support::mem().await;
+        let project_id = seed_project(&surreal).await;
+
+        let note = log_note(
+            &surreal,
+            &NewNote {
+                project_id,
+                author_person_id: None,
+                subject: Some("  Call notes  ".into()),
+                body: "  Client confirmed the schedule.  ".into(),
+            },
+        )
+        .await
+        .expect("log the note");
+        assert_eq!(note.channel, "note");
+        assert_eq!(note.direction, "internal");
+        assert_eq!(note.subject.as_deref(), Some("Call notes"));
+        assert_eq!(note.body, "Client confirmed the schedule.");
+        assert_eq!(note.counterparty, None);
+        assert!(note.call.is_none());
+
+        let firm = for_project(&surreal, project_id).await.unwrap();
+        assert_eq!(firm.len(), 1);
+        assert!(for_project_client_visible(&surreal, project_id)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let empty = log_note(
+            &surreal,
+            &NewNote {
+                project_id,
+                author_person_id: None,
+                subject: None,
+                body: "   ".into(),
+            },
+        )
+        .await;
+        assert!(
+            matches!(empty, Err(CommunicationError::Invalid(_))),
+            "a whitespace-only note is refused"
         );
     }
 
