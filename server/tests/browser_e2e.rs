@@ -249,28 +249,7 @@ async fn prepared_practice_brands_have_responsive_pages_and_a_working_mobile_men
                     "{key:?} {path} overflows at {width}px"
                 );
                 if *key == views::brand::BrandKey::Vesta && path == "/" {
-                    assert_video_rail(&c, width, capture_dir).await;
-                    let layout = c.execute(
-                        "const p=document.querySelector('.vesta-plan__term'); const r=p.getBoundingClientRect(); const a=p.parentElement.getBoundingClientRect(); return {fits:r.left>=a.left&&r.right<=a.right, priced:document.querySelector('.vesta-plan__price')?.textContent.trim()==='From $1,111', columns:getComputedStyle(document.querySelector('.vesta-hero')).gridTemplateColumns.split(' ').length};",
-                        vec![],
-                    ).await.expect("Vesta plan layout");
-                    assert_eq!(layout["fits"], true, "plan fits its column at {width}px");
-                    assert_eq!(
-                        layout["priced"], true,
-                        "the basic plan publishes its approved starting price"
-                    );
-                    assert_eq!(layout["columns"], if width < 768 { 1 } else { 2 });
-                    c.execute(
-                        "document.querySelector('#estate-plan').scrollIntoView({block:'start'});",
-                        vec![],
-                    )
-                    .await
-                    .expect("show Vesta pricing");
-                    std::fs::write(
-                        capture_dir.join(format!("vesta-pricing-{width}.png")),
-                        c.screenshot().await.expect("Vesta capture"),
-                    )
-                    .expect("save Vesta capture");
+                    assert_vesta_layout(&c, width, capture_dir).await;
                 }
                 if width == 390 && path == "/" && *key != views::brand::BrandKey::Vesta {
                     std::fs::write(
@@ -301,6 +280,51 @@ async fn prepared_practice_brands_have_responsive_pages_and_a_working_mobile_men
         }
     }
     c.close().await.expect("close browser");
+}
+
+async fn assert_vesta_layout(c: &Client, width: u32, capture_dir: &std::path::Path) {
+    assert_video_rail(c, width, capture_dir).await;
+    let layout = c.execute(
+        "const p=document.querySelector('.vesta-plan__term'); const r=p.getBoundingClientRect(); const a=p.parentElement.getBoundingClientRect(); return {fits:r.left>=a.left&&r.right<=a.right, priced:document.querySelector('.vesta-plan__price')?.textContent.trim()==='From $1,111', themeColumns:getComputedStyle(document.querySelector('.vesta-themes')).gridTemplateColumns.split(' ').length, lastRow:[...document.querySelectorAll('.vesta-theme summary span:last-child')].slice(-2).map(e=>e.textContent), bottomPair:(()=>{const r=[...document.querySelectorAll('.vesta-theme')].map(e=>e.getBoundingClientRect());return r.length===8&&r[6].top===r[7].top&&r[6].top>r[5].top;})(), columns:getComputedStyle(document.querySelector('.vesta-hero')).gridTemplateColumns.split(' ').length};",
+        vec![],
+    ).await.expect("Vesta plan layout");
+    assert_eq!(layout["fits"], true, "plan fits its column at {width}px");
+    assert_eq!(
+        layout["priced"], true,
+        "Vesta keeps its approved starting price"
+    );
+    assert_eq!(layout["columns"], if width < 768 { 1 } else { 2 });
+    assert_eq!(
+        layout["themeColumns"], 2,
+        "two reflection columns at {width}px"
+    );
+    assert_eq!(layout["lastRow"], serde_json::json!(["Neptune", "Chiron"]));
+    assert_eq!(
+        layout["bottomPair"], true,
+        "Neptune and Chiron share the bottom row"
+    );
+    c.execute(
+        "document.querySelector('#estate-plan').scrollIntoView({block:'start'});",
+        vec![],
+    )
+    .await
+    .expect("show Vesta pricing");
+    std::fs::write(
+        capture_dir.join(format!("vesta-pricing-{width}.png")),
+        c.screenshot().await.expect("Vesta capture"),
+    )
+    .expect("save Vesta capture");
+    c.execute(
+        "document.querySelector('.vesta-themes').scrollIntoView({block:'center'});",
+        vec![],
+    )
+    .await
+    .expect("show Vesta reflections");
+    std::fs::write(
+        capture_dir.join(format!("vesta-two-column-{width}.png")),
+        c.screenshot().await.expect("reflection capture"),
+    )
+    .expect("save reflection capture");
 }
 
 async fn assert_video_rail(c: &Client, width: u32, capture_dir: &std::path::Path) {
