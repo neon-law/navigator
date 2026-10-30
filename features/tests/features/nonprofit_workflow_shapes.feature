@@ -7,8 +7,9 @@ Feature: Bundled-template workflow composition (nonprofit)
   so an accidental reshape on the nonprofit templates surfaces as a named
   failing scenario.
 
-  A rejection scenario per template confirms the parser's MissingEnd
-  guard catches a hand-mutilated copy with the workflow END dropped.
+  Each omitted-END scenario verifies that author normalization preserves
+  the full workflow, while typed runtime validation still requires an
+  explicit terminal END.
 
   Scenario: Nevada 501(c)(3) formation questionnaire walks mission → board → agent → END
     Given the bundled template "notations/forms/united_states/nevada/state/nv__nonprofit_501c3_formation.md"
@@ -28,9 +29,10 @@ Feature: Bundled-template workflow composition (nonprofit)
       | lawyer_review     | mailroom_send    |
       | mailroom_send    | END              |
 
-  Scenario: Nevada 501(c)(3) formation template with END stripped fails to parse
+  Scenario: Nevada 501(c)(3) formation template with omitted END keeps its workflow and strict runtime guard
     Given the bundled template "notations/forms/united_states/nevada/state/nv__nonprofit_501c3_formation.md" with the workflow END declaration removed
-    Then parsing the workflow spec returns a MissingEnd error
+    Then the authored workflow preserves every transition and supplies a terminal END
+    And the typed workflow still rejects a missing END declaration
 
   Scenario: Form 990 questionnaire walks tax_year → revenue → END
     Given the bundled template "notations/forms/united_states/federal/irs/us__form_990.md"
@@ -49,9 +51,10 @@ Feature: Bundled-template workflow composition (nonprofit)
       | lawyer_review     | mailroom_send    |
       | mailroom_send    | END              |
 
-  Scenario: Form 990 template with END stripped fails to parse
+  Scenario: Form 990 template with omitted END keeps its workflow and strict runtime guard
     Given the bundled template "notations/forms/united_states/federal/irs/us__form_990.md" with the workflow END declaration removed
-    Then parsing the workflow spec returns a MissingEnd error
+    Then the authored workflow preserves every transition and supplies a terminal END
+    And the typed workflow still rejects a missing END declaration
 
   Scenario: Charitable solicitation registration questionnaire walks period → activities → END
     Given the bundled template "notations/forms/united_states/nevada/state/nv__charitable_solicitation_registration.md"
@@ -69,6 +72,7 @@ Feature: Bundled-template workflow composition (nonprofit)
       | lawyer_review  | mailroom_send |
       | mailroom_send | END           |
 
-  Scenario: Charitable solicitation template with END stripped fails to parse
+  Scenario: Charitable solicitation template with omitted END keeps its workflow and strict runtime guard
     Given the bundled template "notations/forms/united_states/nevada/state/nv__charitable_solicitation_registration.md" with the workflow END declaration removed
-    Then parsing the workflow spec returns a MissingEnd error
+    Then the authored workflow preserves every transition and supplies a terminal END
+    And the typed workflow still rejects a missing END declaration

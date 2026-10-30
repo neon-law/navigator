@@ -939,13 +939,13 @@ A Project references a shared catalog template by its existing `code`, without c
 Library](glossary/firm-library.md), then resolves the workspace-shared catalog row, and pins that exact template version
 on the Notation. A local file intentionally overrides the catalog for that Project. Use one only for a genuinely
 Project-specific blueprint. Do not recode, rename, or copy a catalog template into a Project repository merely to
-reference it. The `navigator project onboard` and `navigator project offboard` commands
-open the local lifecycle letter after it has been drafted, committed to `main`, and the local copy matches
-`origin/main`. Each command selects the single authored Draft declaring its lifecycle `kind`, so an existing
-`onboarding.md` or `offboarding.md` needs no rename. Unedited stubs are ignored during that selection. Multiple authored
-Drafts of the requested kind require the lawyer to choose one before opening a notation. The selected filename stem is
-the template code sent to Navigator. When no authored letter exists, the command writes the canonical
-`onboarding__letter.md` or `offboarding__letter.md` stub and waits for the lawyer to draft it.
+reference it. The `navigator project onboard` and `navigator project offboard` commands open the local lifecycle letter
+after it has been drafted, committed to `main`, and the local copy matches `origin/main`. Each command selects the
+single authored Draft declaring its lifecycle `kind`, so an existing `onboarding.md` or `offboarding.md` needs no
+rename. Unedited stubs are ignored during that selection. Multiple authored Drafts of the requested kind require the
+lawyer to choose one before opening a notation. The selected filename stem is the template code sent to Navigator. When
+no authored letter exists, the command writes the canonical `onboarding__letter.md` or `offboarding__letter.md` stub and
+waits for the lawyer to draft it.
 
 The filename stem of a Project-local template carries no required Project-code prefix (ENG-693). A `template` row is
 already scoped to its Project by `template.project_id`, so `code` only has to be unique *within* that one repository —
