@@ -79,6 +79,44 @@
   object-fit: contain;
 }
 
+/* ---- Photo band ---------------------------------------------------------- */
+
+/* A full-width curated photograph. The reserved space comes from the
+ * manifest's own classification of the photo, carried inline as
+ * `--fm-photo-ratio`, so the page never shifts while the image loads, and
+ * every colour below follows the `--nav-*` tokens — the Abhaya indigo theme
+ * reaches this band with no photo-specific palette here. The tinted frame
+ * background is the band's while-loading face: a slug whose bytes have not
+ * landed still shows a quiet surface, never a broken-image glyph. */
+.fm-photo {
+  margin: 0;
+}
+
+.fm-photo__image {
+  display: block;
+  width: 100%;
+  aspect-ratio: var(--fm-photo-ratio, 3 / 2);
+  overflow: hidden;
+  border-radius: var(--nav-radius-lg);
+  background: color-mix(in srgb, var(--nav-color-primary) 8%, var(--nav-color-surface));
+}
+
+.fm-photo__image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.fm-photo__caption {
+  margin: 0;
+  padding-block-start: 0.75rem;
+  color: var(--nav-color-text-muted);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
 /* ---- Hero ---------------------------------------------------------------- */
 
 .fm-hero {

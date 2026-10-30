@@ -125,6 +125,39 @@ pub struct StepImage {
     pub alt: String,
 }
 
+/// One `<source>` of a photo band's responsive `<picture>`: the MIME type
+/// the browser tests for support, and the width-keyed candidate set it
+/// picks from. Sources arrive in negotiation order — AVIF, WebP, JPEG.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct PhotoSource {
+    pub mime: String,
+    pub srcset: String,
+}
+
+/// A photo band's photograph, resolved to the URLs this deployment serves.
+///
+/// Finished strings rather than a manifest slug, because resolution reads
+/// process environment (`NAVIGATOR_ASSET_BASE_URL`) and only the server can
+/// answer it — the same seam every other band's resolved hrefs cross. The
+/// catalog names a curated photo; the router building the page resolves it
+/// through `views::assets` and injects the result.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct PhotoImage {
+    /// `<source>` elements in negotiation order: AVIF, WebP, JPEG.
+    pub sources: Vec<PhotoSource>,
+    /// The `<img>` `src` every browser understands — the JPEG fallback.
+    pub fallback_src: String,
+    /// The photo's description: the page's own alt when it authors one,
+    /// else the curated manifest's.
+    pub alt: String,
+    /// The layout-width hint the browser sizes its candidate against.
+    pub sizes: String,
+    /// The photo's intrinsic `aspect-ratio` value (e.g. `21 / 9`), from the
+    /// manifest's classification of the photo. Reserves exactly the loaded
+    /// image's space, so the page never shifts while it loads.
+    pub ratio: String,
+}
+
 /// One labeled place in a Project's connected-work diagram.
 ///
 /// The public diagram names the work surface, not a particular account, URL,
@@ -227,6 +260,19 @@ pub enum Band {
         description: Option<String>,
         label: String,
         src: String,
+    },
+    /// A full-width curated photograph with alt text and an optional
+    /// caption.
+    ///
+    /// The image is optional *in the data* because the router resolves the
+    /// catalog's manifest slug through the asset seam, and a slug the
+    /// curated manifest does not know resolves to nothing. The band then
+    /// renders nothing at all: a missing photograph must never be a broken
+    /// `<img>`, a dangling caption, or a collapsed layout — the prose bands
+    /// around it carry the page on their own.
+    Photo {
+        image: Option<PhotoImage>,
+        caption: Option<String>,
     },
     /// A titled, numbered walk.
     Steps {
@@ -821,6 +867,46 @@ pub(crate) fn Bands(
                                 "aria-label": "{label}",
                                 source { src: "{src}", r#type: "video/mp4" }
                                 a { href: "{src}", "{label}" }
+                            }
+                        }
+                    }
+                },
+                Band::Photo { image, caption } => rsx! {
+                    if let Some(image) = image.as_ref() {
+                        section { class: "fm-band fm-band--photo",
+                            div { class: "fm-band__inner",
+                                figure { class: "fm-photo",
+                                    picture {
+                                        class: "fm-photo__image",
+                                        // The manifest's own ratio for the
+                                        // photo, so the reserved space is
+                                        // exactly the loaded image's — no
+                                        // shift. `width`/`height` attributes
+                                        // would state the same fact a second
+                                        // way; the CSS box sized by this
+                                        // custom property is the one truth.
+                                        style: "--fm-photo-ratio: {image.ratio}",
+                                        for source in image.sources.iter() {
+                                            source {
+                                                srcset: "{source.srcset}",
+                                                sizes: "{image.sizes}",
+                                                r#type: "{source.mime}",
+                                            }
+                                        }
+                                        // No `loading` attribute: the band
+                                        // leads practice pages, so the
+                                        // photograph is the image a reader
+                                        // came for. Lazy-loading it would
+                                        // defer the one thing above the fold.
+                                        img {
+                                            src: "{image.fallback_src}",
+                                            alt: "{image.alt}",
+                                        }
+                                    }
+                                    if let Some(caption) = caption.as_ref() {
+                                        figcaption { class: "fm-photo__caption", "{caption}" }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1475,6 +1561,98 @@ mod tests {
             !out.contains("brew upgrade "),
             "a second upgrade line would be a second spelling of the same formula: {out}"
         );
+    }
+
+    /// One resolved photo, as the router hands it over: three sources in
+    /// negotiation order and the JPEG fallback every browser reads.
+    fn sample_photo() -> PhotoImage {
+        PhotoImage {
+            sources: vec![
+                PhotoSource {
+                    mime: "image/avif".to_string(),
+                    srcset: "/public/img/arrivals/arrivals-400w.avif 400w, \
+                             /public/img/arrivals/arrivals-800w.avif 800w, \
+                             /public/img/arrivals/arrivals-1200w.avif 1200w"
+                        .to_string(),
+                },
+                PhotoSource {
+                    mime: "image/webp".to_string(),
+                    srcset: "/public/img/arrivals/arrivals-400w.webp 400w, \
+                             /public/img/arrivals/arrivals-800w.webp 800w, \
+                             /public/img/arrivals/arrivals-1200w.webp 1200w"
+                        .to_string(),
+                },
+                PhotoSource {
+                    mime: "image/jpeg".to_string(),
+                    srcset: "/public/img/arrivals/arrivals-400w.jpg 400w, \
+                             /public/img/arrivals/arrivals-800w.jpg 800w, \
+                             /public/img/arrivals/arrivals-1200w.jpg 1200w"
+                        .to_string(),
+                },
+            ],
+            fallback_src: "/public/img/arrivals/arrivals-1200w.jpg".to_string(),
+            alt: "A family embracing at an airport arrivals hall".to_string(),
+            sizes: "100vw".to_string(),
+            ratio: "21 / 9".to_string(),
+        }
+    }
+
+    /// The photo band draws a real `<picture>`: the alt text on the image,
+    /// the optional caption under it, every negotiated format as a `<source>`
+    /// smallest-first, and the manifest's ratio reserving the image's space.
+    #[test]
+    fn photo_band_renders_the_responsive_picture_its_caption_and_alt() {
+        let band = Band::Photo {
+            image: Some(sample_photo()),
+            caption: Some("Reunited families are what this work is for.".to_string()),
+        };
+        let html = dioxus_ssr::render_element(rsx! { Bands { items: vec![band] } });
+        assert!(html.contains(r#"class="fm-band fm-band--photo""#), "{html}");
+        assert_eq!(html.matches("<source").count(), 3, "three formats: {html}");
+        // Smallest-first is the negotiation order: the browser takes the
+        // first `type` it supports, so this order is the preference.
+        let avif = html.find("image/avif").expect("avif source: {html}");
+        let webp = html.find("image/webp").expect("webp source: {html}");
+        let jpeg = html.find("image/jpeg").expect("jpeg source: {html}");
+        assert!(
+            avif < webp && webp < jpeg,
+            "AVIF, then WebP, then JPEG: {html}"
+        );
+        assert!(
+            html.contains(r#"srcset="/public/img/arrivals/arrivals-400w.avif 400w"#),
+            "the width-keyed candidate set renders: {html}"
+        );
+        assert!(html.contains(r#"sizes="100vw""#), "{html}");
+        assert!(
+            html.contains(r#"alt="A family embracing at an airport arrivals hall""#),
+            "the photo is described: {html}"
+        );
+        assert!(
+            html.contains(r#"src="/public/img/arrivals/arrivals-1200w.jpg""#),
+            "the <img> fallback is the JPEG every browser reads: {html}"
+        );
+        assert!(
+            html.contains("--fm-photo-ratio: 21 / 9"),
+            "the reserved space is the photo's own ratio: {html}"
+        );
+        assert!(
+            html.contains(
+                r#"class="fm-photo__caption">Reunited families are what this work is for.</figcaption>"#
+            ),
+            "the caption renders under the photo: {html}"
+        );
+    }
+
+    /// A page whose photo is missing renders its fallback: no `<img>`, no
+    /// `<picture>`, no dangling caption — the bands around it carry the page.
+    #[test]
+    fn a_photo_band_without_an_image_renders_no_broken_markup() {
+        let band = Band::Photo {
+            image: None,
+            caption: Some("Reunited families are what this work is for.".to_string()),
+        };
+        let html = dioxus_ssr::render_element(rsx! { Bands { items: vec![band] } });
+        assert!(html.is_empty(), "the band leaves the page alone: {html:?}");
     }
 
     /// A page with no downloads band asks for no `home.css`, and one with a
