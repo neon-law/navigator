@@ -290,6 +290,7 @@ async fn receive(
                 email_conversation_id: None,
                 attachment_asset_id: None,
                 occurred_at: &interaction.occurred_at,
+                raw_storage_key: None,
             },
         )
         .await;

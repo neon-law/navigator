@@ -2254,6 +2254,19 @@ CREATE INDEX communication_acknowledges ON communication (project_id, acknowledg
 ALTER TABLE template ADD COLUMN firm_id UUID REFERENCES firm(id);
 ALTER TABLE template ADD CONSTRAINT template_one_scope CHECK (project_id IS NULL OR firm_id IS NULL);
 
+-- Migration: 20261030020000_linkedin_channel_and_raw_storage.sql
+-- LAW-238 D1: LinkedIn joins the modeled Inbox channels, and Messages gain
+-- the object-storage key of their verbatim import payload. Imports arrive
+-- from the member's own data export, not a provider webhook; the dedup and
+-- threading keys are unchanged. The drop+re-add widens the inline channel
+-- CHECK the create_inbox migration declared.
+DO $
+BEGIN
+    ALTER TABLE inbox_conversation DROP CONSTRAINT inbox_conversation_channel_check;
+END $;
+ALTER TABLE inbox_conversation ADD CONSTRAINT inbox_conversation_channel_check CHECK (channel IN ('email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'linkedin'));
+ALTER TABLE message ADD COLUMN raw_storage_key TEXT;
+
 -- Migration: 20261031010000_create_navigator_graph.sql
 -- Migration: 20261031010000_create_navigator_graph.sql
 -- The Apache AGE relationship graph, projected from the relational mirrors.

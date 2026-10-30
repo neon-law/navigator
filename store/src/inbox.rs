@@ -39,6 +39,10 @@ pub mod channel {
     pub const THREADS: &str = "threads";
     pub const YOUTUBE: &str = "youtube";
     pub const TIKTOK: &str = "tiktok";
+    /// Imported LinkedIn direct messages (LAW-238 D1). The ingest source is
+    /// the member's own data export, not a provider webhook, but the channel
+    /// literal, threading, and dedup are exactly the other social channels'.
+    pub const LINKEDIN: &str = "linkedin";
 }
 
 pub mod direction {
@@ -102,6 +106,11 @@ pub struct Message {
     pub delivery_state: String,
     pub purpose: String,
     pub attachment_asset_id: Option<Uuid>,
+    /// Object-storage key of the verbatim payload this Message was ingested
+    /// from — the raw `.eml`, or the member data-export CSV for an imported
+    /// LinkedIn thread (LAW-238 D1). `None` for webhook-delivered mail, which
+    /// archives under the email-thread model instead.
+    pub raw_storage_key: Option<String>,
     pub communication_id: Option<Uuid>,
     pub occurred_at: String,
     pub inserted_at: DateTime<Utc>,
@@ -142,6 +151,9 @@ pub struct IngestInbound<'a> {
     pub email_conversation_id: Option<Uuid>,
     pub attachment_asset_id: Option<Uuid>,
     pub occurred_at: &'a str,
+    /// Object-storage key of the verbatim import payload (LAW-238 D1); see
+    /// [`Message::raw_storage_key`]. `None` for every webhook-shaped caller.
+    pub raw_storage_key: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,6 +285,11 @@ pub enum InboxError {
     Empty,
     #[error("promotional send is opted out")]
     OptedOut,
+    /// The import entry point requires the postgres Inbox authority —
+    /// imports are postgres-native (LAW-238 D1) and the legacy Surreal path
+    /// has no direction-aware writer.
+    #[error("inbox import requires the PostgreSQL Inbox authority (set NAVIGATOR_POSTGRES_INBOX_AUTHORITY=1)")]
+    PostgresAuthorityRequired,
     #[error("{0}")]
     Contact(String),
 }
@@ -355,6 +372,7 @@ struct MessageRow {
     delivery_state: String,
     purpose: String,
     attachment_asset_id: Option<surrealdb::types::RecordId>,
+    raw_storage_key: Option<String>,
     communication_id: Option<surrealdb::types::RecordId>,
     occurred_at: String,
     inserted_at: surrealdb::types::Datetime,
@@ -392,7 +410,7 @@ const CONVERSATION_SELECT: &str = "id, firm_id, brand_key, interaction_type, pro
 const MESSAGE_SELECT: &str =
     "id, conversation_id, parent_message_id, visibility, direction, body, author_person_id, \
     provider_message_id, provider_ref, delivery_state, purpose, attachment_asset_id, \
-    communication_id, occurred_at, inserted_at, updated_at";
+    raw_storage_key, communication_id, occurred_at, inserted_at, updated_at";
 
 const ASSIGNMENT_SELECT: &str = "id, conversation_id, firm_id, from_project_id, to_project_id, \
     actor_person_id, inserted_at";
@@ -440,6 +458,7 @@ impl MessageRow {
             delivery_state: self.delivery_state,
             purpose: self.purpose,
             attachment_asset_id: self.attachment_asset_id.as_ref().and_then(record_uuid),
+            raw_storage_key: self.raw_storage_key,
             communication_id: self.communication_id.as_ref().and_then(record_uuid),
             occurred_at: self.occurred_at,
             inserted_at: self.inserted_at.into(),
@@ -502,6 +521,48 @@ pub async fn ingest_inbound(
         return Box::pin(crate::postgres::inbox::ingest_inbound_on(&pg, inbound)).await;
     }
     ingest_inbound_surreal(db, inbound).await
+}
+
+/// The direction-aware ingest entry for imported correspondence (LAW-238
+/// D1): lawyer-sent items arrive as `outbound` with the mailbox owner as
+/// author, received mail as `inbound`. Dedup, threading, and projection are
+/// the same machinery [`ingest_inbound`] runs.
+///
+/// Imports are postgres-native, so this entry requires the postgres Inbox
+/// authority — the legacy Surreal store has no direction-aware writer, and
+/// writing one would be new Surreal-bound code, which the removal forbids.
+///
+/// # Errors
+///
+/// Propagates any database error, and
+/// [`InboxError::PostgresAuthorityRequired`] when the deployment has not cut
+/// the Inbox slice over to postgres.
+pub async fn ingest_imported(
+    direction_value: &str,
+    author_person_id: Option<Uuid>,
+    inbound: &IngestInbound<'_>,
+) -> Result<IngestedInbound, InboxError> {
+    let Some(pg) = inbox_authority().await? else {
+        return Err(InboxError::PostgresAuthorityRequired);
+    };
+    crate::postgres::inbox::ingest_message_on(&pg, direction_value, author_person_id, inbound).await
+}
+
+/// Point an imported Message at its first filed attachment Asset (LAW-238
+/// D1) — the postgres-authoritative counterpart of
+/// [`crate::postgres::inbox::set_attachment_asset_on`]. No-op when the slot
+/// is already set.
+///
+/// # Errors
+///
+/// Propagates any database error, and
+/// [`InboxError::PostgresAuthorityRequired`] when the deployment has not cut
+/// the Inbox slice over to postgres.
+pub async fn set_attachment_asset(message_id: Uuid, asset_id: Uuid) -> Result<(), InboxError> {
+    let Some(pg) = inbox_authority().await? else {
+        return Err(InboxError::PostgresAuthorityRequired);
+    };
+    crate::postgres::inbox::set_attachment_asset_on(&pg, message_id, asset_id).await
 }
 
 /// The legacy SurrealDB store behind [`ingest_inbound`] — the webhook-shaped
@@ -1118,6 +1179,7 @@ pub async fn open_sms_conversation(
         email_conversation_id: None,
         attachment_asset_id: None,
         occurred_at: &Utc::now().to_rfc3339(),
+        raw_storage_key: None,
     };
     let conversation = match find_open_thread(db, &thread).await? {
         Some(existing) => existing,
@@ -1944,6 +2006,7 @@ pub(crate) fn is_social_channel(channel_name: &str) -> bool {
             | channel::THREADS
             | channel::YOUTUBE
             | channel::TIKTOK
+            | channel::LINKEDIN
     )
 }
 
@@ -2301,6 +2364,8 @@ pub(crate) fn spine_channel(channel_name: &str, direction_value: &str) -> &'stat
         (channel::TIKTOK, _) => communications::channel::TIKTOK_INBOUND,
         (channel::YOUTUBE, direction::OUTBOUND) => communications::channel::YOUTUBE_OUTBOUND,
         (channel::YOUTUBE, _) => communications::channel::YOUTUBE_INBOUND,
+        (channel::LINKEDIN, direction::OUTBOUND) => communications::channel::LINKEDIN_OUTBOUND,
+        (channel::LINKEDIN, _) => communications::channel::LINKEDIN_INBOUND,
         _ => "",
     }
 }
@@ -2720,6 +2785,7 @@ mod tests {
             email_conversation_id: None,
             attachment_asset_id: None,
             occurred_at: "2026-09-27T00:00:00Z",
+            raw_storage_key: None,
         }
     }
 

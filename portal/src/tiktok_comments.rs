@@ -300,6 +300,7 @@ async fn ingest_comment(
             email_conversation_id: None,
             attachment_asset_id: None,
             occurred_at: &occurred_at.to_rfc3339(),
+            raw_storage_key: None,
         },
     )
     .await
