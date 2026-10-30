@@ -3996,6 +3996,47 @@ struct ExecutionArgs {
     /// Never the notary's name or commission number.
     #[arg(long, value_parser = parse_notarization)]
     notarization: Vec<store::documents::Notarization>,
+    /// The exhibit metadata the matter's evidence index reads (LAW-185).
+    #[command(flatten)]
+    evidence: EvidenceArgs,
+}
+
+/// The exhibit metadata `site document upload` records for the evidence
+/// index. Every flag is optional; the block is recorded only when at least
+/// one is given.
+#[derive(clap::Args)]
+struct EvidenceArgs {
+    /// The date the exhibit itself bears, `YYYY-MM-DD` — a letter's own
+    /// date, a photograph's capture date — not the filing date.
+    #[arg(long, value_parser = parse_calendar_date)]
+    evidence_dated_at: Option<chrono::NaiveDate>,
+    /// Where the exhibit came from, one line — a person, an agency, a URL.
+    #[arg(long)]
+    evidence_source: Option<String>,
+    /// How confidently the exhibit is tied to what it supports:
+    /// `exact`, `inferred`, or `unknown`.
+    #[arg(long, value_parser = parse_evidence_confidence)]
+    evidence_confidence: Option<store::documents::EvidenceConfidence>,
+    /// A claim reference the exhibit bears on, repeatable — exactly the
+    /// reference the reader should follow, `¶ 12` or
+    /// `Count II — Conversion`, not prose.
+    #[arg(long)]
+    evidence_supports: Vec<String>,
+}
+
+impl EvidenceArgs {
+    fn record(self) -> Option<store::documents::Evidence> {
+        let any = self.evidence_dated_at.is_some()
+            || self.evidence_source.is_some()
+            || self.evidence_confidence.is_some()
+            || !self.evidence_supports.is_empty();
+        any.then(|| store::documents::Evidence {
+            dated_at: self.evidence_dated_at,
+            source: self.evidence_source,
+            confidence: self.evidence_confidence,
+            supports: self.evidence_supports,
+        })
+    }
 }
 
 impl ExecutionArgs {
@@ -4006,6 +4047,7 @@ impl ExecutionArgs {
                 .zip(self.signed_on)
                 .map(|(method, signed_on)| store::documents::Signing { method, signed_on }),
             notarization: self.notarization,
+            evidence: self.evidence.record(),
         }
     }
 }
@@ -7180,6 +7222,18 @@ fn parse_signing_method(value: &str) -> Result<store::documents::SigningMethod, 
             .collect::<Vec<_>>()
             .join(" or ");
         format!("signing method must be {accepted}")
+    })
+}
+
+/// Parse one `--evidence-confidence` value.
+fn parse_evidence_confidence(value: &str) -> Result<store::documents::EvidenceConfidence, String> {
+    store::documents::EvidenceConfidence::parse(value).ok_or_else(|| {
+        let accepted = store::documents::EvidenceConfidence::ALL
+            .iter()
+            .map(|confidence| format!("`{}`", confidence.as_str()))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        format!("evidence confidence must be {accepted}")
     })
 }
 

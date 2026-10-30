@@ -287,6 +287,7 @@ async fn ingest_one(
         transcript_quality: None,
         signing: None,
         notarization: Vec::new(),
+        evidence: None,
     };
     let ingest = IngestArgs {
         project_id,

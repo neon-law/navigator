@@ -878,6 +878,8 @@ pub(crate) struct LiveDocumentSummary {
     pub(crate) signing: Option<store::documents::Signing>,
     #[serde(default)]
     pub(crate) notarization: Vec<store::documents::Notarization>,
+    #[serde(default)]
+    pub(crate) evidence: Option<store::documents::Evidence>,
 }
 
 /// How an executed document was executed, as an upload records it. Empty for
@@ -886,6 +888,7 @@ pub(crate) struct LiveDocumentSummary {
 pub(crate) struct DocumentExecution {
     pub(crate) signing: Option<store::documents::Signing>,
     pub(crate) notarization: Vec<store::documents::Notarization>,
+    pub(crate) evidence: Option<store::documents::Evidence>,
 }
 
 impl DocumentExecution {
@@ -896,6 +899,9 @@ impl DocumentExecution {
         if !self.notarization.is_empty() {
             body["notarization"] =
                 serde_json::to_value(&self.notarization).context("encode notarization")?;
+        }
+        if let Some(evidence) = &self.evidence {
+            body["evidence"] = serde_json::to_value(evidence).context("encode evidence")?;
         }
         Ok(())
     }

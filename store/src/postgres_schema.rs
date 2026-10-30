@@ -1174,6 +1174,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261030010000_add_template_firm.sql"),
             ),
             (
+                "20261030020000_add_asset_evidence.sql",
+                include_str!("../postgres/migrations/20261030020000_add_asset_evidence.sql"),
+            ),
+            (
                 "20261030120000_create_project_task.sql",
                 include_str!("../postgres/migrations/20261030120000_create_project_task.sql"),
             ),

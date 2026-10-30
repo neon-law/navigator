@@ -562,7 +562,7 @@ fn desired_pointer(
     // revision it names is unchanged. Live resolution against DocuSign/Xero
     // (confirming the id it names still exists) is `project gate --check`'s
     // separate live-check pass (ENG-863), not this function.
-    let (authority_id, canonical_url, checked_on, docusign_envelope_id, xero_invoice_id) =
+    let (authority_id, canonical_url, checked_on, docusign_envelope_id, xero_invoice_id, evidence) =
         match local {
             Some(pointer) if pointer.current_version.asset_id == operative.asset_id => (
                 pointer.authority_id,
@@ -570,8 +570,9 @@ fn desired_pointer(
                 pointer.current_version.checked_on.clone(),
                 pointer.docusign_envelope_id,
                 pointer.xero_invoice_id,
+                pointer.evidence.clone(),
             ),
-            _ => (None, None, None, None, None),
+            _ => (None, None, None, None, None, None),
         };
     let pointer = DocumentPointer {
         kind: kind.to_string(),
@@ -607,6 +608,10 @@ fn desired_pointer(
         } else {
             operative.notarization.clone()
         },
+        // The committed pointer's exhibit provenance is carried while it
+        // still names the operative revision; reconciliation never drops a
+        // recorded key.
+        evidence,
         // The live inventory carries no service list; the committed one is
         // kept while it still names this revision.
         service: local
