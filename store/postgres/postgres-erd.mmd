@@ -940,6 +940,15 @@ erDiagram
         string to_state
         datetime updated_at
     }
+    notation_machine_state {
+        string current_state
+        boolean ephemeral
+        datetime inserted_at
+        string machine_kind
+        uuid notation_id
+        string spec_yaml
+        datetime updated_at
+    }
     notation_meter_entry {
         string currency
         uuid id
