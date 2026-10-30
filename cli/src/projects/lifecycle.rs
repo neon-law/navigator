@@ -39,7 +39,11 @@ async fn run(root: &Path, host: Option<&str>, kind: &str) -> ExitCode {
 
 async fn run_open(root: &Path, host: Option<&str>, kind: &str) -> Result<()> {
     let project = project_coordinates(root)?;
-    let template = template_path(root, kind);
+    let template = template_path(root, kind)?;
+    let code = template
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| anyhow!("the selected {kind} Draft has no UTF-8 filename stem"))?;
     if !template.is_file() {
         write_template_stub(&template, kind)?;
         println!(
@@ -65,7 +69,7 @@ async fn run_open(root: &Path, host: Option<&str>, kind: &str) -> Result<()> {
     if let Some(row) = remote::notation_rows(host, &project.code)
         .await?
         .into_iter()
-        .find(|row| row.template_code == template_code(kind) && row.notation_id.is_some())
+        .find(|row| row.template_code == code && row.notation_id.is_some())
     {
         println!(
             "{kind} notation {} is already open in state {}",
@@ -75,13 +79,7 @@ async fn run_open(root: &Path, host: Option<&str>, kind: &str) -> Result<()> {
         return Ok(());
     }
 
-    let created = remote::notation_create(
-        host,
-        template_code(kind),
-        &project.client_dri,
-        &project.code,
-    )
-    .await;
+    let created = remote::notation_create(host, code, &project.client_dri, &project.code).await;
     if created != ExitCode::SUCCESS {
         return Err(anyhow!("could not open the {kind} notation"));
     }
@@ -95,7 +93,11 @@ async fn run_offboard(
 ) -> ExitCode {
     let result = async {
         let project = project_coordinates(root)?;
-        let template = template_path(root, OFFBOARDING);
+        let template = template_path(root, OFFBOARDING)?;
+        let code = template
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| anyhow!("the selected offboarding Draft has no UTF-8 filename stem"))?;
         if !template.is_file() {
             write_template_stub(&template, OFFBOARDING)?;
             println!(
@@ -110,9 +112,7 @@ async fn run_offboard(
             if let Some(row) = remote::notation_rows(host, &project.code)
                 .await?
                 .into_iter()
-                .find(|row| {
-                    row.template_code == template_code(OFFBOARDING) && row.notation_id.is_some()
-                })
+                .find(|row| row.template_code == code && row.notation_id.is_some())
             {
                 println!(
                     "offboarding notation {} is already open in state {}",
@@ -121,13 +121,7 @@ async fn run_offboard(
                 );
                 return Ok(());
             }
-            if remote::notation_create(
-                host,
-                template_code(OFFBOARDING),
-                &project.client_dri,
-                &project.code,
-            )
-            .await
+            if remote::notation_create(host, code, &project.client_dri, &project.code).await
                 != ExitCode::SUCCESS
             {
                 return Err(anyhow!("could not open the offboarding notation"));
@@ -182,16 +176,48 @@ fn project_coordinates(root: &Path) -> Result<ProjectCoordinates> {
     })
 }
 
-fn template_relative(root: &Path, kind: &str) -> String {
-    format!(
-        "{}/{}.md",
-        super::repository::draft_directory(root),
-        template_code(kind)
-    )
+fn template_relative(root: &Path, kind: &str) -> Result<String> {
+    let directory = super::repository::draft_directory(root);
+    let folder = root.join(directory);
+    let mut authored = Vec::new();
+    if folder.is_dir() {
+        for entry in
+            std::fs::read_dir(&folder).with_context(|| format!("read {}", folder.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() || path.extension().is_none_or(|extension| extension != "md") {
+                continue;
+            }
+            let body = std::fs::read_to_string(&path)
+                .with_context(|| format!("read {}", path.display()))?;
+            if is_unedited_stub(&body) {
+                continue;
+            }
+            let declared_kind = rules::frontmatter::extract(&body)
+                .and_then(|frontmatter| rules::frontmatter::field(frontmatter, "kind"));
+            if declared_kind.as_deref() == Some(kind) {
+                let filename = entry.file_name();
+                let filename = filename
+                    .to_str()
+                    .ok_or_else(|| anyhow!("a {kind} Draft has a non-UTF-8 filename"))?;
+                authored.push(format!("{directory}/{filename}"));
+            }
+        }
+    }
+    authored.sort();
+    match authored.as_slice() {
+        [] => Ok(format!("{directory}/{}.md", template_code(kind))),
+        [relative] => Ok(relative.clone()),
+        _ => Err(anyhow!(
+            "multiple {kind} Drafts in {directory}: {}; keep one authored {kind} Draft before opening its notation",
+            authored.join(", ")
+        )),
+    }
 }
 
-fn template_path(root: &Path, kind: &str) -> PathBuf {
-    root.join(template_relative(root, kind))
+fn template_path(root: &Path, kind: &str) -> Result<PathBuf> {
+    Ok(root.join(template_relative(root, kind)?))
 }
 
 /// The repository-relative path and stub bytes of `kind`'s letter Draft, as
@@ -228,11 +254,12 @@ fn write_template_stub(path: &Path, kind: &str) -> Result<()> {
 /// The placeholder letter a lifecycle command writes before the lawyer
 /// drafts it. Opening a notation from these bytes is refused.
 fn template_stub(kind: &str) -> String {
-    let (title, command) = if kind == ONBOARDING {
-        ("Onboarding letter", "onboard")
+    let title = if kind == ONBOARDING {
+        "Onboarding letter"
     } else {
-        ("Offboarding letter", "offboard")
+        "Offboarding letter"
     };
+    let placeholder = template_placeholder(kind);
     // An onboarding letter always carries the engagement-arbitration Clause and
     // the two questions it binds; an offboarding letter has none.
     let (clauses, placement) = if kind == ONBOARDING {
@@ -244,22 +271,33 @@ fn template_stub(kind: &str) -> String {
         ("", "")
     };
     format!(
-        "---\nkind: {kind}\ntitle: {title}\nrespondent_type: person_and_entity\nconfidential: true\n{clauses}---\n\n{placement}Draft this letter before running `navigator project {command}` again.\n"
+        "---\nkind: {kind}\ntitle: {title}\nrespondent_type: person_and_entity\nconfidential: true\n{clauses}---\n\n{placement}{placeholder}\n"
     )
+}
+
+fn template_placeholder(kind: &str) -> String {
+    let command = if kind == ONBOARDING {
+        "onboard"
+    } else {
+        "offboard"
+    };
+    format!("Draft this letter before running `navigator project {command}` again.")
 }
 
 /// Whether `contents` is a lifecycle letter stub nobody has drafted yet.
 /// Such a file is a placeholder, never an attorney's edit.
 pub(crate) fn is_unedited_stub(contents: &str) -> bool {
-    [ONBOARDING, OFFBOARDING]
-        .iter()
-        .any(|kind| contents == template_stub(kind))
+    let body = rules::frontmatter::split(contents).map(|(_, body)| body.trim());
+    [ONBOARDING, OFFBOARDING].iter().any(|kind| {
+        contents == template_stub(kind)
+            || body.is_some_and(|body| body == template_placeholder(kind))
+    })
 }
 
 fn require_template_matches_main(root: &Path, kind: &str) -> Result<()> {
     git(root, &["fetch", "origin", "main"])
         .context("fetch origin/main before opening the notation")?;
-    let relative = template_relative(root, kind);
+    let relative = template_relative(root, kind)?;
     let exists = git(
         root,
         &["cat-file", "-e", &format!("origin/main:{relative}")],
@@ -453,7 +491,7 @@ mod tests {
         git_ok(root, &["config", "user.email", "contributor@example.com"]);
         git_ok(root, &["config", "commit.gpgsign", "false"]);
         write_manifest(root);
-        let template = template_path(root, kind);
+        let template = template_path(root, kind).unwrap();
         std::fs::create_dir_all(template.parent().unwrap()).unwrap();
         std::fs::write(template, "---\nkind: letter\ntitle: Letter\n---\n").unwrap();
         git_ok(root, &["add", "navigator.yaml", "drafts"]);
@@ -514,8 +552,99 @@ mod tests {
         assert_eq!(template_code(OFFBOARDING), "offboarding__letter");
         assert_eq!(template_code("engagement__letter"), "engagement__letter");
         assert_eq!(
-            template_path(Path::new("project"), ONBOARDING),
+            template_path(Path::new("project"), ONBOARDING).unwrap(),
             PathBuf::from("project/drafts/onboarding__letter.md")
+        );
+    }
+
+    #[test]
+    fn an_existing_kind_named_lifecycle_draft_is_selected() {
+        for directory in ["drafts", "templates"] {
+            for kind in [ONBOARDING, OFFBOARDING] {
+                let root = tempfile::tempdir().unwrap();
+                std::fs::create_dir(root.path().join(directory)).unwrap();
+                std::fs::write(
+                    root.path().join(format!("{directory}/{kind}.md")),
+                    format!("---\nkind: {kind}\n---\nAuthored draft.\n"),
+                )
+                .unwrap();
+                assert_eq!(
+                    template_relative(root.path(), kind).unwrap(),
+                    format!("{directory}/{kind}.md")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_authored_kind_named_draft_takes_precedence_over_an_unedited_stub() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("drafts")).unwrap();
+        std::fs::write(
+            root.path().join("drafts/onboarding.md"),
+            "---\nkind: onboarding\n---\nAuthored draft.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("drafts/onboarding__letter.md"),
+            super::template_stub(ONBOARDING),
+        )
+        .unwrap();
+        assert_eq!(
+            template_relative(root.path(), ONBOARDING).unwrap(),
+            "drafts/onboarding.md"
+        );
+        std::fs::write(
+            root.path().join("drafts/onboarding__letter.md"),
+            "---\nkind: onboarding\n---\nAuthored canonical draft.\n",
+        )
+        .unwrap();
+        assert!(template_relative(root.path(), ONBOARDING)
+            .unwrap_err()
+            .to_string()
+            .contains("multiple onboarding Drafts"));
+    }
+
+    #[test]
+    fn a_body_only_placeholder_does_not_hide_an_authored_lifecycle_letter() {
+        for (kind, command) in [(ONBOARDING, "onboard"), (OFFBOARDING, "offboard")] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join("drafts")).unwrap();
+            let placeholder = format!("---\nkind: {kind}\ntitle: Undrafted letter\nrespondent_type: person_and_entity\nconfidential: true\n---\n\nDraft this letter before running `navigator project {command}` again.\n");
+            std::fs::write(
+                root.path()
+                    .join(format!("drafts/{}.md", template_code(kind))),
+                placeholder,
+            )
+            .unwrap();
+            std::fs::write(
+                root.path().join(format!("drafts/{kind}.md")),
+                format!("---\nkind: {kind}\n---\nAuthored letter.\n"),
+            )
+            .unwrap();
+            assert_eq!(
+                template_relative(root.path(), kind).unwrap(),
+                format!("drafts/{kind}.md")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn multiple_authored_onboarding_drafts_are_refused_before_remote_requests() {
+        let root = tempfile::tempdir().unwrap();
+        write_manifest(root.path());
+        std::fs::create_dir(root.path().join("drafts")).unwrap();
+        for name in ["onboarding.md", "onboarding__letter.md"] {
+            std::fs::write(
+                root.path().join("drafts").join(name),
+                "---\nkind: onboarding\n---\nAuthored letter.\n",
+            )
+            .unwrap();
+        }
+        let error = run_open(root.path(), None, ONBOARDING).await.unwrap_err();
+        assert!(
+            error.to_string().contains("multiple onboarding Drafts"),
+            "ambiguous Drafts must be refused before Git or HTTP: {error:#}"
         );
     }
 
@@ -548,7 +677,7 @@ mod tests {
             (ONBOARDING, "Onboarding letter", "onboard"),
             (OFFBOARDING, "Offboarding letter", "offboard"),
         ] {
-            let path = template_path(root.path(), kind);
+            let path = template_path(root.path(), kind).unwrap();
             write_template_stub(&path, kind).unwrap();
             let body = std::fs::read_to_string(path).unwrap();
             assert!(body.contains(&format!("title: {expected_title}")));
@@ -580,7 +709,7 @@ mod tests {
         assert!(missing.to_string().contains("origin/main has no"));
 
         std::fs::write(
-            template_path(root.path(), ONBOARDING),
+            template_path(root.path(), ONBOARDING).unwrap(),
             "---\nkind: letter\ntitle: Local edit\n---\n",
         )
         .unwrap();
@@ -613,7 +742,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         write_manifest(root.path());
         run_open(root.path(), None, ONBOARDING).await.unwrap();
-        let stub = std::fs::read_to_string(template_path(root.path(), ONBOARDING)).unwrap();
+        let stub =
+            std::fs::read_to_string(template_path(root.path(), ONBOARDING).unwrap()).unwrap();
         assert!(stub.contains("Draft this letter"));
     }
 
@@ -639,7 +769,7 @@ mod tests {
             run_offboard(root.path(), None, None).await,
             ExitCode::SUCCESS
         );
-        assert!(template_path(root.path(), OFFBOARDING).is_file());
+        assert!(template_path(root.path(), OFFBOARDING).unwrap().is_file());
 
         let root = tempfile::tempdir().unwrap();
         init_project_repository(root.path(), OFFBOARDING);
@@ -698,17 +828,17 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("templates")).unwrap();
         assert_eq!(
-            template_path(root.path(), ONBOARDING),
+            template_path(root.path(), ONBOARDING).unwrap(),
             root.path().join("templates/onboarding__letter.md")
         );
         assert_eq!(
-            template_relative(root.path(), OFFBOARDING),
+            template_relative(root.path(), OFFBOARDING).unwrap(),
             "templates/offboarding__letter.md"
         );
 
         std::fs::create_dir(root.path().join("drafts")).unwrap();
         assert_eq!(
-            template_relative(root.path(), ONBOARDING),
+            template_relative(root.path(), ONBOARDING).unwrap(),
             "drafts/onboarding__letter.md",
             "an ambiguous checkout falls back to the canonical spelling; the gate refuses it"
         );
@@ -744,7 +874,7 @@ mod tests {
     fn template_path_is_under_project_root() {
         let root = Path::new("matter");
         assert_eq!(
-            super::template_path(root, "onboarding"),
+            super::template_path(root, "onboarding").unwrap(),
             root.join("drafts/onboarding__letter.md")
         );
     }

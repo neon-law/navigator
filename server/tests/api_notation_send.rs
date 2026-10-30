@@ -33,6 +33,7 @@ const FEE_CLAUSE: &str = "**Fees.** This matter is billed at $400 per hour again
 struct Harness {
     app: axum::Router,
     surreal: store::surreal::SurrealDb,
+    storage: Arc<dyn cloud::StorageService>,
     /// The workflow-machine runtime (a `DispatchingRuntime`, so the generate-PDF
     /// worker actually renders on approval) — also what drives the fixture to
     /// the `lawyer_review` gate.
@@ -74,6 +75,7 @@ async fn build_app() -> Harness {
     Harness {
         app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
         surreal,
+        storage,
         workflow_runtime,
         signature_provider,
     }
@@ -132,6 +134,7 @@ async fn seed_lawyer_review_notation(h: &Harness, project_id: uuid::Uuid) -> uui
     portal::retainer_walk::advance_to_lawyer_review(
         &h.surreal,
         h.workflow_runtime.as_ref(),
+        &h.storage,
         notation_id,
         None,
     )
