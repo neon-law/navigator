@@ -348,6 +348,10 @@ pub const SEEDED_TEMPLATES: &[SeededTemplate] = &[
         markdown: include_str!("../../templates/notations/neon_law/privacy_policy.md"),
     },
     SeededTemplate {
+        label: "notations/neon_law/basic_will.md",
+        markdown: include_str!("../../templates/notations/neon_law/basic_will.md"),
+    },
+    SeededTemplate {
         label: "notations/neon_law/onboarding__letter.md",
         markdown: canonical::TEMPLATE_ONBOARDING_LETTER,
     },
@@ -6841,7 +6845,7 @@ records:
         let creds = crate::credentials::for_person(&surreal, nick.id)
             .await
             .unwrap();
-        assert_eq!(creds.len(), 3, "expected NV + CA + WA admissions");
+        assert_eq!(creds.len(), 4, "expected NV + CA + NY + WA admissions");
         // The state bar numbers are public-record disclosures; pin them
         // explicitly so a seed YAML edit can't silently change the
         // attorney advertising disclosure rendered on the firm site.
@@ -6857,7 +6861,8 @@ records:
         assert_eq!(by_juris.get("NV").map(String::as_str), Some("13400"));
         assert_eq!(by_juris.get("CA").map(String::as_str), Some("337252"));
         assert_eq!(by_juris.get("WA").map(String::as_str), Some("63446"));
-        assert_eq!(report.credentials_inserted, 3);
+        assert_eq!(by_juris.get("NY").map(String::as_str), Some("6380059"));
+        assert_eq!(report.credentials_inserted, 4);
     }
 
     #[tokio::test]
