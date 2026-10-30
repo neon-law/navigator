@@ -175,11 +175,21 @@ impl PostgresDb {
             PgPoolOptions::new()
                 .max_connections(10)
                 .acquire_timeout(std::time::Duration::from_secs(10))
-                .connect_with(options)
+                .connect_with(graph_session(options))
                 .await
                 .map_err(|_| PostgresError::Connection)?,
         ))
     }
+}
+
+/// AGE's Cypher parser resolves through the `ag_catalog` schema, and AGE
+/// queries run on any connection this store opens, so every connection adds
+/// `ag_catalog` after `public` — ordinary, unqualified table resolution is
+/// unchanged. The AGE library itself is preloaded per session by the role's
+/// `session_preload_libraries` setting (roles.sql), not by connection
+/// options: a non-superuser cannot set it at startup.
+fn graph_session(options: PgConnectOptions) -> PgConnectOptions {
+    options.options([("search_path", "public,ag_catalog")])
 }
 
 #[cfg(test)]
@@ -280,6 +290,18 @@ mod tests {
             .execute(&admin)
             .await
             .expect("create isolated upgrade database");
+        // The graph migration requires the AGE extension; production creates it
+        // in the privileged init path before any migration runs.
+        let fixture = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options(&database))
+            .await
+            .expect("connect to isolated upgrade database");
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS age")
+            .execute(&fixture)
+            .await
+            .expect("create AGE extension on isolated upgrade database");
+        fixture.close().await;
         let result = verify_purchase_upgrade(&options(&database)).await;
         let drop_database = format!("DROP DATABASE \"{database}\" WITH (FORCE)");
         sqlx::query(AssertSqlSafe(drop_database))
