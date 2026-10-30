@@ -15,7 +15,10 @@ use crate::{
     remote,
 };
 
-async fn coordinates(host: Option<&str>, project: Option<&str>) -> Result<(String, String, Uuid)> {
+pub(super) async fn coordinates(
+    host: Option<&str>,
+    project: Option<&str>,
+) -> Result<(String, String, Uuid)> {
     let (base, token, id, _) = coordinates_with_code(host, project).await?;
     Ok((base, token, id))
 }
@@ -34,7 +37,7 @@ async fn coordinates_with_code(
     Ok((base, token, id, project.to_string()))
 }
 
-async fn call(request: reqwest::RequestBuilder, action: &str) -> Result<Value> {
+pub(super) async fn call(request: reqwest::RequestBuilder, action: &str) -> Result<Value> {
     let response = request
         .timeout(Duration::from_secs(30))
         .send()
@@ -61,7 +64,7 @@ fn annotate_visibility(row: &mut Value) {
     }
 }
 
-fn finish(result: Result<Value>) -> ExitCode {
+pub(super) fn finish(result: Result<Value>) -> ExitCode {
     match result {
         Ok(mut row) => {
             annotate_visibility(&mut row);

@@ -258,6 +258,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
                 store::documents::MAX_DOCUMENT_UPLOAD_REQUEST_BYTES,
             )),
         ),
+        (
+            "GET",
+            "/app/api/authorities/{id}",
+            get(crate::authorities_api::read_filed_authority_door),
+        ),
         // LAW-93: read an Authority's archived artifact back down, gated
         // like the write.
         (

@@ -376,3 +376,80 @@ async fn a_title_is_stored_changed_and_cleared() {
     assert_eq!(status, 200, "{cleared}");
     assert!(cleared["title"].is_null(), "{cleared}");
 }
+
+#[tokio::test]
+async fn a_proposal_patch_preserves_existing_deadline_metadata() {
+    use base64::Engine as _;
+    let fixture = fixture().await;
+    let (status, document) = send(
+        &fixture.app,
+        "POST",
+        &format!("/app/api/projects/{}/documents", fixture.project_id),
+        &fixture.participant,
+        serde_json::to_vec(&json!({
+            "filename":"synthetic-notice.txt", "kind":"unclassified", "content_type":"text/plain",
+            "content_base64":base64::engine::general_purpose::STANDARD.encode(b"Synthetic notice")
+        }))
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 201, "{document}");
+    let uri = format!("/app/api/projects/{}/deadlines", fixture.project_id);
+    let mut input: Value = serde_json::from_slice(&body("Synthetic Rule 1")).unwrap();
+    input["replay_key"] = json!("synthetic-rule-1");
+    input["owner_person_id"] = json!(fixture.participant.person_id.unwrap());
+    input["source_document_id"] = document["current_version"]["asset_id"].clone();
+    input["source"] = json!("synthetic-workflow");
+    input["calendar_role"] = json!("opponent");
+    let (status, created) = send(
+        &fixture.app,
+        "POST",
+        &uri,
+        &fixture.participant,
+        serde_json::to_vec(&input).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 201, "{created}");
+    let id = created["id"].as_str().unwrap();
+    let (status, completed) = send(
+        &fixture.app,
+        "POST",
+        &format!("{uri}/{id}/complete"),
+        &fixture.participant,
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(status, 200, "{completed}");
+    let (status, updated) = send(
+        &fixture.app,
+        "PATCH",
+        &format!("{uri}/{id}"),
+        &fixture.participant,
+        serde_json::to_vec(&json!({
+            "title":"Synthetic response", "description":"Synthetic reviewed proposal audit",
+            "due_at":"2028-03-01T17:00:00-08:00", "authority_kind":"court_rule",
+            "authority":"Synthetic Rule 2"
+        }))
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200, "{updated}");
+    assert_eq!(updated["due_at"], "2028-03-01T17:00:00-08:00");
+    assert_eq!(updated["authority"], "Synthetic Rule 2");
+    for field in [
+        "id",
+        "owner_person_id",
+        "source_document_id",
+        "internal_lead_days",
+        "client_lead_days",
+        "calendar_role",
+        "source",
+        "replay_key",
+        "status",
+    ] {
+        assert_eq!(
+            updated[field], completed[field],
+            "proposal PATCH must retain {field}"
+        );
+    }
+}

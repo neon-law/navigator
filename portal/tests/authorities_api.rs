@@ -614,3 +614,68 @@ async fn an_unknown_authority_has_no_archive() {
     .await;
     assert_eq!(status, 404);
 }
+
+async fn get_metadata(
+    fx: &Fixture,
+    session: Option<&portal::SessionData>,
+    id: &str,
+) -> (u16, Value) {
+    let mut request = Request::builder().uri(format!("/app/api/authorities/{id}"));
+    if let Some(session) = session {
+        request = request.extension(session.clone());
+    }
+    let response = fx
+        .app
+        .clone()
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn filed_authority_metadata_resolves_the_canonical_citation() {
+    let fx = fixture().await;
+    let (_, row) = post(
+        &fx.app,
+        Some(&fx.lawyer_session),
+        request_body("Synthetic Rule 1", b"synthetic archive"),
+    )
+    .await;
+    let id = row["id"].as_str().unwrap();
+    let (status, metadata) = get_metadata(&fx, Some(&fx.lawyer_session), id).await;
+    assert_eq!(status, 200);
+    assert_eq!(metadata["citation"], "Synthetic Rule 1");
+    assert_eq!(metadata["id"], row["id"]);
+    assert_eq!(get_metadata(&fx, None, id).await.0, 401);
+    for role in [Role::Clerk, Role::Client] {
+        let session = portal::SessionData::fresh("synthetic-reader", role);
+        assert_eq!(get_metadata(&fx, Some(&session), id).await.0, 403);
+    }
+    assert_eq!(
+        get_metadata(
+            &fx,
+            Some(&fx.lawyer_session),
+            &uuid::Uuid::new_v4().to_string()
+        )
+        .await
+        .0,
+        404
+    );
+    let asset = store::assets::find_by_id(
+        &fx.surreal,
+        row["archived_asset_id"].as_str().unwrap().parse().unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    fx.storage.delete(&asset.storage_key).await.unwrap();
+    assert_eq!(get_metadata(&fx, Some(&fx.lawyer_session), id).await.0, 404);
+}

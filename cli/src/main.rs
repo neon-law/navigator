@@ -1739,6 +1739,15 @@ enum ServiceCmd {
 
 #[derive(Subcommand)]
 enum DeadlineCmd {
+    /// Show a cited date proposal; only --confirm writes a stored Deadline.
+    Propose {
+        #[command(flatten)]
+        args: projects::deadline_proposal::ProposalArgs,
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// List the deadlines stored on a Project.
     List {
         /// Project code. Defaults to project.name in navigator.yaml.
@@ -5132,6 +5141,14 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             }
         },
         ProjectsCmd::Deadline { action } => match action {
+            DeadlineCmd::Propose {
+                args,
+                host,
+                project,
+            } => {
+                projects::deadline_proposal::propose(host.host.as_deref(), project.as_deref(), args)
+                    .await
+            }
             DeadlineCmd::List { host, project } => {
                 projects::deadline::list(host.host.as_deref(), project.as_deref()).await
             }
