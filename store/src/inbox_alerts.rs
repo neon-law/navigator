@@ -154,6 +154,7 @@ mod tests {
                 email_conversation_id: None,
                 attachment_asset_id: None,
                 occurred_at: "2026-10-10T00:00:00Z",
+                raw_storage_key: None,
             },
         )
         .await

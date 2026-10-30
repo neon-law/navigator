@@ -1173,6 +1173,10 @@ mod tests {
                 "20261030010000_add_template_firm.sql",
                 include_str!("../postgres/migrations/20261030010000_add_template_firm.sql"),
             ),
+            (
+                "20261030020000_linkedin_channel_and_raw_storage.sql",
+                include_str!("../postgres/migrations/20261030020000_linkedin_channel_and_raw_storage.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

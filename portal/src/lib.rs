@@ -98,6 +98,7 @@ mod dev_reload;
 pub(crate) mod docket_api;
 pub(crate) mod efilings_api;
 pub(crate) mod handoffs_api;
+pub(crate) mod inbox_import_api;
 pub(crate) mod matter_caption_api;
 pub(crate) mod module_records_api;
 pub(crate) mod pages_api;

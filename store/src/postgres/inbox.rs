@@ -84,7 +84,7 @@ const CONVERSATION_COLUMNS: &str = "id, firm_id, brand_key, interaction_type, pr
 /// this slice serves; the mirror's whole-row parity still compares it.
 const MESSAGE_COLUMNS: &str = "id, conversation_id, parent_message_id, visibility, direction, \
     body, author_person_id, provider_message_id, provider_ref, delivery_state, purpose, \
-    attachment_asset_id, communication_id, occurred_at, inserted_at, updated_at";
+    attachment_asset_id, raw_storage_key, communication_id, occurred_at, inserted_at, updated_at";
 
 const ASSIGNMENT_COLUMNS: &str = "id, conversation_id, firm_id, from_project_id, to_project_id, \
     actor_person_id, inserted_at";
@@ -135,6 +135,7 @@ fn message(row: &sqlx::postgres::PgRow) -> Result<Message, sqlx::Error> {
         delivery_state: row.try_get("delivery_state")?,
         purpose: row.try_get("purpose")?,
         attachment_asset_id: row.try_get("attachment_asset_id")?,
+        raw_storage_key: row.try_get("raw_storage_key")?,
         communication_id: row.try_get("communication_id")?,
         occurred_at: row.try_get("occurred_at")?,
         inserted_at: row.try_get("inserted_at")?,
@@ -172,6 +173,7 @@ struct MessageInsert<'a> {
     purpose: &'a str,
     visibility: Option<&'a str>,
     attachment_asset_id: Option<Uuid>,
+    raw_storage_key: Option<&'a str>,
     occurred_at: &'a str,
 }
 
@@ -184,9 +186,9 @@ async fn insert_message(
     sqlx::query(
         "INSERT INTO message (id, conversation_id, parent_message_id, visibility, direction, body, \
          author_person_id, provider_message_id, provider_ref, delivery_state, purpose, \
-         attachment_asset_id, communication_id, occurred_at, alert_state, alert_channel_id, \
-         alert_timestamp, inserted_at, updated_at) \
-         VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, $12, $13, NULL, NULL, \
+         attachment_asset_id, raw_storage_key, communication_id, occurred_at, alert_state, \
+         alert_channel_id, alert_timestamp, inserted_at, updated_at) \
+         VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL, $13, $14, NULL, NULL, \
          now(), now())",
     )
     .bind(id)
@@ -200,6 +202,7 @@ async fn insert_message(
     .bind(insert.delivery_state)
     .bind(insert.purpose)
     .bind(insert.attachment_asset_id)
+    .bind(insert.raw_storage_key.map(str::to_string))
     .bind(insert.occurred_at)
     .bind(alert_state)
     .execute(executor)
@@ -288,6 +291,7 @@ pub(crate) async fn ingest_message_on(
             purpose: purpose::MATTER,
             visibility: inbound.visibility,
             attachment_asset_id: inbound.attachment_asset_id,
+            raw_storage_key: inbound.raw_storage_key,
             occurred_at: inbound.occurred_at,
         },
     )
@@ -665,6 +669,7 @@ async fn create_message_on(
             purpose: purpose_value,
             visibility,
             attachment_asset_id,
+            raw_storage_key: None,
             occurred_at,
         },
     )
@@ -936,6 +941,7 @@ pub(crate) async fn open_sms_conversation_on(
         email_conversation_id: None,
         attachment_asset_id: None,
         occurred_at: &Utc::now().to_rfc3339(),
+        raw_storage_key: None,
     };
     let conversation = match find_open_thread_on(&pg.0, &thread).await? {
         Some(existing) => existing,
@@ -1283,6 +1289,27 @@ pub(crate) async fn message_by_id_on(
     .await
     .map_err(db_error)?;
     row.map(|row| message(&row)).transpose().map_err(db_error)
+}
+
+/// Point an imported Message at its first filed attachment Asset (LAW-238
+/// D1). The remaining attachments of the same message resolve through
+/// `MailProvenance.source_message_id`, so only the first occupies the slot.
+/// A no-op when the slot is already set — imports re-run idempotently.
+pub(crate) async fn set_attachment_asset_on(
+    pg: &PostgresDb,
+    message_id: Uuid,
+    asset_id: Uuid,
+) -> Result<(), InboxError> {
+    sqlx::query(
+        "UPDATE message SET attachment_asset_id = $2, updated_at = now() \
+         WHERE id = $1 AND attachment_asset_id IS NULL",
+    )
+    .bind(message_id)
+    .bind(asset_id)
+    .execute(&pg.0)
+    .await
+    .map_err(db_error)?;
+    Ok(())
 }
 
 async fn messages_for_on(
