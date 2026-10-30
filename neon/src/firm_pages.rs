@@ -1637,7 +1637,92 @@ mod notation_catalog_tests {
                 views::harvard_outline::stage_html(&document),
                 "preview body must come from {source_path}"
             );
+            assert!(
+                preview.questionnaire_error.is_none(),
+                "{source_path} previews behind a failure panel: {:?}",
+                preview.questionnaire_error
+            );
         }
+    }
+
+    /// The fail-loud sweep: every legal-shelf template — `forms/` and
+    /// `neon_law/` — must yield a readable, non-empty questionnaire with at
+    /// least one interactive step, and a non-empty compiled body. A template
+    /// that declares a questionnaire it cannot parse used to preview as a
+    /// silently empty demo (the reported "no questions" symptom); now the
+    /// typed parse failure surfaces here and in the preview's visible panel
+    /// instead.
+    #[test]
+    fn every_legal_shelf_template_yields_a_live_questionnaire_and_body() {
+        let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let templates_root = repository_root.join("templates");
+        let notations_root = templates_root.join("notations");
+        let mut paths = BTreeSet::new();
+        for shelf in ["forms", "neon_law"] {
+            collect_markdown_paths(&notations_root.join(shelf), &templates_root, &mut paths);
+        }
+        assert!(
+            paths.len() >= 20,
+            "the legal shelves hold {} templates — the sweep only makes sense over the real catalog",
+            paths.len()
+        );
+
+        let mut degraded: Vec<String> = Vec::new();
+        for path in &paths {
+            let source =
+                fs::read_to_string(templates_root.join(path)).expect("shelf template exists");
+            let mut problems: Vec<String> = Vec::new();
+
+            let composed = match rules::clauses::compile(&source) {
+                Ok(composed) => Some(composed),
+                Err(error) => {
+                    problems.push(format!("clause composition failed: {error}"));
+                    None
+                }
+            };
+
+            let document = composed.as_deref().map(views::harvard_outline::parse);
+            let frontmatter = document
+                .as_ref()
+                .and_then(|doc| doc.frontmatter.clone())
+                .unwrap_or_default();
+            match views::questionnaire_preview::parse(&frontmatter) {
+                Err(failure) => problems.push(format!(
+                    "questionnaire failed to parse: {}",
+                    failure.message
+                )),
+                Ok(questions) if questions.is_empty() => {
+                    problems.push("the questionnaire resolved to no demo questions".to_string());
+                }
+                Ok(questions) => {
+                    if !questions
+                        .iter()
+                        .any(views::questionnaire_preview::PreviewQuestion::is_interactive)
+                    {
+                        problems.push(
+                            "every resolved step is non-interactive — nothing to answer"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+
+            if let Some(composed) = composed {
+                let document = views::harvard_outline::parse(&composed);
+                if document.units.is_empty() {
+                    problems.push("the compiled body is empty".to_string());
+                }
+            }
+
+            for problem in problems {
+                degraded.push(format!("{path}: {problem}"));
+            }
+        }
+        assert!(
+            degraded.is_empty(),
+            "the sweep surfaced silently-degrading templates:\n{}",
+            degraded.join("\n")
+        );
     }
 
     /// LAW-53: every catalog card's `kind` facet must come from the

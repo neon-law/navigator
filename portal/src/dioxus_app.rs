@@ -3548,6 +3548,7 @@ async fn inject_notation_preview(
         origin_url: found.origin_url.clone(),
         demo_questions: found.demo_questions.clone(),
         demo_workflow: found.demo_workflow.clone(),
+        questionnaire_error: found.questionnaire_error.clone(),
     };
     req.extensions_mut()
         .insert(webapp::notation_preview::InjectedNotationPreview { content, mode });

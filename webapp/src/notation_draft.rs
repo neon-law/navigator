@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::components::{Accordion, CodeBlock, PublicShell};
 use crate::harvard_outline::{HARVARD_OUTLINE_SCRIPT_HREF, HARVARD_OUTLINE_STYLESHEET_HREF};
-use crate::notation_demo::{render_live_template, QuestionnaireDemo};
+use crate::notation_demo::{questionnaire_error_panel, render_live_template, QuestionnaireDemo};
 use crate::notation_preview::NotationPreviewContent;
 use crate::notation_workflow::WorkflowDiagram;
 use crate::public_chrome::PublicChrome;
@@ -80,31 +80,40 @@ pub fn project_draft_source(source: &str) -> NotationPreviewContent {
     let doc = views::harvard_outline::parse(source);
     let frontmatter = doc.frontmatter.clone().unwrap_or_default();
     let origin_url = views::harvard_outline::frontmatter_field(&frontmatter, "origin_url");
-    let demo_questions = views::questionnaire_preview::parse(&frontmatter)
-        .into_iter()
-        .map(|q| {
-            let interactive = q.is_interactive();
-            crate::notation_demo::DemoQuestion {
-                code: q.code,
-                answer_type: q.answer_type,
-                prompt: q.prompt,
-                choices: q.choices,
-                interactive,
-                role_label: q.role_label,
-                group: q.group,
-                help: q.help,
-                columns: q
-                    .columns
+    let (demo_questions, questionnaire_error) =
+        match views::questionnaire_preview::parse(&frontmatter) {
+            Ok(questions) => (
+                questions
                     .into_iter()
-                    .map(|column| crate::notation_demo::DemoColumn {
-                        name: column.name,
-                        label: column.label,
-                        value_type: column.value_type,
+                    .map(|q| {
+                        let interactive = q.is_interactive();
+                        crate::notation_demo::DemoQuestion {
+                            code: q.code,
+                            answer_type: q.answer_type,
+                            prompt: q.prompt,
+                            choices: q.choices,
+                            interactive,
+                            role_label: q.role_label,
+                            group: q.group,
+                            help: q.help,
+                            columns: q
+                                .columns
+                                .into_iter()
+                                .map(|column| crate::notation_demo::DemoColumn {
+                                    name: column.name,
+                                    label: column.label,
+                                    value_type: column.value_type,
+                                })
+                                .collect(),
+                        }
                     })
                     .collect(),
-            }
-        })
-        .collect();
+                None,
+            ),
+            // Loud, not silent: a draft whose declared questionnaire cannot be
+            // read renders the failure panel, never an empty demo section.
+            Err(failure) => (Vec::new(), Some(failure.to_string())),
+        };
     let demo_workflow = views::workflow_preview::parse(&frontmatter)
         .into_iter()
         .map(|s| crate::notation_workflow::WorkflowStateView {
@@ -120,6 +129,7 @@ pub fn project_draft_source(source: &str) -> NotationPreviewContent {
         frontmatter,
         stage_html: views::harvard_outline::stage_html(&doc),
         origin_url,
+        questionnaire_error,
     }
 }
 
@@ -181,6 +191,9 @@ pub fn NotationDraftPage(chrome: PublicChrome, content: Option<NotationPreviewCo
                 header { class: "notation-draft__header",
                     p { class: "notation-draft__badge", "Draft — not run" }
                     h1 { "{content.title}" }
+                }
+                if let Some(error) = &content.questionnaire_error {
+                    {questionnaire_error_panel(error)}
                 }
                 if !content.demo_questions.is_empty() {
                     section { class: "notation-draft__questionnaire",
@@ -248,6 +261,7 @@ mod tests {
                 name: "BEGIN".to_string(),
                 transitions: vec![("intake_submitted".to_string(), "lawyer_review".to_string())],
             }],
+            questionnaire_error: None,
         }
     }
 
@@ -312,5 +326,56 @@ mod tests {
         }
         let out = ssr(app);
         assert!(out.contains("Draft not found"), "{out}");
+    }
+
+    /// A draft whose declared questionnaire cannot be parsed renders the
+    /// visible failure panel above the document — the author sees the
+    /// break, never a silently empty intake.
+    #[test]
+    fn a_draft_parse_failure_renders_the_visible_error_panel() {
+        fn app() -> Element {
+            let chrome = PublicChrome {
+                brand_name: "Neon Law".to_string(),
+                ..PublicChrome::default()
+            };
+            let content = NotationPreviewContent {
+                demo_questions: Vec::new(),
+                questionnaire_error: Some(
+                    "questionnaire failed to parse: a questionnaire is declared but no steps resolve from `BEGIN`"
+                        .to_string(),
+                ),
+                ..draft_content()
+            };
+            rsx! { NotationDraftPage { chrome, content: Some(content) } }
+        }
+        let out = ssr(app);
+        assert!(
+            out.contains("Questionnaire failed to parse"),
+            "panel headline: {out}"
+        );
+        assert!(out.contains(r#"role="alert""#), "announced: {out}");
+    }
+
+    /// `project_draft_source` maps an unreadable questionnaire onto the
+    /// panel field — the parse failure surfaces, it is not swallowed.
+    #[test]
+    fn a_draft_with_a_broken_questionnaire_carries_the_parse_failure() {
+        let source =
+            "---\ntitle: Broken\nquestionnaire:\n  BEGIN:\n    _: END\n  END: {}\n---\n\nBody.\n";
+        let content = project_draft_source(source);
+        let error = content
+            .questionnaire_error
+            .expect("a declared-but-unreadable questionnaire fails loud");
+        assert!(error.contains("no steps resolve"), "{error}");
+        assert!(content.demo_questions.is_empty());
+    }
+
+    /// A draft with no questionnaire block at all stays failure-free —
+    /// a letter drafts with no intake, not with an error.
+    #[test]
+    fn a_draft_with_no_questionnaire_block_carries_no_error() {
+        let content = project_draft_source("---\ntitle: Letter\n---\n\nBody.\n");
+        assert!(content.questionnaire_error.is_none());
+        assert!(content.demo_questions.is_empty());
     }
 }

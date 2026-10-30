@@ -245,6 +245,7 @@ async fn serve() -> SocketAddr {
             name: "BEGIN".to_string(),
             transitions: vec![("submit".to_string(), "END".to_string())],
         }],
+        questionnaire_error: None,
     })
     .await
 }

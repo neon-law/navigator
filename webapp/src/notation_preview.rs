@@ -48,7 +48,9 @@ use crate::components::{
     CATALOG_STYLESHEET_HREF,
 };
 use crate::harvard_outline::{HARVARD_OUTLINE_SCRIPT_HREF, HARVARD_OUTLINE_STYLESHEET_HREF};
-use crate::notation_demo::{render_live_template, DemoQuestion, QuestionnaireDemo};
+use crate::notation_demo::{
+    questionnaire_error_panel, render_live_template, DemoQuestion, QuestionnaireDemo,
+};
 use crate::notation_workflow::{WorkflowDiagram, WorkflowStateView};
 use crate::public_chrome::{PublicChrome, PublicFooter};
 
@@ -77,6 +79,12 @@ pub struct PreviewDoc {
     /// Empty for a template with no workflow block, which renders no
     /// section at all.
     pub demo_workflow: Vec<WorkflowStateView>,
+    /// Why the declared questionnaire is not on this page, when the
+    /// template declares one that fails to parse or whose Clause
+    /// composition degraded — rendered as a visible panel, never silently
+    /// empty. `None` with an empty question list is a template with no
+    /// questionnaire at all.
+    pub questionnaire_error: Option<String>,
 }
 
 /// Everything the page renders, resolved ahead of the render — the router's
@@ -92,6 +100,10 @@ pub struct NotationPreviewContent {
     pub origin_url: Option<String>,
     pub demo_questions: Vec<DemoQuestion>,
     pub demo_workflow: Vec<WorkflowStateView>,
+    /// Why the declared questionnaire is not on this page — the visible
+    /// panel's body. See [`PreviewDoc::questionnaire_error`].
+    #[serde(default)]
+    pub questionnaire_error: Option<String>,
 }
 
 /// Whether a notation is shown in the published catalog or a local author
@@ -217,6 +229,9 @@ pub fn NotationPreviewPage(
                     }
                 }
                 p { class: "nav-muted", "This is a synthetic preview; nothing you type below is saved." }
+                if let Some(error) = &content.questionnaire_error {
+                    {questionnaire_error_panel(error)}
+                }
                 if !content.demo_questions.is_empty() {
                     QuestionnaireDemo {
                         questions: content.demo_questions.clone(),
@@ -266,6 +281,7 @@ mod tests {
             origin_url: None,
             demo_questions: Vec::new(),
             demo_workflow: Vec::new(),
+            questionnaire_error: None,
         }
     }
 
@@ -284,6 +300,7 @@ mod tests {
             ),
             demo_questions: Vec::new(),
             demo_workflow: Vec::new(),
+            questionnaire_error: None,
         }
     }
 
@@ -373,6 +390,44 @@ mod tests {
         let out = html();
         assert!(out.contains("site-header"), "header chrome: {out}");
         assert!(out.contains("site-footer__legal"), "footer chrome: {out}");
+    }
+
+    /// The fail-loud contract: a template whose declared questionnaire
+    /// failed to parse renders a visible, announced panel — never a
+    /// quietly-missing demo section.
+    #[test]
+    fn a_parse_failure_renders_the_visible_error_panel() {
+        fn app() -> Element {
+            let chrome = PublicChrome {
+                brand_name: "Neon Law".to_string(),
+                ..PublicChrome::default()
+            };
+            let content = NotationPreviewContent {
+                questionnaire_error: Some(
+                    "questionnaire failed to parse: the declared chain stops at `BEGIN`"
+                        .to_string(),
+                ),
+                ..letter_content()
+            };
+            rsx! { NotationPreviewPage { chrome, content } }
+        }
+        let out = ssr(app);
+        assert!(
+            out.contains("Questionnaire failed to parse"),
+            "panel headline: {out}"
+        );
+        assert!(out.contains(r#"role="alert""#), "announced: {out}");
+        assert!(
+            out.contains("the declared chain stops at `BEGIN`"),
+            "panel body carries the parse error: {out}"
+        );
+    }
+
+    /// A healthy page renders no panel: an empty question list with no
+    /// error is a letter with no questionnaire, not a break.
+    #[test]
+    fn a_healthy_page_renders_no_error_panel() {
+        assert!(!html().contains("Questionnaire failed to parse"));
     }
 
     #[test]
