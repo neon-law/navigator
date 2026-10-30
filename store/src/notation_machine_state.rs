@@ -103,18 +103,22 @@ impl From<sqlx::Error> for MachineStateError {
 /// How long a transition waits for its notation's lane before failing.
 const LANE_LOCK_TIMEOUT: &str = "5s";
 
-/// The advisory-lock key for one notation's lane: the first 8 bytes of the
-/// notation id, big-endian. UUIDv7 ids are time-ordered with random low
-/// bits, so distinct notations map to distinct keys in practice — and a
-/// collision would only falsely serialize two notations, never corrupt
-/// either.
+/// The advisory-lock key for one notation's lane: a full-width FNV-1a hash
+/// of all 16 id bytes. Truncating a UUIDv7 to its high bytes would key on
+/// its millisecond timestamp — two notations created in the same
+/// millisecond would collide constantly — so the whole id feeds the hash.
+/// Advisory keys are 64-bit, so collisions remain possible in principle;
+/// one would only briefly serialize two notations, never corrupt either.
 #[must_use]
 pub fn lane_key(notation_id: Uuid) -> i64 {
-    i64::from_be_bytes(
-        notation_id.as_bytes()[0..8]
-            .try_into()
-            .expect("8 bytes of a Uuid"),
-    )
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = FNV_OFFSET;
+    for byte in notation_id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    i64::from_be_bytes(hash.to_be_bytes())
 }
 
 /// Full read query for one machine's state row — static so sqlx's
@@ -602,5 +606,11 @@ mod tests {
             lane_key(b),
             "distinct notations take distinct lanes"
         );
+        // Same-millisecond v7 ids share their timestamp prefix; pin a fixed
+        // pair so a truncating regression fails deterministically, not just
+        // when the clock cooperates.
+        let fixed_a = Uuid::from_u128(0x0197_1234_5678_0000_0000_0000_0000_0001);
+        let fixed_b = Uuid::from_u128(0x0197_1234_5678_0000_0000_0000_0000_0002);
+        assert_ne!(lane_key(fixed_a), lane_key(fixed_b));
     }
 }
