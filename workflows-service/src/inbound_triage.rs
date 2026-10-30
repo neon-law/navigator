@@ -21,9 +21,8 @@ use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::inbox_triage::ClassifierLane;
 use workflows::{
-    assemble_triage, build_triage_prompt, parse_triage, triage_input_digest,
-    InboundTriageReport, InboundTriageRequest, ProjectOption, TriageRunConfig,
-    TRIAGE_PROMPT_VERSION,
+    assemble_triage, build_triage_prompt, parse_triage, triage_input_digest, InboundTriageReport,
+    InboundTriageRequest, ProjectOption, TriageRunConfig, TRIAGE_PROMPT_VERSION,
 };
 
 const DEFAULT_METADATA_TOKEN_URL: &str =
@@ -78,8 +77,8 @@ impl TriageProviders {
         let metadata_url = workflows::harness_override(&get, "GOOGLE_METADATA_URL")
             .map_err(anyhow::Error::msg)?
             .unwrap_or_else(|| DEFAULT_METADATA_TOKEN_URL.to_string());
-        let base_url = workflows::harness_override(&get, TRIAGE_BASE_URL_ENV)
-            .map_err(anyhow::Error::msg)?;
+        let base_url =
+            workflows::harness_override(&get, TRIAGE_BASE_URL_ENV).map_err(anyhow::Error::msg)?;
         let token_source = Arc::new(MetadataTokenSource::new(metadata_url)?);
         let mut gemini = GeminiVertexAdapter::new(token_source)?;
         if let Some(base_url) = base_url {
@@ -285,12 +284,10 @@ impl InboundTriageService {
         let message_id = request.message_id;
         let context = {
             let surreal = self.surreal.clone();
-            ctx.run(move || async move {
-                Ok(Json(triage_context(&surreal, message_id).await?))
-            })
-            .name("load-inbound-triage-context")
-            .await?
-            .into_inner()
+            ctx.run(move || async move { Ok(Json(triage_context(&surreal, message_id).await?)) })
+                .name("load-inbound-triage-context")
+                .await?
+                .into_inner()
         };
         let Some(context) = context else {
             return Ok(Json(InboundTriageReport {
@@ -322,8 +319,8 @@ impl InboundTriageService {
         // The rule layer decides whether a model may be consulted at all.
         // Social-origin channels skip the classifier step entirely, so no
         // journal ever holds a social message's provider invocation.
-        let classifier_ran = self.providers.is_some()
-            && store::inbox_triage::classifier_may_run(&context.channel);
+        let classifier_ran =
+            self.providers.is_some() && store::inbox_triage::classifier_may_run(&context.channel);
         let menu = if classifier_ran {
             let surreal = self.surreal.clone();
             let firm_id = context.firm_id;
@@ -350,11 +347,8 @@ impl InboundTriageService {
                 .providers
                 .clone()
                 .expect("classifier_ran implies configured providers");
-            let digest = triage_input_digest(
-                &context.channel,
-                context.subject.as_deref(),
-                &context.body,
-            );
+            let digest =
+                triage_input_digest(&context.channel, context.subject.as_deref(), &context.body);
             let config = TriageRunConfig::new(&providers.model, &providers.location, digest)
                 .map_err(HandlerError::from)?;
             let prompt = build_triage_prompt(

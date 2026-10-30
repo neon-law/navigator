@@ -73,7 +73,10 @@ impl TriageRunConfig {
         if config.model.trim().is_empty()
             || config.location.trim().is_empty()
             || config.input_digest.len() != 64
-            || !config.input_digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !config
+                .input_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
         {
             return Err(TriageError::InvalidRunConfig);
         }
@@ -178,7 +181,8 @@ where
 /// A malformed, incomplete, or out-of-range verdict is [`TriageError::InvalidOutput`]
 /// — the caller decays to `NeedsHuman`, never to a guess.
 pub fn parse_triage(json: &str) -> Result<TriageClassifierOutput, TriageError> {
-    let raw: RawClassifierOutput = serde_json::from_str(json).map_err(|_| TriageError::InvalidOutput)?;
+    let raw: RawClassifierOutput =
+        serde_json::from_str(json).map_err(|_| TriageError::InvalidOutput)?;
     let rationale = raw.rationale.trim();
     if !rationale.is_empty()
         && rationale.chars().count() <= MAX_RATIONALE_CHARS
@@ -323,9 +327,8 @@ pub fn assemble_triage(
         message_id,
         firm_id,
         suggested_project_id: validated_project,
-        project_confidence: validated_project.map(|_| {
-            classifier.map_or(0.0, |output| output.project_confidence)
-        }),
+        project_confidence: validated_project
+            .map(|_| classifier.map_or(0.0, |output| output.project_confidence)),
         privilege,
         // Only a Privileged row carries the confidence that justified it;
         // an Uncertain row keeps its reasoning in rationale and raw_output.
@@ -377,8 +380,7 @@ mod tests {
         assert_eq!(output.privilege_confidence, 0.93);
         assert!(output.suggested_project_id.is_none());
         assert_eq!(
-            output.rationale,
-            "Sender describes an engagement.",
+            output.rationale, "Sender describes an engagement.",
             "rationale is trimmed for the audit row"
         );
     }
@@ -511,7 +513,10 @@ mod tests {
         assert_eq!(row.model_id.as_deref(), Some("gemini-3.5-flash-lite"));
         assert_eq!(row.prompt_version, TRIAGE_PROMPT_VERSION);
         assert_eq!(row.raw_output.as_deref(), Some("{\"privileged\": true}"));
-        assert_eq!(row.disposition, store::inbox_triage::TriageDisposition::Suggested);
+        assert_eq!(
+            row.disposition,
+            store::inbox_triage::TriageDisposition::Suggested
+        );
         assert!(!row.labeled_example);
         assert_eq!(row.message_id, message_id);
         assert_eq!(row.firm_id, firm_id);
@@ -541,7 +546,10 @@ mod tests {
         assert_eq!(row.privilege_confidence, None);
         // Even a validated suggestion waits: uncertain privilege wins.
         assert_eq!(row.suggested_project_id, Some(project_id));
-        assert_eq!(row.disposition, store::inbox_triage::TriageDisposition::NeedsHuman);
+        assert_eq!(
+            row.disposition,
+            store::inbox_triage::TriageDisposition::NeedsHuman
+        );
         let absent = assemble_triage(
             message_id,
             firm_id,

@@ -71,18 +71,18 @@ pub use email_summary::{
     NormalizedEmail, Sender, SummaryError, SummaryProvider, DEFAULT_MAX_INPUT_CHARS,
     DEFAULT_MAX_OUTPUT_TOKENS, SUMMARY_PROMPT_VERSION,
 };
-pub use inbox_triage::{
-    assemble_triage, build_triage_prompt, parse_triage, triage_input_digest,
-    triage_response_schema, ClassifierLane, InboundTriageReport, InboundTriageRequest,
-    ProjectOption, TriageClassifierOutput, TriageError, TriageRunConfig,
-    DEFAULT_TRIAGE_MAX_OUTPUT_TOKENS, TRIAGE_PROMPT_VERSION,
-};
 pub use email_summary_config::{harness_override, EmailSummaryConfig, EmailSummaryConfigError};
 pub use email_summary_delivery::{
     deliver_summary, render_original_message, render_summary_message, DeliveryResult,
     ProviderDelivery, SummaryDeliveryError, SummaryDeliveryMessage,
 };
 pub use guardrail::{lawyer_review_gates_filing, lawyer_review_precedes_submission, GateViolation};
+pub use inbox_triage::{
+    assemble_triage, build_triage_prompt, parse_triage, triage_input_digest,
+    triage_response_schema, ClassifierLane, InboundTriageReport, InboundTriageRequest,
+    ProjectOption, TriageClassifierOutput, TriageError, TriageRunConfig,
+    DEFAULT_TRIAGE_MAX_OUTPUT_TOKENS, TRIAGE_PROMPT_VERSION,
+};
 pub use intake::{
     dispatch_document_intake, is_document_intake, IntakeArtifact, IntakeError, IntakePayload,
 };
