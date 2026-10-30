@@ -512,8 +512,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
       }
     ],
     "remaining": [
@@ -525,8 +525,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
       }
     ],
     "remaining": [
@@ -538,8 +538,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
       }
     ],
     "remaining": [
@@ -551,8 +551,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
       }
     ],
     "remaining": [
@@ -575,6 +575,19 @@
     ],
     "remaining": [
       "Application reads of the ordered attachments through the matter Communications view require separate acceptance."
+    ]
+  },
+  "inbox_triage": {
+    "scenario": "one triage row per message; structural privilege label; suggestion-only Project routing; human disposition transitions",
+    "runtime_tests": [
+      {
+        "file": "store/src/postgres_mirror/inbox.rs",
+        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
+      }
+    ],
+    "remaining": [
+      "Classifier-driven rows, human confirm and override transitions, and review-queue application queries require separate acceptance."
     ]
   },
   "iolta_account": {
@@ -712,8 +725,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
       }
     ],
     "remaining": [
@@ -922,6 +935,19 @@
     ],
     "remaining": [
       "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
+    ]
+  },
+  "person_phone": {
+    "scenario": "E.164 canonical spelling at the write boundary; one primary per Person; row identity stable across label and primary changes",
+    "runtime_tests": [
+      {
+        "file": "store/tests/person_phones.rs",
+        "function": "setting_a_number_primary_demotes_the_previous_primary",
+        "proves": "Row identity is stable across label and primary changes: differently formatted spellings converge on one row and exactly one primary survives each write, the facts the whole-row projection must reproduce."
+      }
+    ],
+    "remaining": [
+      "PostgreSQL-side whole-row convergence for person_phone is covered by the shared source_domain_records mirror machinery; a live-Postgres parity run for this table specifically is pending with the identity-storage slice."
     ]
   },
   "person_project_role": {
@@ -1249,19 +1275,6 @@
     "runtime_tests": [],
     "remaining": [
       "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "person_phone": {
-    "scenario": "E.164 canonical spelling at the write boundary; one primary per Person; row identity stable across label and primary changes",
-    "runtime_tests": [
-      {
-        "file": "store/tests/person_phones.rs",
-        "function": "setting_a_number_primary_demotes_the_previous_primary",
-        "proves": "Row identity is stable across label and primary changes: differently formatted spellings converge on one row and exactly one primary survives each write, the facts the whole-row projection must reproduce."
-      }
-    ],
-    "remaining": [
-      "PostgreSQL-side whole-row convergence for person_phone is covered by the shared source_domain_records mirror machinery; a live-Postgres parity run for this table specifically is pending with the identity-storage slice."
     ]
   }
 }
