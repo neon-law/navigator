@@ -119,18 +119,121 @@ async fn public_preview_fits_questions_fields_and_the_document() {
     client.close().await.ok();
 }
 
-async fn serve() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    let app = router();
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("serve");
-    });
-    addr
+/// The basic will's public preview, composed exactly the way the published
+/// site composes it — `notation_preview_doc::from_markdown` over the bundled
+/// template — walked once per state the will serves.
+///
+/// This server renders server-side only: the demo's Continue button is a
+/// hydrated `onclick`, and no wasm bundle exists here, so the walk asserts
+/// what the SSR page must carry — the full declared chain as the count and
+/// outline, the state question as a real radio choice for each of the four
+/// states (not the non-interactive explanation the `jurisdiction__law` state
+/// rendered before it became a declared choice), and a body that composes
+/// without leaking raw template markers. The hydrated stepping through the
+/// same chain is the matter-bound walk's job in `browser_e2e.rs`.
+#[tokio::test]
+async fn basic_will_preview_offers_every_states_question() {
+    let Some(client) = new_client_or_skip().await else {
+        return;
+    };
+    let addr = serve_doc(basic_will_doc()).await;
+    let url = format!("http://{addr}/notations/basic-will");
+
+    const WILL_STATES: [(&str, &str); 4] = [
+        ("CA", "California"),
+        ("NV", "Nevada"),
+        ("NY", "New York"),
+        ("WA", "Washington"),
+    ];
+
+    for (key, label) in WILL_STATES {
+        client.goto(&url).await.expect("preview");
+        client
+            .wait()
+            .for_element(fantoccini::Locator::Css(".notation-demo__count"))
+            .await
+            .expect("demo question count");
+        let count = client
+            .find(fantoccini::Locator::Css(".notation-demo__count"))
+            .await
+            .expect("count element")
+            .text()
+            .await
+            .expect("count text");
+        assert_eq!(
+            count, "Question 1 of 8",
+            "{label}: the demo must offer the will's full declared chain — an empty or truncated questionnaire is the reported symptom, at the browser layer"
+        );
+
+        // The state question is interactive: a radio card per declared
+        // choice, including the state under test. Before the will's state
+        // question declared its choices, this step rendered as an
+        // explanation and no state could be walked in the demo.
+        let state_radio = format!(
+            "input[type='radio'][name='custom_single_choice__law'][value='{key}']"
+        );
+        client
+            .find(fantoccini::Locator::Css(&state_radio))
+            .await
+            .unwrap_or_else(|_| {
+                panic!("{label}: the demo's first question must render the state choice as a radio group")
+            });
+        let state_label = client
+            .execute(
+                &format!(
+                    "const el = document.querySelector('{state_radio}'); \
+                     return el ? el.closest('label').textContent.trim() : null;"
+                ),
+                vec![],
+            )
+            .await
+            .expect("state choice label");
+        assert!(
+            state_label.as_str().map_or(false, |text| text.contains(label)),
+            "{label}: the state card's label must name the state, got {state_label:?}"
+        );
+
+        // The outline lists every declared question, so a parse that drops
+        // questions cannot pass silently.
+        let outline_items = client
+            .find_all(fantoccini::Locator::Css(
+                ".notation-demo__outline ol li",
+            ))
+            .await
+            .expect("outline items");
+        assert_eq!(
+            outline_items.len(),
+            8,
+            "{label}: the outline must list all 8 declared questions, got {}",
+            outline_items.len()
+        );
+
+        // The composed page must carry no raw template markers: the preview
+        // is fail-loud, so composition failures may not silently degrade
+        // into `{{#if` leakage or an unanswered-blank scaffold.
+        let html = client.source().await.expect("source");
+        assert!(
+            !html.contains("{{"),
+            "{label}: raw template markers leaked into the composed preview: {:.1000}",
+            html
+        );
+        assert!(
+            !html.contains("notation-demo__explanation"),
+            "{label}: the first question rendered as a non-interactive explanation instead of a control"
+        );
+        assert_no_horizontal_overflow(&client, 1280).await;
+    }
+
+    client.close().await.ok();
 }
 
-fn router() -> Router {
-    let doc = webapp::notation_preview::PreviewDoc {
+fn basic_will_doc() -> webapp::notation_preview::PreviewDoc {
+    let source = include_str!("../../templates/notations/neon_law/basic_will.md");
+    portal::notation_preview_doc::from_markdown("basic-will", "", source)
+}
+
+async fn serve() -> SocketAddr {
+    serve_doc(webapp::notation_preview::PreviewDoc {
         slug: "synthetic-preview".to_string(),
         title: "Synthetic preview".to_string(),
         source_href: String::new(),
@@ -144,7 +247,21 @@ fn router() -> Router {
             name: "BEGIN".to_string(),
             transitions: vec![("submit".to_string(), "END".to_string())],
         }],
-    };
+    })
+    .await
+}
+
+async fn serve_doc(doc: webapp::notation_preview::PreviewDoc) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let app = router(doc);
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+    addr
+}
+
+fn router(doc: webapp::notation_preview::PreviewDoc) -> Router {
     let app = portal::dioxus_app::notation_preview_router(
         vec![doc],
         webapp::notation_preview::NotationPreviewMode::Local,
