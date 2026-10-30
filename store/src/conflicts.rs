@@ -64,7 +64,7 @@
 //! conflict; only a person can *clear* one — because the graph is never
 //! known to be complete.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
@@ -981,6 +981,66 @@ pub async fn edges_among(surreal: &SurrealDb, nodes: &[NodeRef]) -> Result<Vec<E
                 kind: row.kind,
                 confidence_pct: row.confidence_pct,
             })
+        })
+        .collect())
+}
+
+/// One edge of the conflict walk, normalized for graph-parity comparison
+/// against the AGE projection: the same normalization the traversal
+/// projects (`TRAVERSAL_FIELDS`), without the names. Owned here because the
+/// traversal defines the shape; the PostgreSQL graph arm consumes it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ParityEdge {
+    pub(crate) edge_table: String,
+    pub(crate) from_table: String,
+    pub(crate) from_id: String,
+    pub(crate) to_table: String,
+    pub(crate) to_id: String,
+    pub(crate) kind: String,
+    pub(crate) confidence_pct: i32,
+}
+
+/// The conflict walk's edge set over `anchors`, normalized for parity
+/// against the AGE projection. The same bounded traversal the conflict
+/// check runs — [`MAX_HOPS`], same normalization — so a disagreement
+/// between engines is a graph difference, not a normalization one.
+///
+/// # Errors
+///
+/// Returns a message if the query fails.
+pub(crate) async fn parity_edges(
+    surreal: &SurrealDb,
+    anchors: &[NodeRef],
+) -> Result<BTreeSet<ParityEdge>, String> {
+    if anchors.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let (query, last) = traversal_query();
+    let anchor_rows: Vec<AnchorRow> = anchors
+        .iter()
+        .map(|anchor| AnchorRow {
+            table: anchor.kind.table(),
+            id: anchor.id.to_string(),
+        })
+        .collect();
+    let edges: Vec<TraversedEdge> = surreal
+        .query(query)
+        .bind(("anchors", anchor_rows))
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(|err| graph_engine_error("traverse the conflict-check graph", &err))?
+        .take(last)
+        .map_err(|err| graph_engine_error("read the conflict-check traversal", &err))?;
+    Ok(edges
+        .into_iter()
+        .map(|edge| ParityEdge {
+            edge_table: edge.edge_table,
+            from_table: edge.from_table,
+            from_id: edge.from_id,
+            to_table: edge.to_table,
+            to_id: edge.to_id,
+            kind: edge.kind,
+            confidence_pct: edge.confidence_pct,
         })
         .collect())
 }

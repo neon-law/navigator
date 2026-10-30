@@ -1,5 +1,6 @@
 use super::*;
 use crate::persons::{NewPerson, Role};
+use crate::postgres_graph;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::test_support::{
     mem_surreal, seed_entity, SEED_ENTITY_JURISDICTION_ID, SEED_ENTITY_TYPE_ID,
@@ -414,10 +415,13 @@ async fn an_interrupted_run_resumes_without_duplicates_or_gaps() {
     let resumed = resume(&surreal, &pg, paused.run_id, None).await.unwrap();
     assert!(resumed.is_clean(), "{resumed:?}");
     // The rewound row was already written, so it was not written again.
+    // The graph arm's projection counts vertices and edges, not mirror
+    // rows, so its applied count stays out of the relational arithmetic.
     assert_eq!(
         resumed
             .groups
             .iter()
+            .filter(|group| group.mirror != postgres_graph::GRAPH_MIRROR)
             .map(|group| group.applied)
             .sum::<usize>()
             + 1,

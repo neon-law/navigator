@@ -87,6 +87,19 @@ async fn authoritative_facade_uses_postgres_and_keeps_the_compatibility_projecti
             .await
             .expect("create isolated PostgreSQL People database");
 
+        // The graph migration requires the AGE extension; production creates it
+        // in the privileged init path before any migration runs.
+        let mut fixture_options = admin_options.clone();
+        fixture_options = fixture_options.database(&database);
+        let fixture = sqlx::PgPool::connect_with(fixture_options)
+            .await
+            .expect("connect to isolated PostgreSQL People database");
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS age")
+            .execute(&fixture)
+            .await
+            .expect("create AGE extension on isolated PostgreSQL People database");
+        fixture.close().await;
+
         let mut child =
             std::process::Command::new(std::env::current_exe().expect("test executable"));
         child
