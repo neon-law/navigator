@@ -51,21 +51,26 @@ pub async fn run(host: Option<&str>, code: &str, dry_run: bool) -> ExitCode {
 async fn run_inner(host: Option<&str>, code: &str, dry_run: bool) -> Result<ExitCode> {
     let (base, token) = crate::remote::resolve(host)?;
     let report = import(&base, &token, code, dry_run).await?;
-    report_exit(&report, code, dry_run)
+    report_exit(&report, dry_run)
 }
 
 /// Render the report and decide the exit: refusals fail the verb so scripts
 /// notice, the way the door's own refusal statuses would.
-fn report_exit(report: &DriveImportReport, code: &str, dry_run: bool) -> Result<ExitCode> {
+///
+/// Deliberately never echoes the caller's `code`: the `rust/cleartext-logging`
+/// CodeQL query taints every clap-parsed argument through the unrelated
+/// `Commands::Secrets` arm, so echoing it would trip that known false
+/// positive (the same pattern [`super::skill::unresolved_message`] avoids).
+fn report_exit(report: &DriveImportReport, dry_run: bool) -> Result<ExitCode> {
     if report.imported.is_empty() && report.refused.is_empty() {
         println!(
-            "Nothing to import from {code}'s Drive folder{}.",
+            "Nothing to import from the Project's Drive folder{}.",
             if dry_run { " (dry run)" } else { "" }
         );
         return Ok(ExitCode::SUCCESS);
     }
     println!(
-        "{} {code}'s Drive folder{}:",
+        "{} the Project's Drive folder{}:",
         if dry_run { "Plan for" } else { "Imported" },
         if dry_run {
             " (dry run, nothing written)"
@@ -175,14 +180,11 @@ mod tests {
                 reason: "name_collision".into(),
             }],
         };
-        let error = report_exit(&refused, "matter-one", false).unwrap_err();
+        let error = report_exit(&refused, false).unwrap_err();
         assert!(error.to_string().contains("1 file(s) were refused"));
 
         let clean = super::DriveImportReport::default();
-        assert_eq!(
-            report_exit(&clean, "matter-one", false).unwrap(),
-            ExitCode::SUCCESS
-        );
+        assert_eq!(report_exit(&clean, false).unwrap(), ExitCode::SUCCESS);
     }
 
     #[tokio::test]

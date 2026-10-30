@@ -545,8 +545,7 @@ async fn same_name_files_are_refused_together_case_insensitively() {
             .refused
             .iter()
             .all(|refused| refused.reason == "name_collision"),
-        "both members are refused: {:?}",
-        report.refused
+        "both colliding members are refused"
     );
     let assets = store::assets::for_project(&world.surreal, world.project.id)
         .await
