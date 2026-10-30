@@ -326,13 +326,13 @@ async fn fetch_for_update(
         "SELECT id,project_id,title,body,assignee_id,due_on,state,inserted_at,updated_at \
          FROM project_task WHERE id=$1 FOR UPDATE",
     )
-        .bind(id)
-        .fetch_optional(&mut **tx)
-        .await?
-        .as_ref()
-        .map(from_row)
-        .transpose()?
-        .ok_or(ProjectTaskError::NotFound)
+    .bind(id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .as_ref()
+    .map(from_row)
+    .transpose()?
+    .ok_or(ProjectTaskError::NotFound)
 }
 
 async fn fetch(pg: &PostgresDb, id: Uuid) -> Result<ProjectTask, ProjectTaskError> {
@@ -340,13 +340,13 @@ async fn fetch(pg: &PostgresDb, id: Uuid) -> Result<ProjectTask, ProjectTaskErro
         "SELECT id,project_id,title,body,assignee_id,due_on,state,inserted_at,updated_at \
          FROM project_task WHERE id=$1",
     )
-        .bind(id)
-        .fetch_optional(&pg.0)
-        .await?
-        .as_ref()
-        .map(from_row)
-        .transpose()?
-        .ok_or(ProjectTaskError::NotFound)
+    .bind(id)
+    .fetch_optional(&pg.0)
+    .await?
+    .as_ref()
+    .map(from_row)
+    .transpose()?
+    .ok_or(ProjectTaskError::NotFound)
 }
 
 #[cfg(test)]
@@ -371,20 +371,32 @@ mod tests {
     fn refuses_an_untitled_or_oversized_title() {
         let mut value = input();
         value.title = "   ".into();
-        assert!(matches!(validate(&value), Err(ProjectTaskError::Invalid("title"))));
+        assert!(matches!(
+            validate(&value),
+            Err(ProjectTaskError::Invalid("title"))
+        ));
         let mut value = input();
         value.title = "x".repeat(301);
-        assert!(matches!(validate(&value), Err(ProjectTaskError::Invalid("title"))));
+        assert!(matches!(
+            validate(&value),
+            Err(ProjectTaskError::Invalid("title"))
+        ));
     }
 
     #[test]
     fn refuses_a_blank_or_oversized_body() {
         let mut value = input();
         value.body = Some("   ".into());
-        assert!(matches!(validate(&value), Err(ProjectTaskError::Invalid("body"))));
+        assert!(matches!(
+            validate(&value),
+            Err(ProjectTaskError::Invalid("body"))
+        ));
         let mut value = input();
         value.body = Some("x".repeat(2001));
-        assert!(matches!(validate(&value), Err(ProjectTaskError::Invalid("body"))));
+        assert!(matches!(
+            validate(&value),
+            Err(ProjectTaskError::Invalid("body"))
+        ));
     }
 
     #[test]
@@ -410,7 +422,9 @@ mod tests {
     // assignment, transition validation, and the trigger-written audit rows.
     // They share the canonical-schema fixture used across the store crate.
     mod database {
-        use super::super::{assign, create, list_events, transition, NewProjectTask, ProjectTaskError, TaskState};
+        use super::super::{
+            assign, create, list_events, transition, NewProjectTask, ProjectTaskError, TaskState,
+        };
         use crate::postgres::PostgresDb;
         use crate::postgres_mirror::tests::{connect, fresh_schema};
         use sqlx::Row;
@@ -424,14 +438,16 @@ mod tests {
 
         async fn person(pg: &PostgresDb, name: &str) -> Uuid {
             let unique = Uuid::new_v4().simple().to_string();
-            let id: Uuid = sqlx::query("INSERT INTO person (id,name,email,role) VALUES ($1,$2,$3,'lawyer') RETURNING id")
-                .bind(Uuid::new_v4())
-                .bind(format!("Synthetic {name}"))
-                .bind(format!("{unique}@example.com"))
-                .fetch_one(pg.pool())
-                .await
-                .unwrap()
-                .get(0);
+            let id: Uuid = sqlx::query(
+                "INSERT INTO person (id,name,email,role) VALUES ($1,$2,$3,'lawyer') RETURNING id",
+            )
+            .bind(Uuid::new_v4())
+            .bind(format!("Synthetic {name}"))
+            .bind(format!("{unique}@example.com"))
+            .fetch_one(pg.pool())
+            .await
+            .unwrap()
+            .get(0);
             id
         }
 
@@ -505,7 +521,13 @@ mod tests {
 
             // Creating with, or assigning later to, a non-participant is denied.
             assert!(matches!(
-                create(&pg, seed.project_id, actor, &task_input(Some(seed.outsider))).await,
+                create(
+                    &pg,
+                    seed.project_id,
+                    actor,
+                    &task_input(Some(seed.outsider))
+                )
+                .await,
                 Err(ProjectTaskError::AssigneeNotParticipant)
             ));
             let created = create(&pg, seed.project_id, actor, &task_input(None))
@@ -518,9 +540,14 @@ mod tests {
             ));
 
             // A participant is acceptable, at create and by later assignment.
-            let assigned = create(&pg, seed.project_id, actor, &task_input(Some(seed.assignee)))
-                .await
-                .unwrap();
+            let assigned = create(
+                &pg,
+                seed.project_id,
+                actor,
+                &task_input(Some(seed.assignee)),
+            )
+            .await
+            .unwrap();
             assert_eq!(assigned.assignee_id, Some(seed.assignee));
             let reassigned = assign(&pg, created.id, actor, Some(seed.assignee))
                 .await
@@ -543,11 +570,17 @@ mod tests {
             // Skipping the middle state is refused, as is any backward move.
             assert!(matches!(
                 transition(&pg, created.id, actor, TaskState::Done).await,
-                Err(ProjectTaskError::Transition { from: "todo", to: "done" })
+                Err(ProjectTaskError::Transition {
+                    from: "todo",
+                    to: "done"
+                })
             ));
             assert!(matches!(
                 transition(&pg, created.id, actor, TaskState::Todo).await,
-                Err(ProjectTaskError::Transition { from: "todo", to: "todo" })
+                Err(ProjectTaskError::Transition {
+                    from: "todo",
+                    to: "todo"
+                })
             ));
 
             let in_progress = transition(&pg, created.id, actor, TaskState::InProgress)
@@ -565,7 +598,10 @@ mod tests {
             assert_eq!(retained.state, TaskState::Done);
             assert!(matches!(
                 transition(&pg, created.id, actor, TaskState::InProgress).await,
-                Err(ProjectTaskError::Transition { from: "done", to: "in_progress" })
+                Err(ProjectTaskError::Transition {
+                    from: "done",
+                    to: "in_progress"
+                })
             ));
         }
 
@@ -588,9 +624,15 @@ mod tests {
                 .unwrap();
 
             let events = list_events(&pg, created.id).await.unwrap();
-            let kinds: Vec<&str> = events.iter().map(|event| event.event_kind.as_str()).collect();
+            let kinds: Vec<&str> = events
+                .iter()
+                .map(|event| event.event_kind.as_str())
+                .collect();
             assert_eq!(kinds, ["created", "assignee_changed", "state_changed"]);
-            assert!(events[0].before_state.is_none(), "creation has no prior state");
+            assert!(
+                events[0].before_state.is_none(),
+                "creation has no prior state"
+            );
             assert_eq!(
                 events[0].actor_person_id, actor,
                 "every event names its actor"
@@ -603,8 +645,14 @@ mod tests {
                 events[1].after_state["assignee_id"],
                 serde_json::json!(seed.assignee)
             );
-            assert_eq!(events[2].before_state.as_ref().unwrap()["state"], serde_json::json!("todo"));
-            assert_eq!(events[2].after_state["state"], serde_json::json!("in_progress"));
+            assert_eq!(
+                events[2].before_state.as_ref().unwrap()["state"],
+                serde_json::json!("todo")
+            );
+            assert_eq!(
+                events[2].after_state["state"],
+                serde_json::json!("in_progress")
+            );
 
             // The database itself refuses a mutation that carries no audit
             // context, so the event log cannot be bypassed.
