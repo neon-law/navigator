@@ -142,6 +142,7 @@ pub mod notation_clauses;
 pub mod notation_documents;
 pub mod notation_drafts;
 pub mod notation_events;
+pub mod notation_machine_state;
 pub mod notation_packages;
 pub mod notation_pricing;
 pub mod notation_reset;

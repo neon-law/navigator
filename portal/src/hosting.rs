@@ -328,7 +328,12 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         ));
     tracing::info!("attachment scanner configured");
 
-    // Runtime selection: if `RESTATE_BROKER_URL` is set in the
+    // Runtime selection. The DBOS notation flag moves both timelines to
+    // the worker's DBOS ingress and wins over `RESTATE_BROKER_URL` — the
+    // flag is the explicit operator decision to move notation traffic, and
+    // `from_lookup` fails the boot when the worker's ingress is not
+    // configured (pointing notation at nothing is never the safe default).
+    // If the flag is off and `RESTATE_BROKER_URL` is set in the
     // environment, the `web` binary talks to the in-cluster
     // `workflows-service` worker through Restate. Otherwise we fall
     // back to the in-process `InMemoryRuntime` *wrapped in
@@ -339,10 +344,21 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     // Both implement `StateMachineRuntime`; the workflow and
     // questionnaire timelines share a single runtime instance keyed
     // by `(MachineKind, notation_id)`.
+    let dbos_notation_enabled = workflows::dbos_notation_enabled(|key| std::env::var(key).ok())
+        .map_err(anyhow::Error::msg)
+        .context("read NAVIGATOR_DBOS_NOTATION_ENABLED")?;
     let (workflow_runtime, questionnaire_runtime): (
         std::sync::Arc<dyn workflows::StateMachineRuntime>,
         std::sync::Arc<dyn workflows::StateMachineRuntime>,
-    ) = if std::env::var("RESTATE_BROKER_URL").is_ok() {
+    ) = if dbos_notation_enabled {
+        let rt = std::sync::Arc::new(
+            workflows::DbosNotationRuntime::from_lookup(|key| std::env::var(key).ok())
+                .map_err(anyhow::Error::msg)
+                .context("configure the DBOS notation runtime")?,
+        );
+        tracing::info!("runtime: DbosNotationRuntime (NAVIGATOR_DBOS_NOTATION_ENABLED=true)");
+        (rt.clone(), rt)
+    } else if std::env::var("RESTATE_BROKER_URL").is_ok() {
         let rt = std::sync::Arc::new(workflows::RestateRuntime::from_env());
         tracing::info!("runtime: RestateRuntime (RESTATE_BROKER_URL is set)");
         (rt.clone(), rt)
