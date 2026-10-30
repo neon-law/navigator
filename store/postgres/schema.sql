@@ -2258,15 +2258,31 @@ ALTER TABLE template ADD CONSTRAINT template_one_scope CHECK (project_id IS NULL
 -- Migration: 20261031010000_create_navigator_graph.sql
 -- The Apache AGE relationship graph, projected from the relational mirrors.
 --
--- `CREATE EXTENSION age` runs earlier, in the superuser init path
+-- `CREATE EXTENSION age` normally runs earlier, in the superuser init path
 -- (k8s/postgres/access/roles.sql); this migration owns the graph itself so the
--- migration login owns every graph object. The loader helpers are the only
+-- migration login owns every graph object. Environments that apply the
+-- canonical schema directly with no privileged init step (CI fixtures, scratch
+-- databases) bootstrap the extension in the block below under IF-NOT-EXISTS
+-- semantics: a no-op when the init path already created it, and a loud
+-- permission error for a non-superuser login when the init path never ran.
+-- The loader helpers are the only
 -- Cypher entry points for backfill batches: AGE's three-argument cypher()
 -- accepts a bound parameter only as a bare Param node, so each helper takes
 -- one JSON text payload, parses it into an agtype once, and passes it as a
 -- PL/pgSQL variable — which the engine substitutes as exactly that Param.
 -- The Cypher in each branch is a fixed dollar-quoted constant: no value ever
 -- becomes query text.
+
+-- The extension bootstrap lives in a DO block because the canonical-SQL
+-- parser tracks procedural blocks as opaque and every bare statement it does
+-- not know is rejected; the guard follows for the same reason.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'age') THEN
+        CREATE EXTENSION age;
+    END IF;
+END
+$$;
 
 -- The guard lives in a DO block because the canonical-SQL parser tracks
 -- procedural blocks as opaque and every bare statement it does not know
@@ -2307,6 +2323,23 @@ BEGIN
             PERFORM ag_catalog.create_elabel('navigator_graph', label::cstring);
         END IF;
     END LOOP;
+END
+$$;
+
+-- Runtime read access: cypher() executes as the calling login, so the app
+-- needs USAGE on the graph's schema and SELECT on its label tables; writes
+-- stay with the migration login through the loader helpers. The grant is
+-- guarded because environments that apply the canonical schema directly
+-- (CI fixtures) have no navigator_app role to grant to, and skipped when the
+-- role is absent rather than failing the schema application.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'navigator_app') THEN
+        GRANT USAGE ON SCHEMA navigator_graph TO navigator_app;
+        GRANT SELECT ON ALL TABLES IN SCHEMA navigator_graph TO navigator_app;
+        ALTER DEFAULT PRIVILEGES FOR ROLE navigator_owner IN SCHEMA navigator_graph
+            GRANT SELECT ON TABLES TO navigator_app;
+    END IF;
 END
 $$;
 
