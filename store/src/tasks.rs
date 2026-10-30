@@ -517,7 +517,7 @@ mod tests {
             };
             let pg = connect(&options, &database).await;
             let seed = seed(&pg).await;
-            let actor = Uuid::new_v4();
+            let actor = person(&pg, "Actor").await;
 
             // Creating with, or assigning later to, a non-participant is denied.
             assert!(matches!(
@@ -562,7 +562,7 @@ mod tests {
             };
             let pg = connect(&options, &database).await;
             let seed = seed(&pg).await;
-            let actor = Uuid::new_v4();
+            let actor = person(&pg, "Actor").await;
             let created = create(&pg, seed.project_id, actor, &task_input(None))
                 .await
                 .unwrap();
@@ -612,7 +612,7 @@ mod tests {
             };
             let pg = connect(&options, &database).await;
             let seed = seed(&pg).await;
-            let actor = Uuid::new_v4();
+            let actor = person(&pg, "Actor").await;
             let created = create(&pg, seed.project_id, actor, &task_input(None))
                 .await
                 .unwrap();
