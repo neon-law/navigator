@@ -133,18 +133,18 @@ async fn public_preview_fits_questions_fields_and_the_document() {
 /// same chain is the matter-bound walk's job in `browser_e2e.rs`.
 #[tokio::test]
 async fn basic_will_preview_offers_every_states_question() {
-    let Some(client) = new_client_or_skip().await else {
-        return;
-    };
-    let addr = serve_doc(basic_will_doc()).await;
-    let url = format!("http://{addr}/notations/basic-will");
-
     const WILL_STATES: [(&str, &str); 4] = [
         ("CA", "California"),
         ("NV", "Nevada"),
         ("NY", "New York"),
         ("WA", "Washington"),
     ];
+
+    let Some(client) = new_client_or_skip().await else {
+        return;
+    };
+    let addr = serve_doc(basic_will_doc()).await;
+    let url = format!("http://{addr}/notations/basic-will");
 
     for (key, label) in WILL_STATES {
         client.goto(&url).await.expect("preview");
@@ -190,7 +190,7 @@ async fn basic_will_preview_offers_every_states_question() {
         assert!(
             state_label
                 .as_str()
-                .map_or(false, |text| text.contains(label)),
+                .is_some_and(|text| text.contains(label)),
             "{label}: the state card's label must name the state, got {state_label:?}"
         );
 
@@ -213,8 +213,7 @@ async fn basic_will_preview_offers_every_states_question() {
         let html = client.source().await.expect("source");
         assert!(
             !html.contains("{{"),
-            "{label}: raw template markers leaked into the composed preview: {:.1000}",
-            html
+            "{label}: raw template markers leaked into the composed preview: {html:.1000}",
         );
         assert!(
             !html.contains("notation-demo__explanation"),

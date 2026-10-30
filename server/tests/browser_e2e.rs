@@ -4694,7 +4694,7 @@ async fn lawyer_walks_the_basic_will_through_the_matter_workflow() {
         "", // person__executor
         "", // person__alternate_executor
         "", // person__guardian
-        "Vera Beneficiary",
+        "Vera Doe",
         "The Reno residence to my daughter.",
         "Yes",
     ];
@@ -4839,7 +4839,7 @@ async fn lawyer_walks_the_basic_will_through_the_matter_workflow() {
         );
     }
     assert!(
-        src.contains("Vera Beneficiary"),
+        src.contains("Vera Doe"),
         "the beneficiaries people-list answer must render in the will: {src}",
     );
     // The four person questions picked candidates through real `<select>`s;
@@ -4954,7 +4954,7 @@ async fn lawyer_walks_the_basic_will_through_the_matter_workflow() {
     assert!(
         actual_payloads[5]
             .as_deref()
-            .is_some_and(|p| p.contains("Vera Beneficiary")),
+            .is_some_and(|p| p.contains("Vera Doe")),
         "the people list must journal the beneficiary rows: {:?}",
         actual_payloads[5],
     );
