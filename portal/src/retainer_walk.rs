@@ -416,7 +416,19 @@ pub async fn start_post(
     if code.is_empty() {
         return refuse_start(&body, "choose an onboarding template");
     }
-    let template_row = match store::templates::resolve(&state.surreal, None, code).await {
+    let brand = views::brand::brand_key();
+    let firm_id = match store::firms::firm_id_for_brand_key(&state.surreal, brand.as_str()).await {
+        Ok(Some(firm_id)) => firm_id,
+        Ok(None) => return refuse_start(&body, "this brand is not worn by a firm"),
+        Err(error) => {
+            tracing::error!(error = %error, "start_post: firm lookup for brand failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
+        }
+    };
+    // The Firm's own Library version of the code wins over the shared one;
+    // another Firm's Library is never consulted.
+    let template_row = match store::templates::resolve_for_firm(&state.surreal, firm_id, code).await
+    {
         Ok(Some(template)) => template,
         Ok(None) => return refuse_start(&body, "that onboarding template was not found"),
         Err(error) => {
@@ -437,15 +449,6 @@ pub async fn start_post(
             return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
         }
     };
-    let brand = views::brand::brand_key();
-    match store::firms::firm_id_for_brand_key(&state.surreal, brand.as_str()).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return refuse_start(&body, "this brand is not worn by a firm"),
-        Err(error) => {
-            tracing::error!(error = %error, "start_post: firm lookup for brand failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
-        }
-    }
     let lawyer_dri_id = if let Some(id) = session.as_deref().and_then(|s| s.person_id) {
         id
     } else if let Ok(Some(id)) = store::persons::default_firm_dri(&state.surreal).await {

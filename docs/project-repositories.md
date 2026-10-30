@@ -66,8 +66,10 @@ because a Rust check only guards the write paths that call it.
 name *is* the code, a matter coded `navigator` in the Firm's own organization would name Navigator's own source rather
 than a matter's, and every rule that treats a Project repository as client-adjacent would then be pointed at the
 product. `cloud::workspace::NAVIGATOR_REPOSITORY_URL` names that one repository — one host, one organization, the same
-on every deployment forever, which is exactly what a Project's repository never is — and
-`cloud::workspace::RESERVED_PROJECT_CODES` carries all three refusals.
+on every deployment forever, which is exactly what a Project's repository never is — and `library` is refused for the
+same repository reason: `<firm-slug>/library` is the Firm's [Firm Library](glossary/firm-library.md), the Drafts and
+default retainer every matter of that Firm starts from. `cloud::workspace::RESERVED_PROJECT_CODES` carries all four
+refusals.
 
 ## The repository name is the Project code
 
@@ -933,12 +935,13 @@ revised blueprint appears beside them as a new never-started row. Repository rea
 instead of presenting an empty board.
 
 A Project references a shared catalog template by its existing `code`, without carrying a local copy. When no matching
-`<code>.md` exists in the chosen Project blueprint directory, notation creation resolves the workspace-shared catalog
-row and pins that exact template version on the Notation. A local file intentionally overrides the catalog for that
-Project. Use one only for a genuinely Project-specific blueprint. Do not recode, rename, or copy a catalog template into
-a Project repository merely to reference it. The `navigator project onboard` and `navigator project offboard` commands
-are the exception: each creates a local letter stub on its first run, then opens that local template after it has been
-drafted, committed to `main`, and the local copy matches `origin/main`.
+`<code>.md` exists in the chosen Project blueprint directory, notation creation reads the owning Firm's [Firm
+Library](glossary/firm-library.md), then resolves the workspace-shared catalog row, and pins that exact template version
+on the Notation. A local file intentionally overrides the catalog for that Project. Use one only for a genuinely
+Project-specific blueprint. Do not recode, rename, or copy a catalog template into a Project repository merely to
+reference it. The `navigator project onboard` and `navigator project offboard` commands are the exception: each creates
+a local letter stub on its first run, then opens that local template after it has been drafted, committed to `main`, and
+the local copy matches `origin/main`.
 
 The filename stem of a Project-local template carries no required Project-code prefix (ENG-693). A `template` row is
 already scoped to its Project by `template.project_id`, so `code` only has to be unique *within* that one repository —

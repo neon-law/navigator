@@ -118,6 +118,7 @@ pub mod filings;
 pub mod finance_aggregate;
 pub mod firm_capability;
 pub mod firm_journal;
+pub mod firm_library;
 pub mod firm_secrets;
 pub mod firms;
 pub mod git_access_tokens;

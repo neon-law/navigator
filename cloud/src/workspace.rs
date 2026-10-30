@@ -182,7 +182,12 @@ pub const PORTAL_MOUNT_SEGMENT: &str = "portal";
 /// `closed` guards the same segment for the same reason as `new`:
 /// `/app/projects/closed` is the closed-matters tab, so a Project whose code is
 /// `closed` would collide with it.
-pub const RESERVED_PROJECT_CODES: &[&str] = &["navigator", "new", "closed"];
+///
+/// `library` is reserved for the repository reason too: a Firm's Firm
+/// Library is the repository `<firm-slug>/library` in the same organization as
+/// its Projects (`docs/glossary/firm-library.md`), so a matter coded
+/// `library` would name the Firm's library rather than a matter.
+pub const RESERVED_PROJECT_CODES: &[&str] = &["navigator", "new", "closed", "library"];
 
 /// Whether a value is safe as a URL segment and a repository name.
 ///
@@ -1005,6 +1010,10 @@ mod tests {
         assert!(
             RESERVED_PROJECT_CODES.contains(&"closed"),
             "`/app/projects/closed` is a literal route, so `closed` cannot be a Project code"
+        );
+        assert!(
+            RESERVED_PROJECT_CODES.contains(&"library"),
+            "`<firm-slug>/library` is the Firm Library, so `library` cannot be a Project code"
         );
     }
 }

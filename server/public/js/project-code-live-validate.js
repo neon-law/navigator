@@ -20,7 +20,7 @@
 (function () {
   "use strict";
 
-  const RESERVED = ["navigator", "new"];
+  const RESERVED = ["navigator", "new", "closed", "library"];
 
   // Mirrors `cloud::workspace::is_valid_slug` byte for byte: non-empty, at
   // most 80 characters, only lowercase ASCII letters/digits/hyphens,

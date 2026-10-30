@@ -1567,6 +1567,7 @@
         "body_sha256": "option<string>",
         "code": "string",
         "current_key": "option<string>",
+        "firm_id": "option<record<firm>>",
         "form_code": "option<string>",
         "id": "record",
         "inserted_at": "datetime",
@@ -4540,6 +4541,7 @@
           "body_sha256": "TEXT",
           "code": "TEXT",
           "current_key": "TEXT",
+          "firm_id": "UUID",
           "form_code": "TEXT",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
@@ -4557,6 +4559,10 @@
             "asset"
           ],
           [
+            "firm_id",
+            "firm"
+          ],
+          [
             "project_id",
             "project"
           ]
@@ -4564,6 +4570,7 @@
         "name": "template",
         "references": [
           "asset",
+          "firm",
           "project"
         ]
       },

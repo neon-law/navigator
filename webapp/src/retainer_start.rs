@@ -48,6 +48,11 @@ pub struct RetainerStartView {
     #[serde(default)]
     pub tokens_href: String,
     pub templates: Vec<TemplateChoice>,
+    /// The option selected when nothing was submitted: the Firm Library's
+    /// `retainer` when the Firm's library names one, otherwise
+    /// [`SHARED_DEFAULT_RETAINER`].
+    #[serde(default)]
+    pub default_template_code: String,
     pub client_email: String,
     pub retainer_template_code: String,
     pub csrf_token: String,
@@ -61,12 +66,46 @@ pub struct RetainerStartView {
     pub firm_name: String,
 }
 
-/// Load the start form: refuse non-lawyer, read the injected CSRF token and the
-/// echoed `?error=` / values, and list the seeded onboarding templates as
-/// `(code, label)` options sorted by label.
+/// The shared retainer a matter opens on when the Firm's Library names none.
+pub const SHARED_DEFAULT_RETAINER: &str = "onboarding__letter";
+
+/// The picker's options: the shared `onboarding__*` templates, each replaced
+/// by the Firm's own Library version of the same code, plus the Firm's other
+/// `onboarding__*` Drafts and its Library `retainer`, sorted by label.
 ///
-/// Restricting the picker to the `onboarding__*` family is what makes "opening a
-/// matter" always start it with a retainer-type notation.
+/// Restricting the picker to the `onboarding__*` family (and the Firm's chosen
+/// retainer, whose kind the Library sync already checked opens a matter) is
+/// what makes "opening a matter" always start it with a retainer-type notation.
+#[cfg(any(feature = "server", test))]
+#[must_use]
+pub fn picker_choices(
+    shared: &[store::templates::Template],
+    firm: &[store::templates::Template],
+    retainer: Option<&str>,
+) -> Vec<TemplateChoice> {
+    let offered = |t: &&store::templates::Template| {
+        t.code.starts_with("onboarding__") || Some(t.code.as_str()) == retainer
+    };
+    let firm: Vec<&store::templates::Template> = firm.iter().filter(offered).collect();
+    let mut choices: Vec<TemplateChoice> = shared
+        .iter()
+        .filter(|t| t.project_id.is_none() && t.firm_id.is_none())
+        .filter(offered)
+        .filter(|t| !firm.iter().any(|f| f.code == t.code))
+        .chain(firm.iter().copied())
+        .map(|t| TemplateChoice {
+            label: format!("{} — {}", t.title, t.code),
+            code: t.code.clone(),
+        })
+        .collect();
+    choices.sort_by(|a, b| a.label.cmp(&b.label));
+    choices
+}
+
+/// Load the start form: refuse non-lawyer, read the injected CSRF token and the
+/// echoed `?error=` / values, sync the Firm Library of the Firm wearing this
+/// brand, and list the onboarding templates as `(code, label)` options sorted
+/// by label ([`picker_choices`]).
 #[server]
 pub async fn get_retainer_start_form() -> Result<RetainerStartView, ServerFnError> {
     let role = crate::admin_listing::require_lawyer().await?;
@@ -84,22 +123,33 @@ pub async fn get_retainer_start_form() -> Result<RetainerStartView, ServerFnErro
     .await?;
 
     let surreal = consume_context::<store::surreal::SurrealDb>();
-    let mut templates: Vec<TemplateChoice> = store::templates::list_current(&surreal)
+    let shared = store::templates::list_current(&surreal)
         .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?
-        .into_iter()
-        .filter(|t| t.project_id.is_none() && t.code.starts_with("onboarding__"))
-        .map(|t| TemplateChoice {
-            label: format!("{} — {}", t.title, t.code),
-            code: t.code,
-        })
-        .collect();
-    templates.sort_by(|a, b| a.label.cmp(&b.label));
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    // The Firm wearing this brand: the one `POST` opens the matter under.
+    let firm_id = store::firms::firm_id_for_brand_key(&surreal, views::brand::brand_key().as_str())
+        .await
+        .ok()
+        .flatten();
+    let storage = try_consume_context::<std::sync::Arc<dyn cloud::StorageService>>();
+    let library = match (firm_id, storage) {
+        (Some(firm_id), Some(storage)) => {
+            store::firm_library::sync_configured(&surreal, &storage, firm_id).await
+        }
+        _ => None,
+    };
+    let retainer = library
+        .as_ref()
+        .and_then(|synced| synced.retainer.as_ref())
+        .map(|template| template.code.clone());
+    let firm = library.map(|synced| synced.templates).unwrap_or_default();
+    let templates = picker_choices(&shared, &firm, retainer.as_deref());
 
     Ok(RetainerStartView {
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
         firm_name: crate::app_chrome::firm_name_from_context().await,
         templates,
+        default_template_code: retainer.unwrap_or_else(|| SHARED_DEFAULT_RETAINER.to_string()),
         client_email: query.client_email.unwrap_or_default(),
         retainer_template_code: query.retainer_template_code.unwrap_or_default(),
         csrf_token,
@@ -139,11 +189,13 @@ fn start_body(view: &RetainerStartView) -> Element {
     let role = view.role;
     // A matter opens on an onboarding template; the dropdown is the canonical
     // picker so lawyers choose by title rather than typing a code. Default the
-    // selection to the generic retainer.
-    let selected = if view.retainer_template_code.is_empty() {
-        "onboarding__letter".to_string()
-    } else {
+    // selection to the Firm's Library retainer, or the shared generic one.
+    let selected = if !view.retainer_template_code.is_empty() {
         view.retainer_template_code.clone()
+    } else if !view.default_template_code.is_empty() {
+        view.default_template_code.clone()
+    } else {
+        SHARED_DEFAULT_RETAINER.to_string()
     };
     let options: Vec<Choice> = view
         .templates
@@ -221,6 +273,7 @@ mod tests {
                 label: "Onboarding Letter — onboarding__letter".to_string(),
             }],
             client_email: "libra@example.com".to_string(),
+            default_template_code: SHARED_DEFAULT_RETAINER.to_string(),
             retainer_template_code: "onboarding__letter".to_string(),
             csrf_token: "tok".to_string(),
             role: ViewerRole::Lawyer,
@@ -295,5 +348,76 @@ mod tests {
             .find("onboarding__letter")
             .expect("the echoed option renders");
         assert!(letter_at < selected_at, "{html}");
+    }
+
+    fn template(code: &str, title: &str, firm: Option<uuid::Uuid>) -> store::templates::Template {
+        store::templates::Template {
+            id: uuid::Uuid::now_v7(),
+            code: code.to_string(),
+            title: title.to_string(),
+            respondent_type: "person".to_string(),
+            project_id: None,
+            firm_id: firm,
+            is_current: true,
+            asset_id: None,
+            form_code: None,
+            kind: Some("onboarding".to_string()),
+            source_commit_sha: None,
+            body_sha256: None,
+            inserted_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    /// A Firm's Library replaces the shared row of the same code, adds its
+    /// own onboarding Drafts and its named retainer, and leaves out a Firm
+    /// Draft that is neither.
+    #[test]
+    fn the_picker_lays_the_firm_library_over_the_shared_catalog() {
+        let firm = Some(uuid::Uuid::now_v7());
+        let shared = [
+            template("onboarding__letter", "Shared Letter", None),
+            template("nv__llc_formation", "Formation", None),
+        ];
+        let library = [
+            template("onboarding__letter", "Firm Letter", firm),
+            template("firm_retainer", "Firm Retainer", firm),
+            template("firm_memo", "Firm Memo", firm),
+        ];
+        let labels: Vec<String> = picker_choices(&shared, &library, Some("firm_retainer"))
+            .into_iter()
+            .map(|choice| choice.label)
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                "Firm Letter — onboarding__letter",
+                "Firm Retainer — firm_retainer",
+            ]
+        );
+    }
+
+    /// With nothing submitted, the Firm's Library retainer is the selection.
+    #[test]
+    fn the_firm_library_retainer_is_the_default_selection() {
+        let mut view = view(None);
+        view.retainer_template_code = String::new();
+        view.default_template_code = "firm_retainer".to_string();
+        view.templates.push(TemplateChoice {
+            code: "firm_retainer".to_string(),
+            label: "Firm Retainer — firm_retainer".to_string(),
+        });
+        let html = render_start(&view);
+        let selected_at = html.find("selected").expect("a chosen option");
+        let retainer_at = html
+            .find("value=\"firm_retainer\"")
+            .expect("the Firm option");
+        let letter_at = html
+            .find("value=\"onboarding__letter\"")
+            .expect("the shared option");
+        assert!(
+            letter_at < retainer_at && retainer_at < selected_at,
+            "{html}"
+        );
     }
 }

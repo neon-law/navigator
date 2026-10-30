@@ -1480,10 +1480,11 @@ pub fn bootstrap_with_forgejo_oidc(
     // opens a matter — renders through Dioxus. It posts to the unchanged
     // `POST /app/lawyer/retainers/new`, which now redirects a refusal back here with
     // an `?error=` flash instead of re-rendering the form itself.
-    let dioxus_retainer_start = dioxus_app::csrf_page_router(
+    let dioxus_retainer_start = dioxus_app::csrf_page_router_with_storage(
         dioxus_app::LAWYER_RETAINER_NEW_PATH,
         webapp::retainer_start::LawyerRetainerStart,
         state.surreal.clone(),
+        state.storage.clone(),
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),

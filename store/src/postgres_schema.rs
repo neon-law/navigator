@@ -1169,6 +1169,10 @@ mod tests {
                     "../postgres/migrations/20261027120000_add_project_calendar_and_booking_url.sql"
                 ),
             ),
+            (
+                "20261030010000_add_template_firm.sql",
+                include_str!("../postgres/migrations/20261030010000_add_template_firm.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
@@ -1414,6 +1418,7 @@ mod tests {
             "title",
             "respondent_type",
             "project_id",
+            "firm_id",
             "is_current",
             "asset_id",
             "form_code",
@@ -1430,6 +1435,7 @@ mod tests {
             template.foreign_keys,
             BTreeSet::from([
                 ("project_id".to_string(), "project".to_string()),
+                ("firm_id".to_string(), "firm".to_string()),
                 ("asset_id".to_string(), "asset".to_string()),
             ])
         );

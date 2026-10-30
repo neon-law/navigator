@@ -99,7 +99,7 @@ struct Frontmatter {
 }
 
 /// Select and validate a Project blueprint from one pinned Git tree.
-fn selected_blueprint(
+pub(crate) fn selected_blueprint(
     tree: Vec<(String, Vec<u8>)>,
     code: &str,
 ) -> Result<String, TemplateSourceError> {
@@ -201,6 +201,32 @@ pub async fn persist_contents(
     contents: String,
     commit_sha: String,
 ) -> Result<Persisted, TemplateSourceError> {
+    persist_contents_in(
+        surreal,
+        storage,
+        crate::templates::Scope::Project(project_id),
+        code,
+        contents,
+        commit_sha,
+    )
+    .await
+}
+
+/// [`persist_contents`] into any repository-synced [`crate::templates::Scope`]:
+/// a Project's own repository, or a Firm's Firm Library
+/// ([`crate::firm_library`]). The validation, composition, and pins are
+/// identical; only the version line differs.
+///
+/// # Errors
+/// As [`persist_contents`].
+pub async fn persist_contents_in(
+    surreal: &crate::surreal::SurrealDb,
+    storage: &Arc<dyn StorageService>,
+    scope: crate::templates::Scope,
+    code: &str,
+    contents: String,
+    commit_sha: String,
+) -> Result<Persisted, TemplateSourceError> {
     // Validate with the same rule set `navigator project gate` runs. Refuse on
     // any blocking violation — a notation must never open from bad paper.
     //
@@ -241,9 +267,9 @@ pub async fn persist_contents(
     // row (mirrors the batch importer's registry step).
     register_questions(surreal, &fm).await?;
 
-    let saved = crate::templates::save_version(
+    let saved = crate::templates::save_version_in(
         surreal,
-        Some(project_id),
+        scope,
         code,
         crate::templates::Version {
             title: fm.title.unwrap_or_else(|| code.to_string()),

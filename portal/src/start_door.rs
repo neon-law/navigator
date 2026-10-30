@@ -319,8 +319,8 @@ async fn post_start(
         );
         return (StatusCode::OK, catalog.start.refusal.clone()).into_response();
     };
-    let Ok(Some(template)) =
-        store::templates::resolve(&state.app.surreal, None, template_code).await
+    let repo = repos::RepoStore::from_env().ok();
+    let Some(template) = start_template(&state.app, brand, template_code, repo.as_ref()).await
     else {
         audit(
             &session,
@@ -430,6 +430,41 @@ async fn post_start(
             (StatusCode::OK, catalog.start.refusal.clone()).into_response()
         }
     }
+}
+
+/// The Template a client start opens on: the Firm Library `retainer` of the
+/// Firm wearing this brand when its library names one, otherwise the
+/// service's mapped template — the Firm's own Library version of that code
+/// before the shared one. `None` when neither resolves.
+async fn start_template(
+    app: &AppState,
+    brand: views::brand::BrandKey,
+    service_template: &str,
+    repo: Option<&repos::RepoStore>,
+) -> Option<store::templates::Template> {
+    let firm_id = store::firms::firm_id_for_brand_key(&app.surreal, brand.as_str())
+        .await
+        .ok()
+        .flatten();
+    let Some(firm_id) = firm_id else {
+        return store::templates::resolve(&app.surreal, None, service_template)
+            .await
+            .ok()
+            .flatten();
+    };
+    let library = match repo {
+        Some(repo) => {
+            store::firm_library::sync_or_default(&app.surreal, &app.storage, repo, firm_id).await
+        }
+        None => None,
+    };
+    if let Some(retainer) = library.and_then(|synced| synced.retainer) {
+        return Some(retainer);
+    }
+    store::templates::resolve_for_firm(&app.surreal, firm_id, service_template)
+        .await
+        .ok()
+        .flatten()
 }
 
 fn audit(
@@ -665,6 +700,55 @@ mod tests {
             crate::session::SESSION_COOKIE_NAME,
             state.sessions.encode(session)
         )
+    }
+
+    /// The Firm wearing the brand opens every client start on its Firm
+    /// Library retainer when the library names one; a Firm with no library
+    /// keeps the service's mapped template.
+    #[tokio::test]
+    async fn the_firm_library_retainer_replaces_the_service_template() {
+        const DRAFT: &str =
+            include_str!("../../templates/notations/neon_law/onboarding__letter.md");
+        let (state, surreal) = seeded_state().await;
+        let brand = views::brand::BrandKey::Neon;
+        let dir = tempfile::tempdir().expect("temp repository root");
+        let repo = repos::RepoStore::new(dir.path());
+
+        let without = start_template(&state, brand, "nv__llc_formation", Some(&repo))
+            .await
+            .expect("the service template resolves");
+        assert_eq!(without.code, "nv__llc_formation");
+
+        let firm_id = store::firms::firm_id_for_brand_key(&surreal, brand.as_str())
+            .await
+            .expect("firm lookup")
+            .expect("the neon brand is worn");
+        let firm = store::firms::find_by_id(&surreal, firm_id)
+            .await
+            .expect("read firm")
+            .expect("firm exists");
+        repo.commit_as_code(
+            &store::firm_library::repository_name(&firm.slug),
+            repos::Author {
+                name: "Tester",
+                email: "tester@example.com",
+            },
+            "library",
+            &[
+                ("drafts/firm_retainer.md", DRAFT.as_bytes()),
+                (
+                    store::firm_library::MANIFEST_FILE,
+                    b"retainer: firm_retainer\n",
+                ),
+            ],
+        )
+        .expect("commit the synthetic library");
+
+        let with = start_template(&state, brand, "nv__llc_formation", Some(&repo))
+            .await
+            .expect("the library retainer resolves");
+        assert_eq!(with.code, "firm_retainer");
+        assert_eq!(with.firm_id, Some(firm_id));
     }
 
     #[tokio::test]
