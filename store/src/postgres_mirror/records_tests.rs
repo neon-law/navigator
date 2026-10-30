@@ -887,6 +887,7 @@ async fn notation_inputs_mirror_and_follow_their_notation() {
             slug: "synthetic-preview",
             title: "Synthetic preview",
             source: "Synthetic template body",
+            notation_id: None,
         },
     )
     .await
