@@ -33,6 +33,7 @@ pub mod brand_website;
 pub mod brands_edit;
 pub mod brands_home;
 pub mod brands_new;
+pub mod charts;
 pub mod clause_editor;
 pub mod clause_library;
 pub mod clerk;
