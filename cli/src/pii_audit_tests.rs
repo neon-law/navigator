@@ -26,7 +26,7 @@ async fn cruller_fixture() -> (SurrealDb, store::projects::Project) {
 async fn issue_scan_terms_collect_project_and_participant_identifiers() {
     let (db, project) = cruller_fixture().await;
 
-    let terms = crate::pii_audit::private_terms(&db, &[project.code.clone()])
+    let terms = crate::pii_audit::private_terms(&db, std::slice::from_ref(&project.code))
         .await
         .expect("resolve private terms");
 
@@ -68,7 +68,7 @@ async fn issue_scan_terms_skip_participants_of_other_projects() {
     let (db, project) = cruller_fixture().await;
     let other = store::test_support::seed_project(&db, "Unrelated Matter").await;
 
-    let terms = crate::pii_audit::private_terms(&db, &[other.code.clone()])
+    let terms = crate::pii_audit::private_terms(&db, std::slice::from_ref(&other.code))
         .await
         .expect("resolve private terms");
 
