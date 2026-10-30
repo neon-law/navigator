@@ -6180,11 +6180,11 @@ records:
         assert_eq!(holders, 1, "one box, one holder");
     }
 
-    /// No entity beyond the firm anchor seeds in either layer. A further
-    /// corporation, a trust, or a personal entity has no verified public source
-    /// in this repository, so it is supplied to a deployment privately.
+    /// No entity beyond the two firm anchors seeds in either layer. A
+    /// further corporation, a trust, or a personal entity has no verified public
+    /// source in this repository, so it is supplied to a deployment privately.
     #[tokio::test]
-    async fn only_the_firm_anchor_seeds_as_an_entity() {
+    async fn only_the_firm_anchors_seed_as_entities() {
         let surreal = mem_surreal().await;
 
         seed_canonical(&surreal, &fs_storage().await)
@@ -6194,13 +6194,19 @@ records:
             .await
             .expect("brand seed");
 
-        let names: Vec<String> = crate::entities::all(&surreal)
+        let mut names: Vec<String> = crate::entities::all(&surreal)
             .await
             .unwrap()
             .into_iter()
             .map(|e| e.name)
             .collect();
-        assert_eq!(names, vec![super::FIRM_ENTITY_NAME.to_string()]);
+        names.sort();
+        let mut expected = super::FIRM_ENTITY_NAMES
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(names, expected);
     }
 
     /// A Florida P.A. is a distinct designation under Ch. 621, Fla. Stat.,
