@@ -43,7 +43,6 @@
 //! does not first require being put on it. Every other tier still gets the
 //! committed `404`.
 
-
 /// Which view of the matter show is in front of the reader, addressed by
 /// `?tab=`. A tab is a presentation fact about the URL, never an
 /// authorization input: every tab's rows have already been through the
@@ -344,7 +343,10 @@ mod tests {
         );
         // A value the strip never advertised is a presentation nit, not a
         // refusal: the timeline is the default view.
-        assert_eq!(MatterTab::from_query(Some("../../admin")), MatterTab::Timeline);
+        assert_eq!(
+            MatterTab::from_query(Some("../../admin")),
+            MatterTab::Timeline
+        );
     }
 
     #[test]
@@ -382,4 +384,3 @@ mod tests {
         assert_eq!(html.matches("matter-tab--active").count(), 1, "{html}");
     }
 }
-
