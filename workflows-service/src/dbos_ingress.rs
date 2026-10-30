@@ -36,6 +36,7 @@ pub struct WorkerIngress {
     pub nightly_project_update: Option<NightlyIngress>,
     pub email_summary: Option<EmailSummaryIngress>,
     pub inbound_message_alert: Option<AlertIngress>,
+    pub notation: Option<NotationIngress>,
 }
 
 #[derive(Clone)]
@@ -112,6 +113,54 @@ impl AlertIngress {
             workflow,
         }
     }
+/// The synchronous ingress for the `notation` DBOS port: the caller-facing
+/// wire the Restate virtual object served, on the worker's health listener.
+/// Transitions run the [`crate::dbos_notation::NotationTransition`] workflow
+/// with `run` and return its result on the response; the two bodyless reads
+/// answer straight from the stores. All routes require the bearer token —
+/// unlike Restate Cloud, which authenticated by request signature at its
+/// own ingress.
+#[derive(Clone)]
+pub struct NotationIngress {
+    token: Arc<str>,
+    surreal: SurrealDb,
+    postgres: store::postgres::PostgresDb,
+    workflow: crate::dbos_notation::NotationTransitionWorkflow,
+}
+
+impl NotationIngress {
+    /// Construct after [`FinanceIngress::validate_token`] has passed —
+    /// every authenticated ingress shares one validated token.
+    #[must_use]
+    pub fn new(
+        token: String,
+        surreal: SurrealDb,
+        postgres: store::postgres::PostgresDb,
+        workflow: crate::dbos_notation::NotationTransitionWorkflow,
+    ) -> Self {
+        Self {
+            token: Arc::from(token),
+            surreal,
+            postgres,
+            workflow,
+        }
+    }
+
+    /// Per-route state: the kind token the route serves plus the shared
+    /// handles. `Clone` because `add_routes` reuses one instance across
+    /// the eight routes.
+    fn route_state(&self, kind: workflows::MachineKind) -> NotationRouteState {
+        NotationRouteState {
+            kind,
+            inner: self.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct NotationRouteState {
+    kind: workflows::MachineKind,
+    inner: NotationIngress,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -324,6 +373,46 @@ pub fn add_routes(router: Router, ingress: WorkerIngress) -> Router {
     } else {
         router
     };
+    let router = if let Some(notation) = ingress.notation {
+        // The Restate virtual object's seven handlers, plus a journal-backed
+        // `workflow_events` read the Restate side never served (the caller
+        // degrades its absence to an empty list — see `RestateRuntime::events`).
+        router
+            .route(
+                "/notation/{notation_id}/questionnaire_start",
+                post(notation_start).with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
+            )
+            .route(
+                "/notation/{notation_id}/questionnaire_signal",
+                post(notation_signal).with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
+            )
+            .route(
+                "/notation/{notation_id}/questionnaire_back",
+                post(notation_back).with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
+            )
+            .route(
+                "/notation/{notation_id}/questionnaire_current_state",
+                post(notation_current_state).with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
+            )
+            .route(
+                "/notation/{notation_id}/workflow_start",
+                post(notation_start).with_state(notation.route_state(workflows::MachineKind::Workflow)),
+            )
+            .route(
+                "/notation/{notation_id}/workflow_signal",
+                post(notation_signal).with_state(notation.route_state(workflows::MachineKind::Workflow)),
+            )
+            .route(
+                "/notation/{notation_id}/workflow_current_state",
+                post(notation_current_state).with_state(notation.route_state(workflows::MachineKind::Workflow)),
+            )
+            .route(
+                "/notation/{notation_id}/workflow_events",
+                post(notation_events).with_state(notation.route_state(workflows::MachineKind::Workflow)),
+            )
+    } else {
+        router
+    };
     router.layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
@@ -427,6 +516,259 @@ async fn start_nightly_project_update(
             workflow_id: request.workflow_id,
         }),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Notation: the synchronous wire the Restate virtual object served.
+
+/// The transition start body — the same fields the Restate handlers took.
+#[derive(Debug, Deserialize)]
+struct NotationStartBody {
+    spec_yaml: String,
+    #[serde(default)]
+    ephemeral: bool,
+}
+
+/// The transition signal body. `value` carries the respondent's answer on
+/// questionnaire signals; `acting_person_id` attributes the transition.
+#[derive(Debug, Deserialize)]
+struct NotationSignalBody {
+    condition: String,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(default)]
+    acting_person_id: Option<uuid::Uuid>,
+    #[serde(default)]
+    ephemeral: bool,
+}
+
+/// The back body — one attributed undo.
+#[derive(Debug, Deserialize)]
+struct NotationBackBody {
+    acting_person_id: uuid::Uuid,
+}
+
+/// The signal/back response — the caller's `SignalResponse`.
+#[derive(Debug, Serialize)]
+struct NotationStateResponse {
+    next_state: String,
+}
+
+/// The `*_current_state` response — `state: null` when the machine has not
+/// started, the same shape the Restate K/V reader produced.
+#[derive(Debug, Serialize)]
+struct NotationCurrentStateResponse {
+    state: Option<String>,
+}
+
+/// The `*_events` response — the caller degrades failures to an empty list,
+/// so a journal hiccup surfaces as `[]` with a 200, not an error.
+#[derive(Debug, Serialize)]
+struct NotationEventsResponse {
+    events: Vec<workflows::WorkflowEvent>,
+}
+
+/// Map a synchronous transition failure to a status. Deterministic classes
+/// are caller faults (4xx); store failures are the worker's (5xx); anything
+/// the engine itself raised is a bug and says so.
+fn notation_run_status(
+    error: dbos::Error<crate::dbos_notation::NotationTransitionError>,
+) -> StatusCode {
+    use crate::dbos_notation::NotationTransitionError;
+    match error {
+        dbos::Error::Application(application) => match application {
+            NotationTransitionError::Terminal(_) => StatusCode::BAD_REQUEST,
+            NotationTransitionError::MachineMissing { .. } => StatusCode::NOT_FOUND,
+            NotationTransitionError::LaneBusy { .. } => StatusCode::CONFLICT,
+            NotationTransitionError::Store(_) => StatusCode::SERVICE_UNAVAILABLE,
+        },
+        dbos::Error::WorkflowNotFound { .. } => StatusCode::NOT_FOUND,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// Run one transition to completion and return its `next_state`. The run is
+/// durable: a worker that dies mid-transition leaves a `PENDING` row a later
+/// executor recovers, and the caller's retry starts a fresh run whose CAS
+/// step reconciles the two.
+async fn notation_run(
+    state: NotationRouteState,
+    notation_id: uuid::Uuid,
+    operation: crate::dbos_notation::Operation,
+) -> Result<Json<NotationStateResponse>, (StatusCode, String)> {
+    let report = state
+        .inner
+        .workflow
+        .run(crate::dbos_notation::TransitionRequest {
+            kind: state.kind,
+            notation_id,
+            operation,
+        })
+        .await
+        .map_err(|error| {
+            let status = notation_run_status(error);
+            (status, status.to_string())
+        })?;
+    Ok(Json(NotationStateResponse {
+        next_state: report.next_state,
+    }))
+}
+
+/// Reject anything but a bodyless, Content-Type-less POST — the port of
+/// Restate's `input_description: "none"` contract the callers pin with
+/// `post_empty`.
+fn enforce_bodyless(headers: &HeaderMap, body: &Bytes) -> Result<(), StatusCode> {
+    if !body.is_empty() || headers.contains_key(axum::http::header::CONTENT_TYPE) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(())
+}
+
+fn notation_id_for(raw: &str) -> Result<uuid::Uuid, StatusCode> {
+    uuid::Uuid::parse_str(raw).map_err(|_| StatusCode::BAD_REQUEST)
+}
+
+async fn notation_start(
+    State(state): State<NotationRouteState>,
+    axum::extract::Path(notation_id): axum::extract::Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<NotationStateResponse>, (StatusCode, String)> {
+    if !authorized(&headers, &state.inner.token) {
+        return Err((StatusCode::UNAUTHORIZED, "unauthorized".into()));
+    }
+    let notation_id = match notation_id_for(&notation_id) {
+        Ok(notation_id) => notation_id,
+        Err(status) => return Err((status, status.to_string())),
+    };
+    let body: NotationStartBody = match serde_json::from_slice(&body) {
+        Ok(body) => body,
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "bad body".into())),
+    };
+    notation_run(
+        state,
+        notation_id,
+        crate::dbos_notation::Operation::Start {
+            spec_yaml: body.spec_yaml,
+            ephemeral: body.ephemeral,
+        },
+    )
+    .await
+}
+
+async fn notation_signal(
+    State(state): State<NotationRouteState>,
+    axum::extract::Path(notation_id): axum::extract::Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<NotationStateResponse>, (StatusCode, String)> {
+    if !authorized(&headers, &state.inner.token) {
+        return Err((StatusCode::UNAUTHORIZED, "unauthorized".into()));
+    }
+    let notation_id = match notation_id_for(&notation_id) {
+        Ok(notation_id) => notation_id,
+        Err(status) => return Err((status, status.to_string())),
+    };
+    let body: NotationSignalBody = match serde_json::from_slice(&body) {
+        Ok(body) => body,
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "bad body".into())),
+    };
+    notation_run(
+        state,
+        notation_id,
+        crate::dbos_notation::Operation::Signal {
+            condition: body.condition,
+            value: body.value,
+            acting_person_id: body.acting_person_id,
+            ephemeral: body.ephemeral,
+        },
+    )
+    .await
+}
+
+async fn notation_back(
+    State(state): State<NotationRouteState>,
+    axum::extract::Path(notation_id): axum::extract::Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<NotationStateResponse>, (StatusCode, String)> {
+    if !authorized(&headers, &state.inner.token) {
+        return Err((StatusCode::UNAUTHORIZED, "unauthorized".into()));
+    }
+    let notation_id = match notation_id_for(&notation_id) {
+        Ok(notation_id) => notation_id,
+        Err(status) => return Err((status, status.to_string())),
+    };
+    let body: NotationBackBody = match serde_json::from_slice(&body) {
+        Ok(body) => body,
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "bad body".into())),
+    };
+    notation_run(
+        state,
+        notation_id,
+        crate::dbos_notation::Operation::Back {
+            acting_person_id: body.acting_person_id,
+        },
+    )
+    .await
+}
+
+/// The bodyless current-state read — the port of the Restate K/V getter.
+/// A machine that has not started answers `null`, exactly as the Restate
+/// handler's K/V miss did.
+async fn notation_current_state(
+    State(state): State<NotationRouteState>,
+    axum::extract::Path(notation_id): axum::extract::Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<NotationCurrentStateResponse>, StatusCode> {
+    if !authorized(&headers, &state.inner.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    enforce_bodyless(&headers, &body)?;
+    let notation_id = notation_id_for(&notation_id)?;
+    let machine = store::notation_machine_state::read(
+        &state.inner.postgres,
+        notation_id,
+        state.kind.as_str(),
+    )
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(Json(NotationCurrentStateResponse {
+        state: machine.map(|machine| machine.current_state),
+    }))
+}
+
+/// The journal-backed events read. Restate never served this route — the
+/// caller's `events()` degraded its 404 to an empty list — so this is a
+/// strict improvement the caller consumes transparently.
+async fn notation_events(
+    State(state): State<NotationRouteState>,
+    axum::extract::Path(notation_id): axum::extract::Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<NotationEventsResponse>, StatusCode> {
+    if !authorized(&headers, &state.inner.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    enforce_bodyless(&headers, &body)?;
+    let notation_id = notation_id_for(&notation_id)?;
+    let events = store::notation_events::for_notation(&state.inner.surreal, notation_id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(Json(NotationEventsResponse {
+        events: events
+            .into_iter()
+            .filter(|event| event.machine_kind == state.kind.as_str())
+            .map(|event| workflows::WorkflowEvent {
+                notation_id: event.notation_id,
+                from: workflows::StateName::from(event.from_state.as_str()),
+                to: workflows::StateName::from(event.to_state.as_str()),
+                condition: event.condition,
+                acting_person_id: Some(event.acting_person_id),
+            })
+            .collect(),
+    }))
 }
 
 fn validate_reconcile_request(request: &ReconcileRequest) -> Result<(), StatusCode> {
@@ -604,16 +946,18 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use axum::body::Body;
+    use axum::body::Bytes;
     use axum::http::{HeaderMap, Request, StatusCode};
     use serde_json::json;
     use tower::ServiceExt;
 
     use super::{
-        add_routes, authorized, constant_time_eq, validate_alert_request,
-        validate_email_summary_request, validate_nightly_request, validate_reconcile_request,
-        validate_request, workflow_id_for_run, AlertStart, EmailSummaryStart, FinanceIngress,
-        FinanceRequest, FinanceStarter, NightlyIngress, ReconcileIngress, ReconcileRequest,
-        StartError, WorkerIngress,
+        add_routes, authorized, constant_time_eq, enforce_bodyless, notation_id_for,
+        notation_run_status, validate_alert_request, validate_email_summary_request,
+        validate_nightly_request, validate_reconcile_request, validate_request,
+        workflow_id_for_run, AlertStart, EmailSummaryStart, FinanceIngress, FinanceRequest,
+        FinanceStarter, NightlyIngress, ReconcileIngress, ReconcileRequest, StartError,
+        WorkerIngress,
     };
     use crate::dbos_finance_aggregate::RunRequest;
 
@@ -1069,5 +1413,94 @@ mod tests {
                 StatusCode::SERVICE_UNAVAILABLE
             );
         }
+    }
+
+    #[test]
+    fn bodyless_reads_reject_a_body_or_a_content_type() {
+        // The port of Restate's `input_description: "none"`: the caller's
+        // `post_empty` sends neither, and anything else is a 400.
+        assert!(enforce_bodyless(&HeaderMap::new(), &Bytes::new()).is_ok());
+
+        let typed = [(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        )]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            enforce_bodyless(&typed, &Bytes::new()),
+            Err(StatusCode::BAD_REQUEST),
+            "a Content-Type alone breaks the contract"
+        );
+        assert_eq!(
+            enforce_bodyless(&HeaderMap::new(), &Bytes::from_static(b"{}")),
+            Err(StatusCode::BAD_REQUEST),
+            "a body alone breaks the contract"
+        );
+    }
+
+    #[test]
+    fn notation_paths_admit_only_uuid_ids() {
+        let notation = uuid::Uuid::now_v7();
+        assert!(notation_id_for(&notation.to_string()).is_ok());
+        assert_eq!(notation_id_for("../escape"), Err(StatusCode::BAD_REQUEST));
+        assert_eq!(notation_id_for(""), Err(StatusCode::BAD_REQUEST));
+    }
+
+    #[test]
+    fn transition_failures_map_to_their_wire_status() {
+        use crate::dbos_notation::NotationTransitionError;
+        let app = |error: NotationTransitionError| {
+            notation_run_status(dbos::Error::Application(error))
+        };
+        assert_eq!(
+            app(NotationTransitionError::Terminal("bad spec".into())),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            app(NotationTransitionError::MachineMissing {
+                notation_id: uuid::Uuid::now_v7(),
+                machine_kind: "workflow".into(),
+            }),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            app(NotationTransitionError::LaneBusy {
+                notation_id: uuid::Uuid::now_v7(),
+            }),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            app(NotationTransitionError::Store("db down".into())),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            notation_run_status(dbos::Error::WorkflowNotFound {
+                workflow_id: "NotationTransition:missing".into(),
+            }),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            notation_run_status(dbos::Error::Config("bug".into())),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[tokio::test]
+    async fn a_worker_without_the_notation_port_mounts_no_notation_route() {
+        // With the port disabled the URIs must 404 — never a half-mounted
+        // route that answers with an engine error.
+        let router = add_routes(axum::Router::new(), WorkerIngress::default());
+        let uri = format!("/internal/dbos/notation/{}/questionnaire_current_state", uuid::Uuid::now_v7());
+        let request = Request::builder()
+            .method("POST")
+            .uri(&uri)
+            .header("authorization", "Bearer expected-secret")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            router.oneshot(request).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
     }
 }
