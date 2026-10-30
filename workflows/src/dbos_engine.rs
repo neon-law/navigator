@@ -25,6 +25,8 @@ use crate::Notifier;
 pub mod billing_canary;
 pub mod billing_digest;
 pub mod daily;
+/// The nightly Deadline-mirror reconcile schedule.
+pub mod deadline_mirror;
 pub mod dri_digest;
 pub mod general_nag;
 pub mod heartbeat;
@@ -214,6 +216,7 @@ pub struct Schedules {
     pub project_recovery: Option<project_recovery::Context>,
     pub source_imports: Option<source_imports::Context>,
     pub retention_purge: Option<retention_purge::Context>,
+    pub deadline_mirror: Option<deadline_mirror::Context>,
     pub purchase_activation: Option<purchase_activation::Context>,
     pub billing_canary: Option<billing_canary::Context>,
     pub billing_digest: Option<billing_digest::Context>,
@@ -368,6 +371,10 @@ impl Executor {
             .retention_purge
             .map(|context| retention_purge::register(&dbos, context))
             .transpose()?;
+        let mirror = schedules
+            .deadline_mirror
+            .map(|context| deadline_mirror::register(&dbos, context))
+            .transpose()?;
         let activation = schedules
             .purchase_activation
             .map(|context| purchase_activation::register(&dbos, context))
@@ -415,6 +422,13 @@ impl Executor {
             loops.push(tokio::spawn(retention_purge::schedule(
                 purge,
                 retention_purge::system_clock(),
+                stop.clone(),
+            )));
+        }
+        if let Some(mirror) = mirror {
+            loops.push(tokio::spawn(deadline_mirror::schedule(
+                mirror,
+                deadline_mirror::system_clock(),
                 stop.clone(),
             )));
         }

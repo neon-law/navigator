@@ -113,6 +113,8 @@ pub use billing;
 pub use billing::xero_auth;
 pub mod admin_contract_reviews;
 pub mod admin_playbooks;
+/// The nightly Deadline mirror's host-side source.
+pub(crate) mod calendar_mirror;
 pub mod canonical_host;
 pub mod ci_auth;
 pub mod clauses;
