@@ -1930,8 +1930,10 @@ mod tests {
 
     #[test]
     fn the_notes_tab_lists_its_notes_with_their_author() {
-        let mut view = LawyerDetailView::default();
-        view.notes = vec![note_row("Client prefers email")];
+        let view = LawyerDetailView {
+            notes: vec![note_row("Client prefers email")],
+            ..LawyerDetailView::default()
+        };
         let html = dioxus_ssr::render_element(notes_tab(&view));
         assert!(html.contains("Client prefers email"), "{html}");
         assert!(html.contains("Aries Attorney"), "{html}");
@@ -1953,16 +1955,18 @@ mod tests {
 
     #[test]
     fn the_communications_tab_prints_direction_words_and_counterparties() {
-        let mut view = LawyerDetailView::default();
-        view.correspondence = vec![CommunicationRow {
-            channel: "email_inbound".to_string(),
-            direction: "inbound".to_string(),
-            counterparty: Some("clerk@courts.example".to_string()),
-            author_name: None,
-            subject: Some("NEF re D.I. 12".to_string()),
-            body: "Served today.".to_string(),
-            occurred_at: "2026-10-30T09:00:00Z".to_string(),
-        }];
+        let view = LawyerDetailView {
+            correspondence: vec![CommunicationRow {
+                channel: "email_inbound".to_string(),
+                direction: "inbound".to_string(),
+                counterparty: Some("clerk@courts.example".to_string()),
+                author_name: None,
+                subject: Some("NEF re D.I. 12".to_string()),
+                body: "Served today.".to_string(),
+                occurred_at: "2026-10-30T09:00:00Z".to_string(),
+            }],
+            ..LawyerDetailView::default()
+        };
         let html = dioxus_ssr::render_element(communications_tab(&view));
         assert!(html.contains("inbound"), "{html}");
         assert!(html.contains("clerk@courts.example"), "{html}");
@@ -2447,7 +2451,6 @@ mod tests {
         assert!(!html.contains("Previous versions"), "{html}");
     }
 
-    #[test]
     #[test]
     fn documents_sit_under_their_documents_folders_with_every_matter_folder_listed() {
         let row = |id: &str, path: &str| LawyerDocRow {
