@@ -267,3 +267,67 @@ pub async fn find_for_message(
     Ok(rows.into_iter().find_map(TriageRow::into_triage))
 }
 
+/// The prompt version recorded on rows the rule layer decided without a
+/// model. The hosted classifier's prompt template is versioned separately
+/// when that lane lands.
+pub const RULES_ONLY_PROMPT: &str = "rules-only-v1";
+
+/// The least classifier confidence that may flag client email
+/// [`PrivilegeLabel::Privileged`]. Anything below it is
+/// [`PrivilegeLabel::Uncertain`], and the row waits for a person.
+pub const PRIVILEGED_CONFIDENCE_FLOOR: f64 = 0.90;
+
+/// The schema-validated privilege verdict from the hosted classifier, as
+/// the workflow lane will hand it over. Malformed or missing output never
+/// becomes a `ClassifierOutput` — it stays `None`, and the label is
+/// [`PrivilegeLabel::Uncertain`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClassifierOutput {
+    pub privileged: bool,
+    pub privilege_confidence: f64,
+}
+
+/// Decide the privilege label for one inbound Message. Structural, not
+/// statistical.
+///
+/// A social-origin channel is never privileged: the label comes from the
+/// channel alone and `classifier` is never consulted for one. Client email
+/// and SMS may be flagged privileged only when a classifier ran and its
+/// confidence reaches [`PRIVILEGED_CONFIDENCE_FLOOR`]; every other
+/// automated outcome — no classifier, a "not privileged" verdict, low
+/// confidence — is [`PrivilegeLabel::Uncertain`]. Automation can never
+/// produce [`PrivilegeLabel::NotPrivileged`] for client email: that label
+/// belongs to social-origin channels and to a person's review.
+#[must_use]
+pub fn privilege_label(channel: &str, classifier: Option<&ClassifierOutput>) -> PrivilegeLabel {
+    if crate::inbox::is_social_channel(channel) {
+        return PrivilegeLabel::NotPrivileged;
+    }
+    match classifier {
+        Some(output)
+            if output.privileged && output.privilege_confidence >= PRIVILEGED_CONFIDENCE_FLOOR =>
+        {
+            PrivilegeLabel::Privileged
+        }
+        _ => PrivilegeLabel::Uncertain,
+    }
+}
+
+/// The disposition automation may give a triage row:
+/// [`TriageDisposition::Suggested`] only when the label is settled and a
+/// Project suggestion exists, and [`TriageDisposition::NeedsHuman`]
+/// otherwise — uncertain privilege always waits for a person, and so does a
+/// row with nothing to confirm. [`TriageDisposition::Confirmed`] and
+/// [`TriageDisposition::Overridden`] are human acts and are never produced
+/// here.
+#[must_use]
+pub fn automated_disposition(
+    privilege: PrivilegeLabel,
+    suggested_project_id: Option<Uuid>,
+) -> TriageDisposition {
+    match (privilege, suggested_project_id) {
+        (PrivilegeLabel::Uncertain, _) | (_, None) => TriageDisposition::NeedsHuman,
+        (_, Some(_)) => TriageDisposition::Suggested,
+    }
+}
+
