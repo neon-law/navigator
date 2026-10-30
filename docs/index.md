@@ -8,6 +8,7 @@ cannot decay the way the old seven-line stub did.
 ## Start here
 
 - [`glossary/`](glossary/README.md) — canonical vocabulary, one file per term, published on one page at `/glossary`.
+- [`deadline-proposals.md`](deadline-proposals.md) — cited date proposals and lawyer confirmation.
 - [`agent-workflows.md`](agent-workflows.md) — the five action recipes every agent task reduces to.
 - [`gitops.md`](gitops.md) — branch, PR, release, and deploy flow.
 - [`workspace-layout.md`](workspace-layout.md) — what each crate in the monorepo owns.

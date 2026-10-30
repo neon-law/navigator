@@ -1071,6 +1071,16 @@ test_authorities_rule_is_exactly_the_collection_path_and_post if {
 	not authz.allow with input as {"path": ["app", "api", "authorities", "extra"], "method": "POST", "session": lawyer_session}
 }
 
+# A filed Authority's metadata uses the archive door's lawyer tier.
+test_filed_authority_metadata_is_lawyer_only if {
+    authz.allow with input as {"path": ["app", "api", "authorities", "a1"], "method": "GET", "session": lawyer_session}
+    authz.allow with input as {"path": ["app", "api", "authorities", "a1"], "method": "GET", "session": admin_session}
+    not authz.allow with input as {"path": ["app", "api", "authorities", "a1"], "method": "GET", "session": clerk_session}
+    not authz.allow with input as {"path": ["app", "api", "authorities", "a1"], "method": "GET", "session": client_session}
+    not authz.allow with input as {"path": ["app", "api", "authorities", "a1"], "method": "GET", "session": null}
+    not authz.allow with input as {"path": ["app", "api", "authorities", "a1"], "method": "POST", "session": lawyer_session}
+}
+
 # ---------- GET /app/api/authorities/{id}/archive (LAWYER tier — reads a global archive) ----------
 
 test_lawyer_and_admin_can_read_an_authority_archive if {

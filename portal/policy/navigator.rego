@@ -1124,6 +1124,16 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# Resolve filed global Authority metadata with the archive's lawyer-tier gate.
+route_allow if {
+    count(input.path) == 4
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "authorities"
+    input.method == "GET"
+    is_lawyer(input.session)
+}
+
 # Read an Authority's archived artifact: GET /app/api/authorities/{id}/archive
 # (LAW-93). The read half of the write above, lawyer-tier for the same reason;
 # exactly five segments and GET.

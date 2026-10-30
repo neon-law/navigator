@@ -394,3 +394,38 @@ pub(crate) async fn read_authority_archive_door(
     )
         .into_response())
 }
+
+/// Resolve a filed Authority's canonical citation only while its archived bytes exist.
+pub(crate) async fn read_filed_authority_door(
+    State(state): State<ApiState>,
+    _lawyer: LawyerSession,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+) -> Result<Response, ApiError> {
+    let authority =
+        store::authorities::find(&state.surreal, store::authorities::AuthorityLookup::Id(id))
+            .await
+            .map_err(|_| {
+                tracing::error!(authority_id = %id, "api: filed authority lookup failed");
+                ApiError::Db("the filed authority could not be read".into())
+            })?
+            .ok_or(ApiError::NotFound)?;
+    let asset_id = authority.archived_asset_id.ok_or(ApiError::NotFound)?;
+    let asset = store::assets::find_by_id(&state.surreal, asset_id)
+        .await
+        .map_err(|_| {
+            tracing::error!(authority_id = %id, asset_id = %asset_id, "api: authority archive lookup failed");
+            ApiError::Db("the authority archive could not be read".into())
+        })?
+        .ok_or(ApiError::NotFound)?;
+    match state.storage.get(&asset.storage_key).await {
+        Ok(_) => {}
+        Err(cloud::StorageError::NotFound(_)) => return Err(ApiError::NotFound),
+        Err(_) => {
+            tracing::error!(authority_id = %id, asset_id = %asset_id, "api: authority archive read failed");
+            return Err(ApiError::Db(
+                "the authority archive could not be read".into(),
+            ));
+        }
+    }
+    Ok(Json(serde_json::json!({"id":authority.id, "citation":authority.citation})).into_response())
+}

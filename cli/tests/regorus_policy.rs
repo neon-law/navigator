@@ -448,9 +448,11 @@ fn regorus_matches_every_checked_in_policy_decision() {
     //   exact = 621.
     // + 2 for the Project calendar door: an Admin may ensure it and a Client
     //   may not = 623.
+    // + 1 for filed Authority metadata: lawyer admission, lower-tier denial,
+    //   and exact method/path checks share one matrix = 624.
     assert_eq!(
         test_names.len(),
-        623,
+        624,
         "the policy decision inventory changed; review every new or removed rule"
     );
 
