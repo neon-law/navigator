@@ -64,9 +64,15 @@ GRANT USAGE ON SCHEMA public TO navigator_app;
 -- any session that parses Cypher, so both logins preload it per session.
 CREATE EXTENSION IF NOT EXISTS age;
 GRANT USAGE ON SCHEMA ag_catalog TO navigator_owner, navigator_app;
--- The graph migration's idempotence guard reads ag_graph; AGE's own runtime
--- catalog access is in-process and needs no SQL grants.
-GRANT SELECT ON ALL TABLES IN SCHEMA ag_catalog TO navigator_owner, navigator_app;
+-- The graph migration's idempotence guard reads ag_graph as the migration
+-- login; AGE's own runtime catalog access is in-process and needs no SQL
+-- grants, so the runtime login never reads the catalog tables (the
+-- least-privilege proof refuses them to it).
+GRANT SELECT ON ALL TABLES IN SCHEMA ag_catalog TO navigator_owner;
+-- Converge drift: an ag_catalog table read left over from an earlier
+-- iteration of this file is revoked, so the runtime login holds schema USAGE
+-- only (the least-privilege proof refuses catalog reads to it).
+REVOKE ALL ON ALL TABLES IN SCHEMA ag_catalog FROM navigator_app;
 ALTER ROLE navigator_owner IN DATABASE navigator SET session_preload_libraries = 'age';
 ALTER ROLE navigator_app IN DATABASE navigator SET session_preload_libraries = 'age';
 
