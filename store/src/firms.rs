@@ -2579,6 +2579,123 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn moves_a_brand_between_firms_and_names_the_new_owner() {
+        let db = mem_surreal().await;
+        let from = practice(&db, "Moving Out").await;
+        let to = practice(&db, "Moving In").await;
+        attach_brand(&db, Role::Owner, None, from.id, "neon")
+            .await
+            .unwrap();
+
+        move_brand(&db, Role::Owner, None, "neon", to.id)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            firm_id_for_brand_key(&db, "neon").await.unwrap(),
+            Some(to.id)
+        );
+        assert_eq!(
+            brand_keys_for_firm(&db, to.id).await.unwrap(),
+            vec!["neon".to_string()]
+        );
+        assert!(brand_keys_for_firm(&db, from.id).await.unwrap().is_empty());
+        // The brand row's owning firm re-pointed with the seat, so the
+        // live Firm→Entity resolution follows the move too.
+        let brand = crate::brands::find_by_key(&db, "neon")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(brand.firm_id, Some(to.id));
+    }
+
+    #[tokio::test]
+    async fn only_owner_moves_or_attaches() {
+        let db = mem_surreal().await;
+        let admin = admin_dri_person(&db).await;
+        let firm = practice_with_admin(&db, "Admin DRI Practice", admin.clone()).await;
+        let wearer = practice(&db, "Wearer").await;
+        attach_brand(&db, Role::Owner, None, wearer.id, "neon")
+            .await
+            .unwrap();
+
+        // An Admin-DRI may detach a brand but never repoint the seat: a
+        // move changes whose legal entity the public copyright names.
+        let refused = move_brand(&db, Role::Admin, Some(admin.id), "neon", firm.id)
+            .await
+            .unwrap_err();
+        assert!(matches!(refused, FirmError::NotAuthorized));
+        // An attach without an Owner behind it is the same hole, refused.
+        let refused = attach_brand(
+            &db,
+            Role::Admin,
+            Some(admin.id),
+            firm.id,
+            "delete-your-data",
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(refused, FirmError::NotAuthorized));
+        // A non-Owner role with no person behind it is refused outright.
+        let refused = move_brand(&db, Role::Client, None, "neon", firm.id)
+            .await
+            .unwrap_err();
+        assert!(matches!(refused, FirmError::NotAuthorized));
+        // No refusal wrote anything: the seat still names the old firm.
+        assert_eq!(
+            firm_id_for_brand_key(&db, "neon").await.unwrap(),
+            Some(wearer.id)
+        );
+    }
+
+    #[tokio::test]
+    async fn move_noops_retry_and_refuses_unknowns_without_losing_the_seat() {
+        let db = mem_surreal().await;
+        let from = practice(&db, "Wearer").await;
+        let to = practice(&db, "Target").await;
+        attach_brand(&db, Role::Owner, None, from.id, "neon")
+            .await
+            .unwrap();
+
+        // A move to the firm already wearing the brand is a no-op success.
+        move_brand(&db, Role::Owner, None, "neon", from.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            firm_id_for_brand_key(&db, "neon").await.unwrap(),
+            Some(from.id)
+        );
+
+        // An unknown target firm is a typed error before any write runs —
+        // the retried-or-failed move leaves the old association intact.
+        let unknown_firm = move_brand(&db, Role::Owner, None, "neon", Uuid::now_v7())
+            .await
+            .unwrap_err();
+        assert!(matches!(unknown_firm, FirmError::NoSuchFirm(_)));
+        let unknown_brand = move_brand(&db, Role::Owner, None, "not-a-brand", to.id)
+            .await
+            .unwrap_err();
+        assert!(matches!(unknown_brand, FirmError::UnknownBrand(key) if key == "not-a-brand"));
+        assert_eq!(
+            firm_id_for_brand_key(&db, "neon").await.unwrap(),
+            Some(from.id)
+        );
+
+        move_brand(&db, Role::Owner, None, "neon", to.id)
+            .await
+            .unwrap();
+        // Retrying the completed move is a no-op success, and the seat
+        // still resolves to exactly one firm.
+        move_brand(&db, Role::Owner, None, "neon", to.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            firm_id_for_brand_key(&db, "neon").await.unwrap(),
+            Some(to.id)
+        );
+    }
+
+    #[tokio::test]
     async fn attaches_closed_brand_keys_and_refuses_an_unknown_or_taken_key() {
         let db = mem_surreal().await;
         let firm = practice(&db, "Brand Holder").await;
