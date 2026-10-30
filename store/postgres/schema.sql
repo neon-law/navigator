@@ -2248,3 +2248,8 @@ ALTER TABLE project ADD COLUMN booking_url TEXT;
 ALTER TABLE communication ADD COLUMN counterparty_role TEXT CHECK (counterparty_role IN ('opposing_counsel', 'client', 'court', 'other'));
 ALTER TABLE communication ADD COLUMN acknowledges UUID REFERENCES communication(id) ON DELETE SET NULL;
 CREATE INDEX communication_acknowledges ON communication (project_id, acknowledges);
+
+-- Migration: 20261030010000_add_template_firm.sql
+-- A Firm Library version: the Firm whose library repository the Template was synced from.
+ALTER TABLE template ADD COLUMN firm_id UUID REFERENCES firm(id);
+ALTER TABLE template ADD CONSTRAINT template_one_scope CHECK (project_id IS NULL OR firm_id IS NULL);

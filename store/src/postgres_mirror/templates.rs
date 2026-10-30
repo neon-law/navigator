@@ -3,7 +3,8 @@
 //! The markdown body stays in its content-addressed Asset. This table keeps
 //! each version's identity, scope, provenance, and pins. `current_key` is
 //! copied exactly from SurrealDB: it is present only for the current version
-//! and its unique index distinguishes shared from Project-scoped codes.
+//! and its unique index distinguishes shared, Firm Library, and
+//! Project-scoped codes.
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -24,6 +25,7 @@ const COLUMNS: &[&str] = &[
     "title",
     "respondent_type",
     "project_id",
+    "firm_id",
     "is_current",
     "asset_id",
     "form_code",
@@ -34,7 +36,7 @@ const COLUMNS: &[&str] = &[
     "inserted_at",
     "updated_at",
 ];
-const SOURCE_FIELDS: &str = "id, code, title, respondent_type, project_id, is_current, \
+const SOURCE_FIELDS: &str = "id, code, title, respondent_type, project_id, firm_id, is_current, \
     asset_id, form_code, kind, source_commit_sha, body_sha256, current_key, inserted_at, updated_at";
 static UPSERT: LazyLock<String> = LazyLock::new(|| upsert_sql("template", COLUMNS));
 static SELECT: LazyLock<String> = LazyLock::new(|| select_sql("template", COLUMNS));
@@ -46,6 +48,7 @@ struct TemplateSource {
     title: String,
     respondent_type: String,
     project_id: Option<surrealdb::types::RecordId>,
+    firm_id: Option<surrealdb::types::RecordId>,
     is_current: bool,
     asset_id: Option<surrealdb::types::RecordId>,
     form_code: Option<String>,
@@ -64,6 +67,7 @@ struct TemplateImage {
     title: String,
     respondent_type: String,
     project_id: Option<Uuid>,
+    firm_id: Option<Uuid>,
     is_current: bool,
     asset_id: Option<Uuid>,
     form_code: Option<String>,
@@ -90,6 +94,7 @@ impl TemplateImage {
             title: row.title,
             respondent_type: row.respondent_type,
             project_id: optional_id(row.project_id)?,
+            firm_id: optional_id(row.firm_id)?,
             is_current: row.is_current,
             asset_id: optional_id(row.asset_id)?,
             form_code: row.form_code,
@@ -109,6 +114,7 @@ impl TemplateImage {
             title: row.try_get("title")?,
             respondent_type: row.try_get("respondent_type")?,
             project_id: row.try_get("project_id")?,
+            firm_id: row.try_get("firm_id")?,
             is_current: row.try_get("is_current")?,
             asset_id: row.try_get("asset_id")?,
             form_code: row.try_get("form_code")?,
@@ -167,6 +173,7 @@ async fn upsert(pg: &PostgresDb, image: &TemplateImage) -> Result<Mirrored, Mirr
         .bind(&image.title)
         .bind(&image.respondent_type)
         .bind(image.project_id)
+        .bind(image.firm_id)
         .bind(image.is_current)
         .bind(image.asset_id)
         .bind(&image.form_code)
@@ -202,6 +209,16 @@ pub async fn mirror(
             "SELECT EXISTS (SELECT 1 FROM project WHERE id = $1)",
             project_id,
             MirrorKey::Project(project_id),
+        )
+        .await?;
+    }
+    if let Some(firm_id) = image.firm_id {
+        ensure_parent(
+            surreal,
+            pg,
+            "SELECT EXISTS (SELECT 1 FROM firm WHERE id = $1)",
+            firm_id,
+            MirrorKey::Firm(firm_id),
         )
         .await?;
     }

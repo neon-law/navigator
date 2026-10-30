@@ -208,6 +208,9 @@ fn map_notation_err(err: NotationSessionError) -> ToolError {
         // engine.
         NotationSessionError::Question(e) => ToolError::Internal(e.to_string()),
         NotationSessionError::Template(e) => ToolError::Internal(e.to_string()),
+        NotationSessionError::FirmLibrary(e) => {
+            ToolError::InvalidArguments(format!("reading template from the Firm Library: {e}"))
+        }
         NotationSessionError::Answer(e) => ToolError::Internal(e.to_string()),
         NotationSessionError::Notation(e) => ToolError::Internal(e.to_string()),
         NotationSessionError::Reask(e) => ToolError::Internal(e.to_string()),

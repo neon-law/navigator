@@ -1694,8 +1694,8 @@ DEFINE INDEX OVERWRITE asset_project_slug ON asset FIELDS project_id, slug;
 -- `is_current`; it never rewrites a spec a Notation pinned through
 -- `notation.template_id`.
 --
--- `current_key` represents the two conditional uniqueness rules — shared
--- codes are unique when current, and project-scoped codes are unique when
+-- `current_key` represents the conditional uniqueness rules — shared,
+-- Firm-scoped, and project-scoped codes are each unique when
 -- current. Surreal has no partial index, so `store::templates` stores a key only while a row is current
 -- and clears it when the row retires. Multiple NONEs do not collide on a
 -- Surreal unique index, so retired versions never take part, and the
@@ -1709,6 +1709,12 @@ DEFINE FIELD OVERWRITE code ON template TYPE string;
 DEFINE FIELD OVERWRITE title ON template TYPE string;
 DEFINE FIELD OVERWRITE respondent_type ON template TYPE string;
 DEFINE FIELD OVERWRITE project_id ON template TYPE option<record<project>>;
+-- The Firm whose Firm Library (`docs/glossary/firm-library.md`) the version
+-- was synced from. A row carries at most one of `project_id` and `firm_id`;
+-- neither marks the shared catalog. A Firm line's `current_key` scope is
+-- `firm:<uuid>`, so it never collides with a Project line's bare UUID.
+DEFINE FIELD OVERWRITE firm_id ON template TYPE option<record<firm>>
+    ASSERT $value = NONE OR $this.project_id = NONE;
 DEFINE FIELD OVERWRITE is_current ON template TYPE bool DEFAULT true;
 DEFINE FIELD OVERWRITE asset_id ON template TYPE option<record<asset>>;
 DEFINE FIELD OVERWRITE form_code ON template TYPE option<string>;

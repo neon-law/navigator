@@ -144,6 +144,7 @@ mod tests {
             title: "Sample".into(),
             respondent_type: "entity".into(),
             project_id: None,
+            firm_id: None,
             is_current: true,
             asset_id: None,
             form_code: None,

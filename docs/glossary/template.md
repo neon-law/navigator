@@ -22,8 +22,9 @@ silently re-rendering out of a later revision.
 
 Each row carries `body_sha256`, the SHA-256 of its body. A row synced from a Project repository also carries
 `source_commit_sha`, the commit it was read from; the store refuses a project-scoped row without both. A shared-catalog
-row carries no commit. Opening a Notation copies both values onto it, and the renderer refuses a body whose bytes do not
-match the copied digest.
+row carries no commit. A row synced from a Firm's [Firm Library](firm-library.md) carries `template.firm_id` and the
+same two pins; a code resolves Project, then the owning Firm, then the shared catalog. Opening a Notation copies both
+values onto it, and the renderer refuses a body whose bytes do not match the copied digest.
 
 The table is `template`.
 

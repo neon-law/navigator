@@ -2518,14 +2518,63 @@ where
     C: dioxus_core::ComponentFunction<(), M> + Send + Sync + 'static,
     M: 'static,
 {
+    csrf_page_router_providing(path, component, surreal, None, sessions, policy, auth)
+}
+
+/// [`csrf_page_router`] whose loader also reaches the app storage handle — the
+/// retainer start form, which syncs the Firm Library's Drafts into Template
+/// rows before listing them.
+pub fn csrf_page_router_with_storage<C, M>(
+    path: &'static str,
+    component: C,
+    surreal: store::surreal::SurrealDb,
+    storage: std::sync::Arc<dyn cloud::StorageService>,
+    sessions: crate::session::SessionStore,
+    policy: crate::policy::PolicyClient,
+    auth: crate::auth::AuthConfig,
+) -> Router
+where
+    C: dioxus_core::ComponentFunction<(), M> + Send + Sync + 'static,
+    M: 'static,
+{
+    csrf_page_router_providing(
+        path,
+        component,
+        surreal,
+        Some(storage),
+        sessions,
+        policy,
+        auth,
+    )
+}
+
+fn csrf_page_router_providing<C, M>(
+    path: &'static str,
+    component: C,
+    surreal: store::surreal::SurrealDb,
+    storage: Option<std::sync::Arc<dyn cloud::StorageService>>,
+    sessions: crate::session::SessionStore,
+    policy: crate::policy::PolicyClient,
+    auth: crate::auth::AuthConfig,
+) -> Router
+where
+    C: dioxus_core::ComponentFunction<(), M> + Send + Sync + 'static,
+    M: 'static,
+{
     let project_visit_surreal = surreal.clone();
-    let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![
-        // A server fn can only reach what this list provides — a route
-        // that renders a person and forgets it 500s at `consume_context`,
-        // not at build.
-        Box::new(move || Box::new(surreal.clone()) as Box<dyn std::any::Any>)
-            as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>,
-    ]));
+    // A server fn can only reach what this list provides — a route
+    // that renders a person and forgets it 500s at `consume_context`,
+    // not at build.
+    let mut providers: Vec<Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>> =
+        vec![Box::new(move || {
+            Box::new(surreal.clone()) as Box<dyn std::any::Any>
+        })];
+    if let Some(storage) = storage {
+        providers.push(Box::new(move || {
+            Box::new(storage.clone()) as Box<dyn std::any::Any>
+        }));
+    }
+    let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(providers));
 
     Router::<FullstackState>::new()
         .route(

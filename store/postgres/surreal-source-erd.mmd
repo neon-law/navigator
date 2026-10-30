@@ -1233,6 +1233,7 @@ erDiagram
         string body_sha256
         string code
         string current_key
+        uuid firm_id
         string form_code
         datetime inserted_at
         boolean is_current
@@ -1473,6 +1474,7 @@ erDiagram
     person }o--|| summary_sender_approval_event : person_id
     project }o--|| summary_sender_approval_event : project_id
     asset }o--|| template : asset_id
+    firm }o--|| template : firm_id
     project }o--|| template : project_id
     person }o--|| testimonial : person_id
     project }o--|| testimonial : project_id

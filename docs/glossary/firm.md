@@ -21,6 +21,9 @@ refused. Nothing appends a suffix. The slug is immutable: renaming a Firm never 
 the field `READONLY`, and a PostgreSQL trigger refuses an update. Boot backfills a slug for each Firm that predates the
 field, and fails on an invalid or colliding one.
 
+The repository `<firm-slug>/library` is the Firm's [Firm Library](firm-library.md): the Drafts and the default retainer
+every matter of that Firm starts from.
+
 Distinct from [`firm_anchor`](../../store/src/schema/navigator.surql), which still pins exactly one [Entity](entity.md)
 as the Firm-of-record on the [Conflict-Check Graph](conflict-check-graph.md). A deployment may hold several `firm` rows;
 it still holds at most one `firm_anchor` claim. `person.role = owner` remains the one system-wide Owner tier; it is not

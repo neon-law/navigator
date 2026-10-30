@@ -16,16 +16,20 @@
 //!   (`m20260911_drop_notation_group_foreign_keys`), and what replaced it
 //!   is [`body`]'s read-back of the asset before it reaches storage — not
 //!   the link's type. The engine does not validate a `record<asset>` link.
-//! - **Project scoping.** A Template is either workspace-shared
-//!   (`project_id` unset) or scoped to one Project. [`resolve`] looks
-//!   a code up preferring the caller's Project, falling back to the
-//!   shared row — so a Project can override a shared `code` or define
-//!   its own without colliding with another Project's.
+//! - **Scoping.** A Template is workspace-shared (`project_id` and
+//!   `firm_id` unset), scoped to one Firm's Firm Library (`firm_id`
+//!   set), or scoped to one Project (`project_id` set) — see [`Scope`].
+//!   [`resolve`] looks a code up preferring the caller's Project, then
+//!   the Firm that owns that Project, then the shared row — so a Firm or
+//!   a Project can override a shared `code` or define its own without
+//!   colliding with another's. A Firm's rows are never read for another
+//!   Firm's Project, nor listed as the shared catalog
+//!   (`docs/glossary/firm-library.md`).
 //!
 //! # One current row per code, without a partial index
 //!
-//! The rule is one current row per shared `code` and one per
-//! `(project_id, code)`. Surreal has no partial
+//! The rule is one current row per shared `code`, one per
+//! `(firm_id, code)`, and one per `(project_id, code)`. Surreal has no partial
 //! index, so [`current_key`] computes a key that exists only while a row is
 //! current, and the schema's UNIQUE index refuses the second one. Multiple
 //! NONEs do not collide there, so retired versions never take part. That
@@ -62,8 +66,11 @@ pub struct Template {
     /// `entity`, `person`, or `person_and_entity`.
     pub respondent_type: String,
     /// The Project this template is scoped to; `None` for the
-    /// workspace-shared public catalog.
+    /// workspace-shared public catalog and for a Firm Library version.
     pub project_id: Option<Uuid>,
+    /// The Firm whose Firm Library this version was synced from; `None`
+    /// for the shared catalog and for a Project-scoped version.
+    pub firm_id: Option<Uuid>,
     /// Whether this row is the live version of its `code`.
     pub is_current: bool,
     /// The [`crate::assets`] row holding the markdown body (with
@@ -103,6 +110,7 @@ struct TemplateRow {
     title: String,
     respondent_type: String,
     project_id: Option<surrealdb::types::RecordId>,
+    firm_id: Option<surrealdb::types::RecordId>,
     is_current: bool,
     asset_id: Option<surrealdb::types::RecordId>,
     form_code: Option<String>,
@@ -123,6 +131,7 @@ impl TemplateRow {
             title: self.title,
             respondent_type: self.respondent_type,
             project_id: self.project_id.as_ref().and_then(record_uuid),
+            firm_id: self.firm_id.as_ref().and_then(record_uuid),
             is_current: self.is_current,
             asset_id: self.asset_id.as_ref().and_then(record_uuid),
             form_code: self.form_code,
@@ -137,8 +146,8 @@ impl TemplateRow {
 
 /// The projection every read shares, so one field list describes the row
 /// and a new field cannot reach [`TemplateRow`] from only one query.
-const SELECT: &str = "id, code, title, respondent_type, project_id, is_current, asset_id, \
-     form_code, kind, source_commit_sha, body_sha256, inserted_at, updated_at";
+const SELECT: &str = "id, code, title, respondent_type, project_id, firm_id, is_current, \
+     asset_id, form_code, kind, source_commit_sha, body_sha256, inserted_at, updated_at";
 
 /// Errors from [`body`].
 #[derive(Debug, thiserror::Error)]
@@ -198,6 +207,46 @@ fn classify_write(error: surrealdb::Error) -> TemplateError {
     }
 }
 
+/// Which version line a Template belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// The workspace-shared catalog every Firm reads.
+    Shared,
+    /// One Firm's Firm Library, read only for that Firm and the Projects it
+    /// owns.
+    Firm(Uuid),
+    /// One Project's own repository.
+    Project(Uuid),
+}
+
+impl Scope {
+    /// The scope the `project_id: Option<Uuid>` arguments name.
+    #[must_use]
+    pub fn of_project(project_id: Option<Uuid>) -> Self {
+        project_id.map_or(Self::Shared, Self::Project)
+    }
+
+    fn project_id(self) -> Option<Uuid> {
+        match self {
+            Self::Project(id) => Some(id),
+            Self::Shared | Self::Firm(_) => None,
+        }
+    }
+
+    fn firm_id(self) -> Option<Uuid> {
+        match self {
+            Self::Firm(id) => Some(id),
+            Self::Shared | Self::Project(_) => None,
+        }
+    }
+
+    /// Whether a version in this scope is synced from a repository, and so
+    /// must name its commit and carry a body.
+    fn is_synced(self) -> bool {
+        !matches!(self, Self::Shared)
+    }
+}
+
 /// The value stored in `current_key` for a row that is current.
 ///
 /// The unit separator (`U+001F`) joins the scope to the code because it
@@ -207,9 +256,19 @@ fn classify_write(error: surrealdb::Error) -> TemplateError {
 /// pairs collide on one key and silently retire each other's version.
 ///
 /// The shared line uses an empty scope, so a shared `amendment` and a
-/// project-scoped `amendment` get different keys and coexist.
+/// project-scoped `amendment` get different keys and coexist. A Firm line
+/// prefixes its UUID with `firm:`, which no bare Project UUID can equal.
 pub(crate) fn current_key(project_id: Option<Uuid>, code: &str) -> String {
-    let scope = project_id.map(|id| id.to_string()).unwrap_or_default();
+    current_key_in(Scope::of_project(project_id), code)
+}
+
+/// [`current_key`] for any [`Scope`].
+pub(crate) fn current_key_in(scope: Scope, code: &str) -> String {
+    let scope = match scope {
+        Scope::Shared => String::new(),
+        Scope::Project(id) => id.to_string(),
+        Scope::Firm(id) => format!("firm:{id}"),
+    };
     format!("{scope}\u{1f}{code}")
 }
 
@@ -262,9 +321,9 @@ pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Template>, 
 }
 
 /// Resolve a template by `code` for a given Project context. Prefers a
-/// Project-scoped row (`project_id = project_id`), then falls back to
-/// the workspace-shared row (`project_id` unset). Returns `None` when
-/// neither exists.
+/// Project-scoped row (`project_id = project_id`), then the Firm Library
+/// row of the Firm that owns the Project (`project.firm_id`), then the
+/// workspace-shared row. Returns `None` when none exists.
 ///
 /// Pass `project_id = None` to look up only the shared row (the public
 /// catalog).
@@ -277,12 +336,53 @@ pub async fn resolve(
     project_id: Option<Uuid>,
     code: &str,
 ) -> Result<Option<Template>, TemplateError> {
-    if project_id.is_some() {
-        if let Some(scoped) = resolve_exact(db, project_id, code).await? {
-            return Ok(Some(scoped));
-        }
+    let Some(project_id) = project_id else {
+        return resolve_in(db, Scope::Shared, code).await;
+    };
+    if let Some(scoped) = resolve_in(db, Scope::Project(project_id), code).await? {
+        return Ok(Some(scoped));
     }
-    resolve_exact(db, None, code).await
+    match owning_firm(db, project_id).await? {
+        Some(firm_id) => resolve_for_firm(db, firm_id, code).await,
+        None => resolve_in(db, Scope::Shared, code).await,
+    }
+}
+
+/// Resolve a template by `code` for a Firm with no Project yet — the
+/// matter-opening doors. Prefers the Firm's own Library row, then the
+/// workspace-shared row.
+///
+/// # Errors
+///
+/// [`TemplateError::Db`] if the lookup fails.
+pub async fn resolve_for_firm(
+    db: &SurrealDb,
+    firm_id: Uuid,
+    code: &str,
+) -> Result<Option<Template>, TemplateError> {
+    if let Some(firm) = resolve_in(db, Scope::Firm(firm_id), code).await? {
+        return Ok(Some(firm));
+    }
+    resolve_in(db, Scope::Shared, code).await
+}
+
+/// The Firm that owns `project_id`, if any.
+async fn owning_firm(db: &SurrealDb, project_id: Uuid) -> Result<Option<Uuid>, TemplateError> {
+    let mut response = db
+        .query("SELECT VALUE firm_id FROM $project")
+        .bind((
+            "project",
+            record_id(crate::projects::PROJECT_TABLE, project_id),
+        ))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?;
+    let firms: Vec<Option<surrealdb::types::RecordId>> = response.take(0)?;
+    Ok(firms
+        .into_iter()
+        .flatten()
+        .next()
+        .as_ref()
+        .and_then(record_uuid))
 }
 
 /// The current row for an exact `(project_id, code)` — no shared
@@ -297,11 +397,24 @@ pub async fn resolve_exact(
     project_id: Option<Uuid>,
     code: &str,
 ) -> Result<Option<Template>, TemplateError> {
+    resolve_in(db, Scope::of_project(project_id), code).await
+}
+
+/// The current row for an exact `(scope, code)`, with no fallback.
+///
+/// # Errors
+///
+/// [`TemplateError::Db`] if the lookup fails.
+pub async fn resolve_in(
+    db: &SurrealDb,
+    scope: Scope,
+    code: &str,
+) -> Result<Option<Template>, TemplateError> {
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE current_key = $key LIMIT 1"
         ))
-        .bind(("key", current_key(project_id, code)))
+        .bind(("key", current_key_in(scope, code)))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     one(response)
@@ -327,7 +440,7 @@ pub async fn versions_of(
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE code = $code AND project_id = $project \
-             ORDER BY id DESC"
+             AND firm_id = NONE ORDER BY id DESC"
         ))
         .bind(("code", code.to_string()))
         .bind((
@@ -339,9 +452,13 @@ pub async fn versions_of(
     many(response)
 }
 
-/// Every current template in the workspace-shared catalog, ordered by
-/// code — the lawyer listing and the importer's "what is already
-/// catalogued" read.
+/// Every current shared and Project-scoped template, ordered by code —
+/// the lawyer listing and the importer's "what is already catalogued"
+/// read. Callers wanting only the shared catalog filter on `project_id`.
+///
+/// Firm Library versions are never returned here, so a listing of the
+/// shared catalog cannot show one Firm's templates to another. Read a
+/// Firm's own with [`list_for_firm`].
 ///
 /// # Errors
 ///
@@ -349,8 +466,26 @@ pub async fn versions_of(
 pub async fn list_current(db: &SurrealDb) -> Result<Vec<Template>, TemplateError> {
     let response = db
         .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE is_current = true ORDER BY code ASC"
+            "SELECT {SELECT} FROM {TABLE} WHERE is_current = true AND firm_id = NONE \
+             ORDER BY code ASC"
         ))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?;
+    many(response)
+}
+
+/// Every current template in one Firm's Library, ordered by code.
+///
+/// # Errors
+///
+/// [`TemplateError::Db`] if the lookup fails.
+pub async fn list_for_firm(db: &SurrealDb, firm_id: Uuid) -> Result<Vec<Template>, TemplateError> {
+    let response = db
+        .query(format!(
+            "SELECT {SELECT} FROM {TABLE} \
+             WHERE is_current = true AND firm_id = $firm ORDER BY code ASC"
+        ))
+        .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     many(response)
@@ -482,14 +617,30 @@ pub async fn save_version(
     code: &str,
     version: Version,
 ) -> Result<Saved, TemplateError> {
+    save_version_in(db, Scope::of_project(project_id), code, version).await
+}
+
+/// [`save_version`] for any [`Scope`] — how a Firm Library version is
+/// written. A Firm version, like a Project one, is synced from a
+/// repository and must name its commit and carry a body.
+///
+/// # Errors
+///
+/// As [`save_version`].
+pub async fn save_version_in(
+    db: &SurrealDb,
+    scope: Scope,
+    code: &str,
+    version: Version,
+) -> Result<Saved, TemplateError> {
     let mut backoff = WRITE_BACKOFF;
     for remaining in (0..WRITE_ATTEMPTS).rev() {
-        match attempt_save(db, project_id, code, &version).await {
+        match attempt_save(db, scope, code, &version).await {
             Err(TemplateError::CurrentVersionTaken) => {
                 // Someone else holds the slot. If they wrote what we were
                 // about to write, this call is simply a no-op — the shape a
                 // concurrent re-seed takes.
-                if let Some(winner) = resolve_exact(db, project_id, code).await? {
+                if let Some(winner) = resolve_in(db, scope, code).await? {
                     if matches_spec(&winner, &version) {
                         return Ok(Saved::Unchanged(winner));
                     }
@@ -529,12 +680,12 @@ const WRITE_BACKOFF: std::time::Duration = std::time::Duration::from_millis(2);
 /// newer commit stay [`Saved::Unchanged`].
 ///
 /// A row that is missing a pin the current write path would record — a
-/// digest for its body, or a commit for a project-scoped version — never
+/// digest for its body, or a commit for a Project or Firm version — never
 /// matches, so the next sync appends a fully pinned version instead of
 /// keeping the unpinned one current.
 fn matches_spec(row: &Template, version: &Version) -> bool {
     let pinned = row.body_sha256.is_some() == row.asset_id.is_some()
-        && (row.project_id.is_none() || row.source_commit_sha.is_some());
+        && ((row.project_id.is_none() && row.firm_id.is_none()) || row.source_commit_sha.is_some());
     pinned
         && row.title == version.title
         && row.respondent_type == version.respondent_type
@@ -554,7 +705,7 @@ fn normalized_kind(kind: Option<String>) -> Option<String> {
 
 async fn attempt_save(
     db: &SurrealDb,
-    project_id: Option<Uuid>,
+    scope: Scope,
     code: &str,
     spec: &Version,
 ) -> Result<Saved, TemplateError> {
@@ -567,9 +718,9 @@ async fn attempt_save(
         source_commit_sha: spec.source_commit_sha.clone(),
     };
     version.kind = normalized_kind(version.kind);
-    let body_sha256 = pin_body(db, project_id, &version).await?;
+    let body_sha256 = pin_body(db, scope, &version).await?;
 
-    let current = resolve_exact(db, project_id, code).await?;
+    let current = resolve_in(db, scope, code).await?;
     if let Some(existing) = &current {
         if matches_spec(existing, &version) {
             return Ok(Saved::Unchanged(existing.clone()));
@@ -611,6 +762,7 @@ async fn attempt_save(
              title = $title, \
              respondent_type = $respondent_type, \
              project_id = $project_id, \
+             firm_id = $firm_id, \
              is_current = true, \
              asset_id = $asset_id, \
              form_code = $form_code, \
@@ -626,7 +778,13 @@ async fn attempt_save(
         .bind(("respondent_type", version.respondent_type.clone()))
         .bind((
             "project_id",
-            project_id.map(|p| record_id(crate::projects::PROJECT_TABLE, p)),
+            scope
+                .project_id()
+                .map(|p| record_id(crate::projects::PROJECT_TABLE, p)),
+        ))
+        .bind((
+            "firm_id",
+            scope.firm_id().map(|f| record_id(crate::firms::TABLE, f)),
         ))
         .bind((
             "asset_id",
@@ -636,7 +794,7 @@ async fn attempt_save(
         .bind(("kind", version.kind.clone()))
         .bind(("source_commit_sha", version.source_commit_sha.clone()))
         .bind(("body_sha256", body_sha256.clone()))
-        .bind(("current_key", current_key(project_id, code)))
+        .bind(("current_key", current_key_in(scope, code)))
     })
     .await
     .map_err(classify_write)?;
@@ -656,15 +814,15 @@ async fn attempt_save(
 /// The digest a new version pins, read from its body asset's row.
 ///
 /// The caller never supplies the digest, so it cannot disagree with the
-/// asset. A project-scoped version is a Draft synced from the Project
-/// repository: it must carry a body and name the commit it was read from.
-/// A shared-catalog version may omit the commit.
+/// asset. A Project or Firm version is a Draft synced from a repository:
+/// it must carry a body and name the commit it was read from. A
+/// shared-catalog version may omit the commit.
 async fn pin_body(
     db: &SurrealDb,
-    project_id: Option<Uuid>,
+    scope: Scope,
     version: &Version,
 ) -> Result<Option<String>, TemplateError> {
-    if project_id.is_some() {
+    if scope.is_synced() {
         if version
             .source_commit_sha
             .as_deref()
@@ -790,6 +948,67 @@ mod tests {
             .unwrap()
             .into_model()
             .id
+    }
+
+    #[tokio::test]
+    async fn resolve_prefers_project_then_owning_firm_then_shared() {
+        let db = mem().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let project = crate::projects::create(
+            &db,
+            &crate::projects::NewProject {
+                code: format!("firm-scope-{}", Uuid::now_v7()),
+                name: "matter".into(),
+                status: "open".into(),
+                entity_id: crate::test_support::seed_entity(&db).await,
+                firm_id: Some(firm),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        let shared = insert_template(&db, "engagement", None).await;
+        let mut firm_version = version("engagement", None);
+        firm_version.asset_id = Some(crate::test_support::seed_body_asset(&db, b"firm").await);
+        firm_version.source_commit_sha = Some(crate::test_support::SYNTHETIC_COMMIT_SHA.into());
+        let firm_row =
+            super::save_version_in(&db, super::Scope::Firm(firm), "engagement", firm_version)
+                .await
+                .unwrap()
+                .into_model();
+        assert_eq!(firm_row.firm_id, Some(firm));
+        assert_ne!(
+            firm_row.id, shared,
+            "the Firm line coexists with the shared one"
+        );
+
+        let resolved = resolve(&db, Some(project), "engagement").await.unwrap();
+        assert_eq!(resolved.map(|t| t.id), Some(firm_row.id));
+        let scoped = insert_template(&db, "engagement", Some(project)).await;
+        let resolved = resolve(&db, Some(project), "engagement").await.unwrap();
+        assert_eq!(resolved.map(|t| t.id), Some(scoped));
+        // A Project with no Firm, and the shared lookup, never see the Firm line.
+        let unowned = crate::test_support::seed_project_surreal(&db, "unowned").await;
+        let resolved = resolve(&db, Some(unowned), "engagement").await.unwrap();
+        assert_eq!(resolved.map(|t| t.id), Some(shared));
+        let resolved = resolve(&db, None, "engagement").await.unwrap();
+        assert_eq!(resolved.map(|t| t.id), Some(shared));
+    }
+
+    #[tokio::test]
+    async fn a_firm_version_without_a_commit_is_refused() {
+        let db = mem().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let asset = crate::test_support::seed_body_asset(&db, b"firm").await;
+        let refused = super::save_version_in(
+            &db,
+            super::Scope::Firm(firm),
+            "engagement",
+            version("e", Some(asset)),
+        )
+        .await;
+        assert!(matches!(refused, Err(TemplateError::MissingSourceCommit)));
     }
 
     #[tokio::test]

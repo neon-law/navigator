@@ -155,6 +155,8 @@ pub enum NotationSessionError {
     TemplateSource(#[from] store::template_source::TemplateSourceError),
     #[error("template: {0}")]
     Template(#[from] store::templates::TemplateError),
+    #[error("reading template from the Firm Library: {0}")]
+    FirmLibrary(Box<store::firm_library::FirmLibraryError>),
     #[error("notation `{0}` not found")]
     NotationNotFound(Uuid),
     #[error("question `{0}` not seeded in store")]
@@ -262,6 +264,33 @@ pub async fn start_notation(
     Ok(StartOutcome { notation_id, next })
 }
 
+/// After a Project repository miss, persist `template_code` from the Firm
+/// Library of the Firm that owns the Project, so [`store::templates::resolve`]
+/// finds the Firm version before the shared catalog. A Project with no Firm,
+/// a Firm with no library, or a library without the code is a quiet miss; a
+/// Draft that IS in the library but fails validation refuses, exactly as an
+/// invalid Project Draft does.
+async fn persist_from_firm_library(
+    surreal: &store::surreal::SurrealDb,
+    storage: &Arc<dyn StorageService>,
+    repo: &repos::RepoStore,
+    project_id: Uuid,
+    template_code: &str,
+) -> Result<(), NotationSessionError> {
+    let firm_id = store::projects::find_by_id(surreal, project_id)
+        .await
+        .map_err(|error| NotationSessionError::Db(error.to_string()))?
+        .and_then(|project| project.firm_id);
+    let Some(firm_id) = firm_id else {
+        return Ok(());
+    };
+    match store::firm_library::persist_draft(surreal, storage, repo, firm_id, template_code).await {
+        Ok(_) => Ok(()),
+        Err(store::firm_library::FirmLibraryError::Source(source)) => Err(source.into()),
+        Err(other) => Err(NotationSessionError::FirmLibrary(Box::new(other))),
+    }
+}
+
 /// The one `notation create` front door: auto-save the template from the
 /// Project's git repo, then open the notation pinned to that exact version.
 ///
@@ -299,8 +328,11 @@ pub async fn create_notation_from_repo(
     {
         match e {
             // Not authored in the repo (or the repo has no commits yet) —
-            // fall through to the bundled catalog below.
-            TemplateSourceError::TemplateNotFound { .. } | TemplateSourceError::RepoEmpty(_) => {}
+            // try the owning Firm's Library, then the bundled catalog below.
+            TemplateSourceError::TemplateNotFound { .. } | TemplateSourceError::RepoEmpty(_) => {
+                persist_from_firm_library(surreal, storage, repo, project_id, template_code)
+                    .await?;
+            }
             // A template that IS in the repo but is invalid hard-errors.
             other => return Err(other.into()),
         }
@@ -1817,6 +1849,75 @@ mod tests {
             matches!(outcome.next, NextStep::NeedsAnswer { .. }),
             "opening the notation must leave the questionnaire ready to answer"
         );
+    }
+
+    #[tokio::test]
+    async fn a_project_repository_miss_opens_the_owning_firms_library_draft() {
+        use super::create_notation_from_repo;
+        const TEMPLATE: &str =
+            include_str!("../../templates/notations/neon_law/onboarding__letter.md");
+        let surreal = db().await;
+        let storage: Arc<dyn StorageService> = Arc::new(
+            cloud::FsStorage::new(std::env::temp_dir().join("navigator-firm-library-notation"))
+                .await
+                .unwrap(),
+        );
+        let person_id = seed_person(&surreal, "libra@example.com").await;
+        let firm_id = store::test_support::seed_firm_with_brand(&surreal, "neon").await;
+        let firm = store::firms::find_by_id(&surreal, firm_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let project_id = store::projects::create(
+            &surreal,
+            &store::projects::NewProject {
+                code: format!("test-project-{}", Uuid::now_v7()),
+                name: "test project".into(),
+                status: "open".into(),
+                entity_id: store::test_support::seed_entity(&surreal).await,
+                firm_id: Some(firm_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = repos::RepoStore::new(dir.path());
+        repo.commit_as_code(
+            &store::firm_library::repository_name(&firm.slug),
+            repos::Author {
+                name: "Lawyer",
+                email: "lawyer@example.com",
+            },
+            "add the Firm retainer",
+            &[("drafts/firm_retainer.md", TEMPLATE.as_bytes())],
+        )
+        .unwrap();
+
+        let outcome = create_notation_from_repo(
+            &surreal,
+            &InMemoryRuntime::new(),
+            &storage,
+            &repo,
+            "firm_retainer",
+            person_id,
+            project_id,
+            None,
+        )
+        .await
+        .unwrap();
+        let notation = store::notations::find_by_id(&surreal, outcome.notation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let pinned = store::templates::find_by_id(&surreal, notation.template_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pinned.code, "firm_retainer");
+        assert_eq!(pinned.firm_id, Some(firm_id), "the Firm Library version");
+        assert_eq!(pinned.project_id, None);
     }
 
     #[tokio::test]

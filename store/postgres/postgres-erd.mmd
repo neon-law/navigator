@@ -1471,6 +1471,7 @@ erDiagram
         string body_sha256
         string code
         string current_key
+        uuid firm_id
         string form_code
         uuid id
         datetime inserted_at
@@ -1667,6 +1668,7 @@ erDiagram
     person }o--|| summary_sender_approval_event : references
     project }o--|| summary_sender_approval_event : references
     asset }o--|| template : references
+    firm }o--|| template : references
     project }o--|| template : references
     person }o--|| testimonial : references
     project }o--|| testimonial : references
