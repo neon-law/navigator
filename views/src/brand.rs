@@ -618,10 +618,9 @@ pub static LAWYER_SHOOK_BRANDING: Branding = Branding {
     brand_key: BrandKey::LawyerShook,
 };
 
-/// The Guieb & Shook house brand: a bare holding page for Guieb & Shook PC,
-/// the firm's name and nothing more. `/` renders the firm's name, "Attorneys
-/// at Law", and a sign-in line for an existing client — see
-/// `neon::firm_pages::guieb_shook_holding_content`. Its web face is selected
+/// The Guieb & Shook house brand: the firm's own site. `/` renders the
+/// authored classic-NY homepage from its `home.yaml` — see
+/// `neon::firm_pages::resolve_firm_home_content`. Its web face is selected
 /// by the per-brand asset head and token stylesheet (Tinos), like Lawyer
 /// Shook's.
 pub static GUIEB_SHOOK_BRANDING: Branding = Branding {
