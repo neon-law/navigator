@@ -1646,8 +1646,8 @@
 {"file":"store/src/inbox_triage.rs","line":210,"function":"record","operation":"bind","sql_operations":[],"tables":["inbox_triage"],"transaction":false}
 {"file":"store/src/inbox_triage.rs","line":210,"function":"record","operation":"bind","sql_operations":[],"tables":["message"],"transaction":false}
 {"file":"store/src/inbox_triage.rs","line":210,"function":"record","operation":"query","sql_operations":["SELECT","CREATE"],"tables":[],"transaction":false}
-{"file":"store/src/inbox_triage.rs","line":262,"function":"find_for_message","operation":"bind","sql_operations":[],"tables":["message"],"transaction":false}
-{"file":"store/src/inbox_triage.rs","line":262,"function":"find_for_message","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
+{"file":"store/src/inbox_triage.rs","line":259,"function":"find_for_message","operation":"bind","sql_operations":[],"tables":["message"],"transaction":false}
+{"file":"store/src/inbox_triage.rs","line":259,"function":"find_for_message","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
 {"file":"store/src/iolta_accounts.rs","line":266,"function":"upsert","operation":"bind","sql_operations":[],"tables":["iolta_account"],"transaction":false}
 {"file":"store/src/iolta_accounts.rs","line":266,"function":"upsert","operation":"query","sql_operations":["SELECT","UPSERT"],"tables":[],"transaction":false}
 {"file":"store/src/iolta_accounts.rs","line":302,"function":"for_jurisdiction","operation":"bind","sql_operations":[],"tables":["iolta_account"],"transaction":false}
@@ -2683,11 +2683,11 @@
 {"file":"store/src/postgres_mirror/inbox.rs","line":241,"function":"mirror","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/postgres_mirror/inbox.rs","line":250,"function":"mirror","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/postgres_mirror/inbox.rs","line":250,"function":"mirror","operation":"query","sql_operations":["DELETE"],"tables":[],"transaction":false}
-{"file":"store/src/postgres_mirror/inbox.rs","line":441,"function":"six_inbox_tables_mirror_and_mutable_drift_reconciles","operation":"bind","sql_operations":[],"tables":["inbox_delivery_attempt"],"transaction":false}
-{"file":"store/src/postgres_mirror/inbox.rs","line":441,"function":"six_inbox_tables_mirror_and_mutable_drift_reconciles","operation":"bind","sql_operations":[],"tables":["message"],"transaction":false}
-{"file":"store/src/postgres_mirror/inbox.rs","line":441,"function":"six_inbox_tables_mirror_and_mutable_drift_reconciles","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
-{"file":"store/src/postgres_mirror/inbox.rs","line":502,"function":"six_inbox_tables_mirror_and_mutable_drift_reconciles","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"store/src/postgres_mirror/inbox.rs","line":502,"function":"six_inbox_tables_mirror_and_mutable_drift_reconciles","operation":"query","sql_operations":["UPDATE"],"tables":["message"],"transaction":false}
+{"file":"store/src/postgres_mirror/inbox.rs","line":471,"function":"six_inbox_tables_mirror_and_mutable_drift_reconciles","operation":"bind","sql_operations":[],"tables":["inbox_delivery_attempt"],"transaction":false}
+{"file":"store/src/postgres_mirror/inbox.rs","line":471,"function":"six_inbox_tables_mirror_and_mutable_drift_reconciles","operation":"bind","sql_operations":[],"tables":["message"],"transaction":false}
+{"file":"store/src/postgres_mirror/inbox.rs","line":471,"function":"six_inbox_tables_mirror_and_mutable_drift_reconciles","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
+{"file":"store/src/postgres_mirror/inbox.rs","line":513,"function":"six_inbox_tables_mirror_and_mutable_drift_reconciles","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/postgres_mirror/inbox.rs","line":513,"function":"six_inbox_tables_mirror_and_mutable_drift_reconciles","operation":"query","sql_operations":["UPDATE"],"tables":["message"],"transaction":false}
 {"file":"store/src/postgres_mirror/leads.rs","line":126,"function":"source_leads","operation":"query","sql_operations":["SELECT"],"tables":["lead"],"transaction":false}
 {"file":"store/src/postgres_mirror/leads.rs","line":142,"function":"source_consents","operation":"query","sql_operations":["SELECT"],"tables":["lead_consent"],"transaction":false}
 {"file":"store/src/postgres_mirror/leads.rs","line":161,"function":"source_lead","operation":"bind","sql_operations":[],"tables":["lead"],"transaction":false}
