@@ -16,6 +16,7 @@ mod heartbeat;
 mod nightly_project_update;
 mod notation_reset;
 mod project_recovery;
+mod project_slack;
 mod reconcile;
 mod retention_purge;
 mod schedules;

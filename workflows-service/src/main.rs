@@ -207,6 +207,24 @@ async fn main() -> anyhow::Result<()> {
             workflows_service::dbos_inbound_message_alert::enabled(lookup)
                 .map_err(anyhow::Error::msg)
                 .context("read NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED")?;
+        let project_slack_enabled = workflows_service::dbos_project_slack::enabled(lookup)
+            .map_err(anyhow::Error::msg)
+            .context("read NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED")?;
+        if project_slack_enabled {
+            anyhow::ensure!(
+                workflows_service::notify_config::bot_enabled(lookup),
+                "DBOS ProjectSlack requires SLACK_BOT_TOKEN"
+            );
+        }
+        let project_slack_postgres = if project_slack_enabled {
+            Some(
+                store::postgres::PostgresDb::from_env()
+                    .await
+                    .context("connect PostgreSQL for the DBOS Project Slack lane")?,
+            )
+        } else {
+            None
+        };
         let finance_claim_postgres = if finance_aggregate_enabled {
             Some(
                 store::postgres::PostgresDb::from_env()
@@ -221,6 +239,7 @@ async fn main() -> anyhow::Result<()> {
             || nightly_project_update_enabled
             || email_summary_enabled
             || inbound_message_alert_enabled
+            || project_slack_enabled
         {
             let token = lookup("NAVIGATOR_DBOS_INGRESS_TOKEN")
                 .filter(|token| !token.trim().is_empty())
@@ -243,6 +262,7 @@ async fn main() -> anyhow::Result<()> {
             || nightly_project_update_enabled
             || email_summary_enabled
             || inbound_message_alert_enabled
+            || project_slack_enabled
         {
             let surreal = store::surreal::connect_from_env()
                 .await
@@ -375,6 +395,8 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 None
             },
+            project_slack_enabled,
+            project_slack_postgres,
         ))
     } else {
         None
@@ -502,6 +524,8 @@ async fn main() -> anyhow::Result<()> {
     };
     let dbos_nightly_surreal = surreal.clone();
     let dbos_nightly_slack = slack_bot.clone();
+    let dbos_project_slack_surreal = surreal.clone();
+    let dbos_project_slack_bot = slack_bot.clone();
     let dbos_nightly_repository_forge = repository_forge.clone();
     let dbos_nightly_github_forge = forge.clone();
     let dbos_nightly_portal_origin = portal_origin.clone();
@@ -600,6 +624,8 @@ async fn main() -> anyhow::Result<()> {
         email_summary_enabled,
         inbound_message_alert_enabled,
         event_surreal,
+        project_slack_enabled,
+        project_slack_postgres,
     )) = dbos_hosting
     {
         let finance_aggregate_surreal_for_ingress = finance_aggregate_surreal.clone();
@@ -725,6 +751,36 @@ async fn main() -> anyhow::Result<()> {
                                 workflows_service::dbos_ingress::AlertIngress::new(
                                     token.clone(),
                                     workflow,
+                                ),
+                            );
+                        }
+                    }
+                    if project_slack_enabled {
+                        // Registered before Finance consumes the shared
+                        // startup values, so the lane is live ahead of any
+                        // sibling workflow that may want it later.
+                        let workflow = workflows_service::dbos_project_slack::register(
+                            dbos,
+                            workflows_service::dbos_project_slack::Context::new(
+                                dbos_project_slack_surreal.clone(),
+                                dbos_project_slack_bot.clone(),
+                                project_slack_postgres
+                                    .clone()
+                                    .expect("ProjectSlack lane has no PostgreSQL connection"),
+                                simulated_matters,
+                            ),
+                        )?;
+                        if let (Some(token), Some(postgres)) = (
+                            dbos_ingress_token.clone(),
+                            project_slack_postgres.clone(),
+                        ) {
+                            registered_ingress.project_slack = Some(
+                                workflows_service::dbos_ingress::ProjectSlackIngress::new(
+                                    token,
+                                    workflow,
+                                    dbos.clone(),
+                                    dbos_project_slack_surreal.clone(),
+                                    postgres,
                                 ),
                             );
                         }
