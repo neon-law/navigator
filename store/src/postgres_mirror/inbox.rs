@@ -7,8 +7,10 @@ use serde_json::Value;
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::{changed, MirrorError, MirrorKey, Mirrored, ParityReport, TableParity};
-use crate::{postgres::PostgresDb, surreal::SurrealDb};
+use super::{changed, micros, MirrorError, MirrorKey, Mirrored, ParityReport, TableParity};
+use crate::postgres::PostgresDb;
+use crate::postgres_shadow::{compare_row, Comparison, ShadowKey};
+use crate::surreal::SurrealDb;
 
 struct Table {
     name: &'static str,
@@ -292,6 +294,210 @@ pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityRep
         }
     }
     parity(surreal, pg).await
+}
+
+// ---------------------------------------------------------------------------
+// Shadow reads (crate::postgres_shadow) — one row per lookup
+// ---------------------------------------------------------------------------
+
+const CONVERSATION_BY_ID: &str = "SELECT id, firm_id, brand_key, interaction_type, \
+     provider_post_id, project_id, channel, external_address, external_name, subject, \
+     unread, provider_account, provider_thread_ref, source_page, source_channel, \
+     matter_consent, promotional_opt_in, promotional_opt_out, email_conversation_id, \
+     inserted_at, updated_at FROM inbox_conversation WHERE id = $1";
+
+const MESSAGE_BY_ID: &str = "SELECT id, conversation_id, parent_message_id, visibility, \
+     direction, body, author_person_id, provider_message_id, provider_ref, delivery_state, \
+     purpose, attachment_asset_id, communication_id, occurred_at, alert_state, \
+     alert_channel_id, alert_timestamp, inserted_at, updated_at FROM message WHERE id = $1";
+
+// Independent mirrored flags — mirrors Conversation's own flag columns.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConversationImage {
+    id: Uuid,
+    firm_id: Uuid,
+    brand_key: Option<String>,
+    interaction_type: String,
+    provider_post_id: Option<String>,
+    project_id: Option<Uuid>,
+    channel: String,
+    external_address: String,
+    external_name: Option<String>,
+    subject: Option<String>,
+    unread: bool,
+    provider_account: String,
+    provider_thread_ref: Option<String>,
+    source_page: Option<String>,
+    source_channel: Option<String>,
+    matter_consent: bool,
+    promotional_opt_in: bool,
+    promotional_opt_out: bool,
+    email_conversation_id: Option<Uuid>,
+    inserted_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl ConversationImage {
+    fn from_source(row: &crate::inbox::Conversation) -> Self {
+        Self {
+            id: row.id,
+            firm_id: row.firm_id,
+            brand_key: row.brand_key.clone(),
+            interaction_type: row.interaction_type.clone(),
+            provider_post_id: row.provider_post_id.clone(),
+            project_id: row.project_id,
+            channel: row.channel.clone(),
+            external_address: row.external_address.clone(),
+            external_name: row.external_name.clone(),
+            subject: row.subject.clone(),
+            unread: row.unread,
+            provider_account: row.provider_account.clone(),
+            provider_thread_ref: row.provider_thread_ref.clone(),
+            source_page: row.source_page.clone(),
+            source_channel: row.source_channel.clone(),
+            matter_consent: row.matter_consent,
+            promotional_opt_in: row.promotional_opt_in,
+            promotional_opt_out: row.promotional_opt_out,
+            email_conversation_id: row.email_conversation_id,
+            inserted_at: micros(row.inserted_at),
+            updated_at: micros(row.updated_at),
+        }
+    }
+
+    fn from_row(row: &sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            firm_id: row.try_get("firm_id")?,
+            brand_key: row.try_get("brand_key")?,
+            interaction_type: row.try_get("interaction_type")?,
+            provider_post_id: row.try_get("provider_post_id")?,
+            project_id: row.try_get("project_id")?,
+            channel: row.try_get("channel")?,
+            external_address: row.try_get("external_address")?,
+            external_name: row.try_get("external_name")?,
+            subject: row.try_get("subject")?,
+            unread: row.try_get("unread")?,
+            provider_account: row.try_get("provider_account")?,
+            provider_thread_ref: row.try_get("provider_thread_ref")?,
+            source_page: row.try_get("source_page")?,
+            source_channel: row.try_get("source_channel")?,
+            matter_consent: row.try_get("matter_consent")?,
+            promotional_opt_in: row.try_get("promotional_opt_in")?,
+            promotional_opt_out: row.try_get("promotional_opt_out")?,
+            email_conversation_id: row.try_get("email_conversation_id")?,
+            inserted_at: row.try_get("inserted_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MessageImage {
+    id: Uuid,
+    conversation_id: Uuid,
+    parent_message_id: Option<Uuid>,
+    visibility: Option<String>,
+    direction: String,
+    body: String,
+    author_person_id: Option<Uuid>,
+    provider_message_id: Option<String>,
+    provider_ref: Option<String>,
+    delivery_state: String,
+    purpose: String,
+    attachment_asset_id: Option<Uuid>,
+    communication_id: Option<Uuid>,
+    occurred_at: String,
+    alert_state: Option<String>,
+    alert_channel_id: Option<String>,
+    alert_timestamp: Option<String>,
+    inserted_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl MessageImage {
+    fn from_source(row: &crate::inbox::Message) -> Self {
+        Self {
+            id: row.id,
+            conversation_id: row.conversation_id,
+            parent_message_id: row.parent_message_id,
+            visibility: row.visibility.clone(),
+            direction: row.direction.clone(),
+            body: row.body.clone(),
+            author_person_id: row.author_person_id,
+            provider_message_id: row.provider_message_id.clone(),
+            provider_ref: row.provider_ref.clone(),
+            delivery_state: row.delivery_state.clone(),
+            purpose: row.purpose.clone(),
+            attachment_asset_id: row.attachment_asset_id,
+            communication_id: row.communication_id,
+            occurred_at: row.occurred_at.clone(),
+            alert_state: None,
+            alert_channel_id: None,
+            alert_timestamp: None,
+            inserted_at: micros(row.inserted_at),
+            updated_at: micros(row.updated_at),
+        }
+    }
+
+    fn from_row(row: &sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            conversation_id: row.try_get("conversation_id")?,
+            parent_message_id: row.try_get("parent_message_id")?,
+            visibility: row.try_get("visibility")?,
+            direction: row.try_get("direction")?,
+            body: row.try_get("body")?,
+            author_person_id: row.try_get("author_person_id")?,
+            provider_message_id: row.try_get("provider_message_id")?,
+            provider_ref: row.try_get("provider_ref")?,
+            delivery_state: row.try_get("delivery_state")?,
+            purpose: row.try_get("purpose")?,
+            attachment_asset_id: row.try_get("attachment_asset_id")?,
+            communication_id: row.try_get("communication_id")?,
+            occurred_at: row.try_get("occurred_at")?,
+            alert_state: row.try_get("alert_state")?,
+            alert_channel_id: row.try_get("alert_channel_id")?,
+            alert_timestamp: row.try_get("alert_timestamp")?,
+            inserted_at: row.try_get("inserted_at")?,
+            updated_at: row.try_get("updated_at")?,
+        })
+    }
+}
+
+/// Compare one Conversation read with PostgreSQL's row for the same lookup.
+pub(crate) async fn shadow_conversation(
+    pg: &PostgresDb,
+    id: Uuid,
+    source: Option<&crate::inbox::Conversation>,
+) -> Result<Comparison, MirrorError> {
+    compare_row(
+        pg,
+        CONVERSATION_BY_ID,
+        ShadowKey::Id(id),
+        source.map(ConversationImage::from_source),
+        ConversationImage::from_row,
+        |image| image.id,
+    )
+    .await
+}
+
+/// Compare one Message read with PostgreSQL's row for the same lookup. The
+/// model carries no alert fields, so the source side compares them as absent.
+pub(crate) async fn shadow_message(
+    pg: &PostgresDb,
+    id: Uuid,
+    source: Option<&crate::inbox::Message>,
+) -> Result<Comparison, MirrorError> {
+    compare_row(
+        pg,
+        MESSAGE_BY_ID,
+        ShadowKey::Id(id),
+        source.map(MessageImage::from_source),
+        MessageImage::from_row,
+        |image| image.id,
+    )
+    .await
 }
 
 #[cfg(test)]
