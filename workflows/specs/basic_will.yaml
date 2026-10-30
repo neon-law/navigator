@@ -1,0 +1,42 @@
+kind: will
+title: Basic Last Will and Testament
+code: basic_will
+jurisdiction: US
+respondent_type: person
+confidential: true
+prompts:
+  law: "In which state is the testator domiciled? That state's law governs this will."
+  testator: "Who is the testator, the person making this will?"
+  executor: "Who is the executor, the person who administers the estate?"
+  alternate_executor: "Who is the alternate executor, if the executor cannot serve?"
+  guardian: "Who should raise the testator's minor children if both parents are gone?"
+  beneficiaries: "Who are the beneficiaries? List every person who inherits under this will."
+  specific_bequests: "List each specific gift, one row per gift: who receives it and what it is."
+  self_proving: "Should the will include a self-proving affidavit?"
+questionnaire:
+  BEGIN: { _: jurisdiction__law }
+  jurisdiction__law: { _: person__testator }
+  person__testator: { _: person__executor }
+  person__executor: { _: person__alternate_executor }
+  person__alternate_executor: { _: person__guardian }
+  person__guardian: { _: people__beneficiaries }
+  people__beneficiaries: { _: schedule__specific_bequests }
+  schedule__specific_bequests:
+    _: custom_yes_no__self_proving
+    columns:
+      - name: beneficiary
+        label: Who receives it
+        type: text
+      - name: gift
+        label: What it is
+        type: text
+  custom_yes_no__self_proving: { _: END }
+  END: {}
+workflow:
+  BEGIN: { _: lawyer_review }
+  lawyer_review: { approved: generate_pdf__will_pdf }
+  generate_pdf__will_pdf: { pdf_persisted: witnesses }
+  witnesses: { _: _signature }
+  _signature: { _: notarization }
+  notarization: { _: END }
+  END: {}
