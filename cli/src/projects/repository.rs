@@ -6121,3 +6121,36 @@ mod forgejo_gate_tests {
         let tree = crate::projects::source_import::tree_from_checkout(root.path()).unwrap();
         assert!(tree.files.contains_key(FORGEJO_GATE_WORKFLOW));
     }
+
+    /// The blueprint's locked decision: the scaffold bytes are shared with
+    /// the CLI scaffold generator — one source of truth, asserted equal by
+    /// test. `project_scaffold::forgejo_seed_files` is exactly what the
+    /// server commits through `ForgeService::initialize_source`, and what
+    /// this CLI writes through `emit_scaffold_for` for the same inputs.
+    #[test]
+    fn the_shared_seed_set_is_byte_identical_to_the_cli_scaffold() {
+        let root = scaffold(ForgeBackend::Forgejo);
+        let source = project_scaffold::ScaffoldSource {
+            code: "matter-one",
+            host: "staging.neonlaw.com",
+            lawyer_dri: "lawyer@example.com",
+            client_dri: "client@example.com",
+            version: crate::cli_version(),
+        };
+        let seeded = project_scaffold::forgejo_seed_files(&source);
+        assert!(
+            seeded.iter().any(|(path, _)| path == FORGEJO_GATE_WORKFLOW),
+            "the Forgejo seed set carries the gate"
+        );
+        for (relative, contents) in seeded {
+            assert_eq!(
+                fs::read_to_string(root.path().join(&relative)).unwrap(),
+                contents,
+                "{relative} forked from the CLI scaffold"
+            );
+        }
+        // A GitHub-backed scaffold never carries the gate.
+        let github = scaffold(ForgeBackend::GitHub);
+        assert!(!github.path().join(FORGEJO_GATE_WORKFLOW).exists());
+    }
+}
