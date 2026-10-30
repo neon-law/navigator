@@ -143,6 +143,14 @@ pub enum EphemerisError {
         problem: String,
     },
 
+    /// Serializing derived output failed, most often a non-finite
+    /// coordinate that would corrupt geometry as JSON `null`.
+    #[error("serializing derived output: {problem}")]
+    Serialization {
+        /// What failed and where.
+        problem: String,
+    },
+
     /// The configured filesystem data root does not exist.
     #[error("ephemeris data directory {} does not exist", .0.display())]
     MissingDataDir(PathBuf),
