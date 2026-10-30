@@ -2307,18 +2307,37 @@ pub(crate) fn slug_from_documents_folder(root: &Path, file: &Path) -> Option<Str
             _ => None,
         })
         .collect::<Option<_>>()?;
-    match parts.as_slice() {
-        // A matter folder is where the bytes live, not part of the slug
-        // (LAW-189).
-        ["documents", folder, rest @ ..]
-            if !rest.is_empty()
-                && store::document_pointers::MatterFolder::parse(folder).is_some() =>
-        {
-            Some(rest.join("/"))
-        }
-        ["documents", folders @ .., _] if !folders.is_empty() => Some(parts[1..].join("/")),
-        _ => None,
+    // A matter folder — including a fixed `Work Product` subfolder, whose
+    // name spans two components (LAW-215) — is where the bytes live, not
+    // part of the slug (LAW-189).
+    if let Some(prefix) = documents_folder_prefix_len(&parts) {
+        return Some(parts[1 + prefix..].join("/"));
     }
+    if parts.len() > 2 && parts[0] == "documents" {
+        return Some(parts[1..].join("/"));
+    }
+    None
+}
+
+/// How many leading components of `parts` spell a matter folder's name —
+/// two for a fixed `Work Product` subfolder (LAW-215), one for every other.
+/// The longest match wins, so `Work Product/Research (Work Product)/` never
+/// degrades to its bare parent.
+fn documents_folder_prefix_len(parts: &[&str]) -> Option<usize> {
+    // Folder names are spelled below `documents/`; the leading component is
+    // the checkout's documents root itself.
+    if parts.first() != Some(&"documents") {
+        return None;
+    }
+    let segments = &parts[1..];
+    store::document_pointers::MatterFolder::ALL
+        .iter()
+        .filter_map(|folder| {
+            let names: Vec<&str> = folder.as_str().split('/').collect();
+            (segments.len() > names.len() && segments[..names.len()] == names[..])
+                .then_some(names.len())
+        })
+        .max()
 }
 
 /// `navigator site document visibility <asset_id> --project <code> --visibility …`
@@ -6326,6 +6345,17 @@ mod tests {
         assert_eq!(
             slug("documents/Work Product/c.pdf").as_deref(),
             Some("c.pdf")
+        );
+        // A fixed `Work Product` subfolder is matched whole, and its name is
+        // not part of the slug (LAW-215); a lawyer-made subfolder inside one
+        // stays in the slug.
+        assert_eq!(
+            slug("documents/Work Product/Research (Work Product)/memo.pdf").as_deref(),
+            Some("memo.pdf")
+        );
+        assert_eq!(
+            slug("documents/Work Product/Motions (Work Product)/motions/dismiss.pdf").as_deref(),
+            Some("motions/dismiss.pdf")
         );
         // Files at the `documents/` root, or outside it, keep the filename slug.
         assert_eq!(slug("documents/c.pdf"), None);

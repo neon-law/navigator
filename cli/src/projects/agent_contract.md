@@ -76,14 +76,23 @@ each answer terse.
   case-management system organises a matter. `navigator project sync` creates every folder, even when it is empty:
   * `Client Production/` holds what the client supplied, such as exhibits (`kind: exhibit`).
   * `Correspondence (Served)/` holds letters served or received (`kind: letter`).
-  * `Discovery/` holds discovery requests and responses.
+  * `Discovery (Served)/` holds discovery actually served or received.
   * `Docket Filings/` holds court paper: pleadings, filings, and docket ingest (`kind: pleading`, `filing`).
-  * `Work Product/` holds memos, transcripts, drafts, and every other kind.
+  * `Court Rules/` holds the court's local rules and standing orders.
+  * `Engagement/` holds the letters that open and close the engagement (`kind: onboarding`).
+  * `Work Product/` holds drafts, research, and every other kind. Its seven fixed subfolders each carry the suffix so
+    they read unambiguously out of context and never collide with a served twin (LAW-215): `Client Calls (Work
+    Product)/` (call notes and transcripts, `kind: transcript`), `Correspondence (Work Product)/` (letters the firm
+    drafted but did not serve), `Discovery (Work Product)/` (discovery in preparation), `Motions (Work Product)/` (one
+    folder per motion), `Pleadings (Work Product)/` (pleadings in draft), `Research (Work Product)/` (memos, `kind:
+    memo`), and `Stipulations (Work Product)/`.
   * `onboarding/`, `offboarding/`, `invoices/`, `cases/`, and `rules/` keep their bytes at the pointer's own path.
 
   The slug is the path below the matter folder: `documents/Docket Filings/pleadings/motion.pdf` for
   `blobs/pleadings/motion.pdf.yaml`. A file dropped into a matter folder is uploaded on the next sync with that folder's
-  kind, and a subfolder inside one is part of the slug. Never commit anything under `documents/`.
+  kind, and a lawyer-made subfolder inside one is part of the slug. Never commit anything under `documents/`. A checkout
+  from before LAW-215 holds a bare `Discovery/` folder instead of `Discovery (Served)/`; `navigator project repository
+  migrate-folders` refiles it.
 * `drafts/` holds Drafts, the notation blueprints, directly under it; `templates/` is an alias the gate warns about.
   Memo notations use `kind: memo`. Use placeholders for client data and matter facts; answers and work product stay in
   Navigator. A Notation is a database record, never a file here.
