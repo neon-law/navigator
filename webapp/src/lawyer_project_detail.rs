@@ -31,9 +31,9 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Field, FormCard, Heading};
+use crate::components::{Empty, FactCard, FactGrid, Field, FormCard, Heading, Tab, Tabs};
 use crate::csrf::CsrfToken;
-use crate::lawyer_project_documents::{documents_table, LawyerDocRevision, LawyerDocRow};
+use crate::lawyer_project_documents::{documents_table, LawyerDocRow};
 use crate::lawyer_project_integrations::integrations_section;
 use crate::lawyer_project_notations::{ProjectNotationBoard, ProjectNotationRow};
 use crate::lawyer_project_participation::{
@@ -43,23 +43,161 @@ use crate::lawyer_project_testimonial::{admin_testimonial_card, AdminTestimonial
 use crate::people::ViewerRole;
 
 #[cfg(feature = "server")]
-use crate::lawyer_project_documents::{asset_kind_choices, service_lines, visibility_word};
+use crate::lawyer_project_documents::{
+    asset_kind_choices, service_lines, visibility_word, LawyerDocRevision,
+};
 #[cfg(feature = "server")]
 use crate::lawyer_project_notations::project_notation_board;
 #[cfg(feature = "server")]
-use crate::lawyer_project_participation::{participation_rows_for, to_participation_rows};
+use crate::lawyer_project_participation::to_participation_rows;
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ProjectRepositoryPointer(pub Option<String>);
 
-/// The document-upload form's `?error=` flash query.
+/// The workbench's read query: the document-upload `?error=` flash and the
+/// dashboard's `?tab=` section selection.
 #[derive(Deserialize, Default)]
-pub struct DocumentsQuery {
+pub struct MatterQuery {
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub tab: Option<String>,
 }
 
-/// One revision in a grouped lawyer document history.
+/// One section of the matter dashboard. Tab selection is URL state (`?tab=`),
+/// never client state: the strip is link-driven and each tab server-renders
+/// its panel from the same view struct.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MatterTab {
+    #[default]
+    Overview,
+    Tasks,
+    Correspondence,
+    Documents,
+    Billing,
+    Participants,
+}
+
+impl MatterTab {
+    /// An explicit, valid `?tab=` value wins; an unknown or absent value
+    /// falls back to Overview, except that the document-upload `?error=`
+    /// flash — which renders on the documents panel — opens Documents.
+    #[must_use]
+    pub fn from_query(raw: Option<&str>, has_error_flash: bool) -> Self {
+        match raw {
+            Some("tasks") => Self::Tasks,
+            Some("correspondence") => Self::Correspondence,
+            Some("documents") => Self::Documents,
+            Some("billing") => Self::Billing,
+            Some("participants") => Self::Participants,
+            Some("overview") => Self::Overview,
+            _ if has_error_flash => Self::Documents,
+            _ => Self::Overview,
+        }
+    }
+
+    /// The `?tab=` value this tab's link carries.
+    #[must_use]
+    pub fn query_value(self) -> &'static str {
+        match self {
+            Self::Overview => "overview",
+            Self::Tasks => "tasks",
+            Self::Correspondence => "correspondence",
+            Self::Documents => "documents",
+            Self::Billing => "billing",
+            Self::Participants => "participants",
+        }
+    }
+
+    /// The tab's label in the strip.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Overview => "Overview",
+            Self::Tasks => "Tasks",
+            Self::Correspondence => "Correspondence",
+            Self::Documents => "Documents",
+            Self::Billing => "Billing",
+            Self::Participants => "Participants",
+        }
+    }
+}
+
+/// The dashboard's sections in reading order.
+const MATTER_TABS: [MatterTab; 6] = [
+    MatterTab::Overview,
+    MatterTab::Tasks,
+    MatterTab::Correspondence,
+    MatterTab::Documents,
+    MatterTab::Billing,
+    MatterTab::Participants,
+];
+
+/// The tab strip: one link per section, the active one carrying
+/// `aria-current="page"` through the shared `Tabs` component.
+fn matter_tab_strip(code: &str, active: MatterTab) -> Vec<Tab> {
+    MATTER_TABS
+        .iter()
+        .map(|tab| {
+            Tab::new(
+                tab.label(),
+                format!("/app/projects/{code}?tab={}", tab.query_value()),
+                *tab == active,
+            )
+        })
+        .collect()
+}
+
+/// The summary strip under the tab bar: the handful of facts a matter opens
+/// with, derived from data the view already carries. A fact this matter does
+/// not have is left out rather than shown as a zero, and the strip itself is
+/// skipped when nothing renders in it. The tiles that need the work and
+/// billing models (tasks, correspondence, work in progress, outstanding
+/// balance) join as those models land.
+fn matter_fact_grid(view: &LawyerDetailView) -> Element {
+    let next_due = view.deadlines.first().map(|row| row.due.clone());
+    let deadline_count = view.deadlines.len();
+    let document_count = view.documents.len();
+    let people_count = view.participations.len();
+    let trust_held = view.trust.held.clone();
+    let has_facts = deadline_count > 0 || document_count > 0 || people_count > 0 || view.trust.any;
+
+    if !has_facts {
+        return rsx! {};
+    }
+
+    rsx! {
+        section { class: "lawyer-detail__section lawyer-detail__summary",
+            FactGrid {
+                if deadline_count > 0 {
+                    FactCard { title: "Open deadlines".to_string(),
+                        span { class: "lawyer-detail__fact-value", "{deadline_count}" }
+                    }
+                }
+                if let Some(due) = next_due {
+                    FactCard { title: "Next deadline".to_string(),
+                        span { class: "lawyer-detail__fact-value", "{due}" }
+                    }
+                }
+                if document_count > 0 {
+                    FactCard { title: "Documents".to_string(),
+                        span { class: "lawyer-detail__fact-value", "{document_count}" }
+                    }
+                }
+                if people_count > 0 {
+                    FactCard { title: "Matter people".to_string(),
+                        span { class: "lawyer-detail__fact-value", "{people_count}" }
+                    }
+                }
+                if view.trust.any {
+                    FactCard { title: "Trust held".to_string(),
+                        span { class: "lawyer-detail__fact-value", "{trust_held}" }
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// The rendered lawyer workbench — every field wasm-safe (plain scalars; no
 /// `store`/`SeaORM`/`cloud`/`repos` type crosses to the client build).
@@ -113,6 +251,11 @@ pub struct LawyerDetailView {
     /// kind conflicts with the chain it would join.
     #[serde(default)]
     pub error: Option<String>,
+    /// The dashboard section this render shows, resolved server-side from
+    /// `?tab=` (the `?error=` flash opens Documents when no tab was asked
+    /// for). URL state, never client state.
+    #[serde(default)]
+    pub active_tab: MatterTab,
     /// The upload form's Kind select, as `(value, label)` pairs — every
     /// `rules::kind::Kind::valid_for(Lane::Asset)` value, computed
     /// server-side so the wasm client never needs the `rules` crate.
@@ -197,13 +340,15 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     // The document-upload form's `?error=` flash — set when the upload
     // handler's redirect-on-refusal carries a message (a kind-changed
     // revision refusal today).
-    let error = dioxus_fullstack_core::FullstackContext::extract::<
-        axum::extract::Query<DocumentsQuery>,
-        _,
-    >()
-    .await
-    .map_or_else(|_| DocumentsQuery::default(), |axum::extract::Query(q)| q)
-    .error;
+    let query =
+        dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<MatterQuery>, _>()
+            .await
+            .map_or_else(|_| MatterQuery::default(), |axum::extract::Query(q)| q);
+    let error = query.error;
+    // The dashboard's active section is URL state resolved with the view: an
+    // explicit `?tab=` wins, and the upload error flash — which renders on
+    // the documents panel — opens Documents when no tab was asked for.
+    let active_tab = MatterTab::from_query(query.tab.as_deref(), error.is_some());
     let role = dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<ViewerRole>, _>()
         .await
         .map(|axum::Extension(role)| role)
@@ -463,6 +608,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
             .collect(),
         notations,
         error,
+        active_tab,
         asset_kind_choices: asset_kind_choices(),
         csrf_token,
         calendar_sort,
@@ -602,155 +748,316 @@ pub fn LawyerProjectDetail() -> Element {
                 }
             }
 
-            crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
-
-            crate::project_deadlines::ProjectDeadlinesPanel {
-                section_class: "lawyer-detail__section".to_string(),
-                rows: view.deadlines.clone(),
-                past: view.past_deadlines.clone(),
+            section { class: "lawyer-detail__section lawyer-detail__tabs",
+                Tabs {
+                    aria_label: "Matter sections".to_string(),
+                    tabs: matter_tab_strip(&view.code, view.active_tab),
+                }
             }
 
-            if is_admin && !view.client_dris.is_empty() {
-                {admin_testimonial_card(&view.code, &csrf, view.testimonial.as_ref())}
-            }
+            {matter_fact_grid(&view)}
 
-            if view.trust.any {
-                section { class: "lawyer-detail__section",
-                    h2 { "Client trust" }
-                    p { class: "nav-muted",
-                        "Held for this Project in the firm's pooled client trust account, \
-                         mirrored from Xero. Xero is the books."
-                    }
-                    ul {
-                        li { "Held: {view.trust.held}" }
-                        li { "Paid in: {view.trust.deposited}" }
-                        li { "Earned and drawn: {view.trust.drawn}" }
-                        li { "Refunded: {view.trust.refunded}" }
-                    }
-                    if !view.trust.allocations.is_empty() {
-                        p { class: "nav-muted",
-                            "Drawn against this Project's invoices. The pooled transfer \
-                             these lines were part of is not a Project-level fact."
+            {
+                match view.active_tab {
+                    MatterTab::Overview => rsx! {
+                        crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
+
+                        crate::project_deadlines::ProjectDeadlinesPanel {
+                            section_class: "lawyer-detail__section".to_string(),
+                            rows: view.deadlines.clone(),
+                            past: view.past_deadlines.clone(),
                         }
-                        ul {
-                            for line in view.trust.allocations.iter() {
-                                li {
-                                    "{line.amount} to {line.invoice_reference} on {line.occurred_on}"
+
+                        if is_admin && !view.client_dris.is_empty() {
+                            {admin_testimonial_card(&view.code, &csrf, view.testimonial.as_ref())}
+                        }
+
+                        {integrations_section(&view)}
+
+                        // The matter timeline: every docket entry on this matter's cases
+                        // joined with every open deadline, in date order. Documents,
+                        // participations, and notations stay out of it.
+                        crate::project_calendar::ProjectCalendar {
+                            section_class: "lawyer-detail__section project-calendar".to_string(),
+                            heading: "Calendar".to_string(),
+                            empty_message: "No calendar events scheduled for this project.".to_string(),
+                            columns: crate::project_calendar::MATTER_COLUMNS.to_vec(),
+                            path: format!("/app/projects/{}", view.code),
+                            query_prefix: String::new(),
+                            sort: view.calendar_sort.clone(),
+                            dir: view.calendar_dir.clone(),
+                            events: view.calendar_events.clone(),
+                        }
+
+                        ProjectNotationBoard { rows: view.notations.clone() }
+
+                        // Closing a matter is bespoke: it is asked for by email and opened
+                        // by the lawyer DRI, never fired from a button here. Every firm
+                        // participant reads where to ask — the accountability marker
+                        // decides who acts on the request, not who may raise it.
+                        if view.status == "open" {
+                            section { class: "lawyer-detail__section project-close",
+                                p { class: "nav-muted",
+                                    "To close this project, email the lawyer DRI"
+                                    if !view.lawyer_dris.is_empty() {
+                                        " ({lawyer_dri_disp})"
+                                    }
+                                    " or "
+                                    "support@neonlaw.com"
+                                    "."
+                                }
+                                // A matter always has at least one lawyer DRI — they are who
+                                // close it. An empty set is therefore a gap to fill, not a
+                                // neutral blank, so the workbench says so. Admin can add a
+                                // person and mark them; a lawyer already on the matter uses
+                                // Make DRI on a firm-side row in the ledger below.
+                                if view.lawyer_dris.is_empty() && view.role.is_lawyer_tier() {
+                                    p { class: "nav-form-error", role: "alert",
+                                        "This project has no lawyer DRI. "
+                                        if is_admin {
+                                            a { class: "nav-link", href: "/app/projects/{view.code}/people/new", "Designate the accountable lawyer" }
+                                        } else {
+                                            "Use Make DRI on a lawyer already assigned to this project"
+                                        }
+                                        "."
+                                    }
                                 }
                             }
                         }
-                    }
-                }
-            }
-
-            {integrations_section(&view)}
-
-            // The matter timeline: every docket entry on this matter's cases
-            // joined with every open deadline, in date order. Documents,
-            // participations, and notations stay out of it.
-            crate::project_calendar::ProjectCalendar {
-                section_class: "lawyer-detail__section project-calendar".to_string(),
-                heading: "Calendar".to_string(),
-                empty_message: "No calendar events scheduled for this project.".to_string(),
-                columns: crate::project_calendar::MATTER_COLUMNS.to_vec(),
-                path: format!("/app/projects/{}", view.code),
-                query_prefix: String::new(),
-                sort: view.calendar_sort.clone(),
-                dir: view.calendar_dir.clone(),
-                events: view.calendar_events.clone(),
-            }
-
-            ProjectNotationBoard { rows: view.notations.clone() }
-
-            ParticipationTable {
-                code: view.code.clone(),
-                csrf: csrf.clone(),
-                participations: view.participations.clone(),
-                is_admin,
-                may_govern_lawyer_side,
-                may_govern_client_side,
-            }
-
-            section { class: "lawyer-detail__section project-documents",
-                h2 { "Documents" }
-                {documents_table(&view)}
-                // Real-time upload progress: `upload-progress.js` finds the
-                // form via this field's id and replays the native submit as
-                // an XHR so it can render `upload.loaded` / `upload.total`
-                // as they arrive — a plain `Field::file(...)` id defaults to
-                // its `name` ("file"), so this needs its own id to stay
-                // unique against any other file field on the page.
-                document::Script { src: "/public/js/upload-progress.js", defer: true }
-                FormCard {
-                    title: "Upload documents".to_string(),
-                    action: "/app/projects/{view.code}/documents/upload",
-                    submit_label: "Upload".to_string(),
-                    heading: Heading::H2,
-                    multipart: true,
-                    csrf_token: Some(csrf.clone()),
-                    fields: vec![
-                        Field::file("Files", "file").id("document-upload-file").required().multiple()
-                            .help("Select one file or several — each is filed as its own document."),
-                        Field::select(
-                            "Kind",
-                            "kind",
-                            view.asset_kind_choices
-                                .iter()
-                                .map(|(value, label)| crate::components::Choice::new(value.clone(), label.clone()))
-                                .collect(),
-                            Some("unclassified".to_string()),
-                        )
-                        .required()
-                        .help(
-                            "Required. The stored enum is in parentheses. Applies to every file in this batch.",
-                        ),
-                        Field::text("Description", "description", "")
-                            .placeholder("Letter from Acme Bank dated 2026-05-23")
-                            .help("Optional. Applies to every file in this batch."),
-                        Field::select("Visibility", "visibility",
-                            vec![
-                                crate::components::Choice::new("internal", "Internal (lawyer only)"),
-                                crate::components::Choice::new("client", "Client-visible"),
-                            ],
-                            Some("internal".to_string()))
-                            .help("Applies to every file in this batch. Internal work product — memos, drafts — stays internal."),
-                    ],
-                }
-            }
-
-            // Closing a matter is bespoke: it is asked for by email and opened
-            // by the lawyer DRI, never fired from a button here. Every firm
-            // participant reads where to ask — the accountability marker
-            // decides who acts on the request, not who may raise it.
-            if view.status == "open" {
-                section { class: "lawyer-detail__section project-close",
-                    p { class: "nav-muted",
-                        "To close this project, email the lawyer DRI"
-                        if !view.lawyer_dris.is_empty() {
-                            " ({lawyer_dri_disp})"
-                        }
-                        " or "
-                        "support@neonlaw.com"
-                        "."
-                    }
-                    // A matter always has at least one lawyer DRI — they are who
-                    // close it. An empty set is therefore a gap to fill, not a
-                    // neutral blank, so the workbench says so. Admin can add a
-                    // person and mark them; a lawyer already on the matter uses
-                    // Make DRI on a firm-side row in the ledger below.
-                    if view.lawyer_dris.is_empty() && view.role.is_lawyer_tier() {
-                        p { class: "nav-form-error", role: "alert",
-                            "This project has no lawyer DRI. "
-                            if is_admin {
-                                a { class: "nav-link", href: "/app/projects/{view.code}/people/new", "Designate the accountable lawyer" }
-                            } else {
-                                "Use Make DRI on a lawyer already assigned to this project"
+                    },
+                    MatterTab::Tasks => rsx! {
+                        section { class: "lawyer-detail__section",
+                            Empty {
+                                title: "No tasks on this matter yet".to_string(),
+                                description: Some("Assignable work — an owner, a due date, and a state — will appear here once it is tracked for this matter. Court deadlines remain docket obligations and stay on Overview.".to_string()),
                             }
-                            "."
                         }
-                    }
+                    },
+                    MatterTab::Correspondence => rsx! {
+                        section { class: "lawyer-detail__section",
+                            Empty {
+                                title: "Correspondence lives in the matter inbox".to_string(),
+                                description: Some("Email, texts, and logged calls for this matter are triaged in the project inbox.".to_string()),
+                                action: Some(rsx! {
+                                    a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.code}/inbox", "Open the matter inbox" }
+                                }),
+                            }
+                        }
+                    },
+                    MatterTab::Documents => rsx! {
+                        section { class: "lawyer-detail__section project-documents",
+                            h2 { "Documents" }
+                            {documents_table(&view)}
+                            // Real-time upload progress: `upload-progress.js` finds the
+                            // form via this field's id and replays the native submit as
+                            // an XHR so it can render `upload.loaded` / `upload.total`
+                            // as they arrive — a plain `Field::file(...)` id defaults to
+                            // its `name` ("file"), so this needs its own id to stay
+                            // unique against any other file field on the page.
+                            document::Script { src: "/public/js/upload-progress.js", defer: true }
+                            FormCard {
+                                title: "Upload documents".to_string(),
+                                action: "/app/projects/{view.code}/documents/upload",
+                                submit_label: "Upload".to_string(),
+                                heading: Heading::H2,
+                                multipart: true,
+                                csrf_token: Some(csrf.clone()),
+                                fields: vec![
+                                    Field::file("Files", "file").id("document-upload-file").required().multiple()
+                                        .help("Select one file or several — each is filed as its own document."),
+                                    Field::select(
+                                        "Kind",
+                                        "kind",
+                                        view.asset_kind_choices
+                                            .iter()
+                                            .map(|(value, label)| crate::components::Choice::new(value.clone(), label.clone()))
+                                            .collect(),
+                                        Some("unclassified".to_string()),
+                                    )
+                                    .required()
+                                    .help(
+                                        "Required. The stored enum is in parentheses. Applies to every file in this batch.",
+                                    ),
+                                    Field::text("Description", "description", "")
+                                        .placeholder("Letter from Acme Bank dated 2026-05-23")
+                                        .help("Optional. Applies to every file in this batch."),
+                                    Field::select("Visibility", "visibility",
+                                        vec![
+                                            crate::components::Choice::new("internal", "Internal (lawyer only)"),
+                                            crate::components::Choice::new("client", "Client-visible"),
+                                        ],
+                                        Some("internal".to_string()))
+                                        .help("Applies to every file in this batch. Internal work product — memos, drafts — stays internal."),
+                                ],
+                            }
+                        }
+                    },
+                    MatterTab::Billing => rsx! {
+                        if view.trust.any {
+                            section { class: "lawyer-detail__section",
+                                h2 { "Client trust" }
+                                p { class: "nav-muted",
+                                    "Held for this Project in the firm's pooled client trust account, \
+                                     mirrored from Xero. Xero is the books."
+                                }
+                                ul {
+                                    li { "Held: {view.trust.held}" }
+                                    li { "Paid in: {view.trust.deposited}" }
+                                    li { "Earned and drawn: {view.trust.drawn}" }
+                                    li { "Refunded: {view.trust.refunded}" }
+                                }
+                                if !view.trust.allocations.is_empty() {
+                                    p { class: "nav-muted",
+                                        "Drawn against this Project's invoices. The pooled transfer \
+                                         these lines were part of is not a Project-level fact."
+                                    }
+                                    ul {
+                                        for line in view.trust.allocations.iter() {
+                                            li {
+                                                "{line.amount} to {line.invoice_reference} on {line.occurred_on}"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        section { class: "lawyer-detail__section",
+                            Empty {
+                                title: "Nothing billed yet".to_string(),
+                                description: Some("Time, expenses, and invoices for this matter will appear here.".to_string()),
+                            }
+                        }
+                    },
+                    MatterTab::Participants => rsx! {
+                        ParticipationTable {
+                            code: view.code.clone(),
+                            csrf: csrf.clone(),
+                            participations: view.participations.clone(),
+                            is_admin,
+                            may_govern_lawyer_side,
+                            may_govern_client_side,
+                        }
+                    },
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_query_reads_explicit_tabs_and_falls_back() {
+        assert_eq!(
+            MatterTab::from_query(Some("tasks"), false),
+            MatterTab::Tasks
+        );
+        assert_eq!(
+            MatterTab::from_query(Some("correspondence"), false),
+            MatterTab::Correspondence
+        );
+        assert_eq!(
+            MatterTab::from_query(Some("documents"), false),
+            MatterTab::Documents
+        );
+        assert_eq!(
+            MatterTab::from_query(Some("billing"), false),
+            MatterTab::Billing
+        );
+        assert_eq!(
+            MatterTab::from_query(Some("participants"), false),
+            MatterTab::Participants
+        );
+        assert_eq!(
+            MatterTab::from_query(Some("overview"), false),
+            MatterTab::Overview
+        );
+        // An unknown value and an absent one both fall back to Overview.
+        assert_eq!(
+            MatterTab::from_query(Some("nonsense"), false),
+            MatterTab::Overview
+        );
+        assert_eq!(MatterTab::from_query(None, false), MatterTab::Overview);
+        // The upload error flash opens Documents when no tab was asked for —
+        // but never overrides an explicit tab.
+        assert_eq!(MatterTab::from_query(None, true), MatterTab::Documents);
+        assert_eq!(
+            MatterTab::from_query(Some("billing"), true),
+            MatterTab::Billing
+        );
+    }
+
+    #[test]
+    fn query_value_round_trips_through_from_query() {
+        for tab in MATTER_TABS {
+            assert_eq!(
+                MatterTab::from_query(Some(tab.query_value()), false),
+                tab,
+                "{} round-trips",
+                tab.label()
+            );
+        }
+    }
+
+    #[test]
+    fn strip_builds_six_links_and_marks_the_active_tab() {
+        let tabs = matter_tab_strip("acme", MatterTab::Billing);
+        assert_eq!(tabs.len(), 6);
+        assert!(
+            tabs.iter()
+                .all(|tab| tab.href.contains("/app/projects/acme?tab=")),
+            "{tabs:?}"
+        );
+        assert_eq!(tabs.iter().filter(|tab| tab.selected).count(), 1);
+        assert_eq!(tabs[4].label, "Billing");
+        assert!(tabs[4].selected);
+        assert_eq!(tabs[4].href, "/app/projects/acme?tab=billing");
+    }
+
+    #[test]
+    fn strip_renders_one_anchor_per_section_with_aria_current() {
+        let html = dioxus_ssr::render_element(rsx! {
+            Tabs {
+                aria_label: "Matter sections".to_string(),
+                tabs: matter_tab_strip("acme", MatterTab::Overview),
+            }
+        });
+        assert!(html.contains(r#"aria-label="Matter sections""#), "{html}");
+        assert_eq!(html.matches("<a ").count(), 6, "{html}");
+        assert_eq!(html.matches(r#"aria-current="page""#).count(), 1, "{html}");
+        assert!(html.contains("Correspondence"), "{html}");
+        assert!(html.contains("Participants"), "{html}");
+    }
+
+    #[test]
+    fn fact_grid_skips_empty_matters() {
+        let html = dioxus_ssr::render_element(matter_fact_grid(&LawyerDetailView::default()));
+        assert!(!html.contains("lawyer-detail__summary"), "{html}");
+        assert!(!html.contains("Open deadlines"), "{html}");
+    }
+
+    #[test]
+    fn fact_grid_renders_the_facts_the_matter_has() {
+        let mut view = LawyerDetailView::default();
+        view.deadlines = vec![crate::project_deadlines::DeadlineRow {
+            due: "Monday, March 14, 2026".to_string(),
+            ..crate::project_deadlines::DeadlineRow::default()
+        }];
+        view.trust.any = true;
+        view.trust.held = "$5,000".to_string();
+
+        let html = dioxus_ssr::render_element(matter_fact_grid(&view));
+        assert!(html.contains("lawyer-detail__summary"), "{html}");
+        // Two deadline tiles: the open count and the soonest due date.
+        assert!(html.contains("Open deadlines"), "{html}");
+        assert!(html.contains("Next deadline"), "{html}");
+        assert!(html.contains("Monday, March 14, 2026"), "{html}");
+        // No documents or people on this view — no tiles for them.
+        assert!(!html.contains("Documents"), "{html}");
+        assert!(!html.contains("Matter people"), "{html}");
+        assert!(html.contains("Trust held"), "{html}");
+        assert!(html.contains("$5,000"), "{html}");
     }
 }
