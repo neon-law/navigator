@@ -81,6 +81,7 @@ pub use vertex::{
     ClaudeVertexAdapter, GeminiVertexAdapter, MetadataTokenSource, StaticTokenSource, VertexError,
     VertexRequest, VertexResponse, VertexTokenSource, DEFAULT_CLAUDE_CHAT_LOCATION,
     DEFAULT_CLAUDE_CHAT_MODEL, DEFAULT_GEMINI_SUMMARY_LOCATION, DEFAULT_GEMINI_SUMMARY_MODEL,
+    DEFAULT_GEMINI_TRIAGE_LOCATION, DEFAULT_GEMINI_TRIAGE_MODEL,
 };
 pub use workspace::{
     documents_prefix, is_navigator_repository, is_valid_slug, DeploymentWorkspace,

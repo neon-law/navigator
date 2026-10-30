@@ -215,6 +215,7 @@ fn request_for(
         prompt,
         max_output_tokens: config.max_output_tokens.min(DEFAULT_MAX_OUTPUT_TOKENS),
         response_schema: Some(workflows::summary_response_schema()),
+        system_instruction: None,
     }
 }
 
