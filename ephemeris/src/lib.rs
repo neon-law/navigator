@@ -14,6 +14,7 @@
 //! parsed, immutable [`Ephemeris`] for parking in shared application state.
 
 pub mod apparent;
+pub mod lines;
 
 mod daf;
 mod error;
