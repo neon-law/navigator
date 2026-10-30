@@ -340,13 +340,20 @@
       "extra_column": null,
       "extra_table": null,
       "missing_column": null,
+      "missing_table": "person_phone",
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": null,
       "missing_table": "schema_version",
       "table": null
     }
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 106,
+    "table_count": 107,
     "tables": {
       "address": {
         "city": "string",
@@ -1280,6 +1287,15 @@
       "person_mailbox": {
         "id": "record",
         "person_id": "record<person>"
+      },
+      "person_phone": {
+        "e164": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "is_primary": "bool",
+        "label": "string",
+        "person_id": "record<person>",
+        "updated_at": "datetime"
       },
       "person_project_role": {
         "id": "record",
