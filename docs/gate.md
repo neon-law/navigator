@@ -207,6 +207,7 @@ to resolve it.
 | `S103` | Error | The declared `kind:` must be a recognized document kind, and never a matter page kind. | No |
 | `S104` | Error | A file's declared `kind:` must agree with its notation/event structure. | No |
 | `S105` | Error | Teaching prose must use Pointer, Blob, and Matter Folder consistently with the glossary. | No |
+| `S106` | Error | Markdown content is not valid UTF-8, contains control characters other than newline and tab, contains the Unicode replacement character, or uses a non-ASCII character outside the allowlisted typographic set. | No |
 
 `S102` runs on notation templates as well as prose, because a template renders into an instrument a client signs; the
 rule's own guards hold back the structured YAML. The single exception is a GitHub intake notation under
