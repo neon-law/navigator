@@ -110,7 +110,11 @@ const LANE_LOCK_TIMEOUT: &str = "5s";
 /// either.
 #[must_use]
 pub fn lane_key(notation_id: Uuid) -> i64 {
-    i64::from_be_bytes(notation_id.as_bytes()[0..8].try_into().expect("8 bytes of a Uuid"))
+    i64::from_be_bytes(
+        notation_id.as_bytes()[0..8]
+            .try_into()
+            .expect("8 bytes of a Uuid"),
+    )
 }
 
 /// Full read query for one machine's state row — static so sqlx's
@@ -195,12 +199,13 @@ pub async fn apply_transition(
     if result.rows_affected() > 0 {
         return Ok(TransitionOutcome::Applied);
     }
-    let current = read(pg, notation_id, machine_kind)
-        .await?
-        .ok_or(MachineStateError::MachineMissing {
-            notation_id,
-            machine_kind: machine_kind.to_owned(),
-        })?;
+    let current =
+        read(pg, notation_id, machine_kind)
+            .await?
+            .ok_or(MachineStateError::MachineMissing {
+                notation_id,
+                machine_kind: machine_kind.to_owned(),
+            })?;
     if current.current_state == next {
         Ok(TransitionOutcome::AlreadyApplied)
     } else {
@@ -335,10 +340,7 @@ impl LaneGuard {
             .transaction
             .take()
             .expect("lane guard commits at most once");
-        transaction
-            .commit()
-            .await
-            .map_err(MachineStateError::from)
+        transaction.commit().await.map_err(MachineStateError::from)
     }
 }
 
@@ -387,7 +389,9 @@ mod tests {
             );
             return None;
         };
-        let port = port.parse::<u16>().expect("test PostgreSQL port is numeric");
+        let port = port
+            .parse::<u16>()
+            .expect("test PostgreSQL port is numeric");
         let options = |database: &str| {
             PgConnectOptions::new()
                 .host("127.0.0.1")
@@ -436,8 +440,10 @@ mod tests {
             .await
             .expect("re-start"));
 
-        let state =
-            read(&pg, notation, "questionnaire").await.expect("read").expect("machine row");
+        let state = read(&pg, notation, "questionnaire")
+            .await
+            .expect("read")
+            .expect("machine row");
         assert_eq!(state.current_state, "BEGIN");
         assert_eq!(state.spec_yaml, SPEC);
         assert!(!state.ephemeral);
@@ -502,7 +508,10 @@ mod tests {
             .expect("import");
         assert_eq!(first, ImportOutcome::Imported);
 
-        let state = read(&pg, notation, "workflow").await.expect("read").expect("row");
+        let state = read(&pg, notation, "workflow")
+            .await
+            .expect("read")
+            .expect("row");
         assert_eq!(state.current_state, "lawyer_review");
         assert_eq!(state.spec_yaml, SPEC);
 
@@ -512,7 +521,10 @@ mod tests {
             .await
             .expect("re-import");
         assert_eq!(second, ImportOutcome::AlreadyPresent);
-        let state = read(&pg, notation, "workflow").await.expect("read").expect("row");
+        let state = read(&pg, notation, "workflow")
+            .await
+            .expect("read")
+            .expect("row");
         assert_eq!(state.current_state, "lawyer_review");
         assert_eq!(state.spec_yaml, SPEC);
         assert!(!state.ephemeral);
@@ -585,6 +597,10 @@ mod tests {
         let a = Uuid::now_v7();
         let b = Uuid::now_v7();
         assert_eq!(lane_key(a), lane_key(a), "the lane key is stable");
-        assert_ne!(lane_key(a), lane_key(b), "distinct notations take distinct lanes");
+        assert_ne!(
+            lane_key(a),
+            lane_key(b),
+            "distinct notations take distinct lanes"
+        );
     }
 }

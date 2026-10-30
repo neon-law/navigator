@@ -239,25 +239,19 @@ pub(crate) async fn resolve_review_notification_plan(
 ) -> Result<ReviewNotificationPlan, NotationLogicError> {
     let notation = store::notations::find_by_id(surreal, notation_id)
         .await
-        .map_err(|e| {
-            NotationLogicError::Store(format!("review notification notation: {e}"))
-        })?
+        .map_err(|e| NotationLogicError::Store(format!("review notification notation: {e}")))?
         .ok_or_else(|| {
             NotationLogicError::Terminal("review notification notation not found".into())
         })?;
     let project = store::projects::find_by_id(surreal, notation.project_id)
         .await
-        .map_err(|e| {
-            NotationLogicError::Store(format!("review notification project: {e}"))
-        })?
+        .map_err(|e| NotationLogicError::Store(format!("review notification project: {e}")))?
         .ok_or_else(|| {
             NotationLogicError::Terminal("review notification project not found".into())
         })?;
     let rows = store::projects::participations_for_project(surreal, project.id)
         .await
-        .map_err(|e| {
-            NotationLogicError::Store(format!("review notification participants: {e}"))
-        })?;
+        .map_err(|e| NotationLogicError::Store(format!("review notification participants: {e}")))?;
     let candidate_ids = review_recipient_ids(&rows, hop);
     let mut candidates = Vec::new();
     for person_id in candidate_ids {
@@ -288,9 +282,7 @@ pub(crate) async fn resolve_review_notification_plan(
             if let Some(person) = store::persons::find_by_id(surreal, person_id)
                 .await
                 .map_err(|e| {
-                    NotationLogicError::Store(format!(
-                        "review notification fallback person: {e}"
-                    ))
+                    NotationLogicError::Store(format!("review notification fallback person: {e}"))
                 })?
             {
                 if person.role.is_lawyer_tier() {
@@ -340,9 +332,7 @@ pub(crate) async fn review_notification_target(
 ) -> Result<ReviewNotificationTarget, NotationLogicError> {
     let person = store::persons::find_by_id(surreal, recipient_id)
         .await
-        .map_err(|e| {
-            NotationLogicError::Store(format!("review notification recipient: {e}"))
-        })?
+        .map_err(|e| NotationLogicError::Store(format!("review notification recipient: {e}")))?
         .ok_or_else(|| {
             NotationLogicError::Terminal("review notification recipient not found".into())
         })?;

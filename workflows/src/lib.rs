@@ -41,9 +41,9 @@ pub mod notify;
 pub mod post_questionnaire;
 pub mod post_slack_notification;
 pub mod runtime;
-pub mod runtime_dispatching;
 #[cfg(feature = "dbos")]
 pub mod runtime_dbos;
+pub mod runtime_dispatching;
 pub mod runtime_restate;
 pub mod social_publish;
 pub mod spec;
@@ -102,9 +102,9 @@ pub use post_questionnaire::{PostQuestionnaireDrive, PostQuestionnaireError};
 pub use runtime::{
     InMemoryRuntime, SignalContext, StateMachineRuntime, WorkflowEvent, WorkflowRuntimeError,
 };
-pub use runtime_dispatching::DispatchingRuntime;
 #[cfg(feature = "dbos")]
 pub use runtime_dbos::{enabled as dbos_notation_enabled, DbosNotationRuntime, RuntimeConfigError};
+pub use runtime_dispatching::DispatchingRuntime;
 pub use runtime_restate::{RestateRuntime, DEFAULT_BROKER_URL, DEFAULT_SERVICE};
 pub use social_publish::{SocialPublishReport, SocialPublishRequest};
 pub use spec::{

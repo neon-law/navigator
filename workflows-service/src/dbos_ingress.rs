@@ -380,35 +380,43 @@ pub fn add_routes(router: Router, ingress: WorkerIngress) -> Router {
         router
             .route(
                 "/notation/{notation_id}/questionnaire_start",
-                post(notation_start).with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
+                post(notation_start)
+                    .with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
             )
             .route(
                 "/notation/{notation_id}/questionnaire_signal",
-                post(notation_signal).with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
+                post(notation_signal)
+                    .with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
             )
             .route(
                 "/notation/{notation_id}/questionnaire_back",
-                post(notation_back).with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
+                post(notation_back)
+                    .with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
             )
             .route(
                 "/notation/{notation_id}/questionnaire_current_state",
-                post(notation_current_state).with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
+                post(notation_current_state)
+                    .with_state(notation.route_state(workflows::MachineKind::Questionnaire)),
             )
             .route(
                 "/notation/{notation_id}/workflow_start",
-                post(notation_start).with_state(notation.route_state(workflows::MachineKind::Workflow)),
+                post(notation_start)
+                    .with_state(notation.route_state(workflows::MachineKind::Workflow)),
             )
             .route(
                 "/notation/{notation_id}/workflow_signal",
-                post(notation_signal).with_state(notation.route_state(workflows::MachineKind::Workflow)),
+                post(notation_signal)
+                    .with_state(notation.route_state(workflows::MachineKind::Workflow)),
             )
             .route(
                 "/notation/{notation_id}/workflow_current_state",
-                post(notation_current_state).with_state(notation.route_state(workflows::MachineKind::Workflow)),
+                post(notation_current_state)
+                    .with_state(notation.route_state(workflows::MachineKind::Workflow)),
             )
             .route(
                 "/notation/{notation_id}/workflow_events",
-                post(notation_events).with_state(notation.route_state(workflows::MachineKind::Workflow)),
+                post(notation_events)
+                    .with_state(notation.route_state(workflows::MachineKind::Workflow)),
             )
     } else {
         router
@@ -1450,9 +1458,8 @@ mod tests {
     #[test]
     fn transition_failures_map_to_their_wire_status() {
         use crate::dbos_notation::NotationTransitionError;
-        let app = |error: NotationTransitionError| {
-            notation_run_status(dbos::Error::Application(error))
-        };
+        let app =
+            |error: NotationTransitionError| notation_run_status(dbos::Error::Application(error));
         assert_eq!(
             app(NotationTransitionError::Terminal("bad spec".into())),
             StatusCode::BAD_REQUEST
@@ -1491,7 +1498,10 @@ mod tests {
         // With the port disabled the URIs must 404 — never a half-mounted
         // route that answers with an engine error.
         let router = add_routes(axum::Router::new(), WorkerIngress::default());
-        let uri = format!("/internal/dbos/notation/{}/questionnaire_current_state", uuid::Uuid::now_v7());
+        let uri = format!(
+            "/internal/dbos/notation/{}/questionnaire_current_state",
+            uuid::Uuid::now_v7()
+        );
         let request = Request::builder()
             .method("POST")
             .uri(&uri)

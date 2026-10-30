@@ -197,12 +197,12 @@ impl NotationTransitionError {
 fn retryable_steps() -> StepOptions<NotationTransitionError> {
     StepOptions {
         max_attempts: STEP_MAX_ATTEMPTS,
-        should_retry: Some(Arc::new(|error: &dbos::Error<NotationTransitionError>| {
-            match error {
+        should_retry: Some(Arc::new(
+            |error: &dbos::Error<NotationTransitionError>| match error {
                 dbos::Error::Application(application) => application.is_retryable(),
                 _ => false,
-            }
-        })),
+            },
+        )),
         ..StepOptions::default()
     }
 }
@@ -328,7 +328,13 @@ async fn transition(
             .await
         }
         Operation::Back { acting_person_id } => {
-            back(&context, notation_id, kind_token(request.kind), acting_person_id).await
+            back(
+                &context,
+                notation_id,
+                kind_token(request.kind),
+                acting_person_id,
+            )
+            .await
         }
     }
 }
@@ -342,25 +348,21 @@ async fn read_machine(
     kind: MachineKind,
 ) -> dbos::Result<store::notation_machine_state::MachineState, NotationTransitionError> {
     let token = kind_token(kind).to_owned();
-    dbos::step_with(
-        "read-machine",
-        retryable_steps(),
-        move || {
-            let postgres = context.postgres.clone();
-            let token = token.clone();
-            async move {
-                store::notation_machine_state::read(&postgres, notation_id, &token)
-                    .await
-                    .map_err(|error| dbos::Error::Application(store_error(error)))?
-                    .ok_or_else(|| {
-                        dbos::Error::Application(NotationTransitionError::MachineMissing {
-                            notation_id,
-                            machine_kind: token.clone(),
-                        })
+    dbos::step_with("read-machine", retryable_steps(), move || {
+        let postgres = context.postgres.clone();
+        let token = token.clone();
+        async move {
+            store::notation_machine_state::read(&postgres, notation_id, &token)
+                .await
+                .map_err(|error| dbos::Error::Application(store_error(error)))?
+                .ok_or_else(|| {
+                    dbos::Error::Application(NotationTransitionError::MachineMissing {
+                        notation_id,
+                        machine_kind: token.clone(),
                     })
-            }
-        },
-    )
+                })
+        }
+    })
     .await
 }
 
@@ -378,33 +380,31 @@ async fn apply_transition_step(
     let token = token.to_owned();
     let from = from.to_owned();
     let next = next.to_owned();
-    dbos::step_with(
-        "apply-transition",
-        retryable_steps(),
-        move || {
-            let postgres = context.postgres.clone();
-            let token = token.clone();
-            let from = from.clone();
-            let next = next.clone();
-            async move {
-                match store::notation_machine_state::apply_transition(
-                    &postgres, notation_id, &token, &from, &next,
-                )
-                .await
-                {
-                    Ok(TransitionOutcome::Applied | TransitionOutcome::AlreadyApplied) => Ok(()),
-                    Ok(TransitionOutcome::Conflicted { current }) => {
-                        Err(dbos::Error::Application(NotationTransitionError::Terminal(
-                            format!(
-                                "notation {notation_id} moved past `{from}` — it is in `{current}`"
-                            ),
-                        )))
-                    }
-                    Err(error) => Err(dbos::Error::Application(store_error(error))),
-                }
+    dbos::step_with("apply-transition", retryable_steps(), move || {
+        let postgres = context.postgres.clone();
+        let token = token.clone();
+        let from = from.clone();
+        let next = next.clone();
+        async move {
+            match store::notation_machine_state::apply_transition(
+                &postgres,
+                notation_id,
+                &token,
+                &from,
+                &next,
+            )
+            .await
+            {
+                Ok(TransitionOutcome::Applied | TransitionOutcome::AlreadyApplied) => Ok(()),
+                Ok(TransitionOutcome::Conflicted { current }) => Err(dbos::Error::Application(
+                    NotationTransitionError::Terminal(format!(
+                        "notation {notation_id} moved past `{from}` — it is in `{current}`"
+                    )),
+                )),
+                Err(error) => Err(dbos::Error::Application(store_error(error))),
             }
-        },
-    )
+        }
+    })
     .await
 }
 
@@ -415,19 +415,15 @@ async fn record_funnel_step(
     notation_id: uuid::Uuid,
     step: WorkflowFunnelStep,
 ) -> dbos::Result<(), NotationTransitionError> {
-    dbos::step_with(
-        "record-funnel-step",
-        retryable_steps(),
-        move || {
-            let surreal = context.surreal.clone();
-            async move {
-                record_notation_funnel_step(&surreal, notation_id, step)
-                    .await
-                    .map_err(NotationTransitionError::from_logic)
-                    .map_err(dbos::Error::Application)
-            }
-        },
-    )
+    dbos::step_with("record-funnel-step", retryable_steps(), move || {
+        let surreal = context.surreal.clone();
+        async move {
+            record_notation_funnel_step(&surreal, notation_id, step)
+                .await
+                .map_err(NotationTransitionError::from_logic)
+                .map_err(dbos::Error::Application)
+        }
+    })
     .await
 }
 
@@ -441,32 +437,28 @@ async fn send_notification_step(
     recipient_id: uuid::Uuid,
     hop: ReviewNotificationHop,
 ) -> dbos::Result<(), NotationTransitionError> {
-    dbos::step_with(
-        "send-review-notification",
-        retryable_steps(),
-        move || {
-            let surreal = context.surreal.clone();
-            let email = Arc::clone(&context.email);
-            async move {
-                let target = review_notification_target(&surreal, project_id, recipient_id)
-                    .await
-                    .map_err(NotationTransitionError::from_logic)
-                    .map_err(dbos::Error::Application)?;
-                send_review_notification(
-                    Arc::clone(&email),
-                    notation_id,
-                    project_id,
-                    &target.project_code,
-                    recipient_id,
-                    &target.address,
-                    hop,
-                )
+    dbos::step_with("send-review-notification", retryable_steps(), move || {
+        let surreal = context.surreal.clone();
+        let email = Arc::clone(&context.email);
+        async move {
+            let target = review_notification_target(&surreal, project_id, recipient_id)
                 .await
                 .map_err(NotationTransitionError::from_logic)
-                .map_err(dbos::Error::Application)
-            }
-        },
-    )
+                .map_err(dbos::Error::Application)?;
+            send_review_notification(
+                Arc::clone(&email),
+                notation_id,
+                project_id,
+                &target.project_code,
+                recipient_id,
+                &target.address,
+                hop,
+            )
+            .await
+            .map_err(NotationTransitionError::from_logic)
+            .map_err(dbos::Error::Application)
+        }
+    })
     .await
 }
 
@@ -493,22 +485,22 @@ async fn start_machine(
 
     let token = kind_token(kind).to_owned();
     let spec = spec_yaml.to_owned();
-    dbos::step_with(
-        "start-machine",
-        retryable_steps(),
-        move || {
-            let postgres = context.postgres.clone();
-            let token = token.clone();
-            let spec = spec.clone();
-            async move {
-                store::notation_machine_state::start_machine(
-                    &postgres, notation_id, &token, &spec, ephemeral,
-                )
-                .await
-                .map_err(|error| dbos::Error::Application(store_error(error)))
-            }
-        },
-    )
+    dbos::step_with("start-machine", retryable_steps(), move || {
+        let postgres = context.postgres.clone();
+        let token = token.clone();
+        let spec = spec.clone();
+        async move {
+            store::notation_machine_state::start_machine(
+                &postgres,
+                notation_id,
+                &token,
+                &spec,
+                ephemeral,
+            )
+            .await
+            .map_err(|error| dbos::Error::Application(store_error(error)))
+        }
+    })
     .await?;
 
     Ok(TransitionReport {
@@ -542,23 +534,26 @@ async fn signal(
         .map_err(NotationTransitionError::from_logic)
         .map_err(dbos::Error::Application)?;
 
-    apply_transition_step(context, notation_id, token, &machine.current_state, next.as_str()).await?;
+    apply_transition_step(
+        context,
+        notation_id,
+        token,
+        &machine.current_state,
+        next.as_str(),
+    )
+    .await?;
 
     // Step-kind side effects run BEFORE the journal append so the artifact
     // they produce can ride the journal row's payload — the workflow
     // handler's order, unchanged. The questionnaire never dispatches.
-    let dispatch_payload: Option<String> = if kind == MachineKind::Workflow
-        && dispatches_side_effect(&next)
-    {
-        let email = Arc::clone(&context.email);
-        let storage = Arc::clone(&context.storage);
-        let surreal = context.surreal.clone();
-        let state = next.clone();
-        let value = value.clone();
-        dbos::step_with(
-            "dispatch-step",
-            retryable_steps(),
-            move || {
+    let dispatch_payload: Option<String> =
+        if kind == MachineKind::Workflow && dispatches_side_effect(&next) {
+            let email = Arc::clone(&context.email);
+            let storage = Arc::clone(&context.storage);
+            let surreal = context.surreal.clone();
+            let state = next.clone();
+            let value = value.clone();
+            dbos::step_with("dispatch-step", retryable_steps(), move || {
                 let email = Arc::clone(&email);
                 let storage = Arc::clone(&storage);
                 let surreal = surreal.clone();
@@ -574,12 +569,11 @@ async fn signal(
                             )))
                         })
                 }
-            },
-        )
-        .await?
-    } else {
-        None
-    };
+            })
+            .await?
+        } else {
+            None
+        };
 
     // The journal append — skipped for ephemeral machines, which have no
     // `notations` row for `append_event`'s read-back. A questionnaire signal
@@ -594,40 +588,36 @@ async fn signal(
         let from_str = machine.current_state.clone();
         let to_str = next.as_str().to_owned();
         let condition_for_step = condition.to_owned();
-        dbos::step_with(
-            "append-event",
-            retryable_steps(),
-            move || {
-                let surreal = surreal.clone();
-                let from_str = from_str.clone();
-                let to_str = to_str.clone();
-                let condition = condition_for_step.clone();
-                let payload = journal_payload.clone();
-                async move {
-                    let recorded_at = chrono::Utc::now().to_rfc3339();
-                    append_event(
-                        &surreal,
-                        TransitionRecord {
-                            notation_id,
-                            acting_person_id,
-                            machine_kind: kind_token(kind),
-                            from_state: &from_str,
-                            to_state: &to_str,
-                            condition: &condition,
-                            payload_json: payload,
-                            recorded_at: &recorded_at,
-                        },
-                    )
-                    .await
-                    .map_err(|error| {
-                        dbos::Error::Application(NotationTransitionError::Store(format!(
-                            "journal: {error}"
-                        )))
-                    })
-                    .map(|_| ())
-                }
-            },
-        )
+        dbos::step_with("append-event", retryable_steps(), move || {
+            let surreal = surreal.clone();
+            let from_str = from_str.clone();
+            let to_str = to_str.clone();
+            let condition = condition_for_step.clone();
+            let payload = journal_payload.clone();
+            async move {
+                let recorded_at = chrono::Utc::now().to_rfc3339();
+                append_event(
+                    &surreal,
+                    TransitionRecord {
+                        notation_id,
+                        acting_person_id,
+                        machine_kind: kind_token(kind),
+                        from_state: &from_str,
+                        to_state: &to_str,
+                        condition: &condition,
+                        payload_json: payload,
+                        recorded_at: &recorded_at,
+                    },
+                )
+                .await
+                .map_err(|error| {
+                    dbos::Error::Application(NotationTransitionError::Store(format!(
+                        "journal: {error}"
+                    )))
+                })
+                .map(|_| ())
+            }
+        })
         .await?;
 
         if let Some(funnel_step) =
@@ -674,22 +664,18 @@ async fn signal(
         // symmetric bookend to the client-signed retainer that opened it.
         if workflows::closes_matter(&from_state) {
             let surreal = context.surreal.clone();
-            dbos::step_with(
-                "close-matter",
-                retryable_steps(),
-                move || {
-                    let surreal = surreal.clone();
-                    async move {
-                        workflows::close_matter(&surreal, notation_id)
-                            .await
-                            .map_err(|error| {
-                                dbos::Error::Application(NotationTransitionError::Store(format!(
-                                    "close: {error}"
-                                )))
-                            })
-                    }
-                },
-            )
+            dbos::step_with("close-matter", retryable_steps(), move || {
+                let surreal = surreal.clone();
+                async move {
+                    workflows::close_matter(&surreal, notation_id)
+                        .await
+                        .map_err(|error| {
+                            dbos::Error::Application(NotationTransitionError::Store(format!(
+                                "close: {error}"
+                            )))
+                        })
+                }
+            })
             .await?;
         }
     }
@@ -734,73 +720,76 @@ async fn back(
     // missing target means "stay put": no event, state unchanged.
     let token_owned = token.to_owned();
     let from = machine.current_state.clone();
-    let previous = dbos::step_with(
-        "append-back",
-        retryable_steps(),
-        move || {
-            let surreal = context.surreal.clone();
-            let token = token_owned.clone();
-            let from = from.clone();
-            async move {
-                let events = store::notation_events::for_notation(&surreal, notation_id)
-                    .await
-                    .map_err(|error| {
-                        dbos::Error::Application(NotationTransitionError::Store(format!(
-                            "journal: {error}"
-                        )))
-                    })?;
-                let history: Vec<_> = events
-                    .into_iter()
-                    .filter(|event| event.machine_kind == token)
-                    .map(|event| {
-                        (
-                            event.from_state,
-                            event.to_state,
-                            event.condition,
-                            event.id.to_string(),
-                        )
-                    })
-                    .collect();
-                let Some(previous) =
-                    questionnaire_back_target(&StateName::from(from.as_str()), &history)
-                else {
-                    return Ok(from.clone());
-                };
-                let previous = previous.as_str().to_owned();
-                let recorded_at = chrono::Utc::now().to_rfc3339();
-                append_event(
-                    &surreal,
-                    TransitionRecord {
-                        notation_id,
-                        acting_person_id: Some(acting_person_id),
-                        machine_kind: &token,
-                        from_state: &from,
-                        to_state: &previous,
-                        condition: "back",
-                        payload_json: None,
-                        recorded_at: &recorded_at,
-                    },
-                )
+    let previous = dbos::step_with("append-back", retryable_steps(), move || {
+        let surreal = context.surreal.clone();
+        let token = token_owned.clone();
+        let from = from.clone();
+        async move {
+            let events = store::notation_events::for_notation(&surreal, notation_id)
                 .await
                 .map_err(|error| {
                     dbos::Error::Application(NotationTransitionError::Store(format!(
                         "journal: {error}"
                     )))
                 })?;
-                Ok(previous)
-            }
-        },
-    )
+            let history: Vec<_> = events
+                .into_iter()
+                .filter(|event| event.machine_kind == token)
+                .map(|event| {
+                    (
+                        event.from_state,
+                        event.to_state,
+                        event.condition,
+                        event.id.to_string(),
+                    )
+                })
+                .collect();
+            let Some(previous) =
+                questionnaire_back_target(&StateName::from(from.as_str()), &history)
+            else {
+                return Ok(from.clone());
+            };
+            let previous = previous.as_str().to_owned();
+            let recorded_at = chrono::Utc::now().to_rfc3339();
+            append_event(
+                &surreal,
+                TransitionRecord {
+                    notation_id,
+                    acting_person_id: Some(acting_person_id),
+                    machine_kind: &token,
+                    from_state: &from,
+                    to_state: &previous,
+                    condition: "back",
+                    payload_json: None,
+                    recorded_at: &recorded_at,
+                },
+            )
+            .await
+            .map_err(|error| {
+                dbos::Error::Application(NotationTransitionError::Store(format!(
+                    "journal: {error}"
+                )))
+            })?;
+            Ok(previous)
+        }
+    })
     .await?;
 
     if previous != machine.current_state {
-        apply_transition_step(context, notation_id, token, &machine.current_state, &previous)
-            .await?;
+        apply_transition_step(
+            context,
+            notation_id,
+            token,
+            &machine.current_state,
+            &previous,
+        )
+        .await?;
     }
 
-    Ok(TransitionReport { next_state: previous })
+    Ok(TransitionReport {
+        next_state: previous,
+    })
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -829,12 +818,15 @@ END: {}
     fn flag_follows_the_strict_switch_contract() {
         assert!(!enabled(|_| None).expect("unset is off"));
         assert!(
-            !enabled(|name| (name == ENABLED_ENV).then(|| "false".to_owned())).expect("false is off")
+            !enabled(|name| (name == ENABLED_ENV).then(|| "false".to_owned()))
+                .expect("false is off")
         );
         assert!(
             !enabled(|name| (name == ENABLED_ENV).then(|| String::new())).expect("empty is off")
         );
-        assert!(enabled(|name| (name == ENABLED_ENV).then(|| "true".to_owned())).expect("true is on"));
+        assert!(
+            enabled(|name| (name == ENABLED_ENV).then(|| "true".to_owned())).expect("true is on")
+        );
         assert!(
             enabled(|name| (name == ENABLED_ENV).then(|| "TRUE".to_owned())).is_err(),
             "non-lowercase truthy values fail closed, like every other DBOS flag"
@@ -845,14 +837,15 @@ END: {}
     fn retry_policy_retries_store_failures_and_deterministic_outcomes_fail_fast() {
         let options = retryable_steps();
         let should_retry = options.should_retry.expect("the policy sets a predicate");
-        let retryable = |error: NotationTransitionError| {
-            should_retry(&dbos::Error::Application(error))
-        };
+        let retryable =
+            |error: NotationTransitionError| should_retry(&dbos::Error::Application(error));
         assert!(retryable(NotationTransitionError::Store("db down".into())));
         assert!(retryable(NotationTransitionError::LaneBusy {
             notation_id: uuid::Uuid::now_v7(),
         }));
-        assert!(!retryable(NotationTransitionError::Terminal("bad spec".into())));
+        assert!(!retryable(NotationTransitionError::Terminal(
+            "bad spec".into()
+        )));
         assert!(!retryable(NotationTransitionError::MachineMissing {
             notation_id: uuid::Uuid::now_v7(),
             machine_kind: "workflow".into(),
@@ -863,10 +856,17 @@ END: {}
     fn parse_spec_keeps_the_two_machine_kinds_distinct() {
         let questionnaire = parse_spec(MachineKind::Questionnaire, QUESTIONNAIRE_SPEC)
             .expect("valid questionnaire spec");
-        assert!(questionnaire.inner().transitions_from(&workflows::StateName::begin()).is_some());
+        assert!(questionnaire
+            .inner()
+            .transitions_from(&workflows::StateName::begin())
+            .is_some());
 
-        let workflow = parse_spec(MachineKind::Workflow, WORKFLOW_SPEC).expect("valid workflow spec");
-        assert!(workflow.inner().transitions_from(&workflows::StateName::begin()).is_some());
+        let workflow =
+            parse_spec(MachineKind::Workflow, WORKFLOW_SPEC).expect("valid workflow spec");
+        assert!(workflow
+            .inner()
+            .transitions_from(&workflows::StateName::begin())
+            .is_some());
 
         let garbage = parse_spec(MachineKind::Questionnaire, "not: [a: spec");
         assert!(
@@ -877,7 +877,10 @@ END: {}
 
     #[test]
     fn kind_tokens_match_the_journal_and_check_constraint() {
-        assert_eq!(kind_token(MachineKind::Questionnaire), MACHINE_QUESTIONNAIRE);
+        assert_eq!(
+            kind_token(MachineKind::Questionnaire),
+            MACHINE_QUESTIONNAIRE
+        );
         assert_eq!(kind_token(MachineKind::Workflow), MACHINE_WORKFLOW);
     }
 
@@ -897,13 +900,16 @@ END: {}
         let encoded = serde_json::to_vec(&request).expect("serialize");
         let decoded: TransitionRequest = serde_json::from_slice(&encoded).expect("deserialize");
         assert_eq!(decoded, request);
-        assert!(matches!(decoded.operation, Operation::Signal { ref condition, .. } if condition == "_"));
+        assert!(
+            matches!(decoded.operation, Operation::Signal { ref condition, .. } if condition == "_")
+        );
     }
 
     #[test]
     fn logic_failures_map_to_the_port_error_classes() {
-        let terminal =
-            NotationTransitionError::from_logic(NotationLogicError::Terminal("no such state".into()));
+        let terminal = NotationTransitionError::from_logic(NotationLogicError::Terminal(
+            "no such state".into(),
+        ));
         assert!(matches!(terminal, NotationTransitionError::Terminal(_)));
         assert!(!terminal.is_retryable());
 

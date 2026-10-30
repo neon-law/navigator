@@ -39,7 +39,9 @@ pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_NOTATION_ENABLED";
 ///
 /// Refuses any value other than `true` or `false`, so a typo cannot
 /// silently leave traffic on Restate.
-pub fn enabled(lookup: impl Fn(&str) -> Option<String>) -> Result<bool, crate::dbos_engine::SettingsError> {
+pub fn enabled(
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<bool, crate::dbos_engine::SettingsError> {
     let value = lookup(ENABLED_ENV);
     flag_enabled(ENABLED_ENV, value.as_deref())
 }
@@ -83,7 +85,10 @@ impl DbosNotationRuntime {
                 .filter(|value| !value.is_empty())
                 .ok_or(RuntimeConfigError::MissingIngress(name))
         };
-        Ok(Self::new(required(DBOS_INGRESS_URL_ENV)?, Some(required(DBOS_INGRESS_TOKEN_ENV)?)))
+        Ok(Self::new(
+            required(DBOS_INGRESS_URL_ENV)?,
+            Some(required(DBOS_INGRESS_TOKEN_ENV)?),
+        ))
     }
 
     /// The worker ingress URL this runtime posts to.
@@ -128,7 +133,9 @@ impl StateMachineRuntime for DbosNotationRuntime {
         condition: &str,
         payload: Option<&str>,
     ) -> Result<StateName, WorkflowRuntimeError> {
-        self.inner.signal(kind, notation_id, condition, payload).await
+        self.inner
+            .signal(kind, notation_id, condition, payload)
+            .await
     }
 
     async fn signal_with_context(
@@ -176,7 +183,7 @@ impl StateMachineRuntime for DbosNotationRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::{DbosNotationRuntime, RuntimeConfigError, ENABLED_ENV, enabled};
+    use super::{enabled, DbosNotationRuntime, RuntimeConfigError, ENABLED_ENV};
     use crate::trigger::{DBOS_INGRESS_TOKEN_ENV, DBOS_INGRESS_URL_ENV};
 
     fn lookup<'a>(env: &'a [(&'static str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
