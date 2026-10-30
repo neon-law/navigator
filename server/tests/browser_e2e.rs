@@ -4828,7 +4828,11 @@ async fn lawyer_walks_the_basic_will_through_the_matter_workflow() {
         src.contains("Nevada provisions"),
         "the NV branch the walk selected must render in the will: {src}",
     );
-    for absent in ["California provisions", "New York provisions", "Washington provisions"] {
+    for absent in [
+        "California provisions",
+        "New York provisions",
+        "Washington provisions",
+    ] {
         assert!(
             !src.contains(absent),
             "only the selected state's provisions may render, found {absent}",
@@ -4943,8 +4947,7 @@ async fn lawyer_walks_the_basic_will_through_the_matter_workflow() {
             continue;
         }
         assert_eq!(
-            &actual_payloads[i],
-            expected,
+            &actual_payloads[i], expected,
             "journal payload for question {i} does not match what the walker submitted",
         );
     }

@@ -169,9 +169,8 @@ async fn basic_will_preview_offers_every_states_question() {
         // choice, including the state under test. Before the will's state
         // question declared its choices, this step rendered as an
         // explanation and no state could be walked in the demo.
-        let state_radio = format!(
-            "input[type='radio'][name='custom_single_choice__law'][value='{key}']"
-        );
+        let state_radio =
+            format!("input[type='radio'][name='custom_single_choice__law'][value='{key}']");
         client
             .find(fantoccini::Locator::Css(&state_radio))
             .await
@@ -189,16 +188,16 @@ async fn basic_will_preview_offers_every_states_question() {
             .await
             .expect("state choice label");
         assert!(
-            state_label.as_str().map_or(false, |text| text.contains(label)),
+            state_label
+                .as_str()
+                .map_or(false, |text| text.contains(label)),
             "{label}: the state card's label must name the state, got {state_label:?}"
         );
 
         // The outline lists every declared question, so a parse that drops
         // questions cannot pass silently.
         let outline_items = client
-            .find_all(fantoccini::Locator::Css(
-                ".notation-demo__outline ol li",
-            ))
+            .find_all(fantoccini::Locator::Css(".notation-demo__outline ol li"))
             .await
             .expect("outline items");
         assert_eq!(
