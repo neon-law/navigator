@@ -426,8 +426,7 @@ mod tests {
                 },
             )
             .await
-            .err()
-            .expect("an unknown contact is refused");
+            .expect_err("an unknown contact is refused");
         assert!(matches!(error, ContactsError::NoContact(_)), "{error}");
     }
 
@@ -564,8 +563,7 @@ mod tests {
                 },
             )
             .await
-            .err()
-            .expect("a fuzzy-only match is refused");
+            .expect_err("a fuzzy-only match is refused");
         assert!(matches!(error, ContactsError::NoContact(_)), "{error}");
     }
 
@@ -592,8 +590,7 @@ mod tests {
                 },
             )
             .await
-            .err()
-            .expect("two contacts for one email are refused");
+            .expect_err("two contacts for one email are refused");
         assert!(
             matches!(error, ContactsError::AmbiguousContact(_)),
             "{error}"
@@ -626,8 +623,7 @@ mod tests {
                 },
             )
             .await
-            .err()
-            .expect("a refused patch surfaces its error");
+            .expect_err("a refused patch surfaces its error");
         assert!(
             error.to_string().contains("updating the contact"),
             "{error}"
