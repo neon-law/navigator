@@ -12,9 +12,9 @@ project->project_reference->(person|entity)`, carrying only a `reason` (`counter
 A reference is deliberately not a [Person–Project Role](personproject-role.md). Every [participation](participation.md)
 value grants a lens on the matter, and a counterparty must never have one; yet the [Conflict-Check
 Graph](conflict-check-graph.md) must be able to collide a future matter with exactly these people. So the row lives in
-its own relation, and three things are asserted by tests rather than by convention: `store::access` and the embedded
-Rego policy never read it, and a party list — the participation ledger a Project portal reads, and the matter
-workbench's "Project people" — never renders it.
+its own relation. `store::access` and the embedded Rego policy never read it. The lawyer party roster lists references
+under "Referenced, no standing on the matter"; the client lens never loads or renders them. The participation ledger and
+the matter workbench's "Project people" list exclude references. Tests cover the access boundary and roster lenses.
 
 It is the one seam through which a Project repository records a counterparty. The `project_reference` model of
 `navigator site import` (`seeds/ProjectReference.yaml`) creates the referenced Person or Entity when absent and writes

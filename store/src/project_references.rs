@@ -6,12 +6,13 @@
 //! Every `person_project_role.participation` value grants a lens on the
 //! matter. A counterparty's officer, its registered agent, the signatory on
 //! the instrument, or the counterparty organization itself must be durable
-//! so the Conflict-Check Graph can collide a future matter with them, and
-//! must never reach the portal. So the row is its own relation,
-//! `RELATE project->project_reference->(person|entity)`, carrying only a
-//! `reason`. `store::access` and the embedded Rego policy never read it;
-//! the portal party list never renders it. Each carries a test that fails
-//! if that changes.
+//! so the Conflict-Check Graph can collide a future matter with them.
+//! A reference grants no participation or access to the matter. The row
+//! is its own relation, `RELATE project->project_reference->(person|entity)`, carrying
+//! only a `reason`. `store::access` and the embedded Rego policy never
+//! read it. The lawyer party roster lists references under "Referenced,
+//! no standing on the matter"; the client lens never loads or renders
+//! them. Tests cover the access boundary and the roster lenses.
 //!
 //! # Adversity is recorded against a referenced party
 //!
