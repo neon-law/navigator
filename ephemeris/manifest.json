@@ -13,9 +13,9 @@
     },
     {
       "name": "chiron.bsp",
-      "sha256": "110c97c9ed785125d9e3483214b32f3c059fb46f2611b63c92f7be3eded45360",
+      "sha256": "75d645eb2a65b332ddfb3fe4684a3c097eccd1bd5116a28aea07e08c4f6b6583",
       "bytes": 2791424,
-      "source": "JPL Horizons API SPK generation for 2060 Chiron (COMMAND='2060;', EPHEM_TYPE=SPK, START_TIME='1900-01-01', STOP_TIME='2050-01-01') at https://ssd.jpl.nasa.gov/api/horizons.api; Horizons regenerates the file on request, so re-fetching may yield a different digest for the same solution",
+      "source": "JPL Horizons API SPK generation for 2060 Chiron (COMMAND='2060;', EPHEM_TYPE=SPK, START_TIME='1900-01-01', STOP_TIME='2050-01-01') at https://ssd.jpl.nasa.gov/api/horizons.api; Horizons regenerates the file on request, so re-fetching may yield a different digest for the same solution. Re-fetched 2026-10-30 with identical parameters: byte size unchanged (2791424), digest refreshed, and solution equivalence re-verified by the unchanged Horizons reference fixture table in tests/fixtures.rs",
       "coverage_start": "1899-12-31",
       "coverage_end": "2050-01-01"
     }
