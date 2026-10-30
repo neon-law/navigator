@@ -1,0 +1,84 @@
+head_title: "{site_name} | Removal defense"
+meta_description: >-
+  Abhaya Immigration, a Shook Law PC practice, defends people in immigration
+  court: responding to a Notice to Appear, hearings, bond, and relief from
+  removal. Deadlines in immigration court are short; government filing fees
+  are separate, and no outcome is promised.
+title: Removal defense
+tagline: If you have a court date, the calendar is the first thing to know.
+skin: practice
+bands:
+  - kind: statement
+    heading: What is happening, in plain words
+    lead: A Notice to Appear starts a court case. It has deadlines.
+    body:
+      - - text: >-
+            A Notice to Appear is the document that starts a case in
+            immigration court, before the Executive Office for Immigration
+            Review. It names the charges the government says apply and the
+            date and place of your first hearing. Missing a
+            hearing can mean a removal order entered in your absence, so
+            the hearing date is the first thing to find and keep.
+      - - text: >-
+            There are real ways to fight a case: relief such as asylum or
+            cancellation of removal, bond arguments for people in custody,
+            and challenges to the charges themselves. None of it works from
+            silence — filings carry deadlines the court sets, and they are
+            shorter than most people
+            expect.
+  - kind: steps
+    anchor: removal-process
+    overline: What to do now
+    heading: Read the notice, find the date, get counsel.
+    description: >-
+      Immigration court moves on its own calendar. The first days matter
+      most.
+    items:
+      - title: Find the hearing date
+        body:
+          - - text: >-
+                The notice names the first hearing, and the court's
+                automated line and online case portal confirm it. Call and
+                check; notices can change.
+      - title: Answer the charges in writing when required
+        body:
+          - - text: >-
+                The court usually sets a deadline for responding to the
+                Notice to Appear. A response admits or denies the charges
+                and states the relief you will seek. We cannot promise an
+                outcome; the judge decides.
+      - title: Ask about bond if you are in custody
+        body:
+          - - text: >-
+                For people detained, a bond hearing before an immigration
+                judge can change the terms of custody while the case
+                proceeds.
+      - title: Pursue relief with evidence
+        body:
+          - - text: >-
+                Relief from removal — asylum, cancellation, adjustment
+                where the law allows it — is applied for, evidenced, and
+                argued in the same case. The earlier the record starts, the
+                more complete it can be.
+  - kind: statement
+    heading: Costs and honesty about outcomes
+    lead: Fees and outcomes, stated plainly.
+    body:
+      - - text: >-
+            Filing fees for court applications, where they apply, are
+            separate from any attorney fee. The current amounts are
+            published by the court and the agencies, and they change.
+      - - text: >-
+            We cannot promise that a case ends in relief; the judge decides.
+            We can promise deadlines are tracked, filings are prepared
+            carefully, and the hard truths about a case are said out loud.
+  - kind: cta
+    heading: Bring the Notice to Appear
+    body: >-
+      A first conversation covers the hearing date, the charges, and what
+      relief the law allows in your case. Abhaya Immigration, a Shook Law
+      PC practice, defends people in immigration court.
+    email: "{firm_email}"
+    action:
+      href: "https://www.abhayaimmigration.com/"
+      label: Talk to Abhaya Immigration

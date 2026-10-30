@@ -1,0 +1,83 @@
+head_title: "{site_name} | Citizenship"
+meta_description: >-
+  Abhaya Immigration, a Shook Law PC practice, guides lawful permanent
+  residents through naturalization: eligibility, the N-400, the interview,
+  and the oath. Government filing fees are separate, and no approval or
+  timeline is promised.
+title: Citizenship
+tagline: Naturalization, from the N-400 to the oath.
+skin: practice
+bands:
+  - kind: statement
+    heading: Who this is for
+    lead: Lawful permanent residents ready to naturalize.
+    body:
+      - - text: >-
+            Most naturalization applicants are lawful permanent residents
+            who have held a green card for five years, or for three years
+            when married to and living with a United States citizen. The
+            general requirements also include continuous residence and
+            physical presence in the United States, good moral character,
+            and an English and civics test, with accommodations and
+            exceptions defined by law.
+      - - text: >-
+            Time outside the country, certain criminal history, and
+            selective-service registration questions are the places cases
+            most often go sideways. It is worth reviewing your own record
+            against the rules before you file.
+  - kind: steps
+    anchor: citizenship-process
+    overline: How the process works
+    heading: The N-400 and the road to the oath.
+    description: >-
+      USCIS decides naturalization cases. The stages below are the general
+      order.
+    items:
+      - title: File the N-400
+        body:
+          - - text: >-
+                The naturalization application is Form N-400, filed with
+                United States Citizenship and Immigration Services with the
+                government fee and supporting documents.
+      - title: Biometrics
+        body:
+          - - text: >-
+                An application support center collects fingerprints, which
+                the agency uses for its background check.
+      - title: The interview and the tests
+        body:
+          - - text: >-
+                An officer reviews the application, asks about your history,
+                and administers the English and civics tests unless an
+                exception applies.
+      - title: The oath
+        body:
+          - - text: >-
+                If USCIS approves the application, the last step is the
+                Oath of Allegiance at a ceremony, where the certificate of
+                naturalization is issued. We cannot promise approval or a
+                timeline; the agency decides.
+  - kind: statement
+    heading: What to gather and what it costs
+    lead: Documents and fees, stated plainly.
+    body:
+      - - text: >-
+            Most applicants need a green card, travel and residence history
+            for the required period, records for any arrests or citations,
+            and marriage documents when applying under the three-year rule.
+      - - text: >-
+            The government charges its own filing fee, which is separate
+            from any attorney fee. The current amount is published on
+            USCIS.gov, and it changes. We cannot promise approval or a
+            timeline; the relevant agency decides.
+  - kind: cta
+    heading: Review your naturalization case with Abhaya Immigration
+    body: >-
+      A first conversation covers whether you meet the general requirements,
+      what your record shows, and what the application needs. Abhaya
+      Immigration, a Shook Law PC practice, guides applicants through
+      naturalization.
+    email: "{firm_email}"
+    action:
+      href: "https://www.abhayaimmigration.com/"
+      label: Talk to Abhaya Immigration

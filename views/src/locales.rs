@@ -54,6 +54,14 @@ pub const KNOWN_PAGES: &[&str] = &[
     "gateway-estate-planning",
     "gateway-immigration",
     "home",
+    "immigration-citizenship",
+    "immigration-consular-processing",
+    "immigration-employment-visas",
+    "immigration-family-green-cards",
+    "immigration-free-support",
+    "immigration-humanitarian-relief",
+    "immigration-removal-defense",
+    "immigration-uscis-notices",
     "legal-aid",
     "litigation",
     "nautilus",
@@ -627,7 +635,15 @@ pub fn locale_page_kind(stem: &str) -> Option<LocalePageKind> {
         | "gateway-delete-your-debt"
         | "gateway-divorce"
         | "gateway-estate-planning"
-        | "gateway-immigration" => Some(LocalePageKind::Marketing),
+        | "gateway-immigration"
+        | "immigration-citizenship"
+        | "immigration-consular-processing"
+        | "immigration-employment-visas"
+        | "immigration-family-green-cards"
+        | "immigration-free-support"
+        | "immigration-humanitarian-relief"
+        | "immigration-removal-defense"
+        | "immigration-uscis-notices" => Some(LocalePageKind::Marketing),
         shared::SHARED_CATALOG_STEM => Some(LocalePageKind::Shared),
         services::SERVICES_CATALOG_STEM => Some(LocalePageKind::ServicesCatalog),
         _ => None,
