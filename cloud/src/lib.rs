@@ -21,6 +21,7 @@ use thiserror::Error;
 
 pub mod audio;
 pub mod calendar;
+pub mod contacts;
 pub mod drive;
 pub mod forge;
 pub mod forgejo_forge;
