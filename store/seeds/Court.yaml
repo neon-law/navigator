@@ -1,0 +1,70 @@
+lookup_fields:
+  - key
+# The court-form registry: the courts whose self-help forms Navigator
+# carries, and the per-form entries keyed to forms-shelf template codes.
+#
+# Each record is a court; each entry in its `forms:` list registers one
+# template under `templates/notations/forms/` with the provenance a filer
+# needs: what the filing office calls the form, where the official blank is
+# published, the sha-256 pin of that blank, where in the courthouse the
+# filing goes, what it costs, and which fee-waiver form the office accepts.
+#
+# The blank itself is never checked in — `sha256` pins it where the court
+# publishes it, exactly like the vendored forms' `.sha256` files. A form
+# entry may only reference a template that exists on the forms shelf, and a
+# template under a court directory must have an entry here;
+# `cli/tests/court_registry.rs` fails CI on either drift.
+#
+# This file is canonical reference data consumed at compile time
+# (`store::courts`), not a database table — the seed boundary test classifies
+# it in the canonical layer.
+records:
+  # Statewide form sets are registered under the court that approves them:
+  # the Nevada Supreme Court's self-help forms are acceptable in any court
+  # in Nevada, so the county-specific rows below carry only the forms and
+  # fees unique to that county.
+  - key: nevada_supreme_court
+    name: Nevada Supreme Court
+    jurisdiction: NV
+    level: supreme
+    forms: []
+  - key: eighth_judicial_district_court
+    name: Eighth Judicial District Court
+    jurisdiction: NV
+    county: Clark
+    level: district
+    # One entry per form this court accepts, keyed to the template code:
+    #
+    # forms:
+    #   - code: nv__adult_name_change_petition
+    #     title: Petition for Adult Name Change
+    #     form_number: null            # official form number, when the office publishes one
+    #     source_url: https://selfhelp.nvcourts.gov/images/name-change/name-adult-petition-pdf-fillable.pdf
+    #     sha256: 0000000000000000000000000000000000000000000000000000000000000000
+    #     filing_office: Family Division Clerk's Office
+    #     filing_fee:                  # flat fee; omit when the office publishes none
+    #       amount: "270.00"
+    #       currency: USD
+    #     fee_note: null               # tiered or county-varying schedules go here as prose
+    #     fee_waiver_code: nv__fee_waiver_application
+    forms: []
+  - key: second_judicial_district_court
+    name: Second Judicial District Court
+    jurisdiction: NV
+    county: Washoe
+    level: district
+    forms: []
+  - key: las_vegas_justice_court
+    name: Las Vegas Justice Court
+    jurisdiction: NV
+    county: Clark
+    city: Las Vegas
+    level: justice
+    forms: []
+  - key: reno_justice_court
+    name: Reno Justice Court
+    jurisdiction: NV
+    county: Washoe
+    city: Reno
+    level: justice
+    forms: []

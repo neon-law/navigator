@@ -51,6 +51,17 @@ fn title_defaults(form_code: &str) -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/// A filing fee as the filing office publishes it: a decimal amount and an
+/// ISO 4217 currency code. `&'static str` fields keep a fee expressible in
+/// the compiled-in [`BUNDLED`] registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FilingFee {
+    /// Decimal amount (`"270.00"`, `"0.00"`).
+    pub amount: &'static str,
+    /// ISO 4217 alphabetic currency code (`USD`).
+    pub currency: &'static str,
+}
+
 /// Metadata for one vendored government form. Carries no bytes: the
 /// blank itself lives in the assets bucket at
 /// [`object_path`](Self::object_path), pinned by
@@ -75,6 +86,14 @@ pub struct FormMeta {
     /// a synthetic blank under its own pin; production code reads
     /// [`pinned_sha256`](Self::pinned_sha256).
     pub sha256_pin: &'static str,
+    /// The filing fee the office charges for this form, when it publishes
+    /// a flat one. The court-form registry (`store/seeds/Court.yaml`) is
+    /// the curated source of fee data; the cross-crate guard test pins a
+    /// vendored form's fee to its registry row.
+    pub filing_fee: Option<FilingFee>,
+    /// Template code of the fee-waiver form the filing office accepts,
+    /// when one exists. Must resolve to a real forms-shelf template.
+    pub fee_waiver_code: Option<&'static str>,
 }
 
 impl FormMeta {
@@ -157,6 +176,8 @@ const BUNDLED: &[FormMeta] = &[
         sha256_pin: include_str!(
             "../../templates/notations/forms/united_states/federal/uscis/us__naturalization.sha256"
         ),
+        filing_fee: None,
+        fee_waiver_code: None,
     },
     FormMeta {
         code: "nv__llc_formation",
@@ -167,6 +188,8 @@ const BUNDLED: &[FormMeta] = &[
         sha256_pin: include_str!(
             "../../templates/notations/forms/united_states/nevada/state/nv__llc_formation.sha256"
         ),
+        filing_fee: None,
+        fee_waiver_code: None,
     },
     FormMeta {
         code: "nv__profit_corp_formation",
@@ -177,6 +200,8 @@ const BUNDLED: &[FormMeta] = &[
         sha256_pin: include_str!(
             "../../templates/notations/forms/united_states/nevada/state/nv__profit_corp_formation.sha256"
         ),
+        filing_fee: None,
+        fee_waiver_code: None,
     },
     FormMeta {
         code: "nv__business_trust_formation",
@@ -187,6 +212,8 @@ const BUNDLED: &[FormMeta] = &[
         sha256_pin: include_str!(
             "../../templates/notations/forms/united_states/nevada/state/nv__business_trust_formation.sha256"
         ),
+        filing_fee: None,
+        fee_waiver_code: None,
     },
 ];
 

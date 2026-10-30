@@ -89,6 +89,7 @@ pub mod communications;
 pub mod config;
 pub mod conflicts;
 pub mod contract_reviews;
+pub mod courts;
 pub mod credentials;
 pub mod delegations;
 pub mod deployment;
