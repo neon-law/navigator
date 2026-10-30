@@ -54,11 +54,22 @@ pub enum ShadowStore {
     Notations,
     /// `projects::find_by_id` and `projects::find_by_code`.
     Projects,
+    /// `inbox::conversation_by_id` (LAW-238 D0).
+    InboxConversations,
+    /// `inbox::message_by_id` (LAW-238 D0).
+    InboxMessages,
 }
 
 impl ShadowStore {
     /// Every store.
-    pub const ALL: [Self; 4] = [Self::Entities, Self::Firms, Self::Notations, Self::Projects];
+    pub const ALL: [Self; 6] = [
+        Self::Entities,
+        Self::Firms,
+        Self::Notations,
+        Self::Projects,
+        Self::InboxConversations,
+        Self::InboxMessages,
+    ];
 
     /// The store's name in [`STORES_ENV`].
     #[must_use]
@@ -68,6 +79,8 @@ impl ShadowStore {
             Self::Firms => "firms",
             Self::Notations => "notations",
             Self::Projects => "projects",
+            Self::InboxConversations => "inbox_conversations",
+            Self::InboxMessages => "inbox_messages",
         }
     }
 }
@@ -77,7 +90,7 @@ impl ShadowStore {
 pub enum ShadowConfigError {
     #[error(
         "{STORES_ENV} names an unknown store `{0}`; expected a comma-separated list of \
-         entities, firms, notations, projects"
+         entities, firms, notations, projects, inbox_conversations, inbox_messages"
     )]
     UnknownStore(String),
     #[error("{SAMPLE_ENV} must be a decimal greater than 0 and at most 1")]
@@ -401,6 +414,42 @@ pub(crate) fn notation_read(id: Uuid, result: Option<&crate::notations::Notation
         Some(id),
         move |pg| async move {
             crate::postgres_mirror::workflow::shadow_notation(&pg, id, source.as_ref()).await
+        },
+    );
+}
+
+/// Shadow an `inbox::conversation_by_id` read (LAW-238 D0 cutover evidence).
+pub(crate) fn conversation_read(id: Uuid, result: Option<&crate::inbox::Conversation>) {
+    let Some(draw) = draw(ShadowStore::InboxConversations) else {
+        return;
+    };
+    let source = result.cloned();
+    let _ = observe_with(
+        config(),
+        draw,
+        ShadowStore::InboxConversations,
+        "inbox_conversation",
+        Some(id),
+        move |pg| async move {
+            crate::postgres_mirror::inbox::shadow_conversation(&pg, id, source.as_ref()).await
+        },
+    );
+}
+
+/// Shadow an `inbox::message_by_id` read (LAW-238 D0 cutover evidence).
+pub(crate) fn message_read(id: Uuid, result: Option<&crate::inbox::Message>) {
+    let Some(draw) = draw(ShadowStore::InboxMessages) else {
+        return;
+    };
+    let source = result.cloned();
+    let _ = observe_with(
+        config(),
+        draw,
+        ShadowStore::InboxMessages,
+        "message",
+        Some(id),
+        move |pg| async move {
+            crate::postgres_mirror::inbox::shadow_message(&pg, id, source.as_ref()).await
         },
     );
 }
