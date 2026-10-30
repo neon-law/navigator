@@ -1993,6 +1993,20 @@ enum DeadlineCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Mirror the Project's deadlines into its shared matter calendar
+    /// through the portal, repairing drift. Requires the Firm's calendar
+    /// integration; `--dry-run` plans without writing.
+    Sync {
+        /// Plan the mirror without writing — the door answers what it
+        /// would insert, patch, and delete.
+        #[arg(long)]
+        dry_run: bool,
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Reopen a cancelled deadline and print the stored row.
     Reopen {
         /// Deadline id from project deadline list.
@@ -5464,6 +5478,11 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             DeadlineCmd::Ics { host, project } => {
                 projects::deadline::ics(host.host.as_deref(), project.as_deref()).await
             }
+            DeadlineCmd::Sync {
+                host,
+                project,
+                dry_run,
+            } => projects::deadline::sync(host.host.as_deref(), project.as_deref(), dry_run).await,
             DeadlineCmd::Reopen { host, project, id } => {
                 projects::deadline::reopen(host.host.as_deref(), project.as_deref(), id).await
             }

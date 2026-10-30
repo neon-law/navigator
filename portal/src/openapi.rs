@@ -1023,6 +1023,31 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/integrations/calendar/deadline-mirror": {
+          "post": {
+            "summary": "Reconcile each Project's mirrored Deadline events to its rows (admin)",
+            "description":
+              "Reconciles the Project's shared Google Calendar against its Deadline rows: inserts, patches, and deletes the events the nightly mirror owns, carrying the matter-page link beside each. The applied pass ensures the calendar exists and is shared first; a dry run plans the same writes without making them. Outcomes are the reconcile outcomes `mirrored`, `skipped_closed`, `missing_calendar`, plus the ensure outcomes a calendar-less applied pass reaches, `duplicate` for an ambiguous calendar summary, and the resolution outcomes. The response carries outcome lines with counts, never matter content. Authorization: admin-tier, plus `use_integrations` on the Project's owning Firm.",
+            "requestBody": { "required": true, "content": { "application/json": {
+              "schema": { "$ref": "#/components/schemas/DeadlineMirrorRequest" }
+            } } },
+            "responses": {
+              "200": { "description": "One outcome per selected Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IntegrationReport" } } } },
+              "400": { "description": "The selector is not accepted", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "403": { "description": "Authenticated caller is not admin-tier", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "404": { "description": "No Project with that code is visible to the caller, or the caller may not use its Firm's integrations — the two answer identically on purpose", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
         "/app/api/integrations/notion/reconcile": {
           "post": {
             "summary": "Reconcile each Project against the selected Notion database (admin)",
@@ -4171,6 +4196,18 @@ fn canonical_document(base: &str) -> Value {
                                 "description": "One Project code. Omit when `all` is true." },
               "all": { "type": "boolean", "default": false,
                        "description": "Act on every Project visible to the caller — the same participation-scoped lens `GET /app/api/projects` uses, so an admin sweep can never reach a matter the read surface would hide." }
+            }
+          },
+          "DeadlineMirrorRequest": {
+            "type": "object",
+            "description": "The ensure door's selector with a dry-run flag beside it: `project_code` and `all` follow the same exactly-one rule.",
+            "properties": {
+              "project_code": { "type": ["string", "null"],
+                                "description": "One Project code. Omit when `all` is true." },
+              "all": { "type": "boolean", "default": false,
+                       "description": "Reconcile every Project visible to the caller — the same participation-scoped lens `GET /app/api/projects` uses." },
+              "dry_run": { "type": "boolean", "default": false,
+                           "description": "Plan the mirror without making writes — the door answers what it would insert, patch, and delete." }
             }
           },
           "SlackIntegrationRequest": {

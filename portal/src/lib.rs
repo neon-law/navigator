@@ -892,6 +892,7 @@ pub fn bootstrap_with_forgejo_oidc(
                 signature_provider: state.signature_provider.clone(),
                 contract_reviewer: state.contract_reviewer.clone(),
                 integration_providers: state.integration_providers.clone(),
+                canonical_base_url: state.canonical_host.host().map(str::to_string),
             })
             .layer(axum::middleware::from_fn_with_state(
                 (state.sessions.clone(), crate::csrf::CsrfMode::Strict),
