@@ -1186,6 +1186,18 @@ enum ProjectsCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// File a Project's Drive dropbox folder into the matter through the
+    /// portal's drive-import door, as internal documents under their original
+    /// filenames. `--dry-run` plans the pass and writes nothing.
+    DriveIngest {
+        /// The Project code.
+        project_code: String,
+        /// Report what a real pass would do, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Interactively open a Project and write this release's canonical repository files.
     Scaffold {
         /// Empty directory to populate. Defaults to the current directory.
@@ -5441,6 +5453,11 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             )
             .await
         }
+        ProjectsCmd::DriveIngest {
+            project_code,
+            dry_run,
+            host,
+        } => projects::drive_ingest::run(host.host.as_deref(), &project_code, dry_run).await,
         ProjectsCmd::Scaffold {
             dir,
             resume,
