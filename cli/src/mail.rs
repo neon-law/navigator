@@ -19,6 +19,10 @@ const GOOGLE_TOKEN_API: &str = "https://oauth2.googleapis.com/token";
 const MAX_SEARCH_RESULTS: u8 = 25;
 /// Gmail's 25 MB message limit, measured on the encoded MIME message.
 const MAX_MESSAGE_BYTES: u64 = 25_000_000;
+/// Where `mail save` writes by default: the Project checkout's git-ignored
+/// working folder for email bodies, drafts, and saved copies of sent mail
+/// (`cli/src/projects/repository.rs`'s `MAIL_DIRECTORY`).
+const MAIL_DIRECTORY: &str = "mail";
 /// The asset-lane kind a `mail parse` file-path upload takes when `--kind`
 /// is not passed: mail correspondence is served correspondence.
 const DEFAULT_PARSE_UPLOAD_KIND: &str = "letter";
@@ -103,6 +107,17 @@ pub enum MailAction {
         /// Asset-lane kind for a file-path upload. Defaults to `letter`.
         #[arg(long, value_parser = crate::parse_asset_kind)]
         kind: Option<String>,
+    },
+    /// Save a Gmail message's .eml copy under the git-ignored mail/ folder.
+    Save {
+        /// Gmail web URL or Gmail message id.
+        reference: String,
+        /// Directory to save into. Defaults to mail/.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Output filename. Defaults to the convention: YYYY.MM.DD_<subject>.eml.
+        #[arg(long)]
+        name: Option<String>,
     },
 }
 
@@ -232,6 +247,13 @@ impl GmailClient {
         .await
     }
 
+    /// One message in `format=raw`: the complete RFC 822 copy `mail save`
+    /// writes to disk.
+    async fn raw_message(&self, id: &str) -> Result<RawGmailMessage> {
+        self.call(Operation::ReadMessage, Some(id), &[("format", "raw")], None)
+            .await
+    }
+
     async fn profile(&self) -> Result<GmailProfile> {
         self.call(Operation::ReadProfile, None, &[], None).await
     }
@@ -282,6 +304,12 @@ struct ThreadSummary {
 struct GmailThread {
     id: String,
     messages: Vec<GmailMessage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGmailMessage {
+    /// URL-safe base64 of the complete RFC 822 message.
+    raw: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -983,6 +1011,107 @@ fn addr_text(addr: &mail_parser::Addr<'_>) -> String {
     }
 }
 
+/// Gmail returns `format=raw` messages URL-safe base64 encoded.
+///
+/// # Errors
+///
+/// [`anyhow::Error`] when the response carries no raw field or it does not
+/// decode.
+fn decode_gmail_raw(raw: &str) -> Result<Vec<u8>> {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(raw.trim())
+        .context("decode Gmail raw message")
+}
+
+/// The conventional saved-mail filename: the send date, the subject as a
+/// slug, and the .eml extension — `2026.10.30_Retainer questions.eml` shape.
+fn conventional_mail_name(sent_on: &str, subject: &str) -> String {
+    let subject = subject.trim();
+    let slug = subject_slug(subject).unwrap_or_else(|| "no-subject".to_string());
+    format!("{sent_on}_{slug}.eml")
+}
+
+/// The subject as a path-safe slug: alphanumeric characters, `-`, `.`, and
+/// `_` survive; whitespace becomes `_`; everything else drops. None when
+/// nothing survives.
+fn subject_slug(subject: &str) -> Option<String> {
+    let mut slug = String::new();
+    let mut trailing_separator = true;
+    for character in subject.chars() {
+        if slug.len() >= 64 {
+            break;
+        }
+        if character.is_alphanumeric() || character == '-' || character == '.' {
+            slug.push(character);
+            trailing_separator = false;
+        } else if (character.is_whitespace() || character == '_') && !trailing_separator {
+            slug.push('_');
+            trailing_separator = true;
+        }
+    }
+    let slug = slug.trim_matches(['_', '.', '-']).to_string();
+    (!slug.is_empty()).then_some(slug)
+}
+
+/// A saved-mail filename must start with its send date and keep the .eml
+/// extension: `YYYY.MM.DD_<name>.eml`.
+///
+/// # Errors
+///
+/// [`anyhow::Error`] naming the convention when the filename does not follow
+/// it.
+fn check_mail_save_name(name: &str) -> Result<()> {
+    let bytes = name.as_bytes();
+    let dated = bytes.len() >= 15
+        && bytes[..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'.'
+        && bytes[5..7].iter().all(u8::is_ascii_digit)
+        && bytes[7] == b'.'
+        && bytes[8..10].iter().all(u8::is_ascii_digit)
+        && bytes[10] == b'_';
+    let eml = std::path::Path::new(name)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("eml"));
+    if dated && eml {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "the filename must follow the convention YYYY.MM.DD_<name>.eml, the send date first"
+    ))
+}
+
+/// What `write_saved_mail` did.
+#[derive(Debug, Eq, PartialEq)]
+enum SavedMail {
+    Written,
+    AlreadySaved,
+}
+
+/// Write the .eml copy without clobbering: an identical file is already
+/// saved (a re-run is idempotent); a different one is refused.
+///
+/// # Errors
+///
+/// [`anyhow::Error`] when an existing file's contents differ or the write
+/// fails.
+fn write_saved_mail(path: &Path, bytes: &[u8]) -> Result<SavedMail> {
+    if path.exists() {
+        let existing = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        if existing == bytes {
+            return Ok(SavedMail::AlreadySaved);
+        }
+        return Err(anyhow!(
+            "{} already exists with different contents; remove it or pass --name",
+            path.display()
+        ));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    std::fs::write(path, bytes).with_context(|| format!("write {}", path.display()))?;
+    Ok(SavedMail::Written)
+}
+
 fn scoped_query(query: &str, project: Option<&str>) -> String {
     let Some(email) = project.and_then(|_| client_contact_from_manifest()) else {
         return query.to_owned();
@@ -1298,6 +1427,11 @@ async fn run_inner(action: MailAction) -> Result<()> {
             )
             .await
         }
+        MailAction::Save {
+            reference,
+            dir,
+            name,
+        } => save_message_command(&reference, dir.as_deref(), name.as_deref()).await,
     }
 }
 
@@ -1657,6 +1791,48 @@ async fn parse_eml_file(path: &Path, project_code: &str, host: Option<&str>) -> 
     Ok(())
 }
 
+/// `mail save`: fetch the message's RFC 822 copy through the read-only Gmail
+/// path and write it under the Project checkout's git-ignored mail/ folder
+/// with the conventional YYYY.MM.DD_<subject>.eml name. Saving never sends.
+async fn save_message_command(
+    reference: &str,
+    dir: Option<&Path>,
+    name: Option<&str>,
+) -> Result<()> {
+    let message_id = gmail_message_id(reference).ok_or_else(|| {
+        anyhow!("the reference is neither a Gmail web URL nor a Gmail message id: {reference}")
+    })?;
+    if let Some(name) = name {
+        check_mail_save_name(name)?;
+    }
+    let gmail = client().await?;
+    let raw_field = gmail.raw_message(&message_id).await?;
+    let raw = decode_gmail_raw(
+        raw_field
+            .raw
+            .as_deref()
+            .ok_or_else(|| anyhow!("message {message_id} came back with no raw copy"))?,
+    )?;
+    let message = mail_parser::MessageParser::default()
+        .parse(&raw)
+        .ok_or_else(|| anyhow!("the saved message is not a MIME email"))?;
+    let name = if let Some(name) = name {
+        name.to_string()
+    } else {
+        let sent_on = message
+            .date()
+            .map(|date| format!("{:04}.{:02}.{:02}", date.year, date.month, date.day))
+            .ok_or_else(|| anyhow!("the message has no Date header; pass --name"))?;
+        conventional_mail_name(&sent_on, message.subject().unwrap_or(""))
+    };
+    let path = dir.unwrap_or_else(|| Path::new(MAIL_DIRECTORY)).join(&name);
+    match write_saved_mail(&path, &raw)? {
+        SavedMail::Written => println!("Saved {} (message {message_id})", path.display()),
+        SavedMail::AlreadySaved => println!("Already saved: {}", path.display()),
+    }
+    Ok(())
+}
+
 async fn file_message(target: &FileTarget<'_>, message: &GmailMessage, body: &str) -> Result<()> {
     let request = communication_request(
         target.mailbox,
@@ -1873,9 +2049,68 @@ Hello\r\n";
     }
 
     #[test]
+    fn gmail_raw_copies_decode_from_url_safe_base64() {
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(b"From: client@example.test\r\n\r\nHello");
+        assert_eq!(
+            decode_gmail_raw(&encoded).unwrap(),
+            b"From: client@example.test\r\n\r\nHello".to_vec()
+        );
+        assert!(decode_gmail_raw("not base64!").is_err());
+    }
+
+    #[test]
+    fn saved_mail_names_carry_the_send_date_and_subject_slug() {
+        assert_eq!(
+            conventional_mail_name("2026.10.30", "Retainer questions: phase 2!"),
+            "2026.10.30_Retainer_questions_phase_2.eml"
+        );
+        assert_eq!(
+            conventional_mail_name("2026.10.30", "   "),
+            "2026.10.30_no-subject.eml"
+        );
+        assert_eq!(
+            conventional_mail_name("2026.10.30", "Fwd: the signed order"),
+            "2026.10.30_Fwd_the_signed_order.eml"
+        );
+    }
+
+    #[test]
+    fn save_names_must_carry_the_send_date_prefix_and_eml_extension() {
+        assert!(check_mail_save_name("2026.10.30_Retainer questions.eml").is_ok());
+        assert!(check_mail_save_name("2026.10.30_.eml").is_ok());
+        assert!(check_mail_save_name("mail.eml").is_err());
+        assert!(check_mail_save_name("2026-10-30_dashes.eml").is_err());
+        assert!(check_mail_save_name("2026.10.30_wrong.pdf").is_err());
+        assert!(check_mail_save_name("2026.10.30_no_extension").is_err());
+    }
+
+    #[test]
+    fn saved_mail_never_clobbers_a_changed_file() {
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("mail").join("2026.10.30_Order.eml");
+        assert_eq!(
+            write_saved_mail(&path, b"first").unwrap(),
+            SavedMail::Written
+        );
+        assert!(path.exists());
+        assert_eq!(
+            write_saved_mail(&path, b"first").unwrap(),
+            SavedMail::AlreadySaved
+        );
+        let error = write_saved_mail(&path, b"different")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("different contents"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+    }
+
+    #[test]
     fn agent_contract_documents_mail_parse_and_save() {
         let contract = include_str!("projects/agent_contract.md");
         assert!(contract.contains("navigator mail parse"));
+        assert!(contract.contains("navigator mail save"));
+        assert!(contract.contains("`mail/` is git-ignored"));
     }
 
     #[test]

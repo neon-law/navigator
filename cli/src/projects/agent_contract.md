@@ -89,6 +89,9 @@ each answer terse.
   Navigator. A Notation is a database record, never a file here.
 * `seeds/` holds seed data that `navigator site import` creates or updates.
 * `notes/` is git-ignored. Write call notes there for `navigator project communication create --body-file`.
+* `mail/` is git-ignored. Saved mail lives there: `navigator mail save <message-url>` writes a message's
+  `YYYY.MM.DD_<subject>.eml` copy, and email bodies kept on disk for `navigator mail draft --body-file` belong there
+  too. Saved mail is a matter fact, never Git; the gate refuses anything under `mail/`.
 * Handoff note: work that may outlast the session keeps its state in `notes/HANDOFF-<topic>.md.local`. The gate does
   not read it, and no matter fact leaves the repository. Follow `.agents/skills/working-notes/SKILL.md`.
   * Write it before a session ends with work in flight, near compaction, or when the lawyer asks. Rewrite it when the
@@ -148,6 +151,8 @@ For a client email:
 * To file a received message into the matter's Communication log, run `navigator mail parse <gmail-web-url>` (the URL
   copied from the browser), `navigator mail parse <message.eml>`, or `navigator mail parse <document.pdf>` — the last
   uploads through the document lane. Filing is a record write only; it never sends or archives in Gmail.
+* To keep a Gmail message's .eml copy in this checkout, run `navigator mail save <gmail-web-url>`; it writes
+  `mail/YYYY.MM.DD_<subject>.eml` and refuses a filename that drops the send-date prefix.
 
 ## Feedback
 
