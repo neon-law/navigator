@@ -14,6 +14,9 @@ name = "sandbox_skills"
 path = "src/lib.rs"
 
 [dependencies]
+# `SkillId` serializes: the gateway's `CompletionRequest` — which carries
+# the session's active skills — journals through serde.
+serde.workspace = true
 
 [lints]
 workspace = true
