@@ -929,6 +929,13 @@ fn resolve_firm_contact_content(
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
         ),
+        // IEP belongs to the second firm, so its contact page names Lex
+        // Tecnica LLP — never Guieb & Shook PC.
+        BrandKey::Iep => format!(
+            "Reach {firm_name}, a practice of Lex Tecnica LLP, about legal services. \
+             Attorney advertisement. Nothing here is legal advice without a signed retainer for \
+             an active project."
+        ),
         BrandKey::GuiebShook => format!(
             "Reach {firm_name}, attorneys at law. Attorney advertisement. Nothing here is legal \
              advice without a signed retainer for an active project."
@@ -983,7 +990,8 @@ pub(crate) fn resolve_firm_home_content(
         | BrandKey::Summons
         | BrandKey::Aegis
         | BrandKey::Groundwork
-        | BrandKey::DeathAndDivorce => locales::home_for_host(branding, deployment_host),
+        | BrandKey::DeathAndDivorce
+        | BrandKey::Iep => locales::home_for_host(branding, deployment_host),
     }
 }
 
