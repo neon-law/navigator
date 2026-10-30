@@ -263,6 +263,7 @@ pub fn load(section: Section, cx: &LoadContext) -> SectionView {
             SectionView::RequirementTracker(cx.closing.requirements.clone())
         }
         Section::RedlineView => SectionView::RedlineView(cx.closing.redlines.clone()),
+        Section::ActivityLog => SectionView::ActivityLog(Vec::new()),
     }
 }
 
@@ -271,7 +272,8 @@ mod tests {
     /// The sections [`load`](super::load) still maps to an empty view, so
     /// their pages always show the empty state. Loading data into one means
     /// removing it from this list in the same change.
-    const UNLOADED: [&str; 10] = [
+    const UNLOADED: [&str; 11] = [
+        "ActivityLog",
         "AssertionPanel",
         "CommentRail",
         "ItemDetail",

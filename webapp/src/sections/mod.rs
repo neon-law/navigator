@@ -183,6 +183,7 @@ pub enum SectionView {
     TermComparison(Vec<transactional::ComparisonRow>),
     RequirementTracker(Vec<transactional::RequirementRow>),
     RedlineView(Vec<transactional::RevisionDocument>),
+    ActivityLog(Vec<SectionRow>),
 }
 
 impl SectionView {
@@ -239,6 +240,7 @@ impl SectionView {
             Self::TermComparison(_) => "term_comparison",
             Self::RequirementTracker(_) => "requirement_tracker",
             Self::RedlineView(_) => "redline_view",
+            Self::ActivityLog(_) => "activity_log",
         }
     }
 
@@ -295,6 +297,7 @@ impl SectionView {
             Self::TermComparison(Vec::new()),
             Self::RequirementTracker(Vec::new()),
             Self::RedlineView(Vec::new()),
+            Self::ActivityLog(Vec::new()),
         ]
     }
 }
@@ -435,6 +438,13 @@ list_section!(
     "No files are available here yet."
 );
 list_section!(InvoiceSection, "invoice", "Invoices", "No invoices yet.");
+
+list_section!(
+    ActivityLogSection,
+    "activity_log",
+    "Activity log",
+    "Nothing has been logged on this matter yet."
+);
 
 #[component]
 fn ProjectCostsSection(view: ProjectCostsView) -> Element {
@@ -593,6 +603,7 @@ pub fn SectionBody(view: SectionView) -> Element {
             rsx! { transactional::RequirementTrackerSection { rows } }
         }
         SectionView::RedlineView(rows) => rsx! { transactional::RedlineViewSection { rows } },
+        SectionView::ActivityLog(rows) => rsx! { ActivityLogSection { rows } },
     }
 }
 
@@ -605,7 +616,7 @@ pub(crate) mod tests {
     /// wasm build of this crate never links `rules`; the server-side test
     /// below proves the two agree.
     fn rules_section_count() -> usize {
-        49
+        50
     }
 
     pub(super) fn render(view: SectionView) -> String {

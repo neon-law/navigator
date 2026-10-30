@@ -221,6 +221,9 @@ pub enum Section {
     RequirementTracker,
     /// The revisions of each living document.
     RedlineView,
+    /// The matter's activity, one dated entry per day, newest first
+    /// (LAW-235). The day-log page's spine.
+    ActivityLog,
 }
 
 /// The sections every kind carries, whatever else it carries.
@@ -278,6 +281,7 @@ impl Section {
         Section::TermComparison,
         Section::RequirementTracker,
         Section::RedlineView,
+        Section::ActivityLog,
     ];
 
     /// The name this section is authored as.
@@ -333,6 +337,7 @@ impl Section {
             Section::TermComparison => "term_comparison",
             Section::RequirementTracker => "requirement_tracker",
             Section::RedlineView => "redline_view",
+            Section::ActivityLog => "activity_log",
         }
     }
 
@@ -407,6 +412,7 @@ impl Section {
             Section::TermComparison => "The proposal beside the client's position, by clause",
             Section::RequirementTracker => "Each required filing and whether it was made",
             Section::RedlineView => "The revisions of each living document",
+            Section::ActivityLog => "The matter's activity, one dated entry per day",
         }
     }
 
@@ -622,6 +628,14 @@ pub fn skeleton(kind: Kind) -> Option<Skeleton> {
             ],
             lawyer_only: &[],
         },
+        // The matter as it happened: one dated entry per day, newest
+        // first. Reading, not working — the records speak for themselves.
+        Kind::DayLog => Skeleton {
+            family: Family::Dashboard,
+            required: &[S::ActivityLog],
+            optional: &[S::KeyDatesStrip],
+            lawyer_only: &[],
+        },
         Kind::Letter
         | Kind::Filing
         | Kind::Will
@@ -725,7 +739,7 @@ mod tests {
                 kind.as_str(),
             );
         }
-        assert_eq!(dashboard_kinds().len(), 12, "the catalog is twelve kinds");
+        assert_eq!(dashboard_kinds().len(), 13, "the catalog is thirteen kinds");
     }
 
     #[test]
@@ -966,6 +980,20 @@ mod tests {
             assert!(room.catalog().contains(&section), "{}", section.as_str());
             assert!(room.permits(Lens::Client, section), "{}", section.as_str());
         }
+    }
+
+    #[test]
+    fn the_day_log_reads_one_dated_entry_per_day() {
+        let log = skeleton(Kind::DayLog).unwrap();
+        assert_eq!(log.required, [Section::ActivityLog]);
+        assert_eq!(log.family, Family::Dashboard);
+        // Reading, not working: nothing on the day log is firm-only, and
+        // the key dates strip rides along for orientation.
+        assert!(log.lawyer_only.is_empty());
+        for section in [Section::ActivityLog, Section::KeyDatesStrip] {
+            assert!(log.permits(Lens::Client, section), "{}", section.as_str());
+        }
+        assert_eq!(Section::parse("activity_log"), Some(Section::ActivityLog));
     }
 
     #[test]
