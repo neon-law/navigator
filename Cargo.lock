@@ -10562,6 +10562,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandbox-skills"
+version = "26.10.29"
+
+[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
