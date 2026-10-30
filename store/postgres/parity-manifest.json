@@ -1058,6 +1058,7 @@
         "provider_message_id": "option<string>",
         "provider_ref": "option<string>",
         "purpose": "string",
+        "raw_storage_key": "option<string>",
         "updated_at": "datetime",
         "visibility": "option<string>"
       },
@@ -3202,6 +3203,7 @@
           "provider_message_id": "TEXT",
           "provider_ref": "TEXT",
           "purpose": "TEXT",
+          "raw_storage_key": "TEXT",
           "updated_at": "TIMESTAMPTZ",
           "visibility": "TEXT"
         },

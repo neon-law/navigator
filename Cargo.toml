@@ -261,6 +261,9 @@ uuid = { version = "1", default-features = false, features = ["std", "v7", "serd
 # message (send_raw=true) with no parsed text part, so `web` extracts the
 # plain-text body itself when threading a support email.
 mail-parser = "0.11"
+# RFC 4180 reader for the LinkedIn data-export `messages.csv` (LAW-238 D1):
+# quoted CONTENT fields with embedded newlines are the export's norm.
+csv = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

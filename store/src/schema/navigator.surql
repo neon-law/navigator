@@ -2425,6 +2425,7 @@ DEFINE FIELD OVERWRITE channel ON communication TYPE string
                       'portal_message', 'sms_inbound', 'sms_outbound',
                       'facebook_inbound', 'facebook_outbound',
                       'instagram_inbound', 'instagram_outbound',
+                      'linkedin_inbound', 'linkedin_outbound',
                       'threads_inbound', 'threads_outbound',
                       'youtube_inbound', 'youtube_outbound', 'tiktok_inbound', 'tiktok_outbound', 'call'];
 DEFINE FIELD OVERWRITE direction ON communication TYPE string
@@ -2531,7 +2532,7 @@ DEFINE FIELD OVERWRITE interaction_type ON inbox_conversation TYPE string DEFAUL
 DEFINE FIELD OVERWRITE provider_post_id ON inbox_conversation TYPE option<string>;
 DEFINE FIELD OVERWRITE project_id ON inbox_conversation TYPE option<record<project>>;
 DEFINE FIELD OVERWRITE channel ON inbox_conversation TYPE string
-    ASSERT $value IN ['email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok'];
+    ASSERT $value IN ['email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'linkedin', 'tiktok'];
 DEFINE FIELD OVERWRITE external_address ON inbox_conversation TYPE string;
 DEFINE FIELD OVERWRITE external_name ON inbox_conversation TYPE option<string>;
 DEFINE FIELD OVERWRITE subject ON inbox_conversation TYPE option<string>;
@@ -2572,6 +2573,9 @@ DEFINE FIELD OVERWRITE purpose ON message TYPE string DEFAULT 'matter'
 DEFINE FIELD OVERWRITE attachment_asset_id ON message TYPE option<record<asset>>;
 DEFINE FIELD OVERWRITE communication_id ON message TYPE option<record<communication>>;
 DEFINE FIELD OVERWRITE occurred_at ON message TYPE string;
+-- Object-storage key of the verbatim import payload (LAW-238 D1). Written
+-- only by the postgres-authoritative import path; Surreal rows read None.
+DEFINE FIELD OVERWRITE raw_storage_key ON message TYPE option<string>;
 DEFINE FIELD OVERWRITE alert_state ON message TYPE option<string>
     ASSERT $value IS NONE OR $value IN ['pending', 'notified', 'unknown', 'failed', 'disabled'];
 DEFINE FIELD OVERWRITE alert_channel_id ON message TYPE option<string>;
