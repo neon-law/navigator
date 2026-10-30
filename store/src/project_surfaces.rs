@@ -338,22 +338,20 @@ where
             // LAW-213: a folder named for the code that predates the matter
             // is adopted, not shadowed by a second folder. Only a genuinely
             // absent folder is created.
-            let folder = match drive.find_folder_by_name(&project.code).await? {
-                Some(existing) => {
+            let (folder_id, status) =
+                if let Some(existing) = drive.find_folder_by_name(&project.code).await? {
                     set_drive_folder_id(surreal, project_id, Some(&existing.id))
                         .await?
                         .ok_or(SurfaceError::NotFound)?;
                     (existing.id, SurfaceStatus::Adopted)
-                }
-                None => {
+                } else {
                     let folder = drive.create_folder(&project.code).await?;
                     set_drive_folder_id(surreal, project_id, Some(&folder.id))
                         .await?
                         .ok_or(SurfaceError::NotFound)?;
                     (folder.id, SurfaceStatus::Created)
-                }
-            };
-            (Some(folder.0), folder.1, None)
+                };
+            (Some(folder_id), status, None)
         } else {
             (
                 None,

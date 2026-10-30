@@ -36,28 +36,23 @@ pub struct LiveFields<'a> {
     pub jurisdiction: Option<&'a str>,
 }
 
-pub async fn run(
-    host_override: Option<&str>,
-    project_override: Option<&str>,
-    from_live: bool,
-    supplied: [Option<&str>; 4],
-    live_fields: LiveFields<'_>,
-    firm: Option<&str>,
-    brand: Option<&str>,
-    dry_run: bool,
-) -> ExitCode {
-    match set(
-        host_override,
-        project_override,
-        from_live,
-        supplied,
-        live_fields,
-        firm,
-        brand,
-        dry_run,
-    )
-    .await
-    {
+/// Everything one `navigator project set` invocation was asked to do, as
+/// a single argument bundle — the LAW-213 flags pushed the bare parameter
+/// list past `clippy::too_many_arguments`.
+pub struct SetRequest<'a> {
+    pub host_override: Option<&'a str>,
+    pub project_override: Option<&'a str>,
+    pub from_live: bool,
+    pub supplied: [Option<&'a str>; 4],
+    pub live_fields: LiveFields<'a>,
+    pub firm: Option<&'a str>,
+    pub brand: Option<&'a str>,
+    pub dry_run: bool,
+}
+
+pub async fn run(request: SetRequest<'_>) -> ExitCode {
+    let dry_run = request.dry_run;
+    match set(request).await {
         Ok(changed) => {
             if dry_run {
                 println!(
@@ -76,16 +71,17 @@ pub async fn run(
     }
 }
 
-async fn set(
-    host_override: Option<&str>,
-    project_override: Option<&str>,
-    from_live: bool,
-    supplied: [Option<&str>; 4],
-    live_fields: LiveFields<'_>,
-    firm: Option<&str>,
-    brand: Option<&str>,
-    dry_run: bool,
-) -> Result<Vec<String>> {
+async fn set(request: SetRequest<'_>) -> Result<Vec<String>> {
+    let SetRequest {
+        host_override,
+        project_override,
+        from_live,
+        supplied,
+        live_fields,
+        firm,
+        brand,
+        dry_run,
+    } = request;
     if firm.is_some() != brand.is_some() {
         return Err(anyhow!("--firm and --brand must be supplied together"));
     }
@@ -130,32 +126,13 @@ async fn set(
             "pass --from-live, a coordinate flag, or --firm with --brand"
         ));
     }
-    let mut updated = contents.clone();
-    let mut changed = Vec::new();
-    for (key, value) in KEYS.into_iter().zip(values) {
-        let Some(value) = value else { continue };
-        let current = match key {
-            "lawyer_dri" => parsed.lawyer_dri.as_deref(),
-            "client_dri" => parsed.client_dri.as_deref(),
-            "private_slack_channel" => parsed.private_slack_channel.as_deref(),
-            "private_notion_page" => parsed.private_notion_page.as_deref(),
-            "drive_folder_id" => parsed.drive_folder_id.as_deref(),
-            _ => parsed.calendar_id.as_deref(),
-        };
-        if current == Some(value.as_str()) {
-            continue;
-        }
-        updated = replace_project_key(&updated, key, &value)?;
-        changed.push(key.to_string());
-    }
-    if clear_calendar && parsed.calendar_id.is_some() {
-        updated = remove_project_key(&updated, "calendar_id");
-        changed.push("calendar_id".to_string());
-    }
-    if clear_drive_folder && parsed.drive_folder_id.is_some() {
-        updated = remove_project_key(&updated, "drive_folder_id");
-        changed.push("drive_folder_id".to_string());
-    }
+    let (updated, mut changed) = apply_manifest_values(
+        &parsed,
+        &contents,
+        values,
+        clear_calendar,
+        clear_drive_folder,
+    )?;
     let findings = manifest::lint_contents(path, &updated);
     if let Some(finding) = findings.into_iter().find(|finding| !finding.warning) {
         return Err(anyhow!(
@@ -186,6 +163,45 @@ async fn set(
         changed.push("coordinates already current".to_string());
     }
     Ok(changed)
+}
+
+/// The navigator.yaml text and the names of the changed keys after the
+/// supplied coordinate values and explicit clears are applied to the parsed
+/// manifest. Pure, so the dry-run plan and the real write share one path.
+fn apply_manifest_values(
+    parsed: &manifest::Manifest,
+    contents: &str,
+    values: [Option<String>; 6],
+    clear_calendar: bool,
+    clear_drive_folder: bool,
+) -> Result<(String, Vec<String>)> {
+    let mut updated = contents.to_string();
+    let mut changed = Vec::new();
+    for (key, value) in KEYS.into_iter().zip(values) {
+        let Some(value) = value else { continue };
+        let current = match key {
+            "lawyer_dri" => parsed.lawyer_dri.as_deref(),
+            "client_dri" => parsed.client_dri.as_deref(),
+            "private_slack_channel" => parsed.private_slack_channel.as_deref(),
+            "private_notion_page" => parsed.private_notion_page.as_deref(),
+            "drive_folder_id" => parsed.drive_folder_id.as_deref(),
+            _ => parsed.calendar_id.as_deref(),
+        };
+        if current == Some(value.as_str()) {
+            continue;
+        }
+        updated = replace_project_key(&updated, key, &value)?;
+        changed.push(key.to_string());
+    }
+    if clear_calendar && parsed.calendar_id.is_some() {
+        updated = remove_project_key(&updated, "calendar_id");
+        changed.push("calendar_id".to_string());
+    }
+    if clear_drive_folder && parsed.drive_folder_id.is_some() {
+        updated = remove_project_key(&updated, "drive_folder_id");
+        changed.push("drive_folder_id".to_string());
+    }
+    Ok((updated, changed))
 }
 
 /// Fill each coordinate not supplied by a flag from the live Project row.

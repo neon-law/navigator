@@ -5593,26 +5593,26 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             brand,
             host,
         } => {
-            projects::set::run(
-                host.host.as_deref(),
-                project_code.as_deref(),
+            projects::set::run(projects::set::SetRequest {
+                host_override: host.host.as_deref(),
+                project_override: project_code.as_deref(),
                 from_live,
-                [
+                supplied: [
                     lawyer_dri.as_deref(),
                     client_dri.as_deref(),
                     private_slack_channel.as_deref(),
                     private_notion_page.as_deref(),
                 ],
-                projects::set::LiveFields {
+                live_fields: projects::set::LiveFields {
                     calendar_id: calendar.as_deref(),
                     drive_folder_id: drive_folder.as_deref(),
                     booking_url: booking_url.as_deref(),
                     jurisdiction: jurisdiction.as_deref(),
                 },
-                firm.as_deref(),
-                brand.as_deref(),
+                firm: firm.as_deref(),
+                brand: brand.as_deref(),
                 dry_run,
-            )
+            })
             .await
         }
         ProjectsCmd::Sync {
