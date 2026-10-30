@@ -390,62 +390,25 @@ impl Executor {
         tracing::info!(app_name = APP_NAME, "DBOS launched");
         let stop = dbos::CancellationToken::new();
         let mut loops = vec![tokio::spawn(heartbeat::schedule(beat, clock, stop.clone()))];
-        if let Some(digest) = billing_digest {
+        if let Some(billing_digest) = billing_digest {
             loops.push(tokio::spawn(billing_digest::schedule(
-                digest,
+                billing_digest,
                 billing_digest::system_clock(),
                 stop.clone(),
             )));
         }
-        if let Some(nag) = nag {
-            loops.push(tokio::spawn(general_nag::schedule(
+        loops.extend(spawn_family_loops(
+            &stop,
+            FamilyStarters {
                 nag,
-                general_nag::system_clock(),
-                stop.clone(),
-            )));
-        }
-        if let Some(digest) = digest {
-            loops.push(tokio::spawn(dri_digest::schedule(
                 digest,
-                dri_digest::system_clock(),
-                stop.clone(),
-            )));
-        }
-        if let Some(recovery) = recovery {
-            loops.push(tokio::spawn(project_recovery::schedule(
                 recovery,
-                project_recovery::system_clock(),
-                stop.clone(),
-            )));
-        }
-        if let Some(purge) = purge {
-            loops.push(tokio::spawn(retention_purge::schedule(
                 purge,
-                retention_purge::system_clock(),
-                stop.clone(),
-            )));
-        }
-        if let Some(mirror) = mirror {
-            loops.push(tokio::spawn(deadline_mirror::schedule(
                 mirror,
-                deadline_mirror::system_clock(),
-                stop.clone(),
-            )));
-        }
-        if let Some(activation) = activation {
-            loops.push(tokio::spawn(purchase_activation::schedule(
                 activation,
-                purchase_activation::system_clock(),
-                stop.clone(),
-            )));
-        }
-        if let Some(imports) = imports {
-            loops.push(tokio::spawn(source_imports::schedule(
                 imports,
-                source_imports::system_clock(),
-                stop.clone(),
-            )));
-        }
+            },
+        ));
         restate_ports.spawn(&stop, &mut loops);
         loops.extend(
             external_schedules
@@ -470,6 +433,86 @@ impl Executor {
         }
         tracing::info!(app_name = APP_NAME, "DBOS shut down");
     }
+}
+
+/// The registered-but-unlaunched starters for the seven built-in family
+/// schedules, in the engine's fixed family order.
+struct FamilyStarters {
+    nag: Option<general_nag::GeneralNagWorkflow>,
+    digest: Option<dri_digest::DriDigestWorkflow>,
+    recovery: Option<project_recovery::ProjectRecoveryWorkflow>,
+    purge: Option<retention_purge::RetentionPurgeWorkflow>,
+    mirror: Option<deadline_mirror::DeadlineMirrorWorkflow>,
+    activation: Option<purchase_activation::PurchaseActivationWorkflow>,
+    imports: Option<source_imports::SourceImportWorkflow>,
+}
+
+/// Spawn each registered family's schedule loop onto the runtime,
+/// preserving the engine's fixed family order.
+fn spawn_family_loops(
+    stop: &dbos::CancellationToken,
+    starters: FamilyStarters,
+) -> Vec<tokio::task::JoinHandle<()>> {
+    let FamilyStarters {
+        nag,
+        digest,
+        recovery,
+        purge,
+        mirror,
+        activation,
+        imports,
+    } = starters;
+    let mut loops = Vec::new();
+    if let Some(nag) = nag {
+        loops.push(tokio::spawn(general_nag::schedule(
+            nag,
+            general_nag::system_clock(),
+            stop.clone(),
+        )));
+    }
+    if let Some(digest) = digest {
+        loops.push(tokio::spawn(dri_digest::schedule(
+            digest,
+            dri_digest::system_clock(),
+            stop.clone(),
+        )));
+    }
+    if let Some(recovery) = recovery {
+        loops.push(tokio::spawn(project_recovery::schedule(
+            recovery,
+            project_recovery::system_clock(),
+            stop.clone(),
+        )));
+    }
+    if let Some(purge) = purge {
+        loops.push(tokio::spawn(retention_purge::schedule(
+            purge,
+            retention_purge::system_clock(),
+            stop.clone(),
+        )));
+    }
+    if let Some(mirror) = mirror {
+        loops.push(tokio::spawn(deadline_mirror::schedule(
+            mirror,
+            deadline_mirror::system_clock(),
+            stop.clone(),
+        )));
+    }
+    if let Some(activation) = activation {
+        loops.push(tokio::spawn(purchase_activation::schedule(
+            activation,
+            purchase_activation::system_clock(),
+            stop.clone(),
+        )));
+    }
+    if let Some(imports) = imports {
+        loops.push(tokio::spawn(source_imports::schedule(
+            imports,
+            source_imports::system_clock(),
+            stop.clone(),
+        )));
+    }
+    loops
 }
 
 /// Run an [`Executor`] until `shutdown` resolves.
