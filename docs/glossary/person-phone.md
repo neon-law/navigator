@@ -17,8 +17,8 @@ rows. The first number a Person gets is primary whether or not the caller said s
 
 This is a SurrealDB table and [`store::person_phones`](../../store/src/person_phones.rs) is the only module that reads
 or writes it; it is mirrored whole-row to PostgreSQL through the `source_domain_records` mirror. The legacy free-text
-`person.phone` column on the Person row itself stays what it was for older surfaces; `seed_from_legacy_phone` lifts
-that single value into the structured list — as the primary mobile — the first time a Person's phones are updated,
-guarded so a Person with structured rows or an unnormalizable legacy value is left alone rather than silently migrated.
+`person.phone` column on the Person row itself stays what it was for older surfaces; `seed_from_legacy_phone` lifts that
+single value into the structured list — as the primary mobile — the first time a Person's phones are updated, guarded so
+a Person with structured rows or an unnormalizable legacy value is left alone rather than silently migrated.
 
 The table is `person_phone`.
