@@ -558,9 +558,12 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path(GEMINI_PATH))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_string("this is not the requested JSON"),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "candidates": [{
+                    "content": { "parts": [{ "text": "this is not the requested JSON" }] },
+                    "finishReason": "STOP",
+                }],
+            })))
             .mount(&server)
             .await;
         let attempt =
@@ -635,7 +638,7 @@ mod tests {
         let off = triage_env(&[("NAVIGATOR_TRIAGE_ENABLED", "0")]);
         assert!(TriageProviders::from_lookup(off).unwrap().is_none());
 
-        let missing_project = triage_env(&[]);
+        let missing_project = triage_env(&[("NAVIGATOR_GCP_PROJECT_ID", "")]);
         assert!(TriageProviders::from_lookup(missing_project).is_err());
     }
 
