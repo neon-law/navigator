@@ -215,7 +215,7 @@ pub async fn seed_firm_with_brand(surreal: &crate::surreal::SurrealDb, brand: &s
     )
     .await
     .expect("seed Firm");
-    crate::firms::attach_brand(surreal, firm.id, brand)
+    crate::firms::attach_brand(surreal, crate::persons::Role::Owner, None, firm.id, brand)
         .await
         .expect("attach Firm brand");
     firm.id

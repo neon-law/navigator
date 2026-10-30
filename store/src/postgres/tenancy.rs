@@ -624,6 +624,76 @@ pub async fn detach_brand(firm_id: Uuid, brand_key: &str) -> Result<(), firms::F
     Ok(())
 }
 
+/// Move one Brand to another Firm in one transaction: the old `firm_brand`
+/// row is removed, the `brand` row's owning Firm is re-pointed, and the
+/// target Firm's row is created together, so a partial failure leaves the
+/// old association intact. A move to the Firm that already wears the brand,
+/// with the `brand` row already naming it, is a no-op. Authorization
+/// happens in [`crate::firms::move_brand`] before this write runs.
+pub async fn move_brand(brand_key: &str, target_firm_id: Uuid) -> Result<(), firms::FirmError> {
+    let pg = db().await?;
+    let mut tx = pg.pool().begin().await?;
+    let brand_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM brand WHERE brand_key=$1")
+        .bind(brand_key)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(brand_id) = brand_id else {
+        return Err(firms::FirmError::UnknownBrand(brand_key.to_string()));
+    };
+    let target_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM firm WHERE id=$1)")
+        .bind(target_firm_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if !target_exists {
+        return Err(firms::FirmError::NoSuchFirm(target_firm_id));
+    }
+    let worn_by: Option<Uuid> =
+        sqlx::query_scalar("SELECT firm_id FROM firm_brand WHERE brand_key=$1")
+            .bind(brand_key)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let owned_by: Option<Uuid> = sqlx::query_scalar("SELECT firm_id FROM brand WHERE id=$1")
+        .bind(brand_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if worn_by == Some(target_firm_id) && owned_by == Some(target_firm_id) {
+        return Ok(());
+    }
+    sqlx::query("DELETE FROM firm_brand WHERE brand_key=$1")
+        .bind(brand_key)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE brand SET firm_id=$2, updated_at=now() WHERE id=$1")
+        .bind(brand_id)
+        .bind(target_firm_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO firm_brand (id,firm_id,brand_key) VALUES ($1,$2,$3)")
+        .bind(Uuid::new_v4())
+        .bind(target_firm_id)
+        .bind(brand_key)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| {
+            if error
+                .as_database_error()
+                .and_then(sqlx::error::DatabaseError::constraint)
+                .is_some_and(|name| {
+                    matches!(
+                        name,
+                        "firm_brand_brand_key_key" | "firm_brand_firm_id_brand_key_key"
+                    )
+                })
+            {
+                firms::FirmError::DuplicateBrand
+            } else {
+                firms::FirmError::Postgres(TenancyError::Query(error))
+            }
+        })?;
+    tx.commit().await?;
+    Ok(())
+}
+
 async fn membership_query(
     sql: &'static str,
     id: Uuid,
