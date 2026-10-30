@@ -6283,6 +6283,7 @@ mod tests {
                 county: "Clark".into(),
                 commission_expires: chrono::NaiveDate::from_ymd_opt(2029, 1, 31).unwrap(),
             }],
+            evidence: None,
         };
         assert_eq!(
             document_upload_from(
@@ -7115,6 +7116,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         };
         std::fs::write(&pointer_path, pointer.to_yaml().unwrap()).unwrap();
 

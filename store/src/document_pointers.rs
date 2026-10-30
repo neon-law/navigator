@@ -324,6 +324,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         }
     }
 

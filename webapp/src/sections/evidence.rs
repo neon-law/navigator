@@ -305,9 +305,12 @@ mod tests {
     fn exhibits_group_under_each_claim_they_name() {
         let letter = exhibit_asset(
             "letter.pdf",
-            Some(evidence(&["Count I", "Count II"], "2026-01-05")),
+            Some(evidence(&["Count I", "Count II"], Some("2026-01-05"))),
         );
-        let photo = exhibit_asset("photo.png", Some(evidence(&["Count II"], "2026-01-04")));
+        let photo = exhibit_asset(
+            "photo.png",
+            Some(evidence(&["Count II"], Some("2026-01-04"))),
+        );
         let view = index(&[letter, photo], "c");
         let names: Vec<&str> = view.claims.iter().map(|g| g.claim.as_str()).collect();
         assert_eq!(names, vec!["Count I", "Count II"]);
@@ -324,7 +327,10 @@ mod tests {
 
     #[test]
     fn undated_exhibits_sort_last_within_a_claim() {
-        let dated = exhibit_asset("dated.pdf", Some(evidence(&["Count I"], "2026-01-05")));
+        let dated = exhibit_asset(
+            "dated.pdf",
+            Some(evidence(&["Count I"], Some("2026-01-05"))),
+        );
         let undated = exhibit_asset("undated.pdf", Some(evidence(&["Count I"], None)));
         let view = index(&[undated, dated], "c");
         let labels: Vec<&str> = view.claims[0]

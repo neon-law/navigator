@@ -2888,6 +2888,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         }
     }
 
@@ -2912,6 +2913,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         }
     }
 
@@ -2982,6 +2984,7 @@ mod tests {
             inserted_at: "2026-09-23T20:53:07.132412551Z".into(),
             signing: None,
             notarization: Vec::new(),
+            evidence: None,
         };
         let root = tempfile::tempdir().unwrap();
         let plans =
@@ -3009,6 +3012,7 @@ mod tests {
             inserted_at: "2026-09-23T20:53:07Z".into(),
             signing: None,
             notarization: Vec::new(),
+            evidence: None,
         }
     }
 
