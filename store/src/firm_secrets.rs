@@ -27,6 +27,9 @@ pub enum IntegrationProvider {
     Notion,
     GitHub,
     Forgejo,
+    /// Court and program websites with authenticated member portals. The
+    /// docket scraper resolves its session credentials through this provider.
+    CourtPortal,
 }
 
 impl IntegrationProvider {
@@ -39,6 +42,7 @@ impl IntegrationProvider {
             Self::Notion => "notion",
             Self::GitHub => "github",
             Self::Forgejo => "forgejo",
+            Self::CourtPortal => "court_portal",
         }
     }
 }
@@ -47,7 +51,7 @@ impl IntegrationProvider {
 /// view builds its "create a secret" choices from this rather than a
 /// hand-kept second list, so a new kind cannot be added to the enum without
 /// also appearing there.
-pub const ALL_KINDS: [IntegrationSecretKind; 10] = [
+pub const ALL_KINDS: [IntegrationSecretKind; 11] = [
     IntegrationSecretKind::MercuryReadToken,
     IntegrationSecretKind::XeroTenantId,
     IntegrationSecretKind::XeroWebhookKey,
@@ -58,6 +62,7 @@ pub const ALL_KINDS: [IntegrationSecretKind; 10] = [
     IntegrationSecretKind::NotionToken,
     IntegrationSecretKind::GitHubAppPrivateKey,
     IntegrationSecretKind::ForgejoAccessToken,
+    IntegrationSecretKind::PortalLogin,
 ];
 
 /// Typed Firm API credentials and provider webhook verification keys.
@@ -75,6 +80,9 @@ pub enum IntegrationSecretKind {
     GitHubAppPrivateKey,
     /// The Firm's own Forgejo access token, confined to its namespace.
     ForgejoAccessToken,
+    /// A username or password for an external court or program portal,
+    /// stored for the docket scraper's Chromium sessions.
+    PortalLogin,
 }
 
 impl IntegrationSecretKind {
@@ -91,6 +99,7 @@ impl IntegrationSecretKind {
             Self::NotionToken => "notion_token",
             Self::GitHubAppPrivateKey => "github_app_private_key",
             Self::ForgejoAccessToken => "forgejo_access_token",
+            Self::PortalLogin => "portal_login",
         }
     }
 
@@ -107,6 +116,7 @@ impl IntegrationSecretKind {
             Self::NotionToken => IntegrationProvider::Notion,
             Self::GitHubAppPrivateKey => IntegrationProvider::GitHub,
             Self::ForgejoAccessToken => IntegrationProvider::Forgejo,
+            Self::PortalLogin => IntegrationProvider::CourtPortal,
         }
     }
 }
@@ -155,9 +165,15 @@ impl std::fmt::Debug for ResolvedCredential {
     }
 }
 
+/// Overwrite secret bytes in place. A named helper so the `Drop` impl stays
+/// trivially auditable and tests can exercise the zeroization directly.
+fn zeroize(buffer: &mut [u8]) {
+    buffer.fill(0);
+}
+
 impl Drop for ResolvedCredential {
     fn drop(&mut self) {
-        self.value.fill(0);
+        zeroize(&mut self.value);
     }
 }
 
@@ -168,7 +184,10 @@ pub enum SecretStoreError {
     Db(#[from] surrealdb::Error),
     #[error("firm secret authorization denied")]
     NotAuthorized,
-    #[error("the {provider} {kind} credential is not configured")]
+    #[error(
+        "the {provider} {kind} credential is not configured; a Firm administrator \
+             with the ManageIntegrationSecrets capability must store one first"
+    )]
     NotConfigured {
         provider: &'static str,
         kind: &'static str,
@@ -228,6 +247,7 @@ pub fn parse_provider(value: &str) -> Option<IntegrationProvider> {
         "notion" => Some(IntegrationProvider::Notion),
         "github" => Some(IntegrationProvider::GitHub),
         "forgejo" => Some(IntegrationProvider::Forgejo),
+        "court_portal" => Some(IntegrationProvider::CourtPortal),
         _ => None,
     }
 }
@@ -247,6 +267,7 @@ pub fn parse_kind(value: &str) -> Option<IntegrationSecretKind> {
         "xero_tenant_id" => Some(IntegrationSecretKind::XeroTenantId),
         "xero_webhook_key" => Some(IntegrationSecretKind::XeroWebhookKey),
         "forgejo_access_token" => Some(IntegrationSecretKind::ForgejoAccessToken),
+        "portal_login" => Some(IntegrationSecretKind::PortalLogin),
         _ => None,
     }
 }
@@ -590,3 +611,4 @@ pub async fn resolve_firm_credential(
         })
         .map_err(|_| SecretStoreError::InvalidValue)
 }
+
