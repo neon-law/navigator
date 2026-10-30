@@ -789,6 +789,57 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         state.sessions.clone(),
         portal::secure_cookies(state),
     ));
+    // The seven `/immigration/<page>` practice pages and the free-support
+    // hub — every one a marketing catalog under the same Neon-host
+    // admission shape as `/immigration` above.
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/family-green-cards",
+        firm_copy::immigration_family_green_cards(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/citizenship",
+        firm_copy::immigration_citizenship(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/employment-visas",
+        firm_copy::immigration_employment_visas(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/consular-processing",
+        firm_copy::immigration_consular_processing(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/uscis-notices",
+        firm_copy::immigration_uscis_notices(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/humanitarian-relief",
+        firm_copy::immigration_humanitarian_relief(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/removal-defense",
+        firm_copy::immigration_removal_defense(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/free-support",
+        firm_copy::immigration_free_support(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
     // `/estate-planning` — Neon's own gateway to the Vesta Estate Planning
     // practice. Same admission shape as `/delete-your-debt` above.
     routers.push(dioxus_app::marketing_page_router(

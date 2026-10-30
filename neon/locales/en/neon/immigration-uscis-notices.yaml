@@ -1,0 +1,85 @@
+head_title: "{site_name} | USCIS notices"
+meta_description: >-
+  Abhaya Immigration, a Shook Law PC practice, responds to requests for
+  evidence, notices of intent to deny, and other USCIS notices: what the
+  notice means, the deadline, and what a response needs. Government filing
+  fees are separate, and no approval or timeline is promised.
+title: USCIS notices
+tagline: Got a notice from USCIS? Read it, then act on the clock.
+skin: practice
+bands:
+  - kind: statement
+    heading: What the notice is telling you
+    lead: A request for evidence is not a denial — but it is a deadline.
+    body:
+      - - text: >-
+            When United States Citizenship and Immigration Services reviews
+            an application, it can send a notice instead of deciding. A
+            request for evidence (RFE) asks for documents or explanations
+            the file is missing. A notice of intent to deny (NOID) says the
+            agency is leaning toward denial unless the response changes its
+            mind. Other notices move an interview, request biometrics, or
+            pass the case to another office.
+      - - text: >-
+            Every one of these notices carries a response deadline, and the
+            deadline is short — often weeks, not months. A missed deadline
+            usually ends the case on the agency's own decision, without a
+            person ever reading your documents. Reading the notice carefully
+            and answering it completely is the whole job; the notice tells
+            you exactly what the officer is missing.
+  - kind: steps
+    anchor: notice-process
+    overline: How a response comes together
+    heading: Answer what was asked, with proof.
+    description: >-
+      The response is built from the notice itself. The general order is
+      below.
+    items:
+      - title: Read the notice and mark the date
+        body:
+          - - text: >-
+                Find the deadline, the form number it names, and the office
+                that sent it. Everything else follows from those facts. We
+                cannot promise how an agency responds; the agency decides.
+      - title: List what was requested
+        body:
+          - - text: >-
+                A request for evidence asks for specific things. A response
+                that answers every item, in the order asked, is easier for
+                the officer to grant.
+      - title: Gather the proof and the explanations
+        body:
+          - - text: >-
+                Documents answer document requests; sworn statements and
+                legal argument answer questions about eligibility. Gaps get
+                explained, not ignored.
+      - title: File the response before the deadline
+        body:
+          - - text: >-
+                The response goes to the address the notice names, with the
+                notice page on top, before the stated deadline. Filing
+                early leaves room for mail problems.
+  - kind: statement
+    heading: What a response costs and what it cannot promise
+    lead: Fees and outcomes, stated plainly.
+    body:
+      - - text: >-
+            Responding to a notice usually costs nothing in government fees
+            unless the response includes a new form. Costs are documents,
+            time, and care. Government fees, where they apply, are separate
+            from any attorney fee.
+      - - text: >-
+            We cannot promise that a response changes the outcome; the
+            agency decides. We can promise the response is built to answer
+            the notice completely and on time.
+  - kind: cta
+    heading: Show us the notice
+    body: >-
+      A first conversation covers what the notice asks, the real deadline,
+      and what a complete response looks like for your case. Abhaya
+      Immigration, a Shook Law PC practice, responds to requests for
+      evidence, notices of intent to deny, and other USCIS notices.
+    email: "{firm_email}"
+    action:
+      href: "https://www.abhayaimmigration.com/"
+      label: Talk to Abhaya Immigration
