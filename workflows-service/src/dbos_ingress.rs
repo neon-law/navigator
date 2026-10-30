@@ -14,7 +14,9 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use store::surreal::SurrealDb;
 
+use crate::dbos_email_summary::EmailSummaryWorkflow;
 use crate::dbos_finance_aggregate::{self, FinanceAggregateWorkflow, RunRequest};
+use crate::dbos_inbound_message_alert::InboundMessageAlertWorkflow;
 use crate::dbos_nightly_project_update::NightlyWorkflow;
 use crate::dbos_reconcile::ReconcileWorkflow;
 
@@ -32,6 +34,8 @@ pub struct WorkerIngress {
     pub finance: Option<FinanceIngress>,
     pub reconcile: Option<ReconcileIngress>,
     pub nightly_project_update: Option<NightlyIngress>,
+    pub email_summary: Option<EmailSummaryIngress>,
+    pub inbound_message_alert: Option<AlertIngress>,
 }
 
 #[derive(Clone)]
@@ -44,6 +48,18 @@ pub struct ReconcileIngress {
 pub struct NightlyIngress {
     token: Arc<str>,
     workflow: NightlyWorkflow,
+}
+
+#[derive(Clone)]
+pub struct EmailSummaryIngress {
+    token: Arc<str>,
+    workflow: EmailSummaryWorkflow,
+}
+
+#[derive(Clone)]
+pub struct AlertIngress {
+    token: Arc<str>,
+    workflow: InboundMessageAlertWorkflow,
 }
 
 #[async_trait::async_trait]
@@ -71,6 +87,26 @@ impl ReconcileIngress {
 impl NightlyIngress {
     #[must_use]
     pub fn new(token: String, workflow: NightlyWorkflow) -> Self {
+        Self {
+            token: Arc::from(token),
+            workflow,
+        }
+    }
+}
+
+impl EmailSummaryIngress {
+    #[must_use]
+    pub fn new(token: String, workflow: EmailSummaryWorkflow) -> Self {
+        Self {
+            token: Arc::from(token),
+            workflow,
+        }
+    }
+}
+
+impl AlertIngress {
+    #[must_use]
+    pub fn new(token: String, workflow: InboundMessageAlertWorkflow) -> Self {
         Self {
             token: Arc::from(token),
             workflow,
@@ -272,6 +308,22 @@ pub fn add_routes(router: Router, ingress: WorkerIngress) -> Router {
     } else {
         router
     };
+    let router = if let Some(email_summary) = ingress.email_summary {
+        router.route(
+            "/internal/dbos/email-summary",
+            post(start_email_summary).with_state(email_summary),
+        )
+    } else {
+        router
+    };
+    let router = if let Some(alert) = ingress.inbound_message_alert {
+        router.route(
+            "/internal/dbos/inbound-message-alert",
+            post(start_inbound_message_alert).with_state(alert),
+        )
+    } else {
+        router
+    };
     router.layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
@@ -404,6 +456,40 @@ fn validate_nightly_request(request: &ReconcileRequest) -> Result<(), StatusCode
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+struct EmailSummaryStart {
+    workflow_id: String,
+    request: workflows::EmailSummaryRequest,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlertStart {
+    workflow_id: String,
+    request: workflows::InboundMessageAlertRequest,
+}
+
+/// The event twins' ids are deterministic per Message/receipt — that
+/// identity is the duplicate-delivery dedupe — so a caller may not split
+/// the id from the payload it names.
+fn validate_email_summary_request(request: &EmailSummaryStart) -> Result<(), StatusCode> {
+    if request.workflow_id.len() > MAX_WORKFLOW_ID_BYTES
+        || request.workflow_id != crate::dbos_email_summary::workflow_id(request.request.receipt_id)
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(())
+}
+
+fn validate_alert_request(request: &AlertStart) -> Result<(), StatusCode> {
+    if request.workflow_id.len() > MAX_WORKFLOW_ID_BYTES
+        || request.workflow_id
+            != crate::dbos_inbound_message_alert::workflow_id(request.request.message_id)
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(())
+}
+
 fn validate_request(request: &FinanceRequest) -> Result<(), StatusCode> {
     let Some(run_id) = request.workflow_id.strip_prefix("FinanceAggregate:") else {
         return Err(StatusCode::BAD_REQUEST);
@@ -417,6 +503,71 @@ fn validate_request(request: &FinanceRequest) -> Result<(), StatusCode> {
         return Err(StatusCode::BAD_REQUEST);
     }
     Ok(())
+}
+
+async fn start_email_summary(
+    State(ingress): State<EmailSummaryIngress>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<Accepted>), StatusCode> {
+    if !authorized(&headers, &ingress.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let request: EmailSummaryStart =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    validate_email_summary_request(&request)?;
+    ingress
+        .workflow
+        .start_with(
+            request.request,
+            dbos::StartOptions {
+                workflow_id: Some(&request.workflow_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(Accepted {
+            workflow_id: request.workflow_id,
+        }),
+    ))
+}
+
+async fn start_inbound_message_alert(
+    State(ingress): State<AlertIngress>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<Accepted>), StatusCode> {
+    if !authorized(&headers, &ingress.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let request: AlertStart = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    validate_alert_request(&request)?;
+    ingress
+        .workflow
+        .start_with(
+            request.request,
+            dbos::StartOptions {
+                workflow_id: Some(&request.workflow_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(Accepted {
+            workflow_id: request.workflow_id,
+        }),
+    ))
 }
 
 fn authorized(headers: &HeaderMap, token: &str) -> bool {
@@ -458,8 +609,9 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{
-        add_routes, authorized, constant_time_eq, validate_nightly_request,
-        validate_reconcile_request, validate_request, workflow_id_for_run, FinanceIngress,
+        add_routes, authorized, constant_time_eq, validate_alert_request,
+        validate_email_summary_request, validate_nightly_request, validate_reconcile_request,
+        validate_request, workflow_id_for_run, AlertStart, EmailSummaryStart, FinanceIngress,
         FinanceRequest, FinanceStarter, NightlyIngress, ReconcileIngress, ReconcileRequest,
         StartError, WorkerIngress,
     };
@@ -575,6 +727,58 @@ mod tests {
         );
     }
 
+    fn email_summary_start(receipt_id: uuid::Uuid) -> EmailSummaryStart {
+        let digest = "a".repeat(64);
+        EmailSummaryStart {
+            workflow_id: crate::dbos_email_summary::workflow_id(receipt_id),
+            request: workflows::EmailSummaryRequest {
+                receipt_id,
+                matter_project_id: None,
+                project_id: "synthetic-project".into(),
+                channel_id: "C-SYNTHETIC".into(),
+                gemini: workflows::EmailSummaryRunConfig::new(
+                    workflows::SummaryProvider::Gemini,
+                    "summary-model",
+                    "global",
+                    "summary-v1",
+                    &digest,
+                )
+                .expect("valid test config"),
+            },
+        }
+    }
+
+    #[test]
+    fn event_routes_bind_the_workflow_id_to_the_payload_it_names() {
+        let mut email = email_summary_start(uuid::Uuid::now_v7());
+        assert!(validate_email_summary_request(&email).is_ok());
+        email.workflow_id = format!("EmailSummary:{}", uuid::Uuid::now_v7());
+        assert_eq!(
+            validate_email_summary_request(&email),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        email.workflow_id = "ReconcileInvoices:2026-10-22".into();
+        assert_eq!(
+            validate_email_summary_request(&email),
+            Err(StatusCode::BAD_REQUEST)
+        );
+
+        let message_id = uuid::Uuid::now_v7();
+        let alert = AlertStart {
+            workflow_id: crate::dbos_inbound_message_alert::workflow_id(message_id),
+            request: workflows::InboundMessageAlertRequest { message_id },
+        };
+        assert!(validate_alert_request(&alert).is_ok());
+        let mismatched = AlertStart {
+            workflow_id: crate::dbos_inbound_message_alert::workflow_id(uuid::Uuid::now_v7()),
+            request: workflows::InboundMessageAlertRequest { message_id },
+        };
+        assert_eq!(
+            validate_alert_request(&mismatched),
+            Err(StatusCode::BAD_REQUEST)
+        );
+    }
+
     #[tokio::test]
     async fn unauthorized_body_never_starts_a_workflow_and_valid_retries_keep_the_id() {
         let starts = Arc::new(Starts::default());
@@ -585,8 +789,7 @@ mod tests {
                     "expected-secret",
                     starts.clone(),
                 )),
-                reconcile: None,
-                nightly_project_update: None,
+                ..WorkerIngress::default()
             },
         );
         let body = serde_json::to_vec(&json!({
@@ -828,6 +1031,7 @@ mod tests {
                     "worker-secret".into(),
                     crate::dbos_nightly_project_update::unlaunched_workflow().await,
                 )),
+                ..WorkerIngress::default()
             },
         );
         for (uri, valid, foreign) in [
