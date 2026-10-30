@@ -20,11 +20,11 @@ Before naming a table, field, state, or UI concept, follow the **Find the term f
 1. Inspect `git status --short --branch` and review the diff. Before committing, attach work on `main` or a detached
    HEAD to a fresh topic branch with `git switch -c <branch>`; this retains local commits and uncommitted work. Reuse an
    existing topic branch when continuing its pull request. Stage only the requested source and document pointers; keep
-   document bytes, notes, credentials, and client data out of Git. Run `navigator project gate`, then make a signed
-   commit with `git commit -S`. Commit work in progress before rebasing; never stash or commit on `main`.
-2. Fetch `origin/main`, then run `git rebase -S origin/main` on the topic branch. Never push to `main`. Follow
-   [pull-changes](../pull-changes/SKILL.md) for conflict handling and squash-merged duplicates, keeping rebased commits
-   signed. If a conflict cannot be resolved safely, abort the rebase and report it.
+   document bytes, notes, credentials, and client data out of Git. Run `navigator project gate`, then commit. Commit
+   work in progress before rebasing; never stash or commit on `main`.
+2. Fetch `origin/main`, then run `git rebase origin/main` on the topic branch. Never push to `main`. Follow
+   [pull-changes](../pull-changes/SKILL.md) for conflict handling and squash-merged duplicates. If a conflict cannot be
+   resolved safely, abort the rebase and report it.
 3. Run `navigator project gate` again, then `git push --force-with-lease -u origin <branch>`. Never use plain
    `--force`. Reuse the same branch and existing pull request when continuing an earlier attempt.
 4. Open a pull request against `main`, ready for review. Inspect the origin URL to choose the forge. On GitHub, use

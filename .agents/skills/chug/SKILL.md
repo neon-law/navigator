@@ -20,7 +20,7 @@ delegating these issue implementations. Keep the parent available to coordinate 
 3. Give each issue its own subagent and isolated managed worktree from the current `origin/main`. Use the app's
    worktree tool for deliberate parallel checkouts. Each child works only in its assigned checkout and follows
    [implement-issue](../implement-issue/SKILL.md) and [create-pr](../create-pr/SKILL.md), including TDD, specialized
-   skills, signed commits, content gates, UI verification when applicable, and a ready PR with a bare issue trailer.
+   skills, content gates, UI verification when applicable, and a ready PR with a bare issue trailer.
    Never let children change the shared parent checkout or reuse another issue's agent for a different issue.
 4. Dispatch up to three issues at once. Monitor results, inspect their evidence, and follow required PR-head CI.
    Fix failures through the owning issue agent. An issue counts toward the target when its implementation is complete,

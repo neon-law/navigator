@@ -18,8 +18,8 @@ it with a narrowly scoped release App token (`contents: write` + `pull_requests:
 same shape `docs/gitops.md`'s auto-merge identity callout describes). That merge is an ordinary push to `main`;
 `deploy.yml` takes over from there exactly as it does for a human-opened bump.
 
-The release PR follows the same merge policy as every other PR. `production` requires the `ci` check, signed commits,
-linear history, resolved threads, and squash-only merging, but no approving review.
+The release PR follows the same merge policy as every other PR. `production` requires the `ci` check, linear history,
+resolved threads, and squash-only merging, but no approving review.
 
 `release-cut.yml` runs only while `vars.RELEASE_TRAIN_ENABLED` is `true`, on both of its jobs.
 
