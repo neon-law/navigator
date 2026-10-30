@@ -106,8 +106,7 @@ async fn setting_a_phone_on_a_missing_person_is_refused_by_name() {
     let missing = uuid::Uuid::now_v7();
     let error = person_phones::set_phone(&db, missing, "7025550142", PhoneLabel::Mobile, true)
         .await
-        .err()
-        .expect("a phone row needs its person");
+        .expect_err("a phone row needs its person");
     assert!(matches!(error, PhoneError::PersonMissing(id) if id == missing));
 }
 
