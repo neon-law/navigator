@@ -7,6 +7,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
+use store::surreal::SurrealDb;
+use store::{persons, projects};
 
 use anyhow::{ensure, Context, Result};
 use futures::{StreamExt, TryStreamExt};
@@ -470,6 +472,47 @@ pub async fn audit_tree(root: &Path, analyzer: &str) -> Result<Vec<Finding>> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect())
+}
+
+/// The private terms a Project carries: its code, its matter name, and every
+/// attached participant's name, mailbox, and phone. A draft that repeats one
+/// of these into an outside tracker identifies the matter, so the pre-filing
+/// check refuses it. A code that resolves to nothing is an error, never an
+/// empty scan — a typo must not read as a clean draft.
+pub async fn private_terms(db: &SurrealDb, codes: &[String]) -> Result<Vec<String>> {
+    let mut terms = Vec::new();
+    for code in codes {
+        let code = code.trim();
+        ensure!(!code.is_empty(), "a Project code cannot be blank");
+        let project = projects::find_by_code(db, code)
+            .await?
+            .with_context(|| format!("no Project carries the code {code:?}"))?;
+        terms.push(project.code.clone());
+        terms.push(project.name.clone());
+        let participations = projects::participations_for_project(db, project.id).await?;
+        let people: Vec<_> = participations.iter().map(|p| p.person_id).collect();
+        for person in persons::find_by_ids(db, &people).await? {
+            terms.push(person.name.clone());
+            terms.push(person.email.clone());
+            if let Some(phone) = person.phone {
+                terms.push(phone);
+            }
+        }
+    }
+    Ok(terms)
+}
+
+/// Merge store-resolved terms with hand-supplied `--term` values: trim, drop
+/// blanks, dedupe case-insensitively, and keep the first-seen casing.
+pub fn merge_terms(resolved: &[String], manual: &[String]) -> Vec<String> {
+    let mut merged: Vec<String> = Vec::new();
+    for term in resolved.iter().chain(manual.iter()) {
+        let term = term.trim();
+        if !term.is_empty() && !merged.iter().any(|t| t.eq_ignore_ascii_case(term)) {
+            merged.push(term.to_string());
+        }
+    }
+    merged
 }
 
 #[cfg(test)]

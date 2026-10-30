@@ -972,6 +972,10 @@ enum ProjectsCmd {
         /// A private name or Project code to refuse; repeat for each.
         #[arg(long = "term")]
         terms: Vec<String>,
+        /// A Project whose code and participants are resolved into private
+        /// terms from the store; repeat for each matter in the draft.
+        #[arg(long = "project")]
+        projects: Vec<String>,
     },
     /// Record e-filing transaction status and file court-stamped copies.
     Efiling {
@@ -4944,7 +4948,11 @@ async fn open_surreal() -> Result<store::surreal::SurrealDb, ExitCode> {
 #[allow(clippy::too_many_lines)]
 async fn run_projects(action: ProjectsCmd) -> ExitCode {
     match action {
-        ProjectsCmd::FeedbackCheck { file, terms } => {
+        ProjectsCmd::FeedbackCheck {
+            file,
+            terms,
+            projects,
+        } => {
             let text = match file {
                 Some(path) => std::fs::read_to_string(path),
                 None => std::io::read_to_string(std::io::stdin()),
@@ -4953,6 +4961,24 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 eprintln!("navigator: could not read the draft");
                 return ExitCode::from(2);
             };
+            // The store opens only for a --project draft: a term-only check
+            // must work without any database configured.
+            let resolved = if projects.is_empty() {
+                Vec::new()
+            } else {
+                let db = match open_surreal().await {
+                    Ok(db) => db,
+                    Err(exit) => return exit,
+                };
+                match cli::pii_audit::private_terms(&db, &projects).await {
+                    Ok(terms) => terms,
+                    Err(e) => {
+                        eprintln!("navigator: {e:#}");
+                        return ExitCode::from(2);
+                    }
+                }
+            };
+            let terms = cli::pii_audit::merge_terms(&resolved, &terms);
             let findings = cli::feedback_scan::scan(&text, &terms);
             for f in &findings {
                 eprintln!(

@@ -1,3 +1,119 @@
+// LAW-162: the pre-filing issue scan refuses a draft that carries a Project's
+// code or any of its attached people's identifiers, resolved from the store.
+
+use store::persons::NewPerson;
+use store::surreal::SurrealDb;
+
+async fn cruller_fixture() -> (SurrealDb, store::projects::Project) {
+    let db = store::surreal::test_support::mem().await;
+    let project = store::test_support::seed_project(&db, "Cruller Estate").await;
+    let person = store::persons::find_or_create(
+        &db,
+        &NewPerson {
+            phone: Some("702-555-0142".to_string()),
+            ..NewPerson::new("Harriet Cruller", "harriet@crullers.example")
+        },
+    )
+    .await
+    .expect("seed the client person");
+    store::projects::add_participation(&db, project.id, person.id, "client")
+        .await
+        .expect("attach the client to the project");
+    (db, project)
+}
+
+#[tokio::test]
+async fn issue_scan_terms_collect_project_and_participant_identifiers() {
+    let (db, project) = cruller_fixture().await;
+
+    let terms = crate::pii_audit::private_terms(&db, &[project.code.clone()])
+        .await
+        .expect("resolve private terms");
+
+    for known in [
+        project.code.clone(),
+        "Cruller Estate".to_string(),
+        "Harriet Cruller".to_string(),
+        "harriet@crullers.example".to_string(),
+        "702-555-0142".to_string(),
+    ] {
+        assert!(
+            terms.iter().any(|t| t == &known),
+            "terms lack {known:?}: {terms:?}"
+        );
+    }
+
+    // The resolved terms feed the existing scanner: a draft naming the client
+    // is refused, and the scanner stays silent on the abstract draft.
+    let draft = "Harriet Cruller asked where the filing stands";
+    assert!(!crate::feedback_scan::scan(draft, &terms).is_empty());
+    assert!(crate::feedback_scan::scan(
+        "the status command exits 0 when the folder is empty",
+        &terms
+    )
+    .is_empty());
+}
+
+#[tokio::test]
+async fn issue_scan_terms_refuse_an_unknown_project_code() {
+    let db = store::surreal::test_support::mem().await;
+
+    let resolved = crate::pii_audit::private_terms(&db, &["no-such-project".to_string()]).await;
+
+    assert!(resolved.is_err(), "a typo'd code must not scan as nothing");
+}
+
+#[tokio::test]
+async fn issue_scan_terms_skip_participants_of_other_projects() {
+    let (db, project) = cruller_fixture().await;
+    let other = store::test_support::seed_project(&db, "Unrelated Matter").await;
+
+    let terms = crate::pii_audit::private_terms(&db, &[other.code.clone()])
+        .await
+        .expect("resolve private terms");
+
+    assert!(terms.iter().any(|t| t == "Unrelated Matter"));
+    assert!(!terms.iter().any(|t| t == "Harriet Cruller"));
+    assert!(
+        crate::pii_audit::private_terms(&db, &[project.code, other.code])
+            .await
+            .expect("resolve both projects")
+            .iter()
+            .any(|t| t == "Harriet Cruller")
+    );
+}
+
+#[test]
+fn merged_terms_dedupe_case_insensitively_and_skip_blanks() {
+    let resolved = vec!["sample-estate".to_string(), "Harriet Cruller".to_string()];
+    let manual = vec![
+        "  ".to_string(),
+        "SAMPLE-ESTATE".to_string(),
+        "harriet cruller".to_string(),
+        "Opposing Counsel".to_string(),
+    ];
+
+    let merged = crate::pii_audit::merge_terms(&resolved, &manual);
+
+    assert_eq!(
+        merged,
+        vec![
+            "sample-estate".to_string(),
+            "Harriet Cruller".to_string(),
+            "Opposing Counsel".to_string()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn issue_scan_terms_error_when_a_project_code_is_blank() {
+    let db = store::surreal::test_support::mem().await;
+
+    let resolved = crate::pii_audit::private_terms(&db, &["  ".to_string()]).await;
+
+    assert!(resolved.is_err());
+}
+
 use super::*;
 use std::process::Command;
 use wiremock::matchers::{body_partial_json, method, path};

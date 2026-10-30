@@ -140,9 +140,10 @@ substitute browser or native-app automation for a server that is available.
 * **Slack** — private channel for updates.
 * **Linear** — CLI feedback, named by mechanism and never by matter. Remove personal and matter identifiers before
   filing: write `<client>`, `<claim number>`, `<email>`, `<phone>`, `<address>`, `<identifier>` in their place, and
-  never quote matter text. Run `navigator project feedback-check --term <Project code> --term <client name>` on the
-  draft (repeat `--term` for each private name); it runs locally and refuses a draft that still carries one. Show the
-  checked text to the lawyer before filing.
+  never quote matter text. Run `navigator project feedback-check --project <Project code>` on the draft (repeat
+  `--project` for each matter in it, plus `--term` for a private name the store does not know); it resolves each
+  Project's code and participants' names, mailboxes, and phones from the store, runs locally, and refuses a draft that
+  still carries one. Show the checked text to the lawyer before filing.
 * **CourtListener** — dockets, filings, parties, and judges.
 * **Midpage** — statutes and rules.
 * **Descrybe** — case law.
