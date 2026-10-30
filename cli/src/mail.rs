@@ -1714,7 +1714,7 @@ async fn parse_gmail_message(
     if let Some(contact) = expected_contact {
         if !message_mentions_contact(&message, &contact) {
             eprintln!(
-                "warning: message does not appear to belong to this Project's client contact (message {message_id})"
+                "warning: message does not appear to belong to this Project's client contact"
             );
         }
     }
@@ -1725,7 +1725,7 @@ async fn parse_gmail_message(
         mailbox: &profile.email_address,
     };
     file_message(&target, &message, &body).await?;
-    println!("Filed message {message_id} as a Communication");
+    println!("Filed the message as a Communication");
     Ok(())
 }
 
@@ -1827,7 +1827,7 @@ async fn save_message_command(
     };
     let path = dir.unwrap_or_else(|| Path::new(MAIL_DIRECTORY)).join(&name);
     match write_saved_mail(&path, &raw)? {
-        SavedMail::Written => println!("Saved {} (message {message_id})", path.display()),
+        SavedMail::Written => println!("Saved {}", path.display()),
         SavedMail::AlreadySaved => println!("Already saved: {}", path.display()),
     }
     Ok(())
