@@ -79,6 +79,49 @@ async fn cyber_injury_home_serves_its_copy_assets_and_fonts() {
     }
 }
 
+/// The share-card contract: every public page advertises the full Open Graph
+/// + Twitter Card set with absolute brand URLs, and one canonical address.
+#[tokio::test]
+async fn public_pages_emit_complete_open_graph_and_canonical_metadata() {
+    for host in HOSTS {
+        let origin = format!("https://{host}");
+        for (path, title, description_marker) in [
+            (
+                "/",
+                "Cyber Injury Law | We use AI to put more money in your pocket",
+                "We investigate, preserve evidence",
+            ),
+            (
+                "/services",
+                "Cyber Injury Law | Injury and cybercrime claims",
+                "a lawyer reviews the facts before any engagement",
+            ),
+        ] {
+            let (status, html) = page(host, path).await;
+            assert_eq!(status, StatusCode::OK, "{host}{path}");
+            let url = format!("{origin}{path}");
+            for tag in [
+                format!(r#"content="{title}" property="og:title""#),
+                format!(r#"content="Cyber Injury Law" property="og:site_name""#),
+                format!(r#"content="{description_marker} property="og:description""#),
+                format!(r#"content="{url}" property="og:url""#),
+                r#"property="og:image" content="https://"#.to_string(),
+                r#"property="og:image:alt""#.to_string(),
+                format!(r#"rel="canonical" href="{url}""#),
+                r#"name="twitter:card" content="summary""#.to_string(),
+                format!(r#"content="{title}" name="twitter:title""#),
+                r#"name="twitter:description""#.to_string(),
+                r#"name="twitter:image" content="https://""#.to_string(),
+            ] {
+                assert!(
+                    html.contains(&tag),
+                    "{host}{path}: missing social head fragment {tag}"
+                );
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn printed_consultation_url_redirects_to_the_brands_booking_provider() {
     for host in HOSTS {
