@@ -93,8 +93,10 @@ fn the_publish_job_downloads_every_lsp_archive_before_attaching_it() {
 
     let mut downloaded = Vec::new();
     for step in steps {
-        if step.get("uses").and_then(serde_yaml::Value::as_str)
-            == Some("actions/download-artifact@v8")
+        if step
+            .get("uses")
+            .and_then(serde_yaml::Value::as_str)
+            .is_some_and(|action| action.starts_with("actions/download-artifact@"))
         {
             // The image-digest artifacts are collected by pattern; the
             // platform archives below are fetched individually by name.
