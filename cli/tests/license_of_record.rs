@@ -496,8 +496,7 @@ fn the_firm_entity_of_record_is_one_string_across_brand_seed_and_entity_row() {
     for key in views::brand::BrandKey::ALL {
         let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
         assert!(
-            store::seed::FIRM_ENTITY_NAMES
-                .contains(&branding.firm.legal_entity.as_str()),
+            store::seed::FIRM_ENTITY_NAMES.contains(&branding.firm.legal_entity),
             "brand `{}` names legal entity `{}`, which no firm-anchor Entity ships; \
              the footer, the retainer, and the delete-guarded Entity rows must name a \
              legal person the seed actually creates",
