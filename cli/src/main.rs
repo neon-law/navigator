@@ -1660,6 +1660,30 @@ enum CommunicationCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Log a firm-internal matter note and print the stored Communication
+    /// (LAW-230).
+    ///
+    /// A note has no counterparty and no client visibility: it is the
+    /// lawyer's own observation on the matter, rendered on the workbench's
+    /// Notes tab and never on a client view. Communications stay
+    /// server-only: nothing is written under `documents/`, and `project
+    /// sync` writes no pointer for one.
+    Note {
+        /// The note's Markdown body.
+        #[arg(long)]
+        body_file: PathBuf,
+        /// A subject line.
+        #[arg(long)]
+        subject: Option<String>,
+        /// Print the request and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
 }
 
 #[derive(Subcommand)]
@@ -5087,6 +5111,21 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                         client_visible,
                         subject,
                     },
+                    dry_run,
+                )
+                .await
+            }
+            CommunicationCmd::Note {
+                body_file,
+                subject,
+                dry_run,
+                project,
+                host,
+            } => {
+                projects::communication::note(
+                    host.host.as_deref(),
+                    project.as_deref(),
+                    projects::communication::NewNote { body_file, subject },
                     dry_run,
                 )
                 .await

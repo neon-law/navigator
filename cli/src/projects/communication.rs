@@ -184,9 +184,67 @@ pub async fn create(
     )
 }
 
+/// What `navigator project communication note` logs (LAW-230).
+#[derive(Debug, Clone)]
+pub struct NewNote {
+    pub body_file: PathBuf,
+    pub subject: Option<String>,
+}
+
+fn note_body(new: &NewNote, at: &str) -> Result<Value> {
+    let body = std::fs::read_to_string(&new.body_file)
+        .with_context(|| format!("read {}", new.body_file.display()))?;
+    if body.trim().is_empty() {
+        return Err(anyhow!("{} is empty", new.body_file.display()));
+    }
+    let mut request = json!({
+        "channel": "note",
+        "direction": "internal",
+        "at": at,
+        "body": body,
+    });
+    if let Some(subject) = &new.subject {
+        request["subject"] = json!(subject);
+    }
+    Ok(request)
+}
+
+/// Log a firm-internal matter note (LAW-230). A note has no counterparty
+/// and no client visibility — it renders on the workbench's Notes tab and
+/// never on a client view.
+pub async fn note(
+    host: Option<&str>,
+    project: Option<&str>,
+    new: NewNote,
+    dry_run: bool,
+) -> ExitCode {
+    finish(
+        async {
+            let at = chrono::Utc::now().to_rfc3339();
+            let body = note_body(&new, &at)?;
+            if dry_run {
+                eprintln!(
+                    "dry run: `navigator project communication note` would send this and write nothing"
+                );
+                return Ok(body);
+            }
+            let (base, token, id) = coordinates(host, project).await?;
+            call(
+                reqwest::Client::new()
+                    .post(format!("{base}/app/api/projects/{id}/communications"))
+                    .bearer_auth(token)
+                    .json(&body),
+                "create",
+            )
+            .await
+        }
+        .await,
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{create_body, NewCommunication};
+    use super::{create_body, note_body, NewCommunication, NewNote};
 
     #[test]
     fn a_call_carries_its_structure_and_an_email_carries_what_it_confirms() {
@@ -234,6 +292,37 @@ mod tests {
         })
         .is_err());
     }
+    #[test]
+    fn a_note_is_internal_without_a_counterparty() {
+        let dir = tempfile::tempdir().unwrap();
+        let note = dir.path().join("note.md");
+        std::fs::write(&note, "Client confirmed the schedule.\n").unwrap();
+        let request = note_body(
+            &NewNote {
+                body_file: note,
+                subject: Some("Call notes".into()),
+            },
+            "2026-10-30T17:00:00+00:00",
+        )
+        .unwrap();
+        assert_eq!(request["channel"], "note");
+        assert_eq!(request["direction"], "internal");
+        assert_eq!(request["subject"], "Call notes");
+        assert_eq!(request["at"], "2026-10-30T17:00:00+00:00");
+        assert!(request.get("counterparty").is_none());
+        assert!(request.get("client_visible").is_none());
+
+        std::fs::write(dir.path().join("empty.md"), "  \n").unwrap();
+        assert!(note_body(
+            &NewNote {
+                body_file: dir.path().join("empty.md"),
+                subject: None,
+            },
+            "2026-10-30T17:00:00+00:00",
+        )
+        .is_err());
+    }
+
     #[test]
     fn email_request_preserves_source_role_and_receipt_link() {
         let dir = tempfile::tempdir().unwrap();

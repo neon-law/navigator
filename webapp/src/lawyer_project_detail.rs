@@ -106,6 +106,72 @@ pub struct ProjectNotationRow {
     pub last_transition_at: Option<String>,
 }
 
+/// One Communication on the matter show, as plain display fields — never a
+/// `store` type, which does not cross to the wasm client build.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct CommunicationRow {
+    /// `note`, `email_inbound`, `email_outbound`, or `call` — the wire
+    /// shape of `store::communications::channel`.
+    pub channel: String,
+    /// `inbound`, `outbound`, or `internal`.
+    pub direction: String,
+    /// The other party as recorded; `None` on a note.
+    pub counterparty: Option<String>,
+    /// The author's name when a persons row is on file.
+    pub author_name: Option<String>,
+    pub subject: Option<String>,
+    /// The body, truncated to an index entry — the full text stays in the
+    /// store.
+    pub body: String,
+    /// RFC 3339, as the store normalises it.
+    pub occurred_at: String,
+}
+
+/// Project the stored thread into the workbench's Notes and Communications
+/// tab shapes. Pure: the caller resolves author names once, so both tabs
+/// read one store query. Notes are the `note` channel only; everything else
+/// — every email and call — is correspondence.
+#[cfg(feature = "server")]
+fn communication_views(
+    rows: &[store::communications::Communication],
+    author_names: &std::collections::HashMap<uuid::Uuid, String>,
+) -> (Vec<CommunicationRow>, Vec<CommunicationRow>) {
+    let mut notes = Vec::new();
+    let mut correspondence = Vec::new();
+    for row in rows {
+        let view = CommunicationRow {
+            channel: row.channel.clone(),
+            direction: row.direction.clone(),
+            counterparty: row.counterparty.clone(),
+            author_name: row
+                .author_person_id
+                .and_then(|author| author_names.get(&author).cloned()),
+            subject: row.subject.clone(),
+            body: excerpt_body(&row.body),
+            occurred_at: row.occurred_at.clone(),
+        };
+        if row.channel == store::communications::channel::NOTE {
+            notes.push(view);
+        } else {
+            correspondence.push(view);
+        }
+    }
+    (notes, correspondence)
+}
+
+/// The tab is an index, not a reader: bodies past this cut end on an
+/// ellipsis and the full text stays in the store.
+#[cfg(feature = "server")]
+fn excerpt_body(body: &str) -> String {
+    const EXCERPT_CHARS: usize = 2_000;
+    if body.chars().count() <= EXCERPT_CHARS {
+        return body.to_string();
+    }
+    let mut excerpt: String = body.chars().take(EXCERPT_CHARS).collect();
+    excerpt.push('…');
+    excerpt
+}
+
 /// Assemble the private Project notation board from its current templates,
 /// runs, transition journal, respondents, and signature records.
 #[cfg(feature = "server")]
@@ -266,7 +332,7 @@ fn repository_templates_from_tree(
         BlueprintSelection::Selected(directory) => directory,
         BlueprintSelection::Absent => return Ok(std::collections::BTreeMap::new()),
         BlueprintSelection::Ambiguous => {
-            return Err("Project repository has both drafts/ and templates/".into())
+            return Err("Project repository has both drafts/ and templates/".into());
         }
     };
     let prefix = format!("{}/", directory.as_str());
@@ -418,6 +484,9 @@ pub struct LawyerDetailView {
     /// normalised to the advertised columns.
     pub calendar_sort: String,
     pub calendar_dir: String,
+    /// The matter show's active tab, read from `?tab=` and parsed leniently.
+    #[serde(default)]
+    pub tab: crate::matter_surface::MatterTab,
     /// The matter timeline: docket entries and open deadlines, in date order.
     #[serde(default)]
     pub calendar_events: Vec<crate::project_calendar::CalendarEvent>,
@@ -427,6 +496,15 @@ pub struct LawyerDetailView {
     /// Completed and cancelled deadlines, collapsed in the Deadlines panel.
     #[serde(default)]
     pub past_deadlines: Vec<crate::project_deadlines::DeadlineRow>,
+    /// The matter's firm-internal notes (the `note` channel), oldest first —
+    /// the body of the Notes tab.
+    #[serde(default)]
+    pub notes: Vec<CommunicationRow>,
+    /// Every logged email and call on this matter, oldest first — the body
+    /// of the Communications tab. The logging is verified working for
+    /// emails without a call (LAW-230); this is that log's surface.
+    #[serde(default)]
+    pub correspondence: Vec<CommunicationRow>,
     pub role: ViewerRole,
     /// The deploy's brand mark for the navbar. `None` when the mounted brand
     /// configures none.
@@ -576,6 +654,18 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     .await
     .map_or_else(|_| DocumentsQuery::default(), |axum::extract::Query(q)| q)
     .error;
+    // The matter show's active tab. Lenient like the calendar's sort — a
+    // tab nobody advertised falls back to the timeline rather than refusing
+    // the matter.
+    let matter_tab = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::extract::Query<crate::matter_surface::MatterTabQuery>,
+        _,
+    >()
+    .await
+    .map_or_else(
+        |_| crate::matter_surface::MatterTab::from_query(None),
+        |axum::extract::Query(q)| crate::matter_surface::MatterTab::from_query(q.tab.as_deref()),
+    );
     let role = dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<ViewerRole>, _>()
         .await
         .map(|axum::Extension(role)| role)
@@ -787,6 +877,25 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     let deadline_groups =
         crate::project_deadlines::deadline_groups(&stored_deadlines, chrono::Utc::now(), false);
 
+    // The Notes and Communications tabs read the firm-visible thread once;
+    // the projection splits notes from correspondence so the render never
+    // matches channel discriminators.
+    let thread = store::communications::for_project(&surreal, id)
+        .await
+        .map_err(server_error)?;
+    let author_ids: Vec<uuid::Uuid> = thread
+        .iter()
+        .filter_map(|row| row.author_person_id)
+        .collect();
+    let authors: std::collections::HashMap<uuid::Uuid, String> =
+        store::persons::find_by_ids(&surreal, &author_ids)
+            .await
+            .map_err(server_error)?
+            .into_iter()
+            .map(|person| (person.id, person.name))
+            .collect();
+    let (notes, correspondence) = communication_views(&thread, &authors);
+
     let code_for_resources = project.code.clone();
     let page_tabs = crate::sections::page::stored_page_tabs(
         &surreal,
@@ -839,9 +948,12 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         csrf_token,
         calendar_sort,
         calendar_dir,
+        tab: matter_tab,
         calendar_events,
         deadlines: deadline_groups.open,
         past_deadlines: deadline_groups.past,
+        notes,
+        correspondence,
         role,
         logo,
         tokens_href,
@@ -944,6 +1056,78 @@ fn not_found(
 /// value in the row. Documents are grouped under the folders of a checkout's
 /// `documents/`, every matter folder listed even while empty. A chain with
 /// earlier revisions expands into a Previous versions table giving each
+/// The Notes tab: the matter's firm-internal notes, oldest first. A note is
+/// a firm-internal observation — it never reaches the client view, so the
+/// empty state names the verb that writes one rather than apologising.
+fn notes_tab(view: &LawyerDetailView) -> Element {
+    rsx! {
+        section {
+            class: "lawyer-detail__section detail-notes",
+            h2 { "Notes" }
+            if view.notes.is_empty() {
+                p {
+                    class: "nav-muted",
+                    "No notes yet. `navigator project communication note` records one; a note is internal and never reaches the client view."
+                }
+            } else {
+                for note in view.notes.iter() {
+                    article { class: "detail-note",
+                        header { class: "detail-note__meta",
+                            span {
+                                class: "detail-note__author",
+                                "{note.author_name.clone().unwrap_or_else(|| \"Navigator\".to_string())}"
+                            }
+                            span { class: "detail-note__when", "{note.occurred_at}" }
+                        }
+                        if let Some(subject) = note.subject.as_ref() {
+                            p { class: "detail-note__subject", "{subject}" }
+                        }
+                        p { class: "detail-note__body", "{note.body}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The Communications tab: every logged email and call on the matter,
+/// oldest first — the log emails write with or without a call. Direction
+/// prints as a plain word, never an icon or colour alone.
+fn communications_tab(view: &LawyerDetailView) -> Element {
+    rsx! {
+        section {
+            class: "lawyer-detail__section detail-communications",
+            h2 { "Communications" }
+            if view.correspondence.is_empty() {
+                p {
+                    class: "nav-muted",
+                    "No communications logged yet. Email logged on this project lands here with or without a call."
+                }
+            } else {
+                for message in view.correspondence.iter() {
+                    article { class: "detail-communication",
+                        header { class: "detail-communication__meta",
+                            span { class: "detail-communication__channel", "{message.channel}" }
+                            span { class: "detail-communication__direction", "{message.direction}" }
+                            if let Some(counterparty) = message.counterparty.as_ref() {
+                                span {
+                                    class: "detail-communication__counterparty",
+                                    "with {counterparty}"
+                                }
+                            }
+                            span { class: "detail-communication__when", "{message.occurred_at}" }
+                        }
+                        if let Some(subject) = message.subject.as_ref() {
+                            p { class: "detail-communication__subject", "{subject}" }
+                        }
+                        p { class: "detail-communication__body", "{message.body}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The Integrations section: the Xero and source-repository links, rendered
 /// only when at least one exists — a matter with no integrations prints no
 /// heading to be empty under.
@@ -1288,17 +1472,17 @@ pub fn LawyerProjectDetail() -> Element {
         Some(Ok(_)) => {
             return rsx! {
                 main { id: "lawyer-project", p { "That project was not found." } }
-            }
+            };
         }
         Some(Err(_)) => {
             return rsx! {
                 main { id: "lawyer-project", p { "Failed to load this project." } }
-            }
+            };
         }
         None => {
             return rsx! {
                 main { id: "lawyer-project", p { "Loading…" } }
-            }
+            };
         }
     };
 
@@ -1371,6 +1555,14 @@ pub fn LawyerProjectDetail() -> Element {
                 }
             }
 
+            // The matter show's views. The strip advertises exactly the tabs
+            // the surface serves; the active one is marked by the strip.
+            crate::matter_surface::MatterTabNav {
+                base: format!("/app/projects/{}", view.code),
+                tabs: crate::matter_surface::MatterTab::all().to_vec(),
+                current: view.tab,
+            }
+
             crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
 
             crate::project_deadlines::ProjectDeadlinesPanel {
@@ -1416,17 +1608,26 @@ pub fn LawyerProjectDetail() -> Element {
 
             // The matter timeline: every docket entry on this matter's cases
             // joined with every open deadline, in date order. Documents,
-            // participations, and notations stay out of it.
-            crate::project_calendar::ProjectCalendar {
-                section_class: "lawyer-detail__section project-calendar".to_string(),
-                heading: "Calendar".to_string(),
-                empty_message: "No calendar events scheduled for this project.".to_string(),
-                columns: crate::project_calendar::MATTER_COLUMNS.to_vec(),
-                path: format!("/app/projects/{}", view.code),
-                query_prefix: String::new(),
-                sort: view.calendar_sort.clone(),
-                dir: view.calendar_dir.clone(),
-                events: view.calendar_events.clone(),
+            // participations, and notations stay out of it. It is the body
+            // of the Timeline tab; the other tabs replace it.
+            match view.tab {
+                crate::matter_surface::MatterTab::Timeline => rsx! {
+                    crate::project_calendar::ProjectCalendar {
+                        section_class: "lawyer-detail__section project-calendar".to_string(),
+                        heading: "Calendar".to_string(),
+                        empty_message: "No calendar events scheduled for this project.".to_string(),
+                        columns: crate::project_calendar::MATTER_COLUMNS.to_vec(),
+                        path: format!("/app/projects/{}", view.code),
+                        query_prefix: String::new(),
+                        sort: view.calendar_sort.clone(),
+                        dir: view.calendar_dir.clone(),
+                        events: view.calendar_events.clone(),
+                    }
+                },
+                crate::matter_surface::MatterTab::Notes => rsx! { {notes_tab(&view)} },
+                crate::matter_surface::MatterTab::Communications => rsx! {
+                    {communications_tab(&view)}
+                },
             }
 
             ProjectNotationBoard { rows: view.notations.clone() }
@@ -1663,9 +1864,10 @@ pub fn ParticipationTable(
 #[cfg(test)]
 mod tests {
     use super::{
-        admin_testimonial_card, documents_table, integrations_section, may_govern_lawyer_dri,
-        notation_state_cell, to_participation_rows, workflow_state_order, AdminTestimonialView,
-        LawyerDetailView, LawyerDocRevision, LawyerDocRow, ParticipationRow, ParticipationTable,
+        admin_testimonial_card, communications_tab, documents_table, integrations_section,
+        may_govern_lawyer_dri, notation_state_cell, notes_tab, to_participation_rows,
+        workflow_state_order, AdminTestimonialView, CommunicationRow, LawyerDetailView,
+        LawyerDocRevision, LawyerDocRow, ParticipationRow, ParticipationTable,
         ProjectNotationBoard, ProjectNotationRow,
     };
     use dioxus::prelude::*;
@@ -1712,6 +1914,70 @@ mod tests {
                 may_govern_client_side: true,
             }
         })
+    }
+
+    fn note_row(subject: &str) -> CommunicationRow {
+        CommunicationRow {
+            channel: "note".to_string(),
+            direction: "internal".to_string(),
+            counterparty: None,
+            author_name: Some("Aries Attorney".to_string()),
+            subject: Some(subject.to_string()),
+            body: "The client prefers email; do not call.".to_string(),
+            occurred_at: "2026-10-30T12:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn the_notes_tab_lists_its_notes_with_their_author() {
+        let view = LawyerDetailView {
+            notes: vec![note_row("Client prefers email")],
+            ..LawyerDetailView::default()
+        };
+        let html = dioxus_ssr::render_element(notes_tab(&view));
+        assert!(html.contains("Client prefers email"), "{html}");
+        assert!(html.contains("Aries Attorney"), "{html}");
+        // A note's body renders, but its row never prints a counterparty
+        // direction — it has no other party.
+        assert!(!html.contains("with "), "{html}");
+    }
+
+    #[test]
+    fn the_notes_tab_empty_state_names_the_verb_and_the_exclusion() {
+        let view = LawyerDetailView::default();
+        let html = dioxus_ssr::render_element(notes_tab(&view));
+        assert!(
+            html.contains("navigator project communication note"),
+            "{html}"
+        );
+        assert!(html.contains("never reaches the client view"), "{html}");
+    }
+
+    #[test]
+    fn the_communications_tab_prints_direction_words_and_counterparties() {
+        let view = LawyerDetailView {
+            correspondence: vec![CommunicationRow {
+                channel: "email_inbound".to_string(),
+                direction: "inbound".to_string(),
+                counterparty: Some("clerk@courts.example".to_string()),
+                author_name: None,
+                subject: Some("NEF re D.I. 12".to_string()),
+                body: "Served today.".to_string(),
+                occurred_at: "2026-10-30T09:00:00Z".to_string(),
+            }],
+            ..LawyerDetailView::default()
+        };
+        let html = dioxus_ssr::render_element(communications_tab(&view));
+        assert!(html.contains("inbound"), "{html}");
+        assert!(html.contains("clerk@courts.example"), "{html}");
+        assert!(html.contains("NEF re D.I. 12"), "{html}");
+    }
+
+    #[test]
+    fn the_communications_tab_empty_state_says_emails_need_no_call() {
+        let view = LawyerDetailView::default();
+        let html = dioxus_ssr::render_element(communications_tab(&view));
+        assert!(html.contains("with or without a call"), "{html}");
     }
 
     #[test]

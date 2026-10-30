@@ -2426,7 +2426,8 @@ DEFINE FIELD OVERWRITE channel ON communication TYPE string
                       'facebook_inbound', 'facebook_outbound',
                       'instagram_inbound', 'instagram_outbound',
                       'threads_inbound', 'threads_outbound',
-                      'youtube_inbound', 'youtube_outbound', 'tiktok_inbound', 'tiktok_outbound', 'call'];
+                      'youtube_inbound', 'youtube_outbound', 'tiktok_inbound', 'tiktok_outbound',
+                      'call', 'note'];
 DEFINE FIELD OVERWRITE direction ON communication TYPE string
     ASSERT $value IN ['inbound', 'outbound', 'internal'];
 DEFINE FIELD OVERWRITE author_person_id ON communication TYPE option<record<person>>;
