@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::components::{Empty, FactCard, FactGrid, Field, FormCard, Heading, Tab, Tabs};
 use crate::csrf::CsrfToken;
+use crate::lawyer_project_communications::{communications_tab, notes_tab, CommunicationRow};
 use crate::lawyer_project_documents::{documents_table, LawyerDocRow};
 use crate::lawyer_project_integrations::integrations_section;
 use crate::lawyer_project_notations::{ProjectNotationBoard, ProjectNotationRow};
@@ -274,6 +275,15 @@ pub struct LawyerDetailView {
     /// Completed and cancelled deadlines, collapsed in the Deadlines panel.
     #[serde(default)]
     pub past_deadlines: Vec<crate::project_deadlines::DeadlineRow>,
+    /// The matter's firm-internal notes (the `note` channel), oldest first —
+    /// rendered as a section on the Overview tab.
+    #[serde(default)]
+    pub notes: Vec<CommunicationRow>,
+    /// Every logged email and call on this matter, oldest first — the body
+    /// of the Correspondence tab. The logging is verified working for
+    /// emails without a call (LAW-230); this is that log's surface.
+    #[serde(default)]
+    pub correspondence: Vec<CommunicationRow>,
     pub role: ViewerRole,
     /// The deploy's brand mark for the navbar. `None` when the mounted brand
     /// configures none.
@@ -555,6 +565,26 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     let deadline_groups =
         crate::project_deadlines::deadline_groups(&stored_deadlines, chrono::Utc::now(), false);
 
+    // The Overview notes section and the Correspondence tab read the
+    // firm-visible thread once; the projection splits notes from
+    // correspondence so the render never matches channel discriminators.
+    let thread = store::communications::for_project(&surreal, id)
+        .await
+        .map_err(server_error)?;
+    let author_ids: Vec<uuid::Uuid> = thread
+        .iter()
+        .filter_map(|row| row.author_person_id)
+        .collect();
+    let authors: std::collections::HashMap<uuid::Uuid, String> =
+        store::persons::find_by_ids(&surreal, &author_ids)
+            .await
+            .map_err(server_error)?
+            .into_iter()
+            .map(|person| (person.id, person.name))
+            .collect();
+    let (notes, correspondence) =
+        crate::lawyer_project_communications::communication_views(&thread, &authors);
+
     let code_for_resources = project.code.clone();
     let page_tabs = crate::sections::page::stored_page_tabs(
         &surreal,
@@ -611,6 +641,8 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         calendar_events,
         deadlines: deadline_groups.open,
         past_deadlines: deadline_groups.past,
+        notes,
+        correspondence,
         role,
         logo,
         tokens_href,
@@ -786,6 +818,11 @@ pub fn LawyerProjectDetail() -> Element {
 
                         ProjectNotationBoard { rows: view.notations.clone() }
 
+                        // The firm's internal observations about this matter:
+                        // the note channel of the correspondence log, kept on
+                        // Overview where the matter's full narrative lives.
+                        {notes_tab(&view)}
+
                         // Closing a matter is bespoke: it is asked for by email and opened
                         // by the lawyer DRI, never fired from a button here. Every firm
                         // participant reads where to ask — the accountability marker
@@ -829,13 +866,24 @@ pub fn LawyerProjectDetail() -> Element {
                         }
                     },
                     MatterTab::Correspondence => rsx! {
-                        section { class: "lawyer-detail__section",
-                            Empty {
-                                title: "Correspondence lives in the project inbox".to_string(),
-                                description: Some("Email, texts, and logged calls for this project are triaged in the project inbox.".to_string()),
-                                action: Some(rsx! {
-                                    a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.code}/inbox", "Open the project inbox" }
-                                }),
+                        if view.correspondence.is_empty() {
+                            section { class: "lawyer-detail__section",
+                                Empty {
+                                    title: "Correspondence lives in the project inbox".to_string(),
+                                    description: Some("No communications logged yet. Email logged on this project lands here with or without a call.".to_string()),
+                                    action: Some(rsx! {
+                                        a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.code}/inbox", "Open the project inbox" }
+                                    }),
+                                }
+                            }
+                        } else {
+                            {communications_tab(&view)}
+                            section { class: "lawyer-detail__section",
+                                p { class: "nav-muted",
+                                    a { class: "nav-link", href: "/app/projects/{view.code}/inbox",
+                                        "New email, texts, and calls for this project are triaged in the project inbox."
+                                    }
+                                }
                             }
                         }
                     },

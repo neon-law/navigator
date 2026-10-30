@@ -86,6 +86,7 @@ pub mod inbox;
 pub mod intake_review;
 pub mod keyboard;
 pub mod lawyer_dashboard;
+pub mod lawyer_project_communications;
 pub mod lawyer_project_detail;
 pub mod lawyer_project_documents;
 pub mod lawyer_project_integrations;
