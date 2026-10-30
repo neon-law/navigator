@@ -1073,6 +1073,13 @@ enum ProjectsCmd {
         /// live Project only and shown to the client; an empty value clears it.
         #[arg(long, value_name = "URL")]
         booking_url: Option<String>,
+        /// The jurisdiction an onboarding Notation's Clauses bind to: the state
+        /// whose law and arbitration seat an engagement letter names. Written
+        /// to the live Project row and read live at render time by a Clause
+        /// input bound to `project.onboarding_jurisdiction`; an empty value
+        /// clears it.
+        #[arg(long, value_name = "STATE")]
+        jurisdiction: Option<String>,
         /// Firm name to assign to the live Project (requires --brand).
         #[arg(long, requires = "brand")]
         firm: Option<String>,
@@ -5542,6 +5549,7 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             private_notion_page,
             calendar,
             booking_url,
+            jurisdiction,
             firm,
             brand,
             host,
@@ -5559,6 +5567,7 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 projects::set::LiveFields {
                     calendar_id: calendar.as_deref(),
                     booking_url: booking_url.as_deref(),
+                    jurisdiction: jurisdiction.as_deref(),
                 },
                 firm.as_deref(),
                 brand.as_deref(),

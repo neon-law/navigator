@@ -3292,7 +3292,7 @@ async fn build_answer_context(
     // asks `person__client` for the name only, so `{{person__client.email}}`
     // (and the N-400's email field) fills from `persons.email`. Answers win:
     // only fill a gap, never overwrite a captured value.
-    if let Some(person) = match notation_row {
+    if let Some(person) = match notation_row.as_ref() {
         Some(n) => store::persons::find_by_id(surreal, n.person_id).await?,
         None => None,
     } {
@@ -3300,6 +3300,21 @@ async fn build_answer_context(
             .or_insert(person.email);
         ctx.entry("person__client.name".to_string())
             .or_insert(person.name);
+    }
+    // Seed the onboarding jurisdiction the notation's Project carries, so a
+    // Clause input bound to `project.onboarding_jurisdiction` (`rules::clauses`)
+    // fills from the live row instead of a questionnaire answer. Answers and
+    // the Person row win: this only fills a gap.
+    if let Some(n) = notation_row.as_ref() {
+        if let Some(project) = store::projects::find_by_id(surreal, n.project_id)
+            .await
+            .map_err(|error| ContextError::Db(error.to_string()))?
+        {
+            if let Some(jurisdiction) = project.onboarding_jurisdiction {
+                ctx.entry("project.onboarding_jurisdiction".to_string())
+                    .or_insert(jurisdiction);
+            }
+        }
     }
     default_governing_law(&mut ctx, choice_rendering);
     Ok(ctx)

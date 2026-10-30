@@ -4157,6 +4157,8 @@ fn canonical_document(base: &str) -> Value {
                                       "description": "The Project's shared Google Calendar id, or `null` before it is created." },
               "booking_url":        { "type": ["string", "null"],
                                       "description": "Where the client books time with the firm, or `null`. Cleared when the Project closes." },
+              "onboarding_jurisdiction": { "type": ["string", "null"],
+                                      "description": "The jurisdiction an onboarding Notation's Clauses bind to (the state whose law and arbitration seat an engagement letter names), or `null` before it is chosen." },
               "inserted_at":        { "type": "string" },
               "updated_at":         { "type": "string" }
             }
@@ -4270,7 +4272,10 @@ fn canonical_document(base: &str) -> Value {
               "calendar_id": { "type": "string",
                                "description": "The Project's shared Google Calendar id. Omit to leave unchanged; a blank string clears it." },
               "booking_url": { "type": "string",
-                               "description": "The client's booking page, an http(s) URL. Omit to leave unchanged; a blank string clears it." }
+                               "description": "The client's booking page, an http(s) URL. Omit to leave unchanged; a blank string clears it." },
+              "onboarding_jurisdiction": { "type": "string",
+                               "description": "The jurisdiction an onboarding Notation's Clauses bind to (the state whose law and \
+                                               arbitration seat an engagement letter names). Omit to leave unchanged; a blank string clears it." }
             },
             "additionalProperties": false,
             "example": {

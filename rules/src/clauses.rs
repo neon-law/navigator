@@ -154,6 +154,27 @@ fn selections(doc: &Value) -> Result<BTreeMap<String, (Reference, Clause)>, Stri
             ));
         }
         for (name, state) in &reference.inputs {
+            // A direct Project binding (`project.onboarding_jurisdiction`)
+            // answers no questionnaire question: the render context supplies
+            // the value from the notation's live Project row. Only that one
+            // field binds directly, and only to a `jurisdiction` input.
+            if let Some((table, field)) = state.split_once('.') {
+                if table != "project" || field != "onboarding_jurisdiction" {
+                    return Err(format!(
+                        "Clause `{alias}` input `{name}` binds `{state}`; only `project.onboarding_jurisdiction` binds directly to the Project"
+                    ));
+                }
+                if !clause.inputs[name]
+                    .types
+                    .iter()
+                    .any(|allowed| allowed == "jurisdiction")
+                {
+                    return Err(format!(
+                        "Clause `{alias}` input `{name}` binds `project.onboarding_jurisdiction`, which is a jurisdiction and must bind a `jurisdiction` input"
+                    ));
+                }
+                continue;
+            }
             let Some((question_type, role)) = state.split_once("__") else {
                 return Err(format!(
                     "Clause `{alias}` input `{name}` must name a typed questionnaire state"
@@ -200,6 +221,10 @@ pub fn merge_questions(doc: &mut Value) -> Result<(), String> {
         .unwrap_or_default();
     for (reference, clause) in selected.values() {
         for (name, state) in &reference.inputs {
+            // A direct Project binding answers no questionnaire question.
+            if state.contains('.') {
+                continue;
+            }
             if !questionnaire.contains_key(Value::String(state.clone())) {
                 // Insert before END; validation still checks the whole chain.
                 let predecessors: Vec<Value> = questionnaire
@@ -671,5 +696,40 @@ mod tests {
         assert!(bound.contains("{{else if jurisdiction__law}}"));
         assert!(bound.contains("{{#for p in people__parties}}"));
         assert!(bound.contains("{{entity__company.name}}"));
+    }
+
+    /// A `jurisdiction` input may bind straight to the Project's
+    /// `onboarding_jurisdiction` field: the compiled body carries the dotted
+    /// placeholder the render context seeds, and the binding answers no
+    /// questionnaire question, so nothing is merged for it.
+    #[test]
+    fn a_jurisdiction_input_may_bind_directly_to_the_project_onboarding_jurisdiction() {
+        let template = crate::SourceFile {
+            path: "onboarding__letter.md".into(),
+            contents: "---\nkind: onboarding\nquestionnaire: [jurisdiction__arbitration_seat]\nclauses:\n  arbitration:\n    source: engagement_arbitration@1\n    inputs:\n      law: project.onboarding_jurisdiction\n      seat: jurisdiction__arbitration_seat\n---\n{{> arbitration}}\n".into(),
+        };
+        let compiled = compile(&template.contents).unwrap();
+        assert!(
+            compiled
+                .contains("The law of {{project.onboarding_jurisdiction}} governs this letter."),
+            "the project binding compiles to the dotted placeholder: {compiled}"
+        );
+        assert!(compiled.contains("{{jurisdiction__arbitration_seat}}"));
+        // The questionnaire keeps only the seat question: the project binding
+        // must not be merged in as a question edge.
+        assert!(!compiled.contains("jurisdiction__governing_law"));
+    }
+
+    /// Only the one supported Project field binds directly; any other
+    /// `project.*` path is a mistake the compile refuses, not a silent
+    /// empty placeholder.
+    #[test]
+    fn a_project_binding_must_name_the_onboarding_jurisdiction_field() {
+        let template = onboarding(
+            "clauses:\n  arbitration:\n    source: engagement_arbitration@1\n    inputs:\n      law: project.governing_law\n      seat: jurisdiction__arbitration_seat\n",
+            "{{> arbitration}}\n",
+        );
+        let error = compile(&template.contents).unwrap_err();
+        assert!(error.contains("project.governing_law"), "{error}");
     }
 }

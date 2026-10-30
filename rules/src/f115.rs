@@ -347,6 +347,13 @@ fn handle_path(
     if SIGNATURE_FIELDS.contains(&field) {
         return;
     }
+    // A direct Project binding (`project.onboarding_jurisdiction`) resolves
+    // from the render context, not a questionnaire state; no other
+    // `project.*` path is grounded, so anything else falls through to the
+    // undeclared-state violation below.
+    if head == "project" && tail == "onboarding_jurisdiction" {
+        return;
+    }
     // A loop variable resolves against its aggregate row shape.
     if let Some((_, agg)) = loops.iter().find(|(v, _)| v == head) {
         if agg.is_empty() {
@@ -463,6 +470,26 @@ mod tests {
             "The trustor is {{person__trustor.name}}.",
         );
         assert!(F115PathResolution.lint(&file(&body)).is_empty());
+    }
+
+    /// A direct Project binding compiles to `{{project.onboarding_jurisdiction}}`
+    /// and resolves from the render context, not a questionnaire state — the
+    /// dotted path is grounded without a declared state behind `project`.
+    #[test]
+    fn a_project_onboarding_jurisdiction_path_resolves_without_a_questionnaire_state() {
+        let body = tmpl(
+            "  BEGIN:\n    _: person__trustor\n  person__trustor:\n    _: END\n  END: {}\n",
+            "The law of {{project.onboarding_jurisdiction}} governs this letter.",
+        );
+        assert!(F115PathResolution.lint(&file(&body)).is_empty());
+        // Any other `project.*` path stays a violation: only the one
+        // supported binding is grounded.
+        let unknown = tmpl(
+            "  BEGIN:\n    _: person__trustor\n  person__trustor:\n    _: END\n  END: {}\n",
+            "Brand: {{project.brand}}.",
+        );
+        let findings = F115PathResolution.lint(&file(&unknown));
+        assert!(findings.iter().any(|finding| finding.code == "N115"),);
     }
 
     #[test]
