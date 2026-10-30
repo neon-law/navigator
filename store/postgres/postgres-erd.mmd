@@ -1272,6 +1272,27 @@ erDiagram
         string state
         string tree_sha256
     }
+    project_task {
+        string REFERENCES
+        uuid assignee_id
+        string body
+        datetime due_on
+        uuid id
+        datetime inserted_at
+        uuid project_id
+        string state
+        string title
+        datetime updated_at
+    }
+    project_task_events {
+        uuid actor_person_id
+        json after_state
+        json before_state
+        string event_kind
+        uuid id
+        datetime occurred_at
+        uuid project_task_id
+    }
     purchase {
         string account_code
         datetime activated_at
@@ -1650,6 +1671,10 @@ erDiagram
     person }o--|| project_service : references
     project }o--|| project_service : references
     sent_email }o--|| project_service : references
+    person_project_role }o--|| project_task : references
+    project }o--|| project_task : references
+    person }o--|| project_task_events : references
+    project_task }o--|| project_task_events : references
     person }o--|| relationship_log : references
     project }o--|| relationship_log : references
     project }o--|| sent_email : references

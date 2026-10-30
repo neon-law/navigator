@@ -303,6 +303,20 @@
     },
     {
       "extra_column": null,
+      "extra_table": "project_task",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_task_events",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "purchase",
       "missing_column": null,
       "missing_table": null,
@@ -1632,7 +1646,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 127,
+    "table_count": 129,
     "tables": {
       "address": {
         "columns": {
@@ -4165,6 +4179,61 @@
         "foreign_keys": [],
         "name": "project_source_import",
         "references": []
+      },
+      "project_task": {
+        "columns": {
+          "REFERENCES": "person_project_role",
+          "assignee_id": "UUID",
+          "body": "TEXT",
+          "due_on": "DATE",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "state": "TEXT",
+          "title": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "REFERENCES",
+            "person_project_role"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "project_task",
+        "references": [
+          "person_project_role",
+          "project"
+        ]
+      },
+      "project_task_events": {
+        "columns": {
+          "actor_person_id": "UUID",
+          "after_state": "JSONB",
+          "before_state": "JSONB",
+          "event_kind": "TEXT",
+          "id": "UUID",
+          "occurred_at": "TIMESTAMPTZ",
+          "project_task_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "actor_person_id",
+            "person"
+          ],
+          [
+            "project_task_id",
+            "project_task"
+          ]
+        ],
+        "name": "project_task_events",
+        "references": [
+          "person",
+          "project_task"
+        ]
       },
       "purchase": {
         "columns": {
