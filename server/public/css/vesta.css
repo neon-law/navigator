@@ -162,7 +162,7 @@
 .vesta-reflection { border-left: 0; padding: 5rem 0; background: transparent; }
 .vesta-reflection > h2 { max-width: 19ch; font-size: clamp(2.8rem, 5vw, 4.8rem); }
 .vesta-reflection > p:not(.vesta-eyebrow) { max-width: 46rem; color: #c1b9ad; }
-.vesta-themes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; align-items: start; margin-top: 3rem; }
+.vesta-themes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; align-items: start; margin-top: 3rem; }
 .vesta-theme { border-block: 1px solid var(--vesta-rule); min-width: 0; }
 .vesta-theme summary { padding: 1.5rem .5rem; cursor: pointer; text-align: center; list-style: none; color: #f3e9d8; }
 .vesta-theme summary::-webkit-details-marker { display: none; }
@@ -189,8 +189,6 @@
   .vesta-hero { grid-template-columns: 1fr; min-height: auto; padding-top: 3rem; }
   .vesta-hero h1 { max-width: 13ch; }
   .vesta-cosmos { width: 100%; max-width: 32rem; justify-self: center; }
-  .vesta-themes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .vesta-theme:last-child { grid-column: 1 / -1; }
 }
 @media (max-width: 600px) {
   .vesta-offer .vesta-plan { display: block; }
