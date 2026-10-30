@@ -418,6 +418,9 @@ pub struct LawyerDetailView {
     /// normalised to the advertised columns.
     pub calendar_sort: String,
     pub calendar_dir: String,
+    /// The matter show's active tab, read from `?tab=` and parsed leniently.
+    #[serde(default)]
+    pub tab: crate::matter_surface::MatterTab,
     /// The matter timeline: docket entries and open deadlines, in date order.
     #[serde(default)]
     pub calendar_events: Vec<crate::project_calendar::CalendarEvent>,
@@ -576,6 +579,20 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     .await
     .map_or_else(|_| DocumentsQuery::default(), |axum::extract::Query(q)| q)
     .error;
+    // The matter show's active tab. Lenient like the calendar's sort — a
+    // tab nobody advertised falls back to the timeline rather than refusing
+    // the matter.
+    let matter_tab = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::extract::Query<crate::matter_surface::MatterTabQuery>,
+        _,
+    >()
+    .await
+    .map_or_else(
+        |_| crate::matter_surface::MatterTab::from_query(None),
+        |axum::extract::Query(q)| {
+            crate::matter_surface::MatterTab::from_query(q.tab.as_deref())
+        },
+    );
     let role = dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<ViewerRole>, _>()
         .await
         .map(|axum::Extension(role)| role)
@@ -839,6 +856,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         csrf_token,
         calendar_sort,
         calendar_dir,
+        tab: matter_tab,
         calendar_events,
         deadlines: deadline_groups.open,
         past_deadlines: deadline_groups.past,
@@ -1371,6 +1389,14 @@ pub fn LawyerProjectDetail() -> Element {
                 }
             }
 
+            // The matter show's views. The strip advertises exactly the tabs
+            // the surface serves; the active one is marked by the strip.
+            crate::matter_surface::MatterTabNav {
+                base: format!("/app/projects/{}", view.code),
+                tabs: vec![crate::matter_surface::MatterTab::Timeline],
+                current: view.tab,
+            }
+
             crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
 
             crate::project_deadlines::ProjectDeadlinesPanel {
@@ -1416,17 +1442,26 @@ pub fn LawyerProjectDetail() -> Element {
 
             // The matter timeline: every docket entry on this matter's cases
             // joined with every open deadline, in date order. Documents,
-            // participations, and notations stay out of it.
-            crate::project_calendar::ProjectCalendar {
-                section_class: "lawyer-detail__section project-calendar".to_string(),
-                heading: "Calendar".to_string(),
-                empty_message: "No calendar events scheduled for this project.".to_string(),
-                columns: crate::project_calendar::MATTER_COLUMNS.to_vec(),
-                path: format!("/app/projects/{}", view.code),
-                query_prefix: String::new(),
-                sort: view.calendar_sort.clone(),
-                dir: view.calendar_dir.clone(),
-                events: view.calendar_events.clone(),
+            // participations, and notations stay out of it. It is the body
+            // of the Timeline tab; the other tabs replace it.
+            match view.tab {
+                crate::matter_surface::MatterTab::Timeline => rsx! {
+                    crate::project_calendar::ProjectCalendar {
+                        section_class: "lawyer-detail__section project-calendar".to_string(),
+                        heading: "Calendar".to_string(),
+                        empty_message: "No calendar events scheduled for this project.".to_string(),
+                        columns: crate::project_calendar::MATTER_COLUMNS.to_vec(),
+                        path: format!("/app/projects/{}", view.code),
+                        query_prefix: String::new(),
+                        sort: view.calendar_sort.clone(),
+                        dir: view.calendar_dir.clone(),
+                        events: view.calendar_events.clone(),
+                    }
+                },
+                // The Notes and Communications tabs land with the
+                // communications tab; the strip does not advertise them yet.
+                crate::matter_surface::MatterTab::Notes
+                | crate::matter_surface::MatterTab::Communications => rsx! {},
             }
 
             ProjectNotationBoard { rows: view.notations.clone() }
