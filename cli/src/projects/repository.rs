@@ -419,6 +419,7 @@ pub(crate) fn validate_gate(
     validate_codeowners(root, &mut errors);
     validate_automerge_workflow(root, write_fixes, &mut errors);
     validate_tracked_files(root, write_fixes, &mut errors, &mut warnings);
+    validate_client_visibility(root, &mut warnings);
     validate_skills(root, &mut errors);
     validate_documented_cli(root, &mut errors);
     let blueprints = blueprint_selection(root, &mut errors, &mut warnings);
@@ -2293,6 +2294,69 @@ pub(crate) fn validate_tracked_files_only(root: &Path) -> usize {
     errors.len()
 }
 
+/// `Y025` — a pointer a checkout proposes carries `visibility: client`.
+///
+/// Ask #3 of LAW-144: the reviewer sees exactly what newly reaches the
+/// client. The gate runs inside one repository's CI with no live row, so it
+/// cannot know whether the matter has onboarded — it reports every
+/// client-visible pointer the tracked tree proposes, which is precisely what
+/// a pull request's merge would add or change. A warning, never an error:
+/// client visibility is a deliberate choice to make, not a thing to forbid.
+pub(crate) const CLIENT_VISIBILITY_CODE: &str = "Y025";
+
+/// Whether a tracked relative path is a committed document pointer.
+fn is_pointer_path(relative: &str) -> bool {
+    let mut components = relative.split('/');
+    components.next() == Some("blobs")
+        && std::path::Path::new(relative)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("yaml"))
+}
+
+/// The [`CLIENT_VISIBILITY_CODE`] check: one warning per `visibility: client`
+/// pointer under `blobs/`. Unparseable pointers stay silent here — the
+/// layout pass already judges pointer validity, and a warning built from a
+/// pointer this one cannot read would invent its fields.
+fn validate_client_visibility(root: &Path, warnings: &mut Vec<Finding>) {
+    let Ok(files) = git_tracked_and_stageable_files(root) else {
+        // The enumeration failure is already an error in the tracked-file
+        // pass; reporting it twice adds noise, not information.
+        return;
+    };
+    for path in files {
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        let relative = relative
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        if !is_pointer_path(&relative) {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(pointer) = store::document_pointers::DocumentPointer::from_yaml(&contents) else {
+            continue;
+        };
+        if pointer.visibility != "client" {
+            continue;
+        }
+        warnings.push(Finding::at(
+            path,
+            format!(
+                "{CLIENT_VISIBILITY_CODE}: `{relative}` carries `visibility: client`: this \
+                 revision reaches the client the moment it lands. Confirm the \
+                 client-visibility review is a deliberate choice (LAW-144) — especially \
+                 while the matter is still a pitch, when substantive client-visible work \
+                 has no engagement behind it yet"
+            ),
+        ));
+    }
+}
+
 /// `Y010` — a Project template names `Neon Law` with a corporate suffix that is
 /// not the firm entity of record.
 ///
@@ -2926,13 +2990,13 @@ mod tests {
         lint_project_template, misnamed_firm_entities, missing_root_gitignore_lines,
         publish_workflow_prefix, repair_root_gitignore, repair_skills, repository_name,
         retired_workflow_refused, validate_agent_contract, validate_cd_workflow,
-        validate_documents_gitignore, validate_gate, validate_github_path, validate_layout,
-        validate_skills, validate_workflow, workflow, workflow_for, Finding, LayoutOutcome,
-        AGENT_CONTRACT_BASE, ALLOWED_ROOTS, AUTOMERGE_WORKFLOW_CONTENTS, CD_WORKFLOW,
-        CLAUDE_SETTINGS, CLAUDE_SETTINGS_CONTENTS, DEFAULT_WORKFLOW_HOME, DRAFT_DIRECTORY,
-        ENTITY_CODE, FINAL_RETIRED_WORKFLOW_RELEASE, FIRM_TRADE_NAME_CODE, PROJECT_MANIFEST,
-        RETIRED_CD_WORKFLOW, RETIRED_SYNCED_SKILLS, RETIRED_WORKFLOW, ROOT_GITIGNORE,
-        SYNCED_SKILLS, TEMPLATE_DIRECTORY, WORKFLOW,
+        validate_client_visibility, validate_documents_gitignore, validate_gate,
+        validate_github_path, validate_layout, validate_skills, validate_workflow, workflow,
+        workflow_for, Finding, LayoutOutcome, AGENT_CONTRACT_BASE, ALLOWED_ROOTS,
+        AUTOMERGE_WORKFLOW_CONTENTS, CD_WORKFLOW, CLAUDE_SETTINGS, CLAUDE_SETTINGS_CONTENTS,
+        DEFAULT_WORKFLOW_HOME, DRAFT_DIRECTORY, ENTITY_CODE, FINAL_RETIRED_WORKFLOW_RELEASE,
+        FIRM_TRADE_NAME_CODE, PROJECT_MANIFEST, RETIRED_CD_WORKFLOW, RETIRED_SYNCED_SKILLS,
+        RETIRED_WORKFLOW, ROOT_GITIGNORE, SYNCED_SKILLS, TEMPLATE_DIRECTORY, WORKFLOW,
     };
     use super::{
         tracked_file_admitted, validate_tracked_files, CANONICAL_GITATTRIBUTES, CODEOWNERS,
@@ -4786,6 +4850,104 @@ jobs:
         fs::write(root.path().join(".github/CODEOWNERS"), CODEOWNERS).unwrap();
         assert_eq!(
             tracked_file_findings(root.path(), false),
+            Vec::<String>::new()
+        );
+    }
+
+    /// One `visibility: client` pointer under `blobs/`, as YAML text.
+    fn pointer_yaml(visibility: &str) -> String {
+        format!(
+            "kind: agreement\nvisibility: {visibility}\ncurrent_version:\n  version: 1\n  \
+             asset_id: 018f1a2b-3c4d-7e5f-8a9b-0c1d2e3f4a5b\n  \
+             created_at: \"2026-10-30T00:00:00Z\"\n  \
+             sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n  \
+             size_bytes: 42\n"
+        )
+    }
+
+    fn client_visibility_warnings(root: &Path) -> Vec<String> {
+        let mut warnings: Vec<Finding> = Vec::new();
+        validate_client_visibility(root, &mut warnings);
+        warnings
+            .into_iter()
+            .map(|finding| finding.message)
+            .collect()
+    }
+
+    /// LAW-144 ask #3: the gate names every `visibility: client` pointer the
+    /// checkout proposes, so the reviewer sees exactly what newly reaches the
+    /// client.
+    #[test]
+    fn a_client_visible_pointer_warns() {
+        let root = tempfile::tempdir().unwrap();
+        scaffold_minimal(root.path());
+        write_files(root.path(), &["blobs/complaint.pdf.yaml"]);
+        fs::write(
+            root.path().join("blobs/complaint.pdf.yaml"),
+            pointer_yaml("client"),
+        )
+        .unwrap();
+
+        let warnings = client_visibility_warnings(root.path());
+        assert_eq!(warnings.len(), 1, "{warnings:#?}");
+        assert!(
+            warnings[0].starts_with("Y025: `blobs/complaint.pdf.yaml`"),
+            "{warnings:#?}"
+        );
+        assert!(warnings[0].contains("visibility: client"), "{warnings:#?}");
+    }
+
+    /// The default posture is internal: an all-internal checkout — a matter
+    /// still a pitch included — collects no Y025 warning at all.
+    #[test]
+    fn internal_pointers_and_non_pointer_yaml_stay_silent() {
+        let root = tempfile::tempdir().unwrap();
+        scaffold_minimal(root.path());
+        write_files(
+            root.path(),
+            &[
+                "blobs/retainer.pdf.yaml",
+                "blobs/memos/notes.md.yaml",
+                "seeds/people.yaml",
+            ],
+        );
+        fs::write(
+            root.path().join("blobs/retainer.pdf.yaml"),
+            pointer_yaml("internal"),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("blobs/memos/notes.md.yaml"),
+            pointer_yaml("internal"),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("seeds/people.yaml"),
+            "kind: not a pointer\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            client_visibility_warnings(root.path()),
+            Vec::<String>::new()
+        );
+    }
+
+    /// A pointer this check cannot parse is the layout pass's finding, not
+    /// this one: Y025 never invents a visibility for a file it cannot read.
+    #[test]
+    fn an_unparseable_pointer_is_not_reported_as_client_visible() {
+        let root = tempfile::tempdir().unwrap();
+        scaffold_minimal(root.path());
+        write_files(root.path(), &["blobs/broken.pdf.yaml"]);
+        fs::write(
+            root.path().join("blobs/broken.pdf.yaml"),
+            "kind: agreement\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            client_visibility_warnings(root.path()),
             Vec::<String>::new()
         );
     }
