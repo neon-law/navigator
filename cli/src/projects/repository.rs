@@ -302,6 +302,7 @@ const FORBIDDEN_DOCUMENT_EXTENSIONS: &[&str] = &["doc", "docx", "odt", "pdf"];
 /// `opposing-communication-review` gives every Project the recipient-side
 /// review discipline for opposing-party correspondence. `pull-changes` is the
 /// one meaning of "pull changes": rebase the branch onto the latest `origin/main`.
+/// `push-changes` carries the outbound loop through a ready PR and verified merge.
 /// `word-editing` (LAW-229) carries a lawyer's edits in local Word back into
 /// the notation template, with the template kept the source of truth.
 /// `analyze-memo` (LAW-237) reviews a finished memo or letter and reports
@@ -370,6 +371,10 @@ pub(crate) const SYNCED_SKILLS: &[(&str, &str)] = &[
     (
         "pull-changes",
         include_str!("../../../.agents/skills/pull-changes/SKILL.md"),
+    ),
+    (
+        "push-changes",
+        include_str!("../../../.agents/skills/push-changes/SKILL.md"),
     ),
     (
         "word-editing",
@@ -4296,6 +4301,36 @@ jobs:
             assert!(!matches(allowed), "read/draft tool is denied: {allowed}");
         }
     }
+    #[test]
+    fn push_changes_is_synced_and_finishes_only_after_merge() {
+        let (_, skill) = SYNCED_SKILLS
+            .iter()
+            .find(|(name, _)| *name == "push-changes")
+            .expect("push-changes must ship to every Project repository");
+        for required in [
+            "git rebase -S origin/main",
+            "navigator project gate",
+            "git commit -S",
+            "git push --force-with-lease -u origin",
+            "MERGED",
+            "App-owned",
+            "another forge",
+            "git switch main",
+        ] {
+            assert!(
+                skill.contains(required),
+                "missing push contract: {required}"
+            );
+        }
+        assert!(!skill.contains("gh pr merge"));
+        assert!(AGENT_CONTRACT_BASE.contains(".agents/skills/push-changes/SKILL.md"));
+        let contract = AGENT_CONTRACT_BASE
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(contract.contains("The job ends when the pull request is merged"));
+    }
+
     #[test]
     fn canonical_contract_requires_deliberate_client_visibility_review() {
         assert!(AGENT_CONTRACT_BASE.contains("## Branches"));

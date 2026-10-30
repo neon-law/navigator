@@ -38,10 +38,9 @@ each answer terse.
 * `main` is the only long-lived branch. Change it only through a pull request; never push to it directly.
 * Pull requests are squash-merged, and the head branch is deleted on merge.
 * Open pull requests ready for review by default; use a draft only when deliberately holding work for more changes.
-  On GitHub, run `gh pr merge <number> --auto --squash` if auto-merge was not armed automatically, then confirm
-  `autoMergeRequest` is non-null or the pull request is already merged. On another forge, use its equivalent
-  ready-for-review and merge-when-checks-pass controls, and verify the resulting pull-request state and merge policy
-  there.
+  On GitHub, respect App-owned automatic squash auto-merge and confirm `autoMergeRequest` is non-null or the pull
+  request is already merged. If automation does not arm it, inspect and report the blocker. On another forge, use its
+  equivalent ready-for-review and merge-when-checks-pass controls, and verify the pull-request state and merge policy.
 * Before merging, review every changed document pointer (`blobs/**/*.yaml`): retain `visibility: internal` unless
   the client is meant to read that document. Treat every change to `visibility: client` as a deliberate client-release
   decision. Review every change to a `client:` lens under `pages:`; it is what the client sees. For each Deadline,
@@ -54,6 +53,9 @@ each answer terse.
   `navigator project gate`, then push with `git push --force-with-lease`, never plain `--force`, and never force-push
   `main`. A host-side "sync with base branch" tool merges rather than rebases; use it only when the sandbox blocks a
   rebase, and say so. The steps live in `.agents/skills/pull-changes/SKILL.md`.
+* "Push changes", "push this", "ship it", and "land it" mean signed-rebase onto the latest `origin/main`, gate, sign,
+  push a topic branch, open a ready PR against `main`, and follow its checks and auto-merge through merge. The job ends
+  when the pull request is merged and this checkout is current. Follow `.agents/skills/push-changes/SKILL.md`.
 * The required check is `ci`, which runs `navigator project gate`.
 * The forge enforces branch and merge settings; client-visibility decisions remain part of human review. A pre-commit
   hook is a convenience only.
