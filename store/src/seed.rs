@@ -6937,7 +6937,7 @@ records:
             .await
             .unwrap();
         neon_keys.sort();
-        let closed = crate::firms::CLOSED_BRAND_KEYS
+        let mut closed = crate::firms::CLOSED_BRAND_KEYS
             .iter()
             .map(|k| k.to_string())
             .collect::<Vec<_>>();
