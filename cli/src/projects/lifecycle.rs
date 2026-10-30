@@ -243,7 +243,6 @@ fn write_template_stub(path: &Path, kind: &str) -> Result<()> {
     std::fs::write(path, template_stub(kind)).with_context(|| format!("write {}", path.display()))
 }
 
-
 /// Whether `contents` is a lifecycle letter stub nobody has drafted yet.
 /// Such a file is a placeholder, never an attorney's edit.
 pub(crate) fn is_unedited_stub(contents: &str) -> bool {
