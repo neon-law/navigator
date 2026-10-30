@@ -8,7 +8,13 @@
 //! empty and `cargo build --workspace` stays green.
 
 fn main() {
-    #[cfg(all(feature = "web", target_arch = "wasm32"))]
+        // Native mobile shell (`dx serve --platform ios|android` from webapp/):
+    // the Nautilus subscription experience with local content only — no
+    // SSR-injected context or server futures, which do not exist natively.
+    #[cfg(feature = "mobile")]
+    dioxus::launch(webapp::mobile::MobileApp);
+
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
     {
         // Hydration must launch the same root used by the server's home router.
         let is_design = web_sys::window()
