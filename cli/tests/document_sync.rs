@@ -2015,7 +2015,7 @@ async fn project_sync_migrates_a_flat_project_without_changing_a_checksum_or_ass
     for expected in [
         "moved 2 pointer(s) from documents/ to blobs/",
         "moved documents/complaint.pdf -> documents/Docket Filings/complaint.pdf",
-        "moved documents/memos/analysis.pdf -> documents/Work Product/memos/analysis.pdf",
+        "moved documents/memos/analysis.pdf -> documents/Work Product/Research (Work Product)/memos/analysis.pdf",
     ] {
         assert!(
             stdout.contains(expected),
@@ -2048,7 +2048,8 @@ async fn project_sync_migrates_a_flat_project_without_changing_a_checksum_or_ass
         FILED
     );
     assert_eq!(
-        fs::read(root.join("documents/Work Product/memos/analysis.pdf")).unwrap(),
+        fs::read(root.join("documents/Work Product/Research (Work Product)/memos/analysis.pdf"))
+            .unwrap(),
         NEWER
     );
     assert!(
