@@ -44,6 +44,34 @@ pub async fn start_inbound_message_alert(message_id: Uuid) -> Result<(), String>
     .map_err(|error| error.to_string())
 }
 
+/// Start the triage workflow for a fresh, non-deduped inbound Message, keyed
+/// by the same Message ID as the alert. Best effort in the same sense as the
+/// alert submission: a failure surfaces as the handler's 503 so the provider
+/// retries the webhook and the durable submission eventually lands — ingest
+/// itself is never rolled back, and the alert that was already submitted is
+/// keyed identically and survives the replay untouched.
+pub async fn start_inbound_message_triage(message_id: Uuid) -> Result<(), String> {
+    let Some(ingress) = std::env::var("RESTATE_BROKER_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(());
+    };
+    let request = workflows::InboundTriageRequest { message_id };
+    workflows::start_workflow(
+        &ingress,
+        std::env::var("RESTATE_AUTH_TOKEN").ok().as_deref(),
+        "InboundTriage",
+        &message_id.to_string(),
+        "run",
+        &request,
+        true,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
 /// Record support intake in the shared email/SMS transcript. Public Neon Law
 /// mailboxes resolve their owning Firm by brand when no explicit inbox Firm is
 /// configured. Token-addressed Lawyer/Clerk replies keep their threading path.
@@ -601,6 +629,12 @@ pub async fn sms_inbound(
     {
         Ok(receipt) => {
             if start_inbound_message_alert(receipt.message_id)
+                .await
+                .is_err()
+            {
+                return StatusCode::SERVICE_UNAVAILABLE;
+            }
+            if start_inbound_message_triage(receipt.message_id)
                 .await
                 .is_err()
             {

@@ -277,6 +277,13 @@ pub async fn webhook(
         tracing::error!("SMS notice submission failed; Message retained for reconciliation");
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
+    if crate::inbox::start_inbound_message_triage(saved.message_id)
+        .await
+        .is_err()
+    {
+        tracing::error!("SMS triage submission failed; Message retained for reconciliation");
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     let Some(summary) = state.summary_intake.as_ref() else {
         return (
             StatusCode::OK,

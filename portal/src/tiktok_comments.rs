@@ -309,6 +309,9 @@ async fn ingest_comment(
     crate::inbox::start_inbound_message_alert(received.message_id)
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    crate::inbox::start_inbound_message_triage(received.message_id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     Ok(())
 }
 

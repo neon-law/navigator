@@ -32,6 +32,7 @@ pub mod email_summary_config;
 pub mod email_summary_delivery;
 pub mod guardrail;
 pub mod heartbeat;
+pub mod inbox_triage;
 pub mod intake;
 pub mod integrations;
 pub mod message_alert;
@@ -69,6 +70,12 @@ pub use email_summary::{
     summary_response_schema, EmailSummary, EmailSummaryRequest, EmailSummaryRunConfig,
     NormalizedEmail, Sender, SummaryError, SummaryProvider, DEFAULT_MAX_INPUT_CHARS,
     DEFAULT_MAX_OUTPUT_TOKENS, SUMMARY_PROMPT_VERSION,
+};
+pub use inbox_triage::{
+    assemble_triage, build_triage_prompt, parse_triage, triage_input_digest,
+    triage_response_schema, ClassifierLane, InboundTriageReport, InboundTriageRequest,
+    ProjectOption, TriageClassifierOutput, TriageError, TriageRunConfig,
+    DEFAULT_TRIAGE_MAX_OUTPUT_TOKENS, TRIAGE_PROMPT_VERSION,
 };
 pub use email_summary_config::{harness_override, EmailSummaryConfig, EmailSummaryConfigError};
 pub use email_summary_delivery::{

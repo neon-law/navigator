@@ -77,6 +77,7 @@ pub(crate) async fn receive(
         return Ok(());
     };
     crate::inbox::start_inbound_message_alert(inbound.message_id).await?;
+    crate::inbox::start_inbound_message_triage(inbound.message_id).await?;
     let Some(mailbox) = mailbox(email).filter(|_| receipt_allowed(email)) else {
         return Ok(());
     };

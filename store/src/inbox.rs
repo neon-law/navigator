@@ -2274,7 +2274,7 @@ async fn assignee_label(db: &SurrealDb, project_id: Option<Uuid>) -> Result<Stri
         .map_or_else(|| "Unassigned".to_string(), |project| project.name))
 }
 
-async fn projects_in_firm(db: &SurrealDb, firm_id: Uuid) -> Result<Vec<ProjectChoice>, InboxError> {
+pub async fn projects_in_firm(db: &SurrealDb, firm_id: Uuid) -> Result<Vec<ProjectChoice>, InboxError> {
     let mut response = db
         .query("SELECT id, code, name FROM project WHERE firm_id = $firm ORDER BY name")
         .bind(("firm", record_id(crate::firms::TABLE, firm_id)))

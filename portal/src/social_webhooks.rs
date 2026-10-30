@@ -299,12 +299,19 @@ async fn receive(
         if start_alert(received.message_id).await.is_err() {
             return StatusCode::SERVICE_UNAVAILABLE;
         }
+        if start_triage(received.message_id).await.is_err() {
+            return StatusCode::SERVICE_UNAVAILABLE;
+        }
     }
     StatusCode::ACCEPTED
 }
 
 async fn start_alert(message_id: uuid::Uuid) -> Result<(), String> {
     crate::inbox::start_inbound_message_alert(message_id).await
+}
+
+async fn start_triage(message_id: uuid::Uuid) -> Result<(), String> {
+    crate::inbox::start_inbound_message_triage(message_id).await
 }
 
 fn constant_time_eq(expected: &str, actual: &str) -> bool {

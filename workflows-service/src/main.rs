@@ -39,7 +39,7 @@ use workflows_service::{
 };
 
 macro_rules! bind_common_services {
-    ($endpoint:expr, $surreal:expr, $email:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $forge:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
+    ($endpoint:expr, $surreal:expr, $email:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $inbound_triage:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $forge:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
         $endpoint
             .bind(NotationService::new(
                 $surreal.clone(),
@@ -511,6 +511,10 @@ async fn main() -> anyhow::Result<()> {
         slack_bot.clone(),
         summary_providers,
     );
+    // Rules-only when `NAVIGATOR_TRIAGE_ENABLED` is unset: the service stays
+    // registered and every message still gets a triage row, from rules alone.
+    let triage_providers = TriageProviders::from_env().context("configure triage providers")?;
+    let inbound_triage = InboundTriageService::new(surreal.clone(), triage_providers);
 
     let listen: SocketAddr = std::env::var("WORKFLOWS_SERVICE_LISTEN")
         .unwrap_or_else(|_| "0.0.0.0:9080".into())

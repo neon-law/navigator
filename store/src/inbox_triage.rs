@@ -277,6 +277,16 @@ pub const RULES_ONLY_PROMPT: &str = "rules-only-v1";
 /// [`PrivilegeLabel::Uncertain`], and the row waits for a person.
 pub const PRIVILEGED_CONFIDENCE_FLOOR: f64 = 0.90;
 
+/// Whether the hosted classifier lane may be consulted for a message on this
+/// channel at all. Social-origin channels are settled by the rule layer
+/// alone; only client email and SMS may spend a model call. The workflow
+/// branches on this before its classifier step so a replay journal never
+/// contains a social message's provider invocation.
+#[must_use]
+pub fn classifier_may_run(channel: &str) -> bool {
+    !crate::inbox::is_social_channel(channel)
+}
+
 /// The schema-validated privilege verdict from the hosted classifier, as
 /// the workflow lane will hand it over. Malformed or missing output never
 /// becomes a `ClassifierOutput` — it stays `None`, and the label is
