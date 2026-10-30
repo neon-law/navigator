@@ -322,6 +322,14 @@ pub enum FirmError {
     /// nothing for [`update_membership`] or [`remove_membership`] to change.
     #[error("person {0} is not a member of firm {1}")]
     NotAMember(Uuid, Uuid),
+    /// The Brand row has no owning Firm, so there is no Firm it may be
+    /// attached to through [`attach_own_brand`].
+    #[error("brand {0} belongs to no firm")]
+    BrandHasNoFirm(String),
+    /// Reading the `brand` row failed. Boxed because
+    /// [`crate::brands::BrandError`] itself carries a `FirmError`.
+    #[error(transparent)]
+    Brand(Box<crate::brands::BrandError>),
 }
 
 impl FirmError {
@@ -373,11 +381,13 @@ impl FirmError {
                 "This firm still owns one or more brands and cannot be deleted.".to_string()
             }
             Self::NotAMember(_, _) => "That person is not a member of this firm.".to_string(),
+            Self::BrandHasNoFirm(_) => "That brand belongs to no firm.".to_string(),
             Self::Db(_)
             | Self::Postgres(_)
             | Self::PostgresSql(_)
             | Self::Person(_)
             | Self::Entity(_)
+            | Self::Brand(_)
             | Self::WriteReturnedNothing => "Could not save firm.".to_string(),
         }
     }
@@ -1206,6 +1216,42 @@ fn in_registry_order(keys: Vec<String>) -> Vec<String> {
         }
     }
     ordered
+}
+
+/// Attach a Brand to the Firm that owns its `brand` row. Owner, or that
+/// Firm's own Admin membership, only (`authorize_manage_firm`). The Firm is
+/// read from the row, never from the caller, so no one can make a Firm wear
+/// another Firm's Brand. A key the Firm already wears is a no-op
+/// ([`ensure_brand`]); returns the Firm the Brand is now attached to.
+pub async fn attach_own_brand(
+    surreal: &SurrealDb,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    brand_key: &str,
+) -> Result<Uuid, FirmError> {
+    let brand = crate::brands::find_by_key(surreal, brand_key)
+        .await
+        .map_err(|error| FirmError::Brand(Box::new(error)))?
+        .ok_or_else(|| FirmError::UnknownBrand(brand_key.to_string()))?;
+    let firm_id = brand
+        .firm_id
+        .ok_or_else(|| FirmError::BrandHasNoFirm(brand_key.to_string()))?;
+    if crate::postgres::tenancy::enabled()? {
+        let pg = crate::postgres::PostgresDb::from_env()
+            .await
+            .map_err(crate::postgres::tenancy::TenancyError::from)?;
+        Box::pin(crate::postgres::tenancy::authorize_firm_management(
+            pg.pool(),
+            actor_role,
+            actor_person_id,
+            firm_id,
+        ))
+        .await?;
+    } else {
+        authorize_manage_firm(surreal, actor_role, actor_person_id, firm_id).await?;
+    }
+    ensure_brand(surreal, firm_id, brand_key).await?;
+    Ok(firm_id)
 }
 
 /// Detach a house-brand key from a firm. Owner, or that Firm's own Admin
@@ -2575,6 +2621,53 @@ mod tests {
             firm_id_for_brand_key(&db, "runtime-brand").await.unwrap(),
             Some(firm.id)
         );
+    }
+
+    /// `attach_own_brand` reads the Firm from the `brand` row, admits only
+    /// Owner or that Firm's own Admin, and is idempotent.
+    #[tokio::test]
+    async fn attach_own_brand_wears_the_rows_own_firm_only() {
+        let db = mem_surreal().await;
+        let admin = admin_dri_person(&db).await;
+        let firm = practice_with_admin(&db, "Own Brand Wearer", admin).await;
+        let stranger = admin_dri_person(&db).await;
+        practice_with_admin(&db, "Stranger Practice", stranger).await;
+        crate::brands::create(
+            &db,
+            Role::Admin,
+            Some(admin),
+            &crate::brands::NewBrand {
+                name: "Own Brand".to_string(),
+                key: "own-brand".to_string(),
+                firm_id: Some(firm.id),
+                ..crate::brands::NewBrand::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let refused = attach_own_brand(&db, Role::Admin, Some(stranger), "own-brand")
+            .await
+            .unwrap_err();
+        assert!(matches!(refused, FirmError::NotAuthorized), "{refused:?}");
+        assert!(brand_keys_for_firm(&db, firm.id).await.unwrap().is_empty());
+
+        let attached = attach_own_brand(&db, Role::Admin, Some(admin), "own-brand")
+            .await
+            .unwrap();
+        assert_eq!(attached, firm.id);
+        attach_own_brand(&db, Role::Owner, None, "own-brand")
+            .await
+            .unwrap();
+        assert_eq!(
+            brand_keys_for_firm(&db, firm.id).await.unwrap(),
+            vec!["own-brand".to_string()]
+        );
+
+        let unknown = attach_own_brand(&db, Role::Owner, None, "no-such-brand")
+            .await
+            .unwrap_err();
+        assert!(matches!(unknown, FirmError::UnknownBrand(_)), "{unknown:?}");
     }
 
     /// ENG-494: `update` edits name/status/entity_id and leaves the Admin

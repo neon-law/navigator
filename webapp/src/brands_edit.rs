@@ -25,6 +25,13 @@ pub struct BrandsEditView {
     pub social_accounts: Vec<SocialAccountView>,
     #[serde(default)]
     pub social_selections: std::collections::BTreeMap<String, String>,
+    /// The Owner-approved website, `https://<host>`; its host is the Brand's
+    /// approved email domain.
+    #[serde(default)]
+    pub website_url: Option<String>,
+    /// Whether the Firm that owns this row wears it (`firm_brand`).
+    #[serde(default)]
+    pub worn_by_firm: bool,
     pub csrf_token: String,
     #[serde(default)]
     pub error: Option<String>,
@@ -92,6 +99,10 @@ pub struct BrandsEditQuery {
     pub social_connected: Option<usize>,
     #[serde(default)]
     pub social_disconnected: Option<usize>,
+    #[serde(default)]
+    pub website_saved: bool,
+    #[serde(default)]
+    pub attached: bool,
 }
 
 /// Load the edit form for `{key}`.
@@ -133,9 +144,15 @@ pub async fn get_brands_edit() -> Result<BrandsEditView, ServerFnError> {
         firm_href: None,
         social_accounts: Vec::new(),
         social_selections: std::collections::BTreeMap::default(),
+        website_url: None,
+        worn_by_firm: false,
         csrf_token,
         error: query.error.clone(),
-        notice: if query.social_reused {
+        notice: if query.website_saved {
+            Some("The website is saved.".to_string())
+        } else if query.attached {
+            Some("The Firm now wears this Brand.".to_string())
+        } else if query.social_reused {
             Some(
                 "This saved destination is already connected with usable authorization."
                     .to_string(),
@@ -229,6 +246,13 @@ pub async fn get_brands_edit() -> Result<BrandsEditView, ServerFnError> {
                 .flatten()
         })
         .map(|face| face.label.to_string());
+    let worn_by_firm = match brand.firm_id {
+        Some(firm_id) => store::firms::brand_keys_for_firm(&surreal, firm_id)
+            .await
+            .map_err(|error| ServerFnError::new(error.to_string()))?
+            .contains(&key),
+        None => false,
+    };
 
     Ok(BrandsEditView {
         fields: Some(BrandPresentationFields {
@@ -249,6 +273,8 @@ pub async fn get_brands_edit() -> Result<BrandsEditView, ServerFnError> {
             .map(|selection| (selection.provider, selection.provider_account_id))
             .collect(),
         firm_href: brand.firm_id.map(|id| format!("/app/admin/firms/{id}")),
+        website_url: brand.website_url,
+        worn_by_firm,
         ..base
     })
 }
@@ -493,6 +519,62 @@ fn social_provider(view: &BrandsEditView, provider: &str) -> Element {
     }
 }
 
+fn website_section(view: &BrandsEditView) -> Element {
+    let help = "https only, for example https://www.example.com. Its host becomes this Brand's \
+                approved email domain: people with an address there may create an account. \
+                Leave blank to clear the approval.";
+    rsx! {
+        section { id: "brand-website-url",
+            if view.role == ViewerRole::Owner {
+                FormCard {
+                    title: "Website".to_string(),
+                    action: format!("/app/admin/brands/{}/website", view.key),
+                    submit_label: "Save website".to_string(),
+                    heading: Heading::H2,
+                    csrf_token: Some(view.csrf_token.clone()),
+                    fields: vec![Field::text(
+                        "Website URL",
+                        "website_url",
+                        view.website_url.clone().unwrap_or_default(),
+                    )
+                    .help(help)],
+                }
+            } else {
+                Card {
+                    header: rsx! { h2 { "Website" } },
+                    match &view.website_url {
+                        Some(url) => rsx! { p { "{url}" } },
+                        None => rsx! { p { class: "muted", "No approved website. The Owner approves one." } },
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn firm_section(view: &BrandsEditView) -> Element {
+    rsx! {
+        section { id: "brand-firm",
+            Card {
+                header: rsx! { h2 { "Firm" } },
+                if view.worn_by_firm {
+                    p { "Its Firm wears this Brand." }
+                } else {
+                    p { "Its Firm does not wear this Brand yet, so the Firm's footer and Brand list leave it out." }
+                    form {
+                        class: "nav-form",
+                        method: "post",
+                        action: format!("/app/admin/brands/{}/attach", view.key),
+                        aria_label: "Attach Brand to its Firm",
+                        input { class: "nav-control", r#type: "hidden", name: "_csrf", value: "{view.csrf_token}" }
+                        button { class: "nav-btn", r#type: "submit", "Attach to Firm" }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Split from the component so tests render a fixed view.
 pub fn brands_edit_body(view: &BrandsEditView) -> Element {
     let role = view.role;
@@ -521,6 +603,8 @@ pub fn brands_edit_body(view: &BrandsEditView) -> Element {
                     }
                     {social_accounts(view)}
                     {presentation_form(view, fields)}
+                    {website_section(view)}
+                    {firm_section(view)}
                     {logo_status(fields)}
                     {font_status(view, fields)}
                     p { a { href: "/app/admin/brands", "← Brands" } }
@@ -552,9 +636,57 @@ mod tests {
             csrf_token: "TOK".to_string(),
             social_accounts: Vec::new(),
             social_selections: std::collections::BTreeMap::default(),
+            website_url: None,
+            worn_by_firm: false,
             error: None,
             notice: None,
         }
+    }
+
+    #[test]
+    fn owner_edits_the_website_and_an_admin_only_reads_it() {
+        let mut owner = view(Some(fields()));
+        owner.website_url = Some("https://www.example.com".to_string());
+        let html = dioxus_ssr::render_element(brands_edit_body(&owner));
+        assert!(
+            html.contains(r#"action="/app/admin/brands/neon/website""#),
+            "{html}"
+        );
+        assert!(html.contains(r#"name="website_url""#), "{html}");
+        assert!(
+            html.contains(r#"value="https://www.example.com""#),
+            "{html}"
+        );
+        assert!(html.contains("approved email domain"), "{html}");
+        assert_forms_accessible(&html, "brands edit");
+
+        let mut admin = owner.clone();
+        admin.role = ViewerRole::Admin;
+        let html = dioxus_ssr::render_element(brands_edit_body(&admin));
+        assert!(!html.contains("/website\""), "{html}");
+        assert!(html.contains("https://www.example.com"), "{html}");
+
+        admin.website_url = None;
+        let html = dioxus_ssr::render_element(brands_edit_body(&admin));
+        assert!(html.contains("No approved website."), "{html}");
+    }
+
+    #[test]
+    fn an_unworn_brand_offers_attach_and_a_worn_one_does_not() {
+        let unworn = view(Some(fields()));
+        let html = dioxus_ssr::render_element(brands_edit_body(&unworn));
+        assert!(
+            html.contains(r#"action="/app/admin/brands/neon/attach""#),
+            "{html}"
+        );
+        assert!(html.contains("Attach to Firm"), "{html}");
+        assert_forms_accessible(&html, "brands edit");
+
+        let mut worn = unworn.clone();
+        worn.worn_by_firm = true;
+        let html = dioxus_ssr::render_element(brands_edit_body(&worn));
+        assert!(!html.contains("/attach"), "{html}");
+        assert!(html.contains("Its Firm wears this Brand."), "{html}");
     }
 
     fn fields() -> BrandPresentationFields {

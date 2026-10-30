@@ -2251,6 +2251,139 @@ async fn app_admin_brands_hides_another_firms_brand_from_its_admin() {
     );
 }
 
+/// A Firm with its Admin DRI and one Brand keyed `key`.
+async fn brand_practice(
+    db: &store::surreal::SurrealDb,
+    name: &str,
+    key: &str,
+) -> (store::persons::Person, uuid::Uuid) {
+    let entity_id = store::test_support::seed_entity(db).await;
+    let admin = store::persons::create(
+        db,
+        &store::persons::NewPerson::with_role(
+            format!("{name} Admin"),
+            format!("{key}@example.com"),
+            store::persons::Role::Admin,
+        ),
+    )
+    .await
+    .unwrap();
+    let firm = store::firms::create(
+        db,
+        &store::firms::NewFirm {
+            name: name.to_string(),
+            status: "active".to_string(),
+            entity_id,
+            admin_dri_person_id: admin.id,
+        },
+    )
+    .await
+    .unwrap();
+    store::brands::create(
+        db,
+        store::persons::Role::Admin,
+        Some(admin.id),
+        &store::brands::NewBrand {
+            name: format!("{name} Brand"),
+            key: key.to_string(),
+            firm_id: Some(firm.id),
+            ..store::brands::NewBrand::default()
+        },
+    )
+    .await
+    .unwrap();
+    (admin, firm.id)
+}
+/// POST a CSRF-carrying form as `person` and return the status.
+async fn post_form_as(
+    app: &axum::Router,
+    person: &store::persons::Person,
+    uri: &str,
+    form: &str,
+) -> StatusCode {
+    let (cookie, csrf) = session_cookie_and_csrf_for_person(person);
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::COOKIE, cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("_csrf={csrf}{form}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn owner_approves_a_brand_website_and_its_own_admin_attaches_it() {
+    let (state, surreal) = state_with_engines().await;
+    let (admin_a, firm_a) = brand_practice(&surreal, "Practice A", "practice-a-brand").await;
+    let (admin_b, _) = brand_practice(&surreal, "Practice B", "practice-b-brand").await;
+    let owner = store::persons::create(
+        &surreal,
+        &store::persons::NewPerson::with_role(
+            "Brand Owner",
+            "brand-owner@example.com",
+            store::persons::Role::Owner,
+        ),
+    )
+    .await
+    .unwrap();
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    let website = "/app/admin/brands/practice-a-brand/website";
+    let website_of = || async {
+        store::brands::find_by_key(&surreal, "practice-a-brand")
+            .await
+            .unwrap()
+            .unwrap()
+            .website_url
+    };
+
+    let form = "&website_url=https%3A%2F%2Fwww.practice-a.example";
+    assert_eq!(
+        post_form_as(&app, &admin_a, website, form).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(website_of().await, None, "an Admin cannot widen admission");
+
+    assert_eq!(
+        post_form_as(&app, &owner, website, form).await,
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        website_of().await.as_deref(),
+        Some("https://www.practice-a.example")
+    );
+    assert_eq!(
+        post_form_as(&app, &owner, website, "&website_url=").await,
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(website_of().await, None, "a blank URL clears the approval");
+
+    let attach = "/app/admin/brands/practice-a-brand/attach";
+    assert_eq!(
+        post_form_as(&app, &admin_b, attach, "").await,
+        StatusCode::NOT_FOUND
+    );
+    assert!(store::firms::brand_keys_for_firm(&surreal, firm_a)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        post_form_as(&app, &admin_a, attach, "").await,
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        store::firms::brand_keys_for_firm(&surreal, firm_a)
+            .await
+            .unwrap(),
+        vec!["practice-a-brand".to_string()]
+    );
+}
+
 #[tokio::test]
 async fn retired_app_brands_paths_are_not_mounted() {
     let (state, surreal) = state_with_engines().await;

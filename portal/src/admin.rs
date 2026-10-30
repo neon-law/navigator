@@ -3119,6 +3119,13 @@ pub(crate) async fn brands_create(
     .await
     {
         Ok(created) => {
+            // The creating Firm wears its new Brand at once. A failure leaves
+            // the Brand unattached, and the edit page offers the attach form.
+            if let Err(error) =
+                store::firms::ensure_brand(&state.surreal, firm_id, &created.key).await
+            {
+                tracing::error!(error = %error, "brands_create: attaching the new brand failed");
+            }
             Redirect::to(&format!("/app/admin/brands/{}/edit", created.key)).into_response()
         }
         Err(error) => refuse(&error.user_message()),
