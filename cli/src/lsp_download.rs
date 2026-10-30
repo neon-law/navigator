@@ -27,11 +27,10 @@ use views::lsp::{lsp_release_archive_for_host, lsp_release_asset_name, LspReleas
 /// archive to its Release, so an anonymous `navigator lsp` resolves there.
 const RELEASES_REPO: &str = "neon-law/navigator";
 
-/// [`RELEASES_REPO`]'s anonymous release-download base, for a consumer that
-/// fetches an archive by URL rather than through the API: the generated
-/// Forgejo gate (`projects::repository::forgejo_gate_workflow`).
-pub(crate) const RELEASE_DOWNLOAD_BASE: &str =
-    "https://github.com/neon-law/navigator/releases/download";
+/// The release-download base the generated Forgejo gate installs the pinned
+/// `navigator` release from. The canonical value lives in `project-scaffold`
+/// beside the gate workflow that embeds it.
+pub(crate) use project_scaffold::RELEASE_DOWNLOAD_BASE;
 
 /// `api.github.com`'s own base. A test overrides this with a `wiremock`
 /// server's address so no test makes a live network call.

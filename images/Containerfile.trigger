@@ -40,6 +40,7 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 RUN rustup target add x86_64-unknown-linux-musl
 COPY rules             rules
+COPY project-scaffold project-scaffold
 COPY store             store
 COPY repos             repos
 COPY cli               cli

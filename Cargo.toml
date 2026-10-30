@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "rules",
+    "project-scaffold",
     "store",
     "repos",
     "import",
@@ -191,6 +192,7 @@ neon = { path = "neon" }
 repos = { path = "repos" }
 server = { path = "server" }
 rules = { path = "rules" }
+project-scaffold = { path = "project-scaffold" }
 store = { path = "store" }
 # SurrealDB, the store the workspace is porting onto (#1093). `store`
 # is its only consumer;

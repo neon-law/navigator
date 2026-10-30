@@ -892,11 +892,12 @@ fn images_that_copy_cli_also_copy_the_root_files_it_embeds() {
     );
 }
 
-/// `cli/src/projects/repository.rs` embeds the Project-repository review
-/// councils with `include_str!("../../../.agents/skills/council/SKILL.md")`
+/// `project-scaffold/src/lib.rs` embeds the Project-repository review
+/// councils with `include_str!("../../.agents/skills/council/SKILL.md")`
 /// (and its `legal-council`/`client-council` siblings) from the canonical
-/// skill catalog, which lives outside the `cli` crate directory. Any
-/// Containerfile that actually builds the `cli` binary without also staging
+/// skill catalog, which lives outside that crate directory. Any
+/// Containerfile that actually builds the `cli` binary also compiles
+/// `project-scaffold` (a workspace dependency), and not staging
 /// `.agents` fails `cargo build` at `couldn't read
 /// .../.agents/skills/council/SKILL.md` — deploy run 33231322469 failed on
 /// exactly this in `Containerfile.trigger` and `Containerfile.runner`, while
@@ -913,14 +914,14 @@ fn images_that_copy_cli_also_copy_the_root_files_it_embeds() {
 /// `Containerfile.runner` — stage them.
 #[test]
 fn every_containerfile_that_builds_cli_also_copies_dot_agents() {
-    let repository_rs =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/projects/repository.rs");
-    let repo_body = fs::read_to_string(&repository_rs)
-        .unwrap_or_else(|e| panic!("read {}: {e}", repository_rs.display()));
+    let scaffold_lib_rs =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../project-scaffold/src/lib.rs");
+    let scaffold_body = fs::read_to_string(&scaffold_lib_rs)
+        .unwrap_or_else(|e| panic!("read {}: {e}", scaffold_lib_rs.display()));
     assert!(
-        repo_body.contains("include_str!(\"../../../.agents/skills/council/SKILL.md\")"),
+        scaffold_body.contains("include_str!(\"../../.agents/skills/council/SKILL.md\")"),
         "{} no longer embeds the council skill; if that is deliberate, drop this guard",
-        repository_rs.display()
+        scaffold_lib_rs.display()
     );
 
     let dir = images_dir();
