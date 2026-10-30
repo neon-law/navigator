@@ -113,6 +113,20 @@
       "table": "matter_page"
     },
     {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": "notation_id",
+      "missing_table": null,
+      "table": "notation_draft"
+    },
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": "relationship notation_id → notation",
+      "missing_table": null,
+      "table": "notation_draft"
+    },
+    {
       "extra_column": "entity_id",
       "extra_table": null,
       "missing_column": null,
@@ -1248,6 +1262,7 @@
         "expires_at": "datetime",
         "id": "record",
         "inserted_at": "datetime",
+        "notation_id": "option<record<notation>>",
         "project_id": "record<project>",
         "slug": "string",
         "source": "string",
