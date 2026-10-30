@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 
 /// Identifier for one vendored sandbox skill, e.g. `"draft"`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SkillId(String);
 
 impl SkillId {
