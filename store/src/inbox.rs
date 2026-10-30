@@ -1731,7 +1731,7 @@ async fn participant_still_may_reply(
     sees_project(db, person_id, person.role, project_id).await
 }
 
-fn is_social_channel(channel_name: &str) -> bool {
+pub(crate) fn is_social_channel(channel_name: &str) -> bool {
     matches!(
         channel_name,
         channel::FACEBOOK

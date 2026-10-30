@@ -476,8 +476,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
       }
     ],
     "remaining": [
@@ -489,8 +489,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
       }
     ],
     "remaining": [
@@ -502,8 +502,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
       }
     ],
     "remaining": [
@@ -515,12 +515,25 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
       }
     ],
     "remaining": [
       "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
+    ]
+  },
+  "inbox_triage": {
+    "scenario": "one triage row per message; structural privilege label; suggestion-only Project routing; human disposition transitions",
+    "runtime_tests": [
+      {
+        "file": "store/src/postgres_mirror/inbox.rs",
+        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
+      }
+    ],
+    "remaining": [
+      "Classifier-driven rows, human confirm and override transitions, and review-queue application queries require separate acceptance."
     ]
   },
   "iolta_account": {
@@ -658,8 +671,8 @@
     "runtime_tests": [
       {
         "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+        "function": "six_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "All six Inbox table images mirror and mutable target drift reconciles."
       }
     ],
     "remaining": [

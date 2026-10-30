@@ -17,7 +17,7 @@ struct Table {
     immutable: bool,
 }
 
-// The same five table names and columns are declared in the Inbox migration.
+// The same six table names and columns are declared in the Inbox migration.
 // `references` names only RecordId columns; every other value retains its
 // source type through jsonb_populate_record.
 const TABLES: &[Table] = &[
@@ -51,6 +51,12 @@ const TABLES: &[Table] = &[
         references: "id,message_id",
         immutable: true,
     },
+    Table {
+        name: "inbox_triage",
+        columns: "id,message_id,firm_id,suggested_project_id,project_confidence,privilege,privilege_confidence,rationale,model_id,prompt_version,raw_output,disposition,labeled_example,inserted_at,updated_at",
+        references: "id,message_id,firm_id,suggested_project_id",
+        immutable: false,
+    },
 ];
 
 fn table(name: &str) -> Result<&'static Table, MirrorError> {
@@ -82,6 +88,7 @@ fn key(name: &str, id: Uuid) -> Result<MirrorKey, MirrorError> {
         "inbox_ingress" => MirrorKey::InboxIngress(id),
         "inbox_assignment" => MirrorKey::InboxAssignment(id),
         "inbox_delivery_attempt" => MirrorKey::InboxDeliveryAttempt(id),
+        "inbox_triage" => MirrorKey::InboxTriage(id),
         _ => return Err(MirrorError::Source),
     })
 }
@@ -191,7 +198,9 @@ fn upsert_sql(table: &Table) -> String {
 fn parent(column: &str, id: Uuid) -> Option<MirrorKey> {
     Some(match column {
         "firm_id" => MirrorKey::Firm(id),
-        "project_id" | "from_project_id" | "to_project_id" => MirrorKey::Project(id),
+        "project_id" | "from_project_id" | "to_project_id" | "suggested_project_id" => {
+            MirrorKey::Project(id)
+        }
         "email_conversation_id" => MirrorKey::EmailConversation(id),
         "conversation_id" => MirrorKey::InboxConversation(id),
         "parent_message_id" | "message_id" => MirrorKey::InboxMessage(id),
@@ -215,7 +224,8 @@ pub async fn mirror(
         | MirrorKey::InboxMessage(id)
         | MirrorKey::InboxIngress(id)
         | MirrorKey::InboxAssignment(id)
-        | MirrorKey::InboxDeliveryAttempt(id) => *id,
+        | MirrorKey::InboxDeliveryAttempt(id)
+        | MirrorKey::InboxTriage(id) => *id,
         _ => return Err(MirrorError::Source),
     };
     if let Some(row) = source_one(surreal, table, id).await? {
@@ -386,8 +396,38 @@ mod tests {
             .is_some());
     }
 
+    /// Seed one Suggested triage row for a mirrored message with model
+    /// fields filled — the classifier-lane shape the mirror must carry.
+    async fn seed_triage(
+        db: &crate::surreal::SurrealDb,
+        message_id: Uuid,
+        firm: Uuid,
+        project_id: Uuid,
+    ) -> Uuid {
+        crate::inbox_triage::record(
+            db,
+            &crate::inbox_triage::NewInboxTriage {
+                message_id,
+                firm_id: firm,
+                suggested_project_id: Some(project_id),
+                project_confidence: Some(0.8),
+                privilege: crate::inbox_triage::PrivilegeLabel::NotPrivileged,
+                privilege_confidence: None,
+                rationale: Some("mentions a closing".into()),
+                model_id: Some("gemini-flash-lite".into()),
+                prompt_version: "triage-v1".into(),
+                raw_output: Some("{\"privileged\":false}".into()),
+                disposition: crate::inbox_triage::TriageDisposition::Suggested,
+                labeled_example: false,
+            },
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
     #[tokio::test]
-    async fn five_inbox_tables_mirror_and_mutable_drift_reconciles() {
+    async fn six_inbox_tables_mirror_and_mutable_drift_reconciles() {
         use crate::postgres_mirror::{self, MirrorKey};
         use crate::surreal::record_id;
 
@@ -435,6 +475,7 @@ mod tests {
             .unwrap()
             .check()
             .unwrap();
+        let triage = seed_triage(&db, saved.message_id, firm, project.id).await;
 
         let firm_entity = crate::firms::find_by_id(&db, firm)
             .await
@@ -452,6 +493,7 @@ mod tests {
             ingress,
             MirrorKey::InboxAssignment(assignment),
             MirrorKey::InboxDeliveryAttempt(attempt),
+            MirrorKey::InboxTriage(triage),
         ] {
             postgres_mirror::mirror(&db, &pg, &key)
                 .await
