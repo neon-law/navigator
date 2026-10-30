@@ -8,12 +8,21 @@
 //! classical ΔT (TT−UT1) is a property of Earth rotation, not of the ephemeris
 //! lookup, and enters only later layers that compute angles from Earth
 //! orientation.
+//!
+//! The kernel files live outside the repository. [`loader`] pins their bytes
+//! with SHA-256 checksums recorded in a checked-in manifest, and exposes the
+//! parsed, immutable [`Ephemeris`] for parking in shared application state.
 
 mod daf;
 mod error;
+mod loader;
 mod spk;
 mod time;
 
 pub use error::EphemerisError;
+pub use loader::{
+    load, EphemerisFile, EphemerisManifest, EphemerisStore, FilesystemStore, LoadedEphemeris,
+    DATA_DIR_ENV,
+};
 pub use spk::{Body, Ephemeris, SpkFile};
 pub use time::{utc_to_tdb, utc_to_tdb_from_parts, TdbSeconds};
