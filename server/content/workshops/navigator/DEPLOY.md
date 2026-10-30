@@ -1178,6 +1178,7 @@ roles. Complete the global Workspace attachment once:
 | Google token endpoint | `GOOGLE_TOKENINFO_URL` | Google default |
 | Password door | `NAVIGATOR_IDENTITY_PLATFORM_API_KEY` | OIDC-only login |
 | Password endpoint | `NAVIGATOR_IDENTITY_PLATFORM_ENDPOINT` | Google default |
+| Leads by platform | `PLAUSIBLE_STATS_API_KEY` | Social dashboard explains how to connect it |
 | Identity Platform admin calls | `NAVIGATOR_GCP_METADATA_ENDPOINT` | GCE metadata server default |
 
 ---
