@@ -851,6 +851,45 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         "/business",
         resolve_transactional_content(branding),
     ));
+    // The free court-form catalog: the registry's public surface. One
+    // branded index, one branded page per jurisdiction the registry
+    // covers, and the unbranded JSON twin of the same rows.
+    let free_copy = locales::free_resources(branding);
+    let free_courts = store::courts::embedded()
+        .expect("invariant: the shipped court registry parses; the store's tests are the gate");
+    routers.push(with_branded(
+        dioxus_app::free_resources_index_router(
+            dioxus_app::free_resources_index_content(&free_copy, &free_courts),
+        ),
+        branded_map(branding, |resolved| {
+            webapp::free_resources::InjectedFreeResourcesIndex(
+                dioxus_app::free_resources_index_content(
+                    &locales::free_resources(resolved),
+                    &free_courts,
+                ),
+            )
+        }),
+    ));
+    for group in dioxus_app::jurisdiction_groups(&free_courts) {
+        let path = dioxus_app::free_resources_jurisdiction_path(&dioxus_app::jurisdiction_slug(
+            &group.name,
+        ));
+        routers.push(with_branded(
+            dioxus_app::free_resources_jurisdiction_router(
+                &path,
+                dioxus_app::free_resources_jurisdiction_content(&free_copy, &group),
+            ),
+            branded_map(branding, |resolved| {
+                webapp::free_resources::InjectedFreeResourcesJurisdiction(
+                    dioxus_app::free_resources_jurisdiction_content(
+                        &locales::free_resources(resolved),
+                        &group,
+                    )
+                )
+            }),
+        ));
+    }
+    routers.push(dioxus_app::free_resources_json_router());
     // The platform page. It carries a commercial offer, so it sits with the
     // firm's own pages.
     // The retired consumer plan. The firm speaks to emerging technology

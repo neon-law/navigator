@@ -34,6 +34,7 @@ const NEON_NOTATIONS_YAML: &str = include_str!("../locales/en/neon/notations.yam
 const NEON_LEGAL_AID_YAML: &str = include_str!("../locales/en/neon/legal-aid.yaml");
 const NEON_NAVIGATOR_YAML: &str = include_str!("../locales/en/neon/navigator.yaml");
 const NEON_SERVICES_YAML: &str = include_str!("../locales/en/neon/services.yaml");
+const NEON_FREE_RESOURCES_YAML: &str = include_str!("../locales/en/neon/free-resources.yaml");
 /// `/delete-your-debt` — Neon's own gateway to the DeleteYourDebt.com
 /// practice. The first of a family of Neon-only practice gateways; see
 /// [`views::locales::KNOWN_PAGES`].
@@ -80,6 +81,7 @@ const NEON_GATEWAY_DIVORCE_YAML: &str = include_str!("../locales/en/neon/gateway
 const NEON_SERVICES_CATALOG_YAML: &str = include_str!("../locales/en/neon/services-catalog.yaml");
 const DELETE_YOUR_DATA_HOME_YAML: &str = include_str!("../locales/en/delete-your-data/home.yaml");
 const VESTA_HOME_YAML: &str = include_str!("../locales/en/vesta/home.yaml");
+const VESTA_FREE_RESOURCES_YAML: &str = include_str!("../locales/en/vesta/free-resources.yaml");
 const LAWYER_SHOOK_HOME_YAML: &str = include_str!("../locales/en/lawyer-shook/home.yaml");
 const VESTA_SERVICES_YAML: &str = include_str!("../locales/en/vesta/services.yaml");
 const MISERICORDIA_HOME_YAML: &str = include_str!("../locales/en/misericordia/home.yaml");
@@ -152,7 +154,9 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         )),
         (BrandKey::Neon, "home") => Some(NEON_HOME_YAML),
         (BrandKey::Neon, "team") => Some(NEON_TEAM_YAML),
+        (BrandKey::Neon, "free-resources") => Some(NEON_FREE_RESOURCES_YAML),
         (BrandKey::Vesta, "home") => Some(VESTA_HOME_YAML),
+        (BrandKey::Vesta, "free-resources") => Some(VESTA_FREE_RESOURCES_YAML),
         (BrandKey::Vesta, "explainer-probate") => {
             Some(include_str!("../locales/en/vesta/explainer-probate.yaml"))
         }
@@ -232,6 +236,24 @@ pub fn team(branding: &views::brand::Branding) -> views::locales::TeamCopy {
     let interpolated = interpolate(raw, branding.firm.site_name, branding.firm_email);
     serde_yaml::from_str(&interpolated)
         .expect("invariant: navigator project gate validates the team catalog")
+}
+
+
+/// The free court-form catalog's copy — the brand's free-of-charge and
+/// no-outcome promises included, the page-kind gate (`Y002`) the same one
+/// every other page's YAML passes.
+///
+/// # Panics
+///
+/// Never for a shipped brand: both Neon and Vesta publish the
+/// `free-resources` catalog, and the project gate validates its shape.
+pub fn free_resources(branding: &views::brand::Branding) -> views::locales::FreeResourcesCopy {
+    let raw = catalog_yaml(branding.brand_key, "free-resources")
+        .expect("invariant: the mounted brand publishes the free-resources catalog");
+    let interpolated = interpolate(raw, branding.firm.site_name, branding.firm_email);
+    serde_yaml::from_str(&interpolated).expect(
+        "invariant: navigator project gate validates the free-resources catalog",
+    )
 }
 
 /// Load one catalog file as `T`, after resolving shared copy and the mounted
