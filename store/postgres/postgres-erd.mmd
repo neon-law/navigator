@@ -1055,6 +1055,15 @@ erDiagram
         string id
         uuid person_id
     }
+    person_phone {
+        string e164
+        uuid id
+        datetime inserted_at
+        boolean is_primary
+        string label
+        uuid person_id
+        datetime updated_at
+    }
     person_project_role {
         uuid id
         datetime inserted_at
