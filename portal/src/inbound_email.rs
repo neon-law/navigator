@@ -956,6 +956,16 @@ pub async fn webhook(
     }
     let raw_key = persist(&state.surreal, &state.storage, &email).await?;
 
+    // Mail addressed to the lawyer's own mailbox joins the Firm inbox as its
+    // own channel (LAW-238). Best-effort like threading: the raw `.eml` is
+    // already archived, and a non-2xx would make SendGrid redeliver.
+    if let Err(error) = crate::lawyer_mailbox::ingest(&state.surreal, &email).await {
+        tracing::error!(
+            error = %error,
+            "lawyer mailbox ingest failed (message archived; inbox not advanced)"
+        );
+    }
+
     // Thread the message into a support conversation when the feature is
     // configured (both NAVIGATOR_PARSE_HOST + NAVIGATOR_LAWYER_NOTIFY_EMAIL).
     // Best-effort: the raw `.eml` is already archived, so a threading

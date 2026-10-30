@@ -178,7 +178,7 @@ fn receiving_brand(mailbox: &str) -> Option<views::brand::BrandKey> {
     })
 }
 
-fn provider_message_id(email: &InboundEmail) -> String {
+pub(crate) fn provider_message_id(email: &InboundEmail) -> String {
     if let Some(id) = email.message_id.as_ref().filter(|id| !id.is_empty()) {
         return id.clone();
     }
