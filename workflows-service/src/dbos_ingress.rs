@@ -18,7 +18,9 @@ use crate::dbos_email_summary::EmailSummaryWorkflow;
 use crate::dbos_finance_aggregate::{self, FinanceAggregateWorkflow, RunRequest};
 use crate::dbos_inbound_message_alert::InboundMessageAlertWorkflow;
 use crate::dbos_nightly_project_update::NightlyWorkflow;
+use crate::dbos_project_slack::{self, LaneKey, LaneRequest, ProjectSlackWorkflow};
 use crate::dbos_reconcile::ReconcileWorkflow;
+use crate::project_slack::{LaneError, MainPushRequest};
 
 const MAX_BODY_BYTES: usize = 16 * 1024;
 const MAX_WORKFLOW_ID_BYTES: usize = 160;
@@ -36,6 +38,7 @@ pub struct WorkerIngress {
     pub nightly_project_update: Option<NightlyIngress>,
     pub email_summary: Option<EmailSummaryIngress>,
     pub inbound_message_alert: Option<AlertIngress>,
+    pub project_slack: Option<ProjectSlackIngress>,
 }
 
 #[derive(Clone)]
@@ -131,7 +134,11 @@ impl FinanceStarter for DbosFinanceStarter {
         if project.code != request.project_code {
             return Err(StartError::ProjectNotFound);
         }
-        claim_request_identity(
+        claim_request_identity::<
+            crate::dbos_finance_aggregate::FinanceAggregateReport,
+            crate::dbos_finance_aggregate::FinanceAggregateError,
+            RunRequest,
+        >(
             &self.postgres,
             &self.dbos,
             workflow_id,
@@ -153,13 +160,16 @@ impl FinanceStarter for DbosFinanceStarter {
     }
 }
 
-async fn claim_request_identity(
+async fn claim_request_identity<O, E, T>(
     postgres: &store::postgres::PostgresDb,
     dbos: &dbos::DBOS,
     workflow_id: &str,
     workflow_name: &str,
-    request: &RunRequest,
-) -> Result<(), StartError> {
+    request: &T,
+) -> Result<(), StartError>
+where
+    T: serde::Serialize,
+{
     use sha2::{Digest, Sha256};
 
     let encoded = serde_json::to_vec(request).map_err(|_| StartError::StartFailed)?;
@@ -179,10 +189,7 @@ async fn claim_request_identity(
         };
     }
     let handle = dbos
-        .retrieve_workflow::<
-            crate::dbos_finance_aggregate::FinanceAggregateReport,
-            crate::dbos_finance_aggregate::FinanceAggregateError,
-        >(workflow_id)
+        .retrieve_workflow::<O, E>(workflow_id)
         .map_err(|_| StartError::StartFailed)?;
     match handle.status().await {
         Ok(_) => {
@@ -324,6 +331,14 @@ pub fn add_routes(router: Router, ingress: WorkerIngress) -> Router {
     } else {
         router
     };
+    let router = if let Some(project_slack) = ingress.project_slack {
+        router.route(
+            "/internal/dbos/project-slack",
+            post(start_project_slack).with_state(project_slack),
+        )
+    } else {
+        router
+    };
     router.layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
@@ -421,6 +436,171 @@ async fn start_nightly_project_update(
         )
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(Accepted {
+            workflow_id: request.workflow_id,
+        }),
+    ))
+}
+
+#[derive(Clone)]
+pub struct ProjectSlackIngress {
+    token: Arc<str>,
+    starter: Arc<dyn ProjectSlackStarter>,
+}
+
+#[async_trait::async_trait]
+trait ProjectSlackStarter: Send + Sync {
+    /// `workflow_id` is validated and parsed by the route; `project_id`
+    /// names the Project whose lane the request rides.
+    async fn start(
+        &self,
+        workflow_id: &str,
+        project_id: uuid::Uuid,
+        request: LaneRequest,
+    ) -> Result<(), StartError>;
+}
+
+struct DbosProjectSlackStarter {
+    workflow: ProjectSlackWorkflow,
+    dbos: dbos::DBOS,
+    surreal: SurrealDb,
+    postgres: store::postgres::PostgresDb,
+}
+
+#[async_trait::async_trait]
+impl ProjectSlackStarter for DbosProjectSlackStarter {
+    async fn start(
+        &self,
+        workflow_id: &str,
+        project_id: uuid::Uuid,
+        request: LaneRequest,
+    ) -> Result<(), StartError> {
+        store::projects::find_by_id(&self.surreal, project_id)
+            .await
+            .map_err(|_| StartError::StartFailed)?
+            .ok_or(StartError::ProjectNotFound)?;
+        claim_request_identity::<(), LaneError, LaneRequest>(
+            &self.postgres,
+            &self.dbos,
+            workflow_id,
+            dbos_project_slack::WORKFLOW,
+            &request,
+        )
+        .await?;
+        self.workflow
+            .start_with(
+                request,
+                dbos::StartOptions {
+                    workflow_id: Some(workflow_id),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|_| StartError::StartFailed)?;
+        Ok(())
+    }
+}
+
+impl ProjectSlackIngress {
+    /// Construct a dispatcher after [`FinanceIngress::validate_token`] has
+    /// succeeded — both doors share the one credential.
+    #[must_use]
+    pub fn new(
+        token: String,
+        workflow: ProjectSlackWorkflow,
+        dbos: dbos::DBOS,
+        surreal: SurrealDb,
+        postgres: store::postgres::PostgresDb,
+    ) -> Self {
+        Self {
+            token: Arc::from(token),
+            starter: Arc::new(DbosProjectSlackStarter {
+                workflow,
+                dbos,
+                surreal,
+                postgres,
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_starter(token: &str, starter: Arc<dyn ProjectSlackStarter>) -> Self {
+        Self {
+            token: Arc::from(token),
+            starter,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectSlackRequest {
+    workflow_id: String,
+    /// Present exactly when the id names the main-push lane.
+    #[serde(default)]
+    event: Option<MainPushRequest>,
+}
+
+/// Parse and cross-check a Project Slack request: the id must name one of
+/// the two lanes, the event must ride its lane, and the event must be the
+/// shape the portal door relays.
+fn validate_project_slack_request(
+    request: &ProjectSlackRequest,
+) -> Result<(uuid::Uuid, LaneRequest), StatusCode> {
+    if request.workflow_id.len() > MAX_WORKFLOW_ID_BYTES {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let Some((project_id, lane)) = dbos_project_slack::parse_workflow_id(&request.workflow_id)
+    else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+    let lane_request = match (&lane, &request.event) {
+        (LaneKey::ClientView, None) => LaneRequest::ClientView,
+        (
+            LaneKey::MainPush {
+                short_sha,
+                run_attempt,
+            },
+            Some(event),
+        ) => {
+            event.validate().map_err(|_| StatusCode::BAD_REQUEST)?;
+            if *short_sha != event.short_sha || *run_attempt != event.run_attempt {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            LaneRequest::MainPush(event.clone())
+        }
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+    Ok((project_id, lane_request))
+}
+
+/// The Project Slack door: start (or join) the lane's workflow for one
+/// event. The id is the idempotency key, so a relayed event that arrives
+/// twice joins the first run instead of posting twice.
+async fn start_project_slack(
+    State(ingress): State<ProjectSlackIngress>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<Accepted>), StatusCode> {
+    if !authorized(&headers, &ingress.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let request: ProjectSlackRequest =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let (project_id, lane_request) = validate_project_slack_request(&request)?;
+    ingress
+        .starter
+        .start(&request.workflow_id, project_id, lane_request)
+        .await
+        .map_err(|error| match error {
+            StartError::ProjectNotFound => StatusCode::NOT_FOUND,
+            StartError::Conflict => StatusCode::CONFLICT,
+            StartError::StartFailed => StatusCode::SERVICE_UNAVAILABLE,
+        })?;
     Ok((
         StatusCode::ACCEPTED,
         Json(Accepted {
@@ -610,12 +790,16 @@ mod tests {
 
     use super::{
         add_routes, authorized, constant_time_eq, validate_alert_request,
-        validate_email_summary_request, validate_nightly_request, validate_reconcile_request,
-        validate_request, workflow_id_for_run, AlertStart, EmailSummaryStart, FinanceIngress,
-        FinanceRequest, FinanceStarter, NightlyIngress, ReconcileIngress, ReconcileRequest,
-        StartError, WorkerIngress,
+        validate_email_summary_request, validate_nightly_request, validate_project_slack_request,
+        validate_reconcile_request, validate_request, workflow_id_for_run, AlertStart,
+        EmailSummaryStart, FinanceIngress, FinanceRequest, FinanceStarter, NightlyIngress,
+        ProjectSlackIngress, ProjectSlackRequest, ProjectSlackStarter, ReconcileIngress,
+        ReconcileRequest, StartError, WorkerIngress,
     };
     use crate::dbos_finance_aggregate::RunRequest;
+    use crate::dbos_project_slack;
+    use crate::dbos_project_slack::LaneRequest;
+    use crate::project_slack::{CiOutcome, MainPushRequest};
 
     #[derive(Default)]
     struct Starts(AtomicUsize);
@@ -942,6 +1126,7 @@ mod tests {
             "/internal/dbos/finance-aggregate",
             "/internal/dbos/reconcile-invoices",
             "/internal/dbos/nightly-project-update",
+            "/internal/dbos/project-slack",
         ] {
             assert_eq!(
                 post(&router, uri, Some("anything"), "{}").await,
@@ -1067,6 +1252,232 @@ mod tests {
             assert_eq!(
                 post(&router, uri, Some("worker-secret"), valid).await,
                 StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
+    }
+
+    fn push(short_sha: &str, run_attempt: u32) -> MainPushRequest {
+        MainPushRequest {
+            short_sha: short_sha.to_string(),
+            run_url: "https://github.com/an-organization/sample-push/actions/runs/1".to_string(),
+            author_login: "octocat".to_string(),
+            gate: CiOutcome::Pass,
+            publish: Some(CiOutcome::Skipped),
+            run_attempt,
+        }
+    }
+
+    #[test]
+    fn a_project_slack_request_must_name_one_lane_with_the_matching_event() {
+        let project = uuid::Uuid::now_v7();
+        let client_view = ProjectSlackRequest {
+            workflow_id: dbos_project_slack::client_view_workflow_id(project),
+            event: None,
+        };
+        assert_eq!(
+            validate_project_slack_request(&client_view).expect("client view"),
+            (project, LaneRequest::ClientView)
+        );
+
+        let id = dbos_project_slack::main_push_workflow_id(project, &push("abc1234", 1));
+        let main_push = ProjectSlackRequest {
+            workflow_id: id,
+            event: Some(push("abc1234", 1)),
+        };
+        let (parsed_project, lane_request) =
+            validate_project_slack_request(&main_push).expect("main push");
+        assert_eq!(parsed_project, project);
+        assert_eq!(lane_request, LaneRequest::MainPush(push("abc1234", 1)));
+
+        // The event must ride its lane: a different sha or attempt in the
+        // event than the id names would let one relayed event shadow another.
+        let mismatch = ProjectSlackRequest {
+            workflow_id: main_push.workflow_id.clone(),
+            event: Some(push("def5678", 1)),
+        };
+        assert_eq!(
+            validate_project_slack_request(&mismatch),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        let mismatched_attempt = ProjectSlackRequest {
+            workflow_id: main_push.workflow_id.clone(),
+            event: Some(push("abc1234", 2)),
+        };
+        assert_eq!(
+            validate_project_slack_request(&mismatched_attempt),
+            Err(StatusCode::BAD_REQUEST)
+        );
+
+        // A client-view lane carries no event; a main-push lane carries one.
+        let view_with_event = ProjectSlackRequest {
+            workflow_id: dbos_project_slack::client_view_workflow_id(project),
+            event: Some(push("abc1234", 1)),
+        };
+        assert_eq!(
+            validate_project_slack_request(&view_with_event),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        let viewless_push = ProjectSlackRequest {
+            workflow_id: main_push.workflow_id.clone(),
+            event: None,
+        };
+        assert_eq!(
+            validate_project_slack_request(&viewless_push),
+            Err(StatusCode::BAD_REQUEST)
+        );
+
+        // Not a Project Slack id at all, or malformed within it.
+        for workflow_id in [
+            "FinanceAggregate:manual-0190e0d0-0000-7000-8000-000000000001".to_string(),
+            format!("ProjectSlack:{}:not-a-lane", project.simple()),
+            format!("ProjectSlack:{}:abc1234:x", project.simple()),
+        ] {
+            let foreign = ProjectSlackRequest {
+                workflow_id,
+                event: None,
+            };
+            assert_eq!(
+                validate_project_slack_request(&foreign),
+                Err(StatusCode::BAD_REQUEST)
+            );
+        }
+    }
+
+    struct StartsProjectSlack(AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl ProjectSlackStarter for StartsProjectSlack {
+        async fn start(
+            &self,
+            _workflow_id: &str,
+            _project_id: uuid::Uuid,
+            _request: LaneRequest,
+        ) -> Result<(), StartError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// A starter that always fails the same way, to pin each status mapping.
+    struct RefusesProjectSlack(StartError);
+
+    #[async_trait::async_trait]
+    impl ProjectSlackStarter for RefusesProjectSlack {
+        async fn start(
+            &self,
+            _workflow_id: &str,
+            _project_id: uuid::Uuid,
+            _request: LaneRequest,
+        ) -> Result<(), StartError> {
+            Err(self.0)
+        }
+    }
+
+    const PROJECT_SLACK_BODY: &str = r#"{"workflow_id":"ProjectSlack:0190e0d0-0000-7000-8000-0000000000aa:abc1234:1","event":{"short_sha":"abc1234","run_url":"https://github.com/an-organization/sample-push/actions/runs/1","author_login":"octocat","gate":"pass","run_attempt":1}}"#;
+
+    #[tokio::test]
+    async fn the_project_slack_route_authenticates_then_validates_then_starts() {
+        let starts = Arc::new(StartsProjectSlack(AtomicUsize::new(0)));
+        let router = add_routes(
+            axum::Router::new(),
+            WorkerIngress {
+                project_slack: Some(ProjectSlackIngress::with_starter(
+                    "worker-secret",
+                    starts.clone(),
+                )),
+                ..WorkerIngress::default()
+            },
+        );
+        assert_eq!(
+            post(
+                &router,
+                "/internal/dbos/project-slack",
+                None,
+                PROJECT_SLACK_BODY
+            )
+            .await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            post(
+                &router,
+                "/internal/dbos/project-slack",
+                Some("wrong-secret"),
+                PROJECT_SLACK_BODY
+            )
+            .await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            post(
+                &router,
+                "/internal/dbos/project-slack",
+                Some("worker-secret"),
+                "{not json"
+            )
+            .await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(starts.0.load(Ordering::SeqCst), 0);
+
+        // An event whose fields do not match its workflow id is refused.
+        let mismatched = r#"{"workflow_id":"ProjectSlack:0190e0d0-0000-7000-8000-0000000000aa:abc1234:1","event":{"short_sha":"def5678","run_url":"https://github.com/an-organization/sample-push/actions/runs/1","author_login":"octocat","gate":"pass","run_attempt":1}}"#;
+        assert_eq!(
+            post(
+                &router,
+                "/internal/dbos/project-slack",
+                Some("worker-secret"),
+                mismatched
+            )
+            .await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(starts.0.load(Ordering::SeqCst), 0);
+
+        for _ in 0..2 {
+            assert_eq!(
+                post(
+                    &router,
+                    "/internal/dbos/project-slack",
+                    Some("worker-secret"),
+                    PROJECT_SLACK_BODY
+                )
+                .await,
+                StatusCode::ACCEPTED
+            );
+        }
+        assert_eq!(starts.0.load(Ordering::SeqCst), 2);
+        // The route forwards every accepted delivery; joining repeated ids
+        // into one durable run is the claim layer's work, proven against
+        // PostgreSQL in the integration suite.
+    }
+
+    #[tokio::test]
+    async fn project_slack_start_failures_map_to_distinct_statuses() {
+        for (error, status) in [
+            (StartError::ProjectNotFound, StatusCode::NOT_FOUND),
+            (StartError::Conflict, StatusCode::CONFLICT),
+            (StartError::StartFailed, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let router = add_routes(
+                axum::Router::new(),
+                WorkerIngress {
+                    project_slack: Some(ProjectSlackIngress::with_starter(
+                        "expected-secret",
+                        Arc::new(RefusesProjectSlack(error)),
+                    )),
+                    ..WorkerIngress::default()
+                },
+            );
+            assert_eq!(
+                post(
+                    &router,
+                    "/internal/dbos/project-slack",
+                    Some("expected-secret"),
+                    PROJECT_SLACK_BODY
+                )
+                .await,
+                status
             );
         }
     }
