@@ -13,9 +13,9 @@
       },
       "Microsoft.NET.ILLink.Tasks": {
         "type": "Direct",
-        "requested": "[8.0.32, )",
-        "resolved": "8.0.32",
-        "contentHash": "FQXkG87JK9+SEbF6vRcWmevk0Pjqgehhz+9e1hHATDh7U8EvgmVQQcEUJTXj1IKi8VqLrdi/c1QHOpVjZcd9ng=="
+        "requested": "[8.0.33, )",
+        "resolved": "8.0.33",
+        "contentHash": "vtHOb5B7NHm4HenhxTYi2TP18wvKCSYknMmS1fKTKW8xWPYkzc240HocCrSckaBFIjwkSj1bA5VsfPJF7emexQ=="
       },
       "DocumentFormat.OpenXml.Framework": {
         "type": "Transitive",
