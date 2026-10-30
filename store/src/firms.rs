@@ -1349,6 +1349,81 @@ pub async fn detach_brand(
     Ok(())
 }
 
+/// Move one Brand's seat to another Firm. Owner only, through the
+/// capability resolver — `MoveBrand` admits no membership tier, because
+/// moving a Brand changes whose legal entity the public site's copyright
+/// names: an ownership decision only Owner makes, where an Admin-DRI may
+/// still detach ([`detach_brand`]). One transaction removes the old
+/// `firm_brand` row, re-points the `brand` row's owning Firm, and creates
+/// the target Firm's row together, so a partial failure leaves the old
+/// association intact and the UNIQUE index on `firm_brand.brand_key`
+/// never trips on a half-state. The decision anchors to the target Firm —
+/// a move completes only when the target exists — and unknown brand keys
+/// are typed errors before any write runs. A move to the Firm that
+/// already wears the brand, with the `brand` row already naming it, is a
+/// no-op success.
+pub async fn move_brand(
+    surreal: &SurrealDb,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    brand_key: &str,
+    target_firm_id: Uuid,
+) -> Result<(), FirmError> {
+    if crate::postgres::tenancy::enabled()? {
+        if actor_role != Role::Owner {
+            return Err(FirmError::NotAuthorized);
+        }
+        return Box::pin(crate::postgres::tenancy::move_brand(
+            brand_key,
+            target_firm_id,
+        ))
+        .await;
+    }
+    let brand = crate::brands::find_by_key(surreal, brand_key)
+        .await
+        .map_err(|error| FirmError::Brand(Box::new(error)))?
+        .ok_or_else(|| FirmError::UnknownBrand(brand_key.to_string()))?;
+    if find_by_id(surreal, target_firm_id).await?.is_none() {
+        return Err(FirmError::NoSuchFirm(target_firm_id));
+    }
+    authorize_brand_ownership(
+        surreal,
+        actor_role,
+        actor_person_id,
+        target_firm_id,
+        crate::firm_capability::FirmCapability::MoveBrand,
+    )
+    .await?;
+    let worn_by = firm_id_for_brand_key(surreal, brand_key).await?;
+    if worn_by == Some(target_firm_id) && brand.firm_id == Some(target_firm_id) {
+        return Ok(()); // a move to the current firm is a no-op, not an error
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    retry::writing(|| {
+        surreal
+            .query(format!("DELETE {BRAND_TABLE} WHERE brand_key = $brand_key"))
+            .bind(("brand_key", brand_key.to_string()))
+            .query("UPDATE $brand SET firm_id = $firm_id, updated_at = $now")
+            .bind(("brand", record_id(crate::brands::TABLE, brand.id)))
+            .bind(("firm_id", record_id(TABLE, target_firm_id)))
+            .bind(("now", now.clone()))
+            .query(
+                "CREATE $seat SET firm_id = $firm_id, brand_key = $brand_key, \
+                 inserted_at = $now, updated_at = $now",
+            )
+            .bind(("seat", record_id(BRAND_TABLE, Uuid::now_v7())))
+    })
+    .await?;
+    crate::postgres_mirror::after_write(
+        surreal,
+        MirrorKey::FirmBrand {
+            brand_key: brand_key.to_string(),
+        },
+    )
+    .await;
+    Ok(())
+}
+
 /// Assign each unowned Project to the Firm wearing its brand, or to the
 /// deployment's anchor Firm when no Firm wears that brand. Idempotent.
 pub async fn backfill_unowned_projects(
@@ -2621,20 +2696,14 @@ mod tests {
 
         // An Admin-DRI may detach a brand but never repoint the seat: a
         // move changes whose legal entity the public copyright names.
-        let refused = move_brand(&db, Role::Admin, Some(admin.id), "neon", firm.id)
+        let refused = move_brand(&db, Role::Admin, Some(admin), "neon", firm.id)
             .await
             .unwrap_err();
         assert!(matches!(refused, FirmError::NotAuthorized));
         // An attach without an Owner behind it is the same hole, refused.
-        let refused = attach_brand(
-            &db,
-            Role::Admin,
-            Some(admin.id),
-            firm.id,
-            "delete-your-data",
-        )
-        .await
-        .unwrap_err();
+        let refused = attach_brand(&db, Role::Admin, Some(admin), firm.id, "delete-your-data")
+            .await
+            .unwrap_err();
         assert!(matches!(refused, FirmError::NotAuthorized));
         // A non-Owner role with no person behind it is refused outright.
         let refused = move_brand(&db, Role::Client, None, "neon", firm.id)

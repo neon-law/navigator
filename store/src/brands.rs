@@ -34,7 +34,7 @@ use crate::persons::Role;
 use crate::postgres_mirror::MirrorKey;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
-const TABLE: &str = "brand";
+pub(crate) const TABLE: &str = "brand";
 const FIRM_TABLE: &str = "firm";
 const PROJECT_TABLE: &str = "project";
 const FIRM_BRAND_TABLE: &str = "firm_brand";
