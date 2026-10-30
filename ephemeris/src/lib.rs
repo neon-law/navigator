@@ -13,6 +13,8 @@
 //! with SHA-256 checksums recorded in a checked-in manifest, and exposes the
 //! parsed, immutable [`Ephemeris`] for parking in shared application state.
 
+pub mod apparent;
+
 mod daf;
 mod error;
 mod loader;

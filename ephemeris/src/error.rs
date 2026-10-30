@@ -146,4 +146,13 @@ pub enum EphemerisError {
     /// The configured filesystem data root does not exist.
     #[error("ephemeris data directory {} does not exist", .0.display())]
     MissingDataDir(PathBuf),
+
+    /// Light-time iteration did not converge within the pass cap.
+    #[error("light-time iteration for body {naif_id} did not converge within {iterations} passes")]
+    LightTimeNoConvergence {
+        /// NAIF id of the body whose light time failed to converge.
+        naif_id: i32,
+        /// The iteration cap that was reached.
+        iterations: usize,
+    },
 }
