@@ -254,13 +254,6 @@
     },
     {
       "extra_column": null,
-      "extra_table": "notation_machine_state",
-      "missing_column": null,
-      "missing_table": null,
-      "table": null
-    },
-    {
-      "extra_column": null,
       "extra_table": "project_archive_generation",
       "missing_column": null,
       "missing_table": null,
@@ -1639,7 +1632,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 128,
+    "table_count": 127,
     "tables": {
       "address": {
         "columns": {
@@ -3492,20 +3485,6 @@
           "person",
           "template"
         ]
-      },
-      "notation_machine_state": {
-        "columns": {
-          "current_state": "TEXT",
-          "ephemeral": "BOOLEAN",
-          "inserted_at": "TIMESTAMPTZ",
-          "machine_kind": "TEXT",
-          "notation_id": "UUID",
-          "spec_yaml": "TEXT",
-          "updated_at": "TIMESTAMPTZ"
-        },
-        "foreign_keys": [],
-        "name": "notation_machine_state",
-        "references": []
       },
       "notation_meter_entry": {
         "columns": {
