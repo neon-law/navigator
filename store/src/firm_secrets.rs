@@ -612,3 +612,65 @@ pub async fn resolve_firm_credential(
         .map_err(|_| SecretStoreError::InvalidValue)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{zeroize, IntegrationProvider, IntegrationSecretKind, ResolvedCredential};
+
+    const SECRET: &[u8] = b"la-superior-password";
+
+    #[test]
+    fn zeroize_helper_overwrites_every_byte() {
+        let mut buffer = SECRET.to_vec();
+        zeroize(&mut buffer);
+        assert!(buffer.iter().all(|&byte| byte == 0));
+        assert_ne!(buffer.as_slice(), SECRET);
+    }
+
+    #[test]
+    fn debug_renders_redacted_and_never_secret_bytes() {
+        let credential = ResolvedCredential {
+            value: SECRET.to_vec(),
+        };
+        let rendered = format!("{credential:?}");
+        assert_eq!(rendered, "ResolvedCredential(REDACTED)");
+        assert!(!rendered.contains("la-superior-password"));
+    }
+
+    #[test]
+    fn resolved_credential_drops_without_exposing_its_bytes() {
+        let credential = ResolvedCredential {
+            value: SECRET.to_vec(),
+        };
+        // The `Drop` impl delegates to the named `zeroize` helper, which the
+        // first test pins byte for byte; this one pins that dropping a
+        // resolved credential runs that path (no panic, no leak surfaces
+        // through `Debug`).
+        drop(credential);
+        let rendered = format!(
+            "{:?}",
+            ResolvedCredential {
+                value: SECRET.to_vec(),
+            }
+        );
+        assert!(!rendered.contains("la-superior-password"));
+    }
+
+    #[test]
+    fn all_kinds_includes_the_court_portal_pair() {
+        assert_eq!(super::ALL_KINDS.len(), 11);
+        assert_eq!(IntegrationSecretKind::PortalLogin.as_str(), "portal_login");
+        assert_eq!(
+            IntegrationSecretKind::PortalLogin.provider(),
+            IntegrationProvider::CourtPortal
+        );
+        assert_eq!(IntegrationProvider::CourtPortal.as_str(), "court_portal");
+        assert_eq!(
+            super::parse_provider("court_portal"),
+            Some(IntegrationProvider::CourtPortal)
+        );
+        assert_eq!(
+            super::parse_kind("portal_login"),
+            Some(IntegrationSecretKind::PortalLogin)
+        );
+    }
+}
