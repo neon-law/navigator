@@ -104,6 +104,10 @@ pub struct ProjectNotationRow {
     pub respondent_email: Option<String>,
     pub signature_request_id: Option<String>,
     pub last_transition_at: Option<String>,
+    /// Whether the run's pinned template digest has been overtaken by the
+    /// template's current definition on the repository's main (LAW-201).
+    #[serde(default)]
+    pub template_stale: bool,
 }
 
 /// One Communication on the matter show, as plain display fields — never a
@@ -234,6 +238,18 @@ pub async fn project_notation_board(
             .get(&notation.state)
             .cloned()
             .or_else(|| Some(notation.updated_at.to_rfc3339()));
+        // The run's pinned digest, falling back through the store-template
+        // binding for runs opened before the field existed (LAW-201).
+        let pinned_sha = notation
+            .template_body_sha256
+            .clone()
+            .or_else(|| template.body_sha256.clone());
+        let template_stale = store::templates::run_is_stale(
+            pinned_sha.as_deref(),
+            repository_templates
+                .get(&template.code)
+                .map(|source| source.body_sha256.as_str()),
+        );
         started.insert(notation.template_id);
         rows.push(ProjectNotationRow {
             template_code: template.code,
@@ -244,6 +260,7 @@ pub async fn project_notation_board(
             respondent_email: respondent.map(|person| person.email),
             signature_request_id,
             last_transition_at,
+            template_stale,
         });
     }
 
@@ -2320,6 +2337,7 @@ mod tests {
             respondent_email: Some("client@example.test".to_string()),
             signature_request_id: Some("signature-uuid".to_string()),
             last_transition_at: Some("2026-09-25T14:03:00Z".to_string()),
+            template_stale: false,
         };
         let waiting = ProjectNotationRow {
             template_code: "will".to_string(),

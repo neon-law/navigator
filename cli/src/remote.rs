@@ -3902,9 +3902,10 @@ pub async fn project_notations(
                 .is_none_or(|entered| now.signed_duration_since(entered) > stale_after)
         });
         let never_started = rows.iter().any(|row| row.notation_id.is_none());
-        if stale || never_started {
+        let stale_template = rows.iter().any(|row| row.template_stale);
+        if stale || never_started || stale_template {
             return Err(anyhow!(
-                "notation pre-flight found never-started or stale work"
+                "notation pre-flight found never-started work, stale review states, or runs whose template changed on main"
             ));
         }
         Ok(())
@@ -3966,9 +3967,10 @@ fn print_notation_board(rows: &[webapp::lawyer_project_detail::ProjectNotationRo
             "CLIENT EMAIL".to_string(),
             "SIGNATURE REQUEST".to_string(),
             "LAST".to_string(),
+            "STALE".to_string(),
         ]));
     for row in rows {
-        let mut cells = Vec::with_capacity(states.len() + 5);
+        let mut cells = Vec::with_capacity(states.len() + 6);
         for state in &states {
             if !row.workflow_states.contains(state) {
                 cells.push("—".to_string());
@@ -4006,6 +4008,11 @@ fn print_notation_board(rows: &[webapp::lawyer_project_detail::ProjectNotationRo
                 .clone()
                 .unwrap_or_else(|| "—".to_string()),
         );
+        cells.push(if row.template_stale {
+            "template changed on main".to_string()
+        } else {
+            "—".to_string()
+        });
         table.add_row(cells);
     }
     println!("{table}");
