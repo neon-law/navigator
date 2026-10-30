@@ -66,6 +66,23 @@ pub struct InboxMessageView {
     pub provider_message_id: Option<String>,
     #[serde(default)]
     pub visibility: Option<String>,
+    /// The attachments rendered under this Message — the asset its
+    /// `attachment_asset_id` slot holds plus every provenance-linked asset
+    /// the import filed (LAW-238 D4). Empty for threads fetched outside a
+    /// matter, whose lookups are Project-scoped.
+    #[serde(default)]
+    pub attachments: Vec<InboxAttachmentView>,
+}
+
+/// One attachment under a transcript Message: the filed Asset's filename,
+/// kind, and link into the matter's documents (LAW-238 D4).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboxAttachmentView {
+    #[serde(default)]
+    pub filename: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    pub href: String,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -420,6 +437,82 @@ fn message_view(message: &store::inbox::Message) -> InboxMessageView {
             .provider_message_id
             .clone()
             .or_else(|| message.provider_ref.clone()),
+        attachments: Vec::new(),
+    }
+}
+
+/// The attachments one transcript Message renders, as the thread page
+/// receives them (LAW-238 D4): the Message's own asset slot first, then the
+/// provenance-linked assets the import filed (`mail/{message_id}/{index}`),
+/// deduped by asset id — the first attachment occupies both slots, the same
+/// join the Communications list door makes. Each links into the matter's
+/// documents at the revision route the documents table uses.
+#[cfg(feature = "server")]
+#[must_use]
+fn thread_attachment_views(
+    code: &str,
+    primary: Option<store::assets::Asset>,
+    filed: Vec<store::assets::Asset>,
+) -> Vec<InboxAttachmentView> {
+    let mut attachments = Vec::new();
+    let mut seen = Vec::new();
+    for asset in primary.into_iter().chain(filed) {
+        if seen.contains(&asset.id) {
+            continue;
+        }
+        seen.push(asset.id);
+        attachments.push(InboxAttachmentView {
+            filename: asset.filename.clone(),
+            kind: asset.kind.clone(),
+            href: format!("/app/projects/{code}/documents/{}", asset.id),
+        });
+    }
+    attachments
+}
+
+/// The thread's Messages with each one's attachments resolved (LAW-238 D4):
+/// the Message's `attachment_asset_id` slot plus the provenance-linked
+/// assets filed under its id. A lookup failure drops that message's
+/// attachment list rather than the transcript — the same trade the strip's
+/// page read makes.
+#[cfg(feature = "server")]
+async fn thread_messages_with_attachments(
+    surreal: &store::surreal::SurrealDb,
+    code: &str,
+    project_id: uuid::Uuid,
+    messages: &[store::inbox::Message],
+) -> Vec<InboxMessageView> {
+    let mut views = Vec::with_capacity(messages.len());
+    for message in messages {
+        let mut view = message_view(message);
+        let primary = match message.attachment_asset_id {
+            Some(asset_id) => store::assets::find_by_id(surreal, asset_id)
+                .await
+                .unwrap_or_default(),
+            None => None,
+        };
+        let filed =
+            store::assets::find_by_source_message_id(surreal, project_id, &message.id.to_string())
+                .await
+                .unwrap_or_default();
+        view.attachments = thread_attachment_views(code, primary, filed);
+        views.push(view);
+    }
+    views
+}
+
+/// The link text for one inline attachment: its filename, falling back to
+/// "Untitled attachment", with the kind in parentheses when the asset
+/// carries one.
+#[must_use]
+fn attachment_label(attachment: &InboxAttachmentView) -> String {
+    let name = attachment
+        .filename
+        .as_deref()
+        .unwrap_or("Untitled attachment");
+    match attachment.kind.as_deref() {
+        Some(kind) if !kind.is_empty() => format!("{name} ({kind})"),
+        _ => name.to_string(),
     }
 }
 
@@ -698,7 +791,13 @@ pub async fn project_inbox_thread() -> Result<InboxThreadPage, ServerFnError> {
         delivery: thread.delivery,
         next_action: thread.next_action,
         bodies_visible: true,
-        messages: thread.messages.iter().map(message_view).collect(),
+        messages: thread_messages_with_attachments(
+            &surreal,
+            &project_code,
+            project.id,
+            &thread.messages,
+        )
+        .await,
         projects: Vec::new(),
         assign_action: thread
             .can_attribute
@@ -949,6 +1048,17 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
                 }
                 time { datetime: "{message.occurred_at}", "{message.occurred_at}" }
                 p { "{message.body}" }
+                if !message.attachments.is_empty() {
+                    ul { class: "inbox-message-attachments",
+                        for attachment in &message.attachments {
+                            li {
+                                a { class: "nav-link", href: "{attachment.href}",
+                                    "{attachment_label(attachment)}"
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(reference) = message.provider_message_id.as_ref() {
                     p { class: "nav-muted", "Provider message: {reference}" }
                 }
@@ -1375,6 +1485,7 @@ mod tests {
                 occurred_at: "2026-10-10T12:00:00Z".into(),
                 provider_message_id: Some("source-message-1".into()),
                 visibility: None,
+                attachments: Vec::new(),
             }],
             projects: vec![ProjectOption {
                 id: "project-1".into(),
@@ -1421,6 +1532,83 @@ mod tests {
 
         page.link_phone_action = None;
         assert!(!thread(&page).contains("Whose number is this?"));
+    }
+
+    #[test]
+    fn the_transcript_renders_attachments_under_their_message() {
+        let mut page = base_thread();
+        page.messages[0].attachments = vec![
+            InboxAttachmentView {
+                filename: Some("exhibit-a.pdf".into()),
+                kind: Some("pdf".into()),
+                href: "/app/projects/24-1043/documents/9f2c".into(),
+            },
+            InboxAttachmentView {
+                filename: None,
+                kind: None,
+                href: "/app/projects/24-1043/documents/aaa1".into(),
+            },
+        ];
+        let html = thread(&page);
+        assert!(
+            html.contains("href=\"/app/projects/24-1043/documents/9f2c\""),
+            "{html}"
+        );
+        assert!(html.contains("exhibit-a.pdf (pdf)"), "{html}");
+        assert!(html.contains("Untitled attachment"), "{html}");
+
+        // A message with nothing filed renders no attachment list.
+        page.messages[0].attachments = Vec::new();
+        let html = thread(&page);
+        assert!(!html.contains("inbox-message-attachments"), "{html}");
+    }
+
+    #[test]
+    fn thread_attachments_dedupe_the_first_slot_and_keep_list_order() {
+        let primary_id = uuid::Uuid::nil();
+        let filed_id = uuid::Uuid::from_u128(2);
+        let asset = |id, filename: &str| store::assets::Asset {
+            id,
+            filename: Some(filename.into()),
+            kind: Some("pdf".into()),
+            ..asset_fixture()
+        };
+        let views = thread_attachment_views(
+            "24-1043",
+            Some(asset(primary_id, "exhibit-a.pdf")),
+            vec![
+                asset(primary_id, "exhibit-a.pdf"),
+                asset(filed_id, "exhibit-b.pdf"),
+            ],
+        );
+        assert_eq!(views.len(), 2, "the first attachment occupies both slots");
+        assert_eq!(views[0].filename.as_deref(), Some("exhibit-a.pdf"));
+        assert_eq!(views[1].filename.as_deref(), Some("exhibit-b.pdf"));
+        assert_eq!(
+            views[1].href,
+            format!("/app/projects/24-1043/documents/{filed_id}")
+        );
+        assert_eq!(
+            attachment_label(&views[0]),
+            "exhibit-a.pdf (pdf)".to_string()
+        );
+    }
+
+    fn asset_fixture() -> store::assets::Asset {
+        // Only the fields thread_attachment_views reads are load-bearing;
+        // the struct is a plain record, so the rest holds neutral values.
+        serde_json::from_value(serde_json::json!({
+            "id": uuid::Uuid::nil(),
+            "storage_key": "assets/test",
+            "content_type": "application/pdf",
+            "byte_size": 1,
+            "sha256_hex": "abc",
+            "visibility": "internal",
+            "notarization": [],
+            "inserted_at": "2026-10-30T00:00:00Z",
+            "updated_at": "2026-10-30T00:00:00Z"
+        }))
+        .expect("fixture asset")
     }
 
     #[test]
@@ -1543,6 +1731,7 @@ mod tests {
             occurred_at: "2026-10-10T12:00:00Z".into(),
             provider_message_id: None,
             visibility: None,
+            attachments: Vec::new(),
         });
         let html = thread(&page);
         assert!(html.contains("Internal note"), "{html}");
@@ -1573,6 +1762,7 @@ mod tests {
             occurred_at: "2026-10-10T12:00:00Z".into(),
             provider_message_id: None,
             visibility: Some("private".into()),
+            attachments: Vec::new(),
         });
         let html = thread(&page);
         assert!(html.contains("Reconcile delivery"), "{html}");
