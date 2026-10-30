@@ -177,6 +177,7 @@ values = [
   "keychain", "smoke", "blacksmith", "openobserve", "ssr", "dev", "deliverables",
   "blog", "scheduler", "canary", "batch", "upload", "drive", "practice",
   "letter", "closing", "participant", "duces", "tecum", "scope", "go-live",
+  "chooser",
   "sos", "civ", "slack", "durable", "split", "config", "send", "email",
   "fileName", "missing", "mounted", "kebab", "megadeth", "nautilus", "rust",
   "linux", "dioxus", "mermaid", "kubernetes", "instagram", "youtube", "xero",
