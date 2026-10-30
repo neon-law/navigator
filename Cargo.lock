@@ -336,7 +336,7 @@ dependencies = [
 
 [[package]]
 name = "archives"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "anyhow",
  "arrow",
@@ -1517,7 +1517,7 @@ dependencies = [
 
 [[package]]
 name = "billing"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1536,7 +1536,7 @@ dependencies = [
 
 [[package]]
 name = "billing-workflows"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2208,7 +2208,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cli"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2281,7 +2281,7 @@ dependencies = [
 
 [[package]]
 name = "cloud"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "aes-gcm 0.11.1",
  "anyhow",
@@ -4574,7 +4574,7 @@ checksum = "835a3dc7d1ec9e75e2b5fb4ba75396837112d2060b03f7d43bc1897c7f7211da"
 
 [[package]]
 name = "features"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4813,7 +4813,7 @@ dependencies = [
 
 [[package]]
 name = "forms"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "cloud",
  "pdf",
@@ -6488,7 +6488,7 @@ checksum = "89194689a993ab15268672e99e7b0e19da2da3268ac682e8f02d29d4d1434cd7"
 
 [[package]]
 name = "import"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "anyhow",
  "serde",
@@ -7291,7 +7291,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "live-inquiry"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7413,7 +7413,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lsp"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "anyhow",
  "lsp-types",
@@ -7595,7 +7595,7 @@ dependencies = [
 
 [[package]]
 name = "mcp"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "async-trait",
  "axum",
@@ -7882,7 +7882,7 @@ dependencies = [
 
 [[package]]
 name = "neon"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "anyhow",
  "axum",
@@ -8613,7 +8613,7 @@ dependencies = [
 
 [[package]]
 name = "pdf"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "chrono",
  "lopdf 0.45.0",
@@ -9039,7 +9039,7 @@ dependencies = [
 
 [[package]]
 name = "portal"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "ammonia",
  "anyhow",
@@ -9897,7 +9897,7 @@ dependencies = [
 
 [[package]]
 name = "repos"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -10341,7 +10341,7 @@ dependencies = [
 
 [[package]]
 name = "rules"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "chrono",
  "include_dir",
@@ -11060,7 +11060,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "anyhow",
  "arrow",
@@ -12478,7 +12478,7 @@ dependencies = [
 
 [[package]]
 name = "store"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -13343,7 +13343,7 @@ dependencies = [
 
 [[package]]
 name = "telemetry"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "base64 0.23.1",
  "opentelemetry",
@@ -15091,7 +15091,7 @@ dependencies = [
 
 [[package]]
 name = "views"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "chrono",
  "forms",
@@ -15391,7 +15391,7 @@ dependencies = [
 
 [[package]]
 name = "webapp"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -15881,7 +15881,7 @@ dependencies = [
 
 [[package]]
 name = "word"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -15896,7 +15896,7 @@ dependencies = [
 
 [[package]]
 name = "workflows"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -15932,7 +15932,7 @@ dependencies = [
 
 [[package]]
 name = "workflows-service"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "anyhow",
  "archives",
