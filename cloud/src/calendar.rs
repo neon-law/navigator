@@ -1,9 +1,11 @@
 //! A Project's shared Google Calendar on the Firm's Workspace.
 //!
 //! One secondary calendar per Project, named for the Project code, holds the
-//! matter's events. A [`CalendarService`] creates or finds that calendar and
-//! manages who it is shared with. It never reads or writes events: scheduling
-//! calls and mirroring Deadlines are separate work.
+//! matter's events. A [`CalendarService`] creates or finds that calendar,
+//! manages who it is shared with, and writes the events Navigator mirrors
+//! onto it. What an event means — a mirrored Deadline, a scheduled call — is
+//! the caller's concern; the mirror's own identity travels in private
+//! extended properties.
 //!
 //! The Calendar API has no resource for appointment schedules, so a client
 //! booking page cannot be provisioned here. A lawyer makes one on the Project
@@ -18,6 +20,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -76,6 +79,41 @@ pub struct CalendarMember {
     pub role: CalendarRole,
 }
 
+/// One event on a Project calendar, as Navigator writes it.
+///
+/// An event written through this API is an instant: its end is its start, the
+/// zero-duration reading an ICS event without a `DTEND` carries, so a
+/// Deadline marks a moment instead of occupying a lawyer's morning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalendarEvent {
+    pub summary: String,
+    pub description: Option<String>,
+    pub location: Option<String>,
+    /// The instant the event marks, with its own offset.
+    pub start: DateTime<FixedOffset>,
+    /// RFC 5545 `SEQUENCE`, raised on every update.
+    pub sequence: i32,
+    /// A cancelled event keeps its place on the calendar with
+    /// `status: cancelled`, the way the ICS feed renders a cancelled row.
+    pub cancelled: bool,
+    /// Display reminder minutes before `start`. `None` writes no reminder and
+    /// suppresses the calendar's defaults, so an event without a reminder
+    /// stays silent.
+    pub reminder_minutes: Option<i64>,
+    /// Private extended properties carrying the mirror's identity: the source
+    /// row's record id and the body sha a reconcile compares against the row
+    /// it now reads. Only Navigator reads these.
+    pub private_properties: BTreeMap<String, String>,
+}
+
+/// An event as the calendar holds it: the Calendar API's own id and the
+/// private extended properties it was last written with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredEvent {
+    pub id: String,
+    pub private_properties: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Error)]
 pub enum CalendarError {
     #[error("missing required Calendar configuration: {0}")]
@@ -98,6 +136,8 @@ pub enum CalendarError {
     },
     #[error("Calendar API response while creating a calendar did not include an id")]
     MissingCalendarId,
+    #[error("Calendar API response while writing an event did not include an id")]
+    MissingEventId,
     #[error("Calendar found {count} calendars for one project code; refusing to guess")]
     AmbiguousSummary { count: usize },
 }
@@ -121,6 +161,36 @@ pub trait CalendarService: Send + Sync {
         email: &str,
         role: CalendarRole,
     ) -> Result<(), CalendarError>;
+
+    /// Insert the event and read back its stored identity.
+    async fn insert_event(
+        &self,
+        calendar_id: &str,
+        event: &CalendarEvent,
+    ) -> Result<StoredEvent, CalendarError>;
+
+    /// Overwrite the event's Navigator-written fields, leaving everything a
+    /// person set in Google — its color, its guests — alone.
+    async fn patch_event(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        event: &CalendarEvent,
+    ) -> Result<StoredEvent, CalendarError>;
+
+    /// Delete an event. Deleting one already gone succeeds: the desired end
+    /// state is what the mirror reconciles to.
+    async fn delete_event(&self, calendar_id: &str, event_id: &str) -> Result<(), CalendarError>;
+
+    /// Every event on the calendar whose private extended property `key`
+    /// carries `value`. The mirror's marker property finds its events in one
+    /// paginated read.
+    async fn mirrored_events(
+        &self,
+        calendar_id: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<Vec<StoredEvent>, CalendarError>;
 }
 
 /// Calendar v3 client authenticated as the Workspace service account with
@@ -391,6 +461,111 @@ impl CalendarService for GoogleCalendar {
         );
         Ok(())
     }
+
+    async fn insert_event(
+        &self,
+        calendar_id: &str,
+        event: &CalendarEvent,
+    ) -> Result<StoredEvent, CalendarError> {
+        let action = "inserting an event";
+        let token = self.token().await?;
+        let stored = Self::checked(
+            self.http
+                .post(self.url(&["calendars", calendar_id, "events"]))
+                .bearer_auth(token)
+                .json(&event_body(event))
+                .send()
+                .await,
+            action,
+        )?
+        .json::<EventResource>()
+        .await
+        .map_err(|source| CalendarError::Response { action, source })?;
+        stored_event(&stored)
+    }
+
+    async fn patch_event(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        event: &CalendarEvent,
+    ) -> Result<StoredEvent, CalendarError> {
+        let action = "updating an event";
+        let token = self.token().await?;
+        let stored = Self::checked(
+            self.http
+                .patch(self.url(&["calendars", calendar_id, "events", event_id]))
+                .bearer_auth(token)
+                .json(&event_body(event))
+                .send()
+                .await,
+            action,
+        )?
+        .json::<EventResource>()
+        .await
+        .map_err(|source| CalendarError::Response { action, source })?;
+        stored_event(&stored)
+    }
+
+    async fn delete_event(&self, calendar_id: &str, event_id: &str) -> Result<(), CalendarError> {
+        let action = "deleting an event";
+        let token = self.token().await?;
+        let response = self
+            .http
+            .delete(self.url(&["calendars", calendar_id, "events", event_id]))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|source| CalendarError::Request { action, source })?;
+        match response.status().as_u16() {
+            status if (200..300).contains(&status) => Ok(()),
+            // The event a reconcile was about to delete someone else already
+            // deleted; the end state is the same.
+            404 | 410 => Ok(()),
+            status => Err(CalendarError::Api { action, status }),
+        }
+    }
+
+    async fn mirrored_events(
+        &self,
+        calendar_id: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<Vec<StoredEvent>, CalendarError> {
+        let action = "listing mirrored events";
+        let mut found = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let token = self.token().await?;
+            let mut query = vec![
+                ("privateExtendedProperty", format!("{key}:{value}")),
+                ("maxResults", "250".to_string()),
+            ];
+            if let Some(page) = &page_token {
+                query.push(("pageToken", page.clone()));
+            }
+            let page = Self::checked(
+                self.http
+                    .get(self.url(&["calendars", calendar_id, "events"]))
+                    .bearer_auth(token)
+                    .query(&query)
+                    .send()
+                    .await,
+                action,
+            )?
+            .json::<EventPage>()
+            .await
+            .map_err(|source| CalendarError::Response { action, source })?;
+            for event in &page.items {
+                found.push(stored_event(event)?);
+            }
+            page_token = page.next_page_token;
+            if page_token.is_none() {
+                break;
+            }
+        }
+        Ok(found)
+    }
 }
 
 #[derive(Deserialize)]
@@ -433,6 +608,119 @@ struct AclScope {
     value: Option<String>,
 }
 
+/// One page of a filtered events read.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EventPage {
+    #[serde(default)]
+    items: Vec<EventResource>,
+    next_page_token: Option<String>,
+}
+
+/// One event as the Calendar API returns it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EventResource {
+    id: Option<String>,
+    extended_properties: Option<EventExtendedProperties>,
+}
+
+/// The `extendedProperties` object; only the `private` map is ours.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+struct EventExtendedProperties {
+    #[serde(default)]
+    private: BTreeMap<String, String>,
+}
+
+/// The event body Navigator writes. `end` repeats `start`: an event written
+/// here marks a moment, and the ICS feed it mirrors renders no `DTEND`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EventBody<'a> {
+    summary: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    location: Option<&'a str>,
+    start: EventTime,
+    end: EventTime,
+    status: &'static str,
+    transparency: &'static str,
+    sequence: i32,
+    reminders: EventReminders,
+    extended_properties: EventExtendedProperties,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EventTime {
+    date_time: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EventReminders {
+    use_default: bool,
+    overrides: Vec<EventReminder>,
+}
+
+#[derive(Serialize)]
+struct EventReminder {
+    method: &'static str,
+    minutes: i64,
+}
+
+fn event_body(event: &CalendarEvent) -> EventBody<'_> {
+    let start = event.start.to_rfc3339();
+    EventBody {
+        summary: &event.summary,
+        description: event.description.as_deref(),
+        location: event.location.as_deref(),
+        start: EventTime {
+            date_time: start.clone(),
+        },
+        end: EventTime { date_time: start },
+        status: if event.cancelled {
+            "cancelled"
+        } else {
+            "confirmed"
+        },
+        transparency: "transparent",
+        sequence: event.sequence,
+        reminders: EventReminders {
+            use_default: false,
+            overrides: event
+                .reminder_minutes
+                .map(|minutes| {
+                    vec![EventReminder {
+                        method: "popup",
+                        minutes,
+                    }]
+                })
+                .unwrap_or_default(),
+        },
+        extended_properties: EventExtendedProperties {
+            private: event.private_properties.clone(),
+        },
+    }
+}
+
+fn stored_event(resource: &EventResource) -> Result<StoredEvent, CalendarError> {
+    let id = resource
+        .id
+        .clone()
+        .filter(|id| !id.is_empty())
+        .ok_or(CalendarError::MissingEventId)?;
+    Ok(StoredEvent {
+        id,
+        private_properties: resource
+            .extended_properties
+            .as_ref()
+            .map(|properties| properties.private.clone())
+            .unwrap_or_default(),
+    })
+}
+
 /// In-memory calendars for store and door tests. The delegated user is
 /// `owner@calendar.test`, shared as `Owner` on every calendar it creates.
 #[derive(Clone, Debug, Default)]
@@ -443,6 +731,7 @@ pub struct FakeCalendar {
 #[derive(Debug, Default)]
 struct FakeCalendarState {
     calendars: BTreeMap<String, FakeCalendarEntry>,
+    events: BTreeMap<String, BTreeMap<String, CalendarEvent>>,
     next_id: usize,
     created: usize,
 }
@@ -495,6 +784,42 @@ impl FakeCalendar {
     pub fn delete(&self, calendar_id: &str) {
         let mut state = self.state.lock().expect("fake calendar mutex poisoned");
         state.calendars.remove(calendar_id);
+        state.events.remove(calendar_id);
+    }
+
+    /// Every event a calendar holds, in id order.
+    #[must_use]
+    pub fn events(&self, calendar_id: &str) -> Vec<StoredEvent> {
+        let state = self.state.lock().expect("fake calendar mutex poisoned");
+        state
+            .events
+            .get(calendar_id)
+            .map(|events| {
+                events
+                    .iter()
+                    .map(|(id, event)| StoredEvent {
+                        id: id.clone(),
+                        private_properties: event.private_properties.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Delete an event outside Navigator, as a person could in Google.
+    pub fn remove_event(&self, calendar_id: &str, event_id: &str) {
+        let mut state = self.state.lock().expect("fake calendar mutex poisoned");
+        if let Some(events) = state.events.get_mut(calendar_id) {
+            events.remove(event_id);
+        }
+    }
+
+    /// Overwrite an event outside Navigator, as a person could in Google.
+    pub fn put_event(&self, calendar_id: &str, event_id: &str, event: CalendarEvent) {
+        let mut state = self.state.lock().expect("fake calendar mutex poisoned");
+        if let Some(events) = state.events.get_mut(calendar_id) {
+            events.insert(event_id.to_string(), event);
+        }
     }
 }
 
@@ -567,17 +892,99 @@ impl CalendarService for FakeCalendar {
             }),
         }
     }
+
+    async fn insert_event(
+        &self,
+        calendar_id: &str,
+        event: &CalendarEvent,
+    ) -> Result<StoredEvent, CalendarError> {
+        let mut state = self.state.lock().expect("fake calendar mutex poisoned");
+        if !state.calendars.contains_key(calendar_id) {
+            return Err(CalendarError::Api {
+                action: "inserting an event",
+                status: 404,
+            });
+        }
+        state.next_id += 1;
+        let id = format!("e_{}", state.next_id);
+        state
+            .events
+            .entry(calendar_id.to_string())
+            .or_default()
+            .insert(id.clone(), event.clone());
+        Ok(StoredEvent {
+            id,
+            private_properties: event.private_properties.clone(),
+        })
+    }
+
+    async fn patch_event(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        event: &CalendarEvent,
+    ) -> Result<StoredEvent, CalendarError> {
+        let mut state = self.state.lock().expect("fake calendar mutex poisoned");
+        match state
+            .events
+            .get_mut(calendar_id)
+            .and_then(|events| events.get_mut(event_id))
+        {
+            Some(stored) => {
+                *stored = event.clone();
+                Ok(StoredEvent {
+                    id: event_id.to_string(),
+                    private_properties: event.private_properties.clone(),
+                })
+            }
+            None => Err(CalendarError::Api {
+                action: "updating an event",
+                status: 404,
+            }),
+        }
+    }
+
+    async fn delete_event(&self, calendar_id: &str, event_id: &str) -> Result<(), CalendarError> {
+        let mut state = self.state.lock().expect("fake calendar mutex poisoned");
+        if let Some(events) = state.events.get_mut(calendar_id) {
+            events.remove(event_id);
+        }
+        Ok(())
+    }
+
+    async fn mirrored_events(
+        &self,
+        calendar_id: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<Vec<StoredEvent>, CalendarError> {
+        Ok(self
+            .events(calendar_id)
+            .into_iter()
+            .filter(|stored| {
+                stored
+                    .private_properties
+                    .get(key)
+                    .is_some_and(|v| v == value)
+            })
+            .collect())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use chrono::DateTime;
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use async_trait::async_trait;
-    use wiremock::matchers::{body_json, method, path, query_param};
+    use wiremock::matchers::{body_json, body_partial_json, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    use super::{CalendarError, CalendarRole, CalendarService, FakeCalendar, GoogleCalendar};
+    use super::{
+        CalendarError, CalendarEvent, CalendarRole, CalendarService, FakeCalendar, GoogleCalendar,
+        StoredEvent,
+    };
 
     #[derive(Debug)]
     struct StaticToken;
@@ -766,5 +1173,288 @@ mod tests {
             .set_member_role("c_unknown", "lawyer@example.com", CalendarRole::Writer)
             .await
             .is_err());
+    }
+
+    fn event() -> CalendarEvent {
+        CalendarEvent {
+            summary: "Court order deadline - acme".into(),
+            description: Some("Authority: Order setting briefing".into()),
+            location: None,
+            start: DateTime::parse_from_rfc3339("2026-11-02T17:00:00-08:00").unwrap(),
+            sequence: 3,
+            cancelled: false,
+            reminder_minutes: Some(10_080),
+            private_properties: BTreeMap::from([
+                ("navigator_mirror".to_string(), "deadline".to_string()),
+                (
+                    "deadline_id".to_string(),
+                    "0190a000-0000-7000-8000-000000000001".to_string(),
+                ),
+                ("body_sha".to_string(), "abc123".to_string()),
+            ]),
+        }
+    }
+
+    fn stored(id: &str, private_properties: &[(&str, &str)]) -> StoredEvent {
+        StoredEvent {
+            id: id.to_string(),
+            private_properties: private_properties
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn insert_event_posts_an_instant_event_with_its_identity() {
+        let server = MockServer::start().await;
+        let calendar_id = "c_42@group.calendar.example.com";
+        Mock::given(method("POST"))
+            .and(path(format!("/calendars/{calendar_id}/events")))
+            .and(body_json(serde_json::json!({
+                "summary": "Court order deadline - acme",
+                "description": "Authority: Order setting briefing",
+                "start": { "dateTime": "2026-11-02T17:00:00-08:00" },
+                "end": { "dateTime": "2026-11-02T17:00:00-08:00" },
+                "status": "confirmed",
+                "transparency": "transparent",
+                "sequence": 3,
+                "reminders": {
+                    "useDefault": false,
+                    "overrides": [{ "method": "popup", "minutes": 10_080 }]
+                },
+                "extendedProperties": { "private": {
+                    "navigator_mirror": "deadline",
+                    "deadline_id": "0190a000-0000-7000-8000-000000000001",
+                    "body_sha": "abc123"
+                }}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "evt_1",
+                "extendedProperties": { "private": {
+                    "navigator_mirror": "deadline",
+                    "deadline_id": "0190a000-0000-7000-8000-000000000001",
+                    "body_sha": "abc123"
+                }}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let stored_event = google(&server)
+            .insert_event(calendar_id, &event())
+            .await
+            .unwrap();
+        assert_eq!(
+            stored_event,
+            stored(
+                "evt_1",
+                &[
+                    ("body_sha", "abc123"),
+                    ("deadline_id", "0190a000-0000-7000-8000-000000000001"),
+                    ("navigator_mirror", "deadline")
+                ]
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn an_event_without_a_reminder_suppresses_the_defaults() {
+        let server = MockServer::start().await;
+        let calendar_id = "c_42@group.calendar.example.com";
+        let mut silent = event();
+        silent.reminder_minutes = None;
+        Mock::given(method("POST"))
+            .and(path(format!("/calendars/{calendar_id}/events")))
+            .and(body_partial_json(serde_json::json!({
+                "reminders": { "useDefault": false, "overrides": [] }
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": "evt_2" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let stored_event = google(&server)
+            .insert_event(calendar_id, &silent)
+            .await
+            .unwrap();
+        assert_eq!(stored_event.id, "evt_2");
+    }
+
+    #[tokio::test]
+    async fn a_patch_overwrites_the_navigator_fields_at_the_same_event() {
+        let server = MockServer::start().await;
+        let calendar_id = "c_42@group.calendar.example.com";
+        let mut moved = event();
+        moved.sequence = 4;
+        moved.start = DateTime::parse_from_rfc3339("2026-11-09T17:00:00-08:00").unwrap();
+        Mock::given(method("PATCH"))
+            .and(path(format!("/calendars/{calendar_id}/events/evt_1")))
+            .and(body_partial_json(serde_json::json!({
+                "sequence": 4,
+                "start": { "dateTime": "2026-11-09T17:00:00-08:00" }
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "evt_1",
+                "extendedProperties": { "private": { "body_sha": "def456" } }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let stored_event = google(&server)
+            .patch_event(calendar_id, "evt_1", &moved)
+            .await
+            .unwrap();
+        assert_eq!(
+            stored_event.private_properties.get("body_sha"),
+            Some(&"def456".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_an_event_already_gone_still_succeeds() {
+        let server = MockServer::start().await;
+        let calendar_id = "c_42@group.calendar.example.com";
+        Mock::given(method("DELETE"))
+            .and(path(format!("/calendars/{calendar_id}/events/evt_1")))
+            .respond_with(ResponseTemplate::new(204))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path(format!("/calendars/{calendar_id}/events/evt_1")))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let calendar = google(&server);
+        calendar.delete_event(calendar_id, "evt_1").await.unwrap();
+        calendar.delete_event(calendar_id, "evt_1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn mirrored_events_paginate_and_filter_by_the_marker() {
+        let server = MockServer::start().await;
+        let calendar_id = "c_42@group.calendar.example.com";
+        Mock::given(method("GET"))
+            .and(path(format!("/calendars/{calendar_id}/events")))
+            .and(query_param(
+                "privateExtendedProperty",
+                "navigator_mirror:deadline",
+            ))
+            .and(query_param("pageToken", "next"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [
+                    { "id": "evt_2", "extendedProperties": { "private": { "deadline_id": "d2" } } }
+                ]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/calendars/{calendar_id}/events")))
+            .and(query_param(
+                "privateExtendedProperty",
+                "navigator_mirror:deadline",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [
+                    { "id": "evt_1", "extendedProperties": { "private": { "deadline_id": "d1" } } }
+                ],
+                "nextPageToken": "next"
+            })))
+            .mount(&server)
+            .await;
+        let events = google(&server)
+            .mirrored_events(calendar_id, "navigator_mirror", "deadline")
+            .await
+            .unwrap();
+        let ids: Vec<_> = events.iter().map(|event| event.id.as_str()).collect();
+        assert_eq!(ids, ["evt_1", "evt_2"]);
+        assert_eq!(
+            events[0].private_properties.get("deadline_id"),
+            Some(&"d1".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_event_refusal_names_its_action() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/calendars/c_42@group.calendar.example.com/events"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+        let error = google(&server)
+            .insert_event("c_42@group.calendar.example.com", &event())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            CalendarError::Api {
+                action: "inserting an event",
+                status: 403
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_fake_finds_patches_and_deletes_mirrored_events() {
+        let calendar = FakeCalendar::default();
+        let created = calendar.create_calendar("matter-42").await.unwrap();
+        let first = calendar.insert_event(&created.id, &event()).await.unwrap();
+        let mut second = event();
+        second
+            .private_properties
+            .insert("deadline_id".into(), "d2".into());
+        let second_stored = calendar.insert_event(&created.id, &second).await.unwrap();
+        assert_eq!(
+            calendar
+                .mirrored_events(&created.id, "navigator_mirror", "deadline")
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        let mut edited = event();
+        edited.sequence = 4;
+        edited
+            .private_properties
+            .insert("body_sha".into(), "def456".into());
+        calendar
+            .patch_event(&created.id, &first.id, &edited)
+            .await
+            .unwrap();
+        assert_eq!(
+            calendar
+                .mirrored_events(&created.id, "body_sha", "def456")
+                .await
+                .unwrap()[0]
+                .id,
+            first.id
+        );
+        calendar.delete_event(&created.id, &first.id).await.unwrap();
+        calendar.delete_event(&created.id, &first.id).await.unwrap();
+        assert_eq!(calendar.events(&created.id).len(), 1);
+        calendar.remove_event(&created.id, &second_stored.id);
+        assert!(calendar.events(&created.id).is_empty());
+        assert!(calendar.insert_event("c_unknown", &event()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_fake_patches_and_refuses_an_unknown_event() {
+        let calendar = FakeCalendar::default();
+        let created = calendar.create_calendar("matter-42").await.unwrap();
+        let inserted = calendar.insert_event(&created.id, &event()).await.unwrap();
+        let mut moved = event();
+        moved.start = DateTime::parse_from_rfc3339("2026-11-09T17:00:00-08:00").unwrap();
+        calendar
+            .patch_event(&created.id, &inserted.id, &moved)
+            .await
+            .unwrap();
+        assert!(calendar
+            .patch_event(&created.id, "e_missing", &moved)
+            .await
+            .is_err());
+        calendar.put_event(&created.id, &inserted.id, moved);
+        assert_eq!(calendar.events(&created.id).len(), 1);
     }
 }
