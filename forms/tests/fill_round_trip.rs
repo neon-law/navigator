@@ -178,13 +178,13 @@ fn ca_name_change_answers(form_code: &str) -> Vec<(&'static str, String)> {
         "ca__name_change_petition"
         | "ca__name_change_order_to_show_cause"
         | "ca__name_change_decree" => vec![
-            ("person__client.name", "Jordan Avery Blake".to_string()),
-            ("person__new_name.name", "Jordan Avery Solis".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__new_name.name", "Jordan Kim Rivera".to_string()),
             ("custom_text__county_of_residence", "Sacramento".to_string()),
         ],
         "ca__name_change_attachment" => vec![
-            ("person__client.name", "Jordan Avery Blake".to_string()),
-            ("person__new_name.name", "Jordan Avery Solis".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__new_name.name", "Jordan Kim Rivera".to_string()),
             (
                 "custom_single_choice__current_sex_designation",
                 "female".to_string(),
@@ -200,7 +200,7 @@ fn ca_name_change_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ),
         ],
         "ca__civil_case_cover_sheet" => vec![
-            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
             ("custom_text__county_of_residence", "Sacramento".to_string()),
         ],
         other => panic!("no sample answers for `{other}`"),
@@ -213,8 +213,8 @@ fn ca_name_change_answers(form_code: &str) -> Vec<(&'static str, String)> {
 fn ca_gender_marker_answers(form_code: &str) -> Vec<(&'static str, String)> {
     match form_code {
         "ca__gender_identity_name_change_petition" => vec![
-            ("person__client.name", "Rowan Vega Camacho".to_string()),
-            ("person__new_name.name", "Rowan Vega Solis".to_string()),
+            ("person__client.name", "Casey Finley Harper".to_string()),
+            ("person__new_name.name", "Casey Finley Santos".to_string()),
             (
                 "custom_single_choice__current_sex_designation",
                 "female".to_string(),
@@ -231,12 +231,12 @@ fn ca_gender_marker_answers(form_code: &str) -> Vec<(&'static str, String)> {
         ],
         "ca__gender_identity_name_change_order_to_show_cause"
         | "ca__gender_identity_name_change_decree" => vec![
-            ("person__client.name", "Rowan Vega Camacho".to_string()),
-            ("person__new_name.name", "Rowan Vega Solis".to_string()),
+            ("person__client.name", "Casey Finley Harper".to_string()),
+            ("person__new_name.name", "Casey Finley Santos".to_string()),
             ("custom_text__county_of_residence", "Fresno".to_string()),
         ],
         "ca__gender_recognition_petition" => vec![
-            ("person__client.name", "Rowan Vega Camacho".to_string()),
+            ("person__client.name", "Casey Finley Harper".to_string()),
             (
                 "custom_single_choice__sex_identifier",
                 "nonbinary".to_string(),
@@ -245,7 +245,7 @@ fn ca_gender_marker_answers(form_code: &str) -> Vec<(&'static str, String)> {
                 "custom_single_choice__new_certificates",
                 "birth_certificate".to_string(),
             ),
-            ("person__new_name.name", "Rowan Vega Solis".to_string()),
+            ("person__new_name.name", "Casey Finley Santos".to_string()),
             ("custom_datetime__date_of_birth", "1988-09-30".to_string()),
             (
                 "custom_text__place_of_birth",
@@ -257,9 +257,9 @@ fn ca_gender_marker_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ),
         ],
         "ca__gender_recognition_order" => vec![
-            ("person__client.name", "Rowan Vega Camacho".to_string()),
+            ("person__client.name", "Casey Finley Harper".to_string()),
             ("custom_single_choice__sex_identifier", "male".to_string()),
-            ("person__new_name.name", "Rowan Vega Solis".to_string()),
+            ("person__new_name.name", "Casey Finley Santos".to_string()),
             (
                 "custom_single_choice__new_certificates",
                 "birth_certificate".to_string(),
@@ -274,15 +274,15 @@ fn ca_gender_marker_answers(form_code: &str) -> Vec<(&'static str, String)> {
 fn nv_answers(form_code: &str) -> Vec<(&'static str, String)> {
     match form_code {
         "nv__adult_name_change_petition" => vec![
-            ("person__client.name", "Alex Rios Nakamura".to_string()),
+            ("person__client.name", "Alex Kim Marlowe".to_string()),
             ("person__client.given", "Alex".to_string()),
-            ("person__client.middle", "Rios".to_string()),
-            ("person__client.family", "Nakamura".to_string()),
+            ("person__client.middle", "Kim".to_string()),
+            ("person__client.family", "Marlowe".to_string()),
             // The new legal name is a person answer: the map fills its
             // given/middle/family parts into the SEQ001 slots.
             ("person__new_name.given", "Alex".to_string()),
-            ("person__new_name.middle", "Rios".to_string()),
-            ("person__new_name.family", "Sandoval".to_string()),
+            ("person__new_name.middle", "Kim".to_string()),
+            ("person__new_name.family", "Quill".to_string()),
             ("custom_datetime__date_of_birth", "1992-02-17".to_string()),
             ("custom_text__birthplace_city", "Elko".to_string()),
             ("jurisdiction__birthplace.name", "Nevada".to_string()),
@@ -294,14 +294,14 @@ fn nv_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ("custom_yes_no__felony_conviction", "no".to_string()),
         ],
         "nv__dv_protection_order_application" => vec![
-            ("person__client.name", "Jamie Herrera".to_string()),
-            ("person__client.given", "Jamie".to_string()),
-            ("person__client.middle", "Lynn".to_string()),
-            ("person__client.family", "Herrera".to_string()),
-            ("person__respondent.name", "Renée Vásquez".to_string()),
-            ("person__respondent.given", "Renée".to_string()),
-            ("person__respondent.middle", "Marisol".to_string()),
-            ("person__respondent.family", "Vásquez".to_string()),
+            ("person__client.name", "Cora Blair Stubbs".to_string()),
+            ("person__client.given", "Cora".to_string()),
+            ("person__client.middle", "Blair".to_string()),
+            ("person__client.family", "Stubbs".to_string()),
+            ("person__respondent.name", "Odile Quill Prine".to_string()),
+            ("person__respondent.given", "Odile".to_string()),
+            ("person__respondent.middle", "Quill".to_string()),
+            ("person__respondent.family", "Prine".to_string()),
             ("custom_single_choice__relationship", "dating".to_string()),
             ("custom_yes_no__living_together", "yes".to_string()),
             ("custom_text__incident_date", "October 12, 2026".to_string()),
@@ -398,34 +398,30 @@ fn flattened_text_smoke_values(form_code: &str) -> &'static [&'static str] {
         "us__naturalization" => &["1990-04-12", "maria@example.com", "Santos Gómez", "María"],
         "ca__name_change_petition"
         | "ca__name_change_order_to_show_cause"
-        | "ca__name_change_decree" => &["Jordan Avery Blake", "Jordan Avery Solis", "Sacramento"],
+        | "ca__name_change_decree" => &["Jordan Kim Blake", "Jordan Kim Rivera", "Sacramento"],
         "ca__name_change_attachment" => &[
-            "Jordan Avery Blake",
-            "Jordan Avery Solis",
+            "Jordan Kim Blake",
+            "Jordan Kim Rivera",
             "1990-04-12",
             "Fresno, California",
         ],
-        "ca__civil_case_cover_sheet" => &["Jordan Avery Blake", "Sacramento"],
+        "ca__civil_case_cover_sheet" => &["Jordan Kim Blake", "Sacramento"],
         "ca__gender_identity_name_change_petition" | "ca__gender_recognition_petition" => &[
-            "Rowan Vega Camacho",
-            "Rowan Vega Solis",
+            "Casey Finley Harper",
+            "Casey Finley Santos",
             "1988-09-30",
             "San Diego, California",
         ],
         "ca__gender_identity_name_change_order_to_show_cause"
         | "ca__gender_identity_name_change_decree" => {
-            &["Rowan Vega Camacho", "Rowan Vega Solis", "Fresno"]
+            &["Casey Finley Harper", "Casey Finley Santos", "Fresno"]
         }
-        "ca__gender_recognition_order" => &["Rowan Vega Camacho", "Rowan Vega Solis"],
-        "nv__adult_name_change_petition" => &[
-            "Alex Rios Nakamura",
-            "Nakamura",
-            "Sandoval",
-            "1992-02-17",
-            "Elko",
-        ],
+        "ca__gender_recognition_order" => &["Casey Finley Harper", "Casey Finley Santos"],
+        "nv__adult_name_change_petition" => {
+            &["Alex Kim Marlowe", "Marlowe", "Quill", "1992-02-17", "Elko"]
+        }
         "nv__dv_protection_order_application" => {
-            &["Jamie Herrera", "Renée Vásquez", "October 12, 2026"]
+            &["Cora Blair Stubbs", "Odile Quill Prine", "October 12, 2026"]
         }
         other => panic!("no flattened text smoke values for `{other}`"),
     }
