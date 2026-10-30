@@ -113,6 +113,8 @@ impl AlertIngress {
             workflow,
         }
     }
+}
+
 /// The synchronous ingress for the `notation` DBOS port: the caller-facing
 /// wire the Restate virtual object served, on the worker's health listener.
 /// Transitions run the [`crate::dbos_notation::NotationTransition`] workflow

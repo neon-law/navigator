@@ -207,7 +207,6 @@ async fn main() -> anyhow::Result<()> {
             workflows_service::dbos_inbound_message_alert::enabled(lookup)
                 .map_err(anyhow::Error::msg)
                 .context("read NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED")?;
-        let finance_claim_postgres = if finance_aggregate_enabled {
         let notation_enabled = workflows_service::dbos_notation::enabled(lookup)
             .map_err(anyhow::Error::msg)
             .context("read NAVIGATOR_DBOS_NOTATION_ENABLED")?;
@@ -643,6 +642,10 @@ async fn main() -> anyhow::Result<()> {
                     slack_bot_enabled,
                     dbos_alert_portal_origin,
                 ),
+            ))
+        } else {
+            None
+        };
         let dbos_notation_postgres = finance_claim_postgres.clone();
         // Both stores, resolved before the executor launch so a misconfigured
         // notation flag fails boot with a clear message rather than inside
