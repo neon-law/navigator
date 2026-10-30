@@ -233,3 +233,161 @@ pub fn sandbox_body(view: &SandboxView) -> Element {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The default fixture: an active session on a full 500¢ grant.
+    fn credit(remaining_cents: u64) -> SandboxCredit {
+        SandboxCredit {
+            granted_cents: 500,
+            remaining_cents,
+            model_backend: "Claude Sonnet (Vertex AI)".to_string(),
+            backends: vec![
+                "Claude Sonnet (Vertex AI)".to_string(),
+                "Local open-weights".to_string(),
+            ],
+        }
+    }
+
+    fn view(credit: Option<SandboxCredit>) -> SandboxView {
+        SandboxView {
+            tokens_href: String::new(),
+            credit,
+            csrf_token: "TOK".to_string(),
+        }
+    }
+
+    fn render(view: &SandboxView) -> String {
+        dioxus_ssr::render_element(sandbox_body(view))
+    }
+
+    // -- state classification ------------------------------------------------
+
+    /// > 20% remaining is Active.
+    #[test]
+    fn more_than_twenty_percent_remaining_is_active() {
+        assert_eq!(credit_state(Some(&credit(400))), CreditState::Active);
+    }
+
+    /// Exactly 20% — the boundary — is Low balance (≤ 20%).
+    #[test]
+    fn exactly_twenty_percent_remaining_is_low_balance() {
+        assert_eq!(credit_state(Some(&credit(100))), CreditState::LowBalance);
+        assert_eq!(credit_state(Some(&credit(99))), CreditState::LowBalance);
+    }
+
+    /// Zero remaining is Exhausted, whatever the grant was.
+    #[test]
+    fn zero_remaining_is_exhausted() {
+        assert_eq!(credit_state(Some(&credit(0))), CreditState::Exhausted);
+    }
+
+    /// No credit row at all is the Preview state.
+    #[test]
+    fn no_credit_row_is_preview() {
+        assert_eq!(credit_state(None), CreditState::Preview);
+    }
+
+    // -- rendering per state --------------------------------------------------
+
+    /// Active: meter, backend selector, and a live composer.
+    #[test]
+    fn the_active_state_renders_the_meter_and_a_live_composer() {
+        let html = render(&view(Some(credit(500))));
+        assert!(html.contains("$5.00"), "{html}");
+        assert!(html.contains("100% remaining"), "{html}");
+        assert!(html.contains("legal-sandbox-composer"), "{html}");
+        assert!(html.contains("legal-sandbox-backend"), "{html}");
+        assert!(!html.contains("legal-sandbox-low-balance"), "{html}");
+    }
+
+    /// Low balance: the quiet notice stands next to the composer — no
+    /// interruption, no à la carte offer.
+    #[test]
+    fn the_low_balance_state_shows_the_notice_beside_the_composer() {
+        let html = render(&view(Some(credit(100))));
+        assert!(html.contains("legal-sandbox-low-balance"), "{html}");
+        assert!(html.contains("$1.00 left this month"), "{html}");
+        assert!(html.contains("legal-sandbox-composer"), "{html}");
+        assert!(!html.contains("legal-sandbox-exhausted"), "{html}");
+    }
+
+    /// Exhausted: the à la carte offer replaces the composer — the crossing
+    /// completion already completed and was billed; this one waits for consent.
+    #[test]
+    fn the_exhausted_state_replaces_the_composer_with_the_a_la_carte_offer() {
+        let html = render(&view(Some(credit(0))));
+        assert!(html.contains("legal-sandbox-exhausted"), "{html}");
+        assert!(html.contains("à la carte"), "{html}");
+        assert!(!html.contains("legal-sandbox-composer"), "{html}");
+    }
+
+    /// Preview: the read-only description — no composer, no meter, no credit.
+    #[test]
+    fn the_preview_state_renders_the_description_without_a_composer() {
+        let html = render(&view(None));
+        assert!(html.contains("legal-sandbox-preview"), "{html}");
+        assert!(!html.contains("legal-sandbox-composer"), "{html}");
+        assert!(!html.contains("legal-sandbox-meter"), "{html}");
+        assert!(!html.contains("legal-sandbox-exhausted"), "{html}");
+    }
+
+    // -- invariants -----------------------------------------------------------
+
+    /// The non-engagement disclosure renders in all four states.
+    #[test]
+    fn the_disclosure_renders_in_every_state() {
+        for state in [
+            view(Some(credit(500))),
+            view(Some(credit(100))),
+            view(Some(credit(0))),
+            view(None),
+        ] {
+            let html = render(&state);
+            assert!(
+                html.contains("legal-sandbox-disclosure"),
+                "disclosure missing from: {html}"
+            );
+            assert!(
+                html.contains("does not create an attorney-client relationship"),
+                "disclosure text missing from: {html}"
+            );
+        }
+    }
+
+    /// The composer is a native POST carrying the CSRF token — no JavaScript.
+    #[test]
+    fn the_composer_posts_natively_with_the_csrf_token() {
+        let html = render(&view(Some(credit(500))));
+        assert!(html.contains(r#"method="post""#), "{html}");
+        assert!(
+            html.contains(r#"action="/app/nautilus/messages""#),
+            "{html}"
+        );
+        assert!(html.contains(r#"name="_csrf""#), "{html}");
+        assert!(html.contains("TOK"), "{html}");
+        assert!(!html.contains("<script"), "{html}");
+    }
+
+    /// The backend selector marks the session's backend and offers the other
+    /// one.
+    #[test]
+    fn the_backend_selector_marks_the_session_backend() {
+        let html = render(&view(Some(credit(500))));
+        assert!(
+            html.contains(r#"value="Claude Sonnet (Vertex AI)" selected=true"#),
+            "session backend not selected: {html}"
+        );
+        assert!(html.contains("Local open-weights"), "{html}");
+    }
+
+    /// Money is subscriber-English dollars, never bare cent counts.
+    #[test]
+    fn the_meter_shows_dollars_not_cents() {
+        let html = render(&view(Some(credit(375))));
+        assert!(html.contains("$3.75"), "{html}");
+        assert!(html.contains("75% remaining"), "{html}");
+        assert!(!html.contains("375¢"), "{html}");
+    }
+}
