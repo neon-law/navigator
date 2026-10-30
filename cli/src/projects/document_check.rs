@@ -765,7 +765,7 @@ pub(crate) fn check_documents_root(documents: &Path) -> Result<Vec<CheckFailure>
     {
         let entry = match entry {
             Ok(entry) => entry,
-            Err(error) => return Err(walk_error(error, documents)),
+            Err(error) => return Err(walk_error(&error, documents)),
         };
         let path = entry.path().to_path_buf();
         let Ok(relative) = path.strip_prefix(documents) else {
@@ -781,8 +781,7 @@ pub(crate) fn check_documents_root(documents: &Path) -> Result<Vec<CheckFailure>
             if entry.depth() == 1 && !entry.file_name().to_string_lossy().starts_with('.') {
                 let name = relative
                     .to_str()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| relative.display().to_string());
+                    .map_or_else(|| relative.display().to_string(), str::to_string);
                 if crate::document_layout::matter_folder_of(relative).is_none()
                     && !crate::document_layout::is_sibling(relative)
                 {
@@ -863,9 +862,9 @@ fn known_folders() -> String {
     names.join(", ")
 }
 
-/// The walk error for [`check_documents_root`]: the macOS permission note
-/// when the block is the CloudStorage one, the plain context otherwise.
-fn walk_error(error: walkdir::Error, documents: &Path) -> anyhow::Error {
+/// The walk error for [`check_documents_root`]: the `macOS` permission note
+/// when the block is the `CloudStorage` one, the plain context otherwise.
+fn walk_error(error: &walkdir::Error, documents: &Path) -> anyhow::Error {
     let Some(io) = error.io_error() else {
         return anyhow!("{error}");
     };
@@ -884,7 +883,7 @@ fn walk_error(error: walkdir::Error, documents: &Path) -> anyhow::Error {
 /// path on this machine (LAW-217): a folder named after the Project code in
 /// `~/Library/CloudStorage/GoogleDrive-*/My Drive/` or
 /// `~/Library/CloudStorage/GoogleDrive-*/Shared drives/<drive>/`, so nobody
-/// types the CloudStorage path. A folder the Project records by id (LAW-213)
+/// types the `CloudStorage` path. A folder the Project records by id (LAW-213)
 /// is not resolved here yet: offline, the name is the only handle this
 /// machine has.
 pub(crate) fn resolve_drive_local(project: &str) -> Result<PathBuf> {
@@ -951,7 +950,7 @@ fn resolve_drive_local_in(project: &str, cloud_storage: &Path) -> Result<PathBuf
              pass --documents-dir to point the check at the folder itself",
             cloud_storage.display()
         )),
-        [only] => Ok(only.to_path_buf()),
+        [only] => Ok(only.clone()),
         many => Err(anyhow!(
             "{} folders named `{project}` exist across the Drive for desktop mounts; \
              pass --documents-dir to choose one",
@@ -966,7 +965,7 @@ fn resolve_drive_local_in(project: &str, cloud_storage: &Path) -> Result<PathBuf
 fn read_mount_children(shared_drives: &Path) -> Result<Vec<PathBuf>> {
     match std::fs::read_dir(shared_drives) {
         Ok(drives) => Ok(drives
-            .filter_map(|drive| drive.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|drive| drive.file_type().is_ok_and(|kind| kind.is_dir()))
             .map(|drive| drive.path())
             .collect()),

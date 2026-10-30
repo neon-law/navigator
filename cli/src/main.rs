@@ -6900,6 +6900,31 @@ impl rules::FileFilter for ProjectGateMarkdownFilter<'_> {
     }
 }
 
+/// Sort `local_bytes::verify_with`'s findings into check failures (modified
+/// bytes) and reported-missing pointers, the checkout's ordinary state.
+fn split_byte_findings(
+    byte_findings: &[projects::local_bytes::Finding],
+    findings: &mut Vec<projects::document_check::CheckFailure>,
+    missing: &mut Vec<String>,
+) {
+    for finding in byte_findings {
+        match &finding.status {
+            projects::local_bytes::Status::Match => {}
+            projects::local_bytes::Status::Missing => {
+                // A checkout that never downloaded a document's bytes is
+                // ordinary, so a missing pointer passes — reported, not failed.
+                missing.push(finding.pointer.clone());
+            }
+            projects::local_bytes::Status::Modified { reason } => {
+                findings.push(projects::document_check::CheckFailure {
+                    location: finding.pointer.clone(),
+                    message: format!("modified: {reason}"),
+                });
+            }
+        }
+    }
+}
+
 /// `navigator project documents check` (LAW-217) — the read-only document
 /// checks over one documents tree: the checkout's own `documents/` by
 /// default, or any tree laid out like it via `--documents-dir` or
@@ -6951,25 +6976,7 @@ fn run_documents_check(
     let mut missing: Vec<String> = Vec::new();
     if deep && checkout {
         match projects::local_bytes::verify_with(dir, &documents) {
-            Ok(byte_findings) => {
-                for finding in &byte_findings {
-                    match &finding.status {
-                        projects::local_bytes::Status::Match => {}
-                        projects::local_bytes::Status::Missing => {
-                            // A checkout that never downloaded a document's
-                            // bytes is ordinary, so a missing pointer passes
-                            // — reported, not failed.
-                            missing.push(finding.pointer.clone());
-                        }
-                        projects::local_bytes::Status::Modified { reason } => {
-                            findings.push(projects::document_check::CheckFailure {
-                                location: finding.pointer.clone(),
-                                message: format!("modified: {reason}"),
-                            })
-                        }
-                    }
-                }
-            }
+            Ok(byte_findings) => split_byte_findings(&byte_findings, &mut findings, &mut missing),
             Err(error) => {
                 eprintln!("navigator: {error:#}");
                 return ExitCode::from(2);
