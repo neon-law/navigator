@@ -2307,7 +2307,10 @@ pub(crate) const CLIENT_VISIBILITY_CODE: &str = "Y025";
 /// Whether a tracked relative path is a committed document pointer.
 fn is_pointer_path(relative: &str) -> bool {
     let mut components = relative.split('/');
-    components.next() == Some("blobs") && relative.ends_with(".yaml")
+    components.next() == Some("blobs")
+        && std::path::Path::new(relative)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("yaml"))
 }
 
 /// The [`CLIENT_VISIBILITY_CODE`] check: one warning per `visibility: client`
@@ -2315,11 +2318,10 @@ fn is_pointer_path(relative: &str) -> bool {
 /// layout pass already judges pointer validity, and a warning built from a
 /// pointer this one cannot read would invent its fields.
 fn validate_client_visibility(root: &Path, warnings: &mut Vec<Finding>) {
-    let files = match git_tracked_and_stageable_files(root) {
-        Ok(files) => files,
+    let Ok(files) = git_tracked_and_stageable_files(root) else {
         // The enumeration failure is already an error in the tracked-file
         // pass; reporting it twice adds noise, not information.
-        Err(_) => return,
+        return;
     };
     for path in files {
         let Ok(relative) = path.strip_prefix(root) else {
@@ -4864,12 +4866,10 @@ jobs:
     }
 
     fn client_visibility_warnings(root: &Path) -> Vec<String> {
-        let mut errors: Vec<Finding> = Vec::new();
         let mut warnings: Vec<Finding> = Vec::new();
         validate_client_visibility(root, &mut warnings);
-        errors
+        warnings
             .into_iter()
-            .chain(warnings)
             .map(|finding| finding.message)
             .collect()
     }
