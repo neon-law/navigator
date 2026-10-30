@@ -348,6 +348,10 @@ pub const SEEDED_TEMPLATES: &[SeededTemplate] = &[
         markdown: include_str!("../../templates/notations/neon_law/privacy_policy.md"),
     },
     SeededTemplate {
+        label: "notations/neon_law/basic_will.md",
+        markdown: include_str!("../../templates/notations/neon_law/basic_will.md"),
+    },
+    SeededTemplate {
         label: "notations/neon_law/onboarding__letter.md",
         markdown: canonical::TEMPLATE_ONBOARDING_LETTER,
     },
