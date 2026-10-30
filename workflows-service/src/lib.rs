@@ -15,7 +15,9 @@
 //! execution) for the architectural arc.
 
 pub mod asset_config;
+pub mod dbos_email_summary;
 pub mod dbos_finance_aggregate;
+pub mod dbos_inbound_message_alert;
 pub mod dbos_ingress;
 pub mod dbos_nightly_project_update;
 pub mod dbos_reconcile;

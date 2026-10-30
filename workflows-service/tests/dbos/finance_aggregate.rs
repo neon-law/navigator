@@ -59,6 +59,8 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
         )),
         reconcile: None,
         nightly_project_update: None,
+        email_summary: None,
+        inbound_message_alert: None,
     });
 
     let request = RunRequest {
