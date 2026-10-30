@@ -11,7 +11,7 @@ async fn cruller_fixture() -> (SurrealDb, store::projects::Project) {
         &db,
         &NewPerson {
             phone: Some("702-555-0142".to_string()),
-            ..NewPerson::new("Harriet Cruller", "harriet@crullers.example")
+            ..NewPerson::new("Harper Cruller", "harper@crullers.example")
         },
     )
     .await
@@ -33,8 +33,8 @@ async fn issue_scan_terms_collect_project_and_participant_identifiers() {
     for known in [
         project.code.clone(),
         "Cruller Estate".to_string(),
-        "Harriet Cruller".to_string(),
-        "harriet@crullers.example".to_string(),
+        "Harper Cruller".to_string(),
+        "harper@crullers.example".to_string(),
         "702-555-0142".to_string(),
     ] {
         assert!(
@@ -45,7 +45,7 @@ async fn issue_scan_terms_collect_project_and_participant_identifiers() {
 
     // The resolved terms feed the existing scanner: a draft naming the client
     // is refused, and the scanner stays silent on the abstract draft.
-    let draft = "Harriet Cruller asked where the filing stands";
+    let draft = "Harper Cruller asked where the filing stands";
     assert!(!crate::feedback_scan::scan(draft, &terms).is_empty());
     assert!(crate::feedback_scan::scan(
         "the status command exits 0 when the folder is empty",
@@ -73,23 +73,23 @@ async fn issue_scan_terms_skip_participants_of_other_projects() {
         .expect("resolve private terms");
 
     assert!(terms.iter().any(|t| t == "Unrelated Matter"));
-    assert!(!terms.iter().any(|t| t == "Harriet Cruller"));
+    assert!(!terms.iter().any(|t| t == "Harper Cruller"));
     assert!(
         crate::pii_audit::private_terms(&db, &[project.code, other.code])
             .await
             .expect("resolve both projects")
             .iter()
-            .any(|t| t == "Harriet Cruller")
+            .any(|t| t == "Harper Cruller")
     );
 }
 
 #[test]
 fn merged_terms_dedupe_case_insensitively_and_skip_blanks() {
-    let resolved = vec!["sample-estate".to_string(), "Harriet Cruller".to_string()];
+    let resolved = vec!["sample-estate".to_string(), "Harper Cruller".to_string()];
     let manual = vec![
         "  ".to_string(),
         "SAMPLE-ESTATE".to_string(),
-        "harriet cruller".to_string(),
+        "harper cruller".to_string(),
         "Opposing Counsel".to_string(),
     ];
 
@@ -99,7 +99,7 @@ fn merged_terms_dedupe_case_insensitively_and_skip_blanks() {
         merged,
         vec![
             "sample-estate".to_string(),
-            "Harriet Cruller".to_string(),
+            "Harper Cruller".to_string(),
             "Opposing Counsel".to_string()
         ]
     );
