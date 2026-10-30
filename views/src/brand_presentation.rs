@@ -715,7 +715,7 @@ impl BrandKey {
             Self::Summons => {
                 typeface_by_id("libre-franklin").expect("libre-franklin is catalogued")
             }
-            Self::Groundwork | Self::Daybridge => {
+            Self::Groundwork | Self::Daybridge | Self::Iep => {
                 typeface_by_id("source-serif-4").expect("source-serif-4 is catalogued")
             }
             Self::DeathAndDivorce => {
@@ -757,7 +757,8 @@ impl BrandKey {
             | Self::Summons
             | Self::Daybridge
             | Self::Groundwork
-            | Self::DeathAndDivorce => None,
+            | Self::DeathAndDivorce
+            | Self::Iep => None,
         }
     }
 
