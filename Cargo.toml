@@ -23,6 +23,7 @@ members = [
     "archives",
     "billing",
     "billing-workflows",
+    "ephemeris",
     "telemetry",
     "word",
     "geotime",
@@ -134,6 +135,10 @@ bs58 = "0.5"
 # for `restate-jwt`. Encoding is feature-gated in 3.x.
 ed25519-dalek = { version = "3", features = ["alloc", "pkcs8"] }
 hmac = "0.13"
+# DE440 + small-body SPK reading for the astrocartography calculator:
+# UTC→TAI→TT→TDB conversion with the leap-second table pinned by hifitime,
+# so the dynamical-time input of every SPK lookup is reproducible.
+hifitime = "4.3"
 jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
 # P-256 ECDSA — verifies SendGrid's Signed Event Webhook signature. Already
 # compiled in the tree via `jsonwebtoken`'s ES256 support, so this direct dep
