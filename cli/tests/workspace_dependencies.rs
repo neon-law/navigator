@@ -90,6 +90,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "portal",
     "predicates",
     "proc-macro2",
+    "project-scaffold",
     "pulldown-cmark",
     "quote",
     "rand",

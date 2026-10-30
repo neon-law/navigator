@@ -2241,6 +2241,7 @@ dependencies = [
  "pdf-extract",
  "portal",
  "predicates",
+ "project-scaffold",
  "rand 0.10.3",
  "ravif",
  "regex",
@@ -9284,6 +9285,14 @@ checksum = "4488a4a36b9a4ba6b9334a32a39971f77c1436ec82c38707bce707699cc3bbcb"
 dependencies = [
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "project-scaffold"
+version = "26.10.29"
+dependencies = [
+ "rules",
+ "serde_yaml",
 ]
 
 [[package]]

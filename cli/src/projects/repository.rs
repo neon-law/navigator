@@ -96,7 +96,10 @@ const MAIL_DIRECTORY: &str = "mail";
 /// `Y024` reports a present root `.gitignore` that lacks any of these lines
 /// and never rewrites it; `navigator project repository sync-skills` restores
 /// them ([`repair_root_gitignore`]).
-pub(crate) const ROOT_GITIGNORE: &str = "# Document bytes staged for or pulled down by `navigator project sync`.\n# Each document's pointer is committed under blobs/; its bytes never are.\n/documents/\n\n# Legal files and handoff notes never enter a Project repository.\n*.pdf\n*.docx\n*.local\n\n# Call notes and memos for `navigator project communication create --body-file`.\n# The Communication's body lives in Navigator's store, never in Git.\nnotes/\n\n# Email bodies, drafts, and saved copies of sent mail. Matter facts, never Git.\nmail/\n\n# Per-machine agent and operating-system state.\n.claude/settings.local.json\n.claude/worktrees/\n.agents/settings.local.json\n.agents/worktrees/\n.DS_Store\n";
+///
+/// The canonical bytes live in `project-scaffold` so this CLI's scaffold and
+/// the server-side repository seeding write the same bytes.
+pub(crate) use project_scaffold::ROOT_GITIGNORE;
 /// The [`ROOT_GITIGNORE`] lines whose absence is an error rather than drift:
 /// without them a document's bytes, a rendered pleading, a downloaded
 /// exhibit, or a handoff note can be committed (LAW-181).
@@ -147,7 +150,9 @@ const FINAL_RETIRED_WORKFLOW_RELEASE: &str = "26.9.23";
 /// `store::sample_project::MANIFEST_FILE` names, a Project repository's
 /// manifest and a staged sample bundle's manifest are the same file, read by
 /// different tools, not two schemas that happen to overlap.
-pub(crate) const PROJECT_MANIFEST: &str = "navigator.yaml";
+/// The Project manifest's canonical bytes live in `project-scaffold` so this
+/// CLI's scaffold and the server-side repository seeding agree on the file.
+pub(crate) use project_scaffold::PROJECT_MANIFEST;
 const CODEOWNERS: &str = "# CODEOWNERS\n\n* @shicholas\n";
 /// Seed-shaped YAML documents for `navigator site import`, one file per model.
 const SEED_DIRECTORY: &str = "seeds";
@@ -307,80 +312,9 @@ const FORBIDDEN_DOCUMENT_EXTENSIONS: &[&str] = &["doc", "docx", "odt", "pdf"];
 /// the notation template, with the template kept the source of truth.
 /// `analyze-memo` (LAW-237) reviews a finished memo or letter and reports
 /// findings before any correction is applied.
-pub(crate) const SYNCED_SKILLS: &[(&str, &str)] = &[
-    (
-        "council",
-        include_str!("../../../.agents/skills/council/SKILL.md"),
-    ),
-    (
-        "legal-council",
-        include_str!("../../../.agents/skills/legal-council/SKILL.md"),
-    ),
-    (
-        "analyze-memo",
-        include_str!("../../../.agents/skills/analyze-memo/SKILL.md"),
-    ),
-    (
-        "client-council",
-        include_str!("../../../.agents/skills/client-council/SKILL.md"),
-    ),
-    (
-        "human-readable",
-        include_str!("../../../.agents/skills/human-readable/SKILL.md"),
-    ),
-    (
-        "stay-in-repo",
-        include_str!("../../../.agents/skills/stay-in-repo/SKILL.md"),
-    ),
-    (
-        "legal-writing",
-        include_str!("../../../.agents/skills/legal-writing/SKILL.md"),
-    ),
-    (
-        "case-downloader",
-        include_str!("../../../.agents/skills/case-downloader/SKILL.md"),
-    ),
-    (
-        "project-setup",
-        include_str!("../../../.agents/skills/project-setup/SKILL.md"),
-    ),
-    (
-        "deadline",
-        include_str!("../../../.agents/skills/deadline/SKILL.md"),
-    ),
-    (
-        "browser-handoff",
-        include_str!("../../../.agents/skills/browser-handoff/SKILL.md"),
-    ),
-    (
-        "case-timeline",
-        include_str!("../../../.agents/skills/case-timeline/SKILL.md"),
-    ),
-    (
-        "opposing-communication-review",
-        include_str!("../../../.agents/skills/opposing-communication-review/SKILL.md"),
-    ),
-    (
-        "record-search",
-        include_str!("../../../.agents/skills/record-search/SKILL.md"),
-    ),
-    (
-        "working-notes",
-        include_str!("../../../.agents/skills/working-notes/SKILL.md"),
-    ),
-    (
-        "pull-changes",
-        include_str!("../../../.agents/skills/pull-changes/SKILL.md"),
-    ),
-    (
-        "push-changes",
-        include_str!("../../../.agents/skills/push-changes/SKILL.md"),
-    ),
-    (
-        "word-editing",
-        include_str!("../../../.agents/skills/word-editing/SKILL.md"),
-    ),
-];
+/// The canonical bytes live in `project-scaffold` so this CLI's scaffold and
+/// the server-side repository seeding write the same copies.
+pub(crate) use project_scaffold::SYNCED_SKILLS;
 
 #[derive(Debug)]
 struct Finding {
@@ -2657,37 +2591,53 @@ pub(crate) fn emit_scaffold_for(
         anyhow::bail!("invalid immutable Project code `{code}`");
     }
     fs::create_dir_all(root)?;
+    // The forge-agnostic files — README, .gitignore, navigator.yaml, the
+    // onboarding Draft placeholder — are the shared module's bytes, the same
+    // set the server commits when it seeds a Project repository.
+    let source = project_scaffold::ScaffoldSource {
+        code,
+        host,
+        lawyer_dri,
+        client_dri,
+        version: crate::cli_version(),
+    };
     let files = [
-        ("README.md", format!("# Project repository\n\nNavigator Project `{code}`.\n")),
-        ("AGENTS.md", AGENT_CONTRACT_BASE.to_string()),
-        (CLAUDE_SETTINGS, CLAUDE_SETTINGS_CONTENTS.to_string()),
-        (".github/workflows/ci.yml", workflow_for(DEFAULT_WORKFLOW_HOME, crate::cli_version())),
-        (".github/workflows/cd.yml", cd_workflow_for(DEFAULT_WORKFLOW_HOME, crate::cli_version())),
-        (".github/CODEOWNERS", CODEOWNERS.to_string()),
-        ("LICENSE", include_str!("../../../LICENSE").to_string()),
+        ("AGENTS.md".to_string(), AGENT_CONTRACT_BASE.to_string()),
         (
-            "LICENSE-MIT",
+            CLAUDE_SETTINGS.to_string(),
+            CLAUDE_SETTINGS_CONTENTS.to_string(),
+        ),
+        (
+            ".github/workflows/ci.yml".to_string(),
+            workflow_for(DEFAULT_WORKFLOW_HOME, crate::cli_version()),
+        ),
+        (
+            ".github/workflows/cd.yml".to_string(),
+            cd_workflow_for(DEFAULT_WORKFLOW_HOME, crate::cli_version()),
+        ),
+        (".github/CODEOWNERS".to_string(), CODEOWNERS.to_string()),
+        (
+            "LICENSE".to_string(),
+            include_str!("../../../LICENSE").to_string(),
+        ),
+        (
+            "LICENSE-MIT".to_string(),
             include_str!("../../../LICENSE-MIT").to_string(),
         ),
         (
-            "LICENSE-APACHE-2",
+            "LICENSE-APACHE-2".to_string(),
             include_str!("../../../LICENSE-APACHE-2").to_string(),
         ),
-        (".gitignore", ROOT_GITIGNORE.to_string()),
-        (
-            PROJECT_MANIFEST,
-            format!(
-                "version: {}\nproject:\n  host: {}\n  name: {}\n  lawyer_dri: {}\n  client_dri: {}\n  private_slack_channel: not provisioned\n  private_notion_page: not provisioned\n",
-                crate::cli_version(), host, code, lawyer_dri, client_dri
-            ),
-        ),
     ];
-    let (draft, stub) = super::lifecycle::scaffold_draft(super::lifecycle::ONBOARDING);
-    let forgejo_gate = (forge == cloud::ForgeBackend::Forgejo)
-        .then(|| (FORGEJO_GATE_WORKFLOW, forgejo_gate_workflow()));
-    for (relative, contents) in files
+    let forgejo_gate = (forge == cloud::ForgeBackend::Forgejo).then(|| {
+        (
+            project_scaffold::FORGEJO_GATE_WORKFLOW.to_string(),
+            project_scaffold::forgejo_gate_workflow(),
+        )
+    });
+    for (relative, contents) in project_scaffold::canonical_files(&source)
         .into_iter()
-        .chain([(draft.as_str(), stub)])
+        .chain(files)
         .chain(forgejo_gate)
     {
         let path = root.join(relative);
@@ -2722,8 +2672,8 @@ pub(crate) fn emit_scaffold_for(
 /// Write Navigator's canonical Agent Skills. The scaffold always writes them;
 /// [`repair_skills`] restores a drifted copy and reports what changed.
 pub(crate) fn emit_synced_skills(root: &Path) -> anyhow::Result<()> {
-    for (name, contents) in SYNCED_SKILLS {
-        let path = root.join(".agents/skills").join(name).join("SKILL.md");
+    for (relative, contents) in project_scaffold::synced_skill_files() {
+        let path = root.join(relative);
         let parent = path
             .parent()
             .ok_or_else(|| anyhow::anyhow!("skill output path has no parent"))?;
@@ -2933,92 +2883,15 @@ jobs:
     )
 }
 
-/// The gate workflow a Forgejo-backed Project repository carries. Forgejo
-/// Actions reads `.forgejo/workflows/` and ignores `.github/workflows/` when
-/// it exists, so `ci.yml` and `cd.yml` stay for GitHub and this file is the
-/// whole Forgejo gate. The deployment's `NAVIGATOR_FORGEJO_ACTIONS_OIDC_WORKFLOW`
-/// names this exact path: the Forgejo document-token door trusts no other.
-pub(crate) const FORGEJO_GATE_WORKFLOW: &str = ".forgejo/workflows/gate.yml";
-
-/// The commit-status context [`forgejo_gate_workflow`] posts, which `main`'s
-/// branch protection requires: `<workflow name> / <job> (<event>)`.
-pub(crate) const FORGEJO_REQUIRED_CHECK: &str = "gate / gate (pull_request)";
-
-/// The Forgejo Actions gate: on every pull request, check out its head,
-/// install the `navigator` release `navigator.yaml` pins, and run
-/// `navigator project gate --ci`. `enable-openid-connect` makes the runner
-/// export `ACTIONS_ID_TOKEN_REQUEST_*`; the CLI requests a token audienced to
-/// the manifest's host and exchanges it at `/auth/ci/forgejo/document-token`.
-///
-/// Every step is plain shell, so the workflow needs no action repository the
-/// Forgejo installation would have to mirror. The binary installs outside the
-/// checkout, where the gate's closed root list would refuse it.
-pub(crate) fn forgejo_gate_workflow() -> String {
-    use crate::lsp_download::RELEASE_DOWNLOAD_BASE;
-    format!(
-        r#"# Generated by `navigator project scaffold`; `navigator project repository
-# sync-skills` restores it. Posts the required check `{FORGEJO_REQUIRED_CHECK}`.
-name: gate
-
-on:
-  pull_request:
-
-jobs:
-  gate:
-    runs-on: self-hosted
-    enable-openid-connect: true
-    steps:
-      - name: check out the pull request
-        env:
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: http.extraHeader
-          GIT_CONFIG_VALUE_0: "Authorization: token ${{{{ forgejo.token }}}}"
-          SERVER_URL: ${{{{ forgejo.server_url }}}}
-          REPOSITORY: ${{{{ forgejo.repository }}}}
-          REF: ${{{{ forgejo.ref }}}}
-        run: |
-          set -eu
-          git init --quiet .
-          git fetch --quiet --depth 1 "${{SERVER_URL%/}}/${{REPOSITORY}}.git" "${{REF}}"
-          git checkout --quiet --force --detach FETCH_HEAD
-          git clean --quiet -ffdx
-      - name: install the pinned navigator release
-        run: |
-          set -eu
-          version="$(sed -n 's/^version:[[:space:]]*//p' navigator.yaml | head -n 1 | tr -d "\"' \r")"
-          if ! printf '%s\n' "${{version}}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
-            echo "::error::navigator.yaml version must be an exact release tag, not '${{version}}'."
-            exit 1
-          fi
-          case "$(uname -s)" in
-            Linux) platform=linux ;;
-            Darwin) platform=macos ;;
-            *) echo "::error::unsupported runner OS $(uname -s)"; exit 1 ;;
-          esac
-          asset="navigator-${{version}}-${{platform}}.tar.gz"
-          release="{RELEASE_DOWNLOAD_BASE}/${{version}}"
-          bin="$(mktemp -d)"
-          cd "${{bin}}"
-          for file in "${{asset}}" "${{asset}}.sha256"; do
-            if command -v curl >/dev/null 2>&1; then
-              curl -fsSL -o "${{file}}" "${{release}}/${{file}}"
-            else
-              wget -q -O "${{file}}" "${{release}}/${{file}}"
-            fi
-          done
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum -c "${{asset}}.sha256"
-          else
-            shasum -a 256 -c "${{asset}}.sha256"
-          fi
-          tar -xzf "${{asset}}" navigator
-          chmod 0755 navigator
-          echo "${{bin}}" >> "${{GITHUB_PATH}}"
-      - name: navigator project gate
-        run: navigator project gate --ci
-"#
-    )
-}
+/// The required check is named by the gate tests and by Forgejo deployment
+/// fixtures; no production path re-derives it.
+#[cfg(test)]
+pub(crate) use project_scaffold::FORGEJO_REQUIRED_CHECK;
+/// The gate workflow a Forgejo-backed Project repository carries, and the
+/// commit-status context it posts. The canonical bytes live in
+/// `project-scaffold` so this CLI's scaffold and the server-side repository
+/// seeding write the same workflow.
+pub(crate) use project_scaffold::{forgejo_gate_workflow, FORGEJO_GATE_WORKFLOW};
 
 /// The forge this process scaffolds for, from `NAVIGATOR_FORGE_BACKEND`
 /// (unset is GitHub).
@@ -6248,4 +6121,3 @@ mod forgejo_gate_tests {
         let tree = crate::projects::source_import::tree_from_checkout(root.path()).unwrap();
         assert!(tree.files.contains_key(FORGEJO_GATE_WORKFLOW));
     }
-}
