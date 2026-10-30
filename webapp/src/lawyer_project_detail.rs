@@ -1062,7 +1062,7 @@ fn not_found(
 fn notes_tab(view: &LawyerDetailView) -> Element {
     rsx! {
         section {
-            class: "lawyer-detail__section matter-notes",
+            class: "lawyer-detail__section detail-notes",
             h2 { "Notes" }
             if view.notes.is_empty() {
                 p {
@@ -1071,18 +1071,18 @@ fn notes_tab(view: &LawyerDetailView) -> Element {
                 }
             } else {
                 for note in view.notes.iter() {
-                    article { class: "matter-note",
-                        header { class: "matter-note__meta",
+                    article { class: "detail-note",
+                        header { class: "detail-note__meta",
                             span {
-                                class: "matter-note__author",
+                                class: "detail-note__author",
                                 "{note.author_name.clone().unwrap_or_else(|| \"Navigator\".to_string())}"
                             }
-                            span { class: "matter-note__when", "{note.occurred_at}" }
+                            span { class: "detail-note__when", "{note.occurred_at}" }
                         }
                         if let Some(subject) = note.subject.as_ref() {
-                            p { class: "matter-note__subject", "{subject}" }
+                            p { class: "detail-note__subject", "{subject}" }
                         }
-                        p { class: "matter-note__body", "{note.body}" }
+                        p { class: "detail-note__body", "{note.body}" }
                     }
                 }
             }
@@ -1096,31 +1096,31 @@ fn notes_tab(view: &LawyerDetailView) -> Element {
 fn communications_tab(view: &LawyerDetailView) -> Element {
     rsx! {
         section {
-            class: "lawyer-detail__section matter-communications",
+            class: "lawyer-detail__section detail-communications",
             h2 { "Communications" }
             if view.correspondence.is_empty() {
                 p {
                     class: "nav-muted",
-                    "No communications logged yet. Email logged to the matter lands here with or without a call."
+                    "No communications logged yet. Email logged on this project lands here with or without a call."
                 }
             } else {
                 for message in view.correspondence.iter() {
-                    article { class: "matter-communication",
-                        header { class: "matter-communication__meta",
-                            span { class: "matter-communication__channel", "{message.channel}" }
-                            span { class: "matter-communication__direction", "{message.direction}" }
+                    article { class: "detail-communication",
+                        header { class: "detail-communication__meta",
+                            span { class: "detail-communication__channel", "{message.channel}" }
+                            span { class: "detail-communication__direction", "{message.direction}" }
                             if let Some(counterparty) = message.counterparty.as_ref() {
                                 span {
-                                    class: "matter-communication__counterparty",
+                                    class: "detail-communication__counterparty",
                                     "with {counterparty}"
                                 }
                             }
-                            span { class: "matter-communication__when", "{message.occurred_at}" }
+                            span { class: "detail-communication__when", "{message.occurred_at}" }
                         }
                         if let Some(subject) = message.subject.as_ref() {
-                            p { class: "matter-communication__subject", "{subject}" }
+                            p { class: "detail-communication__subject", "{subject}" }
                         }
-                        p { class: "matter-communication__body", "{message.body}" }
+                        p { class: "detail-communication__body", "{message.body}" }
                     }
                 }
             }

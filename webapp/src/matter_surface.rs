@@ -125,17 +125,17 @@ pub struct MatterTabQuery {
 #[component]
 pub fn MatterTabNav(base: String, tabs: Vec<MatterTab>, current: MatterTab) -> Element {
     rsx! {
-        nav { class: "matter-tabs", "aria-label": "Matter views",
+        nav { class: "detail-tabs", "aria-label": "Views",
             for tab in tabs.iter().copied() {
                 if tab == current {
                     a {
-                        class: "matter-tab matter-tab--active",
+                        class: "detail-tab detail-tab--active",
                         href: "{tab.href(&base)}",
                         "aria-current": "page",
                         "{tab.label()}"
                     }
                 } else {
-                    a { class: "matter-tab", href: "{tab.href(&base)}", "{tab.label()}" }
+                    a { class: "detail-tab", href: "{tab.href(&base)}", "{tab.label()}" }
                 }
             }
         }
@@ -381,6 +381,6 @@ mod tests {
             "{html}"
         );
         // Exactly one active tab.
-        assert_eq!(html.matches("matter-tab--active").count(), 1, "{html}");
+        assert_eq!(html.matches("detail-tab--active").count(), 1, "{html}");
     }
 }
