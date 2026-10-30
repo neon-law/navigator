@@ -15,6 +15,7 @@ members = [
     "cloud",
     "mcp",
     "features",
+    "gateway",
     "forms",
     "lsp",
     "live-inquiry",

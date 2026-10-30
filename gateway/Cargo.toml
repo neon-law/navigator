@@ -1,0 +1,36 @@
+# The vendor-neutral model-provider seam for the Legal Sandbox
+# (`ModelProvider` trait + `VertexProvider` + `StubModelProvider` + Vertex
+# bearer-token minting). The same shape as `billing`: a small lib with no
+# axum, no Dioxus, and no Restate, so the sandbox page, the usage meter,
+# and the `billing-workflows` credit-reset job can all reach one contract.
+# No Vertex SDK — one reqwest call to the `:rawPredict` endpoint.
+[package]
+name = "gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "gateway"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+# ADC token minting for the Vertex REST API, mirroring `billing`'s
+# `gcp_cost` BigQuery client. Isolated to the Vertex module — the stub
+# needs neither.
+google-cloud-auth.workspace = true
+google-cloud-token.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock.workspace = true
+
+[lints]
+workspace = true
