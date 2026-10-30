@@ -30,8 +30,11 @@ delegating these issue implementations. Keep the parent available to coordinate 
    met or the ready queue is exhausted or an external blocker prevents progress. Report partial completion honestly;
    never fabricate work to reach the count or bypass an unresolved scope decision. Respect the repository's automatic
    merge policy and leave deployment to its dedicated workflow.
-6. Clean up each task's owned runtime resources. Preserve unfinished work using
-   [working-notes](../working-notes/SKILL.md). Report completed/target counts, issue-to-PR links, test and CI evidence,
-   and blockers. Keep roadmap details and client information out of public Git and PR surfaces.
+6. Clean up each task's owned runtime resources, then archive its managed worktree when the issue is done. At batch
+   completion or an explicit stop, archive all remaining worktrees created by this batch. Before archiving, preserve
+   unfinished work using [working-notes](../working-notes/SKILL.md) and copy needed ignored notes or artifacts into the
+   parent checkout's private, git-ignored notes. Use the app's recoverable worktree archive tool; leave unrelated and
+   current worktrees alone. Report completed/target counts, issue-to-PR links, test and CI evidence, cleanup, and
+   blockers. Keep roadmap details and client information out of public Git and PR surfaces.
 
 The parent coordinates issue work; it does not create sidebar chats or scheduled automations unless requested.
