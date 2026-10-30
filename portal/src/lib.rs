@@ -1206,6 +1206,11 @@ pub fn bootstrap_with_forgejo_oidc(
             forms_registry: state.forms_registry.clone(),
         },
     ));
+    // The sandbox search tools' provider clients, built once from
+    // environment configuration (COURTLISTENER_TOKEN, DESCRYBE_*). An
+    // unconfigured provider degrades its tool's searches to "search
+    // unavailable" — boot never depends on a search credential.
+    mcp_state.search = Some(mcp::SearchBackends::from_env());
     let mcp_layered = |mcp_state: mcp::McpState| {
         mcp::build_router(mcp_state)
             .route_layer(axum::middleware::from_fn_with_state(

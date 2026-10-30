@@ -9,8 +9,9 @@ Feature: Bundled-template workflow composition (compliance filings)
   Like `legal_workflow_shapes.feature`, each scenario pins the
   reusable-step composition so an accidental reshape — splitting the
   lawyer_review step, dropping the outbound mailroom hop — surfaces
-  as a named failing scenario. A rejection scenario per template
-  confirms the parser's MissingEnd guard stays load-bearing.
+  as a named failing scenario. Each omitted-END scenario verifies that
+  author normalization preserves the full workflow, while typed runtime
+  validation still requires an explicit terminal END.
 
   Scenario: Nevada LLC dissolution questionnaire walks reason → debts → END
     Given the bundled template "notations/forms/united_states/nevada/state/nv__dissolution.md"
@@ -29,9 +30,10 @@ Feature: Bundled-template workflow composition (compliance filings)
       | lawyer_review      | mailroom_send     |
       | mailroom_send     | END               |
 
-  Scenario: Nevada dissolution template with END stripped fails to parse
+  Scenario: Nevada dissolution template with omitted END keeps its workflow and strict runtime guard
     Given the bundled template "notations/forms/united_states/nevada/state/nv__dissolution.md" with the workflow END declaration removed
-    Then parsing the workflow spec returns a MissingEnd error
+    Then the authored workflow preserves every transition and supplies a terminal END
+    And the typed workflow still rejects a missing END declaration
 
   Scenario: Nevada annual report questionnaire walks period → managers → END
     Given the bundled template "notations/forms/united_states/nevada/state/nv__annual_report.md"
@@ -49,9 +51,10 @@ Feature: Bundled-template workflow composition (compliance filings)
       | lawyer_review  | mailroom_send |
       | mailroom_send | END           |
 
-  Scenario: Nevada annual report template with END stripped fails to parse
+  Scenario: Nevada annual report template with omitted END keeps its workflow and strict runtime guard
     Given the bundled template "notations/forms/united_states/nevada/state/nv__annual_report.md" with the workflow END declaration removed
-    Then parsing the workflow spec returns a MissingEnd error
+    Then the authored workflow preserves every transition and supplies a terminal END
+    And the typed workflow still rejects a missing END declaration
 
   Scenario: Nevada Modified Business Tax questionnaire walks year → revenue → END
     Given the bundled template "notations/forms/united_states/nevada/state/nv__modified_business_tax.md"
@@ -70,6 +73,7 @@ Feature: Bundled-template workflow composition (compliance filings)
       | lawyer_review      | mailroom_send     |
       | mailroom_send     | END               |
 
-  Scenario: Nevada Modified Business Tax template with END stripped fails to parse
+  Scenario: Nevada Modified Business Tax template with omitted END keeps its workflow and strict runtime guard
     Given the bundled template "notations/forms/united_states/nevada/state/nv__modified_business_tax.md" with the workflow END declaration removed
-    Then parsing the workflow spec returns a MissingEnd error
+    Then the authored workflow preserves every transition and supplies a terminal END
+    And the typed workflow still rejects a missing END declaration

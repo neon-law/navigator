@@ -7616,6 +7616,7 @@ dependencies = [
  "tower",
  "tracing",
  "uuid",
+ "wiremock",
  "workflows",
 ]
 
