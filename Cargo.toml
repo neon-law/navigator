@@ -191,6 +191,7 @@ pdf = { path = "pdf" }
 portal = { path = "portal" }
 neon = { path = "neon" }
 repos = { path = "repos" }
+sandbox-skills = { path = "sandbox-skills" }
 server = { path = "server" }
 rules = { path = "rules" }
 store = { path = "store" }

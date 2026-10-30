@@ -9,7 +9,7 @@
 //! specs render into the `tools` array. The API shape is Anthropic's
 //! "Claude on Vertex AI" documentation and Sonnet pricing is Anthropic's
 //! published list (retrieved 2026-10-30: Sonnet 5.5, $2 input / $10
-//! output per MTok on the global endpoint).
+//! output per `MTok` on the global endpoint).
 //!
 //! The provider executes no tools: when the model answers with a
 //! `tool_use` block the completion errors rather than dropping the call —
@@ -26,10 +26,7 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::{
-    render_system_prompt, tokens_to_cents, CompletionRequest, CompletionResult, ModelProvider,
-    Role, SkillLibrary,
-};
+use crate::{tokens_to_cents, CompletionRequest, CompletionResult, ModelProvider, Role};
 
 /// Supplies a bearer token for the Vertex AI REST API. Production mints
 /// it from Application Default Credentials; tests inject a static one.
@@ -107,11 +104,9 @@ pub struct VertexProvider {
     /// Completion budget the gateway asks for; the sandbox conversation
     /// is short-form drafting and research, not book-length generation.
     max_tokens: u32,
-    /// Sonnet list rates, cents per million tokens ($2 / $10 per MTok).
+    /// Sonnet list rates, cents per million tokens ($2 / $10 per `MTok`).
     input_rate_cents_per_mtok: u64,
     output_rate_cents_per_mtok: u64,
-    /// Skill instruction text the session's ids render from.
-    skills: SkillLibrary,
     token: Arc<dyn TokenProvider>,
     http: reqwest::Client,
     /// Host root of the Agent Platform API. Overridable for mock-HTTP
@@ -125,11 +120,7 @@ impl VertexProvider {
     /// Vertex documentation this session), 4,096 completion tokens, and
     /// Sonnet list rates.
     #[must_use]
-    pub fn new(
-        project: impl Into<String>,
-        token: Arc<dyn TokenProvider>,
-        skills: SkillLibrary,
-    ) -> Self {
+    pub fn new(project: impl Into<String>, token: Arc<dyn TokenProvider>) -> Self {
         Self {
             project: project.into(),
             region: "global".into(),
@@ -137,7 +128,6 @@ impl VertexProvider {
             max_tokens: 4_096,
             input_rate_cents_per_mtok: 200,
             output_rate_cents_per_mtok: 1_000,
-            skills,
             token,
             http: reqwest::Client::builder()
                 // A hung completion must not hang a subscriber's session;
@@ -207,7 +197,8 @@ impl VertexProvider {
             "max_tokens": self.max_tokens,
             "messages": messages,
         });
-        if let Some(system) = render_system_prompt(&req.active_skills, &self.skills) {
+        let system = sandbox_skills::render_system_context(&req.active_skills);
+        if !system.is_empty() {
             body["system"] = serde_json::Value::String(system);
         }
         if !req.tools.is_empty() {
@@ -336,8 +327,6 @@ fn truncate(body: &str, max: usize) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::{StaticToken, VertexProvider};
     use crate::{CompletionRequest, CompletionResult, Message, ModelProvider, Role, SkillId};
 
@@ -345,11 +334,10 @@ mod tests {
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn a_provider(base: String, skills: crate::SkillLibrary) -> VertexProvider {
+    fn a_provider(base: String) -> VertexProvider {
         VertexProvider::new(
-            "neon-law-prod",
+            "example-project",
             std::sync::Arc::new(StaticToken("test-token".into())),
-            skills,
         )
         .with_endpoint_base(base)
     }
@@ -376,7 +364,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path(
-                "/v1/projects/neon-law-prod/locations/global/publishers/anthropic/models/claude-sonnet-5-5:rawPredict",
+                "/v1/projects/example-project/locations/global/publishers/anthropic/models/claude-sonnet-5-5:rawPredict",
             ))
             .and(body_string_contains("vertex-2023-10-16"))
             .respond_with(ResponseTemplate::new(200).set_body_json(a_reply()))
@@ -384,11 +372,8 @@ mod tests {
             .mount(&server)
             .await;
 
-        let skills = [("draft".to_string(), "Draft with citation tags.".to_string())]
-            .into_iter()
-            .collect::<HashMap<_, _>>();
         let request = CompletionRequest {
-            active_skills: vec![SkillId("draft".into())],
+            active_skills: vec![SkillId::new("draft")],
             tools: vec![crate::ToolSpec {
                 name: "search_case_law".into(),
                 description: "Search case law".into(),
@@ -397,10 +382,7 @@ mod tests {
             ..a_request()
         };
 
-        let result = a_provider(server.uri(), skills)
-            .complete(request)
-            .await
-            .unwrap();
+        let result = a_provider(server.uri()).complete(request).await.unwrap();
         assert_eq!(
             result.messages,
             vec![Message {
@@ -418,9 +400,8 @@ mod tests {
     /// The price of a result at the provider's default Sonnet rates.
     fn provider_priced_cents(result: &CompletionResult) -> u64 {
         let provider = VertexProvider::new(
-            "neon-law-prod",
+            "example-project",
             std::sync::Arc::new(StaticToken("t".into())),
-            HashMap::new(),
         );
         provider.price_cents(result)
     }
@@ -428,9 +409,6 @@ mod tests {
     #[tokio::test]
     async fn the_wire_request_carries_skills_system_tools_and_mapped_roles() {
         let server = MockServer::start().await;
-        let skills = [("draft".to_string(), "Draft with citation tags.".to_string())]
-            .into_iter()
-            .collect::<HashMap<_, _>>();
         let request = CompletionRequest {
             messages: vec![
                 Message {
@@ -446,7 +424,7 @@ mod tests {
                     content: "Make it firmer.".into(),
                 },
             ],
-            active_skills: vec![SkillId("draft".into())],
+            active_skills: vec![SkillId::new("draft")],
             tools: vec![crate::ToolSpec {
                 name: "search_legal_aid".into(),
                 description: "Search legal aid resources".into(),
@@ -460,7 +438,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let provider = a_provider(server.uri(), skills);
+        let provider = a_provider(server.uri());
         provider.complete(request).await.unwrap();
 
         let sent = &server.received_requests().await.unwrap()[0];
@@ -471,12 +449,14 @@ mod tests {
         assert_eq!(body["messages"][0]["content"], "Draft a demand letter.");
         assert_eq!(body["messages"][1]["role"], "assistant");
         assert_eq!(body["messages"][2]["role"], "user");
-        assert_eq!(body["system"], "Draft with citation tags.");
+        // The `draft` skill renders through the sandbox-skills catalog:
+        // the vendored markdown, wrapped with the skill's header.
+        assert!(body["system"]
+            .as_str()
+            .unwrap()
+            .starts_with("# Legal Sandbox skill: "));
         assert_eq!(body["tools"][0]["name"], "search_legal_aid");
-        assert_eq!(
-            body["tools"][0]["input_schema"],
-            json!({"type": "object"})
-        );
+        assert_eq!(body["tools"][0]["input_schema"], json!({"type": "object"}));
         assert_eq!(sent.headers["authorization"], "Bearer test-token");
         assert!(sent.url.as_str().ends_with(":rawPredict"));
         // The model id rides the URL, never the body.
@@ -490,16 +470,13 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(a_reply()))
             .mount(&server)
             .await;
-        // The skill id resolves against an empty library — degrade to no
-        // system block, never an error.
+        // The skill id resolves against the sandbox-skills catalog — an
+        // unknown id degrades to no system block, never an error.
         let request = CompletionRequest {
-            active_skills: vec![SkillId("no-such-skill".into())],
+            active_skills: vec![SkillId::new("no-such-skill")],
             ..a_request()
         };
-        a_provider(server.uri(), HashMap::new())
-            .complete(request)
-            .await
-            .unwrap();
+        a_provider(server.uri()).complete(request).await.unwrap();
 
         let sent = &server.received_requests().await.unwrap()[0];
         let body: serde_json::Value = serde_json::from_slice(&sent.body).unwrap();
@@ -516,7 +493,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let error = a_provider(server.uri(), HashMap::new())
+        let error = a_provider(server.uri())
             .complete(a_request())
             .await
             .expect_err("a 429 fails the completion");
@@ -540,7 +517,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let error = a_provider(server.uri(), HashMap::new())
+        let error = a_provider(server.uri())
             .complete(a_request())
             .await
             .expect_err("a tool_use reply is not silently dropped");
@@ -550,9 +527,8 @@ mod tests {
     #[test]
     fn sonnet_usage_prices_at_the_sonnet_list_rates() {
         let provider = VertexProvider::new(
-            "neon-law-prod",
+            "example-project",
             std::sync::Arc::new(StaticToken("t".into())),
-            HashMap::new(),
         );
         // 1M input + 0.5M output at $2/$10 per MTok = $2 + $5 = 700¢.
         let usage = CompletionResult {
@@ -574,20 +550,19 @@ mod tests {
     #[test]
     fn the_endpoint_url_pins_project_region_and_model() {
         let provider = VertexProvider::new(
-            "neon-law-prod",
+            "example-project",
             std::sync::Arc::new(StaticToken("t".into())),
-            HashMap::new(),
         );
         assert_eq!(
             provider.endpoint_url(),
-            "https://aiplatform.googleapis.com/v1/projects/neon-law-prod/locations/global/publishers/anthropic/models/claude-sonnet-5-5:rawPredict"
+            "https://aiplatform.googleapis.com/v1/projects/example-project/locations/global/publishers/anthropic/models/claude-sonnet-5-5:rawPredict"
         );
         let regional = provider
             .with_region("us-east5")
             .with_endpoint_base("https://us-east5-aiplatform.googleapis.com");
         assert_eq!(
             regional.endpoint_url(),
-            "https://us-east5-aiplatform.googleapis.com/v1/projects/neon-law-prod/locations/us-east5/publishers/anthropic/models/claude-sonnet-5-5:rawPredict"
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/example-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-5-5:rawPredict"
         );
     }
 }

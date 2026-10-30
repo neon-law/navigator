@@ -17,6 +17,12 @@
 //! behind the same trait; the trait, not the backend list, is the
 //! contract the meter and the sandbox session build on.
 //!
+//! Session skills are the [Sandbox Skill](https://www.neonlaw.com/glossary/sandbox-skill)
+//! catalog: the gateway renders each requested skill's vendored
+//! instructions into the system context through the `sandbox-skills`
+//! crate and re-exports [`render_system_context`] and [`SkillId`] so
+//! callers need only this crate.
+//!
 //! Two house rules shape the types:
 //!
 //! - **Costs are integer cents, never floats** — the same rule `billing`
@@ -33,7 +39,7 @@ pub mod vertex;
 pub use stub::StubModelProvider;
 pub use vertex::{adc_token_provider, StaticToken, TokenProvider, VertexProvider};
 
-use std::collections::HashMap;
+pub use sandbox_skills::{render_system_context, SkillId};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -57,12 +63,6 @@ pub struct Message {
     pub role: Role,
     pub content: String,
 }
-
-/// A skill the session loaded, by slug — e.g. a vendored `LawDroid`
-/// `drafting` skill. The gateway renders each id's instruction text into
-/// the system context (see [`render_system_prompt`]).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SkillId(pub String);
 
 /// One tool the model may call — a Navigator MCP catalog entry: its name,
 /// what it does, and the JSON Schema of its input. Rendered into the
@@ -99,12 +99,6 @@ pub struct CompletionResult {
     pub output_tokens: u64,
 }
 
-/// Vendored skill instruction text keyed by slug. The LawDroid-skills
-/// work builds this from the repo's vendored markdown; tests hand-build
-/// it. A session naming a skill the library does not have degrades to
-/// none — it never errors (see [`render_system_prompt`]).
-pub type SkillLibrary = HashMap<String, String>;
-
 /// The seam that makes Vertex and local interchangeable: one sandbox
 /// completion, priced in cents. Backends are `Send + Sync` so the portal
 /// can hold one behind an `Arc` and share it across sessions.
@@ -121,20 +115,6 @@ pub trait ModelProvider: Send + Sync {
     /// Cost of the reported usage in integer cents, at the provider's
     /// current rate.
     fn price_cents(&self, usage: &CompletionResult) -> u64;
-}
-
-/// Render the session's system prompt: each requested skill's instruction
-/// text, in request order, joined with a blank line. A skill the library
-/// does not have is skipped — the session degrades to fewer skills, not
-/// an error — and a session with no resolvable skills renders no system
-/// prompt at all.
-#[must_use]
-pub fn render_system_prompt(active_skills: &[SkillId], library: &SkillLibrary) -> Option<String> {
-    let rendered: Vec<&str> = active_skills
-        .iter()
-        .filter_map(|SkillId(slug)| library.get(slug).map(String::as_str))
-        .collect();
-    (!rendered.is_empty()).then(|| rendered.join("\n\n"))
 }
 
 /// Token usage at the given rates, in integer cents. Rates are cents per
@@ -160,8 +140,7 @@ pub fn tokens_to_cents(
 #[cfg(test)]
 mod tests {
     use super::{
-        render_system_prompt, tokens_to_cents, CompletionRequest, CompletionResult, Message, Role,
-        SkillId, ToolSpec,
+        tokens_to_cents, CompletionRequest, CompletionResult, Message, Role, SkillId, ToolSpec,
     };
     use serde_json::json;
 
@@ -181,7 +160,7 @@ mod tests {
                 role: Role::User,
                 content: "Is my lease assignable?".into(),
             }],
-            active_skills: vec![SkillId("drafting".into())],
+            active_skills: vec![SkillId::new("drafting")],
             tools: vec![ToolSpec {
                 name: "search_case_law".into(),
                 description: "Search case law".into(),
@@ -203,53 +182,6 @@ mod tests {
         let back: CompletionResult =
             serde_json::from_value(serde_json::to_value(&result).unwrap()).unwrap();
         assert_eq!(back, result);
-    }
-
-    #[test]
-    fn skills_render_in_request_order_into_one_system_prompt() {
-        let library = [
-            (
-                "drafting".to_string(),
-                "Draft with citation tags.".to_string(),
-            ),
-            (
-                "research-start".to_string(),
-                "Begin every research task with a plan.".to_string(),
-            ),
-        ]
-        .into_iter()
-        .collect();
-        let prompt = render_system_prompt(
-            &[SkillId("research-start".into()), SkillId("drafting".into())],
-            &library,
-        )
-        .unwrap();
-        assert_eq!(
-            prompt,
-            "Begin every research task with a plan.\n\nDraft with citation tags."
-        );
-    }
-
-    #[test]
-    fn a_missing_skill_degrades_to_none_instead_of_erroring() {
-        let library = [(
-            "drafting".to_string(),
-            "Draft with citation tags.".to_string(),
-        )]
-        .into_iter()
-        .collect();
-        // One known skill, one unknown: the unknown is skipped, the known
-        // still renders.
-        let prompt = render_system_prompt(
-            &[SkillId("no-such-skill".into()), SkillId("drafting".into())],
-            &library,
-        )
-        .unwrap();
-        assert_eq!(prompt, "Draft with citation tags.");
-        // All unknown → no system prompt at all, not an error.
-        assert!(render_system_prompt(&[SkillId("no-such-skill".into())], &library).is_none());
-        // No skills requested → no system prompt.
-        assert!(render_system_prompt(&[], &library).is_none());
     }
 
     #[test]

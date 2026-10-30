@@ -25,6 +25,11 @@ async-trait.workspace = true
 google-cloud-auth.workspace = true
 google-cloud-token.workspace = true
 reqwest.workspace = true
+# The Legal Sandbox session's skill catalog: the gateway renders each
+# requested skill's vendored instructions into the system context through
+# `sandbox_skills::render_system_context` — one `SkillId` type, one
+# renderer (glossary-first: the catalog owns the "Sandbox Skill" term).
+sandbox-skills.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

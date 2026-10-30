@@ -152,7 +152,7 @@ mod tests {
     async fn every_call_is_recorded_so_tests_can_assert_the_request() {
         let mut provider = StubModelProvider::new();
         provider.set_usage(10, 2);
-        let skills = vec![crate::SkillId("draft".into())];
+        let skills = vec![crate::SkillId::new("draft")];
         let request = CompletionRequest {
             active_skills: skills.clone(),
             ..a_request()
