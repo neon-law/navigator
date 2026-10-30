@@ -358,10 +358,20 @@ async fn create_row(
 /// if the list is empty, so a deliberate removal is a deliberate gap,
 /// not a silent reshuffle. Absent number, absent effect.
 ///
+/// Returns the canonical E.164 form of the number that was actually
+/// removed, so callers can confirm the edit without echoing the raw
+/// CLI argument back.
+///
+/// A missing number is not an error; it returns `Ok(None)`.
+///
 /// # Errors
 ///
-/// [`PhoneError::Db`] if the database fails.
-pub async fn remove_phone(db: &SurrealDb, person_id: Uuid, raw: &str) -> Result<(), PhoneError> {
+/// Returns [`PhoneError`] on store or normalization failure.
+pub async fn remove_phone(
+    db: &SurrealDb,
+    person_id: Uuid,
+    raw: &str,
+) -> Result<Option<String>, PhoneError> {
     let e164 = normalize_e164(raw)?;
     let mut removed: Vec<PersonPhoneRow> = db
         .query(format!(
@@ -374,7 +384,7 @@ pub async fn remove_phone(db: &SurrealDb, person_id: Uuid, raw: &str) -> Result<
         .take(0)?;
 
     let Some(removed) = removed.drain(..).find_map(PersonPhoneRow::into_phone) else {
-        return Ok(());
+        return Ok(None);
     };
 
     // The mirror is row-keyed, so the projection needs the deleted row's
@@ -387,7 +397,7 @@ pub async fn remove_phone(db: &SurrealDb, person_id: Uuid, raw: &str) -> Result<
         },
     )
     .await;
-    Ok(())
+    Ok(Some(removed.e164))
 }
 
 /// Lift the legacy free-text `person.phone` into the structured list,

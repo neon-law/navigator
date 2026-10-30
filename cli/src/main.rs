@@ -5241,8 +5241,15 @@ async fn run_person(action: PersonCmd) -> ExitCode {
                 }
             };
             match store::person_phones::remove_phone(&db, person_id, &number).await {
-                Ok(()) => {
-                    println!("{number} removed");
+                // The removal echoes the store's canonical E.164 form,
+                // not the raw argument, so no un-normalized input is
+                // written back to the terminal.
+                Ok(Some(removed_e164)) => {
+                    println!("{removed_e164} removed");
+                    Ok(())
+                }
+                Ok(None) => {
+                    println!("no matching phone to remove");
                     Ok(())
                 }
                 Err(e) => Err(e.to_string()),
