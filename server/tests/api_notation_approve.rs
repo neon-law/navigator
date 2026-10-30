@@ -31,6 +31,7 @@ const KEY: &str = "api-notation-approve-test-key";
 struct Harness {
     app: axum::Router,
     surreal: store::surreal::SurrealDb,
+    storage: Arc<dyn cloud::StorageService>,
     runtime: Arc<dyn StateMachineRuntime>,
 }
 
@@ -53,6 +54,7 @@ async fn build_app() -> Harness {
     Harness {
         app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
         surreal,
+        storage,
         runtime,
     }
 }
@@ -110,6 +112,7 @@ async fn seed_lawyer_review_notation(h: &Harness, project_id: uuid::Uuid) -> uui
     portal::retainer_walk::advance_to_lawyer_review(
         &h.surreal,
         h.runtime.as_ref(),
+        &h.storage,
         notation_id,
         None,
     )

@@ -8,9 +8,9 @@ Feature: Bundled-template questionnaire composition
   accidental reshape of a remaining template surfaces as a named failing
   scenario.
 
-  Each template also gets one rejection scenario: a hand-mutilated copy with
-  `END:` excised must fail to parse with `MissingEnd`, so the parser's
-  guardrails stay load-bearing.
+  Each template also verifies the author/runtime boundary: omitting `END:`
+  preserves the entire authored workflow through normalization, while typed
+  runtime validation still rejects a spec without its explicit terminal END.
 
   Scenario: Engagement letter questionnaire walks entity → office → client → project → terms → END
     Given the bundled template "notations/neon_law/onboarding__letter.md"
@@ -25,9 +25,10 @@ Feature: Bundled-template questionnaire composition
       | custom_text__engagement_scope           | custom_single_choice__governing_law     |
       | custom_single_choice__governing_law     | END                                     |
 
-  Scenario: Engagement letter template with END stripped fails to parse
+  Scenario: Engagement letter template with omitted END keeps its workflow and strict runtime guard
     Given the bundled template "notations/neon_law/onboarding__letter.md" with the workflow END declaration removed
-    Then parsing the workflow spec returns a MissingEnd error
+    Then the authored workflow preserves every transition and supplies a terminal END
+    And the typed workflow still rejects a missing END declaration
 
   Scenario: Closing letter questionnaire walks entity → client → project → END
     Given the bundled template "notations/neon_law/offboarding__letter.md"
@@ -38,9 +39,10 @@ Feature: Bundled-template questionnaire composition
       | person__client                     | project                            |
       | project                            | END                                |
 
-  Scenario: Closing letter template with END stripped fails to parse
+  Scenario: Closing letter template with omitted END keeps its workflow and strict runtime guard
     Given the bundled template "notations/neon_law/offboarding__letter.md" with the workflow END declaration removed
-    Then parsing the workflow spec returns a MissingEnd error
+    Then the authored workflow preserves every transition and supplies a terminal END
+    And the typed workflow still rejects a missing END declaration
 
   Scenario: Nevada LLC formation questionnaire walks client → company → agent → management → members → date → END
     Given the bundled template "notations/forms/united_states/nevada/state/nv__llc_formation.md"
@@ -54,6 +56,7 @@ Feature: Bundled-template questionnaire composition
       | people__managing_members                     | custom_datetime__formation_date              |
       | custom_datetime__formation_date              | END                                          |
 
-  Scenario: Nevada LLC formation template with END stripped fails to parse
+  Scenario: Nevada LLC formation template with omitted END keeps its workflow and strict runtime guard
     Given the bundled template "notations/forms/united_states/nevada/state/nv__llc_formation.md" with the workflow END declaration removed
-    Then parsing the workflow spec returns a MissingEnd error
+    Then the authored workflow preserves every transition and supplies a terminal END
+    And the typed workflow still rejects a missing END declaration

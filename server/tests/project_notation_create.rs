@@ -121,6 +121,43 @@ async fn post_new(
 }
 
 #[tokio::test]
+async fn authored_onboarding_with_implicit_end_starts_the_questionnaire() {
+    let _repo_guard = REPO_ENV_LOCK.lock().await;
+    let (app, surreal) = build_app().await;
+    let project = open_project(&surreal).await;
+    let template = include_str!("../../workflows/tests/fixtures/onboarding_implicit_end.txt");
+    commit_template(&project.code, "onboarding", template.as_bytes());
+    let bearer = lawyer_bearer(&surreal, "lawyer@example.com", Some(project.id)).await;
+    let response = post_new(
+        &app,
+        &bearer,
+        &project.code,
+        "onboarding",
+        "client@example.com",
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::SEE_OTHER,
+        "an authored terminal END target must open its questionnaire"
+    );
+    let rows = store::notations::list_by_project(&surreal, project.id)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    let location = response
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        location.contains(&rows[0].id.to_string()),
+        "the redirect must name the created notation"
+    );
+}
+
+#[tokio::test]
 async fn creates_a_project_scoped_notation_from_the_repo_template() {
     let _repo_guard = REPO_ENV_LOCK.lock().await;
     let (app, surreal) = build_app().await;

@@ -1,0 +1,32 @@
+---
+kind: onboarding
+title: Synthetic onboarding
+respondent_type: person
+confidential: true
+questionnaire:
+  BEGIN:
+    _: jurisdiction__governing_law
+  jurisdiction__governing_law:
+    _: jurisdiction__arbitration_seat
+  jurisdiction__arbitration_seat:
+    _: END
+clauses:
+  arbitration:
+    source: engagement_arbitration@1
+    inputs:
+      law: jurisdiction__governing_law
+      seat: jurisdiction__arbitration_seat
+workflow:
+  BEGIN:
+    created: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__engagement_pdf
+  generate_pdf__engagement_pdf:
+    generated: sent_for_signature__pending
+  sent_for_signature__pending:
+    signed: END
+---
+
+{{> arbitration}}
+
+{{client.signature}} {{client.date}} {{firm.signature}} {{firm.date}}
