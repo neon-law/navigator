@@ -888,8 +888,8 @@ pub(crate) fn Bands(
                                         style: "--fm-photo-ratio: {image.ratio}",
                                         for source in image.sources.iter() {
                                             source {
-                                                srcset: "{source.srcset}",
-                                                sizes: "{image.sizes}",
+                                                "srcset": "{source.srcset}",
+                                                "sizes": "{image.sizes}",
                                                 r#type: "{source.mime}",
                                             }
                                         }
