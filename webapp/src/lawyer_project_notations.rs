@@ -353,7 +353,6 @@ pub fn ProjectNotationBoard(rows: Vec<ProjectNotationRow>) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dioxus::prelude::*;
 
     #[test]
     #[cfg(feature = "server")]

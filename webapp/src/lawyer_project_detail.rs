@@ -307,11 +307,6 @@ async fn dri_names(
     Ok(names)
 }
 
-/// The Visibility column's plain word — never an icon or a colour alone, so a
-/// lawyer scanning for what the client can see never has to learn a legend.
-/// Each document revision's Service, as the row prints it: the method, the
-/// date, the recipient and the party they appear for, and the docket entry
-
 /// Fetch the lawyer-lens workbench for one matter. Refuses a non-lawyer caller and
 /// a lawyer not on the matter with `404`; a query failure is a `500`.
 #[server]
@@ -1040,13 +1035,18 @@ mod tests {
 
     #[test]
     fn fact_grid_renders_the_facts_the_matter_has() {
-        let mut view = LawyerDetailView::default();
-        view.deadlines = vec![crate::project_deadlines::DeadlineRow {
-            due: "Monday, March 14, 2026".to_string(),
-            ..crate::project_deadlines::DeadlineRow::default()
-        }];
-        view.trust.any = true;
-        view.trust.held = "$5,000".to_string();
+        let view = LawyerDetailView {
+            deadlines: vec![crate::project_deadlines::DeadlineRow {
+                due: "Monday, March 14, 2026".to_string(),
+                ..crate::project_deadlines::DeadlineRow::default()
+            }],
+            trust: crate::portal_project_detail::TrustView {
+                any: true,
+                held: "$5,000".to_string(),
+                ..crate::portal_project_detail::TrustView::default()
+            },
+            ..Default::default()
+        };
 
         let html = dioxus_ssr::render_element(matter_fact_grid(&view));
         assert!(html.contains("lawyer-detail__summary"), "{html}");

@@ -50,6 +50,9 @@ pub struct LawyerDocRow {
     pub service: Vec<String>,
 }
 
+/// Each document revision's Service, as the row prints it: the method, the
+/// date, the recipient and the party they appear for, and the docket entry
+/// it appears on.
 #[cfg(feature = "server")]
 pub(crate) async fn service_lines(
     surreal: &store::surreal::SurrealDb,
