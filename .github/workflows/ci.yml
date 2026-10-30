@@ -479,14 +479,14 @@ jobs:
       # installer silently picked up a new cargo-llvm-cov. 0.8.7 is the version
       # the floor below was measured with; bump both together, deliberately.
       - name: install cargo-llvm-cov
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
         with:
           tool: cargo-llvm-cov@0.8.7
       # Pinned to the same version `deploy.yml`'s browser gate pins, for the
       # same reason: the test runner must not change under the coverage floor
       # because an installer picked up a newer release.
       - name: install cargo-nextest
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
         with:
           tool: nextest@0.9.140
       # Cache the compiled DEPENDENCIES, not just their sources.

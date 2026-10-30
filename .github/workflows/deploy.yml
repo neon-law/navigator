@@ -1366,7 +1366,7 @@ jobs:
           step: "install cargo-nextest"
       - name: install cargo-nextest
         timeout-minutes: 90
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
         with:
           # Pin the runner version: the browser gate now depends on
           # nextest-specific retry, JUnit-path, and --no-capture behavior, so a
@@ -1791,7 +1791,7 @@ jobs:
           step: "log in to the image registry"
       - name: log in to the image registry
         timeout-minutes: 90
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ secrets.NAVIGATOR_REGISTRY_HOST }}
           username: oauth2accesstoken
@@ -1969,7 +1969,7 @@ jobs:
           step: "log in to the image registry again"
       - name: log in to the image registry again
         timeout-minutes: 90
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ secrets.NAVIGATOR_REGISTRY_HOST }}
           username: oauth2accesstoken
@@ -2287,7 +2287,7 @@ jobs:
           step: "log in to the image registry"
       - name: log in to the image registry
         timeout-minutes: 90
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ secrets.NAVIGATOR_REGISTRY_HOST }}
           username: oauth2accesstoken
@@ -2400,7 +2400,7 @@ jobs:
           step: "log in to the image registry again"
       - name: log in to the image registry again
         timeout-minutes: 90
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ secrets.NAVIGATOR_REGISTRY_HOST }}
           username: oauth2accesstoken
@@ -3713,7 +3713,7 @@ jobs:
           workload_identity_provider: ${{ secrets.NAVIGATOR_PUBLISHER_WIF_PROVIDER }}
           service_account: ${{ secrets.NAVIGATOR_PUBLISHER_SERVICE_ACCOUNT }}
           token_format: access_token
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ secrets.NAVIGATOR_REGISTRY_HOST }}
           username: oauth2accesstoken
