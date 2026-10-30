@@ -300,6 +300,12 @@
     "scope": "firm",
     "through": "firm_id or Firm identity; referenced Projects must have the same Firm"
   },
+  "inbox_triage": {
+    "migration_slice": "communications-storage",
+    "parity_scenario": "one triage row per message; structural privilege label; suggestion-only Project routing; human disposition transitions",
+    "scope": "project",
+    "through": "message_id -> owning parent scope"
+  },
   "iolta_account": {
     "migration_slice": "accounting-storage",
     "parity_scenario": "same-Firm round trip; cross-Firm refusal",

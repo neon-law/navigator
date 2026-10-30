@@ -197,6 +197,7 @@ pub enum MirrorKey {
     InboxIngress(Uuid),
     InboxAssignment(Uuid),
     InboxDeliveryAttempt(Uuid),
+    InboxTriage(Uuid),
     Mailroom(Uuid),
     Letter(Uuid),
     Lead(Uuid),
@@ -326,6 +327,7 @@ impl MirrorKey {
             Self::InboxIngress(_) => "inbox_ingress",
             Self::InboxAssignment(_) => "inbox_assignment",
             Self::InboxDeliveryAttempt(_) => "inbox_delivery_attempt",
+            Self::InboxTriage(_) => "inbox_triage",
             Self::Mailroom(_) => "mailroom",
             Self::Letter(_) => "letter",
             Self::Lead(_) => "lead",
@@ -418,6 +420,7 @@ impl std::fmt::Display for MirrorKey {
             Self::InboxIngress(id) => write!(f, "inbox_ingress:{id}"),
             Self::InboxAssignment(id) => write!(f, "inbox_assignment:{id}"),
             Self::InboxDeliveryAttempt(id) => write!(f, "inbox_delivery_attempt:{id}"),
+            Self::InboxTriage(id) => write!(f, "inbox_triage:{id}"),
             Self::Mailroom(id) => write!(f, "mailroom:{id}"),
             Self::Letter(id) => write!(f, "letter:{id}"),
             Self::Lead(id) => write!(f, "lead:{id}"),
@@ -591,7 +594,8 @@ pub async fn mirror(
         | MirrorKey::InboxMessage(_)
         | MirrorKey::InboxIngress(_)
         | MirrorKey::InboxAssignment(_)
-        | MirrorKey::InboxDeliveryAttempt(_)) => inbox::mirror(surreal, pg, key).await,
+        | MirrorKey::InboxDeliveryAttempt(_)
+        | MirrorKey::InboxTriage(_)) => inbox::mirror(surreal, pg, key).await,
         MirrorKey::SocialAccount(key) => social_accounts::mirror(surreal, pg, key).await,
         key @ MirrorKey::SocialAccountSelection { .. } => {
             social_account_selections::mirror(surreal, pg, key).await
@@ -1578,6 +1582,7 @@ fn row_id(key: &MirrorKey) -> Option<Uuid> {
         | MirrorKey::InboxIngress(id)
         | MirrorKey::InboxAssignment(id)
         | MirrorKey::InboxDeliveryAttempt(id)
+        | MirrorKey::InboxTriage(id)
         | MirrorKey::Mailroom(id)
         | MirrorKey::Letter(id)
         | MirrorKey::Lead(id)

@@ -332,7 +332,7 @@
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 106,
+    "table_count": 107,
     "tables": {
       "address": {
         "city": "string",
@@ -910,6 +910,23 @@
         "message_id": "record<message>",
         "provider_account": "string",
         "provider_message_id": "string"
+      },
+      "inbox_triage": {
+        "disposition": "string",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "labeled_example": "bool",
+        "message_id": "record<message>",
+        "model_id": "option<string>",
+        "privilege": "string",
+        "privilege_confidence": "option<number>",
+        "project_confidence": "option<number>",
+        "prompt_version": "string",
+        "rationale": "option<string>",
+        "raw_output": "option<string>",
+        "suggested_project_id": "option<record<project>>",
+        "updated_at": "datetime"
       },
       "iolta_account": {
         "balance_cents": "int",
@@ -1632,7 +1649,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 127,
+    "table_count": 128,
     "tables": {
       "address": {
         "columns": {
@@ -2814,6 +2831,45 @@
         "references": [
           "firm",
           "message"
+        ]
+      },
+      "inbox_triage": {
+        "columns": {
+          "disposition": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "labeled_example": "BOOLEAN",
+          "message_id": "UUID",
+          "model_id": "TEXT",
+          "privilege": "TEXT",
+          "privilege_confidence": "DOUBLE",
+          "project_confidence": "DOUBLE",
+          "prompt_version": "TEXT",
+          "rationale": "TEXT",
+          "raw_output": "TEXT",
+          "suggested_project_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "message_id",
+            "message"
+          ],
+          [
+            "suggested_project_id",
+            "project"
+          ]
+        ],
+        "name": "inbox_triage",
+        "references": [
+          "firm",
+          "message",
+          "project"
         ]
       },
       "iolta_account": {

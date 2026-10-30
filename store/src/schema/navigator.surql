@@ -2615,6 +2615,37 @@ DEFINE FIELD OVERWRITE inserted_at ON inbox_delivery_attempt TYPE datetime DEFAU
 DEFINE INDEX OVERWRITE inbox_delivery_attempt_message ON inbox_delivery_attempt
     FIELDS message_id;
 
+
+-- `inbox_triage`: one triage row per inbound Message — whether the message
+-- is privileged, which Project is suggested for it, and the audit trail of
+-- how both were decided. Privilege is structural, not statistical: a
+-- social-origin channel is never privileged, decided in code from the
+-- channel alone; client email may be flagged privileged only by a
+-- classifier at or above the confidence floor, and every other automated
+-- outcome is `uncertain` — automation can never mark client email
+-- `not_privileged`. The suggested Project is never applied on its own: a
+-- person confirms it, and the row records the decision.
+DEFINE TABLE IF NOT EXISTS inbox_triage SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD OVERWRITE message_id ON inbox_triage TYPE record<message>;
+DEFINE FIELD OVERWRITE firm_id ON inbox_triage TYPE record<firm>;
+DEFINE FIELD OVERWRITE suggested_project_id ON inbox_triage
+    TYPE option<record<project>>;
+DEFINE FIELD OVERWRITE project_confidence ON inbox_triage TYPE option<number>;
+DEFINE FIELD OVERWRITE privilege ON inbox_triage TYPE string
+    ASSERT $value IN ['privileged', 'not_privileged', 'uncertain'];
+DEFINE FIELD OVERWRITE privilege_confidence ON inbox_triage TYPE option<number>;
+DEFINE FIELD OVERWRITE rationale ON inbox_triage TYPE option<string>;
+DEFINE FIELD OVERWRITE model_id ON inbox_triage TYPE option<string>;
+DEFINE FIELD OVERWRITE prompt_version ON inbox_triage TYPE string;
+DEFINE FIELD OVERWRITE raw_output ON inbox_triage TYPE option<string>;
+DEFINE FIELD OVERWRITE disposition ON inbox_triage TYPE string
+    ASSERT $value IN ['suggested', 'confirmed', 'overridden', 'needs_human'];
+DEFINE FIELD OVERWRITE labeled_example ON inbox_triage TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE inserted_at ON inbox_triage TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON inbox_triage TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE inbox_triage_message ON inbox_triage FIELDS message_id UNIQUE;
+DEFINE INDEX OVERWRITE inbox_triage_firm ON inbox_triage FIELDS firm_id;
+
 -- `finance_aggregate`: one row per `FinanceAggregate` workflow run, keyed on
 -- the run id so a replayed store step rewrites its own row. The latest row per
 -- Project feeds `GET /app/api/projects/{id}/finance`. `report_json` is opaque
