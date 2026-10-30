@@ -83,6 +83,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "asset",
     "notation",
     "notation_event",
+    "notation_machine_state",
     "notation_clause",
     "attestation",
     "answer",
