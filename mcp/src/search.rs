@@ -167,9 +167,11 @@ fn parse_courtlistener(body: &str, limit: u32) -> Result<Vec<SearchHit>, SearchE
     }
     #[derive(Deserialize)]
     struct RawHit {
-        #[serde(default)]
+        // CourtListener names the field in camelCase; accept the snake_case
+        // spelling too in case a mirror or proxy normalizes it.
+        #[serde(default, rename = "caseName", alias = "case_name")]
         case_name: Option<String>,
-        #[serde(default)]
+        #[serde(default, rename = "absolute_url", alias = "absolute_url")]
         absolute_url: Option<String>,
         #[serde(default)]
         snippet: Option<String>,
@@ -380,7 +382,7 @@ mod tests {
         assert_eq!(
             pairs,
             vec![
-                ("q".into(), "water%20rights".into()),
+                ("q".into(), "water+rights".into()), // form-encoded space
                 ("type".into(), "o".into()),
                 ("page_size".into(), "5".into())
             ]
@@ -402,7 +404,7 @@ mod tests {
 
         let req = &server.received_requests().await.unwrap()[0];
         assert_eq!(
-            req.headers().get("authorization").unwrap().to_str().unwrap(),
+            req.headers.get("authorization").unwrap().to_str().unwrap(),
             "Bearer sekrit-token"
         );
     }
@@ -447,7 +449,7 @@ mod tests {
 
         let req = &server.received_requests().await.unwrap()[0];
         assert_eq!(
-            req.headers().get("authorization").unwrap().to_str().unwrap(),
+            req.headers.get("authorization").unwrap().to_str().unwrap(),
             "Bearer k"
         );
         let body: Value = serde_json::from_slice(&req.body).unwrap();
