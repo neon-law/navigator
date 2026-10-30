@@ -185,7 +185,7 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
                     }
                 }
                 if people_count > 0 {
-                    FactCard { title: "Matter people".to_string(),
+                    FactCard { title: "Project people".to_string(),
                         span { class: "lawyer-detail__fact-value", "{people_count}" }
                     }
                 }
@@ -745,7 +745,7 @@ pub fn LawyerProjectDetail() -> Element {
 
             section { class: "lawyer-detail__section lawyer-detail__tabs",
                 Tabs {
-                    aria_label: "Matter sections".to_string(),
+                    aria_label: "Project sections".to_string(),
                     tabs: matter_tab_strip(&view.code, view.active_tab),
                 }
             }
@@ -823,18 +823,18 @@ pub fn LawyerProjectDetail() -> Element {
                     MatterTab::Tasks => rsx! {
                         section { class: "lawyer-detail__section",
                             Empty {
-                                title: "No tasks on this matter yet".to_string(),
-                                description: Some("Assignable work — an owner, a due date, and a state — will appear here once it is tracked for this matter. Court deadlines remain docket obligations and stay on Overview.".to_string()),
+                                title: "No tasks on this project yet".to_string(),
+                                description: Some("Assignable work — an owner, a due date, and a state — will appear here once it is tracked for this project. Court deadlines remain docket obligations and stay on Overview.".to_string()),
                             }
                         }
                     },
                     MatterTab::Correspondence => rsx! {
                         section { class: "lawyer-detail__section",
                             Empty {
-                                title: "Correspondence lives in the matter inbox".to_string(),
-                                description: Some("Email, texts, and logged calls for this matter are triaged in the project inbox.".to_string()),
+                                title: "Correspondence lives in the project inbox".to_string(),
+                                description: Some("Email, texts, and logged calls for this project are triaged in the project inbox.".to_string()),
                                 action: Some(rsx! {
-                                    a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.code}/inbox", "Open the matter inbox" }
+                                    a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.code}/inbox", "Open the project inbox" }
                                 }),
                             }
                         }
@@ -919,7 +919,7 @@ pub fn LawyerProjectDetail() -> Element {
                         section { class: "lawyer-detail__section",
                             Empty {
                                 title: "Nothing billed yet".to_string(),
-                                description: Some("Time, expenses, and invoices for this matter will appear here.".to_string()),
+                                description: Some("Time, expenses, and invoices for this project will appear here.".to_string()),
                             }
                         }
                     },
@@ -1015,11 +1015,11 @@ mod tests {
     fn strip_renders_one_anchor_per_section_with_aria_current() {
         let html = dioxus_ssr::render_element(rsx! {
             Tabs {
-                aria_label: "Matter sections".to_string(),
+                aria_label: "Project sections".to_string(),
                 tabs: matter_tab_strip("acme", MatterTab::Overview),
             }
         });
-        assert!(html.contains(r#"aria-label="Matter sections""#), "{html}");
+        assert!(html.contains(r#"aria-label="Project sections""#), "{html}");
         assert_eq!(html.matches("<a ").count(), 6, "{html}");
         assert_eq!(html.matches(r#"aria-current="page""#).count(), 1, "{html}");
         assert!(html.contains("Correspondence"), "{html}");
@@ -1056,7 +1056,7 @@ mod tests {
         assert!(html.contains("Monday, March 14, 2026"), "{html}");
         // No documents or people on this view — no tiles for them.
         assert!(!html.contains("Documents"), "{html}");
-        assert!(!html.contains("Matter people"), "{html}");
+        assert!(!html.contains("Project people"), "{html}");
         assert!(html.contains("Trust held"), "{html}");
         assert!(html.contains("$5,000"), "{html}");
     }
