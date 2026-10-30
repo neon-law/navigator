@@ -219,7 +219,7 @@ pub struct ContactLink {
 }
 
 impl ContactLink {
-    fn of(person: &persons::Person) -> Self {
+    pub(crate) fn of(person: &persons::Person) -> Self {
         Self {
             person_id: person.id,
             name: person.name.clone(),
@@ -305,6 +305,14 @@ impl From<ProjectStoreError> for InboxError {
     fn from(error: ProjectStoreError) -> Self {
         Self::Db(error.to_string())
     }
+}
+
+/// The postgres pool when the deployment has cut the Inbox slice over.
+/// Configuration errors fail closed rather than silently keeping Surreal.
+pub(crate) async fn inbox_authority() -> Result<Option<crate::postgres::PostgresDb>, InboxError> {
+    crate::postgres::inbox::authority()
+        .await
+        .map_err(|error| InboxError::Db(error.to_string()))
 }
 
 #[derive(SurrealValue)]
@@ -490,6 +498,19 @@ pub async fn ingest_inbound(
     db: &SurrealDb,
     inbound: &IngestInbound<'_>,
 ) -> Result<IngestedInbound, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::ingest_inbound_on(&pg, inbound)).await;
+    }
+    ingest_inbound_surreal(db, inbound).await
+}
+
+/// The legacy SurrealDB store behind [`ingest_inbound`] — the webhook-shaped
+/// ingest path retained for deployments that have not cut the Inbox slice
+/// over to PostgreSQL.
+async fn ingest_inbound_surreal(
+    db: &SurrealDb,
+    inbound: &IngestInbound<'_>,
+) -> Result<IngestedInbound, InboxError> {
     let channel_supported = matches!(inbound.channel, channel::EMAIL | channel::SMS)
         || is_social_channel(inbound.channel);
     if !channel_supported
@@ -603,6 +624,16 @@ pub async fn assign(
     conversation_id: Uuid,
     project_id: Uuid,
 ) -> Result<Assignment, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::assign_on(
+            &pg,
+            db,
+            actor_id,
+            conversation_id,
+            project_id,
+        ))
+        .await;
+    }
     let actor = load_person(db, actor_id).await?;
     let conversation = conversation_by_id(db, conversation_id)
         .await?
@@ -687,6 +718,16 @@ pub async fn post_note(
     conversation_id: Uuid,
     body: &str,
 ) -> Result<Uuid, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::post_note_on(
+            &pg,
+            db,
+            actor_id,
+            conversation_id,
+            body,
+        ))
+        .await;
+    }
     let body = body.trim();
     if body.is_empty() {
         return Err(InboxError::Empty);
@@ -741,6 +782,17 @@ pub async fn queue_reply(
     body: &str,
     purpose_value: &str,
 ) -> Result<Uuid, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::queue_reply_on(
+            &pg,
+            db,
+            actor_id,
+            conversation_id,
+            body,
+            purpose_value,
+        ))
+        .await;
+    }
     let body = body.trim();
     if body.is_empty() {
         return Err(InboxError::Empty);
@@ -789,6 +841,17 @@ pub async fn queue_social_reply(
     body: &str,
     visibility: &str,
 ) -> Result<Uuid, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::queue_social_reply_on(
+            &pg,
+            db,
+            actor_id,
+            conversation_id,
+            body,
+            visibility,
+        ))
+        .await;
+    }
     let conversation = conversation_by_id(db, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
@@ -848,7 +911,7 @@ pub async fn queue_social_reply(
 
 /// The people with a recorded phone, read once when any listed conversation
 /// is a text.
-async fn phone_directory(
+pub(crate) async fn phone_directory(
     db: &SurrealDb,
     conversations: &[Conversation],
 ) -> Result<Vec<persons::Person>, InboxError> {
@@ -862,7 +925,10 @@ async fn phone_directory(
     }
 }
 
-fn contact_for(phones: &[persons::Person], conversation: &Conversation) -> Option<ContactLink> {
+pub(crate) fn contact_for(
+    phones: &[persons::Person],
+    conversation: &Conversation,
+) -> Option<ContactLink> {
     if conversation.channel != channel::SMS {
         return None;
     }
@@ -894,6 +960,16 @@ pub async fn link_contact_phone(
     conversation_id: Uuid,
     email: &str,
 ) -> Result<ContactLink, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::link_contact_phone_on(
+            &pg,
+            db,
+            actor_id,
+            conversation_id,
+            email,
+        ))
+        .await;
+    }
     let conversation = conversation_by_id(db, conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
@@ -925,10 +1001,10 @@ pub async fn link_contact_phone(
 }
 
 /// Maximum length Twilio accepts for one text request.
-const SMS_BODY_LIMIT: usize = 1600;
+pub(crate) const SMS_BODY_LIMIT: usize = 1600;
 
 /// A text starts only toward an E.164 number.
-fn is_e164(number: &str) -> bool {
+pub(crate) fn is_e164(number: &str) -> bool {
     number.strip_prefix('+').is_some_and(|digits| {
         (8..=15).contains(&digits.len())
             && digits.bytes().all(|byte| byte.is_ascii_digit())
@@ -950,6 +1026,16 @@ pub async fn queue_sms_reply(
     conversation_id: Uuid,
     body: &str,
 ) -> Result<Uuid, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::queue_sms_reply_on(
+            &pg,
+            db,
+            actor_id,
+            conversation_id,
+            body,
+        ))
+        .await;
+    }
     let body = body.trim();
     if body.is_empty() || body.chars().count() > SMS_BODY_LIMIT {
         return Err(InboxError::Empty);
@@ -985,6 +1071,20 @@ pub async fn open_sms_conversation(
     body: &str,
     recipient_consented: bool,
 ) -> Result<(Uuid, Uuid), InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::open_sms_conversation_on(
+            &pg,
+            db,
+            actor_id,
+            firm_id,
+            brand_key,
+            provider_account,
+            to,
+            body,
+            recipient_consented,
+        ))
+        .await;
+    }
     let to = to.trim();
     let body = body.trim();
     if body.is_empty() || body.chars().count() > SMS_BODY_LIMIT {
@@ -1065,6 +1165,20 @@ async fn queue_sms_message(
 /// Propagates any database error. A single transport failure is recorded on
 /// that message and does not abort the rest of the queue.
 pub async fn dispatch_queued(
+    db: &SurrealDb,
+    transport: &dyn OutboundTransport,
+) -> Result<DispatchReport, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::dispatch_queued_on(
+            &pg, db, transport,
+        ))
+        .await;
+    }
+    dispatch_queued_surreal(db, transport).await
+}
+
+/// The legacy SurrealDB store behind [`dispatch_queued`].
+async fn dispatch_queued_surreal(
     db: &SurrealDb,
     transport: &dyn OutboundTransport,
 ) -> Result<DispatchReport, InboxError> {
@@ -1171,7 +1285,7 @@ pub async fn dispatch_queued(
     Ok(report)
 }
 
-fn outbound_envelope(
+pub(crate) fn outbound_envelope(
     conversation: &Conversation,
     message: &Message,
     messages: &[Message],
@@ -1214,6 +1328,18 @@ pub async fn apply_delivery(
     provider_ref: &str,
     incoming: &str,
 ) -> Result<Option<Uuid>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::apply_delivery_on(
+            &pg,
+            db,
+            firm_id,
+            channel_name,
+            provider_account,
+            provider_ref,
+            incoming,
+        ))
+        .await;
+    }
     let Some(message) =
         find_by_provider_ref(db, firm_id, channel_name, provider_account, provider_ref).await?
     else {
@@ -1246,6 +1372,15 @@ pub async fn record_promotional_opt_out(
     channel_name: &str,
     external_address: &str,
 ) -> Result<usize, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::record_promotional_opt_out_on(
+            &pg,
+            firm_id,
+            channel_name,
+            external_address,
+        ))
+        .await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {CONVERSATION_SELECT} FROM {CONVERSATION} \
@@ -1295,6 +1430,9 @@ pub async fn record_promotional_opt_out(
 ///
 /// [`InboxError::Denied`] when the actor cannot access any Firm inbox.
 pub async fn list_intake(db: &SurrealDb, actor_id: Uuid) -> Result<Vec<IntakeRow>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::list_intake_on(&pg, db, actor_id)).await;
+    }
     let actor = load_person(db, actor_id).await?;
     let visible_firms = if actor.role == Role::Owner {
         None
@@ -1357,6 +1495,15 @@ pub async fn intake_detail(
     actor_id: Uuid,
     conversation_id: Uuid,
 ) -> Result<IntakeDetail, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::intake_detail_on(
+            &pg,
+            db,
+            actor_id,
+            conversation_id,
+        ))
+        .await;
+    }
     let actor = load_person(db, actor_id).await?;
     let conversation = conversation_by_id(db, conversation_id)
         .await?
@@ -1434,6 +1581,16 @@ pub async fn project_thread(
     project_id: Uuid,
     conversation_id: Uuid,
 ) -> Result<ThreadView, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::project_thread_on(
+            &pg,
+            db,
+            actor_id,
+            project_id,
+            conversation_id,
+        ))
+        .await;
+    }
     let actor = load_person(db, actor_id).await?;
     if actor.role == Role::Client || !sees_project(db, actor_id, actor.role, project_id).await? {
         return Err(InboxError::Denied);
@@ -1472,6 +1629,12 @@ pub async fn list_project(
     actor_id: Uuid,
     project_id: Uuid,
 ) -> Result<Vec<IntakeRow>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::list_project_on(
+            &pg, db, actor_id, project_id,
+        ))
+        .await;
+    }
     let actor = load_person(db, actor_id).await?;
     if actor.role == Role::Client || !sees_project(db, actor_id, actor.role, project_id).await? {
         return Err(InboxError::Denied);
@@ -1527,6 +1690,15 @@ pub async fn clerk_may_relay_email_thread(
     person_id: Uuid,
     email_conversation_id: Uuid,
 ) -> Result<bool, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::clerk_may_relay_email_thread_on(
+            &pg,
+            db,
+            person_id,
+            email_conversation_id,
+        ))
+        .await;
+    }
     let Ok(person) = load_person(db, person_id).await else {
         return Ok(false);
     };
@@ -1548,6 +1720,9 @@ pub async fn assignments(
     db: &SurrealDb,
     conversation_id: Uuid,
 ) -> Result<Vec<Assignment>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::assignments_on(&pg, conversation_id)).await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {ASSIGNMENT_SELECT} FROM {ASSIGNMENT} WHERE conversation_id = $conversation \
@@ -1574,6 +1749,12 @@ pub async fn readable_attachment(
     actor_id: Uuid,
     message_id: Uuid,
 ) -> Result<Option<Uuid>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::readable_attachment_on(
+            &pg, db, actor_id, message_id,
+        ))
+        .await;
+    }
     let message = message_by_id(db, message_id)
         .await?
         .ok_or(InboxError::NotFound)?;
@@ -1607,27 +1788,37 @@ pub async fn conversation_by_id(
     db: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<Conversation>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::conversation_by_id_on(&pg, id)).await;
+    }
     let mut response = db
         .query(format!("SELECT {CONVERSATION_SELECT} FROM ONLY $id"))
         .bind(("id", record_id(CONVERSATION, id)))
         .await?
         .check()?;
     let row: Option<ConversationRow> = response.take(0)?;
-    Ok(row.and_then(ConversationRow::into_conversation))
+    let conversation = row.and_then(ConversationRow::into_conversation);
+    crate::postgres_shadow::conversation_read(id, conversation.as_ref());
+    Ok(conversation)
 }
 
 pub async fn message_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Message>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::message_by_id_on(&pg, id)).await;
+    }
     let mut response = db
         .query(format!("SELECT {MESSAGE_SELECT} FROM ONLY $id"))
         .bind(("id", record_id(MESSAGE, id)))
         .await?
         .check()?;
     let row: Option<MessageRow> = response.take(0)?;
-    Ok(row.and_then(MessageRow::into_message))
+    let message = row.and_then(MessageRow::into_message);
+    crate::postgres_shadow::message_read(id, message.as_ref());
+    Ok(message)
 }
 
 // This stable key is part of the receipt's persistent idempotency contract.
-fn acknowledgment_id(inbound_message_id: Uuid) -> Uuid {
+pub(crate) fn acknowledgment_id(inbound_message_id: Uuid) -> Uuid {
     Uuid::from_u128(inbound_message_id.as_u128() ^ (1_u128 << 127))
 }
 
@@ -1647,6 +1838,12 @@ pub async fn reserve_acknowledgment(
     inbound: &IngestedInbound,
     body: &str,
 ) -> Result<Option<Uuid>, InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::reserve_acknowledgment_on(
+            &pg, inbound, body,
+        ))
+        .await;
+    }
     let id = acknowledgment_id(inbound.message_id);
     if message_by_id(db, id).await?.is_some() {
         return Ok(None);
@@ -1682,6 +1879,14 @@ pub async fn acknowledgment_submitted(
     id: Uuid,
     provider_ref: Option<String>,
 ) -> Result<(), InboxError> {
+    if let Some(pg) = inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::acknowledgment_submitted_on(
+            &pg,
+            id,
+            provider_ref,
+        ))
+        .await;
+    }
     db.query("UPDATE $id SET delivery_state = 'submitted', provider_ref = $provider, updated_at = time::now()")
         .bind(("id", record_id(MESSAGE, id)))
         .bind(("provider", provider_ref))
@@ -1690,7 +1895,7 @@ pub async fn acknowledgment_submitted(
     Ok(())
 }
 
-fn advance_delivery(current: &str, incoming: &str) -> &'static str {
+pub(crate) fn advance_delivery(current: &str, incoming: &str) -> &'static str {
     if matches!(current, delivery::FAILED | delivery::SUPPRESSED) {
         return match current {
             delivery::FAILED => delivery::FAILED,
@@ -1712,7 +1917,7 @@ fn advance_delivery(current: &str, incoming: &str) -> &'static str {
     }
 }
 
-async fn participant_still_may_reply(
+pub(crate) async fn participant_still_may_reply(
     db: &SurrealDb,
     person_id: Uuid,
     project_id: Option<Uuid>,
@@ -1731,7 +1936,7 @@ async fn participant_still_may_reply(
     sees_project(db, person_id, person.role, project_id).await
 }
 
-fn is_social_channel(channel_name: &str) -> bool {
+pub(crate) fn is_social_channel(channel_name: &str) -> bool {
     matches!(
         channel_name,
         channel::FACEBOOK
@@ -1757,7 +1962,7 @@ async fn authorize_social_reply(
 /// Social moderation authority belongs to the deployment Owner or the
 /// conversation's Firm Admin DRI. A matter-side Lawyer/Clerk may reply only
 /// while their Project participation remains active.
-async fn social_reply_actor_still_authorized(
+pub(crate) async fn social_reply_actor_still_authorized(
     db: &SurrealDb,
     actor_id: Uuid,
     conversation: &Conversation,
@@ -1767,7 +1972,7 @@ async fn social_reply_actor_still_authorized(
 
 /// The same authority for a Firm and optional Project, so an outbound text can
 /// be authorized before its conversation exists.
-async fn reply_actor_authorized(
+pub(crate) async fn reply_actor_authorized(
     db: &SurrealDb,
     actor_id: Uuid,
     firm_id: Uuid,
@@ -1790,7 +1995,7 @@ async fn reply_actor_authorized(
     }
 }
 
-async fn sees_project(
+pub(crate) async fn sees_project(
     db: &SurrealDb,
     person_id: Uuid,
     role: Role,
@@ -1801,7 +2006,10 @@ async fn sees_project(
         .map_err(InboxError::Db)
 }
 
-async fn load_person(db: &SurrealDb, person_id: Uuid) -> Result<persons::Person, InboxError> {
+pub(crate) async fn load_person(
+    db: &SurrealDb,
+    person_id: Uuid,
+) -> Result<persons::Person, InboxError> {
     persons::find_by_id(db, person_id)
         .await?
         .ok_or(InboxError::NotFound)
@@ -2077,7 +2285,7 @@ async fn project_message(
     Ok(())
 }
 
-fn spine_channel(channel_name: &str, direction_value: &str) -> &'static str {
+pub(crate) fn spine_channel(channel_name: &str, direction_value: &str) -> &'static str {
     match (channel_name, direction_value) {
         (channel::SMS, direction::OUTBOUND) => communications::channel::SMS_OUTBOUND,
         (channel::SMS, _) => communications::channel::SMS_INBOUND,
@@ -2265,7 +2473,10 @@ async fn latest_outbound_state(
         ))
 }
 
-async fn assignee_label(db: &SurrealDb, project_id: Option<Uuid>) -> Result<String, InboxError> {
+pub(crate) async fn assignee_label(
+    db: &SurrealDb,
+    project_id: Option<Uuid>,
+) -> Result<String, InboxError> {
     let Some(project_id) = project_id else {
         return Ok("Unassigned".to_string());
     };
@@ -2274,7 +2485,10 @@ async fn assignee_label(db: &SurrealDb, project_id: Option<Uuid>) -> Result<Stri
         .map_or_else(|| "Unassigned".to_string(), |project| project.name))
 }
 
-async fn projects_in_firm(db: &SurrealDb, firm_id: Uuid) -> Result<Vec<ProjectChoice>, InboxError> {
+pub(crate) async fn projects_in_firm(
+    db: &SurrealDb,
+    firm_id: Uuid,
+) -> Result<Vec<ProjectChoice>, InboxError> {
     let mut response = db
         .query("SELECT id, code, name FROM project WHERE firm_id = $firm ORDER BY name")
         .bind(("firm", record_id(crate::firms::TABLE, firm_id)))

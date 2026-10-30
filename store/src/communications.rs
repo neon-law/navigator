@@ -722,7 +722,7 @@ pub async fn move_to_project(
 }
 
 /// The row a `(channel, source_ref)` pair already resolves to, if any.
-async fn find_by_source(
+pub(crate) async fn find_by_source(
     db: &SurrealDb,
     channel: &str,
     source_ref: &str,
