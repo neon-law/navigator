@@ -69,6 +69,11 @@ const CONTRACT: &[(&str, Access)] = &[
     ("/app/projects/some-code/portal", Access::ProtectedHuman),
     ("/app/lawyer", Access::ProtectedHuman),
     ("/app/admin", Access::ProtectedHuman),
+    // The Nautilus Legal Sandbox. Same login door as every `/app` page for
+    // an anonymous browser; what an authenticated caller then sees — the
+    // composer or the preview — is the active-subscription gate's decision,
+    // asserted in `portal/tests/nautilus_gate.rs`.
+    ("/app/nautilus", Access::ProtectedHuman),
     // The Owner/Admin matter directory (ENG-221). Listed beside the desk root
     // rather than inferred from it: which authenticated tiers reach it is the
     // Rego suite's assertion, and this one is that an anonymous browser never
