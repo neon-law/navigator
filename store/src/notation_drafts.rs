@@ -1,19 +1,22 @@
 //! `store::notation_drafts` — a stored, addressable notation **draft**
 //! (LAW-29): a preview artifact, not an executed instrument.
 //!
-//! `navigator notation preview` used to serve its own local imitation of
-//! the notation show page. This is the other half: a template pushed to
-//! the Project it belongs to, so an author can open the *real* portal —
-//! production chrome, production questionnaire engine — against something
-//! that has never been run.
+//! `navigator notation preview` pushes a template to the Project it
+//! belongs to, so an author can open the *real* portal — production
+//! chrome, production questionnaire engine — against it. Since LAW-203 the
+//! push also opens a real notation run beside the draft, so the preview is
+//! answerable; the draft row carries the [`crate::notations::Notation`] it
+//! opened when one opened, and carries none when the push predates the
+//! link or the run could not open.
 //!
-//! Creating a draft **deliberately never**:
+//! Creating a draft row **deliberately never**:
 //! * creates a [`crate::notations::Notation`] row,
 //! * starts a [`workflows`] state-machine instance, or
 //! * journals a [`crate::notation_events`] event (`intake_submitted`
 //!   included).
 //!
-//! A draft is a preview, not a filing: no workflow instance, no PDF, no
+//! Opening the run is the *door's* job (`portal::notation_draft`), not the
+//! store write's. A draft is a preview, not a filing: no PDF, no
 //! signature. It carries a short [`TTL`] rather than accumulating.
 
 use chrono::{DateTime, Duration, Utc};
@@ -30,7 +33,10 @@ pub const TABLE: &str = "notation_draft";
 /// this age, and [`find_live`] already treats them as gone.
 pub const TTL: Duration = Duration::hours(24);
 
-/// A stored, addressable, unrun notation preview.
+/// A stored, addressable notation preview. Since LAW-203 a preview push
+/// opens a real notation run beside the draft; `notation_id` carries the
+/// run the draft opened, and is `None` for a draft whose push predates the
+/// link or whose run could not open.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NotationDraft {
     pub id: Uuid,
@@ -42,6 +48,8 @@ pub struct NotationDraft {
     /// The template's raw Markdown source (frontmatter and body), exactly
     /// as [`webapp::notation_preview::PreviewDoc`] parses a preview from.
     pub source: String,
+    /// The notation run this draft opened, when it opened one.
+    pub notation_id: Option<Uuid>,
     pub inserted_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
@@ -53,6 +61,7 @@ struct NotationDraftRow {
     slug: String,
     title: String,
     source: String,
+    notation_id: Option<surrealdb::types::RecordId>,
     inserted_at: surrealdb::types::Datetime,
     expires_at: surrealdb::types::Datetime,
 }
@@ -65,13 +74,14 @@ impl NotationDraftRow {
             slug: self.slug,
             title: self.title,
             source: self.source,
+            notation_id: self.notation_id.as_ref().and_then(record_uuid),
             inserted_at: self.inserted_at.into(),
             expires_at: self.expires_at.into(),
         })
     }
 }
 
-const SELECT: &str = "id, project_id, slug, title, source, inserted_at, expires_at";
+const SELECT: &str = "id, project_id, slug, title, source, notation_id, inserted_at, expires_at";
 
 /// Errors from the notation-draft commands.
 #[derive(Debug, thiserror::Error)]
@@ -91,6 +101,9 @@ pub struct NewNotationDraft<'a> {
     pub slug: &'a str,
     pub title: &'a str,
     pub source: &'a str,
+    /// The notation run this draft opened, when the caller opened one
+    /// beside it. `None` for a run-less draft.
+    pub notation_id: Option<Uuid>,
 }
 
 /// Store a notation draft.
@@ -108,6 +121,7 @@ pub async fn create(
         .query(format!(
             "CREATE $id SET \
              project_id = $project_id, slug = $slug, title = $title, source = $source, \
+             notation_id = $notation_id, \
              inserted_at = $inserted_at, expires_at = $expires_at \
              RETURN {SELECT}"
         ))
@@ -119,6 +133,11 @@ pub async fn create(
         .bind(("slug", new.slug.to_string()))
         .bind(("title", new.title.to_string()))
         .bind(("source", new.source.to_string()))
+        .bind((
+            "notation_id",
+            new.notation_id
+                .map(|notation_id| record_id(crate::notations::TABLE, notation_id)),
+        ))
         .bind(("inserted_at", surrealdb::types::Datetime::from(inserted_at)))
         .bind(("expires_at", surrealdb::types::Datetime::from(expires_at)))
         .await
