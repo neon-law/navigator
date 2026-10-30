@@ -6,7 +6,7 @@
 //! longitude — so the polylines are the full pole-to-pole runs of a single
 //! longitude each.
 
-use super::{AngularLine, Angle, LineBody, Point};
+use super::{Angle, AngularLine, LineBody, Point};
 
 /// Latitude step of the vertical polylines, in degrees. The meridian is
 /// straight in longitude, but dense vertices keep it correct under any map

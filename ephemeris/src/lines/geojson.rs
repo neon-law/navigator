@@ -14,7 +14,7 @@
 
 use serde::Serialize;
 
-use super::{AngularLine, Point, wrap_longitude};
+use super::{wrap_longitude, AngularLine, Point};
 use crate::error::EphemerisError;
 use crate::loader::EphemerisManifest;
 use hifitime::Epoch;
@@ -120,10 +120,9 @@ pub fn feature_collection_json(
         provenance,
         features,
     };
-    serde_json::to_string(&collection)
-        .map_err(|error| EphemerisError::Serialization {
-            problem: error.to_string(),
-        })
+    serde_json::to_string(&collection).map_err(|error| EphemerisError::Serialization {
+        problem: error.to_string(),
+    })
 }
 
 #[derive(Serialize)]
@@ -235,11 +234,7 @@ mod tests {
             Angle::Mc,
             0.821_313_136,
         ));
-        let (asc, _) = super::super::horizon::asc_dsc_curves(
-            LineBody::Moon,
-            20.0,
-            0.821_313_136,
-        );
+        let (asc, _) = super::super::horizon::asc_dsc_curves(LineBody::Moon, 20.0, 0.821_313_136);
         lines.push(asc);
 
         let provenance = LineProvenance::new(&test_manifest(), test_epoch());
@@ -265,11 +260,7 @@ mod tests {
             185.0,
         ));
         // ASC arc for a northern declination crossing the antimeridian.
-        let (asc, _) = super::super::horizon::asc_dsc_curves(
-            LineBody::Moon,
-            20.0,
-            170.0,
-        );
+        let (asc, _) = super::super::horizon::asc_dsc_curves(LineBody::Moon, 20.0, 170.0);
         lines.push(asc);
 
         let provenance = LineProvenance::new(&test_manifest(), test_epoch());
@@ -289,7 +280,10 @@ mod tests {
         for member in members {
             for pair in member.as_array().expect("coordinates") {
                 let lon = pair[0].as_f64().expect("longitude");
-                assert!((-180.0..180.0).contains(&lon), "longitude {lon} out of range");
+                assert!(
+                    (-180.0..180.0).contains(&lon),
+                    "longitude {lon} out of range"
+                );
             }
         }
     }
@@ -322,11 +316,7 @@ mod tests {
 
     #[test]
     fn nonfinite_coordinates_are_rejected() {
-        let mut line = super::super::vertical::vertical_line(
-            LineBody::Sun,
-            Angle::Mc,
-            0.0,
-        );
+        let mut line = super::super::vertical::vertical_line(LineBody::Sun, Angle::Mc, 0.0);
         line.points[0] = Point(f64::NAN, 0.0);
         let provenance = LineProvenance::new(&test_manifest(), test_epoch());
 

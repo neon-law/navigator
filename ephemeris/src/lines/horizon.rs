@@ -22,7 +22,7 @@
 //! along an entire meridian at once — and the curves are emitted as
 //! [`super::vertical`] pole-to-pole lines instead.
 
-use super::{AngularLine, Angle, LineBody, Point};
+use super::{Angle, AngularLine, LineBody, Point};
 
 /// Base longitude sampling step of the horizon polylines, in degrees.
 const BASE_STEP_DEG: f64 = 0.5;
@@ -130,11 +130,7 @@ fn sample_horizon_arc(
 /// curves. For an exactly equatorial body the pair degenerates to two
 /// pole-to-pole meridians 90° east and west of `mc_lon_deg`.
 #[must_use]
-pub fn asc_dsc_curves(
-    body: LineBody,
-    dec_deg: f64,
-    mc_lon_deg: f64,
-) -> (AngularLine, AngularLine) {
+pub fn asc_dsc_curves(body: LineBody, dec_deg: f64, mc_lon_deg: f64) -> (AngularLine, AngularLine) {
     if dec_deg.abs() < EQUATORIAL_EPSILON_DEG {
         let asc = super::vertical::vertical_line(body, Angle::Asc, mc_lon_deg + 90.0);
         let dsc = super::vertical::vertical_line(body, Angle::Dsc, mc_lon_deg - 90.0);
@@ -219,8 +215,7 @@ mod tests {
     fn great_circle_dot(lon: f64, lat: f64, sub_lon: f64, sub_lat: f64) -> f64 {
         let (lon_r, lat_r) = (lon.to_radians(), lat.to_radians());
         let (sub_lon_r, sub_lat_r) = (sub_lon.to_radians(), sub_lat.to_radians());
-        lat_r.cos() * sub_lat_r.cos() * (lon_r - sub_lon_r).cos()
-            + lat_r.sin() * sub_lat_r.sin()
+        lat_r.cos() * sub_lat_r.cos() * (lon_r - sub_lon_r).cos() + lat_r.sin() * sub_lat_r.sin()
     }
 
     /// The curves join the culmination meridians exactly: at each junction
@@ -239,7 +234,9 @@ mod tests {
         assert!((last.1 - ic_junction_latitude_degrees(SUN_DEC)).abs() < 1e-9);
 
         // DSC shares both junctions with ASC, approached from the west.
-        assert!((wrap_longitude(dsc.points[0].0) - wrap_longitude(SUN_MC_LON + 180.0)).abs() < 1e-9);
+        assert!(
+            (wrap_longitude(dsc.points[0].0) - wrap_longitude(SUN_MC_LON + 180.0)).abs() < 1e-9
+        );
         assert!((dsc.points[0].1 - ic_junction_latitude_degrees(SUN_DEC)).abs() < 1e-9);
         let dsc_last = dsc.points[dsc.points.len() - 1];
         assert!((wrap_longitude(dsc_last.0) - SUN_MC_LON).abs() < 1e-9);
@@ -311,10 +308,7 @@ mod tests {
 
         let finest = gaps[0];
         let coarsest = gaps[gaps.len() - 1];
-        assert!(
-            finest < 0.15,
-            "steep stretch refined: finest step {finest}"
-        );
+        assert!(finest < 0.15, "steep stretch refined: finest step {finest}");
         assert!(
             (coarsest - BASE_STEP_DEG).abs() < 1e-9,
             "flat stretch stays coarse: coarsest step {coarsest}"

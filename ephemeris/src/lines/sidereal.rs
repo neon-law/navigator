@@ -42,8 +42,7 @@ pub fn gast_degrees(utc: Epoch) -> f64 {
     let tt_days = J2000_JD + tdb_seconds / SECONDS_PER_DAY;
     // ΔT itself is tabulated against UTC civil time, so it is evaluated at
     // the UTC instant; UT1 then follows from TT − ΔT.
-    let ut1_days =
-        tt_days - delta_t_seconds(utc.to_jde_utc_days()) / SECONDS_PER_DAY;
+    let ut1_days = tt_days - delta_t_seconds(utc.to_jde_utc_days()) / SECONDS_PER_DAY;
 
     let era_deg = earth_rotation_angle_degrees(ut1_days);
     let gmst_poly_deg = gmst06_polynomial_degrees((tt_days - J2000_JD) / DAYS_PER_CENTURY);
@@ -64,9 +63,7 @@ fn earth_rotation_angle_degrees(ut1_days: f64) -> f64 {
 /// adopted in the IERS Conventions 2010 eq. 6.7.
 fn gmst06_polynomial_degrees(centuries_tt: f64) -> f64 {
     let t = centuries_tt;
-    let arcseconds = 0.014_506
-        + 4_612.156_534 * t
-        + 1.391_581_7 * t * t
+    let arcseconds = 0.014_506 + 4_612.156_534 * t + 1.391_581_7 * t * t
         - 0.000_000_44 * t * t * t
         - 0.000_029_956 * t * t * t * t
         - 0.000_000_036_8 * t * t * t * t * t;
