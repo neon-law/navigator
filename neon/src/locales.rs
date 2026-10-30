@@ -631,6 +631,14 @@ fn band(copy: BandCopy, catalog: Option<&views::locales::services::ServicesCatal
             label,
             src: views::assets::asset_url(&asset_key),
         },
+        BandCopy::Photo {
+            image,
+            alt,
+            caption,
+        } => Band::Photo {
+            image: photo_image(&image, &alt),
+            caption,
+        },
         BandCopy::Steps {
             anchor,
             overline,
@@ -680,6 +688,35 @@ fn band(copy: BandCopy, catalog: Option<&views::locales::services::ServicesCatal
             action: action.map(|HeroCtaCopy { href, label }| HeroCta { href, label }),
         },
     }
+}
+
+/// Resolve a photo band's manifest slug into the photograph this deployment
+/// serves, or `None` when the curated manifest does not know the slug.
+///
+/// `page_alt`, when authored, replaces the manifest's description of the
+/// photo — the page says what the image means on it. The `sizes` hint is the
+/// band's own: a photo band fills the page's content column, so the browser
+/// sizes its candidate against the full viewport width.
+fn photo_image(slug: &str, page_alt: &str) -> Option<webapp::marketing_page::PhotoImage> {
+    let picture = views::assets::responsive_picture(slug, "100vw")?;
+    Some(webapp::marketing_page::PhotoImage {
+        sources: picture
+            .sources
+            .into_iter()
+            .map(|source| webapp::marketing_page::PhotoSource {
+                mime: source.mime,
+                srcset: source.srcset,
+            })
+            .collect(),
+        fallback_src: picture.fallback_src,
+        alt: if page_alt.is_empty() {
+            picture.alt
+        } else {
+            page_alt.to_string()
+        },
+        sizes: picture.sizes,
+        ratio: picture.ratio.to_string(),
+    })
 }
 
 fn enrollment_band(copy: BandCopy) -> Band {
@@ -1976,6 +2013,79 @@ mod tests {
         );
         assert!(!photo.alt.is_empty());
         assert!(!photo.caption.is_empty());
+    }
+
+    /// A photo band's manifest slug resolves through the asset seam into the
+    /// URLs this deployment serves, with the page's own alt standing over the
+    /// manifest's — and a slug the manifest does not know resolves to no
+    /// image at all, which the renderer treats as "leave the band out", never
+    /// as a broken `<img>`.
+    #[test]
+    fn photo_band_resolves_through_the_manifest_or_leaves_the_image_off() {
+        let resolved = band(
+            BandCopy::Photo {
+                image: "lake-tahoe".to_string(),
+                alt: "A page-authored description".to_string(),
+                caption: Some("Reunited families are what this work is for.".to_string()),
+            },
+            None,
+        );
+        let Band::Photo { image, caption } = resolved else {
+            unreachable!("the photo helper receives only photo copy")
+        };
+        let image = image.expect("a manifest slug resolves to a photograph");
+        assert_eq!(image.alt, "A page-authored description");
+        assert_eq!(image.sizes, "100vw");
+        assert_eq!(image.ratio, "21 / 9");
+        assert!(image.fallback_src.ends_with("lake-tahoe-1200w.jpg"));
+        let mimes: Vec<_> = image.sources.iter().map(|s| s.mime.as_str()).collect();
+        assert_eq!(mimes, ["image/avif", "image/webp", "image/jpeg"]);
+        for source in &image.sources {
+            assert!(
+                source.srcset.contains("/public/img/lake-tahoe/lake-tahoe-"),
+                "every candidate resolves through the asset seam: {}",
+                source.srcset
+            );
+        }
+        assert_eq!(
+            caption.as_deref(),
+            Some("Reunited families are what this work is for.")
+        );
+
+        let unknown = band(
+            BandCopy::Photo {
+                image: "no-such-photo".to_string(),
+                alt: String::new(),
+                caption: None,
+            },
+            None,
+        );
+        let Band::Photo { image, caption } = unknown else {
+            unreachable!("the photo helper receives only photo copy")
+        };
+        assert!(image.is_none(), "an unknown slug resolves to no image");
+        assert!(caption.is_none());
+    }
+
+    /// Without a page-authored alt, the manifest's own description of the
+    /// photo stands in — the band is never published with an empty one.
+    #[test]
+    fn photo_band_falls_back_to_the_manifest_alt() {
+        let resolved = band(
+            BandCopy::Photo {
+                image: "lake-tahoe".to_string(),
+                alt: String::new(),
+                caption: None,
+            },
+            None,
+        );
+        let Band::Photo { image, .. } = resolved else {
+            unreachable!("the photo helper receives only photo copy")
+        };
+        assert_eq!(
+            image.expect("a manifest slug resolves").alt,
+            views::assets::find("lake-tahoe").expect("in manifest").alt
+        );
     }
 
     #[test]

@@ -412,6 +412,23 @@ pub enum Aspect {
     Portrait,
 }
 
+impl Aspect {
+    /// The CSS `aspect-ratio` value matching the manifest's editorial
+    /// classification — the ratio the transcode leaves the photo at, so a
+    /// `<picture>` sized by this value reserves exactly the space the loaded
+    /// image fills and the page around it never shifts.
+    #[must_use]
+    pub const fn ratio(self) -> &'static str {
+        match self {
+            Self::Hero => "21 / 9",
+            Self::Wide => "16 / 9",
+            Self::Landscape => "4 / 3",
+            Self::Square => "1 / 1",
+            Self::Portrait => "3 / 4",
+        }
+    }
+}
+
 /// One curated photo. `slug` is the URL + directory stem; `source` is
 /// the original filename the `cli assets build` step transcodes from.
 #[derive(Debug, Clone, Copy)]
@@ -583,6 +600,10 @@ pub struct ResponsivePicture {
     /// `sizes`, describing the layout width so the browser can choose a
     /// candidate before stylesheets resolve.
     pub sizes: String,
+    /// The photo's intrinsic `aspect-ratio`, from the manifest's editorial
+    /// classification ([`Aspect::ratio`]). A renderer sizes the `<picture>`
+    /// with it so the page around the image never shifts while it loads.
+    pub ratio: &'static str,
 }
 
 /// Resolve a manifest photo into its `<picture>` data for the given
@@ -608,6 +629,7 @@ pub fn responsive_picture(slug: &str, sizes: &str) -> Option<ResponsivePicture> 
         fallback_src: variant_url(image.slug, FALLBACK_WIDTH, "jpg"),
         alt: image.alt.to_string(),
         sizes: sizes.to_string(),
+        ratio: image.aspect.ratio(),
     })
 }
 
@@ -884,6 +906,10 @@ mod tests {
             picture.fallback_src
         );
         assert_eq!(picture.sizes, "100vw");
+        // The manifest's editorial classification becomes the CSS
+        // `aspect-ratio` a renderer reserves layout space with — the
+        // hero photo is 21:9, and the page must not shift while it loads.
+        assert_eq!(picture.ratio, "21 / 9");
         // Carried through from the manifest rather than invented by the
         // resolver — the assertion is that the alt survives the trip, not what
         // the firm chose to say.

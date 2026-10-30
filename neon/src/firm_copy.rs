@@ -267,6 +267,14 @@ mod firm_copy_tests {
                 "{overline} {heading} {} {label}",
                 description.clone().unwrap_or_default()
             ),
+            Band::Photo { image, caption } => {
+                // Alt text is published copy — a screen reader reads it —
+                // so the guards scan it alongside the visible caption.
+                let alt = image
+                    .as_ref()
+                    .map_or_else(String::new, |image| image.alt.clone());
+                format!("{alt} {}", caption.clone().unwrap_or_default())
+            }
             Band::Steps {
                 overline,
                 heading,

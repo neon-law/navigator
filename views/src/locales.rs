@@ -445,6 +445,22 @@ pub enum BandCopy {
         label: String,
         asset_key: String,
     },
+    /// A full-width curated photograph with alt text and an optional caption.
+    ///
+    /// `image` is a slug in the curated-image manifest (`views::assets`
+    /// [`GALLERY`]) — not a URL and not an object key. The manifest is the
+    /// single source of truth, so a typo'd slug is a validation-time fact:
+    /// the router resolves it at page-build time, and an unknown slug leaves
+    /// the image off the page rather than publishing a broken `<img>`.
+    /// `alt`, when authored, replaces the manifest's own description — the
+    /// manifest says what the photo shows; the page says what it means here.
+    Photo {
+        image: String,
+        #[serde(default)]
+        alt: String,
+        #[serde(default)]
+        caption: Option<String>,
+    },
     Steps {
         #[serde(default)]
         anchor: String,
