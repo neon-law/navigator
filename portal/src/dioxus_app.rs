@@ -3563,11 +3563,12 @@ async fn inject_notation_preview(
 pub const NOTATION_DRAFT_PATH: &str = "/notations/drafts/{id}";
 
 /// Resolve the `{id}` path segment to a live draft and hand its projected
-/// content to the render task, already resolved — mirroring
+/// content — plus the run it opened, when it did (LAW-203's hand-off link) —
+/// to the render task, already resolved — mirroring
 /// [`inject_notation_preview`], but awaited, since this reads the store
-/// rather than a compiled-in `Vec`. `None` covers every refusal alike (an
-/// unknown id, an expired one, or a read failure); the page renders the
-/// same not-found body for all three.
+/// rather than a compiled-in `Vec`. `content: None` covers every refusal
+/// alike (an unknown id, an expired one, or a read failure); the page
+/// renders the same not-found body for all three.
 async fn inject_notation_draft(
     axum::extract::State(surreal): axum::extract::State<store::surreal::SurrealDb>,
     mut req: Request,
@@ -3579,9 +3580,9 @@ async fn inject_notation_draft(
         .rsplit('/')
         .next()
         .and_then(|segment| segment.parse::<uuid::Uuid>().ok());
-    let content = match id {
+    let draft = match id {
         Some(id) => match store::notation_drafts::find_live(&surreal, id).await {
-            Ok(Some(draft)) => Some(webapp::notation_draft::project_draft_source(&draft.source)),
+            Ok(Some(draft)) => Some(draft),
             Ok(None) => None,
             Err(e) => {
                 tracing::error!(error = %e, %id, "notation draft lookup failed");
@@ -3590,8 +3591,15 @@ async fn inject_notation_draft(
         },
         None => None,
     };
+    let run_path = draft
+        .as_ref()
+        .and_then(|draft| draft.notation_id)
+        .map(|notation_id| format!("/app/lawyer/notations/{notation_id}/step"));
     req.extensions_mut()
-        .insert(webapp::notation_draft::InjectedNotationDraft(content));
+        .insert(webapp::notation_draft::InjectedNotationDraft {
+            content: draft.map(|draft| webapp::notation_draft::project_draft_source(&draft.source)),
+            run_path,
+        });
     next.run(req).await
 }
 
@@ -5940,11 +5948,14 @@ mod tests {
     /// `webapp::App`'s draft branch, together — the same router the `neon`
     /// binary serves, not a hand-built stand-in. Exercises the two things a
     /// props-driven page test cannot: the live `{id}` resolution and the
-    /// shared `FullstackState` actually carrying both mounts.
+    /// shared `FullstackState` actually carrying both mounts. The draft is
+    /// linked to the run its push opened (LAW-203), so the page also renders
+    /// the hand-off to that run.
     #[tokio::test]
     async fn the_draft_route_resolves_a_live_draft_through_the_shared_router() {
         let surreal = store::surreal::test_support::mem().await;
         let project_id = store::test_support::seed_project_surreal(&surreal, "draft-e2e").await;
+        let run_id = store::test_support::seed_notation(&surreal).await;
         let draft = store::notation_drafts::create(
             &surreal,
             &store::notation_drafts::NewNotationDraft {
@@ -5958,6 +5969,7 @@ mod tests {
                     is your name?\nworkflow:\n  BEGIN:\n    intake_submitted: \
                     lawyer_review\n  lawyer_review:\n    approved: END\n  END: \
                     {}\n---\n\n# Sample Letter\n\nBody prose.\n",
+                notation_id: Some(run_id),
             },
         )
         .await
@@ -5995,6 +6007,14 @@ mod tests {
             questionnaire_at < body_at,
             "questionnaire must render before the body: {html}"
         );
+        // The hand-off (LAW-203): the run the push opened is one click
+        // away, and leads the page.
+        assert!(
+            html.contains(&format!("href=\"/app/lawyer/notations/{run_id}/step\"")),
+            "the hand-off links the run's step page: {html}"
+        );
+        assert!(html.contains("Draft — run open"), "{html}");
+        assert!(html.contains("Open the real questionnaire"), "{html}");
     }
 
     /// An unknown draft id 404-shapes to "not found" rather than 500ing or

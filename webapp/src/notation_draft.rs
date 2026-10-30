@@ -11,12 +11,13 @@
 //! previewing the intake. Leading with the body, as the published page
 //! does, is backwards for both.
 //!
-//! Nothing here is bound to a real questionnaire run: the demo controls are
-//! the same client-side-only stage [`crate::notation_demo::QuestionnaireDemo`]
-//! renders for a local preview — no Notation, no Answer, no workflow
-//! instance (`store::notation_drafts::create` never touches those tables).
-//! A draft is stored and addressable so the URL is real and shareable; it
-//! is not run.
+//! The demo controls are the client-side-only stage
+//! [`crate::notation_demo::QuestionnaireDemo`] renders for a local
+//! preview — they never save anything. Since LAW-203 a pushed draft may
+//! carry the real notation run its push opened ([`InjectedNotationDraft::run_path`]);
+//! the page then leads with the hand-off to that run, where answers count.
+//! A draft whose push predates the link — or whose run could not open —
+//! keeps the "Draft — not run" badge and the demo alone.
 //!
 //! No auth layer, same as [`crate::notation_preview::NotationPreviewEntry`]
 //! — the draft's id is the access control, exactly like a preview link. An
@@ -51,19 +52,27 @@ use crate::public_chrome::PublicChrome;
 /// mean "this was the draft route", the same role
 /// [`crate::notation_preview::InjectedNotationPreview`] plays for the
 /// preview route. Both routes render through the same shared
-/// [`crate::App`], and `content: None` here (an unknown or expired id) has
-/// to stay distinguishable from this extension never having been inserted
-/// at all (some other route entirely).
+/// [`crate::App`], and `content: None` here (an unknown or expired id)
+/// has to stay distinguishable from this extension never having been
+/// inserted at all (some other route entirely).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
-pub struct InjectedNotationDraft(pub Option<NotationPreviewContent>);
+pub struct InjectedNotationDraft {
+    /// The resolved draft, or `None` for an unknown or expired id.
+    pub content: Option<NotationPreviewContent>,
+    /// The lawyer-side path of the real run this draft opened, when it
+    /// opened one (LAW-203) — the hand-off the page renders.
+    pub run_path: Option<String>,
+}
 
 /// The resolved draft, or `None` for an unknown or expired id. `matched`
 /// is `true` exactly when the current request was the draft route at all;
-/// see [`InjectedNotationDraft`].
+/// see [`InjectedNotationDraft`]. `run_path` carries the real run the
+/// draft opened, when it opened one — the hand-off target.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct NotationDraftView {
     pub chrome: PublicChrome,
     pub content: Option<NotationPreviewContent>,
+    pub run_path: Option<String>,
     pub matched: bool,
 }
 
@@ -142,16 +151,27 @@ pub async fn notation_draft_view() -> Result<NotationDraftView, ServerFnError> {
     .ok();
     Ok(NotationDraftView {
         chrome: crate::public_chrome::firm_public_chrome_from_context().await,
-        content: injected.as_ref().and_then(|axum::Extension(d)| d.0.clone()),
+        content: injected
+            .as_ref()
+            .and_then(|axum::Extension(d)| d.content.clone()),
+        run_path: injected
+            .as_ref()
+            .and_then(|axum::Extension(d)| d.run_path.clone()),
         matched: injected.is_some(),
     })
 }
 
-/// The pure draft page: questionnaire first, rendered body below it.
+/// The pure draft page: questionnaire first, rendered body below it, and —
+/// when the push opened a real run (LAW-203) — the hand-off to it, so the
+/// preview's answerable surface is one click from the shareable draft.
 /// Prop-driven, so it server-renders and unit-tests without a server
 /// future.
 #[component]
-pub fn NotationDraftPage(chrome: PublicChrome, content: Option<NotationPreviewContent>) -> Element {
+pub fn NotationDraftPage(
+    chrome: PublicChrome,
+    content: Option<NotationPreviewContent>,
+    run_path: Option<String>,
+) -> Element {
     let Some(content) = content else {
         return rsx! {
             PublicShell {
@@ -179,8 +199,19 @@ pub fn NotationDraftPage(chrome: PublicChrome, content: Option<NotationPreviewCo
             document::Script { src: HARVARD_OUTLINE_SCRIPT_HREF, defer: true }
             article { class: "notation-draft",
                 header { class: "notation-draft__header",
-                    p { class: "notation-draft__badge", "Draft — not run" }
+                    p { class: "notation-draft__badge",
+                        if run_path.is_some() { "Draft — run open" } else { "Draft — not run" }
+                    }
                     h1 { "{content.title}" }
+                }
+                if let Some(run_path) = run_path.as_ref() {
+                    section { class: "notation-draft__handoff",
+                        p {
+                            "This preview opened a real run. The questionnaire is answered "
+                            "there — what you try on this page stays here."
+                        }
+                        a { href: "{run_path}", "Open the real questionnaire" }
+                    }
                 }
                 if !content.demo_questions.is_empty() {
                     section { class: "notation-draft__questionnaire",
@@ -261,7 +292,7 @@ mod tests {
                 brand_name: "Neon Law".to_string(),
                 ..PublicChrome::default()
             };
-            rsx! { NotationDraftPage { chrome, content: Some(draft_content()) } }
+            rsx! { NotationDraftPage { chrome, content: Some(draft_content()), run_path: None } }
         }
         let out = ssr(app);
         let questionnaire_at = out
@@ -286,7 +317,7 @@ mod tests {
                 brand_name: "Neon Law".to_string(),
                 ..PublicChrome::default()
             };
-            rsx! { NotationDraftPage { chrome, content: Some(draft_content()) } }
+            rsx! { NotationDraftPage { chrome, content: Some(draft_content()), run_path: None } }
         }
         let out = ssr(app);
         assert!(out.contains("Scope of the engagement"), "{out}");
@@ -308,9 +339,57 @@ mod tests {
                 brand_name: "Neon Law".to_string(),
                 ..PublicChrome::default()
             };
-            rsx! { NotationDraftPage { chrome, content: None } }
+            rsx! { NotationDraftPage { chrome, content: None, run_path: None } }
         }
         let out = ssr(app);
         assert!(out.contains("Draft not found"), "{out}");
+    }
+
+    /// LAW-203's hand-off: a draft that opened a real run leads with the
+    /// link to it — the answerable surface — and says honestly that the
+    /// demo on this page is not where answers count.
+    #[test]
+    fn a_run_backed_draft_hands_off_to_the_real_questionnaire() {
+        fn app() -> Element {
+            let chrome = PublicChrome {
+                brand_name: "Neon Law".to_string(),
+                ..PublicChrome::default()
+            };
+            rsx! {
+                NotationDraftPage {
+                    chrome,
+                    content: Some(draft_content()),
+                    run_path: Some("/app/lawyer/notations/0123456789/step".to_string()),
+                }
+            }
+        }
+        let out = ssr(app);
+        assert!(
+            out.contains("href=\"/app/lawyer/notations/0123456789/step\""),
+            "the hand-off links the run's step page: {out}"
+        );
+        assert!(out.contains("Open the real questionnaire"), "{out}");
+        assert!(out.contains("Draft — run open"), "{out}");
+        // The hand-off leads: it renders before the demo questionnaire.
+        let handoff_at = out
+            .find("notation-draft__handoff")
+            .expect("hand-off renders");
+        let demo_at = out.find("Try answering this").expect("demo renders");
+        assert!(handoff_at < demo_at, "the hand-off leads the page: {out}");
+    }
+
+    /// A run-less draft keeps the "not run" badge and renders no hand-off.
+    #[test]
+    fn a_run_less_draft_keeps_the_not_run_badge_and_no_handoff() {
+        fn app() -> Element {
+            let chrome = PublicChrome {
+                brand_name: "Neon Law".to_string(),
+                ..PublicChrome::default()
+            };
+            rsx! { NotationDraftPage { chrome, content: Some(draft_content()), run_path: None } }
+        }
+        let out = ssr(app);
+        assert!(out.contains("Draft — not run"), "{out}");
+        assert!(!out.contains("notation-draft__handoff"), "{out}");
     }
 }

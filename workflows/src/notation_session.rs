@@ -290,6 +290,58 @@ async fn persist_from_firm_library(
     }
 }
 
+/// The engagement-first gate shared by every door that opens a real
+/// notation run: the first notation on a matter must normally be the
+/// engagement that makes it official — a retainer, or the intake-driven
+/// onboarding that opens a bundle of instruments. An open Project with no
+/// notations may instead start with an offboarding letter so a pitch can
+/// be closed.
+///
+/// Only gates a template that actually resolves — a code present in
+/// neither the repo nor the catalog falls through so `start_notation`
+/// surfaces `TemplateNotFound` (not a misleading engagement-first
+/// error). Which kinds open a matter is `rules::kind`'s call, not
+/// this module's: `opens_a_matter` is an exhaustive match, so a new
+/// `Kind` must declare its side of the line, and the lawyer matter
+/// list (`portal::admin::template_opens_a_matter`) reads the very same
+/// classifier — one answer, two callers, no drift.
+pub async fn enforce_engagement_first(
+    surreal: &store::surreal::SurrealDb,
+    project_id: Uuid,
+    template_code: &str,
+) -> Result<(), NotationSessionError> {
+    let is_first = !store::notations::exists_for_project(surreal, project_id).await?;
+    if !is_first {
+        return Ok(());
+    }
+    let Some(template) =
+        store::templates::resolve(surreal, Some(project_id), template_code).await?
+    else {
+        return Ok(());
+    };
+    let kind = template.kind.as_deref().and_then(rules::kind::Kind::parse);
+    let opens = kind.is_some_and(rules::kind::Kind::opens_a_matter);
+    // A pitch has no opening notation by definition. It still needs
+    // an offboarding document before it can close, so let its closing
+    // letter be the first notation without weakening the engagement-
+    // first rule for other kinds or Project lifecycle states.
+    let is_offboarding_pitch = if kind == Some(rules::kind::Kind::Offboarding) {
+        store::projects::find_by_id(surreal, project_id)
+            .await
+            .map_err(|error| NotationSessionError::Db(error.to_string()))?
+            .is_some_and(|project| project.status == "open")
+    } else {
+        false
+    };
+    if opens || is_offboarding_pitch {
+        return Ok(());
+    }
+    Err(NotationSessionError::EngagementMustBeFirst {
+        code: template_code.to_string(),
+        kind: template.kind.unwrap_or_else(|| "none".into()),
+    })
+}
+
 /// The one `notation create` front door: auto-save the template from the
 /// Project's git repo, then open the notation pinned to that exact version.
 ///
@@ -338,46 +390,9 @@ pub async fn create_notation_from_repo(
     }
 
     // The first notation opened on a matter must normally be the engagement
-    // that makes it official — a retainer, or the intake-driven onboarding
-    // that opens a bundle of instruments. An open Project with no notations
-    // may instead start with an offboarding letter so a pitch can be closed.
-    // The template's kind is resolved from the row just persisted (repo
-    // source) or the shared catalog (bundled source), so this holds for both.
-    let is_first = !store::notations::exists_for_project(surreal, project_id).await?;
-    if is_first {
-        // Only gate a template that actually resolves — a code present in
-        // neither the repo nor the catalog falls through so `start_notation`
-        // surfaces `TemplateNotFound` (not a misleading engagement-first
-        // error). Which kinds open a matter is `rules::kind`'s call, not
-        // this module's: `opens_a_matter` is an exhaustive match, so a new
-        // `Kind` must declare its side of the line, and the lawyer matter
-        // list (`portal::admin::template_opens_a_matter`) reads the very same
-        // classifier — one answer, two callers, no drift.
-        if let Some(template) =
-            store::templates::resolve(surreal, Some(project_id), template_code).await?
-        {
-            let kind = template.kind.as_deref().and_then(rules::kind::Kind::parse);
-            let opens = kind.is_some_and(rules::kind::Kind::opens_a_matter);
-            // A pitch has no opening notation by definition. It still needs
-            // an offboarding document before it can close, so let its closing
-            // letter be the first notation without weakening the engagement-
-            // first rule for other kinds or Project lifecycle states.
-            let is_offboarding_pitch = if kind == Some(rules::kind::Kind::Offboarding) {
-                store::projects::find_by_id(surreal, project_id)
-                    .await
-                    .map_err(|error| NotationSessionError::Db(error.to_string()))?
-                    .is_some_and(|project| project.status == "open")
-            } else {
-                false
-            };
-            if !opens && !is_offboarding_pitch {
-                return Err(NotationSessionError::EngagementMustBeFirst {
-                    code: template_code.to_string(),
-                    kind: template.kind.unwrap_or_else(|| "none".into()),
-                });
-            }
-        }
-    }
+    // that makes it official. The preview-push door enforces the same rule
+    // (see [`enforce_engagement_first`]); the decision lives here, once.
+    enforce_engagement_first(surreal, project_id, template_code).await?;
 
     start_notation(
         surreal,

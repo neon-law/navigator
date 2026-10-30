@@ -790,10 +790,11 @@ pub(super) const TABLES: &[Table] = &[
             "slug",
             "title",
             "source",
+            "notation_id",
             "inserted_at",
             "expires_at",
         ],
-        references: &[("project_id", "project")],
+        references: &[("project_id", "project"), ("notation_id", "notation")],
         timestamps: &["inserted_at", "expires_at"],
     },
     Table {
