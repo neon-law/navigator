@@ -926,7 +926,7 @@ enum Command {
     /// Read and update a Person in the deployment's own store, directly.
     ///
     /// Distinct from `navigator site …` verbs, which speak HTTP to a running
-    /// site: these open the SurrealDB coordinates `NAVIGATOR_SURREAL_*`
+    /// site: these open the `SurrealDB` coordinates `NAVIGATOR_SURREAL_*`
     /// names — the same handle the web app uses.
     Person {
         #[command(subcommand)]
