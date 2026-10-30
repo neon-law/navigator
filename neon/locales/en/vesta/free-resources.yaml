@@ -1,0 +1,22 @@
+# The Free Legal Resources catalog's brand copy, Vesta voice. The page's rows
+# never pass through this file — they come from store/seeds/Court.yaml — so
+# this catalog holds only the words around them: the promises (free of
+# charge, no outcome promised), the table labels, and the empty states.
+# `{jurisdiction}` in meta_description and courts_heading is filled with the
+# jurisdiction's seeded display name by the page builder.
+head_title: "{site_name} | Free Legal Resources"
+meta_description: Free court self-help forms and filing information for {jurisdiction} — the filing office, the fee, the fee waiver, and the official source. Free of charge, promising no outcome.
+title: Free Legal Resources
+lede: Vesta collects each court's self-help forms together with the practical facts around them — where to file, what it costs, how to ask the court to waive the fee, and a direct link to the official source.
+free_statement: Everything on these pages is free of charge. Vesta charges nothing for the information, the links, or the blank downloads — the courts publish their forms free, and Vesta adds no paywall.
+no_outcome: These pages promise no outcome. Downloading or filing a form does not promise that a court will grant anything; Vesta has not reviewed your situation and no lawyer–client relationship exists.
+courts_heading: Courts and forms in {jurisdiction}
+filing_office_label: Filing office
+fee_label: Filing fee
+fee_waiver_label: Fee waiver
+source_label: Official source
+blank_label: Download blank
+empty_court: This court has no forms in the registry yet.
+empty_jurisdiction: No court in this jurisdiction has forms in the registry yet.
+footnote: Links point to each court's official source; blanks download from the public assets bucket and match the official publication by hash.
+json_label: Machine-readable JSON

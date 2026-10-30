@@ -67,6 +67,7 @@ pub mod catalog_material;
 pub mod catalog_slide_body;
 pub mod catalog_slides;
 pub mod catalog_step;
+pub mod free_resources;
 pub mod deployment_keys;
 #[cfg(feature = "server")]
 pub mod error_pages;

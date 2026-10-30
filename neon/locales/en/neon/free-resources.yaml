@@ -1,0 +1,22 @@
+# The Free Legal Resources catalog's brand copy. The page's rows never pass
+# through this file — they come from store/seeds/Court.yaml — so this catalog
+# holds only the words around them: the promises (free of charge, no outcome
+# promised), the table labels, and the empty states. `{jurisdiction}` in
+# meta_description and courts_heading is filled with the jurisdiction's
+# seeded display name by the page builder.
+head_title: "{site_name} | Free Legal Resources"
+meta_description: Free court self-help forms and filing information for {jurisdiction} — the filing office, the fee, the fee waiver, and the official source. Free of charge, promising no outcome.
+title: Free Legal Resources
+lede: Court self-help forms and the practical facts around them — the filing office, the fee, the fee-waiver form, and a direct link to the official source — for every jurisdiction the court-form registry covers.
+free_statement: Everything on these pages is free of charge. Every form is published free by its court, every blank download is free, and Neon Law charges nothing for the information on any page.
+no_outcome: These pages promise no outcome. Reading them, downloading a form, or filing it does not promise that a court will grant anything; no lawyer has reviewed your situation.
+courts_heading: Courts and forms in {jurisdiction}
+filing_office_label: Filing office
+fee_label: Filing fee
+fee_waiver_label: Fee waiver
+source_label: Official source
+blank_label: Download blank
+empty_court: This court has no forms in the registry yet.
+empty_jurisdiction: No court in this jurisdiction has forms in the registry yet.
+footnote: Links point to each court's official source; blanks download from Neon Law's public assets bucket and match the official publication by hash.
+json_label: Machine-readable JSON

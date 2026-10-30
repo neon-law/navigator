@@ -1201,7 +1201,7 @@ impl BrandKey {
     pub fn catalog_pages(self) -> &'static [&'static str] {
         match self {
             Self::Neon => crate::locales::KNOWN_PAGES,
-            Self::Vesta => &["home", "services", "explainer-probate"],
+            Self::Vesta => &["home", "services", "explainer-probate", "free-resources"],
             Self::Aegis | Self::Groundwork => &[
                 "home",
                 "services",
@@ -1238,6 +1238,11 @@ impl BrandKey {
     pub fn publishes_firm_path(self, path: &str) -> bool {
         if path == "/probate" {
             return self == Self::Vesta;
+        }
+        // The free court-form catalog publishes on the two house hosts that
+        // serve the public self-help surface; every practice brand 404s it.
+        if path == "/free-legal-resources" || path.starts_with("/free-legal-resources/") {
+            return matches!(self, Self::Neon | Self::Vesta);
         }
         if path == "/blog" || path.starts_with("/blog/") {
             return true;
@@ -3414,6 +3419,32 @@ mod tests {
         assert!(BrandKey::Neon.publishes_firm_path("/services"));
         assert!(!BrandKey::Neon.publishes_firm_path("/business"));
         assert!(!BrandKey::Neon.publishes_firm_path("/disputes"));
+    }
+
+    /// The free court-form catalog publishes on the two house hosts and
+    /// nowhere else, index and jurisdiction pages alike.
+    #[test]
+    fn the_free_resources_catalog_publishes_on_the_house_hosts() {
+        for key in [BrandKey::Neon, BrandKey::Vesta] {
+            assert!(
+                key.publishes_firm_path("/free-legal-resources"),
+                "{key:?} serves the catalog index"
+            );
+            assert!(
+                key.publishes_firm_path("/free-legal-resources/nevada"),
+                "{key:?} serves a jurisdiction page"
+            );
+            assert!(
+                key.publishes_firm_path("/free-legal-resources/index.json"),
+                "{key:?} serves the JSON endpoint"
+            );
+        }
+        for key in [BrandKey::DeleteYourData, BrandKey::LawyerShook, BrandKey::Summons] {
+            assert!(
+                !key.publishes_firm_path("/free-legal-resources"),
+                "{key:?} has no catalog to serve"
+            );
+        }
     }
 
     /// A mounted white-label manifest replaces the *default* brand's identity,
