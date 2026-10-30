@@ -187,9 +187,10 @@ mod tests {
         6.189_911_088_842_041_94e-05,
         -2.694_572_645_905_283_26e-05,
     ];
-    /// ε_A(J2000) − Δε(J2000), from the ERFA anchor digits.
+    /// ε_A(J2000) + Δε(J2000), from the ERFA anchor digits; Δε is true minus
+    /// mean and negative here (ERFA's `deps`).
     const J2000_TRUE_OBLIQUITY: f64 =
-        4.090_926_006_005_828_90e-01 + 2.797_092_331_098_565_26e-05;
+        4.090_926_006_005_828_90e-01 - 2.797_092_331_098_565_26e-05;
 
     /// The four angles of date expected for the ICRF +x direction at J2000,
     /// computed from the transcribed anchor column rather than from the crate

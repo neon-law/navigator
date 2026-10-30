@@ -255,14 +255,14 @@ pub(crate) fn bias_precession_nutation(t: TdbSeconds) -> [[f64; 3]; 3] {
     fw2m(angles.gamb, angles.phib, angles.psib + dpsi, angles.epsa + deps)
 }
 
-/// The true obliquity of date: the mean obliquity ε_A minus the nutation in
-/// obliquity Δε. Used to rotate equatorial-of-date components onto the
-/// ecliptic of date.
+/// The true obliquity of date: the mean obliquity ε_A plus the nutation in
+/// obliquity Δε (ERFA's `deps` is true minus mean, negative at J2000). Used
+/// to rotate equatorial-of-date components onto the ecliptic of date.
 pub(crate) fn true_obliquity(t: TdbSeconds) -> f64 {
     let centuries = t.0 / SECONDS_PER_CENTURY;
     let angles = pfw06(centuries);
     let (_, deps) = nut00b(centuries);
-    angles.epsa - deps
+    angles.epsa + deps
 }
 
 #[cfg(test)]
@@ -454,10 +454,12 @@ mod tests {
     }
 
     #[test]
-    fn true_obliquity_is_mean_minus_nutation() {
+    fn true_obliquity_is_mean_plus_nutation() {
         let anchor = &ANCHORS[2]; // J2000
         let eps_true = true_obliquity(centuries(anchor.t));
-        let expected = anchor.epsa - anchor.deps;
+        // ERFA composes the matrix with fw2m(..., epsa + deps, ...): Δε is
+        // true minus mean, so the true obliquity is ε_A + Δε.
+        let expected = anchor.epsa + anchor.deps;
         assert!(
             (eps_true - expected).abs() < 1e-15,
             "true obliquity {eps_true} vs expected {expected}"
