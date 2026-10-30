@@ -850,11 +850,15 @@ mod tests {
 
     #[test]
     fn helping_photos_render_responsively() {
-        use super::{responsive_picture, WIDTHS};
+        use super::{responsive_picture, FALLBACK_WIDTH, WIDTHS};
         // Every Cyber Injury Law helping-people photo must resolve through
         // `responsive_picture` — the manifest is the single source of
         // truth, so a slug typo would render nothing rather than 404.
-        for slug in ["attorney-consultation", "family-recovery", "records-organized"] {
+        for slug in [
+            "attorney-consultation",
+            "family-recovery",
+            "records-organized",
+        ] {
             let picture =
                 responsive_picture(slug, "100vw").unwrap_or_else(|| panic!("{slug} must resolve"));
             let image = find(slug).expect("slug in manifest");
@@ -862,7 +866,9 @@ mod tests {
             for source in &picture.sources {
                 assert_eq!(source.srcset.split(',').count(), WIDTHS.len());
             }
-            assert!(picture.fallback_src.contains(&format!("{slug}-800w.jpg")));
+            assert!(picture
+                .fallback_src
+                .contains(&format!("{slug}-{FALLBACK_WIDTH}w.jpg")));
         }
     }
 
