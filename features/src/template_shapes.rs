@@ -23,13 +23,13 @@ pub fn templates_root() -> PathBuf {
 }
 
 /// Strip the second `END: {}` declaration from a bundled template's
-/// frontmatter — the one belonging to the `workflow:` block — so a
-/// rejection scenario can confirm the parser surfaces
-/// `WorkflowSpecError::MissingEnd`.
+/// frontmatter — the one belonging to the `workflow:` block — to check
+/// that authored normalization preserves the full workflow while typed
+/// runtime validation still requires an explicit terminal state.
 ///
 /// # Panics
 ///
-/// Panics if `markdown` doesn't contain a `\nworkflow:\n` anchor.
+/// Panics if `markdown` lacks a `\nworkflow:\n` anchor or an explicit workflow END row.
 #[must_use]
 pub fn strip_workflow_end(markdown: &str) -> String {
     let workflow_anchor = markdown
@@ -37,6 +37,10 @@ pub fn strip_workflow_end(markdown: &str) -> String {
         .expect("template has a `workflow:` block");
     let (head, tail) = markdown.split_at(workflow_anchor);
     let mutated_tail = tail.replace("  END: {}\n", "");
+    assert_ne!(
+        tail, mutated_tail,
+        "workflow has an explicit END declaration"
+    );
     format!("{head}{mutated_tail}")
 }
 

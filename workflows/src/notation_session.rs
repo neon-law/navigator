@@ -5,9 +5,8 @@
 //! Notation through the same two state machines: a questionnaire
 //! that asks one question per signal, then a post-intake workflow.
 //! This module owns the questionnaire half; the workflow half is
-//! caller-driven for now (the dev-loop short-circuit in
-//! `retainer_walk::drive_post_questionnaire_workflow` stays in
-//! `web`).
+//! driven by `portal::retainer_walk::begin_post_questionnaire_workflow`,
+//! which advances completed intake to its declared human review gate.
 //!
 //! The runtime — not the application — is the source of truth for
 //! questionnaire state. That mirrors `retainer_walk` exactly: in
@@ -1918,6 +1917,50 @@ mod tests {
         assert_eq!(pinned.code, "firm_retainer");
         assert_eq!(pinned.firm_id, Some(firm_id), "the Firm Library version");
         assert_eq!(pinned.project_id, None);
+    }
+
+    #[tokio::test]
+    async fn onboarding_with_two_jurisdiction_questions_opens_from_project_repo() {
+        const TEMPLATE: &str = include_str!("../tests/fixtures/onboarding_implicit_end.txt");
+        let surreal = db().await;
+        let assets = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn StorageService> =
+            Arc::new(cloud::FsStorage::new(assets.path()).await.unwrap());
+        let person_id = seed_person(&surreal, "client@example.com").await;
+        let project_id = seed_project(&surreal).await;
+        let project = store::projects::find_by_id(&surreal, project_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let runtime = InMemoryRuntime::new();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = repos::RepoStore::new(dir.path());
+        repo.ensure_code(&project.code).unwrap();
+        repo.commit_as_code(
+            &project.code,
+            repos::Author {
+                name: "Tester",
+                email: "tester@example.com",
+            },
+            "add synthetic draft",
+            &[("drafts/onboarding.md", TEMPLATE.as_bytes())],
+        )
+        .unwrap();
+        let outcome = super::create_notation_from_repo(
+            &surreal,
+            &runtime,
+            &storage,
+            &repo,
+            "onboarding",
+            person_id,
+            project_id,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(outcome.next, NextStep::NeedsAnswer { ref question } if question.code == "jurisdiction__governing_law")
+        );
     }
 
     #[tokio::test]

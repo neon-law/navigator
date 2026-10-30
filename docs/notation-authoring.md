@@ -85,6 +85,14 @@ Frontmatter fields:
 - `workflow:` — the post-intake state machine: render, lawyer review, signature, filing. Transitions fire on named
   signals (`approved`, `pdf_persisted`, `signature_received`).
 
+An authored state map may omit `END: {}` in either block. The template parser supplies that empty terminal row; every
+other transition target must have a declared state. The runtime's typed specs contain the explicit terminal row.
+
+A Project-scoped notation follows the workflow in its pinned template version. Completing its questionnaire advances
+only a unique path directly to `lawyer_review`, or through one `intake_persisted__*` wait state to that review gate. The
+driver fires the declared transition signals. A path requiring another action must complete that action through its own
+command. The notation stays at review until the lawyer acts.
+
 Two machines, one journal: questionnaire and workflow are hosted on a single Restate virtual object keyed by the
 notation's id, so their signals serialize and can never interleave. State is **append-only** — every transition writes a
 `notation_events` row, and the current state is the latest row's `to_state`. Nothing is ever updated in place, so the
@@ -293,7 +301,7 @@ today:
 | --- | --- | --- | --- |
 | `email_send__<slug>` | Implemented | Durable SendGrid send; only `welcome` renders. | Sending you an email |
 | `intake_persisted__*` | Implemented | Pass-through wait state recorded on the journal. | Your answers are in |
-| `lawyer_review` | State-only | Mandatory gate; dev auto-approves. | The firm is reviewing |
+| `lawyer_review` | State-only | Mandatory human approval gate. | The firm is reviewing |
 | `client_review` | State-only | Respondent approves reviewed drafts on Phase A. | Your turn to review the drafts |
 | `reask__*` | State-only | Re-collects flagged answers; loops back to review. | A few answers need updating |
 | `document_intake__<slug>` | Implemented | Worker files a provided artifact. | Waiting for a document |

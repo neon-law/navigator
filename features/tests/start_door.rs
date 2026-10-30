@@ -206,6 +206,7 @@ async fn send_to_lawyer_review(world: &mut StartDoorWorld) {
     portal::retainer_walk::advance_to_lawyer_review(
         &world.journey().surreal,
         &worker,
+        &world.journey().storage,
         world.notation_id.expect("notation id"),
         None,
     )
