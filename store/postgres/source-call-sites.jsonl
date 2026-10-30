@@ -173,7 +173,7 @@
 {"file":"cli/src/devx/github_setup.rs","line":2142,"function":"read_live_rulesets","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/github_setup.rs","line":2160,"function":"read_live_rulesets","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/github_setup.rs","line":2401,"function":"apply","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/devx/github_setup.rs","line":4883,"function":"test_client","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/devx/github_setup.rs","line":4875,"function":"test_client","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/github_setup/deploy_environments.rs","line":188,"function":"apply","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/lifecycle.rs","line":591,"function":"reset_rejects_a_blank_context_and_a_blank_environment_id","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/devx/mod.rs","line":1363,"function":"assignments","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
@@ -307,7 +307,7 @@
 {"file":"cli/src/projects/matter.rs","line":108,"function":"caption_for_export","operation":"insert","sql_operations":[],"tables":["message"],"transaction":false}
 {"file":"cli/src/projects/matter.rs","line":185,"function":"caption_for_preview","operation":"insert","sql_operations":[],"tables":["message"],"transaction":false}
 {"file":"cli/src/projects/preview.rs","line":851,"function":"respond","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/repository.rs","line":2610,"function":"lint_project_template","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/repository.rs","line":2544,"function":"lint_project_template","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/search.rs","line":214,"function":"search_file","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/search.rs","line":545,"function":"two_page_pdf","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/set.rs","line":193,"function":"live_patch","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
