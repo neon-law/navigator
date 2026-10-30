@@ -184,6 +184,9 @@ pub enum SectionView {
     RequirementTracker(Vec<transactional::RequirementRow>),
     RedlineView(Vec<transactional::RevisionDocument>),
     ActivityLog(Vec<SectionRow>),
+    PitchHeadline(Vec<SectionRow>),
+    ClaimCards(Vec<SectionRow>),
+    FeeSummary(Vec<SectionRow>),
 }
 
 impl SectionView {
@@ -241,6 +244,9 @@ impl SectionView {
             Self::RequirementTracker(_) => "requirement_tracker",
             Self::RedlineView(_) => "redline_view",
             Self::ActivityLog(_) => "activity_log",
+            Self::PitchHeadline(_) => "pitch_headline",
+            Self::ClaimCards(_) => "claim_cards",
+            Self::FeeSummary(_) => "fee_summary",
         }
     }
 
@@ -298,6 +304,9 @@ impl SectionView {
             Self::RequirementTracker(Vec::new()),
             Self::RedlineView(Vec::new()),
             Self::ActivityLog(Vec::new()),
+            Self::PitchHeadline(Vec::new()),
+            Self::ClaimCards(Vec::new()),
+            Self::FeeSummary(Vec::new()),
         ]
     }
 }
@@ -444,6 +453,24 @@ list_section!(
     "activity_log",
     "Activity log",
     "Nothing has been logged on this matter yet."
+);
+list_section!(
+    PitchHeadlineSection,
+    "pitch_headline",
+    "Pitch headline",
+    "No pitch has been written on this matter yet."
+);
+list_section!(
+    ClaimCardsSection,
+    "claim_cards",
+    "Claim cards",
+    "No claims have been carded on this matter yet."
+);
+list_section!(
+    FeeSummarySection,
+    "fee_summary",
+    "Fee summary",
+    "No fees have been summarized on this matter yet."
 );
 
 #[component]
@@ -604,6 +631,9 @@ pub fn SectionBody(view: SectionView) -> Element {
         }
         SectionView::RedlineView(rows) => rsx! { transactional::RedlineViewSection { rows } },
         SectionView::ActivityLog(rows) => rsx! { ActivityLogSection { rows } },
+        SectionView::PitchHeadline(rows) => rsx! { PitchHeadlineSection { rows } },
+        SectionView::ClaimCards(rows) => rsx! { ClaimCardsSection { rows } },
+        SectionView::FeeSummary(rows) => rsx! { FeeSummarySection { rows } },
     }
 }
 
@@ -616,7 +646,7 @@ pub(crate) mod tests {
     /// wasm build of this crate never links `rules`; the server-side test
     /// below proves the two agree.
     fn rules_section_count() -> usize {
-        50
+        53
     }
 
     pub(super) fn render(view: SectionView) -> String {

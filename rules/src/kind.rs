@@ -197,6 +197,10 @@ pub enum Kind {
     /// (LAW-235). The page reads a matter's history instead of working its
     /// deadlines; the activity-log section is its spine.
     DayLog,
+    /// A litigation pitch: the claim in one line, one card per claim, and
+    /// what pursuing it costs (LAW-223). The page a lawyer pitches from,
+    /// and the client reads — nothing on it is firm-only.
+    LitigationPitch,
 }
 
 /// The group a [`Kind`] belongs to, read by `/notations`' kind catalog
@@ -307,6 +311,7 @@ impl Kind {
         Kind::EstatePlanConsole,
         Kind::ClosingRoom,
         Kind::DayLog,
+        Kind::LitigationPitch,
     ];
 
     /// The frontmatter string this kind is written as.
@@ -350,6 +355,7 @@ impl Kind {
             Kind::EstatePlanConsole => "estate_plan_console",
             Kind::ClosingRoom => "closing_room",
             Kind::DayLog => "day_log",
+            Kind::LitigationPitch => "litigation_pitch",
         }
     }
 
@@ -428,6 +434,9 @@ impl Kind {
                 "A matter dashboard: closing checklist, signatures, and open terms"
             }
             Kind::DayLog => "A matter dashboard: the matter's activity, one dated entry per day",
+            Kind::LitigationPitch => {
+                "A litigation pitch: the claim in one line, one card per claim, and what it costs"
+            }
         }
     }
 
@@ -488,7 +497,8 @@ impl Kind {
             | Kind::EngagementBillingRecords
             | Kind::EstatePlanConsole
             | Kind::ClosingRoom
-            | Kind::DayLog => false,
+            | Kind::DayLog
+            | Kind::LitigationPitch => false,
         }
     }
 
@@ -544,7 +554,8 @@ impl Kind {
             | Kind::EngagementBillingRecords
             | Kind::EstatePlanConsole
             | Kind::ClosingRoom
-            | Kind::DayLog => false,
+            | Kind::DayLog
+            | Kind::LitigationPitch => false,
         }
     }
 
@@ -572,6 +583,7 @@ impl Kind {
                 | Kind::EstatePlanConsole
                 | Kind::ClosingRoom
                 | Kind::DayLog
+                | Kind::LitigationPitch
         )
     }
 
@@ -703,7 +715,8 @@ impl Kind {
             | Kind::EngagementBillingRecords
             | Kind::EstatePlanConsole
             | Kind::ClosingRoom
-            | Kind::DayLog => "plain",
+            | Kind::DayLog
+            | Kind::LitigationPitch => "plain",
         }
     }
 
@@ -759,7 +772,8 @@ impl Kind {
             | Kind::EngagementBillingRecords
             | Kind::EstatePlanConsole
             | Kind::ClosingRoom
-            | Kind::DayLog => Category::MatterDashboard,
+            | Kind::DayLog
+            | Kind::LitigationPitch => Category::MatterDashboard,
             // Asset-lane-only classifications: never declared in a
             // template's frontmatter, so never shown on `/notations`.
             Kind::Transcript
@@ -861,6 +875,7 @@ impl Kind {
                 | Kind::EstatePlanConsole
                 | Kind::ClosingRoom
                 | Kind::DayLog
+                | Kind::LitigationPitch
                 | Kind::Transcript
                 | Kind::InboundContract
                 | Kind::CertificateOfNaturalization
@@ -914,7 +929,8 @@ impl Kind {
                 | Kind::EngagementBillingRecords
                 | Kind::EstatePlanConsole
                 | Kind::ClosingRoom
-                | Kind::DayLog => false,
+                | Kind::DayLog
+                | Kind::LitigationPitch => false,
             },
             // A matter page's `kind:` in a Project manifest's `pages:` block:
             // exactly the dashboard kinds.
@@ -1280,7 +1296,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_kinds_are_exactly_the_thirteen_catalog_entries() {
+    fn dashboard_kinds_are_exactly_the_fourteen_catalog_entries() {
         let dashboards: Vec<&str> = Kind::ALL
             .iter()
             .filter(|k| k.is_dashboard())
@@ -1302,6 +1318,7 @@ mod tests {
                 "estate_plan_console",
                 "closing_room",
                 "day_log",
+                "litigation_pitch",
             ],
         );
     }
