@@ -9,6 +9,7 @@
 //! (`src/bin/reconcile_trigger.rs`).
 
 use anyhow::{Context, Result};
+use chrono::Datelike;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,10 +22,11 @@ async fn main() -> Result<()> {
 
     let now = chrono::Utc::now();
     let run_id = store::sandbox_usage::billing_period(now.year(), now.month() as u8);
-    let target = workflows::trigger::trigger_target("NAVIGATOR_DBOS_SANDBOX_CREDIT_RESET_ENABLED", |name| {
-        std::env::var(name).ok()
-    })
-    .context("selecting the SandboxCreditReset trigger ingress")?;
+    let target =
+        workflows::trigger::trigger_target("NAVIGATOR_DBOS_SANDBOX_CREDIT_RESET_ENABLED", |name| {
+            std::env::var(name).ok()
+        })
+        .context("selecting the SandboxCreditReset trigger ingress")?;
     match target {
         workflows::trigger::TriggerTarget::Dbos { ingress, token } => {
             workflows::trigger::start_dbos_reconcile(

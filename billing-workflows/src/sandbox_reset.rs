@@ -79,29 +79,37 @@ impl SandboxCreditResetService {
         _req: Json<SandboxResetRequest>,
     ) -> Result<Json<SandboxResetReport>, HandlerError> {
         let surreal = self.surreal.clone();
-        let (closed_period, new_period, granted) = ctx
+        let grant_json = ctx
             .run(move || async move {
                 // The month that just closed, and the month being granted.
                 // The `billing_period` spelling is the ledger's own.
                 let now = chrono::Utc::now();
                 let (year, month) = match now.month() {
-                    1 => (now.year() - 1, 12_u8),
+                    1 => (now.year() - 1, 12_u32),
                     m => (now.year(), m - 1),
                 };
-                let closed_period = sandbox_usage::billing_period(year, month);
-                let new_period = sandbox_usage::billing_period(now.year(), now.month_u32() as u8);
+                let closed_period = sandbox_usage::billing_period(year, month as u8);
+                let new_period = sandbox_usage::billing_period(now.year(), now.month() as u8);
 
                 let pg = PostgresDb::from_env()
                     .await
-                    .map_err(|error| TerminalError::new(format!("Postgres: {error}")))?;
-                let granted = grant_active_subscribers(&pg, &surreal, &new_period).await?;
-                Ok((closed_period, new_period, granted))
+                    .map_err(|error| HandlerError::from(anyhow::anyhow!("Postgres: {error}")))?;
+                let granted = grant_active_subscribers(&pg, &surreal, &new_period)
+                    .await
+                    .map_err(HandlerError::from)?;
+                serde_json::to_string(&(closed_period, new_period, granted)).map_err(|error| {
+                    HandlerError::from(anyhow::anyhow!("journal grant result: {error}"))
+                })
             })
             .name("grant")
             .await?;
+        let (closed_period, new_period, granted): (String, String, usize) =
+            serde_json::from_str(&grant_json)
+                .map_err(|error| HandlerError::from(anyhow::anyhow!("unjournal grant: {error}")))?;
 
         let surreal = self.surreal.clone();
-        let report = ctx
+        let closed = closed_period.clone();
+        let report_json = ctx
             .run(move || async move {
                 // A terminal error, not a silent skip: overage is promised
                 // à la carte, so an unconfigured Xero must fail the run and
@@ -111,11 +119,19 @@ impl SandboxCreditResetService {
                 })?;
                 let pg = PostgresDb::from_env()
                     .await
-                    .map_err(|error| TerminalError::new(format!("Postgres: {error}")))?;
-                invoice_closed_overage(&mut *billing, &pg, &surreal, &closed_period).await
+                    .map_err(|error| HandlerError::from(anyhow::anyhow!("Postgres: {error}")))?;
+                let report = invoice_closed_overage(&mut billing, &pg, &surreal, &closed)
+                    .await
+                    .map_err(HandlerError::from)?;
+                serde_json::to_string(&report).map_err(|error| {
+                    HandlerError::from(anyhow::anyhow!("journal invoice report: {error}"))
+                })
             })
             .name("invoice_overage")
             .await?;
+        let report: SandboxResetReport = serde_json::from_str(&report_json).map_err(|error| {
+            HandlerError::from(anyhow::anyhow!("unjournal invoice report: {error}"))
+        })?;
 
         Ok(Json(SandboxResetReport {
             new_period,
@@ -263,7 +279,7 @@ mod tests {
     use super::{grant_active_subscribers, invoice_closed_overage, overage_invoice_key};
     use billing::StubBillingProvider;
     use sqlx::postgres::{PgConnectOptions, PgSslMode};
-    use sqlx::{PgPool, AssertSqlSafe};
+    use sqlx::{AssertSqlSafe, PgPool};
     use store::purchases::{Cadence, NewPurchase};
     use store::sandbox_usage::MeterDecision;
     use store::surreal::test_support::mem;
@@ -405,11 +421,10 @@ mod tests {
         let surreal = mem().await;
         let person = overdrawn_subscriber(&pg, &surreal).await;
 
-        let stub = StubBillingProvider::new();
-        let report =
-            invoice_closed_overage(&mut &stub, &pg, &surreal, "2026-10")
-                .await
-                .unwrap();
+        let mut stub = StubBillingProvider::new();
+        let report = invoice_closed_overage(&mut stub, &pg, &surreal, "2026-10")
+            .await
+            .unwrap();
 
         assert_eq!(report.overage_invoiced, 1, "the 125-cent overage is billed");
         assert_eq!(report.overage_skipped, 0);
@@ -440,11 +455,11 @@ mod tests {
         let surreal = mem().await;
         let person = overdrawn_subscriber(&pg, &surreal).await;
 
-        let stub = StubBillingProvider::new();
-        let first = invoice_closed_overage(&mut &stub, &pg, &surreal, "2026-10")
+        let mut stub = StubBillingProvider::new();
+        let first = invoice_closed_overage(&mut stub, &pg, &surreal, "2026-10")
             .await
             .unwrap();
-        let second = invoice_closed_overage(&mut &stub, &pg, &surreal, "2026-10")
+        let second = invoice_closed_overage(&mut stub, &pg, &surreal, "2026-10")
             .await
             .unwrap();
 
@@ -480,8 +495,8 @@ mod tests {
         ));
 
         // No Nautilus Purchase anywhere: the subscriber's purchase is gone.
-        let stub = StubBillingProvider::new();
-        let report = invoice_closed_overage(&mut &stub, &pg, &surreal, "2026-10")
+        let mut stub = StubBillingProvider::new();
+        let report = invoice_closed_overage(&mut stub, &pg, &surreal, "2026-10")
             .await
             .unwrap();
 
