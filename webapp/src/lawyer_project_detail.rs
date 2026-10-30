@@ -238,18 +238,8 @@ pub async fn project_notation_board(
             .get(&notation.state)
             .cloned()
             .or_else(|| Some(notation.updated_at.to_rfc3339()));
-        // The run's pinned digest, falling back through the store-template
-        // binding for runs opened before the field existed (LAW-201).
-        let pinned_sha = notation
-            .template_body_sha256
-            .clone()
-            .or_else(|| template.body_sha256.clone());
-        let template_stale = store::templates::run_is_stale(
-            pinned_sha.as_deref(),
-            repository_templates
-                .get(&template.code)
-                .map(|source| source.body_sha256.as_str()),
-        );
+        let template_stale =
+            notation_run_is_stale(&notation, &template, &repository_templates);
         started.insert(notation.template_id);
         rows.push(ProjectNotationRow {
             template_code: template.code,
@@ -301,6 +291,28 @@ pub async fn project_notation_board(
 struct RepositoryTemplate {
     body_sha256: String,
     workflow_states: Vec<String>,
+}
+
+/// The run's staleness verdict against the template's current source
+/// definition. The run's pinned digest falls back through the
+/// store-template binding for runs opened before the field existed
+/// (LAW-201).
+#[cfg(feature = "server")]
+fn notation_run_is_stale(
+    run: &store::notations::Notation,
+    template: &store::templates::Template,
+    repository_templates: &std::collections::BTreeMap<String, RepositoryTemplate>,
+) -> bool {
+    let pinned_sha = run
+        .template_body_sha256
+        .clone()
+        .or_else(|| template.body_sha256.clone());
+    store::templates::run_is_stale(
+        pinned_sha.as_deref(),
+        repository_templates
+            .get(&template.code)
+            .map(|source| source.body_sha256.as_str()),
+    )
 }
 
 /// Read current blueprint definitions without importing versions or opening runs.
