@@ -19,6 +19,9 @@ const GOOGLE_TOKEN_API: &str = "https://oauth2.googleapis.com/token";
 const MAX_SEARCH_RESULTS: u8 = 25;
 /// Gmail's 25 MB message limit, measured on the encoded MIME message.
 const MAX_MESSAGE_BYTES: u64 = 25_000_000;
+/// The asset-lane kind a `mail parse` file-path upload takes when `--kind`
+/// is not passed: mail correspondence is served correspondence.
+const DEFAULT_PARSE_UPLOAD_KIND: &str = "letter";
 
 const DRAFT_ATTACH_HELP: &str = "\
 Attachments:
@@ -85,12 +88,29 @@ pub enum MailAction {
         #[arg(long)]
         host: Option<String>,
     },
+    /// File one message as a matter Communication: a Gmail web-URL message, a
+    /// local .eml, or a PDF/file path through the document-upload lane.
+    Parse {
+        /// Gmail web URL (copied from the browser), a local .eml path, or a
+        /// local PDF/file path to upload as a document.
+        reference: String,
+        /// Matter code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        /// Navigator host. Defaults to host in navigator.yaml.
+        #[arg(long)]
+        host: Option<String>,
+        /// Asset-lane kind for a file-path upload. Defaults to `letter`.
+        #[arg(long, value_parser = crate::parse_asset_kind)]
+        kind: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Operation {
     SearchThreads,
     ReadThread,
+    ReadMessage,
     ReadProfile,
     CreateDraft,
     UpdateDraft,
@@ -103,6 +123,11 @@ fn endpoint(
     match operation {
         Operation::SearchThreads => ("GET", vec!["users", "me", "threads"], None),
         Operation::ReadThread => ("GET", vec!["users", "me", "threads"], id.map(str::to_owned)),
+        Operation::ReadMessage => (
+            "GET",
+            vec!["users", "me", "messages"],
+            id.map(str::to_owned),
+        ),
         Operation::ReadProfile => ("GET", vec!["users", "me", "profile"], None),
         Operation::CreateDraft => ("POST", vec!["users", "me", "drafts"], None),
         Operation::UpdateDraft => ("PUT", vec!["users", "me", "drafts"], id.map(str::to_owned)),
@@ -193,6 +218,18 @@ impl GmailClient {
     async fn thread(&self, id: &str) -> Result<GmailThread> {
         self.call(Operation::ReadThread, Some(id), &[("format", "full")], None)
             .await
+    }
+
+    /// One message in `format=full`, the shape `mail file` and `mail parse`
+    /// read headers, bodies, and attachments from.
+    async fn message(&self, id: &str) -> Result<GmailMessage> {
+        self.call(
+            Operation::ReadMessage,
+            Some(id),
+            &[("format", "full")],
+            None,
+        )
+        .await
     }
 
     async fn profile(&self) -> Result<GmailProfile> {
@@ -776,6 +813,176 @@ fn source_reference(mailbox: &str, message_id: &str) -> String {
     format!("gmail:{}:{message_id}", mailbox.trim().to_ascii_lowercase())
 }
 
+/// The Gmail message id a reference names: a Gmail web URL copied from the
+/// browser (`https://mail.google.com/mail/u/0/#inbox/<id>`, the legacy
+/// `?th=<id>` form included) or a bare Gmail message id. None when the
+/// reference is neither, so a misspelled file path falls through to the
+/// caller's file handling.
+fn gmail_message_id(reference: &str) -> Option<String> {
+    if let Ok(url) = Url::parse(reference) {
+        if !url.host_str()?.ends_with("mail.google.com") {
+            return None;
+        }
+        if let Some((_, id)) = url.query_pairs().find(|(name, _)| name == "th") {
+            return Some(id.into_owned()).filter(|id| is_gmail_id(id));
+        }
+        let id = url
+            .fragment()?
+            .rsplit('/')
+            .find(|segment| !segment.is_empty())?;
+        return Some(id.to_string()).filter(|id| is_gmail_id(id));
+    }
+    Some(reference.to_string()).filter(|id| is_gmail_id(id))
+}
+
+/// Gmail message ids are base64url strings (commonly 16 characters) with
+/// digits in them; the digit requirement keeps a search term or misspelled
+/// path from looking like an id.
+fn is_gmail_id(id: &str) -> bool {
+    (8..=128).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && id.bytes().any(|b| b.is_ascii_digit())
+}
+
+/// The Communication request body for one filed message. Pure, so the Gmail
+/// and .eml paths cannot drift apart.
+fn communication_request(
+    mailbox: &str,
+    from: &str,
+    to: &str,
+    subject: Option<&str>,
+    at: &str,
+    body: &str,
+    message_id: &str,
+) -> serde_json::Value {
+    let direction =
+        if email_from_address(from).as_deref() == Some(mailbox.to_ascii_lowercase().as_str()) {
+            "outbound"
+        } else {
+            "inbound"
+        };
+    let counterparty = if direction == "inbound" { from } else { to };
+    json!({
+        "channel": if direction == "inbound" { "email_inbound" } else { "email_outbound" },
+        "direction": direction,
+        "counterparty": counterparty,
+        "at": at,
+        "body": body,
+        "subject": subject,
+        "source_ref": source_reference(mailbox, message_id),
+    })
+}
+
+/// One filed .eml message's Communication request body. The mailbox decides
+/// direction; the Message-ID header (or, absent one, the content digest)
+/// scopes the source reference so re-filing the same message dedupes.
+///
+/// # Errors
+///
+/// [`anyhow::Error`] when the bytes are not a MIME message, carry no text
+/// body, carry attachments, or have no Date header.
+fn eml_communication(mailbox: &str, bytes: &[u8]) -> Result<serde_json::Value> {
+    let message = mail_parser::MessageParser::default()
+        .parse(bytes)
+        .ok_or_else(|| anyhow!("not a MIME email message"))?;
+    let at = eml_sent_at(message.date())?;
+    let body = message
+        .body_text(0)
+        .map(|body| body.trim().to_string())
+        .filter(|body| !body.is_empty())
+        .ok_or_else(|| anyhow!("the .eml has no supported text body"))?;
+    let names: Vec<&str> = {
+        use mail_parser::MimeHeaders as _;
+        message
+            .attachments()
+            .filter_map(|part| part.attachment_name())
+            .collect()
+    };
+    if !names.is_empty() {
+        return Err(anyhow!(
+            "the .eml carries attachments ({}); file them as documents instead — nothing was filed",
+            names.join(", ")
+        ));
+    }
+    Ok(communication_request(
+        mailbox,
+        &address_text(message.from()),
+        &address_text(message.to()),
+        message.subject(),
+        &at,
+        &body,
+        &eml_message_ref(message.message_id(), bytes),
+    ))
+}
+
+/// The Date header as an RFC 3339 instant, read as UTC: the timestamp the
+/// Communication log shows alongside the message.
+///
+/// # Errors
+///
+/// [`anyhow::Error`] when there is no Date header or it is out of range.
+fn eml_sent_at(date: Option<&mail_parser::DateTime>) -> Result<String> {
+    let date = date.ok_or_else(|| anyhow!("the .eml has no Date header"))?;
+    chrono::NaiveDate::from_ymd_opt(
+        i32::from(date.year),
+        u32::from(date.month),
+        u32::from(date.day),
+    )
+    .and_then(|sent| {
+        sent.and_hms_opt(
+            u32::from(date.hour),
+            u32::from(date.minute),
+            u32::from(date.second),
+        )
+    })
+    .map(|sent| sent.and_utc().to_rfc3339())
+    .ok_or_else(|| anyhow!("the .eml Date header is out of range"))
+}
+
+/// The source reference for a filed .eml: its Message-ID without the angle
+/// brackets, else a content digest for messages that never carried one.
+fn eml_message_ref(message_id: Option<&str>, bytes: &[u8]) -> String {
+    use sha2::Digest as _;
+    if let Some(id) = message_id.map(str::trim).filter(|id| !id.is_empty()) {
+        return id.trim_matches(['<', '>']).to_string();
+    }
+    let digest = sha2::Sha256::digest(bytes);
+    format!(
+        "sha256:{:02x}",
+        digest
+            .iter()
+            .take(8)
+            .fold(0u128, |acc, b| (acc << 8) | u128::from(*b))
+    )
+}
+
+/// `From`/`To` as the filed Communication shows them: `Name <a@b>` when the
+/// message carries a display name, the bare address otherwise.
+fn address_text(address: Option<&mail_parser::Address<'_>>) -> String {
+    match address {
+        None => String::new(),
+        Some(mail_parser::Address::List(addrs)) => {
+            addrs.iter().map(addr_text).collect::<Vec<_>>().join(", ")
+        }
+        Some(mail_parser::Address::Group(groups)) => groups
+            .iter()
+            .flat_map(|group| group.addresses.iter().map(addr_text))
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
+}
+
+fn addr_text(addr: &mail_parser::Addr<'_>) -> String {
+    match (addr.name(), addr.address()) {
+        (Some(name), Some(address)) => format!("{name} <{address}>"),
+        (Some(name), None) => name.to_string(),
+        (None, Some(address)) => address.to_string(),
+        (None, None) => String::new(),
+    }
+}
+
 fn scoped_query(query: &str, project: Option<&str>) -> String {
     let Some(email) = project.and_then(|_| client_contact_from_manifest()) else {
         return query.to_owned();
@@ -1077,6 +1284,20 @@ async fn run_inner(action: MailAction) -> Result<()> {
             project,
             host,
         } => file_thread(&thread, project.as_deref(), host.as_deref()).await,
+        MailAction::Parse {
+            reference,
+            project,
+            host,
+            kind,
+        } => {
+            parse_command(
+                &reference,
+                project.as_deref(),
+                host.as_deref(),
+                kind.as_deref(),
+            )
+            .await
+        }
     }
 }
 
@@ -1293,33 +1514,170 @@ struct FileTarget<'a> {
     mailbox: &'a str,
 }
 
-async fn file_message(target: &FileTarget<'_>, message: &GmailMessage, body: &str) -> Result<()> {
-    let from = header(message, "From").unwrap_or_default();
-    let to = header(message, "To").unwrap_or_default();
-    let direction = if email_from_address(from).as_deref()
-        == Some(target.mailbox.to_ascii_lowercase().as_str())
-    {
-        "outbound"
-    } else {
-        "inbound"
-    };
-    let counterparty = if direction == "inbound" { from } else { to };
-    let request = json!({
-        "channel": if direction == "inbound" { "email_inbound" } else { "email_outbound" },
-        "direction": direction,
-        "counterparty": counterparty,
-        "at": now_or_message_date(message)?,
-        "body": body,
-        "subject": header(message, "Subject"),
-        "source_ref": source_reference(target.mailbox, &message.id),
+/// `mail parse`: file one message as a matter Communication. A Gmail web URL
+/// (or message id) fetches through the read-only Gmail path `mail file`
+/// uses; a local .eml files from its own bytes; any other local file rides
+/// the existing `navigator document upload` lane as a document.
+async fn parse_command(
+    reference: &str,
+    project: Option<&str>,
+    host: Option<&str>,
+    kind: Option<&str>,
+) -> Result<()> {
+    if Path::new(reference).exists() {
+        return parse_local_file(reference, project, host, kind).await;
+    }
+    let message_id = gmail_message_id(reference).ok_or_else(|| {
+    anyhow!(
+            "the reference is neither an existing file, a Gmail web URL, nor a Gmail message id: {reference}"
+        )
+    })?;
+    parse_gmail_message(&message_id, project, host).await
+}
+
+async fn parse_gmail_message(
+    message_id: &str,
+    project: Option<&str>,
+    host: Option<&str>,
+) -> Result<()> {
+    let local = crate::projects::manifest::read(Path::new("."));
+    let project_code = project
+        .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
+        .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
+    let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
+    let (base, navigator_token) = crate::remote::resolve(host)?;
+    let project_id =
+        crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
+            .await?;
+    let gmail = client().await?;
+    let profile = gmail.profile().await?;
+    let message = gmail.message(message_id).await?;
+    let payload = message
+        .payload
+        .as_ref()
+        .ok_or_else(|| anyhow!("message {message_id} has no supported body"))?;
+    let mut names = Vec::new();
+    attachments(payload, &mut names);
+    if !names.is_empty() {
+        return Err(anyhow!(
+            "message {message_id} carries attachments ({}); \
+             this CLI cannot file email attachments yet, so nothing was filed",
+            names.join(", ")
+        ));
+    }
+    let body = plain_text(payload)
+        .filter(|body| !body.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow!("message {message_id} has no supported text body; nothing was filed")
+        })?;
+    let expected_contact = local.as_ref().and_then(|manifest| {
+        manifest_project_contact(
+            Some(project_code),
+            manifest.project.as_deref(),
+            manifest.client_dri.as_deref(),
+        )
     });
+    if let Some(contact) = expected_contact {
+        if !message_mentions_contact(&message, &contact) {
+            eprintln!(
+                "warning: message does not appear to belong to this Project's client contact (message {message_id})"
+            );
+        }
+    }
+    let target = FileTarget {
+        base: &base,
+        navigator_token: &navigator_token,
+        project_id,
+        mailbox: &profile.email_address,
+    };
+    file_message(&target, &message, &body).await?;
+    println!("Filed message {message_id} as a Communication");
+    Ok(())
+}
+
+async fn parse_local_file(
+    reference: &str,
+    project: Option<&str>,
+    host: Option<&str>,
+    kind: Option<&str>,
+) -> Result<()> {
+    let local = crate::projects::manifest::read(Path::new("."));
+    let project_code = project
+        .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
+        .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
+    let path = Path::new(reference);
+    if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("eml"))
+    {
+        return parse_eml_file(path, project_code, host).await;
+    }
+    let kind = kind.unwrap_or(DEFAULT_PARSE_UPLOAD_KIND);
+    println!("Uploading {} as a {kind} document", path.display());
+    let exit = crate::remote::document_upload(
+        host,
+        project_code,
+        path,
+        kind,
+        Some("internal"),
+        None,
+        None,
+        None,
+        None,
+        &crate::remote::DocumentExecution::default(),
+        None,
+    )
+    .await;
+    if exit == std::process::ExitCode::SUCCESS {
+        Ok(())
+    } else {
+        Err(anyhow!("document upload failed"))
+    }
+}
+
+async fn parse_eml_file(path: &Path, project_code: &str, host: Option<&str>) -> Result<()> {
+    let local = crate::projects::manifest::read(Path::new("."));
+    let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
+    let (base, navigator_token) = crate::remote::resolve(host)?;
+    let project_id =
+        crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
+            .await?;
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let gmail = client().await?;
+    let profile = gmail.profile().await?;
+    let request = eml_communication(&profile.email_address, &bytes)?;
+    let target = FileTarget {
+        base: &base,
+        navigator_token: &navigator_token,
+        project_id,
+        mailbox: &profile.email_address,
+    };
+    post_communication(&target, &request).await?;
+    println!("Filed {} as a Communication", path.display());
+    Ok(())
+}
+
+async fn file_message(target: &FileTarget<'_>, message: &GmailMessage, body: &str) -> Result<()> {
+    let request = communication_request(
+        target.mailbox,
+        header(message, "From").unwrap_or_default(),
+        header(message, "To").unwrap_or_default(),
+        header(message, "Subject"),
+        &now_or_message_date(message)?,
+        body,
+        &message.id,
+    );
+    post_communication(target, &request).await
+}
+
+async fn post_communication(target: &FileTarget<'_>, request: &serde_json::Value) -> Result<()> {
     let response = reqwest::Client::new()
         .post(format!(
             "{}/app/api/projects/{}/communications",
             target.base, target.project_id
         ))
         .bearer_auth(target.navigator_token)
-        .json(&request)
+        .json(request)
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
@@ -1363,9 +1721,161 @@ mod tests {
     fn gmail_endpoints_expose_reads_and_draft_writes_only() {
         assert_eq!(endpoint(Operation::SearchThreads, None).0, "GET");
         assert_eq!(endpoint(Operation::ReadThread, Some("thread-id")).0, "GET");
+        assert_eq!(
+            endpoint(Operation::ReadMessage, Some("message-id")).0,
+            "GET"
+        );
         assert_eq!(endpoint(Operation::ReadProfile, None).0, "GET");
         assert_eq!(endpoint(Operation::CreateDraft, None).0, "POST");
         assert_eq!(endpoint(Operation::UpdateDraft, Some("draft-id")).0, "PUT");
+    }
+
+    #[test]
+    fn gmail_web_urls_yield_their_message_id() {
+        assert_eq!(
+            gmail_message_id("https://mail.google.com/mail/u/0/#inbox/18fa3bc2d4e5f6a7").as_deref(),
+            Some("18fa3bc2d4e5f6a7")
+        );
+        assert_eq!(
+            gmail_message_id("https://mail.google.com/mail/u/1/#label/Work/AbC_-12345678")
+                .as_deref(),
+            Some("AbC_-12345678")
+        );
+        assert_eq!(
+            gmail_message_id("https://mail.google.com/mail/u/0/?ui=2&view=om&th=18fa3bc2d4e5f6a7")
+                .as_deref(),
+            Some("18fa3bc2d4e5f6a7")
+        );
+        assert_eq!(
+            gmail_message_id("18fa3bc2d4e5f6a7").as_deref(),
+            Some("18fa3bc2d4e5f6a7")
+        );
+    }
+
+    #[test]
+    fn non_gmail_references_name_no_message() {
+        assert_eq!(
+            gmail_message_id("https://example.com/mail/u/0/#inbox/18fa3bc2d4e5f6a7"),
+            None
+        );
+        assert_eq!(
+            gmail_message_id("https://mail.google.com/mail/u/0/#search/retainer"),
+            None
+        );
+        assert_eq!(gmail_message_id("notes/draft-body.txt"), None);
+        assert_eq!(gmail_message_id("short"), None);
+    }
+
+    #[test]
+    fn communication_requests_carry_direction_counterparty_and_source() {
+        let inbound = communication_request(
+            "lawyer@neonlaw.test",
+            "Client <client@example.test>",
+            "lawyer@neonlaw.test",
+            Some("Retainer questions"),
+            "2026-10-30T14:03:00+00:00",
+            "Can I sign electronically?",
+            "<abc-123@example.test>",
+        );
+        assert_eq!(inbound["channel"], "email_inbound");
+        assert_eq!(inbound["direction"], "inbound");
+        assert_eq!(inbound["counterparty"], "Client <client@example.test>");
+        assert_eq!(
+            inbound["source_ref"],
+            "gmail:lawyer@neonlaw.test:<abc-123@example.test>"
+        );
+
+        let outbound = communication_request(
+            "lawyer@neonlaw.test",
+            "lawyer@neonlaw.test",
+            "client@example.test",
+            None,
+            "2026-10-30T14:03:00+00:00",
+            "Draft is ready for your review.",
+            "18fa3bc2d4e5f6a7",
+        );
+        assert_eq!(outbound["channel"], "email_outbound");
+        assert_eq!(outbound["direction"], "outbound");
+        assert_eq!(outbound["counterparty"], "client@example.test");
+    }
+
+    #[test]
+    fn an_eml_files_with_its_headers_and_rejects_non_mime_bytes() {
+        const PLAIN: &str = "Message-ID: <abc-123@example.test>\r\n\
+From: Client <client@example.test>\r\n\
+To: lawyer@neonlaw.test\r\n\
+Subject: Retainer questions\r\n\
+Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+Can I sign electronically?\r\n";
+        let request = eml_communication("lawyer@neonlaw.test", PLAIN.as_bytes()).unwrap();
+        assert_eq!(request["channel"], "email_inbound");
+        assert_eq!(request["counterparty"], "Client <client@example.test>");
+        assert_eq!(request["at"], "2026-10-30T14:03:00+00:00");
+        assert_eq!(request["body"], "Can I sign electronically?");
+        assert_eq!(request["subject"], "Retainer questions");
+        assert_eq!(
+            request["source_ref"],
+            "gmail:lawyer@neonlaw.test:abc-123@example.test"
+        );
+        assert!(eml_communication("lawyer@neonlaw.test", b"not a MIME message").is_err());
+    }
+
+    #[test]
+    fn an_eml_with_attachments_is_refused_before_filing() {
+        const WITH_ATTACHMENT: &str = "From: client@example.test\r\n\
+To: lawyer@neonlaw.test\r\n\
+Subject: The signed order\r\n\
+Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n\
+\r\n\
+--BOUND\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+See the attached order.\r\n\
+--BOUND\r\n\
+Content-Type: application/pdf\r\n\
+Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
+\r\n\
+%PDF-1.4\r\n\
+--BOUND--\r\n";
+        let error = eml_communication("lawyer@neonlaw.test", WITH_ATTACHMENT.as_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("order.pdf"), "{error}");
+        assert!(error.contains("nothing was filed"), "{error}");
+    }
+
+    #[test]
+    fn an_eml_without_a_text_body_or_date_is_refused() {
+        const NO_BODY: &str = "From: client@example.test\r\n\
+To: lawyer@neonlaw.test\r\n\
+Subject: Empty\r\n\
+Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+   \r\n";
+        const NO_DATE: &str = "From: client@example.test\r\n\
+To: lawyer@neonlaw.test\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+Hello\r\n";
+        let error = eml_communication("lawyer@neonlaw.test", NO_BODY.as_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no supported text body"), "{error}");
+        let error = eml_communication("lawyer@neonlaw.test", NO_DATE.as_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no Date header"), "{error}");
+    }
+
+    #[test]
+    fn agent_contract_documents_mail_parse_and_save() {
+        let contract = include_str!("projects/agent_contract.md");
+        assert!(contract.contains("navigator mail parse"));
     }
 
     #[test]

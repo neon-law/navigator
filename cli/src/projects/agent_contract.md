@@ -145,6 +145,9 @@ For a client email:
 * The attorney reviews the complete draft in Gmail before any separate sending action.
 * The CLI strips the `--` signature delimiter and an exact trailing `NAVIGATOR_GMAIL_SIGNATURE`, but not other prose, so
   inspect the draft.
+* To file a received message into the matter's Communication log, run `navigator mail parse <gmail-web-url>` (the URL
+  copied from the browser), `navigator mail parse <message.eml>`, or `navigator mail parse <document.pdf>` — the last
+  uploads through the document lane. Filing is a record write only; it never sends or archives in Gmail.
 
 ## Feedback
 
