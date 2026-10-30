@@ -1209,6 +1209,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261030030000_create_inbox_message_asset.sql"),
             ),
             (
+                "20261030120000_create_notation_machine_state.sql",
+                include_str!("../postgres/migrations/20261030120000_create_notation_machine_state.sql"),
+            ),
+            (
                 "20261030120000_create_project_task.sql",
                 include_str!("../postgres/migrations/20261030120000_create_project_task.sql"),
             ),
