@@ -23,6 +23,7 @@ members = [
     "archives",
     "billing",
     "billing-workflows",
+    "sandbox-skills",
     "telemetry",
     "word",
 ]
