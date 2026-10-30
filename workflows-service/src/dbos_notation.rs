@@ -821,9 +821,7 @@ END: {}
             !enabled(|name| (name == ENABLED_ENV).then(|| "false".to_owned()))
                 .expect("false is off")
         );
-        assert!(
-            !enabled(|name| (name == ENABLED_ENV).then(|| String::new())).expect("empty is off")
-        );
+        assert!(!enabled(|name| (name == ENABLED_ENV).then(String::new)).expect("empty is off"));
         assert!(
             enabled(|name| (name == ENABLED_ENV).then(|| "true".to_owned())).expect("true is on")
         );
