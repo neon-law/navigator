@@ -1845,9 +1845,15 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::firms::attach_brand(&db, firm.id, "worn-brand")
-            .await
-            .unwrap();
+        crate::firms::attach_brand(
+            &db,
+            crate::persons::Role::Owner,
+            None,
+            firm.id,
+            "worn-brand",
+        )
+        .await
+        .unwrap();
         let err = delete(&db, Role::Owner, None, worn.id).await.unwrap_err();
         assert!(matches!(err, BrandError::StillReferenced));
 

@@ -4564,9 +4564,15 @@ Sign: {{client.signature}}";
         )
         .await
         .expect("detach lawyer-shook from the seed practice");
-        store::firms::attach_brand(&surreal, other.id, "lawyer-shook")
-            .await
-            .expect("other firm wears lawyer-shook");
+        store::firms::attach_brand(
+            &surreal,
+            store::persons::Role::Owner,
+            None,
+            other.id,
+            "lawyer-shook",
+        )
+        .await
+        .expect("other firm wears lawyer-shook");
 
         let email = format!("walk-other-firm-{}@example.com", Uuid::now_v7());
         let resp = start_walk_on_brand(state, &views::brand::LAWYER_SHOOK_BRANDING, &email).await;

@@ -79,14 +79,18 @@ pub enum FirmCapability {
     /// moved brand's public copyright names, which is an ownership decision
     /// only Owner makes.
     MoveBrand,
+    /// Attach one of the deployment's closed house brands to a Firm. No
+    /// membership tier admits it — pointing the seat at a firm is the same
+    /// ownership decision moving it is.
+    AttachBrand,
 }
 
 impl FirmCapability {
     /// Whether a `person_firm_role` row carrying this membership tier admits
     /// this capability. `ViewDirectory` is open to every firm tier; only
     /// `Admin` membership may manage who else belongs to the Firm.
-    /// `ManageAdminDri` and `MoveBrand` admit no membership tier — Owner is
-    /// the only actor [`resolve`] ever grants them to.
+    /// `ManageAdminDri`, `MoveBrand`, and `AttachBrand` admit no membership
+    /// tier — Owner is the only actor [`resolve`] ever grants them to.
     #[must_use]
     fn admits(self, membership: FirmMembership) -> bool {
         match self {
@@ -101,7 +105,8 @@ impl FirmCapability {
             Self::ManageBrandContent
             | Self::ManageSummaryApprovals
             | Self::ManageAdminDri
-            | Self::MoveBrand => false,
+            | Self::MoveBrand
+            | Self::AttachBrand => false,
         }
     }
 
@@ -123,6 +128,7 @@ impl FirmCapability {
             Self::ManageSummaryApprovals => "manage_summary_approvals",
             Self::ManageRecoveryArchives => "manage_recovery_archives",
             Self::MoveBrand => "move_brand",
+            Self::AttachBrand => "attach_brand",
         }
     }
 
