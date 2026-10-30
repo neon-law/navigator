@@ -88,8 +88,7 @@ impl SearchBackends {
     pub fn from_env() -> Self {
         Self {
             case_law: Some(Arc::new(CourtListener::from_env())),
-            legal_aid: Descrybe::from_env()
-                .map(|d| Arc::new(d) as Arc<dyn SearchProvider>),
+            legal_aid: Descrybe::from_env().map(|d| Arc::new(d) as Arc<dyn SearchProvider>),
         }
     }
 }
@@ -114,7 +113,9 @@ impl CourtListener {
     pub fn from_env() -> Self {
         Self::new(
             "https://www.courtlistener.com".into(),
-            std::env::var("COURTLISTENER_TOKEN").ok().filter(|t| !t.is_empty()),
+            std::env::var("COURTLISTENER_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty()),
         )
     }
 
@@ -215,8 +216,12 @@ impl Descrybe {
     /// configured the provider.
     #[must_use]
     pub fn from_env() -> Option<Self> {
-        let base_url = std::env::var("DESCRYBE_BASE_URL").ok().filter(|u| !u.is_empty())?;
-        let api_key = std::env::var("DESCRYBE_API_KEY").ok().filter(|k| !k.is_empty())?;
+        let base_url = std::env::var("DESCRYBE_BASE_URL")
+            .ok()
+            .filter(|u| !u.is_empty())?;
+        let api_key = std::env::var("DESCRYBE_API_KEY")
+            .ok()
+            .filter(|k| !k.is_empty())?;
         Some(Self::new(base_url, api_key))
     }
 
@@ -255,7 +260,7 @@ impl SearchProvider for Descrybe {
 }
 
 /// Map a Descrybe search response onto [`SearchHit`]s. Tolerant by
-/// field, like the CourtListener parser.
+/// field, like the `CourtListener` parser.
 fn parse_descrybe(body: &str, limit: u32) -> Result<Vec<SearchHit>, SearchError> {
     #[derive(Deserialize)]
     struct Raw {
@@ -288,8 +293,8 @@ fn parse_descrybe(body: &str, limit: u32) -> Result<Vec<SearchHit>, SearchError>
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_courtlistener, parse_descrybe, CourtListener, Descrybe, SearchBackends,
-        SearchError, SearchProvider, SearchTerms,
+        parse_courtlistener, parse_descrybe, CourtListener, Descrybe, SearchBackends, SearchError,
+        SearchProvider, SearchTerms,
     };
     use serde_json::{json, Value};
     use wiremock::matchers::{method, path};
@@ -506,7 +511,7 @@ mod tests {
     fn parsers_respect_the_page_limit() {
         let body = r#"{"results": [{"caseName": "a"}, {"caseName": "b"}, {"caseName": "c"}]}"#;
         assert_eq!(parse_courtlistener(body, 2).unwrap().len(), 2);
-        assert_eq!(parse_courtlistener(r#"{}"#, 2).unwrap(), vec![]);
+        assert_eq!(parse_courtlistener(r"{}", 2).unwrap(), vec![]);
     }
 
     #[test]
