@@ -311,7 +311,8 @@ access decision wrong — a `client` recorded as `attorney` is a firm-side row, 
   survives in `PARTICIPATION_CLIENT_SIDE` only so a legacy row keeps reading client-side; promoting an adverse party to
   the firm lens is the one direction that must never happen by omission. A matter that needs the counterparty on record
   — so the conflict check can raise them later — writes a [Project Reference](glossary/project-reference.md) instead:
-  its own `project_reference` relation, which `store::access`, this policy, and every party list ignore by test.
+  its own `project_reference` relation. `store::access` and this policy never read it. The lawyer party roster lists
+  references under "Referenced, no standing on the matter"; the client lens never loads or renders them.
 - **`co_counsel`, `legal_aid_provider`** — outside counsel working the matter is a `lawyer` person. Give them the tier;
   the participation follows.
 
