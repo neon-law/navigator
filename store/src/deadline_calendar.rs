@@ -19,6 +19,7 @@
 //! reported rather than replaced with a second calendar.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use chrono::DateTime;
 use cloud::calendar::{CalendarError, CalendarEvent, CalendarService, StoredEvent};
@@ -127,26 +128,22 @@ pub async fn reconcile(
     }
     let recorded = recorded_calendar_id(&project);
     if dry_run {
-        return match recorded {
-            Some(calendar_id) => {
-                if calendar.calendar_exists(&calendar_id).await? {
-                    reconcile_rows(surreal, calendar, &calendar_id, &project, base_url, dry_run)
-                        .await
-                } else {
-                    Ok(MirrorReport::empty(
-                        MirrorOutcome::RecordedResourceMissing,
-                        dry_run,
-                    ))
-                }
+        return if let Some(calendar_id) = recorded {
+            if calendar.calendar_exists(&calendar_id).await? {
+                reconcile_rows(surreal, calendar, &calendar_id, &project, base_url, dry_run).await
+            } else {
+                Ok(MirrorReport::empty(
+                    MirrorOutcome::RecordedResourceMissing,
+                    dry_run,
+                ))
             }
-            None => {
-                // No calendar yet: a first pass would create one and insert
-                // every row. That plan needs no calendar to read.
-                let mut report = MirrorReport::empty(MirrorOutcome::Mirrored, dry_run);
-                report.creates_calendar = true;
-                plan_rows(surreal, &project, base_url, &mut report).await?;
-                Ok(report)
-            }
+        } else {
+            // No calendar yet: a first pass would create one and insert
+            // every row. That plan needs no calendar to read.
+            let mut report = MirrorReport::empty(MirrorOutcome::Mirrored, dry_run);
+            report.creates_calendar = true;
+            plan_rows(surreal, &project, base_url, &mut report).await?;
+            Ok(report)
         };
     }
     let ensured = ensure_calendar(surreal, project_id, calendar).await?;
@@ -331,7 +328,7 @@ pub fn report_line(report: &MirrorReport) -> String {
         report.deleted.len(),
     );
     if !report.failures.is_empty() {
-        line.push_str(&format!(" failed={}", report.failures.len()));
+        let _ = write!(line, " failed={}", report.failures.len());
     }
     if report.dry_run {
         line.push_str(" (dry run)");
@@ -374,7 +371,7 @@ pub fn deadline_event(
 /// role and authority kind, then the Project code.
 #[must_use]
 pub fn event_summary(deadline: &Deadline, project_code: &str) -> String {
-    let title = deadline.title.as_deref().map(str::trim).unwrap_or("");
+    let title = deadline.title.as_deref().map_or("", str::trim);
     let action = if !title.is_empty() {
         title.to_string()
     } else if deadline.calendar_role == "hearing" {
@@ -440,8 +437,7 @@ fn push_line(description: &mut String, line: &str) {
 fn event_sequence(deadline: &Deadline) -> Result<i32, MirrorError> {
     let fallback = || {
         DateTime::parse_from_rfc3339(&deadline.updated_at)
-            .map(|updated| updated.timestamp().max(0))
-            .unwrap_or(0)
+            .map_or(0, |updated| updated.timestamp().max(0))
     };
     let sequence = deadline.calendar_sequence.unwrap_or_else(fallback);
     i32::try_from(sequence).map_err(|_| {
@@ -491,7 +487,11 @@ pub fn body_sha(deadline: &Deadline, project_code: &str, base_url: Option<&str>)
         "base_url": base_url.map(str::trim).filter(|url| !url.is_empty()),
     });
     let digest = Sha256::digest(payload.to_string().as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest.iter() {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
 }
 
 #[cfg(test)]

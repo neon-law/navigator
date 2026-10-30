@@ -155,7 +155,7 @@ async fn one_matters_failure_reads_as_a_line_and_the_run_continues() {
     };
     let good = Uuid::now_v7();
     let bad = Uuid::now_v7();
-    let source = Matters::new(vec![
+    let mut source = Matters::new(vec![
         (good, "acme".to_string()),
         (bad, "unreachable".to_string()),
     ]);
