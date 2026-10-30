@@ -22,14 +22,14 @@ use workflows::social_publish::{send_credential, SendCredential, TokenRefreshCon
 use workflows::{SocialPublishReport, SocialPublishRequest};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Destination {
-    provider: SocialProvider,
-    account_id: String,
+pub(crate) struct Destination {
+    pub(crate) provider: SocialProvider,
+    pub(crate) account_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PostSnapshot {
-    brand_key: String,
+pub(crate) struct PostSnapshot {
+    pub(crate) brand_key: String,
     title: String,
     description: String,
     video_asset: Option<String>,
@@ -43,32 +43,32 @@ struct PostSnapshot {
     instagram_caption: Option<String>,
     threads_caption: Option<String>,
     youtube_caption: Option<String>,
-    destinations: Vec<Destination>,
+    pub(crate) destinations: Vec<Destination>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PublishOutcome {
-    provider: SocialProvider,
-    state: String,
+pub(crate) struct PublishOutcome {
+    pub(crate) provider: SocialProvider,
+    pub(crate) state: String,
     /// The provider's receipt for a confirmed post whose public link has not
     /// yet been read back.
     #[serde(default)]
-    link_pending: Option<String>,
+    pub(crate) link_pending: Option<String>,
     /// A known failure the provider asked to be retried later: a rate limit
     /// or a temporary error. Nothing was published.
     #[serde(default)]
-    retryable: bool,
+    pub(crate) retryable: bool,
 }
 
 const CONFIRMED: &str = "confirmed";
-const FAILED: &str = "failed";
-const UNKNOWN: &str = "unknown";
+pub(crate) const FAILED: &str = "failed";
+pub(crate) const UNKNOWN: &str = "unknown";
 /// A destination this deployment may not write to. It is recorded as a known
 /// pre-send failure and does not hold back the website article.
 const BLOCKED: &str = "blocked";
 
 impl PublishOutcome {
-    fn new(provider: SocialProvider, state: &str) -> Self {
+    pub(crate) fn new(provider: SocialProvider, state: &str) -> Self {
         Self {
             provider,
             state: state.into(),
@@ -81,13 +81,13 @@ impl PublishOutcome {
 /// The journaled result of one destination step: continue with a value, or
 /// stop with the destination's outcome.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum Step<T> {
+pub(crate) enum Step<T> {
     Continue(T),
     Settled(PublishOutcome),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum ContainerStatus {
+pub(crate) enum ContainerStatus {
     Ready,
     Processing,
 }
@@ -97,12 +97,13 @@ enum ContainerStatus {
 /// Instagram documents polling a container's `status_code` once a minute for
 /// no more than five minutes; Threads recommends waiting about 30 seconds
 /// before publishing and reports readiness through `status`.
-struct ContainerPolicy {
-    interval: Duration,
-    checks: usize,
+#[derive(Clone, Copy)]
+pub(crate) struct ContainerPolicy {
+    pub(crate) interval: Duration,
+    pub(crate) checks: usize,
 }
 
-const fn container_policy(provider: SocialProvider) -> Option<ContainerPolicy> {
+pub(crate) const fn container_policy(provider: SocialProvider) -> Option<ContainerPolicy> {
     match provider {
         SocialProvider::Instagram => Some(ContainerPolicy {
             interval: Duration::from_secs(60),
@@ -123,6 +124,15 @@ const fn container_policy(provider: SocialProvider) -> Option<ContainerPolicy> {
 #[derive(Clone)]
 pub struct SocialPublisherService {
     publisher: Publisher,
+}
+
+impl SocialPublisherService {
+    /// The publisher both engines drive. The DBOS twin registers it so the
+    /// provider steps and store claims have exactly one implementation.
+    #[must_use]
+    pub fn publisher(&self) -> Publisher {
+        self.publisher.clone()
+    }
 }
 
 #[derive(Clone)]
@@ -149,8 +159,8 @@ pub struct ReconcileRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ReconcileReport {
-    started: usize,
+pub struct ReconcileReport {
+    pub started: usize,
 }
 
 #[restate_sdk::workflow(name = "SocialPublishReconciler")]
@@ -273,6 +283,59 @@ impl SocialPublisherService {
     }
 }
 
+/// The destination set and copy of a still-scheduled Post, read back from the
+/// store at run time. `None` when the Post is gone, no longer scheduled, or
+/// rescheduled since the request was made. Shared by the Restate handler and
+/// the DBOS twin's `load-scheduled-post` step.
+pub(crate) async fn scheduled_post_snapshot(
+    surreal: &SurrealDb,
+    post_id: Uuid,
+    requested_at: DateTime<Utc>,
+) -> Result<Option<PostSnapshot>, SnapshotError> {
+    let post = store::posts::find_by_id(surreal, post_id).await?;
+    let Some(post) = post else {
+        return Ok(None);
+    };
+    if post.status != "scheduled" || post.publish_at != Some(requested_at) {
+        return Ok(None);
+    }
+    let accounts = store::social_accounts::selected_for_brand(
+        surreal,
+        &post.brand_key,
+        &post.selected_social_accounts,
+    )
+    .await?;
+    Ok(Some(PostSnapshot {
+        brand_key: post.brand_key,
+        title: post.title,
+        description: post.description,
+        video_asset: post.video_asset,
+        vertical_video: post.vertical_video,
+        tiktok_ai_generated: post.tiktok_ai_generated,
+        publish_at: post.publish_at,
+        status: post.status,
+        facebook_caption: post.facebook_caption,
+        instagram_caption: post.instagram_caption,
+        threads_caption: post.threads_caption,
+        youtube_caption: post.youtube_caption,
+        destinations: accounts
+            .into_iter()
+            .map(|account| Destination {
+                provider: account.provider,
+                account_id: account.provider_account_id,
+            })
+            .collect(),
+    }))
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SnapshotError {
+    #[error("the scheduled Post could not be read")]
+    Post(#[from] store::posts::PostError),
+    #[error("the Brand's social accounts could not be read")]
+    Accounts(#[from] store::social_accounts::SocialAccountError),
+}
+
 #[restate_sdk::workflow(name = "SocialPublisher")]
 impl SocialPublisherService {
     #[restate_sdk::handler]
@@ -294,43 +357,10 @@ impl SocialPublisherService {
         let surreal = self.publisher.surreal.clone();
         let snapshot = ctx
             .run(move || async move {
-                let post = store::posts::find_by_id(&surreal, post_id)
+                scheduled_post_snapshot(&surreal, post_id, requested_at)
                     .await
-                    .map_err(HandlerError::from)?;
-                let Some(post) = post else {
-                    return Ok(Json(None::<PostSnapshot>));
-                };
-                if post.status != "scheduled" || post.publish_at != Some(requested_at) {
-                    return Ok(Json(None::<PostSnapshot>));
-                }
-                let accounts = store::social_accounts::selected_for_brand(
-                    &surreal,
-                    &post.brand_key,
-                    &post.selected_social_accounts,
-                )
-                .await
-                .map_err(HandlerError::from)?;
-                Ok(Json(Some(PostSnapshot {
-                    brand_key: post.brand_key,
-                    title: post.title,
-                    description: post.description,
-                    video_asset: post.video_asset,
-                    vertical_video: post.vertical_video,
-                    tiktok_ai_generated: post.tiktok_ai_generated,
-                    publish_at: post.publish_at,
-                    status: post.status,
-                    facebook_caption: post.facebook_caption,
-                    instagram_caption: post.instagram_caption,
-                    threads_caption: post.threads_caption,
-                    youtube_caption: post.youtube_caption,
-                    destinations: accounts
-                        .into_iter()
-                        .map(|account| Destination {
-                            provider: account.provider,
-                            account_id: account.provider_account_id,
-                        })
-                        .collect(),
-                })))
+                    .map(Json)
+                    .map_err(HandlerError::from)
             })
             .name("load-scheduled-post")
             .await?
@@ -395,11 +425,13 @@ impl SocialPublisherService {
 }
 
 /// Attempts for a destination the provider rate-limited or failed temporarily.
-const RETRYABLE_ATTEMPTS: usize = 3;
-const RETRY_AFTER: Duration = Duration::from_secs(120);
+pub(crate) const RETRYABLE_ATTEMPTS: usize = 3;
+pub(crate) const RETRY_AFTER: Duration = Duration::from_secs(120);
+/// How often a `TikTok` upload task is polled while the provider processes it.
+pub(crate) const TIKTOK_POLL: Duration = Duration::from_secs(180);
 /// A provider can take a moment to expose a new post's public link.
-const PERMALINK_READS: usize = 3;
-const PERMALINK_READ_AFTER: Duration = Duration::from_secs(30);
+pub(crate) const PERMALINK_READS: usize = 3;
+pub(crate) const PERMALINK_READ_AFTER: Duration = Duration::from_secs(30);
 
 impl SocialPublisherService {
     /// Read a confirmed post's public link back from the provider. A link that
@@ -465,9 +497,7 @@ impl SocialPublisherService {
             Step::Settled(outcome) => return Ok(outcome),
         };
         for check in 0_u64.. {
-            ctx.sleep(Duration::from_secs(180))
-                .await
-                .map_err(HandlerError::from)?;
+            ctx.sleep(TIKTOK_POLL).await.map_err(HandlerError::from)?;
             let publisher = self.publisher.clone();
             let (snapshot, destination, task) = (post.clone(), target.clone(), task.clone());
             let polled = ctx
@@ -614,14 +644,14 @@ impl SocialPublisherService {
     }
 }
 
-const fn provider_name(provider: SocialProvider) -> &'static str {
+pub(crate) const fn provider_name(provider: SocialProvider) -> &'static str {
     provider.as_str()
 }
 
 /// Everything a destination step needs. Steps receive no secret through the
 /// journal: each resolves its own credential immediately before its request.
 #[derive(Clone)]
-struct Publisher {
+pub struct Publisher {
     surreal: SurrealDb,
     kms: Arc<dyn cloud::RuntimeKms>,
     storage: Arc<dyn cloud::StorageService>,
@@ -634,7 +664,75 @@ struct Publisher {
 }
 
 impl Publisher {
-    async fn start_tiktok(
+    /// Assembles a publisher from its live dependencies with the default
+    /// provider endpoints. The Restate services and the DBOS twin drive the
+    /// same instance of this type; tests override the endpoints afterwards
+    /// with `set_endpoints`.
+    #[must_use]
+    pub fn with_parts(
+        surreal: SurrealDb,
+        kms: Arc<dyn cloud::RuntimeKms>,
+        storage: Arc<dyn cloud::StorageService>,
+        egress: SocialEgressGate,
+        refresh: TokenRefreshConfig,
+        http: reqwest::Client,
+        video_url: fn(&str) -> String,
+    ) -> Self {
+        Self {
+            surreal,
+            kms,
+            storage,
+            egress,
+            refresh,
+            endpoints: ProviderEndpoints::default(),
+            http,
+            video_url,
+        }
+    }
+
+    /// Override the social egress gate. The DBOS twin's integration tests run
+    /// without the deployment's egress environment (which denies by default),
+    /// so they supply the same permissive gate the Restate tests construct
+    /// directly.
+    #[must_use]
+    pub fn with_egress(mut self, egress: SocialEgressGate) -> Self {
+        self.egress = egress;
+        self
+    }
+
+    /// Override the public address a provider fetches a video Asset from.
+    /// The Restate in-file tests build their publisher directly with a
+    /// synthetic origin; the DBOS twin's integration tests reach the same
+    /// override through this builder.
+    #[must_use]
+    pub fn with_video_url(mut self, video_url: fn(&str) -> String) -> Self {
+        self.video_url = video_url;
+        self
+    }
+
+    /// Point every provider endpoint at one base URL. Tests and the DBOS
+    /// twin's checks drive all providers through a single mock origin.
+    #[must_use]
+    pub fn with_provider_base(mut self, base: &str) -> Self {
+        self.endpoints = ProviderEndpoints {
+            facebook_graph: base.to_owned(),
+            threads: base.to_owned(),
+            youtube_upload: base.to_owned(),
+            youtube_api: base.to_owned(),
+            x_api: base.to_owned(),
+            tiktok: format!("{base}/tiktok"),
+            linkedin_rest: base.to_owned(),
+        };
+        self
+    }
+
+    /// The store the publication state is admitted into and claimed from.
+    #[must_use]
+    pub(crate) fn surreal(&self) -> &SurrealDb {
+        &self.surreal
+    }
+
+    pub(crate) async fn start_tiktok(
         &self,
         post_id: Uuid,
         post: &PostSnapshot,
@@ -1004,7 +1102,7 @@ impl Publisher {
         Ok(None)
     }
 
-    async fn poll_tiktok(
+    pub(crate) async fn poll_tiktok(
         &self,
         post_id: Uuid,
         post: &PostSnapshot,
@@ -1132,7 +1230,7 @@ impl Publisher {
         Some(crate::tiktok_business::publish_status(&bytes))
     }
 
-    async fn prepare(
+    pub(crate) async fn prepare(
         &self,
         post_id: Uuid,
         post: &PostSnapshot,
@@ -1287,7 +1385,7 @@ impl Publisher {
     }
 
     /// Record a known failure: the provider refused, or nothing was published.
-    async fn fail(
+    pub(crate) async fn fail(
         &self,
         post_id: Uuid,
         provider: SocialProvider,
@@ -1330,7 +1428,7 @@ impl Publisher {
 
     /// Create an Instagram Reel or Threads media container. A container is not
     /// public, so any failure here is known: nothing was published.
-    async fn create_container(
+    pub(crate) async fn create_container(
         &self,
         post_id: Uuid,
         post: &PostSnapshot,
@@ -1429,7 +1527,7 @@ impl Publisher {
 
     /// Read a container's readiness. An unreadable status is retried at the
     /// next check; an expired or failed container is a known failure.
-    async fn container_status(
+    pub(crate) async fn container_status(
         &self,
         post_id: Uuid,
         post: &PostSnapshot,
@@ -1487,7 +1585,7 @@ impl Publisher {
     }
 
     /// Publish a ready container: the destination's one public write.
-    async fn publish_container(
+    pub(crate) async fn publish_container(
         &self,
         post_id: Uuid,
         post: &PostSnapshot,
@@ -1521,7 +1619,7 @@ impl Publisher {
 
     /// Destinations that publish in one write: [`SocialProvider::Facebook`]
     /// and [`SocialProvider::Youtube`].
-    async fn send_direct(
+    pub(crate) async fn send_direct(
         &self,
         post_id: Uuid,
         post: &PostSnapshot,
@@ -1875,7 +1973,7 @@ impl Publisher {
     }
 
     /// Revisit retained uploads after the initial polling window. This path only reads providers.
-    async fn reconcile_youtube_links(&self) -> Result<usize, HandlerError> {
+    pub(crate) async fn reconcile_youtube_links(&self) -> Result<usize, HandlerError> {
         if self.egress.check().is_err() {
             return Ok(0);
         }
@@ -1965,7 +2063,7 @@ impl Publisher {
         .is_ok())
     }
 
-    async fn read_permalink(
+    pub(crate) async fn read_permalink(
         &self,
         post_id: Uuid,
         brand_key: &str,
@@ -2445,7 +2543,7 @@ impl Default for ProviderEndpoints {
     }
 }
 
-fn publication_outcome(outcomes: &[PublishOutcome]) -> &'static str {
+pub(crate) fn publication_outcome(outcomes: &[PublishOutcome]) -> &'static str {
     if !outcomes.is_empty() && outcomes.iter().all(|outcome| outcome.state == BLOCKED) {
         "social_publishing_disabled"
     } else if outcomes.iter().any(|outcome| outcome.state == FAILED) {
