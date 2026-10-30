@@ -1,9 +1,11 @@
 # Mail CLI
 
-`navigator mail setup|search|read|draft|file` is a local Gmail workflow. Search and read use Gmail's read endpoints;
-draft creates or updates an unsent Gmail draft. The CLI has no message-send, reply-send, or forward operation. Filing
-records each message as a Project-scoped Communication. `file` refuses a thread containing attachments before it writes
-anything; `read` prints their names and marks them as not downloaded.
+`navigator mail setup|search|read|draft|file|parse|save` is a local Gmail workflow. Search and read use Gmail's read
+endpoints; draft creates or updates an unsent Gmail draft. The CLI has no message-send, reply-send, or forward
+operation. Filing records each message as a Project-scoped Communication. `file` refuses a thread that carries
+attachments before it writes anything; `read` prints their names and marks them as not downloaded. `parse` files one
+message the same way — a Gmail web-URL message, a local .eml, or a local file through the document-upload lane — and
+`save` writes a message's .eml copy under the checkout's git-ignored `mail/` folder. Neither touches Gmail beyond reads.
 
 The CLI reads the refresh token from the macOS Keychain item whose service is
 `com.neonlaw.navigator.gmail.refresh-token` and whose account is the configured Gmail address. It exchanges that token
@@ -76,3 +78,41 @@ navigator mail draft --to client@example.test --subject "Engagement letter" --bo
   becomes the draft's attachments. An update without `--attach` leaves the draft with none.
 
 The draft stays unsent; there is still no send operation.
+
+## Parse one message into the log
+
+`navigator mail parse <reference>` files one message as a Project-scoped Communication — the same record write `file`
+makes for a whole thread, but for a single message the lawyer points at:
+
+- **Gmail web URL.** Copy the message's URL from the browser (`https://mail.google.com/mail/u/0/#inbox/<id>`; the legacy
+  `?th=<id>` form works too). The CLI extracts the message id, reads it with `format=full`, and files it. A bare Gmail
+  message id is accepted as well.
+- **Local .eml.** A path to a saved .eml files from its own bytes: headers, Date, and body come from the message, and
+  the Message-ID header (or a content digest when the message has none) scopes the source reference so re-filing the
+  same .eml dedupes.
+- **PDF or any other file.** Any other local path rides the existing `navigator document upload` lane as a document,
+  defaulting to kind `letter` (`--kind` overrides; the asset-lane kinds are accepted), visibility `internal`.
+
+Like `file`, `parse` takes `--project` and `--host` (each defaulting to `navigator.yaml`), warns when the message's
+participants do not match the Project's client contact, and refuses a message that carries attachments before it writes
+anything.
+
+## Save a message's .eml copy
+
+`navigator mail save <gmail-web-url-or-id>` fetches the message with `format=raw` — the complete RFC 822 copy — and
+writes it into the Project checkout's git-ignored `mail/` folder:
+
+```bash
+navigator mail save "https://mail.google.com/mail/u/0/#inbox/18fa3bc2d4e5f6a7"
+# Saved mail/2026.10.30_Retainer_questions.eml (message 18fa3bc2d4e5f6a7)
+```
+
+- **Default path.** `mail/` in the current directory; `--dir` moves it.
+- **Filename convention.** The default name is `YYYY.MM.DD_<subject>.eml`, the send date first, the subject as a
+  path-safe slug. `--name` must follow the same convention — a filename that drops the send-date prefix or loses the
+  `.eml` extension is refused.
+- **Never clobbers.** A re-run of the same message is idempotent (already saved); an existing file with different
+  contents is refused rather than overwritten.
+
+`mail/` is git-ignored — saved mail is a matter fact, never Git — and the Project gate refuses it. Saving is a read of
+Gmail and a write to disk; it never sends, and it does not archive or label the message in Gmail.
