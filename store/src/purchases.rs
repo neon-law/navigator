@@ -139,6 +139,13 @@ const COLUMNS: &str = "id, person_id, email, offering, offering_name, cadence, a
      currency, account_code, state, xero_contact_id, xero_invoice_id, invoice_url, xero_repeating_invoice_id, \
      inserted_at, updated_at, activated_at";
 
+/// The offerings whose Purchase is a Neon Law Nautilus subscription: the one
+/// subscription sold under two names, DeleteYourData.com and Nautilus. The
+/// canonical catalog anchor — the portal's subscription gate and the monthly
+/// sandbox credit reset both key on these ids, so they live next to the
+/// Purchase model rather than in either caller.
+pub const NAUTILUS_OFFERINGS: [&str; 2] = ["delete-your-data-monthly", "delete-your-data-annual"];
+
 fn from_row(row: &sqlx::postgres::PgRow) -> Result<Purchase, PurchaseError> {
     Ok(Purchase {
         id: row.try_get("id")?,
@@ -322,6 +329,28 @@ pub async fn for_person(pg: &PostgresDb, person_id: Uuid) -> Result<Vec<Purchase
         "SELECT {COLUMNS} FROM purchase WHERE person_id = $1 ORDER BY inserted_at DESC, id"
     )))
     .bind(person_id)
+    .fetch_all(pg.pool())
+    .await?;
+    rows.iter().map(from_row).collect()
+}
+
+/// Every Purchase of the given offerings, in every state, oldest first.
+///
+/// The monthly credit reset reads its subscriber list through this: an
+/// `active` Purchase makes a subscriber, while an earlier-state Purchase
+/// still names the contact an overage invoice bills to.
+///
+/// # Errors
+/// A database error.
+pub async fn for_offerings(
+    pg: &PostgresDb,
+    offerings: &[&str],
+) -> Result<Vec<Purchase>, PurchaseError> {
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {COLUMNS} FROM purchase WHERE offering = ANY($1) \
+         ORDER BY person_id, inserted_at, id"
+    )))
+    .bind(offerings)
     .fetch_all(pg.pool())
     .await?;
     rows.iter().map(from_row).collect()

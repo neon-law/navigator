@@ -44,6 +44,7 @@ pub mod contract_review;
 pub mod conversation;
 pub mod csrf;
 pub mod design;
+pub mod sandbox;
 // Server-only: the DocuSign consent callback is returned inline from
 // `portal` rather than a Dioxus router, so it renders its component through
 // the standalone SSR document seam.
@@ -87,6 +88,7 @@ pub mod keyboard;
 pub mod lawyer_dashboard;
 pub mod lawyer_project_detail;
 pub mod lead_capture;
+pub mod lead_sources;
 pub mod legal_page;
 pub mod letter_detail;
 pub mod litigation_page;

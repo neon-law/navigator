@@ -15,6 +15,7 @@ use archives::workflow::ArchivesService;
 use billing_workflows::canary::BillingCanaryService;
 use billing_workflows::digest::BillingDigestService;
 use billing_workflows::reconcile::ReconcileInvoicesService;
+use billing_workflows::sandbox_reset::SandboxCreditResetService;
 use restate_sdk::prelude::*;
 use workflows::dbos_engine;
 use workflows::{EmailService, SlackOpsDelivery};
@@ -121,6 +122,7 @@ macro_rules! bind_common_services {
                 $finance_channel,
                 $simulated_matters,
             ))
+            .bind(SandboxCreditResetService::new($surreal.clone()))
             .bind(DriDigestService::new(
                 $surreal.clone(),
                 $notifier,

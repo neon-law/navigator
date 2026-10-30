@@ -39,7 +39,6 @@ pub const PLAUSIBLE_LOADER_HREF: &str = "/public/js/plausible.js";
 const UNCONFIGURED_DEATH_AND_DIVORCE_ID: &str = "pa-unconfigured-death-and-divorce";
 const UNCONFIGURED_AEGIS_ID: &str = "pa-unconfigured-aegis";
 const UNCONFIGURED_GROUNDWORK_ID: &str = "pa-unconfigured-groundwork";
-const UNCONFIGURED_GUIEB_SHOOK_ID: &str = "pa-unconfigured-guieb-shook";
 
 /// The Plausible script id (the `pa-…` stem of the snippet's script URL) for
 /// `key`'s public site.
@@ -50,7 +49,7 @@ pub const fn script_id(key: BrandKey) -> Option<&'static str> {
     match key {
         BrandKey::Aegis => Some(UNCONFIGURED_AEGIS_ID),
         BrandKey::Groundwork => Some(UNCONFIGURED_GROUNDWORK_ID),
-        BrandKey::GuiebShook => Some(UNCONFIGURED_GUIEB_SHOOK_ID),
+        BrandKey::GuiebShook => Some("pa-CjqS6UQxwrqmMRdiG44m3"),
         BrandKey::CyberInjuryLaw => Some("pa-Ns-yAKpkSNXzfvnEJYZJX"),
         BrandKey::Neon => Some("pa-dktgfAn-5R5ufpXARu6zb"),
         BrandKey::Vesta => Some("pa-0NXcwgtQALjMsqFs8YbfN"),
@@ -116,7 +115,6 @@ impl PlausibleSite {
             UNCONFIGURED_DEATH_AND_DIVORCE_ID,
             UNCONFIGURED_AEGIS_ID,
             UNCONFIGURED_GROUNDWORK_ID,
-            UNCONFIGURED_GUIEB_SHOOK_ID,
         ]
         .contains(&script_id)
         {
@@ -149,8 +147,8 @@ impl ConversionGoal {
     #[must_use]
     pub const fn event_name(self) -> &'static str {
         match self {
-            Self::ContactSubmitted => "Contact: Submitted",
-            Self::IntakeStarted => "Intake: Started",
+            Self::ContactSubmitted => webapp::lead_sources::CONTACT_GOAL,
+            Self::IntakeStarted => webapp::lead_sources::INTAKE_GOAL,
         }
     }
 }
@@ -375,6 +373,7 @@ mod tests {
             (BrandKey::Misericordia, "misericordialaw.com"),
             (BrandKey::Abhaya, "abhayaimmigration.com"),
             (BrandKey::LawyerShook, "lawyershook.com"),
+            (BrandKey::GuiebShook, "guiebandshook.com"),
             (BrandKey::DeleteYourDebt, "deleteyourdebt.com"),
             (BrandKey::Summons, "summonsdefense.nyc"),
             (BrandKey::Daybridge, "daybridgedivorce.com"),

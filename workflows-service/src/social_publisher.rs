@@ -2328,15 +2328,63 @@ fn x_text_eligible(text: &str) -> bool {
 }
 
 fn caption(post: &PostSnapshot, provider: SocialProvider) -> String {
-    match provider {
+    let text = match provider {
         SocialProvider::Facebook => post.facebook_caption.as_deref(),
         SocialProvider::Instagram => post.instagram_caption.as_deref(),
         SocialProvider::Threads => post.threads_caption.as_deref(),
         SocialProvider::Youtube => post.youtube_caption.as_deref(),
         SocialProvider::Linkedin | SocialProvider::X | SocialProvider::Tiktok => None,
     }
-    .unwrap_or(&post.description)
-    .to_string()
+    .unwrap_or(&post.description);
+    tag_brand_links(text, provider)
+}
+
+/// The query keys Plausible reads as a visit's source. A link already
+/// carrying one keeps the author's choice.
+const SOURCE_KEYS: &[&str] = &["ref", "utm_source", "source"];
+
+/// Add `?ref=<provider>` to every `http(s)` link in `text` that points at one
+/// of the firm's own brand hosts, so Plausible attributes the visit (and any
+/// conversion in it) to the platform even when the app strips the referrer.
+/// Links elsewhere, and links that already name a source, are left as written.
+fn tag_brand_links(text: &str, provider: SocialProvider) -> String {
+    let mut tagged = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest
+        .find("https://")
+        .into_iter()
+        .chain(rest.find("http://"))
+        .min()
+    {
+        tagged.push_str(&rest[..start]);
+        let token_len = rest[start..]
+            .find(char::is_whitespace)
+            .unwrap_or(rest.len() - start);
+        let token = &rest[start..start + token_len];
+        let link = token.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '"', '\'']);
+        tagged.push_str(&tag_link(link, provider).unwrap_or_else(|| link.to_string()));
+        tagged.push_str(&token[link.len()..]);
+        rest = &rest[start + token_len..];
+    }
+    tagged.push_str(rest);
+    tagged
+}
+
+fn tag_link(link: &str, provider: SocialProvider) -> Option<String> {
+    let mut url = url::Url::parse(link).ok()?;
+    let host = url.host_str()?;
+    let ours = views::brand::BrandKey::ALL
+        .iter()
+        .any(|key| key.apex() == host || key.hosts().contains(&host));
+    if !ours
+        || url
+            .query_pairs()
+            .any(|(key, _)| SOURCE_KEYS.contains(&&*key))
+    {
+        return None;
+    }
+    url.query_pairs_mut().append_pair("ref", provider.as_str());
+    Some(url.into())
 }
 
 #[derive(Deserialize)]
@@ -3559,6 +3607,33 @@ mod tests {
             assert_eq!(outcome.state, "failed");
         }
         server.verify().await;
+    }
+
+    #[test]
+    fn captions_tag_brand_links_with_the_platform_as_ref() {
+        use super::tag_brand_links;
+        let cases = [
+            (
+                "Read more: https://www.neonlaw.com/blog/wills.",
+                SocialProvider::Linkedin,
+                "Read more: https://www.neonlaw.com/blog/wills?ref=linkedin.",
+            ),
+            (
+                "(https://neonlaw.com/contact?topic=estate) and http://vestaestateplanning.com",
+                SocialProvider::Facebook,
+                "(https://neonlaw.com/contact?topic=estate&ref=facebook) and http://vestaestateplanning.com/?ref=facebook",
+            ),
+            // Someone else's site, an author-chosen source, and plain text stay as written.
+            (
+                "See https://example.com/x and https://www.neonlaw.com/?utm_source=newsletter",
+                SocialProvider::X,
+                "See https://example.com/x and https://www.neonlaw.com/?utm_source=newsletter",
+            ),
+            ("No links here.", SocialProvider::Threads, "No links here."),
+        ];
+        for (text, provider, want) in cases {
+            assert_eq!(tag_brand_links(text, provider), want, "{text}");
+        }
     }
 
     #[test]

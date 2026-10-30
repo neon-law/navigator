@@ -15,6 +15,7 @@ members = [
     "cloud",
     "mcp",
     "features",
+    "gateway",
     "forms",
     "lsp",
     "live-inquiry",
@@ -23,12 +24,13 @@ members = [
     "archives",
     "billing",
     "billing-workflows",
+    "sandbox-skills",
     "telemetry",
     "word",
 ]
 
 [workspace.package]
-version = "26.10.29"
+version = "26.10.30"
 edition = "2021"
 rust-version = "1.95"
 # First-party source and original template material use MIT OR Apache-2.0.
@@ -189,6 +191,7 @@ pdf = { path = "pdf" }
 portal = { path = "portal" }
 neon = { path = "neon" }
 repos = { path = "repos" }
+sandbox-skills = { path = "sandbox-skills" }
 server = { path = "server" }
 rules = { path = "rules" }
 store = { path = "store" }

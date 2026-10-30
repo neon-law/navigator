@@ -636,6 +636,12 @@
     "scope": "project",
     "through": "notation_id -> owning parent scope"
   },
+  "sandbox_usage": {
+    "migration_slice": "accounting-storage",
+    "parity_scenario": "stable identity; tenant link isolation and no inferred participation",
+    "scope": "identity",
+    "through": "person_id -> Person; no Project or Firm attribution"
+  },
   "schema_version": {
     "migration_slice": "platform-storage",
     "parity_scenario": "operator authorization; no matter visibility grant",
