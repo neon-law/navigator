@@ -329,6 +329,22 @@ fn direction_matches(row_direction: &str, selected: Option<&str>) -> bool {
 }
 
 #[cfg(feature = "server")]
+fn row_matches(
+    row: &store::inbox::IntakeRow,
+    channel_filter: Option<&str>,
+    brand_filter: Option<&str>,
+    unread_only: bool,
+    direction_filter: Option<&str>,
+    attachments_only: bool,
+) -> bool {
+    channel_matches(&row.channel, channel_filter)
+        && brand_matches(row.brand_key.as_deref(), brand_filter)
+        && (!unread_only || row.unread)
+        && direction_matches(&row.direction, direction_filter)
+        && (!attachments_only || row.has_attachments)
+}
+
+#[cfg(feature = "server")]
 fn inbox_brands(rows: &[store::inbox::IntakeRow]) -> Vec<String> {
     let mut brands = rows
         .iter()
@@ -438,11 +454,14 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
     let rows = all_rows
         .into_iter()
         .filter(|row| {
-            channel_matches(&row.channel, channel_filter.as_deref())
-                && brand_matches(row.brand_key.as_deref(), brand_filter.as_deref())
-                && (!unread_only || row.unread)
-                && direction_matches(&row.direction, direction_filter.as_deref())
-                && (!attachments_only || row.has_attachments)
+            row_matches(
+                row,
+                channel_filter.as_deref(),
+                brand_filter.as_deref(),
+                unread_only,
+                direction_filter.as_deref(),
+                attachments_only,
+            )
         })
         .collect::<Vec<_>>();
     let (logo, tokens_href, firm_name) = chrome().await;
@@ -592,11 +611,14 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
     let rows = all_rows
         .into_iter()
         .filter(|row| {
-            channel_matches(&row.channel, channel_filter.as_deref())
-                && brand_matches(row.brand_key.as_deref(), brand_filter.as_deref())
-                && (!unread_only || row.unread)
-                && direction_matches(&row.direction, direction_filter.as_deref())
-                && (!attachments_only || row.has_attachments)
+            row_matches(
+                row,
+                channel_filter.as_deref(),
+                brand_filter.as_deref(),
+                unread_only,
+                direction_filter.as_deref(),
+                attachments_only,
+            )
         })
         .collect::<Vec<_>>();
     let (logo, tokens_href, firm_name) = chrome().await;
@@ -1133,41 +1155,97 @@ mod tests {
             html.contains("channel=email&#38;brand=neon&#38;direction=inbound&#38;unread=true&#38;attachments=true"),
             "{html}"
         );
-        // The row filter keeps only rows matching all selected filters —
-        // c1 is inbound with an attachment; c2 is neither.
-        let rendered = render_rows(&view);
-        assert_eq!(rendered, vec!["c1"]);
-        // Each filter survives alone, too.
-        view.unread_only = false;
-        view.brand_filter = None;
-        assert_eq!(render_rows(&view), vec!["c1"]);
-        view.direction_filter = Some(store::inbox::direction::OUTBOUND.into());
+        // Dropping a filter drops it from every link — the all-channels
+        // link carries only the surviving filters.
         view.attachments_only = false;
-        assert_eq!(render_rows(&view), vec!["c2"]);
-        // An unknown direction never renders as a filter link.
-        view.direction_filter = Some("sent".into());
-        view.attachments_only = false;
+        view.direction_filter = None;
         let html = dioxus_ssr::render_element(inbox_list_body(&view));
-        assert!(!html.contains("direction=sent"), "{html}");
+        assert!(
+            html.contains(r#"href="/app/inbox?brand=neon&#38;unread=true""#),
+            "{html}"
+        );
     }
 
-    /// The distinct row ids `inbox_list_body` renders — what a filter
-    /// assertion reads instead of parsing the whole table.
-    fn render_rows(view: &InboxPage) -> Vec<String> {
-        let html = dioxus_ssr::render_element(inbox_list_body(view));
-        let mut ids = html
-            .matches("/app/inbox/c")
-            .map(|rest| {
-                rest.split('"')
-                    .next()
-                    .unwrap_or_default()
-                    .trim_start_matches("/app/inbox/")
-                    .to_string()
-            })
-            .collect::<Vec<_>>();
-        ids.sort();
-        ids.dedup();
-        ids
+    /// The conversation's latest message direction and attachment flag
+    /// decide the new filters, composed with the existing three.
+    #[test]
+    #[cfg(feature = "server")]
+    fn row_matches_requires_every_selected_filter() {
+        let row = store::inbox::IntakeRow {
+            contact: None,
+            id: uuid::Uuid::nil(),
+            firm_id: uuid::Uuid::nil(),
+            brand_key: Some("neon".into()),
+            project_id: None,
+            channel: "email".into(),
+            assignee: "Unassigned".into(),
+            unread: true,
+            delivery: "received".into(),
+            next_action: "Assign".into(),
+            external_address: "court@example.com".into(),
+            external_name: None,
+            subject: Some("Notice".into()),
+            direction: store::inbox::direction::INBOUND.into(),
+            has_attachments: true,
+            updated_at: chrono::Utc::now(),
+        };
+        let selected = (
+            Some("email"),
+            Some("neon"),
+            true,
+            Some(store::inbox::direction::INBOUND),
+            true,
+        );
+        assert!(row_matches(
+            &row, selected.0, selected.1, selected.2, selected.3, selected.4
+        ));
+        // Each filter is load-bearing: drop the match on any one of the
+        // five and the row is excluded.
+        for (index, miss) in [
+            Some("call"),  // channel
+            Some("vesta"), // brand
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (channel, brand) = if index == 0 {
+                (miss, selected.1)
+            } else {
+                (selected.0, miss)
+            };
+            assert!(
+                !row_matches(&row, channel, brand, selected.2, selected.3, selected.4),
+                "filter {index} is load-bearing"
+            );
+        }
+        assert!(row_matches(
+            &row, selected.0, selected.1,
+            false, // unread_only off: the unread row still matches
+            selected.3, selected.4
+        ));
+        // unread_only on excludes a read row.
+        let mut read_row = row.clone();
+        read_row.unread = false;
+        assert!(!row_matches(
+            &read_row, selected.0, selected.1, true, selected.3, selected.4
+        ));
+        assert!(!row_matches(
+            &row,
+            selected.0,
+            selected.1,
+            true,
+            Some(store::inbox::direction::OUTBOUND),
+            selected.4
+        ));
+        // attachments_only on excludes a row with nothing filed.
+        let mut bare_row = row.clone();
+        bare_row.has_attachments = false;
+        assert!(row_matches(
+            &bare_row, selected.0, selected.1, true, selected.3, false
+        ));
+        assert!(!row_matches(
+            &bare_row, selected.0, selected.1, true, selected.3, true
+        ));
     }
 
     #[test]

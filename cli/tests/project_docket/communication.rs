@@ -98,9 +98,10 @@ async fn create_list_and_confirms_print_the_stored_row_and_dry_run_sends_nothing
         .and(path(format!(
             "/app/api/projects/{project_id}/communications"
         )))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!([call.clone(), email.clone()])),
-        )
+        .and(query_param("channel", "call"))
+        // The door filters server-side now, so a channel-filtered request
+        // is answered with only the matching rows.
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([call.clone()])))
         .expect(1)
         .mount(&server)
         .await;

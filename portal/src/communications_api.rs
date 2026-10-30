@@ -362,7 +362,10 @@ pub(crate) async fn create_communication(
 
 #[cfg(test)]
 mod tests {
-    use super::{attachment_views, inbox_message_id, map_communication, validate_direction};
+    use super::{
+        attachment_views, inbox_message_id, map_communication, validate_direction,
+        validate_source_ref,
+    };
     use axum::{http::StatusCode, response::IntoResponse};
     use uuid::Uuid;
 
@@ -436,7 +439,7 @@ mod tests {
         // The first attachment occupies both the row's asset slot and the
         // provenance set (AC8) — it must list once.
         let filed = vec![primary.clone(), second.clone()];
-        let attachments = attachment_views(Some(primary), filed);
+        let attachments = attachment_views(Some(primary.clone()), filed);
         assert_eq!(attachments.len(), 2);
         assert_eq!(attachments[0].asset_id, primary_id);
         assert_eq!(attachments[0].filename.as_deref(), Some("exhibit-a.pdf"));
