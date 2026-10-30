@@ -1072,6 +1072,17 @@ enum ProjectsCmd {
         /// both. `navigator project setup` creates the calendar.
         #[arg(long = "calendar", value_name = "ID")]
         calendar: Option<String>,
+        /// The Project's Drive ingest folder id, in the Firm's Projects
+        /// shared drive. Written to `project.drive_folder_id` and the live
+        /// Project; an empty value clears both. `navigator project setup`
+        /// creates the folder, or adopts one named for the code that
+        /// already exists.
+        #[arg(long = "drive-folder", value_name = "ID")]
+        drive_folder: Option<String>,
+        /// Preview every change without writing navigator.yaml or the live
+        /// Project row.
+        #[arg(long)]
+        dry_run: bool,
         /// The client's booking page: the address of an appointment schedule
         /// made on the Project calendar in Google Calendar. Written to the
         /// live Project only and shown to the client; an empty value clears it.
@@ -5576,6 +5587,8 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             calendar,
             booking_url,
             jurisdiction,
+            drive_folder,
+            dry_run,
             firm,
             brand,
             host,
@@ -5592,11 +5605,13 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 ],
                 projects::set::LiveFields {
                     calendar_id: calendar.as_deref(),
+                    drive_folder_id: drive_folder.as_deref(),
                     booking_url: booking_url.as_deref(),
                     jurisdiction: jurisdiction.as_deref(),
                 },
                 firm.as_deref(),
                 brand.as_deref(),
+                dry_run,
             )
             .await
         }
