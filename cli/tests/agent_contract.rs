@@ -96,7 +96,7 @@ fn both_surfaces_state_the_branch_contract() {
         "squash-merged",
         "deleted on merge",
         "Open pull requests ready for review by default",
-        "`gh pr merge <number> --auto --squash`",
+        "App-owned automatic squash auto-merge",
         "`autoMergeRequest` is non-null",
         "On another forge",
         "retain `visibility: internal`",
@@ -109,10 +109,12 @@ fn both_surfaces_state_the_branch_contract() {
             "AGENTS.md missing {required:?}"
         );
     }
+    assert!(!AGENT_CONTRACT.contains("gh pr merge"));
+    assert!(!doc.contains("gh pr merge"));
     for required in [
         "squash-merged",
         "Open pull requests ready for review by default",
-        "`gh pr merge <number> --auto --squash`",
+        "App-owned automatic squash auto-merge",
         "`autoMergeRequest` is non-null",
         "On another forge",
         "The required check is `ci`, which runs `navigator project gate`",

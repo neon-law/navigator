@@ -678,10 +678,10 @@ Every Project repository follows one branch contract:
 - The head branch is deleted when its pull request merges.
 - The required check is `ci`, which runs `navigator project gate` (see [The CI gate](#the-ci-gate)).
 - Open pull requests ready for review by default; use a draft only when deliberately holding work for more changes.
-  The generated GitHub workflow verifies `autoMergeRequest` after arming, unless the PR has already merged. If it is
-  still open and unarmed, run `gh pr merge <number> --auto --squash`; confirm `autoMergeRequest` is non-null. Missing
-  App credentials require this manual fallback. On another forge, use its native ready-for-review and
-  merge-when-checks-pass controls and verify them; GitHub's `autoMergeRequest` field does not apply.
+  On GitHub, respect App-owned automatic squash auto-merge. Confirm `autoMergeRequest` is non-null or the pull request
+  is already merged. If automation does not arm it, inspect and report the policy or permission blocker. On another
+  forge, use its native ready-for-review and merge-when-checks-pass controls and verify them; GitHub's
+  `autoMergeRequest` field does not apply.
 - Before merging, review every changed document pointer (`blobs/**/*.yaml`): retain `visibility: internal` unless
   the client is meant to read that document. Treat every change to `visibility: client` as a deliberate client-release
   decision. For each Deadline, choose deliberately whether it is internal or client-visible and review that choice.
