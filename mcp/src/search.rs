@@ -70,6 +70,34 @@ pub trait SearchProvider: Send + Sync {
 #[error("search unavailable: {0}")]
 pub struct SearchError(pub String);
 
+/// Render normalized hits as the MCP content payload the two search
+/// tools return. Shared by both tools so the shape a session sees is
+/// identical whichever vendor answered.
+#[must_use]
+pub fn hits_payload(hits: &[SearchHit]) -> serde_json::Value {
+    let text = hits
+        .iter()
+        .map(|h| format!("{} — {}\n{}", h.title, h.url, h.snippet))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    serde_json::json!({
+        "content": [{ "type": "text", "text": text }],
+        "structuredContent": { "count": hits.len(), "hits": hits },
+    })
+}
+
+/// The degraded-but-alive answer a search tool returns when its provider
+/// is unconfigured or down: an ordinary MCP result whose text says search
+/// is unavailable and why. The calling session proceeds without search —
+/// a provider outage must never surface as a tool-call failure.
+#[must_use]
+pub fn unavailable_payload(detail: &str) -> serde_json::Value {
+    serde_json::json!({
+        "content": [{ "type": "text", "text": format!("search unavailable: {detail}") }],
+        "structuredContent": { "count": 0, "hits": [], "available": false },
+    })
+}
+
 /// The vendor clients the sandbox tools dispatch through. Built once at
 /// bootstrap from environment configuration; an unconfigured provider
 /// degrades its tool's searches to "search unavailable" rather than
