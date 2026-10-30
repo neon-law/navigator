@@ -173,13 +173,11 @@ impl CitationParser {
         let supra = Regex::new(r"(?i)\bsupra,?\s+at\s+(\d{1,4})(?::(\d{1,4})(?:[–-](\d{1,4}))?)?")?;
         // `Complaint ¶ 14` / `Roe Declaration ¶¶ 6–8` / `Complaint para. 6`.
         let paragraph = Regex::new(&format!(
-            r"\b({doc})\s+(¶¶?|paras?\.)\s*(\d{{1,4}})(?:\s*[–-]\s*(\d{{1,4}}))?",
-            doc = document
+            r"\b({document})\s+(¶¶?|paras?\.)\s*(\d{{1,4}})(?:\s*[–-]\s*(\d{{1,4}}))?"
         ))?;
         // `Complaint at 4:12–19` / `Amended Complaint at 12`.
         let page = Regex::new(&format!(
-            r"\b({doc})\s+at\s+(\d{{1,4}})(?::(\d{{1,4}})(?:[–-](\d{{1,4}}))?)?",
-            doc = document
+            r"\b({document})\s+at\s+(\d{{1,4}})(?::(\d{{1,4}})(?:[–-](\d{{1,4}}))?)?"
         ))?;
         Ok(Self {
             patterns: Patterns {
@@ -197,8 +195,18 @@ impl CitationParser {
     ///
     /// `aliases` maps a lowercased document name to the document record it is:
     /// a citation whose drafted name is in the table comes back `resolved`.
+    #[must_use]
     pub fn parse(&self, text: &str, aliases: &HashMap<String, String>) -> Vec<RecordCitation> {
         let mut candidates: Vec<Candidate> = Vec::new();
+        self.exhibit_candidates(text, &mut candidates);
+        self.shorthand_candidates(text, &mut candidates);
+        self.paragraph_candidates(text, &mut candidates);
+        self.page_candidates(text, &mut candidates);
+        deduplicate(text, candidates, aliases)
+    }
+
+    /// `Exhibit A at 3`: the exhibit itself, plus a page when one follows it.
+    fn exhibit_candidates(&self, text: &str, candidates: &mut Vec<Candidate>) {
         for captures in self.patterns.exhibit.captures_iter(text) {
             let whole = captures.get(0).unwrap_or_else(|| captures.get(1).unwrap());
             let exhibit = captures
@@ -219,6 +227,11 @@ impl CitationParser {
                 },
             });
         }
+    }
+
+    /// `Id. at 5:2`, `Ibid.`, and `supra at 7` — the short forms that point
+    /// back at an earlier citation in the same draft.
+    fn shorthand_candidates(&self, text: &str, candidates: &mut Vec<Candidate>) {
         for captures in self.patterns.id_at.captures_iter(text) {
             let whole = captures.get(0).unwrap_or_else(|| captures.get(1).unwrap());
             candidates.push(Candidate {
@@ -253,6 +266,10 @@ impl CitationParser {
                 reference: shorthand(Shorthand::Supra, &captures, 1),
             });
         }
+    }
+
+    /// `Complaint ¶ 14` / `Roe Declaration paragraphs 6–8`.
+    fn paragraph_candidates(&self, text: &str, candidates: &mut Vec<Candidate>) {
         for captures in self.patterns.paragraph.captures_iter(text) {
             let whole = captures.get(0).unwrap_or_else(|| captures.get(1).unwrap());
             let document = captures.get(1).map(|m| m.as_str());
@@ -280,6 +297,10 @@ impl CitationParser {
                 },
             });
         }
+    }
+
+    /// `Complaint at 4:12–19` / `Amended Complaint at 12`.
+    fn page_candidates(&self, text: &str, candidates: &mut Vec<Candidate>) {
         for captures in self.patterns.page.captures_iter(text) {
             let whole = captures.get(0).unwrap_or_else(|| captures.get(1).unwrap());
             let name = captures.get(1).map(|m| m.as_str());
@@ -323,47 +344,54 @@ impl CitationParser {
                 },
             });
         }
-
-        // Reading order; on a tie the longer citation wins, so `Id. at 5`
-        // (already captured as a shorthand) is not re-captured by the page
-        // pattern under the same span.
-        candidates.sort_by(|a, b| {
-            a.span
-                .start
-                .cmp(&b.span.start)
-                .then(b.span.end.cmp(&a.span.end))
-        });
-
-        let sentences = sentences(text);
-        let mut citations: Vec<RecordCitation> = Vec::new();
-        let mut cursor: Option<Span> = None;
-        for candidate in candidates {
-            // Drop overlaps with an already-accepted citation.
-            if cursor.is_some_and(|kept| candidate.span.start < kept.end) {
-                continue;
-            }
-            let reference = candidate.reference;
-            let resolved = resolve(&reference, aliases);
-            let shorthand_unresolved =
-                matches!(reference, RecordRef::Shorthand { .. }) && citations.is_empty();
-            let sentence = sentences
-                .iter()
-                .find(|sentence| sentence.contains(&candidate.span))
-                .map_or_else(|| text.trim().to_string(), |sentence| sentence.slice(text));
-            cursor = Some(candidate.span);
-            citations.push(RecordCitation {
-                span: candidate.span,
-                text: text[candidate.span.start..candidate.span.end]
-                    .trim()
-                    .to_string(),
-                reference,
-                resolved,
-                unresolved_shorthand: shorthand_unresolved,
-                sentence,
-            });
-        }
-        citations
     }
+}
+
+/// Reading order; on a tie the longer citation wins, so `Id. at 5`
+/// (already captured as a shorthand) is not re-captured by the page
+/// pattern under the same span. Overlapping candidates drop in favor of
+/// the earlier accepted citation, and each keeps the sentence it sits in.
+fn deduplicate(
+    text: &str,
+    mut candidates: Vec<Candidate>,
+    aliases: &HashMap<String, String>,
+) -> Vec<RecordCitation> {
+    candidates.sort_by(|a, b| {
+        a.span
+            .start
+            .cmp(&b.span.start)
+            .then(b.span.end.cmp(&a.span.end))
+    });
+
+    let sentences = sentences(text);
+    let mut citations: Vec<RecordCitation> = Vec::new();
+    let mut cursor: Option<Span> = None;
+    for candidate in candidates {
+        // Drop overlaps with an already-accepted citation.
+        if cursor.is_some_and(|kept| candidate.span.start < kept.end) {
+            continue;
+        }
+        let reference = candidate.reference;
+        let resolved = resolve(&reference, aliases);
+        let shorthand_unresolved =
+            matches!(reference, RecordRef::Shorthand { .. }) && citations.is_empty();
+        let sentence = sentences
+            .iter()
+            .find(|sentence| sentence.contains(&candidate.span))
+            .map_or_else(|| text.trim().to_string(), |sentence| sentence.slice(text));
+        cursor = Some(candidate.span);
+        citations.push(RecordCitation {
+            span: candidate.span,
+            text: text[candidate.span.start..candidate.span.end]
+                .trim()
+                .to_string(),
+            reference,
+            resolved,
+            unresolved_shorthand: shorthand_unresolved,
+            sentence,
+        });
+    }
+    citations
 }
 
 struct Candidate {
@@ -434,7 +462,7 @@ fn resolve(reference: &RecordRef, aliases: &HashMap<String, String>) -> Option<S
 fn without_article(name: &str) -> &str {
     for article in ["The ", "An ", "A "] {
         if let Some(rest) = name.strip_prefix(article) {
-            if rest.chars().next().is_some_and(|c| c.is_uppercase()) {
+            if rest.chars().next().is_some_and(char::is_uppercase) {
                 return rest;
             }
         }
@@ -471,7 +499,7 @@ fn sentences(text: &str) -> Vec<Sentence> {
         }
         let rest = text[index + 1..].trim_start();
         let next = rest.chars().next();
-        let boundary = next.is_none_or(|c| c.is_uppercase());
+        let boundary = next.is_none_or(char::is_uppercase);
         if !boundary {
             continue;
         }
