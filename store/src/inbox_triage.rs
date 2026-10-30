@@ -96,7 +96,7 @@ impl TriageDisposition {
 }
 
 /// One Message's triage row as it is stored.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InboxTriage {
     pub id: Uuid,
     pub message_id: Uuid,

@@ -95,7 +95,7 @@ impl TriageRunConfig {
 /// One Firm Project offered to the classifier as a routing target. A
 /// lane-local shape, so the prompt contract never moves with the store's
 /// query row.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectOption {
     pub id: Uuid,
     pub code: String,
@@ -104,7 +104,7 @@ pub struct ProjectOption {
 
 /// The full schema-validated classifier verdict. `suggested_project_id` is a
 /// claim to be validated against the Firm — never an instruction to file.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TriageClassifierOutput {
     pub suggested_project_id: Option<Uuid>,
     pub project_confidence: f64,
@@ -113,7 +113,7 @@ pub struct TriageClassifierOutput {
     pub rationale: String,
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum TriageError {
     #[error("triage run configuration is invalid")]
     InvalidRunConfig,
@@ -246,9 +246,9 @@ pub fn build_triage_prompt(
         );
     } else {
         for project in projects {
-            let _ = write!(
+            let _ = writeln!(
                 menu,
-                "- id: {} | code: {} | name: {}\n",
+                "- id: {} | code: {} | name: {}",
                 project.id, project.code, project.name
             );
         }
@@ -365,7 +365,10 @@ mod tests {
         assert!(TriageRunConfig::new("model", "global", "a".repeat(63)).is_err());
         assert!(TriageRunConfig::new("  ", "global", "a".repeat(64)).is_err());
         assert!(TriageRunConfig::new("model", "  ", "a".repeat(64)).is_err());
-        assert!(run_config(&"a".repeat(64)).prompt_version == TRIAGE_PROMPT_VERSION);
+        assert_eq!(
+            run_config(&"a".repeat(64)).prompt_version,
+            TRIAGE_PROMPT_VERSION
+        );
     }
 
     #[test]
@@ -377,7 +380,7 @@ mod tests {
         )
         .expect("valid verdict");
         assert!(output.privileged);
-        assert_eq!(output.privilege_confidence, 0.93);
+        assert!((output.privilege_confidence - 0.93).abs() < 1e-9);
         assert!(output.suggested_project_id.is_none());
         assert_eq!(
             output.rationale, "Sender describes an engagement.",
@@ -582,7 +585,7 @@ mod tests {
                 &ClassifierLane {
                     model_id: Some("gemini-3.5-flash-lite".into()),
                     prompt_version: TRIAGE_PROMPT_VERSION.into(),
-                    raw_output: Some("{}"),
+                    raw_output: Some("{}".to_string()),
                 },
                 Some(&claimed),
                 None,
