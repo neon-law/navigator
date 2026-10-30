@@ -160,6 +160,9 @@ pub mod postgres_backfill;
 /// The AGE relationship graph, projected from the mirrors and parity-checked
 /// against the Surreal conflict traversal.
 pub mod postgres_graph;
+/// Read-only graph views over the AGE projection: the shapes behind the
+/// graph REST endpoints.
+pub mod postgres_graph_views;
 /// Best-effort PostgreSQL mirror of Surreal writes, with parity and reconcile.
 pub mod postgres_mirror;
 /// PostgreSQL schema history and deterministic parity artifacts.
