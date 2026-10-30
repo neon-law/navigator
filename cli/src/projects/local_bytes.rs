@@ -1,4 +1,5 @@
-//! The offline half of `navigator project gate --check --deep`.
+//! The offline half of `navigator project gate --check --deep`, and the byte
+//! half of `navigator project documents check --deep` (LAW-217).
 //!
 //! A pointer's `current_version.sha256` and `size_bytes` describe the bytes
 //! filed on the Project. The bytes themselves are Git-ignored files under
@@ -13,7 +14,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::document_read::{discover_pointers, slug_from_pointer};
 use crate::document_sync::{read_pointer, slash_path};
@@ -42,6 +43,14 @@ pub(crate) struct Finding {
 /// A pointer that cannot be parsed is an error of the run, not a finding: the
 /// content gate owns pointer syntax.
 pub(crate) fn verify(dir: &Path) -> Result<Vec<Finding>> {
+    verify_with(dir, &dir.join(crate::document_sync::DOCUMENT_DIRECTORY))
+}
+
+/// Like [`verify`], with the bytes compared against `dir`'s pointers living
+/// in `documents` — the checkout's own `documents/` by default, or any other
+/// tree laid out like it (LAW-217), a Drive-for-desktop matter folder
+/// included.
+pub(crate) fn verify_with(dir: &Path, documents: &Path) -> Result<Vec<Finding>> {
     let mut findings = Vec::new();
     for relative in discover_pointers(dir)? {
         let absolute = dir.join(&relative);
@@ -51,8 +60,11 @@ pub(crate) fn verify(dir: &Path) -> Result<Vec<Finding>> {
         let slug = slug_from_pointer(dir, &relative)?;
         // Bytes `project sync` has not yet moved into their matter folder
         // still sit at the slug itself (LAW-189).
-        let laid_out = crate::document_layout::document_path(dir, Path::new(&slug), &pointer);
-        let legacy = crate::document_sync::document_path_for_slug(dir, Path::new(&slug));
+        let laid_out = documents.join(crate::document_layout::bytes_relative(
+            Path::new(&slug),
+            pointer.matter_folder(),
+        ));
+        let legacy = documents.join(&slug);
         let bytes_path = if !laid_out.exists() && legacy.is_file() {
             legacy
         } else {
@@ -63,7 +75,11 @@ pub(crate) fn verify(dir: &Path) -> Result<Vec<Finding>> {
             Ok(bytes) => compare(&bytes, &version.sha256, version.size_bytes),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Status::Missing,
             Err(error) => {
-                return Err(error).with_context(|| format!("read {}", bytes_path.display()))
+                return Err(crate::projects::document_check::with_permission_note::<()>(
+                    Err(error),
+                    &bytes_path,
+                )
+                .unwrap_err())
             }
         };
         findings.push(Finding {
@@ -206,5 +222,30 @@ mod tests {
     fn a_checkout_with_no_documents_directory_has_no_findings() {
         let dir = tempfile::tempdir().unwrap();
         assert!(verify(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deep_checks_read_the_bytes_from_a_foreign_documents_tree() {
+        // The pointer lives in the checkout; the bytes live in a Drive-copy
+        // tree laid out like `documents/` (LAW-217). The pointer's kind is
+        // `filing`, so its bytes belong in Docket Filings.
+        let dir = checkout();
+        let drive = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(drive.path().join("Docket Filings")).unwrap();
+        std::fs::write(
+            drive.path().join("Docket Filings/memo.md"),
+            format!("{BODY}tamper\n"),
+        )
+        .unwrap();
+
+        let findings = verify_with(dir.path(), drive.path()).unwrap();
+        assert!(matches!(
+            status_of(&findings, "blobs/memo.md.yaml"),
+            Status::Modified { reason } if reason.contains("hash")
+        ));
+        // And a matching copy passes: the same tree the checkout would hold.
+        std::fs::write(drive.path().join("Docket Filings/memo.md"), BODY).unwrap();
+        let findings = verify_with(dir.path(), drive.path()).unwrap();
+        assert_eq!(status_of(&findings, "blobs/memo.md.yaml"), &Status::Match);
     }
 }

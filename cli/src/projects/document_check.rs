@@ -674,6 +674,310 @@ fn reconcile_legacy_layout(
     Ok(None)
 }
 
+/// The path prefix Google Drive for desktop mounts matter folders under,
+/// below `$HOME` (LAW-217).
+const CLOUD_STORAGE: &str = "Library/CloudStorage";
+
+/// The `EPERM` explanation for a path under `~/Library/CloudStorage`
+/// (LAW-217): macOS privacy controls block that folder for processes
+/// without the permission, and `Operation not permitted` alone says nothing
+/// about why or what would fix it. `None` for every other error.
+pub(crate) fn cloud_storage_permission_note(error: &std::io::Error, path: &Path) -> Option<String> {
+    if error.kind() != std::io::ErrorKind::PermissionDenied {
+        return None;
+    }
+    let home = std::env::var("HOME").ok()?;
+    let cloud = Path::new(&home).join(CLOUD_STORAGE);
+    note_for_block(error, path, &cloud)
+}
+
+/// The core of [`cloud_storage_permission_note`], testable without touching
+/// `$HOME`: the note when `path` sits under `cloud_storage` and `error` is
+/// the permission error macOS gives.
+fn note_for_block(error: &std::io::Error, path: &Path, cloud_storage: &Path) -> Option<String> {
+    if error.kind() != std::io::ErrorKind::PermissionDenied || !path.starts_with(cloud_storage) {
+        return None;
+    }
+    Some(format!(
+        "macOS blocked access to {cloud}: allow the terminal app under Files and Folders or Full \
+         Disk Access in System Settings, Privacy & Security, or fetch the file through the Drive \
+         API instead",
+        cloud = cloud_storage.display(),
+    ))
+}
+
+/// An `anyhow` error for `path` carrying the [`cloud_storage_permission_note`]
+/// when macOS blocked it, the plain context otherwise. Shared by every read
+/// the standalone check makes, so one blocked folder explains itself once.
+pub(crate) fn with_permission_note<T>(
+    result: std::io::Result<T>,
+    path: &Path,
+) -> anyhow::Result<T> {
+    result.map_err(|error| match cloud_storage_permission_note(&error, path) {
+        Some(note) => anyhow!("{}: {note}", path.display()),
+        None => io_error_with(error, path, "read"),
+    })
+}
+
+/// `error` as an `anyhow` error whose context is `action` plus `path` — the
+/// plain form when macOS did not block the read. `anyhow::Context` fits
+/// `Result`/`Option`, not a bare `anyhow::Error`, so this goes through the
+/// `Result` form to attach the message.
+fn io_error_with(error: std::io::Error, path: &Path, action: &str) -> anyhow::Error {
+    let message = format!("{action} {}", path.display());
+    Err::<(), std::io::Error>(error)
+        .with_context(|| message)
+        .unwrap_err()
+}
+
+/// The offline document checks over any tree laid out like `documents/`
+/// (LAW-217): the same matter-folder, filename, and collision rules a
+/// checkout's `documents/` lives under, run read-only over any root — a
+/// Google-Drive matter folder included. Nothing is uploaded, renamed, or
+/// moved.
+///
+/// Each failure's `location` is the path below the tree root, so the same
+/// tree reports identically wherever it lives.
+pub(crate) fn check_documents_root(documents: &Path) -> Result<Vec<CheckFailure>> {
+    match std::fs::symlink_metadata(documents) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Err(anyhow!("{} is not a directory", documents.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(anyhow!("{} does not exist", documents.display()));
+        }
+        Err(error) => {
+            return Err(match cloud_storage_permission_note(&error, documents) {
+                Some(note) => anyhow!("{}: {note}", documents.display()),
+                None => io_error_with(error, documents, "inspect"),
+            })
+        }
+    }
+    let mut errors = Vec::new();
+    let mut unknown: Vec<PathBuf> = Vec::new();
+    // `slug -> the first path filing as it`, for the collision rule.
+    let mut filed: BTreeMap<String, String> = BTreeMap::new();
+    // Sorted: which of two same-slug files is reported as the collision
+    // finding must not depend on readdir order, and two filesystems holding
+    // the same tree must produce the same report (LAW-217).
+    for entry in walkdir::WalkDir::new(documents)
+        .sort_by_file_name()
+        .follow_links(false)
+    {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => return Err(walk_error(error, documents)),
+        };
+        let path = entry.path().to_path_buf();
+        let Ok(relative) = path.strip_prefix(documents) else {
+            continue;
+        };
+        if entry.file_type().is_dir() {
+            // A top-level directory must be a Matter Folder or a sibling
+            // folder: a misspelled one (LAW-217's example) is invisible to
+            // every check keyed to the checkout. Anything below an unknown
+            // directory is that one finding, not one per file. A
+            // dot-directory is Finder and sync-tool litter, like `.DS_Store`,
+            // and is never a document.
+            if entry.depth() == 1 && !entry.file_name().to_string_lossy().starts_with('.') {
+                let name = relative
+                    .to_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| relative.display().to_string());
+                if crate::document_layout::matter_folder_of(relative).is_none()
+                    && !crate::document_layout::is_sibling(relative)
+                {
+                    errors.push(CheckFailure {
+                        location: name,
+                        message: format!(
+                            "not a Matter Folder or sibling folder; the known ones are {}",
+                            known_folders()
+                        ),
+                    });
+                    unknown.push(relative.to_path_buf());
+                }
+            }
+            continue;
+        }
+        if unknown.iter().any(|folder| relative.starts_with(folder)) {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy();
+        // `.gitignore`, and the `.DS_Store` a Finder window leaves in every
+        // matter folder it opens, are never documents.
+        if file_name.starts_with('.') {
+            continue;
+        }
+        let location = slash_path(relative)?;
+        // A pointer left under documents/ is the legacy-layout trap
+        // `slug_from_pointer` refuses: as bytes it names a document that does
+        // not exist. (Authority sidecars are not pointer paths.)
+        if crate::document_sync::is_pointer_path(&path) {
+            errors.push(CheckFailure {
+                location,
+                message: format!(
+                    "looks like a committed Pointer left under the tree; Pointers live under {}/",
+                    crate::document_sync::POINTER_DIRECTORY
+                ),
+            });
+            continue;
+        }
+        // The invoice folder's filename rule, the same one `project sync`
+        // refuses a capture on before anything is uploaded. The message
+        // names no path: `location` already does, and keeping the finding
+        // root-independent means the same tree reports identically wherever
+        // it lives (LAW-217).
+        if crate::document_sync::is_invoice_capture(relative)
+            && !crate::document_sync::is_invoice_filename(&file_name)
+        {
+            errors.push(CheckFailure {
+                location,
+                message: "does not match the invoice filename pattern \
+                          `INV-<digits>.<ext>` (e.g. INV-1.pdf)"
+                    .to_string(),
+            });
+            continue;
+        }
+        // Two files naming one slug cannot both be filed: a Pointer claims
+        // the slug, and `project sync` uploads at most one of them.
+        let (slug, _) = crate::document_layout::slug_of_bytes(relative);
+        let slug = slash_path(&slug)?;
+        match filed.get(&slug) {
+            Some(first) => errors.push(CheckFailure {
+                location,
+                message: format!("files as `{slug}`, which `{first}` already files"),
+            }),
+            None => {
+                filed.insert(slug, location);
+            }
+        }
+    }
+    Ok(errors)
+}
+
+fn known_folders() -> String {
+    let mut names: Vec<&str> = store::document_pointers::MatterFolder::ALL
+        .iter()
+        .map(|folder| folder.as_str())
+        .collect();
+    names.extend_from_slice(store::document_pointers::SIBLING_FOLDERS);
+    names.join(", ")
+}
+
+/// The walk error for [`check_documents_root`]: the macOS permission note
+/// when the block is the CloudStorage one, the plain context otherwise.
+fn walk_error(error: walkdir::Error, documents: &Path) -> anyhow::Error {
+    let Some(io) = error.io_error() else {
+        return anyhow!("{error}");
+    };
+    let path = error.path().unwrap_or(documents).to_path_buf();
+    match cloud_storage_permission_note(io, &path) {
+        Some(note) => anyhow!("{}: {note}", path.display()),
+        None => io_error_with(
+            std::io::Error::new(io.kind(), io.to_string()),
+            documents,
+            "walk",
+        ),
+    }
+}
+
+/// Resolve the Project's matter folder in Google Drive for desktop to its
+/// path on this machine (LAW-217): a folder named after the Project code in
+/// `~/Library/CloudStorage/GoogleDrive-*/My Drive/` or
+/// `~/Library/CloudStorage/GoogleDrive-*/Shared drives/<drive>/`, so nobody
+/// types the CloudStorage path. A folder the Project records by id (LAW-213)
+/// is not resolved here yet: offline, the name is the only handle this
+/// machine has.
+pub(crate) fn resolve_drive_local(project: &str) -> Result<PathBuf> {
+    let home = std::env::var("HOME")
+        .map_err(|_| anyhow!("HOME is not set; cannot look for the Drive for desktop mount"))?;
+    resolve_drive_local_in(project, &Path::new(&home).join(CLOUD_STORAGE))
+}
+
+/// The testable core of [`resolve_drive_local`]: search one
+/// `~/Library/CloudStorage` root.
+fn resolve_drive_local_in(project: &str, cloud_storage: &Path) -> Result<PathBuf> {
+    let mounts = match std::fs::read_dir(cloud_storage) {
+        Ok(mounts) => mounts,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(anyhow!(
+                "no Google Drive for desktop mount: {} does not exist",
+                cloud_storage.display()
+            ));
+        }
+        Err(error) => {
+            return Err(match cloud_storage_permission_note(&error, cloud_storage) {
+                Some(note) => anyhow!("{}: {note}", cloud_storage.display()),
+                None => io_error_with(error, cloud_storage, "read"),
+            })
+        }
+    };
+    let mut found = Vec::new();
+    for mount in mounts {
+        let mount = match mount {
+            Ok(mount) => mount,
+            Err(error) => {
+                return Err(match cloud_storage_permission_note(&error, cloud_storage) {
+                    Some(note) => anyhow!("{}: {note}", cloud_storage.display()),
+                    None => io_error_with(error, cloud_storage, "read"),
+                })
+            }
+        };
+        if !mount
+            .file_name()
+            .to_string_lossy()
+            .starts_with("GoogleDrive-")
+        {
+            continue;
+        }
+        let mount = mount.path();
+        for roots in [
+            vec![mount.join("My Drive")],
+            read_mount_children(&mount.join("Shared drives"))?,
+        ] {
+            for root in roots {
+                let candidate = root.join(project);
+                match std::fs::symlink_metadata(&candidate) {
+                    Ok(metadata) if metadata.is_dir() => found.push(candidate),
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return with_permission_note(Err(error), &candidate),
+                }
+            }
+        }
+    }
+    match found.as_slice() {
+        [] => Err(anyhow!(
+            "no folder named `{project}` was found under any Drive for desktop mount in {}; \
+             pass --documents-dir to point the check at the folder itself",
+            cloud_storage.display()
+        )),
+        [only] => Ok(only.to_path_buf()),
+        many => Err(anyhow!(
+            "{} folders named `{project}` exist across the Drive for desktop mounts; \
+             pass --documents-dir to choose one",
+            many.len()
+        )),
+    }
+}
+
+/// Every child directory of a mount's `Shared drives/`, or none when the
+/// mount has no such folder. A read the macOS permission block refuses
+/// carries the explanation (LAW-217).
+fn read_mount_children(shared_drives: &Path) -> Result<Vec<PathBuf>> {
+    match std::fs::read_dir(shared_drives) {
+        Ok(drives) => Ok(drives
+            .filter_map(|drive| drive.ok())
+            .filter(|drive| drive.file_type().is_ok_and(|kind| kind.is_dir()))
+            .map(|drive| drive.path())
+            .collect()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(match cloud_storage_permission_note(&error, shared_drives) {
+            Some(note) => anyhow!("{}: {note}", shared_drives.display()),
+            None => io_error_with(error, shared_drives, "read"),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,6 +987,7 @@ mod tests {
 
     const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const OTHER_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const BODY: &str = "Synthetic fixture bytes.\n";
 
     #[test]
     fn transcript_gate_rejects_a_source_revision_that_is_no_longer_operative() {
@@ -1551,5 +1856,184 @@ mod tests {
 
         assert!(error.contains("404 Not Found: not found"), "{error}");
         assert!(error.contains("attempt 1 of 3"), "{error}");
+    }
+
+    /// A tree laid out like `documents/`: one Matter Folder, a good invoice,
+    /// and a Finder stray.
+    fn matter_tree(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("Work Product")).unwrap();
+        std::fs::create_dir_all(root.join("invoices")).unwrap();
+        std::fs::create_dir_all(root.join(".apupdates")).unwrap();
+        std::fs::write(root.join("Work Product/memo.md"), BODY).unwrap();
+        std::fs::write(root.join("invoices/INV-1.pdf"), BODY).unwrap();
+        std::fs::write(root.join(".DS_Store"), b"").unwrap();
+    }
+
+    fn locations(errors: &[CheckFailure]) -> Vec<&str> {
+        errors
+            .iter()
+            .map(|failure| failure.location.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_matter_folder_misspelling_and_a_bad_invoice_are_both_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        matter_tree(dir.path());
+        std::fs::create_dir_all(dir.path().join("Docket Filing")).unwrap();
+        std::fs::write(dir.path().join("Docket Filing/order.pdf"), BODY).unwrap();
+        std::fs::write(dir.path().join("invoices/receipt.pdf"), BODY).unwrap();
+
+        let errors = check_documents_root(dir.path()).unwrap();
+        let locations = locations(&errors);
+        assert_eq!(
+            locations,
+            vec!["Docket Filing", "invoices/receipt.pdf"],
+            "both findings, with the paths below the tree root"
+        );
+        assert!(
+            errors[0]
+                .message
+                .contains("not a Matter Folder or sibling folder"),
+            "{}",
+            errors[0].message
+        );
+        assert!(
+            errors[1]
+                .message
+                .contains("does not match the invoice filename pattern"),
+            "{}",
+            errors[1].message
+        );
+    }
+
+    #[test]
+    fn the_same_tree_reports_identically_wherever_it_lives() {
+        let checkout = tempfile::tempdir().unwrap();
+        matter_tree(&checkout.path().join("documents"));
+        let drive = tempfile::tempdir().unwrap();
+        matter_tree(&drive.path().join("shook-estate"));
+
+        let from_checkout = check_documents_root(&checkout.path().join("documents")).unwrap();
+        let from_drive = check_documents_root(&drive.path().join("shook-estate")).unwrap();
+        assert_eq!(from_checkout, from_drive);
+    }
+
+    #[test]
+    fn a_clean_tree_has_no_findings() {
+        let dir = tempfile::tempdir().unwrap();
+        matter_tree(dir.path());
+        assert!(check_documents_root(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_loose_file_at_the_root_is_the_tolerated_legacy_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("memo.md"), BODY).unwrap();
+        assert!(check_documents_root(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn two_folders_filing_one_slug_is_a_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("Work Product")).unwrap();
+        std::fs::create_dir_all(dir.path().join("Discovery")).unwrap();
+        std::fs::write(dir.path().join("Work Product/complaint.pdf"), BODY).unwrap();
+        std::fs::write(dir.path().join("Discovery/complaint.pdf"), BODY).unwrap();
+
+        let errors = check_documents_root(dir.path()).unwrap();
+        assert_eq!(locations(&errors), vec!["Work Product/complaint.pdf"]);
+        assert!(
+            errors[0]
+                .message
+                .contains("files as `complaint.pdf`, which `Discovery/complaint.pdf` already"),
+            "{}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn a_pointer_left_under_the_tree_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("Work Product")).unwrap();
+        std::fs::write(dir.path().join("Work Product/memo.md.yaml"), BODY).unwrap();
+        // An Authority sidecar is not a pointer path and is not reported.
+        std::fs::create_dir_all(dir.path().join("cases")).unwrap();
+        std::fs::write(dir.path().join("cases/acme.authority.yaml"), BODY).unwrap();
+
+        let errors = check_documents_root(dir.path()).unwrap();
+        assert_eq!(locations(&errors), vec!["Work Product/memo.md.yaml"]);
+        assert!(errors[0].message.contains("Pointers live under blobs/"));
+    }
+
+    #[test]
+    fn a_missing_or_non_directory_root_is_an_error_of_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = check_documents_root(&dir.path().join("absent"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("does not exist"), "{error}");
+        std::fs::write(dir.path().join("a-file"), b"").unwrap();
+        let error = check_documents_root(&dir.path().join("a-file"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("is not a directory"), "{error}");
+    }
+
+    #[test]
+    fn the_permission_note_names_the_macos_setting_for_cloud_storage_paths_only() {
+        let cloud = Path::new("/home/lawyer/Library/CloudStorage");
+        let blocked = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let note = note_for_block(&blocked, &cloud.join("GoogleDrive-x/My Drive/acme"), cloud)
+            .expect("the CloudStorage block is explained");
+        assert!(note.contains("Full Disk Access"), "{note}");
+        assert!(note.contains("Files and Folders"), "{note}");
+
+        let elsewhere = Path::new("/home/lawyer/documents");
+        assert!(note_for_block(&blocked, elsewhere, cloud).is_none());
+        assert!(note_for_block(
+            &std::io::Error::from(std::io::ErrorKind::NotFound),
+            &cloud.join("x"),
+            cloud
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn drive_local_finds_one_project_folder_across_mounts() {
+        let cloud = tempfile::tempdir().unwrap();
+        let mount = cloud.path().join("GoogleDrive-nick@firm");
+        std::fs::create_dir_all(mount.join("My Drive/other")).unwrap();
+        std::fs::create_dir_all(mount.join("Shared drives/Legal/shook-estate")).unwrap();
+        let resolved = resolve_drive_local_in("shook-estate", cloud.path()).unwrap();
+        assert_eq!(resolved, mount.join("Shared drives/Legal/shook-estate"));
+    }
+
+    #[test]
+    fn drive_local_refuses_an_ambiguous_or_absent_folder() {
+        let cloud = tempfile::tempdir().unwrap();
+        let error = resolve_drive_local_in("shook-estate", cloud.path())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no folder named `shook-estate`"), "{error}");
+        assert!(error.contains("--documents-dir"), "{error}");
+
+        for drive in ["Shared drives/Legal", "Shared drives/Other", "My Drive"] {
+            std::fs::create_dir_all(
+                cloud
+                    .path()
+                    .join("GoogleDrive-nick@firm")
+                    .join(drive)
+                    .join("shook-estate"),
+            )
+            .unwrap();
+        }
+        let error = resolve_drive_local_in("shook-estate", cloud.path())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("pass --documents-dir to choose one"),
+            "{error}"
+        );
     }
 }
