@@ -58,7 +58,7 @@ async fn run_inner(host: Option<&str>, code: &str, dry_run: bool) -> Result<Exit
 /// notice, the way the door's own refusal statuses would.
 ///
 /// Deliberately never echoes the caller's `code`: the `rust/cleartext-logging`
-/// CodeQL query taints every clap-parsed argument through the unrelated
+/// `CodeQL` query taints every clap-parsed argument through the unrelated
 /// `Commands::Secrets` arm, so echoing it would trip that known false
 /// positive (the same pattern [`super::skill::unresolved_message`] avoids).
 fn report_exit(report: &DriveImportReport, dry_run: bool) -> Result<ExitCode> {
