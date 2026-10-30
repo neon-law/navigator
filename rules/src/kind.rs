@@ -201,6 +201,11 @@ pub enum Kind {
     /// what pursuing it costs (LAW-223). The page a lawyer pitches from,
     /// and the client reads — nothing on it is firm-only.
     LitigationPitch,
+    /// A practice guide: what the matter must prove, what to gather, and
+    /// what it must clear (LAW-208). The lawyer's working plan for a matter —
+    /// the clocks it runs against, the path chosen for it, and the
+    /// eligibility gates on that path, on one page a lawyer works from.
+    PracticeGuide,
 }
 
 /// The group a [`Kind`] belongs to, read by `/notations`' kind catalog
@@ -312,6 +317,7 @@ impl Kind {
         Kind::ClosingRoom,
         Kind::DayLog,
         Kind::LitigationPitch,
+        Kind::PracticeGuide,
     ];
 
     /// The frontmatter string this kind is written as.
@@ -356,6 +362,7 @@ impl Kind {
             Kind::ClosingRoom => "closing_room",
             Kind::DayLog => "day_log",
             Kind::LitigationPitch => "litigation_pitch",
+            Kind::PracticeGuide => "practice_guide",
         }
     }
 
@@ -437,6 +444,9 @@ impl Kind {
             Kind::LitigationPitch => {
                 "A litigation pitch: the claim in one line, one card per claim, and what it costs"
             }
+            Kind::PracticeGuide => {
+                "A practice guide: what the matter must prove, what to gather, and what it must clear"
+            }
         }
     }
 
@@ -498,7 +508,8 @@ impl Kind {
             | Kind::EstatePlanConsole
             | Kind::ClosingRoom
             | Kind::DayLog
-            | Kind::LitigationPitch => false,
+            | Kind::LitigationPitch
+            | Kind::PracticeGuide => false,
         }
     }
 
@@ -555,7 +566,8 @@ impl Kind {
             | Kind::EstatePlanConsole
             | Kind::ClosingRoom
             | Kind::DayLog
-            | Kind::LitigationPitch => false,
+            | Kind::LitigationPitch
+            | Kind::PracticeGuide => false,
         }
     }
 
@@ -584,6 +596,7 @@ impl Kind {
                 | Kind::ClosingRoom
                 | Kind::DayLog
                 | Kind::LitigationPitch
+                | Kind::PracticeGuide
         )
     }
 
@@ -716,7 +729,8 @@ impl Kind {
             | Kind::EstatePlanConsole
             | Kind::ClosingRoom
             | Kind::DayLog
-            | Kind::LitigationPitch => "plain",
+            | Kind::LitigationPitch
+            | Kind::PracticeGuide => "plain",
         }
     }
 
@@ -759,7 +773,7 @@ impl Kind {
             Kind::Github => Category::Engineering,
             Kind::Resume => Category::Profile,
             Kind::TrialPrep => Category::TrialPreparation,
-            // The twelve matter-dashboard page types (see `is_dashboard`).
+            // The fifteen matter-dashboard page types (see `is_dashboard`).
             Kind::ReviewQueueWorkbench
             | Kind::VerifierSplitView
             | Kind::MatterStatusConsole
@@ -773,7 +787,8 @@ impl Kind {
             | Kind::EstatePlanConsole
             | Kind::ClosingRoom
             | Kind::DayLog
-            | Kind::LitigationPitch => Category::MatterDashboard,
+            | Kind::LitigationPitch
+            | Kind::PracticeGuide => Category::MatterDashboard,
             // Asset-lane-only classifications: never declared in a
             // template's frontmatter, so never shown on `/notations`.
             Kind::Transcript
@@ -876,6 +891,7 @@ impl Kind {
                 | Kind::ClosingRoom
                 | Kind::DayLog
                 | Kind::LitigationPitch
+                | Kind::PracticeGuide
                 | Kind::Transcript
                 | Kind::InboundContract
                 | Kind::CertificateOfNaturalization
@@ -930,7 +946,8 @@ impl Kind {
                 | Kind::EstatePlanConsole
                 | Kind::ClosingRoom
                 | Kind::DayLog
-                | Kind::LitigationPitch => false,
+                | Kind::LitigationPitch
+                | Kind::PracticeGuide => false,
             },
             // A matter page's `kind:` in a Project manifest's `pages:` block:
             // exactly the dashboard kinds.
@@ -1296,7 +1313,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_kinds_are_exactly_the_fourteen_catalog_entries() {
+    fn dashboard_kinds_are_exactly_the_fifteen_catalog_entries() {
         let dashboards: Vec<&str> = Kind::ALL
             .iter()
             .filter(|k| k.is_dashboard())
@@ -1319,6 +1336,7 @@ mod tests {
                 "closing_room",
                 "day_log",
                 "litigation_pitch",
+                "practice_guide",
             ],
         );
     }

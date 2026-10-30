@@ -187,6 +187,9 @@ pub enum SectionView {
     PitchHeadline(Vec<SectionRow>),
     ClaimCards(Vec<SectionRow>),
     FeeSummary(Vec<SectionRow>),
+    RuleClocks(Vec<SectionRow>),
+    PathChooser(Vec<SectionRow>),
+    EligibilityChecklist(Vec<SectionRow>),
 }
 
 impl SectionView {
@@ -247,6 +250,9 @@ impl SectionView {
             Self::PitchHeadline(_) => "pitch_headline",
             Self::ClaimCards(_) => "claim_cards",
             Self::FeeSummary(_) => "fee_summary",
+            Self::RuleClocks(_) => "rule_clocks",
+            Self::PathChooser(_) => "path_chooser",
+            Self::EligibilityChecklist(_) => "eligibility_checklist",
         }
     }
 
@@ -307,6 +313,9 @@ impl SectionView {
             Self::PitchHeadline(Vec::new()),
             Self::ClaimCards(Vec::new()),
             Self::FeeSummary(Vec::new()),
+            Self::RuleClocks(Vec::new()),
+            Self::PathChooser(Vec::new()),
+            Self::EligibilityChecklist(Vec::new()),
         ]
     }
 }
@@ -472,6 +481,24 @@ list_section!(
     "Fee summary",
     "No fees have been summarized on this matter yet."
 );
+list_section!(
+    RuleClocksSection,
+    "rule_clocks",
+    "Rule clocks",
+    "No clocks are running on this matter yet."
+);
+list_section!(
+    PathChooserSection,
+    "path_chooser",
+    "Path chooser",
+    "No path has been chosen on this matter yet."
+);
+list_section!(
+    EligibilityChecklistSection,
+    "eligibility_checklist",
+    "Eligibility checklist",
+    "No eligibility gates are marked on this matter yet."
+);
 
 #[component]
 fn ProjectCostsSection(view: ProjectCostsView) -> Element {
@@ -634,6 +661,9 @@ pub fn SectionBody(view: SectionView) -> Element {
         SectionView::PitchHeadline(rows) => rsx! { PitchHeadlineSection { rows } },
         SectionView::ClaimCards(rows) => rsx! { ClaimCardsSection { rows } },
         SectionView::FeeSummary(rows) => rsx! { FeeSummarySection { rows } },
+        SectionView::RuleClocks(rows) => rsx! { RuleClocksSection { rows } },
+        SectionView::PathChooser(rows) => rsx! { PathChooserSection { rows } },
+        SectionView::EligibilityChecklist(rows) => rsx! { EligibilityChecklistSection { rows } },
     }
 }
 
@@ -646,7 +676,7 @@ pub(crate) mod tests {
     /// wasm build of this crate never links `rules`; the server-side test
     /// below proves the two agree.
     fn rules_section_count() -> usize {
-        53
+        56
     }
 
     pub(super) fn render(view: SectionView) -> String {

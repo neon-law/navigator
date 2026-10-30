@@ -9289,7 +9289,7 @@ dependencies = [
 
 [[package]]
 name = "project-scaffold"
-version = "26.10.29"
+version = "26.10.30"
 dependencies = [
  "rules",
  "serde_yaml",

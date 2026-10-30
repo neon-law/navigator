@@ -267,6 +267,9 @@ pub fn load(section: Section, cx: &LoadContext) -> SectionView {
         Section::PitchHeadline => SectionView::PitchHeadline(Vec::new()),
         Section::ClaimCards => SectionView::ClaimCards(Vec::new()),
         Section::FeeSummary => SectionView::FeeSummary(Vec::new()),
+        Section::RuleClocks => SectionView::RuleClocks(Vec::new()),
+        Section::PathChooser => SectionView::PathChooser(Vec::new()),
+        Section::EligibilityChecklist => SectionView::EligibilityChecklist(Vec::new()),
     }
 }
 
@@ -275,18 +278,21 @@ mod tests {
     /// The sections [`load`](super::load) still maps to an empty view, so
     /// their pages always show the empty state. Loading data into one means
     /// removing it from this list in the same change.
-    const UNLOADED: [&str; 14] = [
+    const UNLOADED: [&str; 17] = [
         "ActivityLog",
         "AssertionPanel",
         "ClaimCards",
         "CommentRail",
+        "EligibilityChecklist",
         "FeeSummary",
         "ItemDetail",
         "MetricStrip",
         "PackageManifest",
+        "PathChooser",
         "PitchHeadline",
         "PrebillReview",
         "QueueRail",
+        "RuleClocks",
         "SourcePagePanel",
         "Stepper",
         "WorkstreamCards",
