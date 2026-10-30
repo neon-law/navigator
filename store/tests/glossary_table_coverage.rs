@@ -67,7 +67,11 @@ fn every_schema_table_has_exactly_one_glossary_definition() {
                 path,
             )
         })
-        .filter(|(name, _)| name.ends_with(".md") && name != "README.md")
+        .filter(|(name, path)| {
+            path.extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+                && name != "README.md"
+        })
         .map(|(name, path)| (name, std::fs::read_to_string(path).expect("glossary text")))
         .collect();
     let entries: Vec<_> = owned
