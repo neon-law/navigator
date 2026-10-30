@@ -353,3 +353,418 @@ fn ChartLegend(series: Vec<Series>) -> Element {
     }
 }
 
+/// A KPI tile: a label, a headline value, an optional delta versus the prior
+/// period, and an optional [`Sparkline`] of the recent trend. The delta's
+/// direction is a prop — a card cannot know whether down is good.
+#[component]
+pub fn StatCard(
+    /// What the number measures, e.g. `Weekly visits`.
+    label: String,
+    /// The headline value, preformatted by the caller (`1,204`, `$4,200`).
+    value: String,
+    /// The change versus the prior period, preformatted (`+12%`).
+    #[props(default)]
+    delta: Option<String>,
+    /// The delta's direction. Independent of the value and of the text.
+    #[props(default)]
+    delta_tone: DeltaTone,
+    /// Recent points behind the headline, drawn as a sparkline.
+    #[props(default)]
+    sparkline: Option<Vec<SeriesPoint>>,
+) -> Element {
+    rsx! {
+        div { class: "nav-chart__stat",
+            p { class: "nav-chart__stat-label", "{label}" }
+            p { class: "nav-chart__stat-value",
+                "{value}"
+                if let Some(delta) = &delta {
+                    span { class: "nav-chart__delta {delta_tone.class()}", "{delta}" }
+                }
+            }
+            match sparkline {
+                Some(points) => rsx! {
+                    Sparkline {
+                        title: format!("{label} trend"),
+                        points,
+                    }
+                },
+                None => rsx! {},
+            }
+        }
+    }
+}
+
+/// A multi-series time line. Optional area fill under every series (`area`).
+/// The y domain scales from the data; a series with a single point renders
+/// a dot, not a degenerate path.
+#[component]
+pub fn LineChart(
+    /// Heading used for the SVG name, the `<title>`, and the table caption.
+    title: String,
+    /// One sentence on what the lines show, for the `<desc>`.
+    description: String,
+    series: Vec<Series>,
+    /// Fill under every series (rendered beneath the stroke).
+    #[props(default)]
+    area: bool,
+    /// Height in viewBox units; width is fluid via the viewBox.
+    #[props(default = 280.0)]
+    height: f64,
+) -> Element {
+    const W: f64 = 600.0;
+    const LEFT: f64 = 44.0;
+    const RIGHT: f64 = W - 16.0;
+    const TOP: f64 = 16.0;
+    const X_LABEL_MAX: usize = 12;
+
+    let bottom = height - 28.0;
+    let all_values: Vec<f64> = series
+        .iter()
+        .flat_map(|s| s.points.iter().map(|p| p.value))
+        .filter(|value| value.is_finite())
+        .collect();
+    let domain = value_domain(&all_values, false);
+    let (lo, hi) = domain;
+    let span = hi - lo;
+
+    rsx! {
+        ChartFrame {
+            title,
+            description,
+            series: series.clone(),
+            view_box: format!("0 0 {W} {height}"),
+            variant: "nav-chart--line".to_string(),
+            legend: true,
+            g { class: "nav-chart__grid",
+                for fraction in GRID_FRACTIONS {
+                    {let gy = TOP + fraction * (bottom - TOP);
+                     let tick = hi - fraction * span;
+                     rsx! {
+                        line {
+                            x1: "{LEFT}", y1: "{gy}", x2: "{RIGHT}", y2: "{gy}",
+                            stroke: "var(--nav-chart-grid)", "stroke-width": "1",
+                        }
+                        text {
+                            x: "{LEFT - 8.0}", y: "{gy}",
+                            "text-anchor": "end", "dominant-baseline": "central",
+                            class: "nav-chart__tick", fill: "currentColor",
+                            "{format_value(tick)}"
+                        }
+                     }}
+                }
+            }
+            for s in &series {
+                {let points = drawable(&s.points);
+                 let n = points.len();
+                 let coords: Vec<(f64, f64)> = points
+                     .iter()
+                     .enumerate()
+                     .map(|(index, (_, value))| {
+                         (
+                             x_at(index, n, LEFT, RIGHT),
+                             scaled_value(*value, domain, bottom, TOP),
+                         )
+                     })
+                     .collect();
+                 let stroke = tone_var(s.tone);
+                 rsx! {
+                    if area && coords.len() > 1 {
+                        path {
+                            d: "{area_path(&coords, bottom)}",
+                            fill: "{stroke}", "fill-opacity": "0.15", stroke: "none",
+                        }
+                    }
+                    if coords.len() == 1 {
+                        circle {
+                            cx: "{coords[0].0}", cy: "{coords[0].1}", r: "3.5",
+                            fill: "{stroke}", class: "nav-chart__dot",
+                        }
+                    } else if coords.len() > 1 {
+                        path {
+                            d: "{line_path(&coords)}",
+                            fill: "none", stroke: "{stroke}",
+                            "stroke-width": "2", "stroke-linecap": "round",
+                            "stroke-linejoin": "round", class: "nav-chart__line",
+                        }
+                    }
+                 }}
+            }
+            if let Some(first) = series.first() {
+                {let points = drawable(&first.points);
+                 let n = points.len();
+                 // At most six x labels: step so crowded periods thin out.
+                 let stride = n.div_ceil(6);
+                 rsx! {
+                    for (index, (label, _)) in points.iter().enumerate() {
+                        {if index % stride == 0 || index + 1 == n {
+                            let x = x_at(index, n, LEFT, RIGHT);
+                            rsx! {
+                                text {
+                                    x: "{x}", y: "{bottom + 18.0}",
+                                    "text-anchor": "middle",
+                                    class: "nav-chart__tick", fill: "currentColor",
+                                    title { "{label}" }
+                                    "{truncate_label(label, X_LABEL_MAX)}"
+                                }
+                            }
+                        } else { rsx! {} }}
+                    }
+                 }}
+            }
+        }
+    }
+}
+
+/// A single-series bar chart, vertical by default or horizontal. The value
+/// domain always includes zero, so bar lengths are honest proportions; a
+/// zero bar renders at its true (zero) height. Categorical labels truncate
+/// with a `<title>`; the companion table carries the full label.
+#[component]
+pub fn BarChart(
+    /// Heading used for the SVG name, the `<title>`, and the table caption.
+    title: String,
+    /// One sentence on what the bars show, for the `<desc>`.
+    description: String,
+    series: Series,
+    /// Lay the bars out horizontally (labels at the left, rows top to
+    /// bottom); the height then derives from the row count.
+    #[props(default)]
+    horizontal: bool,
+    /// Height in viewBox units for the vertical orientation.
+    #[props(default = 280.0)]
+    height: f64,
+) -> Element {
+    const W: f64 = 600.0;
+    const VERTICAL_LABEL_MAX: usize = 12;
+    const HORIZONTAL_LABEL_MAX: usize = 18;
+    const LABEL_W: f64 = 140.0;
+    const ROW_H: f64 = 36.0;
+    const BAR_H: f64 = 14.0;
+
+    let points = drawable(&series.points);
+    let n = points.len();
+    let values: Vec<f64> = points.iter().map(|(_, value)| *value).collect();
+    let domain = value_domain(&values, true);
+    let stroke = tone_var(series.tone);
+
+    let view_box = if horizontal {
+        format!("0 0 {W} {}", count_units(n) * ROW_H + 16.0)
+    } else {
+        format!("0 0 {W} {height}")
+    };
+    let variant = if horizontal {
+        "nav-chart--bar-horizontal"
+    } else {
+        "nav-chart--bar"
+    };
+
+    rsx! {
+        ChartFrame {
+            title,
+            description,
+            series: vec![series.clone()],
+            view_box,
+            variant: variant.to_string(),
+            for (index, (label, value)) in points.iter().enumerate() {
+                {if horizontal {
+                    // Horizontal rows: label column, then the bar's track.
+                    let row_top = 8.0 + count_units(index) * ROW_H;
+                    let track_left = LABEL_W + 12.0;
+                    let track_right = W - 8.0;
+                    let baseline = scaled_value(0.0, domain, track_left, track_right);
+                    let end = scaled_value(*value, domain, track_left, track_right);
+                    let (bar_x, bar_w) = if end >= baseline {
+                        (baseline, end - baseline)
+                    } else {
+                        (end, baseline - end)
+                    };
+                    rsx! {
+                        text {
+                            x: "{LABEL_W}", y: "{row_top + ROW_H / 2.0}",
+                            "text-anchor": "end", "dominant-baseline": "central",
+                            class: "nav-chart__tick", fill: "currentColor",
+                            title { "{label}" }
+                            "{truncate_label(label, HORIZONTAL_LABEL_MAX)}"
+                        }
+                        rect {
+                            x: "{bar_x}", y: "{row_top + (ROW_H - BAR_H) / 2.0}",
+                            width: "{bar_w}", height: "{BAR_H}",
+                            fill: "{stroke}", class: "nav-chart__bar",
+                            title { "{label}: {format_value(*value)}" }
+                        }
+                    }
+                } else {
+                    // Vertical columns rising from the value axis' baseline.
+                    let left = 44.0;
+                    let right = W - 16.0;
+                    let bottom = height - 28.0;
+                    let top = 16.0;
+                    let slot = if n == 0 {
+                        0.0
+                    } else {
+                        (right - left) / count_units(n)
+                    };
+                    let bar_w = slot * 0.7;
+                    let bar_x = left + count_units(index) * slot + slot * 0.15;
+                    let baseline = scaled_value(0.0, domain, bottom, top);
+                    let value_y = scaled_value(*value, domain, bottom, top);
+                    let (bar_y, bar_h) = if value_y <= baseline {
+                        (value_y, baseline - value_y)
+                    } else {
+                        (baseline, value_y - baseline)
+                    };
+                    rsx! {
+                        rect {
+                            x: "{bar_x}", y: "{bar_y}",
+                            width: "{bar_w}", height: "{bar_h}",
+                            fill: "{stroke}", class: "nav-chart__bar",
+                            title { "{label}: {format_value(*value)}" }
+                        }
+                        text {
+                            x: "{bar_x + bar_w / 2.0}", y: "{bottom + 18.0}",
+                            "text-anchor": "middle",
+                            class: "nav-chart__tick", fill: "currentColor",
+                            title { "{label}" }
+                            "{truncate_label(label, VERTICAL_LABEL_MAX)}"
+                        }
+                    }
+                }}
+            }
+        }
+    }
+}
+
+/// Proportions of a whole as donut slices, the center showing the total.
+/// Slices read the categorical ramp starting at the series' own tone; a
+/// zero total renders the track and the center total honestly (no slices).
+#[component]
+pub fn DonutChart(
+    /// Heading used for the SVG name, the `<title>`, and the table caption.
+    title: String,
+    /// One sentence on what the proportions show, for the `<desc>`.
+    description: String,
+    /// The slices: one point per slice, its value the share of the total.
+    series: Series,
+    /// The donut's (square) side in viewBox units.
+    #[props(default = 200.0)]
+    size: f64,
+    /// The ring's thickness in viewBox units.
+    #[props(default = 24.0)]
+    thickness: f64,
+) -> Element {
+    let center = size / 2.0;
+    let radius = (size - thickness) / 2.0;
+    let circumference = std::f64::consts::TAU * radius;
+    let points = drawable(&series.points);
+    let total: f64 = points.iter().map(|(_, value)| value).sum();
+
+    rsx! {
+        ChartFrame {
+            title,
+            description,
+            series: vec![series.clone()],
+            view_box: format!("0 0 {size} {size}"),
+            variant: "nav-chart--donut".to_string(),
+            legend: true,
+            circle {
+                cx: "{center}", cy: "{center}", r: "{radius}",
+                fill: "none", stroke: "var(--nav-chart-grid)",
+                "stroke-width": "{thickness}",
+            }
+            {let mut start = 0.0;
+             rsx! {
+                for (index, (label, value)) in points.iter().enumerate() {
+                    {let fraction = donut_fraction(*value, total);
+                     if fraction <= 0.0 { rsx! {} } else {
+                        let dash = fraction * circumference;
+                        let angle = start * 360.0 - 90.0;
+                        start += fraction;
+                        rsx! {
+                            circle {
+                                cx: "{center}", cy: "{center}", r: "{radius}",
+                                fill: "none",
+                                stroke: "{tone_var(series.tone + index)}",
+                                "stroke-width": "{thickness}",
+                                "stroke-dasharray": "{dash} {circumference}",
+                                transform: "rotate({angle} {center} {center})",
+                                class: "nav-chart__slice",
+                                title { "{label}: {format_value(*value)}" }
+                            }
+                        }
+                     }}
+                }
+             }}
+            text {
+                x: "{center}", y: "{center}",
+                "text-anchor": "middle", "dominant-baseline": "central",
+                "font-size": "24", fill: "currentColor",
+                class: "nav-chart__total",
+                "{format_value(total)}"
+            }
+        }
+    }
+}
+
+/// A tiny inline trend: no axes, no labels, no grid. Rendered inside
+/// [`StatCard`] but able to stand alone; a single point renders a dot.
+#[component]
+pub fn Sparkline(
+    /// The accessible name — what the trend measures.
+    title: String,
+    points: Vec<SeriesPoint>,
+    /// Which ramp tone to stroke.
+    #[props(default)]
+    tone: usize,
+    /// Width in viewBox units.
+    #[props(default = 96.0)]
+    width: f64,
+    /// Height in viewBox units.
+    #[props(default = 28.0)]
+    height: f64,
+) -> Element {
+    const PAD: f64 = 3.0;
+
+    let points = drawable(&points);
+    let n = points.len();
+    let values: Vec<f64> = points.iter().map(|(_, value)| *value).collect();
+    let domain = value_domain(&values, false);
+    let stroke = tone_var(tone);
+    let coords: Vec<(f64, f64)> = points
+        .iter()
+        .enumerate()
+        .map(|(index, (_, value))| {
+            (
+                x_at(index, n, PAD, width - PAD),
+                scaled_value(*value, domain, height - PAD, PAD),
+            )
+        })
+        .collect();
+
+    rsx! {
+        ChartFrame {
+            title: title.clone(),
+            description: "The recent trend, drawn without axes. The companion table carries the values.".to_string(),
+            series: vec![Series::new(title.clone(), tone, points.iter().map(|(label, value)| SeriesPoint::new(*label, *value)).collect())],
+            view_box: format!("0 0 {width} {height}"),
+            variant: "nav-chart--sparkline".to_string(),
+            value_label: "Trend".to_string(),
+            if coords.len() == 1 {
+                circle {
+                    cx: "{coords[0].0}", cy: "{coords[0].1}", r: "2.5",
+                    fill: "{stroke}", class: "nav-chart__dot",
+                }
+            } else if coords.len() > 1 {
+                path {
+                    d: "{line_path(&coords)}",
+                    fill: "none", stroke: "{stroke}",
+                    "stroke-width": "1.5", "stroke-linecap": "round",
+                    "stroke-linejoin": "round", class: "nav-chart__line",
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
