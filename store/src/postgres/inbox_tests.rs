@@ -233,6 +233,7 @@ fn inbound<'a>(
         email_conversation_id: None,
         attachment_asset_id: None,
         occurred_at: "2026-09-27T00:00:00Z",
+        raw_storage_key: None,
     }
 }
 
@@ -506,6 +507,218 @@ async fn attribution_projects_moves_and_dedups() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// AC3 + AC5 seed: a token-less .eml walks the real adapter → ingest seam,
+/// replays deduped via the scoped digest, and leaves one row. The digest
+/// identity — not a native Message-ID — is what carries idempotency here.
+#[tokio::test]
+async fn email_import_survives_replay_without_a_message_id() {
+    use crate::inbox_import::{EmailAdapter, ImportSource as _};
+
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    // No Message-ID header: the digest fallback is the only identity.
+    let raw = b"From: Clerk <clerk@court.example>\r\n\
+                To: nick@neonlaw.com\r\n\
+                Subject: Re: discovery schedule\r\n\
+                Date: Tue, 28 Oct 2026 14:03:00 +0000\r\n\
+                \r\n\
+                The schedule is entered.";
+
+    let mut first = None::<crate::inbox::IngestedInbound>;
+    for _ in 0..2 {
+        let parsed = EmailAdapter
+            .parse("nick@neonlaw.com", raw)
+            .expect("token-less email parses");
+        assert_eq!(parsed.len(), 1);
+        let ingest = crate::inbox_import::import_message_to_ingest(
+            &parsed[0],
+            fixture.firm,
+            "nick@neonlaw.com",
+        );
+        let ingested = pg_inbox::ingest_message_on(&fixture.pg, direction::INBOUND, None, &ingest)
+            .await
+            .unwrap();
+        if let Some(first) = first {
+            assert!(ingested.deduped, "the replay dedups");
+            assert_eq!(ingested.message_id, first.message_id);
+            assert_eq!(ingested.conversation_id, first.conversation_id);
+        }
+        first = Some(ingested);
+    }
+    assert_eq!(message_count(&fixture.pg).await, 1);
+    assert_eq!(conversation_count(&fixture.pg).await, 1);
+}
+
+/// AC3 (CSV) + AC9 store half: a LinkedIn export threads into one
+/// Conversation per CONVERSATION ID, replaying the same export dedups every
+/// row, and the member's own row lands `outbound` with the author set.
+#[tokio::test]
+async fn linkedin_import_threads_one_conversation_per_export_thread() {
+    use crate::inbox_import::{ImportSource as _, LinkedInAdapter};
+
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let csv = "CONVERSATION ID,FROM,SENDER PROFILE URL,TO,DATE,SUBJECT,CONTENT\r\n\
+               conv-1,Jordan Cliente,https://linkedin.com/in/jordan,Me,2026-10-29 10:00:00 UTC,,Can we talk about the retainer?\r\n\
+               conv-1,Me,https://linkedin.com/in/me,Jordan Cliente,2026-10-29 11:00:00 UTC,,Of course - Tuesday works.\r\n\
+               conv-2,Payee Recruiter,https://linkedin.com/in/recruiter,Me,2026-10-28 09:30:00 UTC,,Role opening\r\n";
+    let mailbox = "https://linkedin.com/in/me";
+
+    let mut thread_conversation_id = None;
+    let mut replay_ids = None::<Vec<crate::inbox::IngestedInbound>>;
+    for _ in 0..2 {
+        let parsed = LinkedInAdapter
+            .parse(mailbox, csv.as_bytes())
+            .expect("export parses");
+        assert_eq!(parsed.len(), 3);
+        let mut pass = Vec::new();
+        for message in &parsed {
+            // The member's own rows are lawyer-sent; the door resolves the
+            // mailbox owner's Person for them.
+            let (direction_value, author) =
+                if message.direction == crate::inbox_import::Direction::Outbound {
+                    (direction::OUTBOUND, Some(fixture.owner))
+                } else {
+                    (direction::INBOUND, None)
+                };
+            let ingest =
+                crate::inbox_import::import_message_to_ingest(message, fixture.firm, mailbox);
+            let ingested =
+                pg_inbox::ingest_message_on(&fixture.pg, direction_value, author, &ingest)
+                    .await
+                    .unwrap();
+            pass.push(ingested);
+            // The conv-1 thread holds the pair this test projects later; the
+            // inbound member of the pair is the first row of the thread.
+            if message.provider_thread_ref.as_deref() == Some("conv-1")
+                && message.direction == crate::inbox_import::Direction::Inbound
+            {
+                thread_conversation_id = Some(ingested.conversation_id);
+            }
+        }
+        if let Some(first) = &replay_ids {
+            for (first, replayed) in first.iter().zip(&pass) {
+                assert!(replayed.deduped, "replayed export dedups");
+                assert_eq!(replayed.message_id, first.message_id);
+            }
+        }
+        replay_ids = Some(pass);
+    }
+    // Two CONVERSATION IDs → exactly two Conversations, three Messages.
+    assert_eq!(conversation_count(&fixture.pg).await, 2);
+    assert_eq!(message_count(&fixture.pg).await, 3);
+
+    // AC7 (linkedin): attributing the conv-1 thread projects a
+    // linkedin_inbound/linkedin_outbound Communication pair.
+    let thread = thread_conversation_id.expect("conv-1 thread ingested");
+    pg_inbox::assign_on(
+        &fixture.pg,
+        &fixture.db,
+        fixture.owner,
+        thread,
+        fixture.project,
+    )
+    .await
+    .unwrap();
+    let communications = crate::communications::for_project(&fixture.db, fixture.project)
+        .await
+        .unwrap();
+    assert_eq!(communications.len(), 2, "one Communication per message");
+    let mut channels = communications
+        .iter()
+        .map(|communication| communication.channel.as_str())
+        .collect::<Vec<_>>();
+    channels.sort_unstable();
+    assert_eq!(
+        channels,
+        vec![
+            crate::communications::channel::LINKEDIN_INBOUND,
+            crate::communications::channel::LINKEDIN_OUTBOUND,
+        ]
+    );
+}
+
+/// AC6 seed: the verbatim payload's object-storage key recorded on ingest
+/// survives the read path — bytes never live in a row, only the key.
+#[tokio::test]
+async fn raw_storage_key_persists_on_imported_messages() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let mut ingest = inbound(
+        fixture.firm,
+        channel::EMAIL,
+        "nick@neonlaw.com",
+        "msg-1",
+        "sender@example.com",
+    );
+    ingest.raw_storage_key = Some("mail/1761800000-notice.eml");
+    let ingested = pg_inbox::ingest_inbound_on(&fixture.pg, &ingest)
+        .await
+        .unwrap();
+    let message = pg_inbox::message_by_id_on(&fixture.pg, ingested.message_id)
+        .await
+        .unwrap()
+        .expect("message row");
+    assert_eq!(
+        message.raw_storage_key.as_deref(),
+        Some("mail/1761800000-notice.eml")
+    );
+}
+
+/// AC8 store half: the attachment slot is first-wins — re-running the import
+/// never re-points the Message, and the remaining attachments of the same
+/// message resolve through MailProvenance, not this slot.
+#[tokio::test]
+async fn attachment_slot_is_first_wins() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let ingested = pg_inbox::ingest_inbound_on(
+        &fixture.pg,
+        &inbound(
+            fixture.firm,
+            channel::EMAIL,
+            "nick@neonlaw.com",
+            "msg-1",
+            "sender@example.com",
+        ),
+    )
+    .await
+    .unwrap();
+    let seed_asset = |id: Uuid, sha: &str| {
+        sqlx::query(
+            "INSERT INTO asset (id, storage_key, content_type, byte_size, sha256_hex) \
+             VALUES ($1, 'projects/x/documents/' || $1::text, 'application/pdf', 3, $2)",
+        )
+        .bind(id)
+        .bind(sha)
+    };
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    seed_asset(first, "aa")
+        .execute(fixture.pg.pool())
+        .await
+        .unwrap();
+    seed_asset(second, "bb")
+        .execute(fixture.pg.pool())
+        .await
+        .unwrap();
+    pg_inbox::set_attachment_asset_on(&fixture.pg, ingested.message_id, first)
+        .await
+        .unwrap();
+    pg_inbox::set_attachment_asset_on(&fixture.pg, ingested.message_id, second)
+        .await
+        .unwrap();
+    let message = pg_inbox::message_by_id_on(&fixture.pg, ingested.message_id)
+        .await
+        .unwrap()
+        .expect("message row");
+    assert_eq!(message.attachment_asset_id, Some(first));
 }
 
 /// Promotional opt-out suppresses the queued promotional send for that

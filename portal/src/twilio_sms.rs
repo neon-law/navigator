@@ -388,6 +388,7 @@ async fn ingest_sms(
             email_conversation_id: None,
             attachments: Vec::new(),
             occurred_at: &chrono::Utc::now().to_rfc3339(),
+            raw_storage_key: None,
         },
     )
     .await

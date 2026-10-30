@@ -70,6 +70,8 @@ pub mod channel {
     pub const YOUTUBE_OUTBOUND: &str = "youtube_outbound";
     pub const X_INBOUND: &str = "x_inbound";
     pub const X_OUTBOUND: &str = "x_outbound";
+    pub const LINKEDIN_INBOUND: &str = "linkedin_inbound";
+    pub const LINKEDIN_OUTBOUND: &str = "linkedin_outbound";
     /// A phone call or other off-system contact, logged after the fact as
     /// an internal note (LAW-140). The row's `direction` is its visibility
     /// (`internal` unless the firm chose to share it); the call's own

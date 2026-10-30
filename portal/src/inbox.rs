@@ -188,6 +188,7 @@ async fn ingest_support_email_for_firm(
             email_conversation_id,
             attachments,
             occurred_at: &chrono::Utc::now().to_rfc3339(),
+            raw_storage_key: None,
         },
     )
     .await
@@ -802,6 +803,7 @@ pub async fn sms_inbound(
             email_conversation_id: None,
             attachments: Vec::new(),
             occurred_at: &chrono::Utc::now().to_rfc3339(),
+            raw_storage_key: None,
         },
     )
     .await
@@ -1411,6 +1413,7 @@ mod tests {
             promotional_opt_in: false,
             email_conversation_id: None,
             attachments: Vec::new(),
+            raw_storage_key: None,
             occurred_at: "2026-10-09T00:00:00Z",
         }
     }

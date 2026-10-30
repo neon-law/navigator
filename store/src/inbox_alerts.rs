@@ -155,6 +155,7 @@ mod tests {
                 email_conversation_id: None,
                 attachments: Vec::new(),
                 occurred_at: "2026-10-10T00:00:00Z",
+                raw_storage_key: None,
             },
         )
         .await
