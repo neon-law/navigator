@@ -27,8 +27,10 @@
 //!   nothing else. Sanitization is the caller's job (the sandbox session
 //!   owns it); the gateway never receives a person id to leak.
 
+pub mod stub;
 pub mod vertex;
 
+pub use stub::StubModelProvider;
 pub use vertex::{adc_token_provider, StaticToken, TokenProvider, VertexProvider};
 
 use std::collections::HashMap;
@@ -56,7 +58,7 @@ pub struct Message {
     pub content: String,
 }
 
-/// A skill the session loaded, by slug — e.g. a vendored LawDroid
+/// A skill the session loaded, by slug — e.g. a vendored `LawDroid`
 /// `drafting` skill. The gateway renders each id's instruction text into
 /// the system context (see [`render_system_prompt`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,10 +129,7 @@ pub trait ModelProvider: Send + Sync {
 /// an error — and a session with no resolvable skills renders no system
 /// prompt at all.
 #[must_use]
-pub fn render_system_prompt(
-    active_skills: &[SkillId],
-    library: &SkillLibrary,
-) -> Option<String> {
+pub fn render_system_prompt(active_skills: &[SkillId], library: &SkillLibrary) -> Option<String> {
     let rendered: Vec<&str> = active_skills
         .iter()
         .filter_map(|SkillId(slug)| library.get(slug).map(String::as_str))
@@ -140,7 +139,7 @@ pub fn render_system_prompt(
 
 /// Token usage at the given rates, in integer cents. Rates are cents per
 /// million tokens (e.g. Claude Sonnet 5.5 lists $2 input / $10 output per
-/// MTok → 200 and 1,000); the product is summed and rounded **up** to the
+/// `MTok` → 200 and 1,000); the product is summed and rounded **up** to the
 /// whole cent, so a sub-cent completion still registers on the meter
 /// instead of riding free between whole cents. The arithmetic is u128 —
 /// a u64 token count times a u64 rate overflows u64 long before any
@@ -209,7 +208,10 @@ mod tests {
     #[test]
     fn skills_render_in_request_order_into_one_system_prompt() {
         let library = [
-            ("drafting".to_string(), "Draft with citation tags.".to_string()),
+            (
+                "drafting".to_string(),
+                "Draft with citation tags.".to_string(),
+            ),
             (
                 "research-start".to_string(),
                 "Begin every research task with a plan.".to_string(),
@@ -230,9 +232,12 @@ mod tests {
 
     #[test]
     fn a_missing_skill_degrades_to_none_instead_of_erroring() {
-        let library = [("drafting".to_string(), "Draft with citation tags.".to_string())]
-            .into_iter()
-            .collect();
+        let library = [(
+            "drafting".to_string(),
+            "Draft with citation tags.".to_string(),
+        )]
+        .into_iter()
+        .collect();
         // One known skill, one unknown: the unknown is skipped, the known
         // still renders.
         let prompt = render_system_prompt(
