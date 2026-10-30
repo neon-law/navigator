@@ -125,8 +125,23 @@ pub async fn matter_page_lens(
     )
 }
 
+/// The built-in Communications tab (LAW-238 D4): the Project's inbox route,
+/// which the shared Inbox renderers already serve project-scoped. `inbox` is
+/// a reserved slug the manifest cannot declare, so the tab is a built-in
+/// appended after the manifest pages — and only for the firm-side lenses the
+/// route admits; the route refuses Clients outright.
+#[cfg(feature = "server")]
+#[must_use]
+pub fn communications_tab(code: &str, lens: PageLens) -> Option<PageTab> {
+    (lens != PageLens::Client).then(|| PageTab {
+        label: "Communications".to_string(),
+        href: format!("/app/projects/{code}/inbox"),
+    })
+}
+
 /// The page strip for the matter show page: [`page_tabs`] over the
-/// Project's stored pages, or nothing when it declares none. A read failure
+/// Project's stored pages — plus the built-in [`communications_tab`] —
+/// or nothing when it declares none. A read failure
 /// drops the strip rather than the show page.
 #[cfg(feature = "server")]
 pub async fn stored_page_tabs(
@@ -142,7 +157,11 @@ pub async fn stored_page_tabs(
         return Vec::new();
     }
     let entries: Vec<rules::pages::PageEntry> = stored.into_iter().map(|page| page.entry).collect();
-    page_tabs(code, &entries, lens)
+    let mut tabs = page_tabs(code, &entries, lens);
+    if let Some(communications) = communications_tab(code, lens) {
+        tabs.push(communications);
+    }
+    tabs
 }
 
 /// The sections `slug` shows on `lens`, in declared order, or `None` when the
@@ -937,6 +956,23 @@ mod tests {
             let lawyer = page_tabs("m", &pages(), PageLens::Lawyer);
             assert_eq!(lawyer.len(), 3);
             assert_eq!(lawyer[2].label, "Billing");
+        }
+
+        #[test]
+        fn the_communications_tab_links_the_project_inbox_for_firm_side_lenses() {
+            use super::super::communications_tab;
+            let lawyer =
+                communications_tab("m", PageLens::Lawyer).expect("lawyer lens has the tab");
+            assert_eq!(lawyer.label, "Communications");
+            assert_eq!(lawyer.href, "/app/projects/m/inbox");
+            assert!(
+                communications_tab("m", PageLens::Clerk).is_some(),
+                "clerks read the inbox too"
+            );
+            assert!(
+                communications_tab("m", PageLens::Client).is_none(),
+                "the Project inbox route refuses Clients"
+            );
         }
     }
 }
