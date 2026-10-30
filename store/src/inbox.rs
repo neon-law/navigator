@@ -217,6 +217,14 @@ pub struct IntakeRow {
     pub external_address: String,
     pub external_name: Option<String>,
     pub subject: Option<String>,
+    /// The direction of the conversation's most recent message — what the
+    /// `?direction=` filter matches rows on (LAW-238 D3). Empty when the
+    /// conversation has no messages yet, so an empty conversation matches
+    /// no direction filter.
+    pub direction: String,
+    /// Whether any message on the conversation carries a filed attachment.
+    /// What the `?attachments=true` filter matches rows on.
+    pub has_attachments: bool,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -1519,6 +1527,7 @@ pub async fn list_intake(db: &SurrealDb, actor_id: Uuid) -> Result<Vec<IntakeRow
     for conversation in conversations {
         let delivery_state = latest_outbound_state(db, conversation.id).await?;
         let assignee = assignee_label(db, conversation.project_id).await?;
+        let messages = messages_for(db, conversation.id).await?;
         rows.push(IntakeRow {
             contact: contact_for(&phones, &conversation),
             id: conversation.id,
@@ -1539,6 +1548,8 @@ pub async fn list_intake(db: &SurrealDb, actor_id: Uuid) -> Result<Vec<IntakeRow
             external_address: conversation.external_address,
             external_name: conversation.external_name,
             subject: conversation.subject,
+            direction: latest_direction(&messages),
+            has_attachments: has_attachments(&messages),
             updated_at: conversation.updated_at,
         });
     }
@@ -1719,6 +1730,7 @@ pub async fn list_project(
     let mut listed = Vec::new();
     for conversation in conversations {
         let delivery_state = latest_outbound_state(db, conversation.id).await?;
+        let messages = messages_for(db, conversation.id).await?;
         listed.push(IntakeRow {
             contact: contact_for(&phones, &conversation),
             id: conversation.id,
@@ -1733,6 +1745,8 @@ pub async fn list_project(
             external_address: conversation.external_address,
             external_name: conversation.external_name,
             subject: conversation.subject,
+            direction: latest_direction(&messages),
+            has_attachments: has_attachments(&messages),
             updated_at: conversation.updated_at,
         });
     }
@@ -2536,6 +2550,24 @@ async fn latest_outbound_state(
             || delivery::RECEIVED.to_string(),
             |message| message.delivery_state.clone(),
         ))
+}
+
+/// The direction of a conversation's most recent message (`occurred_at, id`
+/// order), empty when it has none — what the list view's `?direction=`
+/// filter matches rows on (LAW-238 D3).
+fn latest_direction(messages: &[Message]) -> String {
+    messages
+        .last()
+        .map(|message| message.direction.clone())
+        .unwrap_or_default()
+}
+
+/// Whether any message on the conversation carries a filed attachment —
+/// what the list view's `?attachments=true` filter matches rows on.
+fn has_attachments(messages: &[Message]) -> bool {
+    messages
+        .iter()
+        .any(|message| message.attachment_asset_id.is_some())
 }
 
 pub(crate) async fn assignee_label(

@@ -62,28 +62,35 @@ fn finish(result: Result<Value>) -> ExitCode {
     }
 }
 
-pub async fn list(host: Option<&str>, project: Option<&str>, channel: Option<&str>) -> ExitCode {
+pub async fn list(
+    host: Option<&str>,
+    project: Option<&str>,
+    channel: Option<&str>,
+    direction: Option<&str>,
+    attachments: bool,
+) -> ExitCode {
     finish(
         async {
             let (base, token, id) = coordinates(host, project).await?;
-            let rows = call(
-                reqwest::Client::new()
-                    .get(format!("{base}/app/api/projects/{id}/communications"))
-                    .bearer_auth(token),
-                "list",
-            )
-            .await?;
-            Ok(match channel {
-                Some(channel) => Value::Array(
-                    rows.as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter(|row| row["channel"] == channel)
-                        .cloned()
-                        .collect(),
-                ),
-                None => rows,
-            })
+            let mut request = reqwest::Client::new()
+                .get(format!("{base}/app/api/projects/{id}/communications"))
+                .bearer_auth(token);
+            // The door filters server-side; the CLI composes what it was
+            // given (AC10's read joins attachments in the same response).
+            let mut parameters = Vec::new();
+            if let Some(channel) = channel.map(str::trim).filter(|c| !c.is_empty()) {
+                parameters.push(("channel", channel.to_string()));
+            }
+            if let Some(direction) = direction.map(str::trim).filter(|d| !d.is_empty()) {
+                parameters.push(("direction", direction.to_string()));
+            }
+            if attachments {
+                parameters.push(("attachments", "true".to_string()));
+            }
+            if !parameters.is_empty() {
+                request = request.query(&parameters);
+            }
+            call(request, "list").await
         }
         .await,
     )
