@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "time_scale_model": "UTC→TAI applies hifitime's built-in leap-second table (27 s as of 2017, the table's last entry; pre-1972 UTC drift modeled). TAI→TT adds the fixed 32.184 s offset. TT→TDB adds the periodic relativistic term (amplitude ≈ 1.6 ms). Classical ΔT = TT−UT1 is not consumed by the ephemeris lookup: SPK segments are functions of TDB only, and ΔT belongs to Earth-rotation quantities computed by later layers.",
+  "reference_frame": "ICRF/J2000 (SPK frame id 1)",
+  "files": [
+    {
+      "name": "de440.bsp",
+      "sha256": "a4ce9bf9b3282becc9f4b2ac3cebe03a2ae7599981aabd7265fd8482fff7c4b5",
+      "bytes": 119799808,
+      "source": "https://ssd.jpl.nasa.gov/ftp/eph/planets/bsp/de440.bsp",
+      "coverage_start": "1549-12-21",
+      "coverage_end": "2650-01-25"
+    },
+    {
+      "name": "chiron.bsp",
+      "sha256": "110c97c9ed785125d9e3483214b32f3c059fb46f2611b63c92f7be3eded45360",
+      "bytes": 2791424,
+      "source": "JPL Horizons API SPK generation for 2060 Chiron (COMMAND='2060;', EPHEM_TYPE=SPK, START_TIME='1900-01-01', STOP_TIME='2050-01-01') at https://ssd.jpl.nasa.gov/api/horizons.api; Horizons regenerates the file on request, so re-fetching may yield a different digest for the same solution",
+      "coverage_start": "1899-12-31",
+      "coverage_end": "2050-01-01"
+    }
+  ]
+}
