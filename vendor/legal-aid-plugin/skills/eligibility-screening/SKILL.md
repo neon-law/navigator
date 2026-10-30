@@ -1,72 +1,87 @@
 ---
 name: eligibility-screening
 description: >
-  Funding-source-aware screening — income, assets, residency, citizenship/
-  immigration status, conflicts, and case-type priority. Produces a screening
-  result the intake specialist or staff attorney reviews and the managing
-  attorney approves. Does NOT decide acceptance. Use at the front of every
-  intake, before /client-intake, when a prospective client first contacts the
-  office.
+  Funding-source-aware screening — income, assets, residency, citizenship/ immigration status, conflicts, and case-type
+  priority. Produces a screening result the intake specialist or staff attorney reviews and the managing attorney
+  approves. Does NOT decide acceptance. Use at the front of every intake, before /client-intake, when a prospective
+  client first contacts the office.
 argument-hint: "[optional: funding-source hint, e.g., 'lsc', 'ioltaonly', 'dvgrant']"
 ---
 
 # /eligibility-screening
 
-1. Load `~/.claude/plugins/config/claude-for-legal/legal-aid/CLAUDE.md` → funding sources, eligibility guidelines, jurisdictions, supervision style, flag triggers.
+1. Load `~/.claude/plugins/config/claude-for-legal/legal-aid/CLAUDE.md` → funding sources, eligibility guidelines,
+   jurisdictions, supervision style, flag triggers.
+
 2. Use the workflow below.
-3. Walk through screening in order: income → assets → residency → citizenship/immigration → conflicts → case-type priority.
+3. Walk through screening in order: income → assets → residency → citizenship/immigration → conflicts → case-type
+   priority.
+
 4. Produce a screening result with classification, applicable funding sources, and any flags.
 5. Output the screening result with AI-assisted label, funding-restriction flags, and supervision routing.
 
-```
+```text
 /legal-aid:eligibility-screening
 ```
 
 ---
 
-# Eligibility Screening
+## Eligibility Screening
 
 ## Purpose
 
-Eligibility screening is the front of the funnel and the most common reason a legal aid office ends up in compliance trouble. Income, assets, residency, citizenship, conflicts, and funder-specific case-type rules all have to be cleared before the office takes on a matter, and the rules vary by funding source on the same matter.
+Eligibility screening is the front of the funnel and the most common reason a legal aid office ends up in compliance
+trouble. Income, assets, residency, citizenship, conflicts, and funder-specific case-type rules all have to be cleared
+before the office takes on a matter, and the rules vary by funding source on the same matter.
 
-This skill structures the screening, applies the office's configured eligibility guidelines, surfaces flags for managing-attorney review, and produces a result the intake specialist can verify and the managing attorney can approve.
+This skill structures the screening, applies the office's configured eligibility guidelines, surfaces flags for
+managing-attorney review, and produces a result the intake specialist can verify and the managing attorney can approve.
 
 **What it doesn't do:** decide acceptance. Acceptance is the managing attorney's call. This skill recommends.
 
 ## Load context
 
-`~/.claude/plugins/config/claude-for-legal/legal-aid/CLAUDE.md` → funding sources, eligibility guidelines (income, assets, residency, citizenship policy, priority case types, out-of-scope case types), conflict-check process, supervision style, flag triggers.
+`~/.claude/plugins/config/claude-for-legal/legal-aid/CLAUDE.md` → funding sources, eligibility guidelines (income,
+assets, residency, citizenship policy, priority case types, out-of-scope case types), conflict-check process,
+supervision style, flag triggers.
 
 ## Read the practice-area guide if one exists
 
-Check for a practice-area guide at `~/.claude/plugins/config/claude-for-legal/legal-aid/guides/<practice-area>.md`. If one exists for the area this screening is likely heading into, read its priority criteria and any practice-area-specific eligibility nuances (DV exceptions to citizenship restrictions, elderly age cutoff, immigration-specific bars). If one doesn't exist, use the office defaults from CLAUDE.md.
+Check for a practice-area guide at `~/.claude/plugins/config/claude-for-legal/legal-aid/guides/<practice-area>.md`. If
+one exists for the area this screening is likely heading into, read its priority criteria and any practice-area-specific
+eligibility nuances (DV exceptions to citizenship restrictions, elderly age cutoff, immigration-specific bars). If one
+doesn't exist, use the office defaults from CLAUDE.md.
 
 ## Workflow
 
 ### Step 1: Frame the screen
 
-Open with a short framing line. Do not lead with eligibility questions — lead with the situation, so the prospective client doesn't feel pre-screened out before they've explained why they called.
+Open with a short framing line. Do not lead with eligibility questions — lead with the situation, so the prospective
+client doesn't feel pre-screened out before they've explained why they called.
 
 > "Tell me what's going on — what brought you to the office today?"
 
-Capture the narrative in the prospective client's own words. This determines practice area, urgency, and which funding source's rules apply. **It does not decide eligibility yet.**
+Capture the narrative in the prospective client's own words. This determines practice area, urgency, and which funding
+source's rules apply. **It does not decide eligibility yet.**
 
 ### Step 2: Practice-area routing and urgency
 
 From the narrative, identify:
+
 - Primary practice area (housing / family / consumer / immigration / public benefits / civil rights / other)
 - Cross-area issues (mark every one — the office may handle one and refer the other)
 - Urgency: court date, lockout, deadline, safety issue, irreversible harm imminent
 
-Urgent matters get screened on a fast path: a quick income screen, a fast conflict check, and immediate managing-attorney routing. Do not run a full screen on someone whose lockout is tomorrow morning — flag the urgency and route.
+Urgent matters get screened on a fast path: a quick income screen, a fast conflict check, and immediate
+managing-attorney routing. Do not run a full screen on someone whose lockout is tomorrow morning — flag the urgency and
+route.
 
 ### Step 3: Income screen
 
 Read the office's income standard from CLAUDE.md. Common patterns:
 
 | Funding source | Typical standard | Office variant |
-|---|---|---|
+| --- | --- | --- |
 | LSC | 125% FPL | Read CLAUDE.md |
 | IOLTA / state appropriation | 200% FPL (varies) | Read CLAUDE.md |
 | Elderly programs | 300% FPL or no cap (varies) | Read CLAUDE.md |
@@ -74,17 +89,22 @@ Read the office's income standard from CLAUDE.md. Common patterns:
 | Foundation-specific | Per grant terms | Read CLAUDE.md |
 
 Ask:
+
 - Household size (everyone living in the household, including children)
 - Monthly gross income from all sources (wages, benefits, child support received, contributions from others)
 - Income volatility (was last month representative? is income about to change?)
 
-Output a comparison against each funding source the office runs, **not just one**. A matter may not qualify for LSC funding but may qualify under IOLTA — the screen surfaces both.
+Output a comparison against each funding source the office runs, **not just one**. A matter may not qualify for LSC
+funding but may qualify under IOLTA — the screen surfaces both.
 
-**Do not state a specific FPL dollar figure as if you know the current year's number.** Tag every dollar comparison with `[VERIFY: current FPL table for household size N]`. The intake specialist verifies against the office's posted FPL chart, which the managing attorney is responsible for keeping current.
+**Do not state a specific FPL dollar figure as if you know the current year's number.** Tag every dollar comparison with
+`[VERIFY: current FPL table for household size N]`. The intake specialist verifies against the office's posted FPL
+chart, which the managing attorney is responsible for keeping current.
 
 ### Step 4: Asset screen
 
 Read the office's asset rules from CLAUDE.md. Ask about:
+
 - Liquid assets (checking, savings, cash on hand) — flag the cap if applicable
 - Primary residence (typically excluded — confirm in CLAUDE.md)
 - Vehicle(s) — typically one excluded, additional may count
@@ -95,6 +115,7 @@ If the office has no asset test for this funding source, skip this step and note
 ### Step 5: Residency
 
 Read the office's residency rules. Ask about:
+
 - State of residence
 - County of residence (if the office is county-scoped)
 - Length of residence (rarely required, but some funders require it)
@@ -106,24 +127,34 @@ Flag any mismatch between residence and venue for managing-attorney review.
 
 This is the most sensitive step. Approach with care.
 
-LSC-funded programs operate under 45 CFR § 1626, which restricts representation of certain aliens with explicit exceptions for:
+LSC-funded programs operate under 45 CFR § 1626, which restricts representation of certain aliens with explicit
+exceptions for:
+
 - DV survivors (regardless of status, for matters related to the abuse)
 - Victims of trafficking, sexual assault, and certain other crimes
 - Specific visa categories (U visa applicants, T visa applicants, certain VAWA applicants, etc.)
 - Other narrow exceptions
 
-Non-LSC funding (IOLTA, private foundations, state appropriation) typically has different — and usually broader — rules. An office may serve a person with non-LSC funds even when LSC restrictions would prevent serving them with LSC funds.
+Non-LSC funding (IOLTA, private foundations, state appropriation) typically has different — and usually broader — rules.
+An office may serve a person with non-LSC funds even when LSC restrictions would prevent serving them with LSC funds.
 
 The skill:
+
 - Reads the office's citizenship/immigration policy from CLAUDE.md
 - Asks the prospective client about status only to the extent the office's policy requires it for screening
-- Does **not** ask for documentation or specific case numbers — the screening is about funding eligibility, not status verification
-- Flags `[FUNDING RESTRICTION: LSC § 1626 — confirm exception or non-LSC funding source]` whenever the matter may engage LSC alien restrictions
+- Does **not** ask for documentation or specific case numbers — the screening is about funding eligibility, not status
+  verification
+
+- Flags `[FUNDING RESTRICTION: LSC § 1626 — confirm exception or non-LSC funding source]` whenever the matter may engage
+  LSC alien restrictions
+
 - Routes to managing-attorney review whenever there's ambiguity
 
-**If the prospective client appears to be a DV survivor or trafficking victim and the matter relates to that, flag the relevant § 1626 exception by name and route to the office's DV/trafficking specialist if one exists.**
+**If the prospective client appears to be a DV survivor or trafficking victim and the matter relates to that, flag the
+relevant § 1626 exception by name and route to the office's DV/trafficking specialist if one exists.**
 
-Never tell a prospective client "you are not eligible because of your status." That is a managing-attorney determination, made after the screen.
+Never tell a prospective client "you are not eligible because of your status." That is a managing-attorney
+determination, made after the screen.
 
 ### Step 7: Conflict check
 
@@ -134,7 +165,8 @@ Per the office's process described in CLAUDE.md. At minimum:
 - Positional conflicts — is this case asking for something that would hurt another office client?
 - Prior contact — has the office previously turned this person away, taken brief advice, or had a consultation?
 
-If the office's case management system is connected, run the check against the CMS. If not, output the names and the structured query the intake specialist should run manually.
+If the office's case management system is connected, run the check against the CMS. If not, output the names and the
+structured query the intake specialist should run manually.
 
 Flag for managing-attorney review. Don't resolve the conflict — surface it.
 
@@ -143,7 +175,7 @@ Flag for managing-attorney review. Don't resolve the conflict — surface it.
 Read the office's priority case types and out-of-scope case types from CLAUDE.md. Classify the matter:
 
 | Classification | Means |
-|---|---|
+| --- | --- |
 | **Priority case type — accept track** | Falls within the office's stated priorities and capacity exists |
 | **Standard case type — assess capacity** | In scope; managing attorney weighs capacity |
 | **Out-of-scope — refer** | Outside practice areas or funder-restricted |
@@ -163,6 +195,7 @@ Note any specific funder restrictions that apply, by funder, with the rule cite 
 [AI-ASSISTED DRAFT — requires staff analysis and managing-attorney review]
 
 **Privilege and confidentiality.** This screening contains information disclosed in the course of a prospective client consultation and is subject to Rule 1.18 duties of confidentiality regardless of whether the office accepts the matter. Keep it in the office's privileged file store; distribution decisions go through the managing attorney.
+
 ---
 
 **Date:** [date] | **Screener:** [intake specialist] | **Practice area:** [primary + any cross-area] | **Urgency:** [urgent / time-sensitive / standard]
@@ -247,8 +280,12 @@ Note any specific funder restrictions that apply, by funder, with the rule cite 
 
 ## Cross-skill propagation
 
-- Any `[FUNDING RESTRICTION: ...]` raised here propagates into `/client-intake`, `/draft`, `/memo`, and `/status` for the matter if accepted.
-- Any conflict flag propagates and is repeated in every output until resolved or waived in writing by the managing attorney.
+- Any `[FUNDING RESTRICTION: ...]` raised here propagates into `/client-intake`, `/draft`, `/memo`, and `/status` for
+  the matter if accepted.
+
+- Any conflict flag propagates and is repeated in every output until resolved or waived in writing by the managing
+  attorney.
+
 - The funding-source matrix becomes part of the case file — `/lsc-report` reads it for CSR categorization.
 
 ## What this skill explicitly does not do
