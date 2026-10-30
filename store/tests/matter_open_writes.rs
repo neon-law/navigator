@@ -48,7 +48,7 @@ async fn references(surreal: &SurrealDb) -> (Uuid, Uuid, Uuid) {
     )
     .await
     .expect("firm");
-    store::firms::attach_brand(surreal, firm.id, "neon")
+    store::firms::attach_brand(surreal, store::persons::Role::Owner, None, firm.id, "neon")
         .await
         .expect("firm wears neon");
     (client.id, attester.id, entity_id)

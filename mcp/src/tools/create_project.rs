@@ -333,7 +333,7 @@ mod tests {
         )
         .await
         .unwrap();
-        store::firms::attach_brand(surreal, firm.id, "neon")
+        store::firms::attach_brand(surreal, store::persons::Role::Owner, None, firm.id, "neon")
             .await
             .unwrap();
         admin

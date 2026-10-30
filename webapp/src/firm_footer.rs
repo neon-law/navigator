@@ -476,12 +476,18 @@ mod tests {
         )
         .await
         .unwrap();
-        store::firms::attach_brand(&surreal, firm.id, "neon")
+        store::firms::attach_brand(&surreal, store::persons::Role::Owner, None, firm.id, "neon")
             .await
             .unwrap();
-        store::firms::attach_brand(&surreal, firm.id, "delete-your-data")
-            .await
-            .unwrap();
+        store::firms::attach_brand(
+            &surreal,
+            store::persons::Role::Owner,
+            None,
+            firm.id,
+            "delete-your-data",
+        )
+        .await
+        .unwrap();
 
         let model = resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
 
@@ -536,9 +542,15 @@ mod tests {
         )
         .await
         .unwrap();
-        store::firms::attach_brand(&surreal, firm_a.id, "neon")
-            .await
-            .unwrap();
+        store::firms::attach_brand(
+            &surreal,
+            store::persons::Role::Owner,
+            None,
+            firm_a.id,
+            "neon",
+        )
+        .await
+        .unwrap();
 
         // The second Firm, wearing the reachable compiled key plus a
         // runtime-created one with no dedicated host yet.
@@ -589,12 +601,24 @@ mod tests {
         )
         .await
         .unwrap();
-        store::firms::attach_brand(&surreal, firm_b.id, "lawyer-shook")
-            .await
-            .unwrap();
-        store::firms::attach_brand(&surreal, firm_b.id, "acme-runtime-brand")
-            .await
-            .unwrap();
+        store::firms::attach_brand(
+            &surreal,
+            store::persons::Role::Owner,
+            None,
+            firm_b.id,
+            "lawyer-shook",
+        )
+        .await
+        .unwrap();
+        store::firms::attach_brand(
+            &surreal,
+            store::persons::Role::Owner,
+            None,
+            firm_b.id,
+            "acme-runtime-brand",
+        )
+        .await
+        .unwrap();
 
         let model =
             resolve_firm_footer_model(&surreal, views::brand::BrandKey::LawyerShook, 2026).await;
