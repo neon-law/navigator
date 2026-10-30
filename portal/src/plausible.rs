@@ -147,8 +147,8 @@ impl ConversionGoal {
     #[must_use]
     pub const fn event_name(self) -> &'static str {
         match self {
-            Self::ContactSubmitted => "Contact: Submitted",
-            Self::IntakeStarted => "Intake: Started",
+            Self::ContactSubmitted => webapp::lead_sources::CONTACT_GOAL,
+            Self::IntakeStarted => webapp::lead_sources::INTAKE_GOAL,
         }
     }
 }
