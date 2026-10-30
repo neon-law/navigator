@@ -1692,7 +1692,7 @@ mod notation_catalog_tests {
                     failure.message
                 )),
                 Ok(questions) if questions.is_empty() => {
-                    problems.push("the questionnaire resolved to no demo questions".to_string())
+                    problems.push("the questionnaire resolved to no demo questions".to_string());
                 }
                 Ok(questions) => {
                     if !questions
