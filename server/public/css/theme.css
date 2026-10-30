@@ -5669,3 +5669,167 @@ a.nav-steps__step:focus-visible {
 .public-brand-companion .aster-artwork { width: 8rem; }
 
 .design-aster { display: block; max-width: 100%; height: auto; }
+
+/* == Dashboard charts: the `.nav-chart` family ==========================
+ *
+ * `webapp/src/charts.rs` (ChartFrame, StatCard, LineChart, BarChart,
+ * DonutChart, Sparkline). Every colour resolves through a `--nav-*` token
+ * declared in `tokens.css`, so both color schemes arrive for free: the
+ * categorical ramp (`--nav-chart-1`…`--nav-chart-6`) and the gridline tint
+ * (`--nav-chart-grid`) each carry a light and a dark value against the
+ * scheme's surface, and text rides the theme's AA text pairs — the SVG's
+ * `currentColor` is theme text ink here, never a series color. This block
+ * declares no colors of its own.
+ *
+ * The companion table renders as `.nav-chart__table nav-visually-hidden`
+ * and never paints: `.nav-visually-hidden` carries the hiding, so the
+ * screen-reader path needs no styles of its own.
+ * ---------------------------------------------------------------------- */
+
+.nav-chart {
+  display: grid;
+  gap: var(--nav-space-3);
+  padding: var(--nav-space-4);
+  background: var(--nav-color-surface);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-md);
+  color: var(--nav-color-text);
+}
+
+/* Fluid drawing: the component's viewBox scales, the block never overflows. */
+.nav-chart__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* The SVG's currentColor — axis ticks, the donut total — is theme text
+     ink, never a series ramp color. */
+  color: var(--nav-color-text);
+}
+
+/* Axis labels are secondary-size text in the inherited theme ink. */
+.nav-chart__tick {
+  font-size: 0.75rem;
+}
+
+.nav-chart__total {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* One honest empty state instead of a blank frame. */
+.nav-chart__empty {
+  margin: 0;
+  padding: var(--nav-space-6) var(--nav-space-4);
+  border: 1px dashed var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  color: var(--nav-color-text-muted);
+  text-align: center;
+}
+
+/* -- Legend ------------------------------------------------------------- */
+
+.nav-chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--nav-space-2) var(--nav-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.85rem;
+  color: var(--nav-color-text-muted);
+}
+
+.nav-chart__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nav-space-2);
+}
+
+/* The swatch paints the same variable the drawing strokes. */
+.nav-chart__swatch {
+  inline-size: 0.75rem;
+  block-size: 0.75rem;
+  border-radius: var(--nav-radius-xs);
+}
+
+.nav-chart__swatch--1 { background: var(--nav-chart-1); }
+.nav-chart__swatch--2 { background: var(--nav-chart-2); }
+.nav-chart__swatch--3 { background: var(--nav-chart-3); }
+.nav-chart__swatch--4 { background: var(--nav-chart-4); }
+.nav-chart__swatch--5 { background: var(--nav-chart-5); }
+.nav-chart__swatch--6 { background: var(--nav-chart-6); }
+
+/* -- StatCard ----------------------------------------------------------- */
+
+.nav-chart__stat {
+  display: grid;
+  gap: var(--nav-space-1);
+  padding: var(--nav-space-4);
+  background: var(--nav-color-surface);
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-md);
+}
+
+.nav-chart__stat-label {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--nav-color-text-muted);
+}
+
+.nav-chart__stat-value {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--nav-color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The delta's color is direction only — whether a drop is good news is the
+   caller's prop, not this stylesheet's business. */
+.nav-chart__delta {
+  margin-inline-start: var(--nav-space-2);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.nav-chart__delta--up { color: var(--nav-color-success); }
+.nav-chart__delta--down { color: var(--nav-color-danger); }
+.nav-chart__delta--flat { color: var(--nav-color-text-muted); }
+
+/* A sparkline rides inside its StatCard: strip the frame so it does not
+   draw a card inside a card. */
+.nav-chart--sparkline {
+  padding: 0;
+  border: 0;
+  max-width: 10rem;
+}
+
+/* -- Filter chips (the dashboard showcase's period filters) -------------- */
+
+.nav-chart__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--nav-space-2);
+}
+
+.nav-chart__filter-chip {
+  padding: 0.25rem 0.9rem;
+  min-height: 2.25rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: 999px;
+  background: var(--nav-color-surface);
+  color: var(--nav-color-text);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.nav-chart__filter-chip[aria-pressed="true"] {
+  border-color: var(--nav-color-primary);
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+}
+
+.nav-chart__filter-chip:focus-visible {
+  outline: 2px solid var(--nav-color-focus);
+  outline-offset: var(--nav-focus-offset);
+}
