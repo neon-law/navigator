@@ -343,9 +343,9 @@ both report zero while every `rust` run restores a full match. The `gate` job ru
 entry lives in GitHub's own store and counts against the 10 GB quota. Grep the job for `Cache hit`, `No cache found`,
 and `full match` instead — that is the only authoritative signal.
 
-Commit-signature enforcement in CI was removed by owner decision (2026-10-30): `ci.yml`'s `gate content` job no
-longer runs `navigator ops github check-signatures`. The `production` ruleset, if it still requires signed
-commits in GitHub settings, is managed there and not in this repository.
+Commit-signature enforcement in CI was removed by owner decision (2026-10-30): `ci.yml`'s `gate content` job no longer
+runs `navigator ops github check-signatures`. The `production` ruleset, if it still requires signed commits in GitHub
+settings, is managed there and not in this repository.
 
 | Workflow | Trigger | Job |
 | --- | --- | --- |
