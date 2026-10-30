@@ -258,11 +258,12 @@ impl Scope {
 /// The shared line uses an empty scope, so a shared `amendment` and a
 /// project-scoped `amendment` get different keys and coexist. A Firm line
 /// prefixes its UUID with `firm:`, which no bare Project UUID can equal.
+#[cfg(feature = "test-support")]
 pub(crate) fn current_key(project_id: Option<Uuid>, code: &str) -> String {
     current_key_in(Scope::of_project(project_id), code)
 }
 
-/// [`current_key`] for any [`Scope`].
+/// The current key for any [`Scope`].
 pub(crate) fn current_key_in(scope: Scope, code: &str) -> String {
     let scope = match scope {
         Scope::Shared => String::new(),
