@@ -504,6 +504,7 @@ pub async fn private_terms(db: &SurrealDb, codes: &[String]) -> Result<Vec<Strin
 
 /// Merge store-resolved terms with hand-supplied `--term` values: trim, drop
 /// blanks, dedupe case-insensitively, and keep the first-seen casing.
+#[must_use]
 pub fn merge_terms(resolved: &[String], manual: &[String]) -> Vec<String> {
     let mut merged: Vec<String> = Vec::new();
     for term in resolved.iter().chain(manual.iter()) {
