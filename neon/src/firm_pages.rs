@@ -709,7 +709,10 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         portal::secure_cookies(state),
     ));
     let services_copy = branded_map(branding, |resolved| {
-        webapp::marketing_page::InjectedMarketingPage(firm_copy::legal_services(resolved))
+        webapp::marketing_page::InjectedMarketingPage {
+            path: dioxus_app::FIRM_SERVICES_PATH.to_string(),
+            content: firm_copy::legal_services(resolved),
+        }
     });
     for source_key in [BrandKey::Aegis, BrandKey::Vesta] {
         for (path, stem) in source_key.explainer_pages() {
@@ -720,10 +723,10 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
                 .map(|key| {
                     (
                         key,
-                        webapp::marketing_page::InjectedMarketingPage(firm_copy::explainer(
-                            key.resolve_branding(branding),
-                            stem,
-                        )),
+                        webapp::marketing_page::InjectedMarketingPage {
+                            path: path.to_string(),
+                            content: firm_copy::explainer(key.resolve_branding(branding), stem),
+                        },
                     )
                 })
                 .collect();

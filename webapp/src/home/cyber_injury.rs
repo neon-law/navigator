@@ -21,7 +21,7 @@ pub(super) fn CyberInjuryHome(
     rsx! {
         document::Title { "{content.head_title}" }
         document::Meta { name: "description", content: content.meta_description.clone() }
-        SocialMeta { title: content.head_title.clone(), description: content.meta_description.clone(), og_description: content.og_description.clone(), site_name: chrome.brand_name.clone(), image: chrome.social_image.clone() }
+        SocialMeta { title: content.head_title.clone(), description: content.meta_description.clone(), og_description: content.og_description.clone(), site_name: chrome.brand_name.clone(), image: chrome.social_image.clone(), url: crate::components::canonical_url(&chrome.canonical_origin, "/") }
         BrandFavicon { logo_href: chrome.logo_href.clone() }
         document::Stylesheet { href: THEME_STYLESHEET_HREF }
         document::Stylesheet { href: crate::brand_style::BRAND_STYLESHEET_HREF }

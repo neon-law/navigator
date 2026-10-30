@@ -13,6 +13,14 @@
 //! copy can run punchier than the search-result `description`, which it
 //! otherwise falls back to.
 //!
+//! `url` is the page's **absolute** URL, which the caller builds from the
+//! brand's canonical origin ([`crate::public_chrome::PublicChrome::canonical_origin`])
+//! plus its own path. It drives both `og:url` — scrapers treat a shared link
+//! and its `og:url` as the same page, so a relative or absent one forks the
+//! like/share counts — and the `<link rel="canonical">` search engines
+//! read. Empty (pages that pass no URL) emits neither tag rather than a
+//! wrong one.
+//!
 //! `image` is the **absolute** logo URL — scrapers drop relative `og:image`
 //! URLs, so the caller resolves it against the site origin server-side (the same
 //! `absolute_url` boundary the version used) and passes the result in.
@@ -27,6 +35,17 @@ fn preview_description(description: String, og_description: Option<String>) -> S
         .unwrap_or(description)
 }
 
+/// The page's absolute URL: `origin` plus `path`, or empty when either is
+/// unknown. A page rendered without a resolved brand origin (the wasm
+/// client, a bare `PublicChrome::default()`) has no honest canonical URL
+/// to advertise, so it advertises none.
+pub(crate) fn canonical_url(origin: &str, path: &str) -> String {
+    if origin.is_empty() || path.is_empty() {
+        return String::new();
+    }
+    format!("{origin}{path}")
+}
+
 /// Render the Open Graph + Twitter Card `<meta>` block for one page.
 #[component]
 pub fn SocialMeta(
@@ -35,6 +54,7 @@ pub fn SocialMeta(
     site_name: String,
     image: String,
     #[props(default)] og_description: Option<String>,
+    #[props(default)] url: String,
 ) -> Element {
     let image_alt = format!("{site_name} logo");
     let description = preview_description(description, og_description);
@@ -44,9 +64,17 @@ pub fn SocialMeta(
         document::Meta { property: "og:site_name", content: "{site_name}" }
         document::Meta { property: "og:title", content: "{title}" }
         document::Meta { property: "og:description", content: "{description}" }
+        if !url.is_empty() {
+            document::Meta { property: "og:url", content: "{url}" }
+        }
         if !image.is_empty() {
             document::Meta { property: "og:image", content: "{image}" }
             document::Meta { property: "og:image:alt", content: "{image_alt}" }
+        }
+        if !url.is_empty() {
+            // The same URL search engines canonicalize: one address per page,
+            // shared by the share card and the crawler.
+            document::Link { rel: "canonical", href: "{url}" }
         }
         // Twitter / X. `summary` renders the square logo as a small thumbnail;
         // the wide card expects a 1.91:1 banner, which a square mark would
@@ -101,5 +129,64 @@ mod tests {
             preview_description(meta.clone(), Some("  ".to_string())),
             meta
         );
+    }
+
+    #[test]
+    fn canonical_url_joins_origin_and_path_and_refuses_unknowns() {
+        assert_eq!(
+            canonical_url("https://www.cyberinjurylaw.com", "/services"),
+            "https://www.cyberinjurylaw.com/services"
+        );
+        assert_eq!(canonical_url("https://www.cyberinjurylaw.com", "/"), "https://www.cyberinjurylaw.com/");
+        // No resolved origin (wasm client, bare chrome): no URL to advertise.
+        assert_eq!(canonical_url("", "/services"), "");
+        assert_eq!(canonical_url("https://www.cyberinjurylaw.com", ""), "");
+    }
+
+    #[test]
+    fn a_page_with_a_url_emits_og_url_and_a_canonical_link() {
+        fn app() -> Element {
+            rsx! {
+                SocialMeta {
+                    title: "Home".to_string(),
+                    description: "The home page.".to_string(),
+                    site_name: "CyberInjuryLaw".to_string(),
+                    image: String::new(),
+                    url: "https://www.cyberinjurylaw.com/".to_string(),
+                }
+            }
+        }
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        let out = dioxus_ssr::render(&dom);
+        assert!(
+            out.contains(
+                r#"content="https://www.cyberinjurylaw.com/" property="og:url""#
+            ),
+            "og:url must carry the absolute page URL: {out}"
+        );
+        assert!(
+            out.contains(r#"rel="canonical" href="https://www.cyberinjurylaw.com/""#),
+            "the canonical link must carry the same URL: {out}"
+        );
+    }
+
+    #[test]
+    fn a_page_without_a_url_emits_no_og_url_and_no_canonical_link() {
+        fn app() -> Element {
+            rsx! {
+                SocialMeta {
+                    title: "Home".to_string(),
+                    description: "The home page.".to_string(),
+                    site_name: "CyberInjuryLaw".to_string(),
+                    image: String::new(),
+                }
+            }
+        }
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        let out = dioxus_ssr::render(&dom);
+        assert!(!out.contains("og:url"), "{out}");
+        assert!(!out.contains("canonical"), "{out}");
     }
 }
