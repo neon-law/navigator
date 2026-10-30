@@ -498,7 +498,7 @@ async fn a_dry_run_refuses_exactly_what_a_real_pass_would() {
         .filter(|refused| refused.reason == "name_collision")
         .map(|refused| refused.drive_file_id.as_str())
         .collect::<Vec<_>>();
-    collided.sort();
+    collided.sort_unstable();
     assert_eq!(collided.len(), 2, "every colliding member is flagged");
     assert!(
         plan.refused
