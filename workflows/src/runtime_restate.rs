@@ -92,6 +92,15 @@ impl RestateRuntime {
         self
     }
 
+    /// The broker base URL as handler URLs use it — trimmed of any
+    /// trailing slash. Read by wrapper adapters that compose this
+    /// client (the DBOS notation runtime) so their logging and tests
+    /// see the URL requests actually target.
+    #[must_use]
+    pub fn broker_url(&self) -> String {
+        self.broker_url.trim_end_matches('/').to_owned()
+    }
+
     /// Build from `RESTATE_BROKER_URL` (default
     /// `http://localhost:8080`), `RESTATE_SERVICE` (default
     /// `notation`), and `RESTATE_AUTH_TOKEN` (optional — present
