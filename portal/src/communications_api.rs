@@ -113,9 +113,8 @@ pub(crate) async fn list_communications(
 }
 
 /// A call or email names who it was with; a note has no counterparty.
-fn require_counterparty(value: &Option<String>, channel: &str) -> Result<String, ApiError> {
+fn require_counterparty(value: Option<&str>, channel: &str) -> Result<String, ApiError> {
     value
-        .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
@@ -188,6 +187,32 @@ async fn create_email(
         .ok_or_else(|| ApiError::Db("the email could not be read back".into()))
 }
 
+/// A note is a firm-internal observation: no other party, no linkage.
+fn ensure_note_is_unlinked(input: &CreateCommunicationRequest) -> Result<(), ApiError> {
+    for (flag, value) in [
+        ("counterparty", input.counterparty.as_deref()),
+        ("role", input.role.as_deref()),
+        ("source_ref", input.source_ref.as_deref()),
+    ] {
+        if value.is_some_and(|value| !value.trim().is_empty()) {
+            return Err(ApiError::CommunicationInvalid(format!(
+                "a note has no {flag}; it is a firm-internal observation"
+            )));
+        }
+    }
+    if input.client_visible || input.direction.trim() != "internal" {
+        return Err(ApiError::CommunicationInvalid(
+            "a note is always internal; it never reaches a client view".into(),
+        ));
+    }
+    if input.acknowledges.is_some() || input.confirms.is_some() {
+        return Err(ApiError::CommunicationInvalid(
+            "a note acknowledges and confirms nothing; only email does".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// `POST /app/api/projects/{id}/communications`
 pub(crate) async fn create_communication(
     State(state): State<ApiState>,
@@ -205,7 +230,7 @@ pub(crate) async fn create_communication(
     }
     let row = match input.channel.trim() {
         store::communications::channel::CALL => {
-            let counterparty = require_counterparty(&input.counterparty, "a call")?;
+            let counterparty = require_counterparty(input.counterparty.as_deref(), "a call")?;
             store::communications::record_call(
                 &state.surreal,
                 &store::communications::NewCall {
@@ -240,27 +265,7 @@ pub(crate) async fn create_communication(
             .map_err(map_communication)?
         }
         store::communications::channel::NOTE => {
-            for (flag, value) in [
-                ("counterparty", input.counterparty.as_deref()),
-                ("role", input.role.as_deref()),
-                ("source_ref", input.source_ref.as_deref()),
-            ] {
-                if value.is_some_and(|value| !value.trim().is_empty()) {
-                    return Err(ApiError::CommunicationInvalid(format!(
-                        "a note has no {flag}; it is a firm-internal observation"
-                    )));
-                }
-            }
-            if input.client_visible || input.direction.trim() != "internal" {
-                return Err(ApiError::CommunicationInvalid(
-                    "a note is always internal; it never reaches a client view".into(),
-                ));
-            }
-            if input.acknowledges.is_some() || input.confirms.is_some() {
-                return Err(ApiError::CommunicationInvalid(
-                    "a note acknowledges and confirms nothing; only email does".into(),
-                ));
-            }
+            ensure_note_is_unlinked(&input)?;
             store::communications::log_note(
                 &state.surreal,
                 &store::communications::NewNote {
@@ -275,7 +280,7 @@ pub(crate) async fn create_communication(
         }
         channel @ (store::communications::channel::EMAIL_INBOUND
         | store::communications::channel::EMAIL_OUTBOUND) => {
-            let counterparty = require_counterparty(&input.counterparty, "an email")?;
+            let counterparty = require_counterparty(input.counterparty.as_deref(), "an email")?;
             create_email(
                 &state,
                 session.person_id,
