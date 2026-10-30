@@ -6,6 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cloud::{DriveService, FakeDrive, FsStorage, StorageService};
 use serde_json::json;
+use store::document_pointers::MatterFolder;
 use store::documents::{source, visibility};
 use store::drive_import::{
     import_project_files, DriveImportArgs, DriveImportError, DriveImportReport, IngestScreen,
@@ -49,6 +50,15 @@ const ARGS: DriveImportArgs<'static> = DriveImportArgs {
     kind: "unclassified",
     visibility: visibility::CLIENT,
     description: Some("Dropped in Workspace"),
+    dry_run: false,
+};
+
+/// The same pass, planned and never written.
+const DRY_RUN: DriveImportArgs<'static> = DriveImportArgs {
+    kind: "unclassified",
+    visibility: visibility::CLIENT,
+    description: Some("Dropped in Workspace"),
+    dry_run: true,
 };
 
 async fn project(surreal: &SurrealDb, code: &str) -> Project {
@@ -117,10 +127,26 @@ impl World {
         .await
     }
 
-    async fn revisions(&self, file_id: &str) -> Vec<store::assets::Asset> {
-        store::assets::revisions(&self.surreal, self.project.id, &format!("drive-{file_id}"))
+    async fn revisions(&self, slug: &str) -> Vec<store::assets::Asset> {
+        store::assets::revisions(&self.surreal, self.project.id, slug)
             .await
             .expect("revision chain")
+    }
+
+    /// The dry-run pass: everything [`Self::import`] does, planned and never
+    /// written.
+    #[allow(clippy::result_large_err)]
+    async fn plan(&self, screen: &Screen) -> Result<DriveImportReport, DriveImportError> {
+        import_project_files(
+            &self.surreal,
+            &self.storage,
+            &self.drive,
+            screen,
+            self.project.id,
+            self.actor,
+            &DRY_RUN,
+        )
+        .await
     }
 }
 
@@ -183,7 +209,14 @@ async fn drive_files_become_project_assets_and_a_rerun_writes_nothing() {
         .expect("idempotent Drive import");
     assert_eq!(repeated.imported.len(), 1);
     assert!(!repeated.imported[0].changed);
-    assert_eq!(world.revisions(&file.id).await.len(), 1);
+    assert_eq!(world.revisions("notice.pdf").await.len(), 1);
+    // The document identity is the lawyer's own filename (LAW-216), and the
+    // report names the matter folder a checkout downloads it into.
+    assert_eq!(repeated.imported[0].filename, "notice.pdf");
+    assert_eq!(
+        repeated.imported[0].matter_folder,
+        MatterFolder::WorkProduct
+    );
 }
 
 #[tokio::test]
@@ -208,7 +241,7 @@ async fn a_new_drive_version_is_recorded_as_a_new_revision() {
     );
     let report = world.import(&screen).await.expect("second import");
     assert!(report.imported[0].changed);
-    let chain = world.revisions(&file.id).await;
+    let chain = world.revisions("plan.pdf").await;
     assert_eq!(chain.len(), 2);
     let versions: Vec<_> = chain
         .iter()
@@ -221,7 +254,7 @@ async fn a_new_drive_version_is_recorded_as_a_new_revision() {
 async fn an_interrupted_download_converges_without_duplicates() {
     let world = setup("drive-interrupted").await;
     let screen = Screen::default();
-    let first = world
+    world
         .drive
         .add_file(
             &world.folder_id,
@@ -231,7 +264,7 @@ async fn an_interrupted_download_converges_without_duplicates() {
             None,
         )
         .expect("file a");
-    let second = world
+    world
         .drive
         .add_file(
             &world.folder_id,
@@ -250,8 +283,8 @@ async fn an_interrupted_download_converges_without_duplicates() {
     ));
     let report = world.import(&screen).await.expect("rerun converges");
     assert_eq!(report.imported.len(), 2);
-    assert_eq!(world.revisions(&first.id).await.len(), 1);
-    assert_eq!(world.revisions(&second.id).await.len(), 1);
+    assert_eq!(world.revisions("a.pdf").await.len(), 1);
+    assert_eq!(world.revisions("b.pdf").await.len(), 1);
 }
 
 #[tokio::test]
@@ -271,10 +304,10 @@ async fn a_malformed_receipt_or_malware_files_nothing_and_an_unavailable_screen_
     let report = world.import(&Screen::default()).await.expect("import runs");
     assert!(report.imported.is_empty());
     assert_eq!(report.refused[0].reason, "receipt_mismatch");
-    assert!(world.revisions(&file.id).await.is_empty());
+    assert!(world.revisions("deed.pdf").await.is_empty());
 
     let malware = setup("drive-malware").await;
-    let infected = malware
+    malware
         .drive
         .add_file(
             &malware.folder_id,
@@ -289,7 +322,7 @@ async fn a_malformed_receipt_or_malware_files_nothing_and_an_unavailable_screen_
         .await
         .expect("import runs");
     assert_eq!(report.refused[0].reason, "malware_found");
-    assert!(malware.revisions(&infected.id).await.is_empty());
+    assert!(malware.revisions("x.pdf").await.is_empty());
 
     let unavailable = Screen {
         unavailable: true,
@@ -372,4 +405,174 @@ async fn another_projects_folder_or_a_folder_outside_the_drive_is_refused() {
     ));
     assert_eq!(world.drive.list_files_calls(), 0);
     assert_eq!(world.drive.download_calls(), 0);
+}
+
+#[tokio::test]
+async fn a_dry_run_predicts_a_real_pass_and_writes_nothing() {
+    let world = setup("drive-dry-run").await;
+    let screen = Screen::default();
+    world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "notice.pdf",
+            "application/pdf",
+            b"synthetic drive bytes".to_vec(),
+            None,
+        )
+        .expect("file creation");
+
+    let plan = world.plan(&screen).await.expect("dry run");
+    assert_eq!(plan.imported.len(), 1);
+    assert!(plan.imported[0].changed, "a fresh file would be filed");
+    assert_eq!(plan.imported[0].filename, "notice.pdf");
+    assert_eq!(plan.imported[0].matter_folder, MatterFolder::WorkProduct);
+    assert_eq!(world.drive.download_calls(), 1, "the plan downloads");
+    let assets = store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .expect("asset listing");
+    assert!(assets.is_empty(), "a dry run files nothing");
+
+    world.import(&screen).await.expect("real import");
+    let rerun_plan = world.plan(&screen).await.expect("dry rerun");
+    assert!(
+        !rerun_plan.imported[0].changed,
+        "the plan predicts a rerun writes nothing"
+    );
+    let assets = store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .expect("asset listing");
+    assert_eq!(assets.len(), 1, "the second dry run still files nothing");
+}
+
+#[tokio::test]
+async fn a_dry_run_refuses_exactly_what_a_real_pass_would() {
+    let world = setup("drive-dry-refusals").await;
+    world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "statement.pdf",
+            "application/pdf",
+            b"Statement".to_vec(),
+            None,
+        )
+        .expect("file creation");
+    world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "Statement.PDF",
+            "application/pdf",
+            b"Different bytes".to_vec(),
+            None,
+        )
+        .expect("colliding file creation");
+    world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "invoice.pdf",
+            "application/pdf",
+            b"..EICAR!..".to_vec(),
+            None,
+        )
+        .expect("malware creation");
+    world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "notice.pdf",
+            "application/pdf",
+            b"clean".to_vec(),
+            None,
+        )
+        .expect("clean file creation");
+
+    let plan = world.plan(&Screen::default()).await.expect("dry run");
+    assert_eq!(plan.imported.len(), 1, "only the clean file is planned");
+    assert_eq!(plan.imported[0].filename, "notice.pdf");
+    let mut collided = plan
+        .refused
+        .iter()
+        .filter(|refused| refused.reason == "name_collision")
+        .map(|refused| refused.drive_file_id.as_str())
+        .collect::<Vec<_>>();
+    collided.sort_unstable();
+    assert_eq!(collided.len(), 2, "every colliding member is flagged");
+    assert!(
+        plan.refused
+            .iter()
+            .any(|refused| refused.reason == "malware_found"),
+        "the plan screens too"
+    );
+    let assets = store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .expect("asset listing");
+    assert!(assets.is_empty());
+}
+
+#[tokio::test]
+async fn same_name_files_are_refused_together_case_insensitively() {
+    let world = setup("drive-collisions").await;
+    let screen = Screen::default();
+    world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "report.pdf",
+            "application/pdf",
+            b"one".to_vec(),
+            None,
+        )
+        .expect("file creation");
+    world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "Report.PDF",
+            "application/pdf",
+            b"two".to_vec(),
+            None,
+        )
+        .expect("colliding file creation");
+
+    let report = world.import(&screen).await.expect("import runs");
+    assert!(report.imported.is_empty());
+    assert_eq!(report.refused.len(), 2);
+    assert!(
+        report
+            .refused
+            .iter()
+            .all(|refused| refused.reason == "name_collision"),
+        "both colliding members are refused"
+    );
+    let assets = store::assets::for_project(&world.surreal, world.project.id)
+        .await
+        .expect("asset listing");
+    assert!(assets.is_empty(), "nothing silently merged");
+}
+
+#[tokio::test]
+async fn a_name_that_cannot_be_a_checkout_document_is_refused_before_download() {
+    let world = setup("drive-unusable-names").await;
+    world
+        .drive
+        .add_file(
+            &world.folder_id,
+            "../deed.pdf",
+            "application/pdf",
+            b"escaped".to_vec(),
+            None,
+        )
+        .expect("file creation");
+
+    let report = world.import(&Screen::default()).await.expect("import runs");
+    assert!(report.imported.is_empty());
+    assert_eq!(report.refused[0].reason, "unusable_name");
+    assert_eq!(
+        world.drive.download_calls(),
+        0,
+        "an unusable name is refused before its bytes move"
+    );
 }
