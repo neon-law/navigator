@@ -60,8 +60,8 @@ Guieb & Shook (`guieb-shook/`):
 
 | File | Page |
 | --- | --- |
-| `neon/locales/en/guieb-shook/home.yaml` | `/` page-shell defaults; the statement is hardcoded in `firm_pages.rs` |
-| `neon/locales/en/guieb-shook/services.yaml` | `/services` (kept valid; the route is not published on that host) |
+| `neon/locales/en/guieb-shook/home.yaml` | `/` — the firm's homepage |
+| `neon/locales/en/guieb-shook/services.yaml` | `/services` — published on that host |
 
 Daybridge Divorce Law (`daybridge/`):
 

@@ -756,6 +756,7 @@ fn reachable_image_keys(content_root: &Path) -> anyhow::Result<BTreeSet<String>>
     keys.insert(views::assets::CYBER_INJURY_AD_KEY.to_owned());
     keys.insert(views::assets::DEATH_AND_DIVORCE_HERO_KEY.to_owned());
     keys.insert(views::assets::ABHAYA_COMMUNITY_PHOTO_KEY.to_owned());
+    keys.insert(views::assets::GUIEB_SHOOK_HOME_PHOTO_KEY.to_owned());
     keys.extend(
         views::assets::ARCHITECTURE_PHOTOS
             .iter()

@@ -653,10 +653,9 @@ pub static GUIEB_SHOOK_BRANDING: Branding = Branding {
     base_url: "",
     primary_domain: "guiebandshook.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    // Unused by the rendered page, which reads
-    // `neon::firm_pages::guieb_shook_holding_content`; kept accurate anyway.
+    // The `llms.txt` summary for this brand: the firm speaks as itself.
     mission_description: "Guieb & Shook PC, Attorneys at Law.",
-    service_description: "Guieb & Shook publishes no services or fee schedule here; it is the holding page for Guieb & Shook PC.",
+    service_description: "Legal services from Guieb & Shook PC, attorneys at law: dispute assessment, business counsel, and defined legal tasks. We discuss the work, check for conflicts, and explain the scope before an engagement begins.",
     portal_only: false,
     brand_key: BrandKey::GuiebShook,
 };
@@ -1288,7 +1287,11 @@ impl BrandKey {
         match self {
             Self::Neon => !matches!(path.trim_end_matches('/'), "/business" | "/disputes"),
             Self::DeleteYourData => matches!(path, "/" | "/contact" | "/testimonials"),
-            Self::LawyerShook | Self::GuiebShook => matches!(path, "/" | "/testimonials"),
+            Self::LawyerShook => matches!(path, "/" | "/testimonials"),
+            // Guieb & Shook publishes its services page: the homepage's
+            // practice cards link there, so the route must resolve on this
+            // host. No other path joins the set.
+            Self::GuiebShook => matches!(path, "/" | "/services" | "/testimonials"),
             Self::CyberInjuryLaw => {
                 matches!(
                     path,

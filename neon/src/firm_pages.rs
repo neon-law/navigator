@@ -1301,7 +1301,14 @@ pub(crate) fn resolve_firm_home_content(
 ) -> webapp::home::HomeContent {
     match branding.brand_key {
         BrandKey::LawyerShook => lawyer_shook_holding_content(branding),
-        BrandKey::GuiebShook => guieb_shook_holding_content(branding),
+        // Guieb & Shook reads its own `home.yaml` like every other practice
+        // brand; only the account invitation stays closed on the firm's own
+        // site — an existing test pins that.
+        BrandKey::GuiebShook => {
+            let mut content = locales::home_for_host(branding, deployment_host);
+            content.signup = None;
+            content
+        }
         BrandKey::Neon
         | BrandKey::DeleteYourData
         | BrandKey::Vesta
@@ -1369,22 +1376,6 @@ fn lawyer_shook_holding_content(branding: &views::brand::Branding) -> webapp::ho
     };
     content.practices_heading = "Our Family".to_string();
     content.practices = portfolio_practices(locales::home(branding).practices);
-    content
-}
-
-/// Guieb & Shook's whole page: the firm's legal name, "Attorneys at Law.",
-/// and the sign-in line — no practice cards, no catalog copy.
-fn guieb_shook_holding_content(branding: &views::brand::Branding) -> webapp::home::HomeContent {
-    let mut content = lawyer_shook_holding_content(branding);
-    let legal_entity = branding.firm.legal_entity;
-    let paragraph = format!("Attorneys at Law. {legal_entity} is an American law firm.");
-    if let Some(bare) = content.bare.as_mut() {
-        bare.paragraph.clone_from(&paragraph);
-    }
-    content.meta_description = paragraph;
-    content.practices_heading = String::new();
-    content.practices = Vec::new();
-    content.signup = None;
     content
 }
 
@@ -1588,8 +1579,13 @@ mod lawyer_shook_holding_page_tests {
 
     #[test]
     fn guieb_shook_home_does_not_open_the_account_invitation() {
-        let content = super::guieb_shook_holding_content(&views::brand::GUIEB_SHOOK_BRANDING);
+        let content = super::resolve_firm_home_content(&views::brand::GUIEB_SHOOK_BRANDING, None);
+        // The homepage reads the brand's own catalog — the authored classic-NY
+        // page, not the holding notice — and the account invitation stays
+        // closed on the firm's own site.
         assert!(content.signup.is_none());
+        assert_eq!(content.heading, "Guieb & Shook PC");
+        assert!(!content.practices.is_empty());
     }
 }
 
