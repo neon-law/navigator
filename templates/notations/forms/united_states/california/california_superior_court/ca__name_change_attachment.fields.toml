@@ -1,0 +1,67 @@
+form_code = "ca__name_change_attachment"
+
+# NC-110 (Rev. 7/1/2026) — Name and Information About the Person Whose Name
+# is to be Changed (the item-3 attachment to the NC-100).
+#
+# Mapped: the petitioner's caption name on both pages, the item-3a identity
+# block (current name, proposed name, date of birth, place of birth), the
+# item-3b birth-sex checkboxes (Male/Female, export values "1"/"2"), the
+# item-3j reason line, and the page-2 signature-block name.
+#
+# Deliberately left unmapped (lawyer or clerk completes at review):
+# - `person[0]/person[1]` (Self / Another person, export "1"/"2") — the
+#   item-1 checkbox is a structural recital the lawyer verifies.
+# - `eighteen[0]/eighteen[1]` — the age checkboxes are structural for adult
+#   packets; the lawyer checks "18 years of age or older".
+# - `PetitionerStrAdd/PetitionerCity/PetitionerState/PetitionerZip[0]` — the
+#   residence address is not collected at intake; completed at review.
+# - `Sublistc[0].*` (minor's requester relationship) and the item-4 parent
+#   blocks — minors' items, out of scope for adult petitions.
+# - `Attachment_no/attNo[0]`, `SigDate*`, `T14/T1444[0]` attorney names —
+#   attachment numbering, signing dates, and firm identity at review.
+# - `declaration1/declaration2[0]/[1]`, `AddlSigs/PetSigLastAtt[0]` —
+#   multi-petitioner signature continuation flags.
+
+[[field]]
+name = "NC-110[0].Page1[0].P1Caption[0].Caption[0].Petitioner[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-110[0].Page2[0].PxCaption[0].Caption[0].Petitioner[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-110[0].Page1[0].List1[0].LI1[0].lia[0].Sublista[0].SubLi1[0].presentName[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-110[0].Page1[0].List1[0].LI1[0].lia[0].Sublista[0].SubLi2[0].PropName[0]"
+question = "custom_text__name_changing_to"
+
+[[field]]
+name = "NC-110[0].Page1[0].List1[0].LI1[0].lia[0].Sublista[0].SubLi3[0].petDOB[0]"
+question = "custom_datetime__date_of_birth"
+
+[[field]]
+name = "NC-110[0].Page1[0].List1[0].LI1[0].lia[0].Sublista[0].SubLi4[0].petPLaceOB[0]"
+question = "custom_text__place_of_birth"
+
+[[field]]
+name = "NC-110[0].Page1[0].List1[0].LI1[0].lia[0].Sublista[0].SubLi5[0].gender[0]"
+question = "custom_single_choice__current_sex_designation"
+checked_when = "male"
+on_state = "1"
+
+[[field]]
+name = "NC-110[0].Page1[0].List1[0].LI1[0].lia[0].Sublista[0].SubLi5[0].gender[1]"
+question = "custom_single_choice__current_sex_designation"
+checked_when = "female"
+on_state = "2"
+
+[[field]]
+name = "NC-110[0].Page1[0].List1[0].LI1[0].lib[0].nameChangeReason[0]"
+question = "custom_text__reason_for_change"
+
+[[field]]
+name = "NC-110[0].Page2[0].sigName[0]"
+question = "person__client.name"

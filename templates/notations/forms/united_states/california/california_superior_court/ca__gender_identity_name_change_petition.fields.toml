@@ -1,0 +1,79 @@
+form_code = "ca__gender_identity_name_change_petition"
+
+# NC-200 (Rev. 7/1/2026) — Petition for Change of Name to Conform to Gender
+# Identity.
+#
+# Mapped: the petitioner's caption name on both pages, the item-7b identity
+# block (current name, proposed name, date of birth, place of birth), the
+# item-7b sex-designation checkboxes (Male/Female, export "1"/"2"), the
+# filing county, and the page-2 declaration signature name.
+#
+# Deliberately left unmapped (lawyer, clerk, or court completes):
+# - `List2[0].LI1[0].LI1A[0].residence[0]` — the residency recital the
+#   lawyer verifies (structural for a packet filed in the county of
+#   residence).
+# - `List3[0].LI1[0].LI5A–Li5F[0].*` — the item-5 requester checkboxes for
+#   minors' petitions.
+# - `List4[0].T98[0]` — the minor's objections order checkbox.
+# - `List5[0].LI7B[0].person[0]` (Self) and `eighteen[0]/[1]` — structural
+#   for adult self-petitions; the lawyer verifies.
+# - `Page2[0].List5[0].LI1[0].LI7D[0].Sublist7d[0].relationship[0..5]` — the
+#   item-7d requester relationship; structural for self-petitions.
+# - `LI7E[0].*` parent blocks and `Li7A[0].AttachmentCount[0]` — minors'
+#   items and attachment counts.
+# - `PoPDeclaration[0].declaration1[0]/[1]`, `declaration2[0]/[1]` — the
+#   Penal Code section 290 registration declarations; the lawyer discusses
+#   them with the client at the review appointment.
+# - `SigDate*`/`T1444[0]`/`AttySign[0].*`, `AddlSigs[0]`,
+#   `PetSigLastAtt[0]` — signature dates, attorney names, and continuation
+#   flags.
+# - `Caption[0].AttyPartyInfo[0].*`, `CourtInfo[0].*` beyond the county,
+#   `CaseNumber[0]` — firm identity, court branch, and case number.
+
+[[field]]
+name = "NC-200[0].Page1[0].P1Caption[0].TitlePartyName[0].Petitioner[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-200[0].Page2[0].pXCaption[0].TitlePartyName[0].Petitioner[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-200[0].Page1[0].List1[0].PetitionerPresentName[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-200[0].Page1[0].List5[0].LI7B[0].Subli7b[0].Subli7b1[0].presentName[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-200[0].Page1[0].List5[0].LI7B[0].Subli7b[0].Subli7b2[0].PropName[0]"
+question = "custom_text__name_changing_to"
+
+[[field]]
+name = "NC-200[0].Page1[0].List5[0].LI7B[0].Subli7b[0].Subli7b3[0].petDOB[0]"
+question = "custom_datetime__date_of_birth"
+
+[[field]]
+name = "NC-200[0].Page1[0].List5[0].LI7B[0].Subli7b[0].Subli7b4[0].petPLaceOB[0]"
+question = "custom_text__place_of_birth"
+
+[[field]]
+name = "NC-200[0].Page1[0].List5[0].LI7B[0].Subli7b[0].SubLi7b5[0].gender[0]"
+question = "custom_single_choice__current_sex_designation"
+checked_when = "male"
+on_state = "1"
+
+[[field]]
+name = "NC-200[0].Page1[0].List5[0].LI7B[0].Subli7b[0].SubLi7b5[0].gender[1]"
+question = "custom_single_choice__current_sex_designation"
+checked_when = "female"
+on_state = "2"
+
+[[field]]
+name = "NC-200[0].Page2[0].PoPDeclaration[0].sigName[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-200[0].Page1[0].P1Caption[0].CourtInfo[0].CrtCounty[0]"
+question = "custom_text__county_of_residence"

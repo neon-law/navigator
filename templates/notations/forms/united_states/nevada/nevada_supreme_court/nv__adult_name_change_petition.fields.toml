@@ -1,0 +1,96 @@
+form_code = "nv__adult_name_change_petition"
+
+# Nevada Supreme Court self-help form — Petition for Adult Name Change
+# (statewide PDF-fillable edition).
+#
+# The blank uses clean dotted field names. Mapped: the petitioner's name
+# (the caption full-name fields, and the SEQ001 block's split First/Middle/
+# Last parts — its Full line is a kid-full multi-widget field that cannot
+# merge, so the parts carry the answer), the three new-name parts, the
+# birth date, birthplace city and state, the residence county recital, the
+# reason, the felony-disclosure checkboxes (No/Yes, export "On"), and the
+# felony description.
+#
+# Deliberately left unmapped (lawyer or clerk completes at review):
+# - `Date.CurrentDate.DayProper/MonthName/YearTwoDigit` — the signing date,
+#   set when the petitioner signs at the review appointment (a literal
+#   would freeze the date at vendor time).
+# - `Reason.Gender`/`Reason.Other` — the reason-category checkboxes; the
+#   free-text reason is mapped and the lawyer selects the category.
+# - `Petitioner Home Address`/`CityStateZip`/`Phone`/`Email Address` —
+#   contact details completed at review.
+# - `CASE NO DEPT` — clerk-assigned.
+# - `County` — the caption county is a kid-full text field (it cannot merge
+#   into the recital's county answer, which `State.Residence` carries); the
+#   caption is completed at review from the same answer.
+# - `Petitioner.SEQ001.Name.Full` — the numbered block's full-name line is a
+#   kid-full multi-widget field (it cannot merge into the person answer);
+#   the block's split First/Middle/Last parts carry the same answer.
+
+[[field]]
+name = "Petitioner.Name.Full"
+question = "person__client.name"
+
+[[field]]
+name = "Petitioner Name Full"
+question = "person__client.name"
+
+[[field]]
+name = "Petitioner.SEQ001.Name.First"
+question = "person__client.given"
+
+[[field]]
+name = "Petitioner.SEQ001.Name.Middle"
+question = "person__client.middle"
+
+[[field]]
+name = "Petitioner.SEQ001.Name.Last"
+question = "person__client.family"
+
+[[field]]
+name = "Petitioner.SEQ001.ChangeName.First"
+question = "custom_text__new_first_name"
+
+[[field]]
+name = "Petitioner.SEQ001.ChangeName.Middle"
+question = "custom_text__new_middle_name"
+
+[[field]]
+name = "Petitioner.SEQ001.ChangeName.Last"
+question = "custom_text__new_last_name"
+
+[[field]]
+name = "Petitioner.BirthDate"
+question = "custom_datetime__date_of_birth"
+
+[[field]]
+name = "Petitioner.BirthLocation.City"
+question = "custom_text__birthplace_city"
+
+[[field]]
+name = "Petitioner.BirthLocation.State"
+question = "custom_text__birthplace_state_or_country"
+
+[[field]]
+name = "State.Residence"
+question = "custom_text__county_of_residence"
+
+[[field]]
+name = "NameChange.Reason"
+question = "custom_text__reason_for_change"
+
+[[field]]
+name = "Felony.No"
+question = "custom_yes_no__felony_conviction"
+checked_when = "no"
+on_state = "On"
+
+[[field]]
+name = "Felony.Yes"
+question = "custom_yes_no__felony_conviction"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "Felony.Description"
+question = "custom_text__felony_details"

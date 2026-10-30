@@ -1,0 +1,30 @@
+questionnaire:
+  BEGIN:
+    _: person__client
+  person__client:
+    _: custom_text__name_changing_to
+  custom_text__name_changing_to:
+    _: custom_datetime__date_of_birth
+  custom_datetime__date_of_birth:
+    _: custom_text__county_of_residence
+  custom_text__county_of_residence:
+    _: END
+  END: {}
+prompts:
+  client_name: What is your current full legal name, as it appears on your identification?
+  name_changing_to: What new name are you asking the court for?
+  date_of_birth: What is your date of birth?
+  county_of_residence: In what California county do you live?
+workflow:
+  BEGIN:
+    intake_submitted: intake_persisted__client
+  intake_persisted__client:
+    decree_rendered: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__name_change_decree_pdf
+    rejected: END
+  generate_pdf__name_change_decree_pdf:
+    pdf_persisted: filing__ca_superior_court
+  filing__ca_superior_court:
+    filed: END
+  END: {}

@@ -1,0 +1,42 @@
+questionnaire:
+  BEGIN:
+    _: person__client
+  person__client:
+    _: custom_text__name_changing_to
+  custom_text__name_changing_to:
+    _: custom_single_choice__current_sex_designation
+  custom_single_choice__current_sex_designation:
+    _: custom_datetime__date_of_birth
+  custom_datetime__date_of_birth:
+    _: custom_text__place_of_birth
+  custom_text__place_of_birth:
+    _: custom_text__reason_for_change
+  custom_text__reason_for_change:
+    _: END
+  END: {}
+prompts:
+  client_name: What is your current full legal name, as it appears on your identification?
+  name_changing_to: What new name are you asking the court for? Spell it exactly as you want it to read on the decree.
+  current_sex_designation: What is your current sex designation, as the attachment prints it?
+  date_of_birth: What is your date of birth?
+  place_of_birth: Where were you born (city and state)?
+  reason_for_change: Briefly, why are you asking for the change?
+choices:
+  current_sex_designation:
+    female: Female
+    male: Male
+    nonbinary: Nonbinary
+    prefer_not_to_say: Prefer not to state
+workflow:
+  BEGIN:
+    intake_submitted: intake_persisted__client
+  intake_persisted__client:
+    attachment_rendered: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__name_change_attachment_pdf
+    rejected: END
+  generate_pdf__name_change_attachment_pdf:
+    pdf_persisted: filing__ca_superior_court
+  filing__ca_superior_court:
+    filed: END
+  END: {}

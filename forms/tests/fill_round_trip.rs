@@ -144,6 +144,130 @@ fn sample_answers(form_code: &str) -> BTreeMap<String, String> {
             ("person__client.given", "María".to_string()),
             ("person__client.middle", "Elena".to_string()),
         ],
+        // First wave: California name-change packet (NC-100 family).
+        "ca__name_change_petition" => vec![
+            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("custom_text__name_changing_to", "Jordan Avery Solis".to_string()),
+            ("custom_text__county_of_residence", "Sacramento".to_string()),
+        ],
+        "ca__name_change_attachment" => vec![
+            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("custom_text__name_changing_to", "Jordan Avery Solis".to_string()),
+            (
+                "custom_single_choice__current_sex_designation",
+                "female".to_string(),
+            ),
+            ("custom_datetime__date_of_birth", "1990-04-12".to_string()),
+            ("custom_text__place_of_birth", "Fresno, California".to_string()),
+            (
+                "custom_text__reason_for_change",
+                "The new name reflects the petitioner's family ties.".to_string(),
+            ),
+        ],
+        "ca__name_change_order_to_show_cause" => vec![
+            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("custom_text__name_changing_to", "Jordan Avery Solis".to_string()),
+            ("custom_text__county_of_residence", "Sacramento".to_string()),
+        ],
+        "ca__name_change_decree" => vec![
+            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("custom_text__name_changing_to", "Jordan Avery Solis".to_string()),
+            ("custom_text__county_of_residence", "Sacramento".to_string()),
+        ],
+        "ca__civil_case_cover_sheet" => vec![
+            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("custom_text__county_of_residence", "Sacramento".to_string()),
+        ],
+        // First wave: California gender-identity family (NC-200 family).
+        "ca__gender_identity_name_change_petition" => vec![
+            ("person__client.name", "Rowan Vega Camacho".to_string()),
+            ("custom_text__name_changing_to", "Rowan Vega Solis".to_string()),
+            (
+                "custom_single_choice__current_sex_designation",
+                "female".to_string(),
+            ),
+            ("custom_datetime__date_of_birth", "1988-09-30".to_string()),
+            ("custom_text__place_of_birth", "San Diego, California".to_string()),
+            (
+                "custom_text__reason_for_change",
+                "The new name conforms to the petitioner's gender identity.".to_string(),
+            ),
+        ],
+        "ca__gender_identity_name_change_order_to_show_cause" => vec![
+            ("person__client.name", "Rowan Vega Camacho".to_string()),
+            ("custom_text__name_changing_to", "Rowan Vega Solis".to_string()),
+            ("custom_text__county_of_residence", "Fresno".to_string()),
+        ],
+        "ca__gender_identity_name_change_decree" => vec![
+            ("person__client.name", "Rowan Vega Camacho".to_string()),
+            ("custom_text__name_changing_to", "Rowan Vega Solis".to_string()),
+            ("custom_text__county_of_residence", "Fresno".to_string()),
+        ],
+        "ca__gender_recognition_petition" => vec![
+            ("person__client.name", "Rowan Vega Camacho".to_string()),
+            ("custom_single_choice__sex_identifier", "nonbinary".to_string()),
+            (
+                "custom_single_choice__new_certificates",
+                "birth_certificate".to_string(),
+            ),
+            ("custom_text__name_changing_to", "Rowan Vega Solis".to_string()),
+            ("custom_datetime__date_of_birth", "1988-09-30".to_string()),
+            ("custom_text__place_of_birth", "San Diego, California".to_string()),
+            (
+                "custom_single_choice__current_sex_designation",
+                "male".to_string(),
+            ),
+        ],
+        "ca__gender_recognition_order" => vec![
+            ("person__client.name", "Rowan Vega Camacho".to_string()),
+            ("custom_single_choice__sex_identifier", "male".to_string()),
+            ("custom_text__name_changing_to", "Rowan Vega Solis".to_string()),
+            (
+                "custom_single_choice__new_certificates",
+                "birth_certificate".to_string(),
+            ),
+        ],
+        // First wave: Nevada Supreme Court self-help forms.
+        "nv__adult_name_change_petition" => vec![
+            ("person__client.name", "Alex Rios Nakamura".to_string()),
+            ("person__client.given", "Alex".to_string()),
+            ("person__client.middle", "Rios".to_string()),
+            ("person__client.family", "Nakamura".to_string()),
+            ("custom_text__new_first_name", "Alex".to_string()),
+            ("custom_text__new_middle_name", "Rios".to_string()),
+            ("custom_text__new_last_name", "Sandoval".to_string()),
+            ("custom_datetime__date_of_birth", "1992-02-17".to_string()),
+            ("custom_text__birthplace_city", "Elko".to_string()),
+            ("custom_text__birthplace_state_or_country", "Nevada".to_string()),
+            ("custom_text__county_of_residence", "Elko".to_string()),
+            (
+                "custom_text__reason_for_change",
+                "The petitioner is changing their surname after marriage.".to_string(),
+            ),
+            ("custom_yes_no__felony_conviction", "no".to_string()),
+        ],
+        "nv__dv_protection_order_application" => vec![
+            ("person__client.name", "Jamie Herrera".to_string()),
+            ("person__client.given", "Jamie".to_string()),
+            ("person__client.middle", "Lynn".to_string()),
+            ("person__client.family", "Herrera".to_string()),
+            ("person__respondent.name", "Renée Vásquez".to_string()),
+            ("person__respondent.given", "Renée".to_string()),
+            ("person__respondent.middle", "Marisol".to_string()),
+            ("person__respondent.family", "Vásquez".to_string()),
+            ("custom_single_choice__relationship", "dating".to_string()),
+            ("custom_yes_no__living_together", "yes".to_string()),
+            ("custom_text__incident_date", "October 12, 2026".to_string()),
+            (
+                "custom_text__what_happened",
+                "The adverse party pushed the applicant and broke their phone."
+                    .to_string(),
+            ),
+            ("custom_yes_no__weapon_involved", "no".to_string()),
+            ("custom_yes_no__incident_reported", "no".to_string()),
+            ("custom_yes_no__emergency_residence_stay_away", "yes".to_string()),
+            ("custom_text__county_of_residence", "Washoe".to_string()),
+        ],
         other => panic!("no sample answers for `{other}`"),
     };
     pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
@@ -224,6 +348,29 @@ fn flattened_text_smoke_values(form_code: &str) -> &'static [&'static str] {
             &["Neon Law Services", "Aries Client"]
         }
         "us__naturalization" => &["1990-04-12", "maria@example.com", "Santos Gómez", "María"],
+        "ca__name_change_petition" | "ca__name_change_order_to_show_cause"
+        | "ca__name_change_decree" => &["Jordan Avery Blake", "Jordan Avery Solis", "Sacramento"],
+        "ca__name_change_attachment" => {
+            &["Jordan Avery Blake", "Jordan Avery Solis", "1990-04-12", "Fresno, California"]
+        }
+        "ca__civil_case_cover_sheet" => &["Jordan Avery Blake", "Sacramento"],
+        "ca__gender_identity_name_change_petition" => {
+            &["Rowan Vega Camacho", "Rowan Vega Solis", "1988-09-30", "San Diego, California"]
+        }
+        "ca__gender_identity_name_change_order_to_show_cause"
+        | "ca__gender_identity_name_change_decree" => {
+            &["Rowan Vega Camacho", "Rowan Vega Solis", "Fresno"]
+        }
+        "ca__gender_recognition_petition" => {
+            &["Rowan Vega Camacho", "Rowan Vega Solis", "1988-09-30", "San Diego, California"]
+        }
+        "ca__gender_recognition_order" => &["Rowan Vega Camacho", "Rowan Vega Solis"],
+        "nv__adult_name_change_petition" => {
+            &["Alex Rios Nakamura", "Nakamura", "Sandoval", "1992-02-17", "Elko"]
+        }
+        "nv__dv_protection_order_application" => {
+            &["Jamie Herrera", "Renée Vásquez", "October 12, 2026"]
+        }
         other => panic!("no flattened text smoke values for `{other}`"),
     }
 }

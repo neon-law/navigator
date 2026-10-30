@@ -1,0 +1,40 @@
+form_code = "ca__name_change_order_to_show_cause"
+
+# NC-120 (Rev. 7/1/2018, AES-encrypted source) — Order to Show Cause—Change
+# of Name.
+#
+# Mapped: the petitioner's caption name, the filing county, the item-1
+# recital, and the item-1a slot (current and proposed name). Slots b–e stay
+# for additional petitioners.
+#
+# Deliberately left unmapped (court or clerk completes):
+# - `List2[0].*` — hearing date, time, department, and address checkboxes.
+# - `List3[0].Lia[0].NameChangeGender_cb5[0]`, `TextField2[0]`, and the
+#   publication-radio `order[0]/order[1]` — the publication order and the
+#   newspaper of record are ordered by the court after filing.
+# - `List3[0].Lib[0].OneParent_rb36[0]`/`TextField25[0]` — parent-consent
+#   variations for minors' petitions.
+# - `Caption[0].AttyPartyInfo[0].*`, `CourtInfo[0].*`, `CaseNumber[0]` —
+#   firm identity, court branch, and clerk-assigned case number.
+# - `List1[0].Item1[0].Sublist1[0].LiB–LiE[0].*` — petitioner slots b–e.
+# - `Sign[0].SigDate[0]` — judge's signature date.
+
+[[field]]
+name = "NC-120[0].Page1[0].P1Caption[0].TitlePartyName[0].TextField29[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-120[0].Page1[0].List1[0].PetitionerPresentName[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-120[0].Page1[0].List1[0].Item1[0].Sublist1[0].LiA[0].PresentName1[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-120[0].Page1[0].List1[0].Item1[0].Sublist1[0].LiA[0].ProposedName1[0]"
+question = "custom_text__name_changing_to"
+
+[[field]]
+name = "NC-120[0].Page1[0].P1Caption[0].CourtInfo[0].CrtCounty[0]"
+question = "custom_text__county_of_residence"

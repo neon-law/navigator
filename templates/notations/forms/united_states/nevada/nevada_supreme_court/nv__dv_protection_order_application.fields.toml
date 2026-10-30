@@ -1,0 +1,164 @@
+form_code = "nv__dv_protection_order_application"
+
+# Nevada Supreme Court self-help form — Application for Protection Order
+# Against Domestic Violence (statewide PDF-fillable edition, ~234 fields).
+#
+# The application's detailed relief selections become binding order terms,
+# so intake carries the parties, relationship, incident facts, and the
+# core emergency requests; the consequential specifics are completed by the
+# firm with the applicant at the review appointment.
+#
+# Mapped: the applicant's name (full plus First/Middle/Last parts), the
+# adverse party's name (full plus parts), the relationship checkboxes
+# (Married/Dating/Coparents/Other, export "On"), the living-together pair
+# (export "Yes"), the victim checkbox, the incident date and description
+# (the header fields and the first row of the incident table), the weapon
+# and police-report pairs (export "On"), the residence stay-away pair
+# (export "Yes"), and the venue county.
+#
+# Deliberately left unmapped (firm or clerk completes at review):
+# - `Relationship.OtherType` — the describe box for the "other" path.
+# - `Incident.Weapon.Describe`, `Guns.No/Yes/Unknown` — weapon identity and
+#   the adverse party's firearms access; gathered at review (the
+#   firearms-surrender terms are consequential).
+# - `Incident Date 2`/`What Happened 2` and `PriorIncident.*` — earlier
+#   incidents; collected at review.
+# - `Arrest.Party`, `DVPrior.*`, `AdverseParty.Jail.*` — arrest, prior
+#   case, and custody status details gathered at review.
+# - `Child1..ChildN.*` and `Emergency.ChildCustody*` — the children's
+#   block and custody-relief terms; collected at review.
+# - `Emergency.*` remaining relief fields, `Residence.*`,
+#   `SameComplex.*`, `Accompany*`, `ExtendedOrder.*`, `Contact.*`,
+#   `Exhibits` — detailed relief and contact preferences, confirmed at
+#   review because they become order terms.
+# - `ApplicantVictim.Yes` — no discoverable on-state export; the lawyer
+#   checks the victim box at review.
+# - `ApplicantNonConfidential.*` and `Address Alert` — the confidential-
+#   address determination is a lawyer decision at review.
+# - `NeedInterpreter.*` — intake language handled by the firm.
+# - `CASE NO`, `DEPT`, `Date`, `Year`, `/s/`, `Township` — clerk,
+#   signature-date, and township entries.
+
+[[field]]
+name = "Applicant.Name.Full"
+question = "person__client.name"
+
+[[field]]
+name = "Applicant.Name.First"
+question = "person__client.given"
+
+[[field]]
+name = "Applicant.Name.Middle"
+question = "person__client.middle"
+
+[[field]]
+name = "Applicant.Name.Last"
+question = "person__client.family"
+
+[[field]]
+name = "AdverseParty.Name.Full"
+question = "person__respondent.name"
+
+[[field]]
+name = "AdverseParty.Name.First"
+question = "person__respondent.given"
+
+[[field]]
+name = "AdverseParty.Name.Middle"
+question = "person__respondent.middle"
+
+[[field]]
+name = "AdverseParty.Name.Last"
+question = "person__respondent.family"
+
+[[field]]
+name = "Relationship.Married"
+question = "custom_single_choice__relationship"
+checked_when = "married"
+on_state = "On"
+
+[[field]]
+name = "Relationship.Dating"
+question = "custom_single_choice__relationship"
+checked_when = "dating"
+on_state = "On"
+
+[[field]]
+name = "Relationship.Coparents"
+question = "custom_single_choice__relationship"
+checked_when = "coparents"
+on_state = "On"
+
+[[field]]
+name = "Relationship.Other"
+question = "custom_single_choice__relationship"
+checked_when = "other"
+on_state = "On"
+
+[[field]]
+name = "LivingTogether.Yes"
+question = "custom_yes_no__living_together"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "LivingTogether.No"
+question = "custom_yes_no__living_together"
+checked_when = "no"
+on_state = "Yes"
+
+[[field]]
+name = "Incident.Date"
+question = "custom_text__incident_date"
+
+[[field]]
+name = "Incident Date 1"
+question = "custom_text__incident_date"
+
+[[field]]
+name = "IncidentDescription.Text"
+question = "custom_text__what_happened"
+
+[[field]]
+name = "What Happened 1"
+question = "custom_text__what_happened"
+
+[[field]]
+name = "Incident.Weapon.Yes"
+question = "custom_yes_no__weapon_involved"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "Incident.Weapon.No"
+question = "custom_yes_no__weapon_involved"
+checked_when = "no"
+on_state = "On"
+
+[[field]]
+name = "ReportedMatter.Yes"
+question = "custom_yes_no__incident_reported"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "ReportedMatter.No"
+question = "custom_yes_no__incident_reported"
+checked_when = "no"
+on_state = "On"
+
+[[field]]
+name = "StayAway.Yes"
+question = "custom_yes_no__emergency_residence_stay_away"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "StayAway.No"
+question = "custom_yes_no__emergency_residence_stay_away"
+checked_when = "no"
+on_state = "Yes"
+
+[[field]]
+name = "County"
+question = "custom_text__county_of_residence"
