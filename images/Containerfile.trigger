@@ -70,6 +70,8 @@ COPY archives          archives
 COPY import            import
 COPY billing           billing
 COPY billing-workflows billing-workflows
+COPY gateway gateway
+COPY sandbox-skills sandbox-skills
 # Every scheduled-job crate (workflows-service, archives, billing-workflows, cli)
 # reaches the `views` crate through `workflows`, and
 # `views` bakes in `docs/lsp/*.md` with include_str!(concat!(

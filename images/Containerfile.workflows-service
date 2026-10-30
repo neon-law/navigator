@@ -77,6 +77,8 @@ COPY templates templates
 COPY archives          archives
 COPY billing           billing
 COPY billing-workflows billing-workflows
+COPY gateway gateway
+COPY sandbox-skills sandbox-skills
 # `workflows` (a `workflows-service` dependency) renders branded email via
 # the `views` crate, and `views` bakes in `docs/lsp/*.md` with
 # include_str!(concat!(CARGO_MANIFEST_DIR, "/../docs/…")). Those files live
