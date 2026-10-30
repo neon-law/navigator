@@ -4649,3 +4649,349 @@ async fn homepage_signup_prompt_waits_and_stays_dismissed() {
     .unwrap();
     c.close().await.unwrap();
 }
+
+/// The basic will, walked as a matter, end to end in a real browser:
+///   1. POST /app/lawyer/retainers/new (template code `basic_will`) → /step
+///   2. POST /step × 8 (one question each) → review
+///   3. POST /approve-send → the worker renders the will PDF and advances
+///      through `pdf_persisted` to the `witnesses` human gate.
+///
+/// Preconditions (beyond the module's chromedriver + KIND requirements):
+/// the `basic_will` template must be seeded (`navigator site seed
+/// templates/`), and `store/seeds/Question.yaml` must be seeded for the
+/// record-backed walker question codes (`person`, `schedule`,
+/// `custom_single_choice`, `custom_yes_no`, `people`).
+///
+/// Workflow-tail boundary: the will's declared tail (`witnesses →
+/// _signature → notarization → END`) has no browser door yet — the matter
+/// page's formalities tracker renders those steps read-only, and no route
+/// advances them. This walk therefore ends where the product does: parked
+/// at `witnesses`, with the journal proving the `approved` and
+/// `pdf_persisted` edges the browser did drive.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn lawyer_walks_the_basic_will_through_the_matter_workflow() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&c).await;
+
+    // The eight answers we'll submit, in walker order
+    // (custom_single_choice__law → person__testator → person__executor →
+    // person__alternate_executor → person__guardian → people__beneficiaries
+    // → schedule__specific_bequests → custom_yes_no__self_proving).
+    // The four person questions render `<select>`s (the client is a project
+    // participant, seeded by `start_post` before the first question), so a
+    // literal answer is not what those steps submit — the walk records what
+    // each step actually picked, exactly like the retainer walk.
+    // Nevada is the representative state: it is the one branch with
+    // playbook-grounded provisions (the CA/NY/WA branches are deliberately
+    // empty attorney placeholders).
+    let client_email = format!("will-walk-{}@example.com", std::process::id());
+    let answers = [
+        "NV",
+        "", // person__testator — a select pick, recorded below
+        "", // person__executor
+        "", // person__alternate_executor
+        "", // person__guardian
+        "Vera Doe",
+        "The Reno residence to my daughter.",
+        "Yes",
+    ];
+
+    // --- Step 0: create the Notation -------------------------
+    c.goto(&format!("{}/app/lawyer/retainers/new", base_url()))
+        .await
+        .unwrap();
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("input[name='client_email']"))
+        .await
+        .unwrap();
+    // The template picker lists only onboarding and retainer templates;
+    // `basic_will` resolves from the store like any firm template, so the
+    // walk injects its option rather than depending on picker copy.
+    c.execute(
+        "const select = document.querySelector('select[name=\"retainer_template_code\"]'); \
+         const option = document.createElement('option'); \
+         option.value = 'basic_will'; option.textContent = 'Basic will (test)'; \
+         select.appendChild(option); \
+         select.value = 'basic_will'; \
+         select.dispatchEvent(new Event('input', {bubbles: true})); \
+         select.dispatchEvent(new Event('change', {bubbles: true})); \
+         return select.value;",
+        vec![],
+    )
+    .await
+    .unwrap();
+    c.execute(
+        "document.querySelector('input[name=\"client_email\"]').value = arguments[0]; \
+         document.querySelector('input[name=\"client_email\"]').dispatchEvent(new Event('input', {bubbles: true})); \
+         document.querySelector('form.admin-form').submit(); return true;",
+        vec![serde_json::Value::String(client_email)],
+    )
+    .await
+    .unwrap();
+
+    let started = std::time::Instant::now();
+    let notation_id = loop {
+        let url = c.current_url().await.unwrap();
+        if let Some(id) = notation_id_from_step_path(url.path()) {
+            break id;
+        }
+        assert!(
+            started.elapsed() <= Duration::from_secs(10),
+            "never landed on /app/lawyer/notations/:id/step; last URL was {url}",
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+
+    // --- Steps 1–8: walk the will's questionnaire ------------
+    // One script handles every control the will renders, in priority
+    // order: a radio group (`custom_single_choice__law`, values are the
+    // choice keys CA/NV/NY/WA; `custom_yes_no__self_proving`, keys
+    // Yes/No), then the people-list widget (row-0 inputs `p0_*`), then
+    // the plain text input (schedule falls through `question_fields` to
+    // the generic input today — its typed answer is stored as a string,
+    // so the document's bequest loop renders nothing; the journal still
+    // carries what was typed), then the person `<select>`.
+    let set_step_answer_and_submit_script = "\
+        const value = arguments[0]; \
+        let rendered = value; \
+        let raw = value; \
+        const radios = document.querySelectorAll('input[type=\"radio\"][name=\"value\"]'); \
+        if (radios.length > 0) { \
+          const target = Array.from(radios).find(r => r.value === value); \
+          if (!target) throw new Error('no radio with value ' + value); \
+          target.checked = true; \
+          target.dispatchEvent(new Event('input', {bubbles: true})); \
+          target.dispatchEvent(new Event('change', {bubbles: true})); \
+          raw = target.value; \
+          const label = target.closest('label'); \
+          rendered = label ? label.textContent.trim() : target.value; \
+        } else if (document.querySelector('input[name=\"p0_name\"]')) { \
+          const name = document.querySelector('input[name=\"p0_name\"]'); \
+          name.value = value; \
+          name.dispatchEvent(new Event('input', {bubbles: true})); \
+          name.dispatchEvent(new Event('change', {bubbles: true})); \
+        } else { \
+          const text = document.querySelector(\
+            'input:not([type=\"radio\"]):not([type=\"checkbox\"])[name=\"value\"], \
+             textarea[name=\"value\"]'); \
+          if (text) { \
+            text.value = value; \
+            text.dispatchEvent(new Event('input', {bubbles: true})); \
+            text.dispatchEvent(new Event('change', {bubbles: true})); \
+          } else { \
+            const select = document.querySelector('select[name=\"value\"]'); \
+            if (!select) throw new Error('no answer control found for this step'); \
+            const options = Array.from(select.options).filter(o => o.value && !o.disabled); \
+            const chosen = options[0]; \
+            select.value = chosen.value; \
+            select.dispatchEvent(new Event('input', {bubbles: true})); \
+            select.dispatchEvent(new Event('change', {bubbles: true})); \
+            rendered = chosen.value; \
+            raw = chosen.value; \
+          } \
+        } \
+        document.querySelector('form.admin-form').submit(); \
+        return {rendered, raw};";
+
+    let mut journal_values: Vec<String> = answers.iter().map(|s| (*s).to_string()).collect();
+    let mut picked_people: Vec<String> = Vec::new();
+    for (i, value) in answers.iter().enumerate() {
+        wait_for_text(&c, &format!("Step {} of 8", i + 1), Duration::from_secs(10)).await;
+        let actual = c
+            .execute(
+                set_step_answer_and_submit_script,
+                vec![serde_json::Value::String((*value).to_string())],
+            )
+            .await
+            .unwrap();
+        if let Some(raw) = actual.get("raw").and_then(serde_json::Value::as_str) {
+            journal_values[i] = raw.to_string();
+        }
+        // Only the four person steps render through `<select>` picks whose
+        // shown value differs from the typed `answers[i]` (an empty
+        // placeholder); the other steps' rendered text is the typed answer.
+        if (1..=4).contains(&i) {
+            if let Some(rendered) = actual.get("rendered").and_then(serde_json::Value::as_str) {
+                picked_people.push(rendered.to_string());
+            }
+        }
+    }
+
+    // --- Review: the will is parked at the lawyer gate -------
+    wait_for_text(&c, "Awaiting attorney review", Duration::from_secs(20)).await;
+    let src = c.source().await.unwrap();
+    assert!(
+        src.contains("Nevada provisions"),
+        "the NV branch the walk selected must render in the will: {src}",
+    );
+    for absent in [
+        "California provisions",
+        "New York provisions",
+        "Washington provisions",
+    ] {
+        assert!(
+            !src.contains(absent),
+            "only the selected state's provisions may render, found {absent}",
+        );
+    }
+    assert!(
+        src.contains("Vera Doe"),
+        "the beneficiaries people-list answer must render in the will: {src}",
+    );
+    // The four person questions picked candidates through real `<select>`s;
+    // whatever each pick rendered must appear wherever the will names the
+    // testator, executors, or guardian.
+    for pick in &picked_people {
+        assert!(
+            src.contains(pick.as_str()),
+            "picked candidate `{pick}` must render in the will: {src}",
+        );
+    }
+
+    // --- Attorney approves: the worker renders + advances ----
+    // The approve form fires `approved`; the worker renders the will PDF,
+    // persists it (`pdf_persisted`), and the machine parks at `witnesses` —
+    // the review page shows the intake-started phase, no send form (the
+    // will's tail has no envelope).
+    c.execute(
+        "document.querySelector('form[action$=\"/approve-send\"]').submit(); return true;",
+        vec![],
+    )
+    .await
+    .unwrap();
+    wait_for_text_reloading(
+        &c,
+        &format!("{}/app/lawyer/notations/{notation_id}/review", base_url()),
+        "Retainer intake started",
+        Duration::from_secs(20),
+    )
+    .await;
+
+    c.close().await.unwrap();
+
+    // --- Journal: read `notation_event` from SurrealDB --------
+    let surreal = store::surreal::connect_from_env()
+        .await
+        .expect("connect to the port-forwarded SurrealDB");
+    let events = store::notation_events::for_notation(&surreal, notation_id)
+        .await
+        .expect("read notation_event from surreal");
+    let questionnaire: Vec<&store::notation_events::NotationEvent> = events
+        .iter()
+        .filter(|e| e.machine_kind == store::notation_events::MACHINE_QUESTIONNAIRE)
+        .collect();
+    let workflow: Vec<&store::notation_events::NotationEvent> = events
+        .iter()
+        .filter(|e| e.machine_kind == store::notation_events::MACHINE_WORKFLOW)
+        .collect();
+
+    // Nine questionnaire rows: BEGIN → the eight questions → END, every
+    // edge condition-less. The exact path is the regression record for the
+    // will's declared chain.
+    assert_eq!(
+        questionnaire.len(),
+        9,
+        "expected 9 questionnaire transitions for notation {notation_id}, got {questionnaire:?}",
+    );
+    let states: Vec<(&str, &str, &str)> = questionnaire
+        .iter()
+        .map(|e| {
+            (
+                e.from_state.as_str(),
+                e.to_state.as_str(),
+                e.condition.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        states,
+        vec![
+            ("BEGIN", "custom_single_choice__law", "_"),
+            ("custom_single_choice__law", "person__testator", "_"),
+            ("person__testator", "person__executor", "_"),
+            ("person__executor", "person__alternate_executor", "_"),
+            ("person__alternate_executor", "person__guardian", "_"),
+            ("person__guardian", "people__beneficiaries", "_"),
+            ("people__beneficiaries", "schedule__specific_bequests", "_"),
+            (
+                "schedule__specific_bequests",
+                "custom_yes_no__self_proving",
+                "_"
+            ),
+            ("custom_yes_no__self_proving", "END", "_"),
+        ],
+        "the will's questionnaire walked the wrong path",
+    );
+    // Every answered edge journals `{"answer_value": ...}` built from
+    // exactly what the step submitted (the choice key for a radio, the
+    // typed schedule text, the picked candidate for a person select) —
+    // built through `answer_payload` so a payload-shape change cannot
+    // desync the test from production. The people step is swept by content
+    // instead: its journal carries the assembled people-rows JSON, whose
+    // exact serialization belongs to the fieldmap, not this walk. The
+    // trailing END edge stays payload-free.
+    let mut expected_payloads: Vec<Option<String>> = journal_values
+        .iter()
+        .map(|v| Some(store::notation_events::answer_payload(v)))
+        .collect();
+    expected_payloads.push(None);
+    expected_payloads[5] = None;
+    let actual_payloads: Vec<Option<String>> =
+        questionnaire.iter().map(|e| e.payload.clone()).collect();
+    for (i, expected) in expected_payloads.iter().enumerate().take(8) {
+        if i == 5 {
+            continue;
+        }
+        assert_eq!(
+            &actual_payloads[i], expected,
+            "journal payload for question {i} does not match what the walker submitted",
+        );
+    }
+    assert!(
+        actual_payloads[5]
+            .as_deref()
+            .is_some_and(|p| p.contains("Vera Doe")),
+        "the people list must journal the beneficiary rows: {:?}",
+        actual_payloads[5],
+    );
+    assert!(
+        actual_payloads[6]
+            .as_deref()
+            .is_some_and(|p| p.contains("The Reno residence to my daughter.")),
+        "the schedule answer must journal what was typed: {:?}",
+        actual_payloads[6],
+    );
+
+    // Three workflow rows: the walk opened the matter (BEGIN →
+    // lawyer_review), the attorney approved, and the worker persisted the
+    // will PDF and advanced to the witnesses gate — the last edge the
+    // product drives today.
+    assert_eq!(
+        workflow.len(),
+        3,
+        "expected 3 workflow transitions for notation {notation_id}, got {workflow:?}",
+    );
+    let workflow_states: Vec<(&str, &str, &str)> = workflow
+        .iter()
+        .map(|e| {
+            (
+                e.from_state.as_str(),
+                e.to_state.as_str(),
+                e.condition.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        workflow_states,
+        vec![
+            ("BEGIN", "lawyer_review", "_"),
+            ("lawyer_review", "generate_pdf__will_pdf", "approved"),
+            ("generate_pdf__will_pdf", "witnesses", "pdf_persisted"),
+        ],
+        "the will's workflow walked the wrong path",
+    );
+}
