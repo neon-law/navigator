@@ -4215,8 +4215,15 @@ pub fn app_brand_new_post_router(
         .route_layer(from_fn_with_state(auth, crate::auth::require_auth))
 }
 
+/// Owner approves or clears a Brand's website URL, whose host is the Brand's
+/// approved email domain (`store::brands::set_website_url`).
+pub const APP_BRAND_WEBSITE_PATH: &str = "/app/admin/brands/{key}/website";
+/// Attach a Brand to the Firm that owns its row
+/// (`store::firms::attach_own_brand`).
+pub const APP_BRAND_ATTACH_PATH: &str = "/app/admin/brands/{key}/attach";
+
 /// Native POST twin of `PATCH /app/api/brands/{key}` so the edit form stays
-/// a classic navigation.
+/// a classic navigation, plus the website and attach forms on the same page.
 pub fn app_brands_edit_post_router(
     sessions: crate::session::SessionStore,
     policy: crate::policy::PolicyClient,
@@ -4227,6 +4234,14 @@ pub fn app_brands_edit_post_router(
         .route(
             APP_BRANDS_EDIT_PATH,
             axum::routing::post(crate::brand_edit::post_brand_edit),
+        )
+        .route(
+            APP_BRAND_WEBSITE_PATH,
+            axum::routing::post(crate::brand_edit::post_brand_website),
+        )
+        .route(
+            APP_BRAND_ATTACH_PATH,
+            axum::routing::post(crate::brand_edit::post_brand_attach),
         )
         .with_state(surreal)
         .layer(from_fn_with_state(

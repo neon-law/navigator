@@ -7,6 +7,10 @@ Which house-brand keys a [Firm](firm.md) wears. The `firm_brand` table is the jo
 timestamps. Unique on the pair, and unique on `brand_key` globally: one storefront key belongs to at most one practice.
 Distinct from [Brand](brand.md), which is the storefront a request resolved to.
 
+A Firm wears a Brand it creates at `/app/admin/brands/new` at once. A Brand row its Firm does not yet wear shows an
+"Attach to Firm" button on its edit page, which calls `store::firms::attach_own_brand`: Owner, or that Firm's own Admin,
+and the Firm is read from the `brand` row, never from the form, so no Firm can wear another Firm's Brand.
+
 `store::firms::attach_brand` validates `brand_key` against the `brand` table (`store::brands`): a live row carrying that
 key, not the closed `CLOSED_BRAND_KEYS` array directly. A Firm may therefore wear any brand a `brand` row names, not
 only the nine compiled ones. `store::firms::CLOSED_BRAND_KEYS` names every entry in the compiled registry; `store::seed`

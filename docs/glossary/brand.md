@@ -19,20 +19,21 @@ above, and a runtime `brand` row publishes no marketing page.
 
 A row may carry a canonical **website URL**, `https://<host>`. Its host is the Brand's approved email domain, and the
 set of those domains across every Brand is the only allowlist for account admission
-([`store::brand_domains`](../../store/src/brand_domains.rs)); no second list exists. Only Owner sets or clears it
-(`store::brands::set_website_url`): approving a domain is kept apart from host routing, from Brand ownership, and from
-role grants, so a Firm's Admin DRI cannot widen admission. The stored form is canonical: `https` only, a lowercase IDNA
-(ASCII) host, no port other than the default, no user info, path, query, or fragment, and never an IP address or a
-single label. A `www.` host approves its apex (`https://www.example.com` approves `example.com`); any other subdomain
-approves exactly itself. An email domain must equal an approved domain exactly, so neither a parent, a subdomain, nor a
-lookalike suffix is admitted. A Brand without a URL, or with a stored value that is not canonical, approves nothing, and
-with no approved domain no one is admitted. Each compiled key's row is seeded with `https://` plus its compiled
-`canonical_host()`; a runtime Brand has none until Owner approves one, and a URL Owner clears is never refilled. The
-compiled keys migrate into a Firm-scoped row on first boot — the practice Firm's own Admin DRI creates each one — so the
-one authorization table names every brand a Firm may attach, while each brand's hosts, colours, fonts, logos, and copy
-stay with this entry. A `firm_id IS NONE` row is a historical fact only. Every such row was backfilled onto the Firm
-that wears it through `firm_brand`, or the anchor Firm when only a `project.brand` still named it, and the rest were
-deleted. Nothing can write a new one.
+([`store::brand_domains`](../../store/src/brand_domains.rs)); no second list exists. Only Owner sets or clears it, in
+the Website form on `/app/admin/brands/{key}/edit` (`store::brands::set_website_url`; an Admin sees the approved URL
+read-only): approving a domain is kept apart from host routing, from Brand ownership, and from role grants, so a Firm's
+Admin DRI cannot widen admission. The stored form is canonical: `https` only, a lowercase IDNA (ASCII) host, no port
+other than the default, no user info, path, query, or fragment, and never an IP address or a single label. A `www.` host
+approves its apex (`https://www.example.com` approves `example.com`); any other subdomain approves exactly itself. An
+email domain must equal an approved domain exactly, so neither a parent, a subdomain, nor a lookalike suffix is
+admitted. A Brand without a URL, or with a stored value that is not canonical, approves nothing, and with no approved
+domain no one is admitted. Each compiled key's row is seeded with `https://` plus its compiled `canonical_host()`; a
+runtime Brand has none until Owner approves one, and a URL Owner clears is never refilled. The compiled keys migrate
+into a Firm-scoped row on first boot — the practice Firm's own Admin DRI creates each one — so the one authorization
+table names every brand a Firm may attach, while each brand's hosts, colours, fonts, logos, and copy stay with this
+entry. A `firm_id IS NONE` row is a historical fact only. Every such row was backfilled onto the Firm that wears it
+through `firm_brand`, or the anchor Firm when only a `project.brand` still named it, and the rest were deleted. Nothing
+can write a new one.
 
 Brand `name` and `brand_key` are globally unique across Firms. Today this is enforced by separate unique indexes on the
 exact stored values; changing Firm ownership cannot make an existing name or key available to another Firm. The
