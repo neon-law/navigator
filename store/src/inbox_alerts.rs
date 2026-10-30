@@ -28,6 +28,9 @@ struct ReceiptRow {
 /// # Errors
 /// Returns a database error or `NotFound` when the Message does not exist.
 pub async fn receipt(db: &SurrealDb, message_id: Uuid) -> Result<AlertReceipt, InboxError> {
+    if let Some(pg) = crate::inbox::inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::alert_receipt_on(&pg, message_id)).await;
+    }
     let mut response = db
         .query("SELECT alert_state AS state, alert_channel_id AS channel_id, alert_timestamp AS timestamp FROM ONLY $id")
         .bind(("id", record_id("message", message_id)))
@@ -55,6 +58,12 @@ pub async fn reserve(
     struct Id {
         id: surrealdb::types::RecordId,
     }
+    if let Some(pg) = crate::inbox::inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::reserve_alert_on(
+            &pg, message_id, channel_id,
+        ))
+        .await;
+    }
     let mut response = db.query("UPDATE $id SET alert_state = 'unknown', alert_channel_id = $channel, updated_at = time::now() WHERE direction = 'inbound' AND alert_state = 'pending' RETURN id")
         .bind(("id", record_id("message", message_id)))
         .bind(("channel", channel_id.to_string())).await?.check()?;
@@ -78,6 +87,12 @@ pub async fn record(
     state: &str,
     timestamp: Option<&str>,
 ) -> Result<(), InboxError> {
+    if let Some(pg) = crate::inbox::inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::record_alert_on(
+            &pg, message_id, state, timestamp,
+        ))
+        .await;
+    }
     db.query("UPDATE $id SET alert_state = $state, alert_timestamp = $timestamp, updated_at = time::now() WHERE direction = 'inbound' AND (alert_state != 'notified' OR $state = 'notified')")
         .bind(("id", record_id("message", message_id)))
         .bind(("state", state.to_string()))
@@ -94,6 +109,12 @@ pub async fn awaiting_reconciliation(db: &SurrealDb, limit: u32) -> Result<Vec<U
     #[derive(SurrealValue)]
     struct Id {
         id: surrealdb::types::RecordId,
+    }
+    if let Some(pg) = crate::inbox::inbox_authority().await? {
+        return Box::pin(crate::postgres::inbox::awaiting_alert_reconciliation_on(
+            &pg, limit,
+        ))
+        .await;
     }
     let mut response = db.query("SELECT id, alert_state, updated_at FROM message WHERE direction = 'inbound' AND alert_state IN ['pending', 'unknown'] ORDER BY alert_state ASC, updated_at ASC LIMIT $limit")
         .bind(("limit", i64::from(limit))).await?.check()?;
