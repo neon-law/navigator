@@ -386,6 +386,10 @@ publisher. Both pods read the values below from the same deployment Secret.
 | `NAVIGATOR_TIKTOK_BUSINESS_APP_SECRET` | `secrets.enc.yaml` | production only |
 | `NAVIGATOR_TIKTOK_BUSINESS_AUTHORIZATION_URL` | `config.toml` coordinate | production |
 | `NAVIGATOR_SOCIAL_OAUTH_REDIRECT_URI` | inline env, `https://<public host>/social/oauth/callback` | every row |
+| `PLAUSIBLE_STATS_API_KEY` | Secret Manager (`ops secrets set`) | each row its own key (`independent`) |
+
+`PLAUSIBLE_STATS_API_KEY` is a read-only Plausible Stats key for the social dashboard's "Leads by platform" section. It
+is its own trigger: a row without it writes no object, and the section explains how to connect it.
 
 The app id declares its provider. `WEB_REQUIREMENTS` then demands the provider's secret, the callback, and the runtime
 KMS key; Meta also demands the webhook verify token and webhook app secret. A secret without its app id is half a
