@@ -343,11 +343,9 @@ both report zero while every `rust` run restores a full match. The `gate` job ru
 entry lives in GitHub's own store and counts against the 10 GB quota. Grep the job for `Cache hit`, `No cache found`,
 and `full match` instead — that is the only authoritative signal.
 
-`ci.yml`'s `gate content` job also runs `navigator ops github check-signatures` over `base.sha..head.sha`. `production`
-already requires verified signatures on `main`, but squash-merge writes a new GitHub-signed commit there, so that rule
-does not prove the pull-request head was signed. Cloud Agents attach an HSM Ed25519 `gpgsig`; disabling `commit.gpgsign`
-does not. The check reads the commit object, not GitHub's verification API, and inspects the PR head rather than the
-workflow merge commit.
+Commit-signature enforcement in CI was removed by owner decision (2026-10-30): `ci.yml`'s `gate content` job no longer
+runs `navigator ops github check-signatures`. The `production` ruleset, if it still requires signed commits in GitHub
+settings, is managed there and not in this repository.
 
 | Workflow | Trigger | Job |
 | --- | --- | --- |
