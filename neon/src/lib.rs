@@ -63,6 +63,7 @@ pub const PUBLIC_PATHS: &[&str] = &[
     "/disputes",
     "/business",
     "/navigator",
+    "/legal-aid",
     // The Neon-hosted gateway to the DeleteYourDebt.com practice. Neon-only —
     // 404s on every other registered brand host; see
     // `views::brand::BrandKey::publishes_firm_path`.
@@ -171,6 +172,7 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
                 "/",
                 "/services",
                 "/navigator",
+                "/legal-aid",
                 "/delete-your-debt",
                 "/delete-your-data",
                 "/nautilus",

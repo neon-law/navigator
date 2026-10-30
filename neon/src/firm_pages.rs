@@ -695,6 +695,12 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         state.sessions.clone(),
         portal::secure_cookies(state),
     ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/legal-aid",
+        firm_copy::legal_aid(branding),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
     let services_copy = branded_map(branding, |resolved| {
         webapp::marketing_page::InjectedMarketingPage(firm_copy::legal_services(resolved))
     });

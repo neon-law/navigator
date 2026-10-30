@@ -31,6 +31,7 @@ const NEON_TEAM_YAML: &str = include_str!("../locales/en/neon/team.yaml");
 const NEON_LITIGATION_YAML: &str = include_str!("../locales/en/neon/litigation.yaml");
 const NEON_FRACTIONAL_GC_YAML: &str = include_str!("../locales/en/neon/fractional-gc.yaml");
 const NEON_NOTATIONS_YAML: &str = include_str!("../locales/en/neon/notations.yaml");
+const NEON_LEGAL_AID_YAML: &str = include_str!("../locales/en/neon/legal-aid.yaml");
 const NEON_NAVIGATOR_YAML: &str = include_str!("../locales/en/neon/navigator.yaml");
 const NEON_SERVICES_YAML: &str = include_str!("../locales/en/neon/services.yaml");
 /// `/delete-your-debt` — Neon's own gateway to the DeleteYourDebt.com
@@ -170,6 +171,7 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Neon, "fractional-gc") => Some(NEON_FRACTIONAL_GC_YAML),
         (BrandKey::Neon, "notations") => Some(NEON_NOTATIONS_YAML),
         (BrandKey::Neon, "navigator") => Some(NEON_NAVIGATOR_YAML),
+        (BrandKey::Neon, "legal-aid") => Some(NEON_LEGAL_AID_YAML),
         (BrandKey::Neon, "nautilus") => Some(NEON_NAUTILUS_YAML),
         (BrandKey::Neon, "services") => Some(NEON_SERVICES_YAML),
         (BrandKey::Neon, "gateway-delete-your-debt") => Some(NEON_GATEWAY_DELETE_YOUR_DEBT_YAML),
@@ -1330,6 +1332,34 @@ pub fn fractional_gc(
 /// `/navigator`, from this brand's `navigator.yaml`.
 pub fn navigator(branding: &views::brand::Branding) -> PageContent {
     marketing_page(load_page(branding, "navigator"), None, branding)
+}
+
+/// The legal-aid audience shares the canonical Navigator price card and usage disclosure.
+pub fn legal_aid(branding: &views::brand::Branding) -> PageContent {
+    let mut content = marketing_page(load_page(branding, "legal-aid"), None, branding);
+    let pricing = navigator(branding)
+        .bands
+        .into_iter()
+        .find_map(|mut band| match &mut band {
+            Band::Cards { anchor, items, .. } if anchor == "pricing" => {
+                let card = items
+                    .drain(..)
+                    .find(|card| card.title == "Legal aid organizations")
+                    .expect("invariant: navigator.yaml publishes the Legal aid organizations card");
+                items.push(card);
+                Some(band)
+            }
+            _ => None,
+        })
+        .expect("invariant: navigator.yaml publishes the pricing band");
+    // The contact band stays last, after workshop, self-hosting, and hosting.
+    let contact = content
+        .bands
+        .iter()
+        .position(|band| matches!(band, Band::Cta { .. }))
+        .unwrap_or(content.bands.len());
+    content.bands.insert(contact, pricing);
+    content
 }
 
 /// `/services`, from this brand's `services.yaml`.

@@ -16,6 +16,11 @@ pub fn navigator(branding: &views::brand::Branding) -> PageContent {
     locales::navigator(branding)
 }
 
+/// `/legal-aid` — the workshop, self-hosted, and hosted paths for organizations.
+pub fn legal_aid(branding: &views::brand::Branding) -> PageContent {
+    locales::legal_aid(branding)
+}
+
 /// `/services` — the published schedule. See this brand's `services.yaml`.
 pub fn legal_services(branding: &views::brand::Branding) -> PageContent {
     locales::legal_services(branding)
@@ -94,6 +99,34 @@ pub fn divorce_gateway(
 #[cfg(test)]
 mod firm_copy_tests {
     use webapp::marketing_page::{Band, Paragraph};
+
+    #[test]
+    fn legal_aid_reuses_the_canonical_hosted_card_and_usage_disclosure() {
+        let pricing = |page: webapp::marketing_page::PageContent| {
+            page.bands
+                .into_iter()
+                .find_map(|band| match band {
+                    Band::Cards {
+                        anchor,
+                        description,
+                        items,
+                        ..
+                    } if anchor == "pricing" => Some((description, items)),
+                    _ => None,
+                })
+                .expect("published pricing band")
+        };
+        let branding = &views::brand::DEFAULT_BRANDING;
+        let (canonical_disclosure, canonical_cards) = pricing(super::navigator(branding));
+        let canonical_card = canonical_cards
+            .into_iter()
+            .find(|card| card.title == "Legal aid organizations")
+            .expect("canonical legal-aid card");
+        let (audience_disclosure, audience_cards) = pricing(super::legal_aid(branding));
+        assert_eq!(audience_disclosure, canonical_disclosure);
+        assert_eq!(audience_cards.len(), 1);
+        assert!(audience_cards[0] == canonical_card);
+    }
 
     /// Every string the services band puts in front of a reader: the
     /// heading, the search chrome, the empty state, and each service's name,

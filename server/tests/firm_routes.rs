@@ -1192,13 +1192,91 @@ async fn an_unpublished_path_answers_not_found() {
         "/attorneys",
         "/mission",
         "/transparency",
-        "/legal-aid",
     ] {
         let response = anon_get(&app, path).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
         assert!(
             response.headers().get("location").is_none(),
             "{path} must not redirect: the site publishes no page there"
+        );
+    }
+}
+
+/// Legal-aid organizations can choose a workshop, self-hosting, or the canonical hosted offer.
+#[tokio::test]
+async fn legal_aid_page_presents_the_three_paths_and_existing_lead_form() {
+    let app = site_app().await;
+    let response = anon_get(&app, "/legal-aid").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    let workshop = body
+        .find("An open workshop at your organization")
+        .expect("workshop");
+    let self_host = body.find("Run Navigator yourself").expect("self-host path");
+    let hosted = body.find("Navigator as a service").expect("hosted path");
+    assert!(workshop < self_host && self_host < hosted);
+    for expected in [
+        "at no cost to your organization",
+        "MIT OR Apache-2.0",
+        "infrastructure and operating costs",
+        "https://github.com/neon-law/navigator/blob/main/docs/oss-install.md",
+        "Legal aid organizations",
+        "$5",
+        "/ user / month",
+        "Google Cloud Vertex AI token charges are passed through at cost.",
+        "action=\"/leads\"",
+        "name=\"source_path\" value=\"/legal-aid\"",
+    ] {
+        assert!(body.contains(expected), "missing {expected}");
+    }
+    assert!(body_string(anon_get(&app, "/sitemap.xml").await)
+        .await
+        .contains("/legal-aid"));
+    for forbidden in ["$20", "$50", "free for life", "perpetual", "minimum seats"] {
+        assert!(!body.contains(forbidden), "unexpected {forbidden}");
+    }
+    let navigator = body_string(anon_get(&app, "/navigator").await).await;
+    for shared in [
+        "$5",
+        "/ user / month",
+        "Google Cloud Vertex AI token charges are passed through at cost.",
+    ] {
+        assert!(navigator.contains(shared) && body.contains(shared));
+    }
+}
+
+/// The audience page belongs to Neon; foundation routes and sibling-brand paths remain absent.
+#[tokio::test]
+async fn legal_aid_page_is_only_published_by_neon() {
+    let mut state = site_state().await;
+    let ports = views::brand::BrandKey::ALL
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, key)| (30100 + u16::try_from(index).expect("brand index"), key))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    state.canonical_host = portal::CanonicalHost::new(None).with_local_ports(ports.clone());
+    let app = site_router(state);
+    for (port, key) in ports {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/legal-aid")
+                    .header("host", format!("localhost:{port}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if key == views::brand::BrandKey::Neon {
+                StatusCode::OK
+            } else {
+                StatusCode::NOT_FOUND
+            },
+            "{key:?}"
         );
     }
 }

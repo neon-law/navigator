@@ -1,0 +1,40 @@
+head_title: "{site_name} | Navigator for legal aid"
+meta_description: >-
+  Bring an open Navigator workshop to your legal aid organization, run the
+  software yourself, or ask about hosted access. Attorney advertisement.
+title: Navigator for legal aid
+tagline: Start with the work your community needs.
+bands:
+  - kind: statement
+    heading: Explore Navigator together
+    lead: An open workshop at your organization.
+    body:
+      - - text: >-
+            You can host an open workshop at your organization at no cost to
+            your organization. Explore agentic lawyering with Navigator and
+            discuss the workflows your team wants to build.
+      - - text: >-
+            Navigator brings questionnaires, document templates, and matter
+            pages together. Your team can explore how those pieces fit your
+            practice before choosing how to run the software.
+  - kind: statement
+    heading: Self-hosting
+    lead: Run Navigator yourself.
+    body:
+      - - text: >-
+            Navigator's first-party software is free to self-host under
+            MIT OR Apache-2.0. Commercial use is permitted under either
+            license's terms. You manage your deployment and pay your own
+            infrastructure and operating costs.
+      - - text: >-
+            Third-party software and assets retain their own terms. The
+            software licenses do not grant use of the Neon Law marks.
+      - - text: Read the installation guide
+          href: https://github.com/neon-law/navigator/blob/main/docs/oss-install.md
+        - text: " for the setup requirements and instructions."
+  - kind: cta
+    heading: Tell us what your organization needs
+    body: >-
+      Ask about an open workshop, self-hosting, or hosted Navigator. Tell us
+      which workflow you want to explore and how your team wants to run it.
+    email: "{firm_email}"

@@ -29,7 +29,8 @@ Neon Law (`neon/`):
 | `neon/locales/en/neon/litigation.yaml` | `/disputes` |
 | `neon/locales/en/neon/fractional-gc.yaml` | `/business` |
 | `neon/locales/en/neon/personal-plan.yaml` | `/personal` |
-| `neon/locales/en/neon/navigator.yaml` | `/navigator` |
+| `neon/locales/en/neon/navigator.yaml` | `/navigator` and the shared hosted legal-aid offer |
+| `neon/locales/en/neon/legal-aid.yaml` | `/legal-aid` workshop and self-hosting paths |
 | `neon/locales/en/neon/notations.yaml` | `/notations` format introduction |
 | `neon/locales/en/neon/services.yaml` | `/services` |
 | `neon/locales/en/neon/team.yaml` | `/team` and Nick's short `/team/nick` profile |
