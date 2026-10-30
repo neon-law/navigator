@@ -229,7 +229,10 @@ async fn admin_manages_project_participation_from_the_matter_workbench() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", fixture.project_code))
+                .uri(format!(
+                    "/app/projects/{}?tab=participants",
+                    fixture.project_code
+                ))
                 .header("cookie", &fixture.lawyer_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1151,7 +1154,10 @@ async fn the_matter_people_ledger_labels_the_accountability_marker() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", fixture.project_code))
+                .uri(format!(
+                    "/app/projects/{}?tab=participants",
+                    fixture.project_code
+                ))
                 .header("cookie", &fixture.lawyer_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1341,7 +1347,10 @@ async fn the_workbench_html_form_persists_a_lawyer_dri() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", fixture.project_code))
+                .uri(format!(
+                    "/app/projects/{}?tab=participants",
+                    fixture.project_code
+                ))
                 .header("cookie", &fixture.dri_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1503,7 +1512,7 @@ async fn a_lawyer_on_an_unassigned_matter_names_themselves_dri() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", project.code))
+                .uri(format!("/app/projects/{}?tab=participants", project.code))
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1512,7 +1521,22 @@ async fn a_lawyer_on_an_unassigned_matter_names_themselves_dri() {
         .unwrap();
     assert_eq!(page.status(), StatusCode::OK);
     let html = body_string(page).await;
-    assert!(html.contains("This project has no lawyer DRI"), "{html}");
+    let overview = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/app/projects/{}", project.code))
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let overview_html = body_string(overview).await;
+    assert!(
+        overview_html.contains("This project has no lawyer DRI"),
+        "{overview_html}"
+    );
     assert!(html.contains("Make DRI"), "{html}");
     let action = format!("/app/projects/{}/people/{}/dri", project.code, row.id);
     assert!(html.contains(&format!(r#"action="{action}""#)), "{html}");
@@ -1534,7 +1558,7 @@ async fn a_lawyer_on_an_unassigned_matter_names_themselves_dri() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", project.code))
+                .uri(format!("/app/projects/{}?tab=participants", project.code))
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),

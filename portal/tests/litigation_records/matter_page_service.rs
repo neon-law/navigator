@@ -127,7 +127,7 @@ async fn a_lawyer_records_service_and_the_document_history_lists_it() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", f.code))
+                .uri(format!("/app/projects/{}?tab=documents", f.code))
                 .header("cookie", &f.lawyer_cookie)
                 .body(Body::empty())
                 .unwrap(),
