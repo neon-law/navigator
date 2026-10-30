@@ -10,11 +10,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
+use cloud::StorageService;
 use uuid::Uuid;
 use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 use workflows::dbos_engine;
 use workflows::SocialPublishRequest;
-use workflows_service::dbos_social_publisher::{self, PublisherContext, ReconcilerContext};
+use workflows_service::dbos_social_publisher::{self, Pacing, PublisherContext, ReconcilerContext};
 use workflows_service::social_publisher::{Publisher, SocialPublisherService};
 
 use crate::support::{database, TestDatabase, APP_VERSION, DEADLINE};
@@ -73,6 +74,10 @@ impl Fixture {
         .unwrap();
         let dir = tempfile::tempdir().unwrap();
         let storage = cloud::FsStorage::new(dir.path()).await.unwrap();
+        storage
+            .put("synthetic/video.mp4", b"synthetic video", "video/mp4")
+            .await
+            .unwrap();
         Self {
             db,
             admin: admin.id,
@@ -96,6 +101,10 @@ fn publisher(fixture: &Fixture, server: &MockServer) -> Publisher {
     // in-file tests construct their publisher directly.
     .with_egress(store::config::SocialEgressGate::new(|| Ok(())))
     .with_provider_base(&server.uri())
+    // The twin's integration process resolves bucket assets to the
+    // same-origin route; the Restate in-file tests pin a synthetic
+    // https origin directly, so mirror it through the builder.
+    .with_video_url(|key| format!("https://assets.example.test/{key}"))
 }
 
 /// A scheduled Post with Facebook in its selected destinations, and the
@@ -422,5 +431,269 @@ async fn a_stopped_reconciler_schedule_starts_nothing() {
     assert_eq!(
         started, 0,
         "a stopped pre-slot schedule waits without firing"
+    );
+}
+
+/// A scheduled Post with Instagram in its selected destinations: a vertical
+/// video asset, an Instagram caption, and the connected Instagram account
+/// the selection resolves to.
+async fn scheduled_instagram_post(fixture: &Fixture, publish_at: DateTime<Utc>) -> Uuid {
+    let account = store::social_accounts::connect(
+        &fixture.db,
+        store::social_accounts::ConnectSocialAccount {
+            actor_role: store::persons::Role::Admin,
+            actor_person_id: fixture.admin,
+            brand_key: BRAND,
+            provider: store::social_accounts::SocialProvider::Instagram,
+            provider_account_id: "instagram-user",
+            display_name: None,
+            scopes: &store::social_accounts::SocialProvider::Instagram
+                .required_scopes()
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>(),
+            expires_at: None,
+            access_token: "synthetic-access-token",
+            refresh_token: None,
+        },
+        &fixture.kms,
+    )
+    .await
+    .unwrap();
+    let id = Uuid::now_v7();
+    fixture
+        .db
+        .query(
+            "CREATE $id SET brand_key = $brand, slug = $slug, title = 'Synthetic', \
+             description = 'Synthetic description', body_html = '', status = 'scheduled', \
+             publish_at = <datetime>$publish_at, instagram_caption = 'Instagram copy', \
+             video_asset = 'synthetic/video.mp4', vertical_video = true, \
+             selected_social_accounts = [$account], inserted_at = time::now(), \
+             updated_at = time::now()",
+        )
+        .bind(("id", store::surreal::record_id("post", id)))
+        .bind(("brand", BRAND))
+        .bind(("slug", id.to_string()))
+        .bind(("publish_at", publish_at.to_rfc3339()))
+        .bind(("account", account.id))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    id
+}
+
+async fn mount_instagram_container(server: &MockServer) {
+    Mock::given(matchers::method("POST"))
+        .and(matchers::path("/instagram-user/media"))
+        .and(matchers::body_string_contains("media_type=REELS"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "container-1"
+        })))
+        .mount(server)
+        .await;
+}
+
+async fn mount_instagram_status(server: &MockServer, status: &str, times: Option<u64>) {
+    let template = ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        "status_code": status,
+        "id": "container-1"
+    }));
+    let mock = Mock::given(matchers::method("GET"))
+        .and(matchers::path("/container-1"))
+        .and(matchers::query_param("fields", "status_code"))
+        .respond_with(template);
+    match times {
+        Some(times) => mock.up_to_n_times(times).mount(server).await,
+        None => mock.mount(server).await,
+    }
+}
+
+async fn mount_instagram_publish(server: &MockServer) {
+    Mock::given(matchers::method("POST"))
+        .and(matchers::path("/instagram-user/media_publish"))
+        .and(matchers::body_string_contains("creation_id=container-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "ig-media-1"
+        })))
+        .mount(server)
+        .await;
+}
+
+async fn mount_instagram_permalink(server: &MockServer) {
+    Mock::given(matchers::method("GET"))
+        .and(matchers::path("/ig-media-1"))
+        .and(matchers::query_param("fields", "permalink"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "permalink": "https://www.instagram.com/reel/ig-media-1"
+        })))
+        .mount(server)
+        .await;
+}
+
+async fn request_count(server: &MockServer, path: &str) -> usize {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == path)
+        .count()
+}
+
+/// The container-readiness poll on DBOS: the run waits on durable timers
+/// between checks and publishes the container exactly once when the provider
+/// reports it ready, then reads the public link back.
+#[tokio::test]
+async fn an_instagram_container_waits_until_ready_then_publishes_once() {
+    let Some(db) = database().await else {
+        return;
+    };
+    let fixture = Fixture::new("social-container").await;
+    let server = MockServer::start().await;
+    mount_instagram_container(&server).await;
+    mount_instagram_status(&server, "IN_PROGRESS", Some(2)).await;
+    mount_instagram_status(&server, "FINISHED", Some(1)).await;
+    mount_instagram_publish(&server).await;
+    mount_instagram_permalink(&server).await;
+    let publish_at = scheduled_in(1);
+    let post_id = scheduled_instagram_post(&fixture, publish_at).await;
+
+    let worker = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
+    let pacing = Pacing::default()
+        .with_container_interval(Duration::from_millis(50))
+        .with_permalink_read_after(Duration::from_millis(50));
+    let workflow = dbos_social_publisher::register_publisher(
+        &worker,
+        PublisherContext::new(publisher(&fixture, &server)).with_pacing(pacing),
+    )
+    .expect("register SocialPublisher");
+    worker.launch().await.expect("launch");
+    let workflow_id = dbos_social_publisher::publisher_workflow_id(post_id, publish_at);
+    dbos_social_publisher::fire_publisher(
+        &workflow,
+        SocialPublishRequest {
+            post_id,
+            publish_at,
+        },
+    )
+    .await
+    .expect("start the scheduled publish");
+    wait_for_status(&db, &workflow_id, "SUCCESS").await;
+    worker.shutdown().await;
+
+    assert_eq!(
+        request_count(&server, "/instagram-user/media_publish").await,
+        1,
+        "the container is published exactly once"
+    );
+    let publication = store::social_publications::for_posts(&fixture.db, &[post_id])
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(publication.provider_post_id.as_deref(), Some("ig-media-1"));
+    assert_eq!(
+        publication.permalink.as_deref(),
+        Some("https://www.instagram.com/reel/ig-media-1"),
+        "the read-back records the container's public link"
+    );
+}
+
+/// A container the provider never marks ready exhausts its check budget on
+/// durable timers and fails the destination without publishing it.
+#[tokio::test]
+async fn a_container_that_never_becomes_ready_times_out_without_publishing() {
+    let Some(db) = database().await else {
+        return;
+    };
+    let fixture = Fixture::new("social-container-timeout").await;
+    let server = MockServer::start().await;
+    mount_instagram_container(&server).await;
+    mount_instagram_status(&server, "IN_PROGRESS", None).await;
+    let publish_at = scheduled_in(1);
+    let post_id = scheduled_instagram_post(&fixture, publish_at).await;
+
+    let worker = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
+    let pacing = Pacing::default().with_container_interval(Duration::from_millis(30));
+    let workflow = dbos_social_publisher::register_publisher(
+        &worker,
+        PublisherContext::new(publisher(&fixture, &server)).with_pacing(pacing),
+    )
+    .expect("register SocialPublisher");
+    worker.launch().await.expect("launch");
+    let workflow_id = dbos_social_publisher::publisher_workflow_id(post_id, publish_at);
+    dbos_social_publisher::fire_publisher(
+        &workflow,
+        SocialPublishRequest {
+            post_id,
+            publish_at,
+        },
+    )
+    .await
+    .expect("start the scheduled publish");
+    wait_for_status(&db, &workflow_id, "SUCCESS").await;
+    worker.shutdown().await;
+
+    assert_eq!(
+        request_count(&server, "/instagram-user/media_publish").await,
+        0,
+        "a never-ready container is never published"
+    );
+    let status: String = fixture
+        .db
+        .query("SELECT VALUE status FROM ONLY $id")
+        .bind(("id", store::surreal::record_id("post", post_id)))
+        .await
+        .unwrap()
+        .take::<Option<String>>(0)
+        .unwrap()
+        .expect("read the post status");
+    assert_eq!(status, "scheduled", "the timed-out post is not published");
+}
+
+/// An egress gate that denies every destination settles the prepare step
+/// without reaching a provider, and the run completes with nothing sent.
+#[tokio::test]
+async fn a_denying_egress_gate_records_blocked_without_provider_requests() {
+    let Some(db) = database().await else {
+        return;
+    };
+    let fixture = Fixture::new("social-egress").await;
+    let server = MockServer::start().await;
+    mount_feed(&server).await;
+    let publish_at = scheduled_in(1);
+    let post_id = scheduled_facebook_post(&fixture, publish_at).await;
+
+    let worker = dbos::DBOS::new(dbos_engine::config(&db.url, APP_VERSION));
+    // No `with_egress`: the process has no deployment egress configuration,
+    // so the gate denies and prepare settles blocked.
+    let denied = SocialPublisherService::new(
+        fixture.db.clone(),
+        Arc::new(fixture.kms.clone()),
+        fixture.storage.clone(),
+    )
+    .publisher()
+    .with_provider_base(&server.uri());
+    let workflow =
+        dbos_social_publisher::register_publisher(&worker, PublisherContext::new(denied))
+            .expect("register SocialPublisher");
+    worker.launch().await.expect("launch");
+    let workflow_id = dbos_social_publisher::publisher_workflow_id(post_id, publish_at);
+    dbos_social_publisher::fire_publisher(
+        &workflow,
+        SocialPublishRequest {
+            post_id,
+            publish_at,
+        },
+    )
+    .await
+    .expect("start the scheduled publish");
+    wait_for_status(&db, &workflow_id, "SUCCESS").await;
+    worker.shutdown().await;
+
+    assert_eq!(
+        feed_post_count(&server).await,
+        0,
+        "a denied destination never reaches a provider"
     );
 }

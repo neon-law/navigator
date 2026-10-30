@@ -65,6 +65,7 @@ views.workspace = true
 
 [dev-dependencies]
 bs58.workspace = true
+serde_json.workspace = true
 sqlx.workspace = true
 ed25519-dalek.workspace = true
 store = { workspace = true, features = ["test-support"] }

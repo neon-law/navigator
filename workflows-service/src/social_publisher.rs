@@ -700,6 +700,16 @@ impl Publisher {
         self
     }
 
+    /// Override the public address a provider fetches a video Asset from.
+    /// The Restate in-file tests build their publisher directly with a
+    /// synthetic origin; the DBOS twin's integration tests reach the same
+    /// override through this builder.
+    #[must_use]
+    pub fn with_video_url(mut self, video_url: fn(&str) -> String) -> Self {
+        self.video_url = video_url;
+        self
+    }
+
     /// Point every provider endpoint at one base URL. Tests and the DBOS
     /// twin's checks drive all providers through a single mock origin.
     #[must_use]
