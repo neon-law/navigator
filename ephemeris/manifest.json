@@ -13,11 +13,11 @@
     },
     {
       "name": "chiron.bsp",
-      "sha256": "110c97c9ed785125d9e3483214b32f3c059fb46f2611b63c92f7be3eded45360",
+      "sha256": "675d4f91800f18a0d847c01bb71c14b2b5e9e9ed3979084a4081ba0f813193c1",
       "bytes": 2791424,
-      "source": "JPL Horizons API SPK generation for 2060 Chiron (COMMAND='2060;', EPHEM_TYPE=SPK, START_TIME='1900-01-01', STOP_TIME='2050-01-01') at https://ssd.jpl.nasa.gov/api/horizons.api; Horizons regenerates the file on request, so re-fetching may yield a different digest for the same solution",
+      "source": "JPL Horizons API SPK generation for 2060 Chiron (COMMAND='2060;', EPHEM_TYPE=SPK, START_TIME='1900-01-01', STOP_TIME='2050-01-02') at https://ssd.jpl.nasa.gov/api/horizons.api; Horizons regenerates the file on request, so re-fetching may yield a different digest for the same solution. Re-fetched 2026-10-30 with the stop extended one day (2050-01-02) so coverage includes the fixture grid's final noon epoch, JD 2469808.0 = 2050-01-01 12:00 TT, which the previous 2050-01-01 stop fell 12 hours short of; byte size unchanged (2791424), digest refreshed, and solution equivalence re-verified by the unchanged Horizons reference fixture table in tests/fixtures.rs",
       "coverage_start": "1899-12-31",
-      "coverage_end": "2050-01-01"
+      "coverage_end": "2050-01-02"
     }
   ]
 }

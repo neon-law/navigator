@@ -13,12 +13,15 @@
 //! with SHA-256 checksums recorded in a checked-in manifest, and exposes the
 //! parsed, immutable [`Ephemeris`] for parking in shared application state.
 
+pub mod apparent;
+
 mod daf;
 mod error;
 mod loader;
 mod spk;
 mod time;
 
+pub use apparent::{apparent_geocentric, mean_node, ApparentPosition};
 pub use error::EphemerisError;
 pub use loader::{
     load, EphemerisFile, EphemerisManifest, EphemerisStore, FilesystemStore, LoadedEphemeris,
