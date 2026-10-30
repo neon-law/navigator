@@ -62,6 +62,7 @@ fn seed_files() -> Vec<String> {
 
 /// The canonical layer: reference catalogs plus the public firm facts.
 const CANONICAL: &[&str] = &[
+    "Court.yaml",
     "Credential.yaml",
     "Entity.yaml",
     "EntityType.yaml",
