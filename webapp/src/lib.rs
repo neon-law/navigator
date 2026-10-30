@@ -93,7 +93,7 @@ pub mod letter_detail;
 pub mod litigation_page;
 # Mobile-only: the Nautilus subscription shell launched by the mobile arm
 # of main.rs. Gated so the default workspace build never compiles it.
-#[cfg(feature = "mobile")]
+#[cfg(any(feature = "mobile", test))]
 pub mod mobile;
 pub mod marketing_page;
 pub mod matter_directory;
