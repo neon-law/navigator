@@ -1509,6 +1509,8 @@ async fn intake_rows(
     for conversation in conversations {
         let delivery_state = latest_outbound_state_on(pg, conversation.id).await?;
         let assignee_name = inbox::assignee_label(db, conversation.project_id).await?;
+        let (direction, has_attachments) =
+            latest_direction_and_attachments_on(pg, conversation.id).await?;
         listed.push(IntakeRow {
             contact: inbox::contact_for(&phones, &conversation),
             id: conversation.id,
@@ -1529,10 +1531,34 @@ async fn intake_rows(
             external_address: conversation.external_address,
             external_name: conversation.external_name,
             subject: conversation.subject,
+            direction,
+            has_attachments,
             updated_at: conversation.updated_at,
         });
     }
     Ok(listed)
+}
+
+/// The two per-conversation aggregates the list view's filters match rows on
+/// (LAW-238 D3): the direction of the conversation's most recent message
+/// (`occurred_at, id` order; empty when it has none), and whether any message
+/// carries a filed attachment. One round trip per conversation, the same
+/// fan-out shape `latest_outbound_state_on` already follows.
+async fn latest_direction_and_attachments_on(
+    pg: &PostgresDb,
+    conversation_id: Uuid,
+) -> Result<(String, bool), InboxError> {
+    let row = sqlx::query_as::<_, (Option<String>, bool)>(
+        "SELECT (SELECT direction FROM message WHERE conversation_id = $1 \
+         ORDER BY occurred_at DESC, id DESC LIMIT 1), \
+         EXISTS(SELECT 1 FROM message WHERE conversation_id = $1 \
+         AND attachment_asset_id IS NOT NULL)",
+    )
+    .bind(conversation_id)
+    .fetch_one(&pg.0)
+    .await
+    .map_err(db_error)?;
+    Ok((row.0.unwrap_or_default(), row.1))
 }
 
 pub(crate) async fn list_project_on(
