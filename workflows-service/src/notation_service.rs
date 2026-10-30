@@ -26,11 +26,19 @@ use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use workflows::{
-    dispatch_step, dispatches_side_effect, email::OutboundEmail, EmailService, MachineKind,
-    QuestionnaireSpec, StateName, StepDeps, WorkflowSpec,
+    dispatch_step, dispatches_side_effect, EmailService, MachineKind, QuestionnaireSpec, StateName,
+    StepDeps, WorkflowSpec,
 };
 
 use crate::journal::{answer_payload, append_event, TransitionRecord};
+use crate::notation_logic::{
+    advance, questionnaire_back_target, record_notation_funnel_step,
+    resolve_review_notification_plan, review_notification_hop, review_notification_target,
+    send_review_notification, validate_questionnaire_spec, validate_workflow_spec,
+    workflow_funnel_step, NotationLogicError, ReviewNotificationHop, WorkflowFunnelStep,
+};
+#[cfg(test)]
+use crate::notation_logic::{review_copy, review_recipient_ids};
 
 /// Build a handler span parented on the W3C trace context the caller injected
 /// into the ingress POST (see `telemetry`), extracted from this invocation's
@@ -123,109 +131,6 @@ pub struct CurrentStateResponse {
     pub state: Option<String>,
 }
 
-/// The two human notifications emitted by a workflow transition.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-enum ReviewNotificationHop {
-    Lawyer,
-    Client,
-}
-
-impl ReviewNotificationHop {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Lawyer => "lawyer",
-            Self::Client => "client",
-        }
-    }
-}
-
-/// Recipient selection is journaled separately from each send. That freezes
-/// the DRI/fallback decision for a transition, while a fallback list can still
-/// be sent one recipient at a time with one journal entry per email.
-///
-/// Opaque ids only. `ctx.run` persists this value in the Restate journal so a
-/// replay reuses it, and the journal is an operator debugging surface: a
-/// mailbox names a client (`portal::retainer_walk::send_intake`) and a Project
-/// code names who retained the firm. Ids freeze the decision just as well, and
-/// the address and the code are resolved inside the send step, whose own
-/// journaled value is `()`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct ReviewNotificationPlan {
-    project_id: uuid::Uuid,
-    recipient_ids: Vec<uuid::Uuid>,
-}
-
-/// The wording one notification carries.
-///
-/// Authored here rather than in `neon/locales/`, because those catalogs are
-/// the firm's *page* copy and say so: the shared catalog is exported to the
-/// other repository entry by entry, and `neon::locales` asserts that every key
-/// it authors is read by a shipped page. Transactional email is read by no
-/// page, so a key for it fails that gate. Copy with no catalog belongs in the
-/// module that renders it.
-struct ReviewCopy {
-    subject: &'static str,
-    body: &'static str,
-}
-
-/// The funnel step caused by one durable workflow transition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WorkflowFunnelStep {
-    IntakeComplete,
-    ReviewEntered,
-    Sent(telemetry::FunnelChannel),
-}
-
-fn workflow_funnel_step(
-    _from: &StateName,
-    _condition: &str,
-    next: &StateName,
-) -> Option<WorkflowFunnelStep> {
-    if next.as_str().starts_with("lawyer_review") {
-        return Some(WorkflowFunnelStep::ReviewEntered);
-    }
-    None
-}
-
-async fn record_notation_funnel_step(
-    surreal: &store::surreal::SurrealDb,
-    notation_id: uuid::Uuid,
-    step: WorkflowFunnelStep,
-) -> Result<(), HandlerError> {
-    let notation = store::notations::find_by_id(surreal, notation_id)
-        .await
-        .map_err(|e| HandlerError::from(TerminalError::new(format!("funnel notation: {e}"))))?
-        .ok_or_else(|| TerminalError::new("funnel notation not found"))?;
-    let notation_id = notation_id.to_string();
-    let project_id = notation.project_id.to_string();
-    let event = match step {
-        WorkflowFunnelStep::IntakeComplete => telemetry::FunnelEvent::IntakeComplete {
-            notation_id: &notation_id,
-            project_id: &project_id,
-        },
-        WorkflowFunnelStep::ReviewEntered => telemetry::FunnelEvent::ReviewEntered {
-            notation_id: &notation_id,
-            project_id: &project_id,
-        },
-        WorkflowFunnelStep::Sent(channel) => telemetry::FunnelEvent::Sent {
-            notation_id: &notation_id,
-            project_id: &project_id,
-            channel,
-        },
-    };
-    telemetry::record_funnel_event(event);
-    Ok(())
-}
-
-const LAWYER_REVIEW_COPY: ReviewCopy = ReviewCopy {
-    subject: "A draft is ready for your review",
-    body: "A draft is ready for your review.",
-};
-const CLIENT_REVIEW_COPY: ReviewCopy = ReviewCopy {
-    subject: "Your reviewed draft is ready",
-    body: "Your reviewed draft is ready.",
-};
-
 /// Service struct held by the Restate endpoint. Carries the shared
 /// store handle, the worker-side [`workflows::EmailService`] that
 /// `email_send__*` step dispatch routes through, and the
@@ -262,38 +167,6 @@ fn parse_notation_id(key: &str) -> Result<uuid::Uuid, HandlerError> {
     })
 }
 
-/// Recover a back event that was appended before a worker crash but whose
-/// Restate `ctx.run` result was not committed. The runtime key still names
-/// `current`; the matching last event proves that the requested Back already
-/// took effect, so retries reuse its target instead of appending again.
-fn questionnaire_back_target(
-    current: &StateName,
-    events: &[(String, String, String, String)],
-) -> Option<StateName> {
-    if let Some((from, to, condition, _)) = events.last() {
-        if condition == "back" && from == current.as_str() {
-            return Some(StateName::from(to.as_str()));
-        }
-    }
-    if current == &StateName::begin() || current == &StateName::end() {
-        return None;
-    }
-    let mut path = vec![StateName::begin()];
-    for (_, to, condition, _) in events {
-        if condition == "back" {
-            if path.len() > 1 {
-                path.pop();
-            }
-        } else {
-            path.push(StateName::from(to.as_str()));
-        }
-    }
-    if path.last() != Some(current) || path.len() < 2 {
-        return None;
-    }
-    path.iter().rev().nth(1).cloned()
-}
-
 #[restate_sdk::object(name = "notation")]
 impl NotationService {
     /// Begin the questionnaire walk for this Notation. Idempotent
@@ -312,8 +185,7 @@ impl NotationService {
             }
             // Validate the yaml round-trips before storing so a later
             // signal can't fail mid-flight.
-            QuestionnaireSpec::from_yaml(&body.spec_yaml)
-                .map_err(|e| TerminalError::new(format!("questionnaire spec: {e}")))?;
+            validate_questionnaire_spec(&body.spec_yaml).map_err(terminal_from)?;
             ctx.set(QUESTIONNAIRE_SPEC_KEY, body.spec_yaml);
             ctx.set(QUESTIONNAIRE_STATE_KEY, StateName::BEGIN.to_string());
             Ok(())
@@ -384,6 +256,7 @@ impl NotationService {
                         WorkflowFunnelStep::IntakeComplete,
                     )
                     .await
+                    .map_err(terminal_from)
                 })
                 .name("record-funnel-intake-complete")
                 .await?;
@@ -522,8 +395,7 @@ impl NotationService {
             if ctx.get::<String>(WORKFLOW_SPEC_KEY).await?.is_some() {
                 return Ok(()); // idempotent
             }
-            WorkflowSpec::from_yaml(&body.spec_yaml)
-                .map_err(|e| TerminalError::new(format!("workflow spec: {e}")))?;
+            validate_workflow_spec(&body.spec_yaml).map_err(terminal_from)?;
             ctx.set(WORKFLOW_SPEC_KEY, body.spec_yaml);
             ctx.set(WORKFLOW_STATE_KEY, StateName::BEGIN.to_string());
             Ok(())
@@ -634,7 +506,9 @@ impl NotationService {
                 if let Some(step) = workflow_funnel_step(&from_state, &body.condition, &next) {
                     let surreal = self.surreal.clone();
                     ctx.run(move || async move {
-                        record_notation_funnel_step(&surreal, notation_id, step).await
+                        record_notation_funnel_step(&surreal, notation_id, step)
+                            .await
+                            .map_err(terminal_from)
                     })
                     .name("record-funnel-step")
                     .await?;
@@ -654,6 +528,7 @@ impl NotationService {
                             resolve_review_notification_plan(&surreal, notation_id, hop)
                                 .await
                                 .map(Json)
+                                .map_err(terminal_from)
                         })
                         .name("resolve-review-notification-recipients")
                         .await?
@@ -672,7 +547,8 @@ impl NotationService {
                         ctx.run(move || async move {
                             let target =
                                 review_notification_target(&surreal, project_id, recipient_id)
-                                    .await?;
+                                    .await
+                                    .map_err(terminal_from)?;
                             send_review_notification(
                                 email,
                                 notation_id,
@@ -683,6 +559,7 @@ impl NotationService {
                                 hop,
                             )
                             .await
+                            .map_err(terminal_from)
                         })
                         .name("send-review-notification")
                         .await?;
@@ -697,6 +574,7 @@ impl NotationService {
                                 WorkflowFunnelStep::Sent(telemetry::FunnelChannel::Email),
                             )
                             .await
+                            .map_err(terminal_from)
                         })
                         .name("record-funnel-sent")
                         .await?;
@@ -754,21 +632,19 @@ fn next_state(
     from: &StateName,
     condition: &str,
 ) -> Result<StateName, HandlerError> {
-    if spec.is_terminal(from) {
-        return Err(TerminalError::new(format!("`{}` is terminal", from.as_str())).into());
+    advance(spec, from, condition).map_err(terminal_from)
+}
+
+/// The Restate adapter's mapping for shared-logic failures: both classes
+/// surface as terminal handler errors — the handler's existing semantics,
+/// which treat store failures as caller-visible rather than Restate-retryable.
+/// The DBOS adapter (`dbos_notation.rs`) retries the Store class instead.
+fn terminal_from(error: NotationLogicError) -> HandlerError {
+    match error {
+        NotationLogicError::Terminal(message) | NotationLogicError::Store(message) => {
+            TerminalError::new(message).into()
+        }
     }
-    let transitions = spec.transitions_from(from).ok_or_else(|| {
-        HandlerError::from(TerminalError::new(format!(
-            "unknown state `{}`",
-            from.as_str()
-        )))
-    })?;
-    transitions.lookup(condition).cloned().ok_or_else(|| {
-        HandlerError::from(TerminalError::new(format!(
-            "no transition from `{}` on condition `{condition}`",
-            from.as_str()
-        )))
-    })
 }
 
 async fn dispatch_workflow_step(
@@ -783,278 +659,6 @@ async fn dispatch_workflow_step(
     dispatch_step(deps, notation_id, next, payload)
         .await
         .map_err(|e| HandlerError::from(TerminalError::new(format!("dispatch: {e}"))))
-}
-
-fn review_notification_hop(
-    from: &StateName,
-    condition: &str,
-    next: &StateName,
-) -> Option<ReviewNotificationHop> {
-    if next.as_str().starts_with("lawyer_review") {
-        return Some(ReviewNotificationHop::Lawyer);
-    }
-    if from.as_str().starts_with("lawyer_review")
-        && !next.as_str().starts_with("reask__")
-        && matches!(condition, "approved" | "_")
-    {
-        return Some(ReviewNotificationHop::Client);
-    }
-    None
-}
-
-async fn resolve_review_notification_plan(
-    surreal: &store::surreal::SurrealDb,
-    notation_id: uuid::Uuid,
-    hop: ReviewNotificationHop,
-) -> Result<ReviewNotificationPlan, HandlerError> {
-    let notation = store::notations::find_by_id(surreal, notation_id)
-        .await
-        .map_err(|e| {
-            HandlerError::from(TerminalError::new(format!(
-                "review notification notation: {e}"
-            )))
-        })?
-        .ok_or_else(|| TerminalError::new("review notification notation not found"))?;
-    let project = store::projects::find_by_id(surreal, notation.project_id)
-        .await
-        .map_err(|e| {
-            HandlerError::from(TerminalError::new(format!(
-                "review notification project: {e}"
-            )))
-        })?
-        .ok_or_else(|| TerminalError::new("review notification project not found"))?;
-    let rows = store::projects::participations_for_project(surreal, project.id)
-        .await
-        .map_err(|e| {
-            HandlerError::from(TerminalError::new(format!(
-                "review notification participants: {e}"
-            )))
-        })?;
-    let candidate_ids = review_recipient_ids(&rows, hop);
-    let mut candidates = Vec::new();
-    for person_id in candidate_ids {
-        if let Some(person) = store::persons::find_by_id(surreal, person_id)
-            .await
-            .map_err(|e| {
-                HandlerError::from(TerminalError::new(format!(
-                    "review notification person: {e}"
-                )))
-            })?
-        {
-            candidates.push(person);
-        }
-    }
-    let recipient_ids: Vec<uuid::Uuid> = match hop {
-        ReviewNotificationHop::Lawyer => candidates
-            .into_iter()
-            .filter(|person| person.role.is_lawyer_tier())
-            .map(|person| person.id)
-            .collect(),
-        ReviewNotificationHop::Client => candidates
-            .into_iter()
-            .next()
-            .map(|person| person.id)
-            .into_iter()
-            .collect(),
-    };
-    let recipient_ids = if matches!(hop, ReviewNotificationHop::Lawyer) && recipient_ids.is_empty()
-    {
-        let mut fallback = Vec::new();
-        for person_id in review_fallback_ids(&rows) {
-            if let Some(person) = store::persons::find_by_id(surreal, person_id)
-                .await
-                .map_err(|e| {
-                    HandlerError::from(TerminalError::new(format!(
-                        "review notification fallback person: {e}"
-                    )))
-                })?
-            {
-                if person.role.is_lawyer_tier() {
-                    fallback.push(person.id);
-                }
-            }
-        }
-        fallback
-    } else {
-        recipient_ids
-    };
-
-    if recipient_ids.is_empty() {
-        tracing::warn!(
-            target: "audit",
-            audit = true,
-            notation_id = %notation_id,
-            project_id = %project.id,
-            recipient_role = "none",
-            hop = hop.as_str(),
-            outcome = "skipped_no_recipient",
-            "review notification skipped: no recipient"
-        );
-    }
-
-    Ok(ReviewNotificationPlan {
-        project_id: project.id,
-        recipient_ids,
-    })
-}
-
-/// What one send needs that the journaled plan deliberately does not carry.
-struct ReviewNotificationTarget {
-    address: String,
-    project_code: String,
-}
-
-/// Read the recipient's mailbox and the matter's code at send time.
-///
-/// Both are client identifiers, so they are resolved here rather than frozen
-/// into [`ReviewNotificationPlan`]: this runs inside the send step, whose
-/// journaled value is `()`.
-async fn review_notification_target(
-    surreal: &store::surreal::SurrealDb,
-    project_id: uuid::Uuid,
-    recipient_id: uuid::Uuid,
-) -> Result<ReviewNotificationTarget, HandlerError> {
-    let person = store::persons::find_by_id(surreal, recipient_id)
-        .await
-        .map_err(|e| {
-            HandlerError::from(TerminalError::new(format!(
-                "review notification recipient: {e}"
-            )))
-        })?
-        .ok_or_else(|| TerminalError::new("review notification recipient not found"))?;
-    let project = store::projects::find_by_id(surreal, project_id)
-        .await
-        .map_err(|e| {
-            HandlerError::from(TerminalError::new(format!(
-                "review notification project: {e}"
-            )))
-        })?
-        .ok_or_else(|| TerminalError::new("review notification project not found"))?;
-    Ok(ReviewNotificationTarget {
-        address: person.email,
-        project_code: project.code,
-    })
-}
-
-fn review_recipient_ids(
-    rows: &[store::projects::PersonProjectRole],
-    hop: ReviewNotificationHop,
-) -> Vec<uuid::Uuid> {
-    match hop {
-        ReviewNotificationHop::Lawyer => {
-            let eligible = rows.iter().filter(|row| {
-                !store::projects::PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str())
-            });
-            // The role tier is resolved after the row query. A DRI marker is
-            // the first choice; person lookup rejects stale links and filters
-            // the result to the licensed lawyer tiers.
-            let dris: Vec<uuid::Uuid> = eligible
-                .clone()
-                .filter(|row| row.is_lawyer_dri)
-                .map(|row| row.person_id)
-                .collect();
-            if dris.is_empty() {
-                eligible.map(|row| row.person_id).collect()
-            } else {
-                dris
-            }
-        }
-        ReviewNotificationHop::Client => rows
-            .iter()
-            .filter(|row| row.participation == "client")
-            .find(|row| row.is_client_dri)
-            .or_else(|| rows.iter().find(|row| row.participation == "client"))
-            .map(|row| vec![row.person_id])
-            .unwrap_or_default(),
-    }
-}
-
-fn review_fallback_ids(rows: &[store::projects::PersonProjectRole]) -> Vec<uuid::Uuid> {
-    rows.iter()
-        .filter(|row| {
-            !store::projects::PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str())
-        })
-        .map(|row| row.person_id)
-        .collect()
-}
-
-async fn send_review_notification(
-    email: Arc<dyn EmailService>,
-    notation_id: uuid::Uuid,
-    project_id: uuid::Uuid,
-    project_code: &str,
-    recipient_id: uuid::Uuid,
-    recipient_email: &str,
-    hop: ReviewNotificationHop,
-) -> Result<(), HandlerError> {
-    let copy = review_copy(hop);
-    let base_url = workflows::email::base_url_from_env();
-    let path = match hop {
-        ReviewNotificationHop::Lawyer => {
-            format!("/app/lawyer/notations/{notation_id}/review")
-        }
-        ReviewNotificationHop::Client => format!("/app/projects/{project_code}"),
-    };
-    let body = format!(
-        "{}\n\n{}{}",
-        copy.body,
-        base_url.trim_end_matches('/'),
-        path
-    );
-    // Every person-addressed Navigator email carries the inline-styled firm
-    // layout as its `text/html` alternative beside the plain part, so a rich
-    // client shows the wordmark rather than a bare URL.
-    let html = workflows::email::render_email_html(&body, &base_url);
-    let outbound = OutboundEmail::new(recipient_email, copy.subject, body)
-        .with_html(html)
-        .with_template(format!("notation-review-{}", hop.as_str()))
-        .with_person(recipient_id.to_string());
-    match email.send(outbound).await {
-        Ok(_) => {
-            tracing::info!(
-                target: "audit",
-                audit = true,
-                notation_id = %notation_id,
-                project_id = %project_id,
-                recipient_role = hop.as_str(),
-                hop = hop.as_str(),
-                outcome = "sent",
-                "review notification sent"
-            );
-            Ok(())
-        }
-        Err(error) => {
-            // The variant, never the message: `EmailError::InvalidRecipient`
-            // carries the address it refused, and telemetry leaves the firm's
-            // trust boundary. The two words still separate a bad mailbox from
-            // a provider outage, which is the whole diagnostic question, and
-            // they ride the handler error rather than a new audit field — the
-            // collector's allow-list is fail-closed, so a key added here would
-            // export as a blank until it is allow-listed too.
-            let reason = match error {
-                workflows::email::EmailError::InvalidRecipient(_) => "invalid recipient",
-                workflows::email::EmailError::Transport(_) => "transport",
-            };
-            tracing::info!(
-                target: "audit",
-                audit = true,
-                notation_id = %notation_id,
-                project_id = %project_id,
-                recipient_role = hop.as_str(),
-                hop = hop.as_str(),
-                outcome = "failed",
-                "review notification failed"
-            );
-            Err(TerminalError::new(format!("review notification send failed: {reason}")).into())
-        }
-    }
-}
-
-const fn review_copy(hop: ReviewNotificationHop) -> ReviewCopy {
-    match hop {
-        ReviewNotificationHop::Lawyer => LAWYER_REVIEW_COPY,
-        ReviewNotificationHop::Client => CLIENT_REVIEW_COPY,
-    }
 }
 
 #[cfg(test)]
