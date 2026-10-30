@@ -24,6 +24,7 @@ use workflows_service::engine::Engine;
 use workflows_service::finance_aggregate::FinanceAggregateService;
 use workflows_service::general_nag::GeneralNagService;
 use workflows_service::inbound_message_alert::InboundMessageAlertService;
+use workflows_service::inbound_triage::{InboundTriageService, TriageProviders};
 use workflows_service::nightly_project_update::{
     membership::MembershipTagService,
     repository::{EnvFirmForges, RepositoryForge, RepositoryTagService},
@@ -62,6 +63,7 @@ macro_rules! bind_common_services {
                 $assets_storage,
             ))
             .bind($email_summary)
+            .bind($inbound_triage)
             .bind(InboundMessageAlertService::new(
                 $surreal.clone(),
                 $slack_bot.clone(),
@@ -543,6 +545,7 @@ async fn main() -> anyhow::Result<()> {
             assets_storage,
             kms,
             email_summary,
+            inbound_triage,
             notifier,
             ops_delivery,
             slack_bot,
