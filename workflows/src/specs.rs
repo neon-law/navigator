@@ -14,8 +14,9 @@
 //! `templates/notations/forms/...` or `templates/notations/neon_law/...`,
 //! write the same `workflow:` + `questionnaire:` blocks into
 //! `workflows/specs/<code>.yaml`, and add the file to
-//! [`BUNDLED_SPEC_YAML`] below. Project-scoped onboarding letters may reuse the
-//! shared retainer spec through [`catalog_spec_yaml`]. The coherence test in
+//! [`BUNDLED_SPEC_YAML`] below. Project-scoped letters declare their own
+//! workflow in the pinned body; body-only overrides retain the shared catalog
+//! workflow through [`catalog_spec_yaml`]. The coherence test in
 //! `workflows/tests/spec_coherence.rs` catches any drift between standalone
 //! YAML and its template frontmatter.
 
@@ -23,7 +24,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::spec::{QuestionnaireSpec, WorkflowSpec, WorkflowSpecError};
+use crate::spec::{QuestionnaireSpec, StateName, WorkflowSpec, WorkflowSpecError};
 
 /// Raw markdown body for the onboarding-letter notation template. Used
 /// by the rendering layer (`views::notation::render_filled_in`) and
@@ -101,6 +102,7 @@ pub const BUNDLED_SPEC_YAML: &[(&str, &str)] = &[
         "privacy_policy",
         include_str!("../specs/privacy_policy.yaml"),
     ),
+    ("basic_will", include_str!("../specs/basic_will.yaml")),
     ("onboarding__letter", RETAINER_INTAKE_SPEC_YAML),
     (
         "nv__llc_formation",
@@ -201,17 +203,28 @@ pub fn workflow_spec_from_yaml(yaml: &str) -> Result<WorkflowSpec, WorkflowSpecE
     Ok(wrapper.workflow)
 }
 
-/// Parse a standalone spec YAML and return the questionnaire spec.
-/// Applies the full questionnaire validation
-/// ([`QuestionnaireSpec::validate`]): base shape plus the
-/// linear-`_`-chain invariant.
+/// Normalize authored frontmatter, including the empty terminal END rows.
 fn normalized_yaml(yaml: &str) -> Result<serde_yaml::Value, WorkflowSpecError> {
     let mut value: serde_yaml::Value =
         serde_yaml::from_str(yaml).map_err(|error| WorkflowSpecError::Yaml(error.to_string()))?;
     rules::normalize_value(&mut value).map_err(WorkflowSpecError::Yaml)?;
+    // Authored maps may name END as a target without spelling out its empty
+    // terminal row. Supply that row before the strict runtime-spec validation;
+    // every other transition target must still be explicitly declared.
+    for block in ["questionnaire", "workflow"] {
+        if let Some(states) = value
+            .get_mut(block)
+            .and_then(serde_yaml::Value::as_mapping_mut)
+        {
+            states
+                .entry(serde_yaml::Value::String(StateName::END.into()))
+                .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+        }
+    }
     Ok(value)
 }
 
+/// Parse an authored questionnaire and validate its complete linear `_` chain.
 pub fn questionnaire_spec_from_yaml(yaml: &str) -> Result<QuestionnaireSpec, WorkflowSpecError> {
     let wrapper: QuestionnaireFrontmatter = serde_yaml::from_value(normalized_yaml(yaml)?)
         .map_err(|error| WorkflowSpecError::Yaml(error.to_string()))?;
@@ -372,6 +385,30 @@ mod tests {
             begin.lookup("_").map(StateName::as_str),
             Some("entity__company")
         );
+    }
+
+    #[test]
+    fn authored_maps_supply_the_implicit_terminal_end() {
+        let yaml = "questionnaire:\n  BEGIN: { _: jurisdiction__law }\n  jurisdiction__law: { _: END }\nworkflow:\n  BEGIN: { created: lawyer_review }\n  lawyer_review: { approved: END }\n";
+        assert!(questionnaire_spec_from_yaml(yaml)
+            .unwrap()
+            .is_terminal(&StateName::end()));
+        assert!(workflow_spec_from_yaml(yaml)
+            .unwrap()
+            .is_terminal(&StateName::end()));
+    }
+
+    #[test]
+    fn implicit_end_does_not_repair_dangling_authored_states() {
+        let yaml = "questionnaire:\n  BEGIN: { _: jurisdiction__missing }\nworkflow:\n  BEGIN: { created: lawyer_review__missing }\n";
+        assert!(matches!(
+            questionnaire_spec_from_yaml(yaml),
+            Err(crate::spec::WorkflowSpecError::DanglingTransition { .. })
+        ));
+        assert!(matches!(
+            workflow_spec_from_yaml(yaml),
+            Err(crate::spec::WorkflowSpecError::DanglingTransition { .. })
+        ));
     }
 
     #[test]

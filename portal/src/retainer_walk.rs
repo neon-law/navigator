@@ -1650,76 +1650,135 @@ struct WorkflowOutput {
     final_state: StateName,
 }
 
-/// Run the post-questionnaire signing workflow against an
-/// already-walked Notation. Template-agnostic — the retainer, the
-/// Nevada trust, and any future signed template walk the same path:
-///
-///   intake_submitted  → intake_persisted__<respondent>
-///   <doc>_rendered     → lawyer_review
-///   approved           → generate_pdf__<doc>_pdf
-///   pdf_persisted      → sent_for_signature__pending
-///
-/// The workflow spec is resolved from the notation's bound template
-/// **code** (not a cached retainer spec), and the only per-template
-/// condition — the `*_rendered` edge out of `intake_persisted__*` — is
-/// read straight from that spec, so adding a signed template needs no
-/// code change here. The rendering context is built from the Answer
-/// rows the walker just persisted; the PDF lands in
-/// `cloud::StorageService` keyed by [`document_pdf_storage_key`].
-/// Start the workflow machine for `notation_id` and advance it from
-/// `BEGIN` to the `lawyer_review` gate: fire `intake_submitted`, then the
-/// template's single `*_rendered` edge out of `intake_persisted__*`,
-/// syncing `notation.state` at each step. Returns the resulting
-/// `lawyer_review` state.
-///
-/// It never sends — the human approve step renders + parks
-/// ([`approve_send_post`] → [`render_and_park`]) and the deliberate send
-/// ([`send_post`] → [`dispatch_signature`]) is the only thing that emits an
-/// envelope. The `*_rendered` condition is read from the spec, not
-/// hard-coded, so a new signed template needs no change here. Shared by the
-/// questionnaire walker's post-intake drive and the matter-open form, so
-/// both reach the gate by one code path.
+/// Advance a completed questionnaire to its declared `lawyer_review` gate.
+/// Project-scoped workflows come from the notation's pinned template bytes;
+/// shared templates use the bundled catalog. A body-only Project override
+/// retains that shared workflow. The supported intake paths go straight from
+/// `BEGIN` to review, or pass through one `intake_persisted__*` state. Each
+/// edge must be unique; a path requiring another action is refused before
+/// starting the runtime. The runtime owns state entry and its durable work.
 pub async fn advance_to_lawyer_review(
     surreal: &store::surreal::SurrealDb,
     runtime: &dyn StateMachineRuntime,
+    storage: &Arc<dyn cloud::StorageService>,
     notation_id: Uuid,
     acting: Option<Uuid>,
 ) -> Result<StateName, WorkflowDriveError> {
-    // The send path is keyed off the template code, so the spec follows
-    // the actual bound template.
     let notation_row = store::notations::find_by_id(surreal, notation_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
     let template_row = store::templates::find_by_id(surreal, notation_row.template_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
-    let yaml = workflows::catalog_spec_yaml(&template_row.code)
-        .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
-    let spec = workflows::workflow_spec_from_yaml(yaml)
-        .map_err(|e| WorkflowDriveError::Spec(e.to_string()))?;
-
+    let authored = if template_row.project_id.is_some() && template_row.asset_id.is_some() {
+        let body = store::templates::body_pinned_to(
+            surreal,
+            storage,
+            &template_row,
+            notation_row.template_body_sha256.as_deref(),
+        )
+        .await?;
+        let has_workflow = rules::frontmatter::extract(&body)
+            .map(serde_yaml::from_str::<serde_yaml::Value>)
+            .transpose()
+            .map_err(|error| WorkflowDriveError::Spec(error.to_string()))?
+            .is_some_and(|frontmatter| frontmatter.get("workflow").is_some());
+        if has_workflow {
+            Some(
+                workflows::workflow_spec_from_template(&body)
+                    .map_err(|error| WorkflowDriveError::Spec(error.to_string()))?,
+            )
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let spec = if let Some(spec) = authored {
+        spec
+    } else {
+        workflows::workflow_spec_from_yaml(
+            workflows::catalog_spec_yaml(&template_row.code)
+                .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?,
+        )
+        .map_err(|error| WorkflowDriveError::Spec(error.to_string()))?
+    };
+    let path = review_path(&spec)?;
     StateMachineRuntime::start(runtime, MachineKind::Workflow, notation_id, &spec).await?;
-    let intake_state =
-        signal_workflow(runtime, notation_id, "intake_submitted", None, acting).await?;
-    sync_notation_state(surreal, notation_id, intake_state.as_str()).await?;
-
-    // The condition that advances the persisted intake into lawyer review
-    // names the rendered document (`retainer_rendered`, `trust_rendered`,
-    // …). It is the single edge out of the `intake_persisted__*` state, so
-    // read it from the spec rather than hard-coding the retainer's name.
-    let rendered_condition = spec
-        .transitions_from(&intake_state)
-        .and_then(|t| t.conditions().next())
-        .map(ToString::to_string)
+    let mut state = runtime
+        .current_state(MachineKind::Workflow, notation_id)
+        .await
+        .unwrap_or_else(StateName::begin);
+    if state.prefix() == "lawyer_review" {
+        sync_notation_state(surreal, notation_id, state.as_str()).await?;
+        return Ok(state);
+    }
+    let start = path
+        .iter()
+        .position(|step| step.from == state)
         .ok_or_else(|| {
             WorkflowDriveError::Spec(format!(
-                "no rendered transition out of `{}`",
-                intake_state.as_str()
+                "`{}` is outside the intake-to-review path",
+                state.as_str()
             ))
         })?;
-    let s = signal_workflow(runtime, notation_id, &rendered_condition, None, acting).await?;
-    sync_notation_state(surreal, notation_id, s.as_str()).await?;
-    Ok(s)
+    for step in path.iter().skip(start) {
+        state = signal_workflow(runtime, notation_id, &step.event, None, acting).await?;
+        sync_notation_state(surreal, notation_id, state.as_str()).await?;
+        if state != step.to {
+            return Err(WorkflowDriveError::Spec(format!(
+                "workflow reached `{}` instead of `{}`",
+                state.as_str(),
+                step.to.as_str()
+            )));
+        }
+    }
+    Ok(state)
+}
+
+struct ReviewTransition {
+    from: StateName,
+    event: String,
+    to: StateName,
+}
+
+fn review_path(
+    spec: &workflows::WorkflowSpec,
+) -> Result<Vec<ReviewTransition>, WorkflowDriveError> {
+    let mut state = StateName::begin();
+    let mut path = Vec::new();
+    loop {
+        let mut edges = spec
+            .transitions_from(&state)
+            .into_iter()
+            .flat_map(|edges| edges.0.iter());
+        let (event, target) = edges
+            .next()
+            .filter(|_| edges.next().is_none())
+            .ok_or_else(|| {
+                WorkflowDriveError::Spec(format!(
+                    "`{}` needs one intake-to-review transition",
+                    state.as_str()
+                ))
+            })?;
+        if target.prefix() != "lawyer_review"
+            && !(state == StateName::begin() && target.prefix() == "intake_persisted")
+        {
+            return Err(WorkflowDriveError::Spec(format!(
+                "`{}` requires an action before lawyer review",
+                target.as_str()
+            )));
+        }
+        path.push(ReviewTransition {
+            from: state,
+            event: event.clone(),
+            to: target.clone(),
+        });
+        if target.prefix() == "lawyer_review" {
+            return Ok(path);
+        }
+        state = target.clone();
+    }
 }
 
 async fn drive_post_questionnaire_workflow(
@@ -1738,8 +1797,14 @@ async fn drive_post_questionnaire_workflow(
     // never on the client's last answer, and makes `lawyer_review` a true
     // human gate (N116). The matter-open form reaches this same gate through
     // `advance_to_lawyer_review` directly.
-    let final_state =
-        advance_to_lawyer_review(deps.surreal, deps.runtime, notation_id, acting).await?;
+    let final_state = advance_to_lawyer_review(
+        deps.surreal,
+        deps.runtime,
+        deps.storage,
+        notation_id,
+        acting,
+    )
+    .await?;
     // Assemble the document here even though the caller redirects to a screen
     // that assembles it again: a substitution failure has to surface as an error
     // on the request that completed intake, not as a silently-empty preview on
@@ -3469,6 +3534,131 @@ mod tests {
     use std::collections::BTreeMap;
     use uuid::Uuid;
     use workflows::{retainer_intake_questionnaire, StateName};
+
+    #[tokio::test]
+    async fn project_authored_onboarding_walk_reaches_its_declared_review_gate() {
+        const TEMPLATE: &str =
+            include_str!("../../workflows/tests/fixtures/onboarding_implicit_end.txt");
+        let surreal = store::test_support::mem_surreal().await;
+        let dir = tempfile::tempdir().unwrap();
+        let storage: std::sync::Arc<dyn cloud::StorageService> =
+            std::sync::Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
+        let project = store::test_support::seed_project(&surreal, "Synthetic project").await;
+        let person = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::new("Client", "client@example.com"),
+        )
+        .await
+        .unwrap();
+        store::template_source::persist_contents(
+            &surreal,
+            &storage,
+            project.id,
+            "onboarding",
+            TEMPLATE.into(),
+            "synthetic-commit".into(),
+        )
+        .await
+        .unwrap();
+        let runtime = workflows::InMemoryRuntime::new();
+        let notation = workflows::start_notation(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            "onboarding",
+            person.id,
+            project.id,
+            None,
+        )
+        .await
+        .unwrap();
+        for (code, value) in [
+            ("jurisdiction__governing_law", "NV"),
+            ("jurisdiction__arbitration_seat", "NV"),
+        ] {
+            workflows::answer_step(
+                &surreal,
+                &runtime,
+                Some(&storage),
+                notation.notation_id,
+                code,
+                value,
+                workflows::AnswerAuthor::lawyer(None),
+            )
+            .await
+            .unwrap();
+        }
+        // A newer authored revision does not change an already-open notation.
+        store::template_source::persist_contents(
+            &surreal,
+            &storage,
+            project.id,
+            "onboarding",
+            TEMPLATE.replace("created: lawyer_review", "received: lawyer_review"),
+            "synthetic-newer-commit".into(),
+        )
+        .await
+        .unwrap();
+        let state = super::advance_to_lawyer_review(
+            &surreal,
+            &runtime,
+            &storage,
+            notation.notation_id,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.as_str(), "lawyer_review");
+        let saved = store::notations::find_by_id(&surreal, notation.notation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.state, "lawyer_review");
+    }
+
+    #[tokio::test]
+    async fn catalog_onboarding_walk_reaches_review_idempotently() {
+        let surreal = store::test_support::mem_surreal().await;
+        let runtime = workflows::InMemoryRuntime::new();
+        let (notation_id, accepted) = walk_onboarding_letter(&surreal, &runtime, "nevada").await;
+        assert!(
+            accepted,
+            "the declared governing-law answer must complete intake"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let storage: std::sync::Arc<dyn cloud::StorageService> =
+            std::sync::Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
+        for _ in 0..2 {
+            let state =
+                super::advance_to_lawyer_review(&surreal, &runtime, &storage, notation_id, None)
+                    .await
+                    .unwrap();
+            assert_eq!(state.as_str(), "lawyer_review");
+        }
+        let events = workflows::StateMachineRuntime::events(
+            &runtime,
+            workflows::MachineKind::Workflow,
+            notation_id,
+        )
+        .await;
+        assert_eq!(
+            events.len(),
+            2,
+            "a repeated drive must retain the two catalog transitions"
+        );
+    }
+
+    #[test]
+    fn review_path_refuses_ambiguous_and_action_required_intake() {
+        for yaml in [
+            "workflow:\n  BEGIN: { created: lawyer_review, submitted: lawyer_review }\n  lawyer_review: { approved: END }\n",
+            "workflow:\n  BEGIN: { created: generate_pdf__engagement_pdf }\n  generate_pdf__engagement_pdf: { rendered: lawyer_review }\n  lawyer_review: { approved: END }\n",
+            "workflow:\n  BEGIN: { created: intake_persisted__client }\n  intake_persisted__client: { ready: intake_persisted__other }\n  intake_persisted__other: { ready: lawyer_review }\n  lawyer_review: { approved: END }\n",
+        ] {
+            let spec = workflows::workflow_spec_from_yaml(yaml).unwrap();
+            assert!(super::review_path(&spec).is_err(), "unsupported intake path must be refused before runtime start");
+        }
+    }
 
     /// Build an answer row carrying `state_name` and a primitive value, as
     /// the walker write sites now do.

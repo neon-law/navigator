@@ -13,7 +13,8 @@
 # required by the `enforce_deployment_invariants` boot check —
 # XERO_TENANT_ID + XERO_CLIENT_ID + XERO_CLIENT_SECRET for the Xero billing
 # custom connection, NAVIGATOR_IDENTITY_PLATFORM_API_KEY for email/password
-# sign-in, and SENDGRID_FROM_EMAIL) come in via `envFrom` from the
+# sign-in, PLAUSIBLE_STATS_API_KEY for the social dashboard's leads by
+# platform, and SENDGRID_FROM_EMAIL) come in via `envFrom` from the
 # `navigator-web-secrets` Kubernetes Secret. `navigator ops secrets apply`
 # decrypts the deployment tree in-process, updates Secret Manager, and applies
 # the same values to this Secret. `ops ship` remains metadata-only.

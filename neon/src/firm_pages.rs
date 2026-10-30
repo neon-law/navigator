@@ -149,6 +149,13 @@ const BUSINESS_NOTATIONS: &[(&str, &str, &str, &str, &str)] = &[
         "Data practices, cookies, and privacy requests, with U.S. state and GDPR clauses.",
         include_str!("../../templates/notations/neon_law/privacy_policy.md"),
     ),
+    (
+        "basic-will",
+        "Basic Last Will and Testament",
+        "notations/neon_law/basic_will.md",
+        "A free basic will for California, Nevada, New York, or Washington, reviewed by the firm.",
+        include_str!("../../templates/notations/neon_law/basic_will.md"),
+    ),
 ];
 
 const ONBOARDING: &str = include_str!("../../templates/notations/neon_law/onboarding__letter.md");
@@ -521,7 +528,7 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
     let business = BUSINESS_NOTATIONS
         .iter()
         .map(|(slug, title, _, summary, source)| {
-            let jurisdiction = if *slug == "employee-offer-letter" {
+            let jurisdiction = if matches!(*slug, "employee-offer-letter" | "basic-will") {
                 "United States"
             } else {
                 "Business · lawyer review"
@@ -1471,7 +1478,7 @@ mod notation_catalog_tests {
 
     #[test]
     fn business_notations_have_fillable_previews_and_review_workflows() {
-        assert_eq!(super::BUSINESS_NOTATIONS.len(), 9);
+        assert_eq!(super::BUSINESS_NOTATIONS.len(), 10);
         let seeded = store::seed::seeded_template_codes().expect("seed catalog");
         for (slug, _, path, _, source) in super::BUSINESS_NOTATIONS {
             let code = slug.replace('-', "_");
@@ -1494,9 +1501,12 @@ mod notation_catalog_tests {
                 metadata["workflow"]["BEGIN"]["_"].as_str(),
                 Some("lawyer_review")
             );
-            assert_eq!(
-                metadata["workflow"]["lawyer_review"]["approved"].as_str(),
-                Some("END")
+            let approved = metadata["workflow"]["lawyer_review"]["approved"]
+                .as_str()
+                .expect("every business notation reviews with a lawyer");
+            assert!(
+                approved == "END" || !metadata["workflow"][approved].is_null(),
+                "{slug}: approval must end the workflow or hand off to a declared next state"
             );
             let composed = rules::clauses::compile(source).expect("catalog template composes");
             let (_, body) = composed

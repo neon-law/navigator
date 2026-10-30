@@ -287,6 +287,10 @@ pub static WEB_REQUIREMENTS: &[Requirement] = &[
     // to trigger on, so the key is its own trigger. A row without it declines
     // the door and `ops ship` renders its Secret Manager reference out.
     required!(integration "NAVIGATOR_IDENTITY_PLATFORM_API_KEY" if "NAVIGATOR_IDENTITY_PLATFORM_API_KEY"),
+    // The social dashboard's leads by platform read Plausible's Stats API.
+    // `webapp::lead_sources` reads an absent key as "not connected", so the
+    // key is its own trigger and a row without it declines the section.
+    required!(integration "PLAUSIBLE_STATS_API_KEY" if "PLAUSIBLE_STATS_API_KEY"),
     // DriDigest on DBOS posts through this incoming webhook. A row that does
     // not host it declines the key, so it is its own trigger; `ops ship`
     // demands it when `NAVIGATOR_DBOS_DRI_DIGEST_ENABLED` is on.
