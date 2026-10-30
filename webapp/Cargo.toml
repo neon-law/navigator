@@ -167,6 +167,10 @@ serde_yaml = { workspace = true }
 default = []
 # Selected by `dx` for the wasm client build; pulls the browser renderer.
 web = ["dioxus/web", "dep:dioxus-fullstack-core"]
+# Selected by `dx serve --platform ios|android` (run from webapp/): the
+# native mobile shell. Pulls the mobile platform renderer and the launch
+# arm in main.rs; no wasm or server side-effects.
+mobile = ["dioxus/mobile"]
 # Selected transitively by `web`; pulls the server-side renderer so
 # `dioxus-server`'s `render_handler` can SSR `App`, plus the `store` query
 # layer the server functions run against and the request-extraction helper.
