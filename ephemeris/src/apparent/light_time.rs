@@ -125,8 +125,8 @@ mod tests {
         let ephemeris = moving_body_ephemeris(1_000_000.0, 0.0);
         let earth = [0.0; 3];
         let t = TdbSeconds(DAY / 2.0);
-        let solution = light_time_corrected(&ephemeris, Body::Moon, t, &earth)
-            .expect("static body converges");
+        let solution =
+            light_time_corrected(&ephemeris, Body::Moon, t, &earth).expect("static body converges");
         let expected_tau = 1_000_000.0 / C_KM_S;
         let tau = norm(solution.geometric_km) / C_KM_S;
         assert!((tau - expected_tau).abs() <= 1e-8);
