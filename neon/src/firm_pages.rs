@@ -855,7 +855,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     // branded index, one branded page per jurisdiction the registry
     // covers, and the unbranded JSON twin of the same rows.
     let free_copy = locales::free_resources(branding);
-    let free_courts = store::courts::embedded()
+    let free_courts = dioxus_app::embedded()
         .expect("invariant: the shipped court registry parses; the store's tests are the gate");
     routers.push(with_branded(
         dioxus_app::free_resources_index_router(

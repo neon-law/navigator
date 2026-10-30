@@ -3542,6 +3542,10 @@ pub struct JurisdictionCourts {
     pub courts: Vec<store::courts::Court>,
 }
 
+/// The shipped court registry, re-exported so the brand crates can build
+/// the public catalog's pages without depending on the domain layer.
+pub use store::courts::embedded;
+
 /// Group the registry's courts by jurisdiction, in first-seen order.
 #[must_use]
 pub fn jurisdiction_groups(courts: &[store::courts::Court]) -> Vec<JurisdictionCourts> {
@@ -3663,9 +3667,10 @@ pub fn free_resources_jurisdiction_content(
         filing_office_label: copy.filing_office_label.clone(),
         fee_label: copy.fee_label.clone(),
         fee_waiver_label: copy.fee_waiver_label.clone(),
-        form_label: copy.form_label.clone(),
         source_label: copy.source_label.clone(),
         blank_label: copy.blank_label.clone(),
+        empty_court: copy.empty_court.clone(),
+        empty_jurisdiction: copy.empty_jurisdiction.clone(),
         footnote: copy.footnote.clone(),
     }
 }
