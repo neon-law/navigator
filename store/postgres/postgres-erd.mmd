@@ -130,6 +130,15 @@ erDiagram
         datetime updated_at
         string website_url
     }
+    brand_phone_number {
+        uuid auth_token_secret_ref
+        string brand_key
+        string channel_kinds
+        datetime inserted_at
+        string number_e164
+        string twilio_account_sid
+        datetime updated_at
+    }
     cap_table_holding {
         json holder_id
         uuid id

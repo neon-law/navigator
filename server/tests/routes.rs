@@ -772,6 +772,7 @@ async fn state_with_workshops(materials: Vec<WorkshopMaterial>) -> AppState {
         inbound_email_secret: None,
         summary_intake: None,
         sms_intake: None,
+        twilio_registry: None,
         email_events_secret: None,
         sendgrid_events_public_key: None,
         bootstrap_owner_email: None,

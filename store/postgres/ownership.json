@@ -47,6 +47,13 @@
     "scope": "firm",
     "through": "firm_id or Firm identity; referenced Projects must have the same Firm"
   },
+  "brand_phone_number": {
+    "migration_slice": "brand-phone-numbers",
+    "parity_scenario": "one row per Firm receiving number; idempotent re-registration and content-mismatch conflict; per-number credential reference",
+    "scope": "firm",
+    "target_only": true,
+    "through": "brand_key -> brand.firm_id"
+  },
   "cap_table_holding": {
     "migration_slice": "matter-storage",
     "parity_scenario": "same-Project round trip; cross-Project and cross-Firm refusal",

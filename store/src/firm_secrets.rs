@@ -27,6 +27,7 @@ pub enum IntegrationProvider {
     Notion,
     GitHub,
     Forgejo,
+    Twilio,
 }
 
 impl IntegrationProvider {
@@ -39,6 +40,7 @@ impl IntegrationProvider {
             Self::Notion => "notion",
             Self::GitHub => "github",
             Self::Forgejo => "forgejo",
+            Self::Twilio => "twilio",
         }
     }
 }
@@ -47,7 +49,7 @@ impl IntegrationProvider {
 /// view builds its "create a secret" choices from this rather than a
 /// hand-kept second list, so a new kind cannot be added to the enum without
 /// also appearing there.
-pub const ALL_KINDS: [IntegrationSecretKind; 10] = [
+pub const ALL_KINDS: [IntegrationSecretKind; 11] = [
     IntegrationSecretKind::MercuryReadToken,
     IntegrationSecretKind::XeroTenantId,
     IntegrationSecretKind::XeroWebhookKey,
@@ -58,6 +60,7 @@ pub const ALL_KINDS: [IntegrationSecretKind; 10] = [
     IntegrationSecretKind::NotionToken,
     IntegrationSecretKind::GitHubAppPrivateKey,
     IntegrationSecretKind::ForgejoAccessToken,
+    IntegrationSecretKind::TwilioAuthToken,
 ];
 
 /// Typed Firm API credentials and provider webhook verification keys.
@@ -75,6 +78,10 @@ pub enum IntegrationSecretKind {
     GitHubAppPrivateKey,
     /// The Firm's own Forgejo access token, confined to its namespace.
     ForgejoAccessToken,
+    /// The auth token that signs webhooks for one of the Firm's Twilio
+    /// receiving numbers. Each registered number resolves through its own
+    /// version, not through a Firm-wide current one.
+    TwilioAuthToken,
 }
 
 impl IntegrationSecretKind {
@@ -91,6 +98,7 @@ impl IntegrationSecretKind {
             Self::NotionToken => "notion_token",
             Self::GitHubAppPrivateKey => "github_app_private_key",
             Self::ForgejoAccessToken => "forgejo_access_token",
+            Self::TwilioAuthToken => "twilio_auth_token",
         }
     }
 
@@ -107,6 +115,7 @@ impl IntegrationSecretKind {
             Self::NotionToken => IntegrationProvider::Notion,
             Self::GitHubAppPrivateKey => IntegrationProvider::GitHub,
             Self::ForgejoAccessToken => IntegrationProvider::Forgejo,
+            Self::TwilioAuthToken => IntegrationProvider::Twilio,
         }
     }
 }
@@ -187,6 +196,8 @@ pub enum SecretStoreError {
     InvalidValue,
     #[error("writing a firm secret returned no usable row")]
     WriteReturnedNothing,
+    #[error("the referenced credential {0} is missing, revoked, or not the resolving Firm's")]
+    MissingRef(Uuid),
 }
 
 #[derive(SurrealValue)]
@@ -228,6 +239,7 @@ pub fn parse_provider(value: &str) -> Option<IntegrationProvider> {
         "notion" => Some(IntegrationProvider::Notion),
         "github" => Some(IntegrationProvider::GitHub),
         "forgejo" => Some(IntegrationProvider::Forgejo),
+        "twilio" => Some(IntegrationProvider::Twilio),
         _ => None,
     }
 }
@@ -247,6 +259,7 @@ pub fn parse_kind(value: &str) -> Option<IntegrationSecretKind> {
         "xero_tenant_id" => Some(IntegrationSecretKind::XeroTenantId),
         "xero_webhook_key" => Some(IntegrationSecretKind::XeroWebhookKey),
         "forgejo_access_token" => Some(IntegrationSecretKind::ForgejoAccessToken),
+        "twilio_auth_token" => Some(IntegrationSecretKind::TwilioAuthToken),
         _ => None,
     }
 }
@@ -589,4 +602,67 @@ pub async fn resolve_firm_credential(
             value: value.into_bytes(),
         })
         .map_err(|_| SecretStoreError::InvalidValue)
+}
+
+/// Resolve the exact credential version a registry row pins, addressed by
+/// the secret record's UUID, as `(token, owning Firm)`. The webhook
+/// resolution spine passes each registered number's `auth_token_secret_ref`
+/// and checks the owning Firm against the Brand's. The row must be the
+/// named record, active, and a Twilio auth token — a reference to any other
+/// credential kind is [`SecretStoreError::InvalidKind`]. Unlike
+/// [`resolve_firm_credential`], which takes the Firm's current version,
+/// this pins the version the registry registered, so per-number tokens
+/// rotate independently.
+pub async fn resolve_twilio_auth_token_by_ref(
+    surreal: &SurrealDb,
+    secret_ref: Uuid,
+    kms: &dyn RuntimeKms,
+) -> Result<(ResolvedCredential, Uuid), SecretStoreError> {
+    let mut response = surreal
+        .query(format!(
+            "SELECT firm_id, provider, kind, version, ciphertext, wrapped_dek, kms_key_version, \
+             kms_context, status, actor_id, created_at, updated_at FROM {TABLE} WHERE id = $id"
+        ))
+        .bind(("id", record_id(TABLE, secret_ref)))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?;
+    let rows: Vec<SecretRow> = response.take(0)?;
+    let row = rows
+        .into_iter()
+        .next()
+        .ok_or(SecretStoreError::MissingRef(secret_ref))?;
+    let provider = parse_provider(&row.provider).ok_or(SecretStoreError::InvalidKind)?;
+    let kind = parse_kind(&row.kind).ok_or(SecretStoreError::InvalidKind)?;
+    validate_kind(provider, kind)?;
+    if kind != IntegrationSecretKind::TwilioAuthToken {
+        return Err(SecretStoreError::InvalidKind);
+    }
+    let firm_id = record_uuid(&row.firm_id).ok_or(SecretStoreError::MissingRef(secret_ref))?;
+    if row.status != "active" {
+        return Err(SecretStoreError::MissingRef(secret_ref));
+    }
+    let context = KmsContext::new(firm_id, provider.as_str(), kind.as_str());
+    if row.kms_context != context.aad() {
+        return Err(SecretStoreError::Kms(KmsError::ContextMismatch));
+    }
+    let wrapped = WrappedDataKey {
+        ciphertext: BASE64
+            .decode(row.wrapped_dek)
+            .map_err(|_| SecretStoreError::Kms(KmsError::InvalidResponse))?,
+        key_version: row.kms_key_version,
+    };
+    let data_key = kms
+        .unwrap_data_key(&wrapped, &context)
+        .await
+        .map_err(SecretStoreError::Kms)?;
+    let ciphertext = BASE64
+        .decode(row.ciphertext)
+        .map_err(|_| SecretStoreError::Kms(KmsError::InvalidResponse))?;
+    let plaintext = cloud::open(&ciphertext, &data_key, &context).map_err(SecretStoreError::Kms)?;
+    let credential = String::from_utf8(plaintext)
+        .map(|value| ResolvedCredential {
+            value: value.into_bytes(),
+        })
+        .map_err(|_| SecretStoreError::InvalidValue)?;
+    Ok((credential, firm_id))
 }

@@ -151,6 +151,10 @@ pub struct AdminState {
     /// through `store::firm_secrets::resolve_project_credential` indirectly,
     /// via `AppState.integration_providers`, and never touches this field.
     pub runtime_kms: Arc<dyn cloud::RuntimeKms>,
+    /// The Firm registry of Twilio receiving numbers — the configuration
+    /// the inbox's outbound-text surface resolves firm and Brand through.
+    /// `None` in tests keeps texting off.
+    pub twilio_registry: Option<Arc<store::postgres::PostgresDb>>,
 }
 
 impl FromRef<AdminState> for store::surreal::SurrealDb {
@@ -5152,6 +5156,7 @@ mod tests {
             secure_cookies: false,
             attachment_scanner: app.attachment_scanner,
             runtime_kms: app.runtime_kms,
+            twilio_registry: None,
         }
     }
 

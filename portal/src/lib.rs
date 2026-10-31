@@ -193,6 +193,9 @@ pub mod tenant;
 /// use it; see the module docs.
 pub mod test_support;
 mod tiktok_comments;
+#[cfg(test)]
+pub(crate) mod twilio_registry_harness;
+pub mod twilio_resolution;
 pub mod twilio_sms;
 pub mod visitor_analytics;
 pub mod webhook_auth;
@@ -449,9 +452,17 @@ pub struct AppState {
     /// Opt-in authenticated summary intake. The legacy SendGrid path remains
     /// unchanged when this is absent.
     pub summary_intake: Option<inbound_email::SummaryIntakeConfig>,
-    /// Opt-in Twilio SMS intake onto the shared Inbox and optional summary lane. `None` unless the
-    /// deployment names `NAVIGATOR_SMS_NUMBER`; see [`twilio_sms`].
+    /// Opt-in Twilio SMS intake onto the shared Inbox and optional summary lane. The outbound
+    /// transport still sends through this deployment-wide configuration; inbound verification
+    /// no longer reads it. `None` unless the deployment names `NAVIGATOR_SMS_NUMBER`; see
+    /// [`twilio_sms`].
     pub sms_intake: Option<twilio_sms::SmsIntakeConfig>,
+    /// The Firm registry of Twilio receiving numbers (`brand_phone_number`), the lane behind
+    /// every Twilio webhook. Each registered number carries its Brand and its own KMS-backed
+    /// credential, verified by the resolution spine in [`twilio_resolution`]; an unknown number
+    /// or an unresolvable one fails closed. `None` in dev/tests keeps every Twilio webhook lane
+    /// off; production builds it from the deployment's PostgreSQL environment.
+    pub twilio_registry: Option<std::sync::Arc<store::postgres::PostgresDb>>,
     /// Shared secret SendGrid's Event Webhook must include in the
     /// delivery-event URL path (`/webhook/email-events/{secret}`). Same
     /// `None`-accepts-any-token dev posture as `inbound_email_secret`;
@@ -945,6 +956,7 @@ pub fn bootstrap_with_forgejo_oidc(
         secure_cookies: secure_cookies(&state),
         attachment_scanner: state.attachment_scanner.clone(),
         runtime_kms: state.runtime_kms.clone(),
+        twilio_registry: state.twilio_registry.clone(),
     };
     // #956 Phase 4: the client self-serve intake page renders through Dioxus at
     // /app/projects/{project_code}/intake/{notation_id}. Its pre-layer resolves the

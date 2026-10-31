@@ -328,7 +328,7 @@ async fn list_metadata_for_firm_lists_every_configured_kind_and_is_firm_scoped()
 /// unreachable from any write door.
 #[test]
 fn all_kinds_covers_the_closed_vocabulary_with_no_duplicates() {
-    assert_eq!(ALL_KINDS.len(), 10);
+    assert_eq!(ALL_KINDS.len(), 11);
     let mut slugs: Vec<&str> = ALL_KINDS.iter().map(|kind| kind.as_str()).collect();
     slugs.sort_unstable();
     slugs.dedup();

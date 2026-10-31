@@ -4,16 +4,19 @@
 //! the existing `EmailSummary` lane also retains its receipt and summary.
 //! Attachments remain in Twilio; the summary records their count.
 //!
-//! Auth: every request carries `X-Twilio-Signature`, the base64 HMAC-SHA1 of
-//! the webhook URL followed by each POST parameter's name and value in name
-//! order, keyed by [`TWILIO_AUTH_TOKEN`]. Twilio signs the URL it was told to
-//! call, so the handler rebuilds it from `NAVIGATOR_PUBLIC_HOST` (or the
-//! deployed pod's `CANONICAL_HOST`) rather than
-//! trusting the forwarded request line.
+//! Auth: every request is verified by the [`crate::twilio_resolution`] spine
+//! — the key number is looked up in the Firm's PostgreSQL receiving-number
+//! registry, `X-Twilio-Signature` (the base64 HMAC-SHA1 of the webhook URL
+//! followed by each POST parameter's name and value in name order) is
+//! checked in constant time against that number's own KMS-backed credential,
+//! and the signed URL is rebuilt from `NAVIGATOR_PUBLIC_HOST` (or the
+//! deployed pod's `CANONICAL_HOST`), never from the request line.
 //!
-//! The lane is off unless the deployment names a number. A named number
-//! without the token or a public host fails boot rather than accepting
-//! texts it cannot authenticate. Intake requires a Brand with an owning Firm.
+//! Inbound verification is registry-only: an unknown number or an
+//! unresolvable credential fails closed. [`SmsIntakeConfig`] survives as the
+//! deployment-wide OUTBOUND transport configuration (`NAVIGATOR_SMS_NUMBER`,
+//! [`TWILIO_AUTH_TOKEN`]) — replies and their status callbacks send through
+//! it; nothing inbound authenticates with it.
 
 use std::fmt::Write as _;
 
@@ -27,6 +30,7 @@ use sha1::Sha1;
 use thiserror::Error;
 
 use crate::inbound_email::{InboundEmail, SmtpEnvelope};
+use crate::twilio_resolution::Lane;
 
 /// The firm's SMS number in E.164 form, e.g. `+15108002090`. Unset or blank
 /// keeps the lane off. Not a secret: it is printed on the firm's website.
@@ -108,12 +112,12 @@ impl SmsIntakeConfig {
             webhook_url: format!("https://{host}{SMS_WEBHOOK_PATH}"),
         }))
     }
+}
 
-    /// The receipt's receiving mailbox for a text to this number.
-    #[must_use]
-    pub fn mailbox(&self) -> String {
-        format!("sms:{}", self.number)
-    }
+/// The receipt's receiving mailbox for a text to a registered number.
+#[must_use]
+pub fn mailbox_for(number_e164: &str) -> String {
+    format!("sms:{number_e164}")
 }
 
 fn is_e164(number: &str) -> bool {
@@ -143,18 +147,58 @@ fn signing_mac(auth_token: &str, url: &str, params: &[(String, String)]) -> Hmac
     mac
 }
 
-/// Constant-time check of a provided `X-Twilio-Signature`.
-fn signature_matches(
-    config: &SmsIntakeConfig,
+/// Constant-time check of a provided `X-Twilio-Signature` against the
+/// webhook URL Twilio signed, keyed by the credential the resolution spine
+/// selected.
+pub(crate) fn verify_signature(
+    auth_token: &str,
+    webhook_url: &str,
     params: &[(String, String)],
     provided: &str,
 ) -> bool {
     let Ok(provided) = base64::engine::general_purpose::STANDARD.decode(provided.trim()) else {
         return false;
     };
-    signing_mac(&config.auth_token, &config.webhook_url, params)
+    signing_mac(auth_token, webhook_url, params)
         .verify_slice(&provided)
         .is_ok()
+}
+
+/// The spine over the shared state. A configured registry resolves the
+/// request; an unconfigured one keeps the lane off at 404, the same answer
+/// an unknown number gets.
+async fn resolve(
+    state: &crate::AppState,
+    lane: crate::twilio_resolution::Lane,
+    key_number: &str,
+    params: &[(String, String)],
+    provided: Option<&str>,
+) -> Result<crate::twilio_resolution::ResolvedTwilioWebhook, Response> {
+    let Some(registry) = state.twilio_registry.as_deref() else {
+        return Err(StatusCode::NOT_FOUND.into_response());
+    };
+    // The boot-resolved host, or the process environment where no
+    // `CANONICAL_HOST` is set — a bare-metal deployment names
+    // `NAVIGATOR_PUBLIC_HOST`; the pod rewrite is `CANONICAL_HOST`-only.
+    let boot_host = state.canonical_host.host().map(str::to_string);
+    let spine = crate::twilio_resolution::Spine {
+        registry,
+        surreal: &state.surreal,
+        kms: state.runtime_kms.as_ref(),
+    };
+    spine
+        .resolve(
+            lane,
+            move |key| boot_host.clone().or_else(|| std::env::var(key).ok()),
+            key_number,
+            params,
+            provided,
+        )
+        .await
+        .map_err(|refusal| {
+            tracing::warn!(%refusal, "twilio webhook refused");
+            refusal.into_response()
+        })
 }
 
 /// One inbound text, reduced to the fields the summary lane reads.
@@ -247,27 +291,27 @@ pub async fn webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Some(config) = state.sms_intake.as_ref() else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
     let params: Vec<(String, String)> = url::form_urlencoded::parse(&body).into_owned().collect();
-    let Some(provided) = headers
+    let provided = headers
         .get(SIGNATURE_HEADER)
-        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.to_str().ok());
+    // The callee keys the registry lookup.
+    let Some(to) = params
+        .iter()
+        .find(|(key, _)| key == "To")
+        .map(|(_, value)| value.as_str())
+        .filter(|value| !value.is_empty())
     else {
-        return StatusCode::UNAUTHORIZED.into_response();
+        return StatusCode::BAD_REQUEST.into_response();
     };
-    if !signature_matches(config, &params, provided) {
-        tracing::warn!("twilio sms webhook: signature mismatch");
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
+    let resolved = match resolve(&state, Lane::SmsIngest, to, &params, provided).await {
+        Ok(resolved) => resolved,
+        Err(response) => return response,
+    };
     let Some(sms) = InboundSms::from_params(&params) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    if sms.to != config.number {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let Ok(saved) = ingest_sms(&state.surreal, config, &sms).await else {
+    let Ok(saved) = ingest_sms(&state.surreal, &resolved, &sms).await else {
         return StatusCode::UNPROCESSABLE_ENTITY.into_response();
     };
     if crate::inbox::start_inbound_message_alert(saved.message_id)
@@ -285,11 +329,7 @@ pub async fn webhook(
         )
             .into_response();
     };
-    let Ok((receiving_firm, _)) = receiving_firm(&state.surreal, config).await else {
-        tracing::error!("SMS receiving Firm lookup failed");
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
-    if receiving_firm != summary.firm_id {
+    if resolved.firm_id != summary.firm_id {
         tracing::warn!("SMS summary configuration belongs to another Firm; Inbox receipt retained");
         return (
             StatusCode::OK,
@@ -299,12 +339,13 @@ pub async fn webhook(
             .into_response();
     }
     tracing::info!(media = sms.media_count, "twilio sms received");
-    let email = sms.into_email(config.mailbox());
+    let mailbox = mailbox_for(&resolved.registration.number_e164);
+    let email = sms.into_email(mailbox.clone());
     let receipt = match crate::inbound_email::persist_summary_receipt(
         &state.surreal,
         &state.storage,
         &summary.deployment,
-        config.mailbox(),
+        mailbox,
         &email,
         Some(summary.firm_id),
         None,
@@ -326,28 +367,11 @@ pub async fn webhook(
         .into_response()
 }
 
-pub(crate) async fn receiving_firm(
-    db: &store::surreal::SurrealDb,
-    config: &SmsIntakeConfig,
-) -> Result<(uuid::Uuid, views::brand::BrandKey), String> {
-    let url = reqwest::Url::parse(&config.webhook_url).map_err(|_| "invalid SMS webhook URL")?;
-    let brand = url
-        .host_str()
-        .and_then(views::brand::registered_brand_key)
-        .ok_or("SMS receiving number has no registered Brand")?;
-    let firm = store::firms::firm_id_for_brand_key(db, brand.as_str())
-        .await
-        .map_err(|_| "SMS Brand lookup failed")?
-        .ok_or("SMS Brand has no owning Firm")?;
-    Ok((firm, brand))
-}
-
 async fn ingest_sms(
     db: &store::surreal::SurrealDb,
-    config: &SmsIntakeConfig,
+    resolved: &crate::twilio_resolution::ResolvedTwilioWebhook,
     sms: &InboundSms,
 ) -> Result<store::inbox::IngestedInbound, String> {
-    let (firm_id, brand) = receiving_firm(db, config).await?;
     let body = if sms.media_count == 0 {
         sms.body.clone()
     } else {
@@ -359,21 +383,21 @@ async fn ingest_sms(
     store::inbox::ingest_inbound(
         db,
         &store::inbox::IngestInbound {
-            firm_id,
-            brand_key: Some(brand.as_str()),
+            firm_id: resolved.firm_id,
+            brand_key: Some(&resolved.registration.brand_key),
             interaction_type: Some("message"),
             provider_post_id: None,
             parent_provider_message_id: None,
             visibility: Some("private"),
             channel: store::inbox::channel::SMS,
-            provider_account: &config.number,
+            provider_account: &resolved.registration.number_e164,
             provider_message_id: &sms.message_sid,
             provider_thread_ref: None,
             external_address: &sms.from,
             external_name: None,
             subject: None,
             body: &body,
-            source_page: Some(&config.number),
+            source_page: Some(&resolved.registration.number_e164),
             source_channel: Some(store::inbox::channel::SMS),
             matter_consent: false,
             promotional_opt_in: false,
@@ -392,30 +416,30 @@ pub async fn status(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Some(config) = state.sms_intake.as_ref() else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
     let params: Vec<(String, String)> = url::form_urlencoded::parse(&body).into_owned().collect();
-    let mut signed_config = config.clone();
-    signed_config.webhook_url = config
-        .webhook_url
-        .replace(SMS_WEBHOOK_PATH, SMS_STATUS_PATH);
-    let signature = headers
+    let provided = headers
         .get(SIGNATURE_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    if !signature_matches(&signed_config, &params, signature) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
+        .and_then(|value| value.to_str().ok());
+    // A delivery callback reports on the Firm's own sending number: that
+    // number keys the registry, and the status path is the URL it signed.
+    let Some(from) = params
+        .iter()
+        .find(|(key, _)| key == "From")
+        .map(|(_, value)| value.as_str())
+        .filter(|value| !value.is_empty())
+    else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let resolved = match resolve(&state, Lane::SmsStatus, from, &params, provided).await {
+        Ok(resolved) => resolved,
+        Err(response) => return response,
+    };
     let field = |name: &str| {
         params
             .iter()
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.as_str())
     };
-    if field("From").is_some_and(|from| from != config.number) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
     let Some(provider_ref) = field("MessageSid") else {
         return StatusCode::BAD_REQUEST.into_response();
     };
@@ -425,14 +449,11 @@ pub async fn status(
         Some("queued" | "accepted" | "sending" | "sent") => store::inbox::delivery::SUBMITTED,
         _ => return StatusCode::NO_CONTENT.into_response(),
     };
-    let Ok((firm_id, _)) = receiving_firm(&state.surreal, config).await else {
-        return StatusCode::UNPROCESSABLE_ENTITY.into_response();
-    };
     if store::inbox::apply_delivery(
         &state.surreal,
-        firm_id,
+        resolved.firm_id,
         store::inbox::channel::SMS,
-        &config.number,
+        &resolved.registration.number_e164,
         provider_ref,
         delivery,
     )
@@ -509,7 +530,7 @@ mod tests {
             config().webhook_url,
             "https://www.example.com/webhook/twilio/sms"
         );
-        assert_eq!(config().mailbox(), "sms:+15108002090");
+        assert_eq!(mailbox_for("+15108002090"), "sms:+15108002090");
     }
 
     /// A GKE pod receives the row's public host as `CANONICAL_HOST` only:
@@ -534,6 +555,9 @@ mod tests {
     /// Pinned against an independent HMAC-SHA1 (Python's `hmac`) over the
     /// same URL and name-sorted parameters, so a reordering or a dropped
     /// separator in [`twilio_signature`] cannot pass by agreeing with itself.
+    /// Two credentials are pinned because the registry verifies each
+    /// registered number against its own token — the spine test proves a
+    /// cross-signed request is rejected between two registry rows.
     #[test]
     fn signature_matches_twilio_algorithm() {
         let signed = params(&[
@@ -550,6 +574,29 @@ mod tests {
             ),
             "vSMrFg0ktZZDl1G5odfhAhWJAiQ="
         );
+        assert_eq!(
+            twilio_signature(
+                "67890",
+                "https://www.example.com/webhook/twilio/sms",
+                &signed
+            ),
+            "lLYFZ7RE2NfTywErlHxZ+YOSdWs="
+        );
+        assert!(verify_signature(
+            "12345",
+            "https://www.example.com/webhook/twilio/sms",
+            &signed,
+            "vSMrFg0ktZZDl1G5odfhAhWJAiQ="
+        ));
+        assert!(
+            !verify_signature(
+                "67890",
+                "https://www.example.com/webhook/twilio/sms",
+                &signed,
+                "vSMrFg0ktZZDl1G5odfhAhWJAiQ="
+            ),
+            "the other number's credential must not verify"
+        );
     }
 
     #[test]
@@ -557,10 +604,25 @@ mod tests {
         let config = config();
         let signed = params(&[("Body", "Hello"), ("MessageSid", "SM123")]);
         let signature = twilio_signature(&config.auth_token, &config.webhook_url, &signed);
-        assert!(signature_matches(&config, &signed, &signature));
+        assert!(verify_signature(
+            &config.auth_token,
+            &config.webhook_url,
+            &signed,
+            &signature
+        ));
         let tampered = params(&[("Body", "Hullo"), ("MessageSid", "SM123")]);
-        assert!(!signature_matches(&config, &tampered, &signature));
-        assert!(!signature_matches(&config, &signed, "not base64!"));
+        assert!(!verify_signature(
+            &config.auth_token,
+            &config.webhook_url,
+            &tampered,
+            &signature
+        ));
+        assert!(!verify_signature(
+            &config.auth_token,
+            &config.webhook_url,
+            &signed,
+            "not base64!"
+        ));
     }
 
     #[test]
@@ -611,27 +673,58 @@ mod tests {
         assert!(InboundSms::from_params(&params(&[("MessageSid", "SM1"), ("To", "+2")])).is_none());
     }
 
+    /// The registry lane: a seeded Firm with `number` registered for its
+    /// own token, and a state whose webhook lanes resolve through
+    /// PostgreSQL with the host the spine should sign.
+    async fn registry_state(
+        db: &store::surreal::SurrealDb,
+        pg: &store::postgres::PostgresDb,
+        brand: &str,
+        number: &str,
+        token: &str,
+        host: &str,
+    ) -> (crate::AppState, uuid::Uuid) {
+        let firm = store::test_support::seed_firm_with_brand(db, brand).await;
+        crate::twilio_registry_harness::register_number(db, pg, firm, brand, number, token).await;
+        let mut state = crate::test_support::app_state(db.clone()).await;
+        state.canonical_host = crate::CanonicalHost::new(Some(host.to_string()));
+        state.twilio_registry = Some(std::sync::Arc::new(pg.clone()));
+        (state, firm)
+    }
+
     #[tokio::test]
     async fn signed_sms_is_saved_without_a_summary_service_and_unsigned_callbacks_are_denied() {
+        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
+            return;
+        };
         let db = store::test_support::mem_surreal().await;
-        store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let mut state = crate::test_support::app_state(db.clone()).await;
-        let mut config = config();
-        config.webhook_url = "https://www.neonlaw.com/webhook/twilio/sms".into();
-        state.sms_intake = Some(config.clone());
+        let number = "+15551234444";
+        let (mut state, _) = registry_state(
+            &db,
+            &pg,
+            "neon",
+            number,
+            "registry-token",
+            "www.neonlaw.com",
+        )
+        .await;
         state.summary_intake = None;
         let fields = params(&[
             ("MessageSid", "synthetic-sid"),
             ("From", "+15555550100"),
-            ("To", &config.number),
+            ("To", number),
             ("Body", "Synthetic inquiry"),
         ]);
         let mut headers = HeaderMap::new();
         headers.insert(
             SIGNATURE_HEADER,
-            twilio_signature(&config.auth_token, &config.webhook_url, &fields)
-                .parse()
-                .unwrap(),
+            twilio_signature(
+                "registry-token",
+                &format!("https://www.neonlaw.com{SMS_WEBHOOK_PATH}"),
+                &fields,
+            )
+            .parse()
+            .unwrap(),
         );
         let body = url::form_urlencoded::Serializer::new(String::new())
             .extend_pairs(&fields)
@@ -659,34 +752,47 @@ mod tests {
 
     #[tokio::test]
     async fn signed_delivery_callback_updates_the_original_outbound_message() {
+        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
+            return;
+        };
         let db = store::test_support::mem_surreal().await;
-        store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let mut config = config();
-        config.webhook_url = "https://www.neonlaw.com/webhook/twilio/sms".into();
+        let number = "+15551234444";
+        let (state, firm) = registry_state(
+            &db,
+            &pg,
+            "neon",
+            number,
+            "registry-token",
+            "www.neonlaw.com",
+        )
+        .await;
+        let resolved = crate::twilio_resolution::ResolvedTwilioWebhook {
+            registration: store::brand_phone_numbers::find_by_number(&pg, number)
+                .await
+                .unwrap()
+                .unwrap(),
+            firm_id: firm,
+        };
         let sms = InboundSms {
             message_sid: "synthetic-inbound".into(),
             from: "+15555550100".into(),
-            to: config.number.clone(),
+            to: number.into(),
             body: "Synthetic inquiry".into(),
             media_count: 0,
         };
-        let saved = ingest_sms(&db, &config, &sms).await.unwrap();
+        let saved = ingest_sms(&db, &resolved, &sms).await.unwrap();
         db.query("UPDATE $id SET direction = 'outbound', provider_ref = 'synthetic-outbound', delivery_state = 'submitted'")
             .bind(("id", store::surreal::record_id("message", saved.message_id))).await.unwrap().check().unwrap();
-        let mut state = crate::test_support::app_state(db.clone()).await;
-        state.sms_intake = Some(config.clone());
         let fields = params(&[
             ("MessageSid", "synthetic-outbound"),
             ("MessageStatus", "delivered"),
-            ("From", &config.number),
+            ("From", number),
         ]);
-        let callback = config
-            .webhook_url
-            .replace(SMS_WEBHOOK_PATH, SMS_STATUS_PATH);
+        let callback = format!("https://www.neonlaw.com{SMS_STATUS_PATH}");
         let mut headers = HeaderMap::new();
         headers.insert(
             SIGNATURE_HEADER,
-            twilio_signature(&config.auth_token, &callback, &fields)
+            twilio_signature("registry-token", &callback, &fields)
                 .parse()
                 .unwrap(),
         );
@@ -711,18 +817,36 @@ mod tests {
 
     #[tokio::test]
     async fn a_picture_only_message_keeps_a_transcript_receipt() {
+        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
+            return;
+        };
         let db = store::test_support::mem_surreal().await;
-        store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let mut config = config();
-        config.webhook_url = "https://www.neonlaw.com/webhook/twilio/sms".into();
+        let number = "+15551234444";
+        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
+        crate::twilio_registry_harness::register_number(
+            &db,
+            &pg,
+            firm,
+            "neon",
+            number,
+            "registry-token",
+        )
+        .await;
+        let resolved = crate::twilio_resolution::ResolvedTwilioWebhook {
+            registration: store::brand_phone_numbers::find_by_number(&pg, number)
+                .await
+                .unwrap()
+                .unwrap(),
+            firm_id: firm,
+        };
         let sms = InboundSms {
             message_sid: "synthetic-media-id".into(),
             from: "synthetic-sender".into(),
-            to: config.number.clone(),
+            to: number.into(),
             body: String::new(),
             media_count: 1,
         };
-        let saved = ingest_sms(&db, &config, &sms).await.unwrap();
+        let saved = ingest_sms(&db, &resolved, &sms).await.unwrap();
         let message = store::inbox::message_by_id(&db, saved.message_id)
             .await
             .unwrap()
@@ -742,10 +866,20 @@ mod tests {
 
     #[tokio::test]
     async fn an_unsigned_text_is_refused() {
-        let mut state =
-            crate::test_support::app_state(store::test_support::mem_surreal().await).await;
-        state.sms_intake = Some(config());
-        let body = Bytes::from_static(b"MessageSid=SM1&From=%2B15555550100&To=%2B15108002090");
+        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
+            return;
+        };
+        let db = store::test_support::mem_surreal().await;
+        let (state, _) = registry_state(
+            &db,
+            &pg,
+            "neon",
+            "+15551234444",
+            "registry-token",
+            "www.neonlaw.com",
+        )
+        .await;
+        let body = Bytes::from_static(b"MessageSid=SM1&From=%2B15555550100&To=%2B15551234444");
         let response = webhook(State(state.clone()), HeaderMap::new(), body.clone()).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let mut headers = HeaderMap::new();
@@ -754,12 +888,24 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
+    /// A request signed with a registered number's own credential but
+    /// addressed to a number that never registered resolves to nothing:
+    /// the caller's token proves nothing about an unregistered callee.
     #[tokio::test]
     async fn a_signed_text_to_another_number_is_not_ours() {
-        let mut state =
-            crate::test_support::app_state(store::test_support::mem_surreal().await).await;
-        let config = config();
-        state.sms_intake = Some(config.clone());
+        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
+            return;
+        };
+        let db = store::test_support::mem_surreal().await;
+        let (state, _) = registry_state(
+            &db,
+            &pg,
+            "neon",
+            "+15551234444",
+            "registry-token",
+            "www.neonlaw.com",
+        )
+        .await;
         let signed = params(&[
             ("MessageSid", "SM1"),
             ("From", "+15555550100"),
@@ -768,30 +914,75 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             SIGNATURE_HEADER,
-            twilio_signature(&config.auth_token, &config.webhook_url, &signed)
-                .parse()
-                .unwrap(),
+            twilio_signature(
+                "registry-token",
+                "https://www.neonlaw.com/webhook/twilio/sms",
+                &signed,
+            )
+            .parse()
+            .unwrap(),
         );
         let body = Bytes::from_static(b"MessageSid=SM1&From=%2B15555550100&To=%2B15550000000");
         let response = webhook(State(state), headers, body).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        // Fail closed: nothing was ingested for the unregistered callee.
+        let mut conversations = db
+            .query("SELECT VALUE id FROM inbox_conversation")
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let rows: Vec<surrealdb::types::RecordId> = conversations.take(0).unwrap();
+        assert!(
+            rows.is_empty(),
+            "an unregistered callee must not create a conversation"
+        );
+        let mut messages = db
+            .query("SELECT VALUE id FROM message")
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let rows: Vec<surrealdb::types::RecordId> = messages.take(0).unwrap();
+        assert!(
+            rows.is_empty(),
+            "an unregistered callee must not create a message"
+        );
     }
 
     #[tokio::test]
     async fn twilio_intake_saves_one_shared_message_even_without_summaries() {
+        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
+            return;
+        };
         let db = store::test_support::mem_surreal().await;
         let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let mut receiving = config();
-        receiving.webhook_url = "https://www.neonlaw.com/webhook/twilio/sms".into();
+        let number = "+15551234444";
+        crate::twilio_registry_harness::register_number(
+            &db,
+            &pg,
+            firm,
+            "neon",
+            number,
+            "registry-token",
+        )
+        .await;
+        let resolved = crate::twilio_resolution::ResolvedTwilioWebhook {
+            registration: store::brand_phone_numbers::find_by_number(&pg, number)
+                .await
+                .unwrap()
+                .unwrap(),
+            firm_id: firm,
+        };
         let sms = InboundSms {
             message_sid: "synthetic-sms-id".into(),
             from: "synthetic-sender".into(),
-            to: receiving.number.clone(),
+            to: number.into(),
             body: "Synthetic inquiry".into(),
             media_count: 0,
         };
-        let first = ingest_sms(&db, &receiving, &sms).await.unwrap();
-        let replay = ingest_sms(&db, &receiving, &sms).await.unwrap();
+        let first = ingest_sms(&db, &resolved, &sms).await.unwrap();
+        let replay = ingest_sms(&db, &resolved, &sms).await.unwrap();
         assert_eq!(first.message_id, replay.message_id);
         assert!(replay.deduped);
         let conversation = store::inbox::conversation_by_id(&db, first.conversation_id)
@@ -800,6 +991,6 @@ mod tests {
             .unwrap();
         assert_eq!(conversation.firm_id, firm);
         assert_eq!(conversation.channel, store::inbox::channel::SMS);
-        assert_eq!(conversation.provider_account, receiving.number);
+        assert_eq!(conversation.provider_account, number);
     }
 }
