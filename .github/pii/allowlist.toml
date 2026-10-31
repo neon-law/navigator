@@ -27,6 +27,13 @@ values = [
 ]
 
 [[paths]]
+reason = "Generated court registry data and its generator: only published form titles, court addresses, and fee schedules appear here — no personal contact data. (Presidio false-positives: the Latin phrase 'in forma pauperis' as a PERSON, street names, and dollar amounts in fee notes as PHONE_NUMBER.)"
+values = [
+  "store/seeds/Court.yaml",
+  "gen_court.py",
+]
+
+[[paths]]
 reason = "Copyright attributions the licences require."
 values = [
   "third-party-notices.txt",
@@ -64,6 +71,17 @@ values = [
   "github.com",
   "gitlab.com",
   "sms.twilio.com",
+]
+
+[[email_domains]]
+reason = "Claims-agent vendors' public notice addresses and a court ECF clerk mailbox: synthetic senders in the docket-ingest tests, no person reads them."
+values = [
+  "stretto.com",
+  "kroll.com",
+  "epiq11.com",
+  "epiq.com",
+  "notkroll.com",
+  "ecf.nvb.uscourts.gov",
 ]
 
 [[values]]
@@ -110,6 +128,9 @@ values = [
   "Juan Moccagatta",
   "Karen Rustad Tölva",
   "Steve Matteson",
+  "Karolina Grabowska",
+  "Gustavo Fring",
+  "Ron Lach",
 ]
 
 [[names]]
@@ -177,6 +198,7 @@ values = [
   "keychain", "smoke", "blacksmith", "openobserve", "ssr", "dev", "deliverables",
   "blog", "scheduler", "canary", "batch", "upload", "drive", "practice",
   "letter", "closing", "participant", "duces", "tecum", "scope", "go-live",
+  "chooser",
   "sos", "civ", "slack", "durable", "split", "config", "send", "email",
   "fileName", "missing", "mounted", "kebab", "megadeth", "nautilus", "rust",
   "linux", "dioxus", "mermaid", "kubernetes", "instagram", "youtube", "xero",

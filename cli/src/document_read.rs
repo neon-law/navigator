@@ -667,6 +667,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         };
         std::fs::write(documents.join("memo.md.yaml"), pointer.to_yaml().unwrap()).unwrap();
         std::fs::write(documents.join("config.yaml"), "name: client\n").unwrap();
@@ -791,6 +792,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         };
         let live = [revision(1, Uuid::max(), true)];
         let error = check_pointer_drift(Some(&pointer), &live).unwrap_err();
@@ -824,6 +826,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         };
         let live = [live_revision];
         assert!(check_pointer_drift(Some(&pointer), &live).is_ok());
@@ -852,6 +855,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         };
         let live = [live_revision.clone()];
         let error = check_pointer_drift(Some(&pointer), &live).unwrap_err();
@@ -883,6 +887,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         };
         let live = [live_revision];
         let error = check_pointer_drift(Some(&pointer), &live).unwrap_err();
@@ -912,6 +917,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         };
         // A newer revision landed (e.g. a browser upload) without a re-sync.
         let live = [revision(2, Uuid::nil(), true), stale];

@@ -194,11 +194,24 @@ pub(crate) async fn fresh_schema() -> Option<(PgConnectOptions, String)> {
     let setup = sqlx::PgPool::connect_with(options.clone().database(&database))
         .await
         .unwrap();
+    // The graph migration needs the AGE extension, which only a superuser
+    // creates: in production the superuser init path (`roles.sql`) runs
+    // before any migration, and these fixtures stand in for it. `LOAD` puts
+    // the library in this session, the way `session_preload_libraries` does
+    // for the application's roles.
+    sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS age; LOAD 'age';")
+        .execute(&setup)
+        .await
+        .unwrap();
     sqlx::raw_sql(crate::postgres_schema::canonical_schema())
         .execute(&setup)
         .await
         .unwrap();
     setup.close().await;
+    // Production role settings (`roles.sql`) preload AGE into every
+    // application session; test sessions connect as the superuser, so the
+    // equivalent rides on the connect options.
+    let options = options.options([("session_preload_libraries", "age")]);
     Some((options, database))
 }
 

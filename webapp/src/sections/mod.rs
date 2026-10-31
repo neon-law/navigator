@@ -25,6 +25,7 @@ pub mod checklist;
 pub mod discovery;
 pub mod engagement;
 pub mod estate;
+pub mod evidence;
 pub mod graph;
 pub mod notations;
 pub mod page;
@@ -37,6 +38,7 @@ pub use authorities::{AuthorityCard, AuthorityQuote, AuthorityView};
 pub use checklist::ChecklistStep;
 pub use discovery::{DiscoveryFilter, DiscoveryPair, DiscoveryView};
 pub use engagement::{EngagementLetterView, LetterDocument, PageDraft};
+pub use evidence::{EvidenceClaim, EvidenceExhibit, EvidenceIndexSection, EvidenceIndexView};
 pub use graph::{GraphEdge, GraphNode, GraphView};
 pub use notations::{ChecklistView, DocumentState, NotationDocumentView, NotationListRow};
 
@@ -151,6 +153,7 @@ pub enum SectionView {
     DocumentBody(PageDraft),
     CommentRail(Vec<SectionRow>),
     AuthorityTable(AuthorityView),
+    EvidenceIndex(EvidenceIndexView),
     DiscoveryPairs(DiscoveryView),
     StageList(Vec<SectionRow>),
     ArgumentExchange(ArgumentExchangeView),
@@ -183,6 +186,13 @@ pub enum SectionView {
     TermComparison(Vec<transactional::ComparisonRow>),
     RequirementTracker(Vec<transactional::RequirementRow>),
     RedlineView(Vec<transactional::RevisionDocument>),
+    ActivityLog(Vec<SectionRow>),
+    PitchHeadline(Vec<SectionRow>),
+    ClaimCards(Vec<SectionRow>),
+    FeeSummary(Vec<SectionRow>),
+    RuleClocks(Vec<SectionRow>),
+    PathChooser(Vec<SectionRow>),
+    EligibilityChecklist(Vec<SectionRow>),
 }
 
 impl SectionView {
@@ -207,6 +217,7 @@ impl SectionView {
             Self::DocumentBody(_) => "document_body",
             Self::CommentRail(_) => "comment_rail",
             Self::AuthorityTable(_) => "authority_table",
+            Self::EvidenceIndex(_) => "evidence_index",
             Self::DiscoveryPairs(_) => "discovery_pairs",
             Self::StageList(_) => "stage_list",
             Self::ArgumentExchange(_) => "argument_exchange",
@@ -239,6 +250,13 @@ impl SectionView {
             Self::TermComparison(_) => "term_comparison",
             Self::RequirementTracker(_) => "requirement_tracker",
             Self::RedlineView(_) => "redline_view",
+            Self::ActivityLog(_) => "activity_log",
+            Self::PitchHeadline(_) => "pitch_headline",
+            Self::ClaimCards(_) => "claim_cards",
+            Self::FeeSummary(_) => "fee_summary",
+            Self::RuleClocks(_) => "rule_clocks",
+            Self::PathChooser(_) => "path_chooser",
+            Self::EligibilityChecklist(_) => "eligibility_checklist",
         }
     }
 
@@ -263,6 +281,7 @@ impl SectionView {
             Self::DocumentBody(PageDraft::default()),
             Self::CommentRail(Vec::new()),
             Self::AuthorityTable(AuthorityView::default()),
+            Self::EvidenceIndex(EvidenceIndexView::default()),
             Self::DiscoveryPairs(DiscoveryView::default()),
             Self::StageList(Vec::new()),
             Self::ArgumentExchange(ArgumentExchangeView::default()),
@@ -295,6 +314,13 @@ impl SectionView {
             Self::TermComparison(Vec::new()),
             Self::RequirementTracker(Vec::new()),
             Self::RedlineView(Vec::new()),
+            Self::ActivityLog(Vec::new()),
+            Self::PitchHeadline(Vec::new()),
+            Self::ClaimCards(Vec::new()),
+            Self::FeeSummary(Vec::new()),
+            Self::RuleClocks(Vec::new()),
+            Self::PathChooser(Vec::new()),
+            Self::EligibilityChecklist(Vec::new()),
         ]
     }
 }
@@ -436,6 +462,49 @@ list_section!(
 );
 list_section!(InvoiceSection, "invoice", "Invoices", "No invoices yet.");
 
+list_section!(
+    ActivityLogSection,
+    "activity_log",
+    "Activity log",
+    "Nothing has been logged on this matter yet."
+);
+list_section!(
+    PitchHeadlineSection,
+    "pitch_headline",
+    "Pitch headline",
+    "No pitch has been written on this matter yet."
+);
+list_section!(
+    ClaimCardsSection,
+    "claim_cards",
+    "Claim cards",
+    "No claims have been carded on this matter yet."
+);
+list_section!(
+    FeeSummarySection,
+    "fee_summary",
+    "Fee summary",
+    "No fees have been summarized on this matter yet."
+);
+list_section!(
+    RuleClocksSection,
+    "rule_clocks",
+    "Rule clocks",
+    "No clocks are running on this matter yet."
+);
+list_section!(
+    PathChooserSection,
+    "path_chooser",
+    "Path chooser",
+    "No path has been chosen on this matter yet."
+);
+list_section!(
+    EligibilityChecklistSection,
+    "eligibility_checklist",
+    "Eligibility checklist",
+    "No eligibility gates are marked on this matter yet."
+);
+
 #[component]
 fn ProjectCostsSection(view: ProjectCostsView) -> Element {
     rsx! {
@@ -547,6 +616,7 @@ pub fn SectionBody(view: SectionView) -> Element {
         SectionView::DocumentBody(draft) => rsx! { engagement::DocumentBodySection { draft } },
         SectionView::CommentRail(rows) => rsx! { CommentRailSection { rows } },
         SectionView::AuthorityTable(view) => rsx! { authorities::AuthorityTableSection { view } },
+        SectionView::EvidenceIndex(view) => rsx! { EvidenceIndexSection { view } },
         SectionView::DiscoveryPairs(view) => rsx! { discovery::DiscoveryPairsSection { view } },
         SectionView::StageList(rows) => rsx! { StageListSection { rows } },
         SectionView::ArgumentExchange(view) => {
@@ -593,6 +663,13 @@ pub fn SectionBody(view: SectionView) -> Element {
             rsx! { transactional::RequirementTrackerSection { rows } }
         }
         SectionView::RedlineView(rows) => rsx! { transactional::RedlineViewSection { rows } },
+        SectionView::ActivityLog(rows) => rsx! { ActivityLogSection { rows } },
+        SectionView::PitchHeadline(rows) => rsx! { PitchHeadlineSection { rows } },
+        SectionView::ClaimCards(rows) => rsx! { ClaimCardsSection { rows } },
+        SectionView::FeeSummary(rows) => rsx! { FeeSummarySection { rows } },
+        SectionView::RuleClocks(rows) => rsx! { RuleClocksSection { rows } },
+        SectionView::PathChooser(rows) => rsx! { PathChooserSection { rows } },
+        SectionView::EligibilityChecklist(rows) => rsx! { EligibilityChecklistSection { rows } },
     }
 }
 
@@ -605,7 +682,7 @@ pub(crate) mod tests {
     /// wasm build of this crate never links `rules`; the server-side test
     /// below proves the two agree.
     fn rules_section_count() -> usize {
-        49
+        57
     }
 
     pub(super) fn render(view: SectionView) -> String {

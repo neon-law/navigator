@@ -152,7 +152,7 @@ fn authority_class_belongs_in_folder(class: &str, folder: &str) -> bool {
 }
 
 /// Whether `relative` is a `documents/invoices/**` staged file.
-fn is_invoice_capture(relative: &Path) -> bool {
+pub(crate) fn is_invoice_capture(relative: &Path) -> bool {
     relative
         .components()
         .next()
@@ -166,7 +166,7 @@ fn is_invoice_capture(relative: &Path) -> bool {
 /// is firm-confidential and not modeled here — this is a simple, documented
 /// placeholder a synthetic fixture can satisfy, not an attempt to reproduce
 /// a real numbering scheme.
-fn is_invoice_filename(filename: &str) -> bool {
+pub(crate) fn is_invoice_filename(filename: &str) -> bool {
     let Some((stem, _extension)) = filename.rsplit_once('.') else {
         return false;
     };
@@ -178,7 +178,7 @@ fn is_invoice_filename(filename: &str) -> bool {
 /// Refuse a `documents/invoices/**` file whose name does not match
 /// [`is_invoice_filename`], per the issue's optional (but in-scope) folder
 /// rule.
-fn validate_invoice_filename(path: &Path) -> Result<()> {
+pub(crate) fn validate_invoice_filename(path: &Path) -> Result<()> {
     let filename = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -488,6 +488,9 @@ async fn sync_authority_capture(
         xero_invoice_id: None,
         signing: None,
         notarization: Vec::new(),
+        // An Authority capture resolves the Authority keys, not exhibit
+        // provenance — the evidence block is always absent here.
+        evidence: None,
         service: Vec::new(),
     };
     pointer
@@ -657,6 +660,9 @@ fn carry_recorded_keys(
     pointer.signing = pointer.signing.or(from.signing);
     if pointer.notarization.is_empty() {
         pointer.notarization.clone_from(&from.notarization);
+    }
+    if pointer.evidence.is_none() {
+        pointer.evidence.clone_from(&from.evidence);
     }
     if pointer.service.is_empty() {
         pointer.service.clone_from(&from.service);
@@ -886,6 +892,9 @@ fn project_sync_plans_scoped(
             signing: current
                 .signing
                 .or_else(|| local.as_ref().and_then(|local| local.signing)),
+            // The live inventory carries no exhibit provenance; the
+            // committed pointer's evidence block is kept.
+            evidence: local.as_ref().and_then(|local| local.evidence.clone()),
             notarization: if current.notarization.is_empty() {
                 local
                     .as_ref()
@@ -1481,7 +1490,69 @@ async fn project_sync(
         return Ok(());
     }
     sync_pages(&root, &client, dry_run).await?;
-    sync_matter(&root, &client, dry_run).await
+    sync_matter(&root, &client, dry_run).await?;
+    sync_case_timeline(&root, &client, &project, dry_run, yes_delete).await
+}
+
+/// Reconcile the checkout's Case Timeline records with the live docket:
+/// every Docket Entry renders its `DKT NNNN - <title>.yaml` record, a
+/// missing or stale record is rewritten from its entry, and a record no
+/// entry names any more is removed. A removal asks first — `--yes-delete`
+/// answers it — because a record is a file in the lawyer's checkout even
+/// though the store owns its truth.
+async fn sync_case_timeline(
+    root: &Path,
+    client: &DocumentClient,
+    project: &str,
+    dry_run: bool,
+    yes_delete: bool,
+) -> Result<()> {
+    let coordinates = crate::projects::docket::entries::Coordinates {
+        base: client.base().to_string(),
+        token: client.token().to_string(),
+        project_id: client.project_id(),
+        project_code: project.to_string(),
+    };
+    // A refused docket read keeps every existing record rather than
+    // failing the whole sync — the same grace `list_service` gets.
+    let rows = match crate::projects::docket::entries::list_rows(&coordinates).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!(
+                "could not read the live docket entries; Case Timeline records are kept: {error:#}"
+            );
+            return Ok(());
+        }
+    };
+    let timeline = crate::projects::docket::timeline_write::plan(root, &rows)?;
+    for write in &timeline.writes {
+        if dry_run {
+            println!("would write {}", write.relative);
+        } else {
+            write_pointer_atomically(&root.join(&write.relative), &write.yaml)
+                .with_context(|| format!("write {}", write.relative))?;
+            println!("wrote {}", write.relative);
+        }
+    }
+    if timeline.removals.is_empty() {
+        return Ok(());
+    }
+    if dry_run {
+        for relative in &timeline.removals {
+            println!("would remove {relative}");
+        }
+    } else if yes_delete {
+        for relative in &timeline.removals {
+            std::fs::remove_file(root.join(relative))
+                .with_context(|| format!("remove {relative}"))?;
+            println!("removed {relative}");
+        }
+    } else {
+        for relative in &timeline.removals {
+            println!("cannot remove {relative}: no Docket Entry names it any more; rerun with --yes-delete");
+        }
+    }
+    Ok(())
 }
 
 /// Store the manifest's `pages:` with the Project, so the matter page renders
@@ -2879,6 +2950,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         }
     }
 
@@ -2903,6 +2975,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         }
     }
 
@@ -2973,6 +3046,7 @@ mod tests {
             inserted_at: "2026-09-23T20:53:07.132412551Z".into(),
             signing: None,
             notarization: Vec::new(),
+            evidence: None,
         };
         let root = tempfile::tempdir().unwrap();
         let plans =
@@ -3000,6 +3074,7 @@ mod tests {
             inserted_at: "2026-09-23T20:53:07Z".into(),
             signing: None,
             notarization: Vec::new(),
+            evidence: None,
         }
     }
 

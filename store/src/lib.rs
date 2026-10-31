@@ -82,6 +82,8 @@ pub mod authorities;
 pub mod brand_domains;
 pub mod brands;
 pub mod cap_table_holdings;
+/// Firm-authored Case Stage vocabulary and audited per-matter transitions.
+pub mod case_stages;
 pub mod cases;
 pub mod clauses;
 pub mod cm_ecf_stamp;
@@ -89,7 +91,10 @@ pub mod communications;
 pub mod config;
 pub mod conflicts;
 pub mod contract_reviews;
+pub mod courts;
 pub mod credentials;
+/// The Deadline mirror onto a Project's shared Google Calendar.
+pub mod deadline_calendar;
 pub mod delegations;
 pub mod deployment;
 pub mod deployment_secret_changes;
@@ -154,6 +159,12 @@ pub mod playbooks;
 pub mod postgres;
 /// Resumable batches that copy rows the PostgreSQL mirror never saw.
 pub mod postgres_backfill;
+/// The AGE relationship graph, projected from the mirrors and parity-checked
+/// against the Surreal conflict traversal.
+pub mod postgres_graph;
+/// Read-only graph views over the AGE projection: the shapes behind the
+/// graph REST endpoints.
+pub mod postgres_graph_views;
 /// Best-effort PostgreSQL mirror of Surreal writes, with parity and reconcile.
 pub mod postgres_mirror;
 /// PostgreSQL schema history and deterministic parity artifacts.
@@ -200,6 +211,7 @@ pub mod summary_sender_approvals;
 /// The store connection, over the `NAVIGATOR_SURREAL_*` contract.
 pub mod surreal;
 pub mod synthetic_portfolio;
+pub mod tasks;
 pub mod template_source;
 pub mod templates;
 pub mod testimonials;

@@ -310,7 +310,9 @@ mod tests {
         }));
         assert!(
             // Server-side rendering escapes the apostrophe (`&#39;`).
-            html.contains("Moved iep. Its public pages now name Lex Tecnica LLP&#39;s legal entity."),
+            html.contains(
+                "Moved iep. Its public pages now name Lex Tecnica LLP&#39;s legal entity."
+            ),
             "{html}"
         );
     }

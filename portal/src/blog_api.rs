@@ -707,6 +707,7 @@ mod tests {
             signature_provider: app.signature_provider,
             contract_reviewer: app.contract_reviewer,
             integration_providers: app.integration_providers,
+            canonical_base_url: None,
         };
         let actor = SessionData {
             person_id: Some(admin.id),

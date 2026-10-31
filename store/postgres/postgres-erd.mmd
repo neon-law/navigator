@@ -38,6 +38,7 @@ erDiagram
         string deleted_commit_sha
         json derived_from
         string description
+        json evidence
         string filename
         uuid id
         datetime inserted_at
@@ -621,6 +622,16 @@ erDiagram
         string provider_account
         string provider_message_id
     }
+    inbox_message_asset {
+        uuid asset_id
+        string filename
+        uuid firm_id
+        uuid id
+        datetime inserted_at
+        uuid message_id
+        int position
+        string sha256
+    }
     iolta_account {
         int balance_cents
         string currency
@@ -1117,6 +1128,7 @@ erDiagram
         string internal_slack_channel_url
         uuid jurisdiction_id
         string name
+        string onboarding_jurisdiction
         string private_notion_page_url
         string repository_url
         string shared_notion_page_url
@@ -1271,6 +1283,27 @@ erDiagram
         uuid requested_by_person_id
         string state
         string tree_sha256
+    }
+    project_task {
+        string REFERENCES
+        uuid assignee_id
+        string body
+        datetime due_on
+        uuid id
+        datetime inserted_at
+        uuid project_id
+        string state
+        string title
+        datetime updated_at
+    }
+    project_task_events {
+        uuid actor_person_id
+        json after_state
+        json before_state
+        string event_kind
+        uuid id
+        datetime occurred_at
+        uuid project_task_id
     }
     purchase {
         string account_code
@@ -1433,6 +1466,24 @@ erDiagram
         string state
         datetime updated_at
     }
+    stage_definition {
+        string case_type
+        uuid firm_id
+        uuid id
+        datetime inserted_at
+        string label
+        int position
+        datetime updated_at
+    }
+    stage_event {
+        uuid actor_person_id
+        uuid from_stage_id
+        uuid id
+        string note
+        datetime occurred_at
+        uuid project_id
+        uuid to_stage_id
+    }
     statutory_deadline {
         datetime due_on
         uuid id
@@ -1580,6 +1631,9 @@ erDiagram
     message }o--|| inbox_delivery_attempt : references
     firm }o--|| inbox_ingress : references
     message }o--|| inbox_ingress : references
+    asset }o--|| inbox_message_asset : references
+    firm }o--|| inbox_message_asset : references
+    message }o--|| inbox_message_asset : references
     firm }o--|| journal_entry : references
     journal_entry }o--|| journal_entry : references
     journal_entry }o--|| journal_entry_source : references
@@ -1650,6 +1704,10 @@ erDiagram
     person }o--|| project_service : references
     project }o--|| project_service : references
     sent_email }o--|| project_service : references
+    person_project_role }o--|| project_task : references
+    project }o--|| project_task : references
+    person }o--|| project_task_events : references
+    project_task }o--|| project_task_events : references
     person }o--|| relationship_log : references
     project }o--|| relationship_log : references
     project }o--|| sent_email : references
@@ -1660,6 +1718,10 @@ erDiagram
     firm }o--|| social_account_selection : references
     brand }o--|| social_handle : references
     post }o--|| social_publication : references
+    firm }o--|| stage_definition : references
+    person }o--|| stage_event : references
+    project }o--|| stage_event : references
+    stage_definition }o--|| stage_event : references
     project }o--|| statutory_deadline : references
     firm }o--|| summary_sender_approval : references
     person }o--|| summary_sender_approval : references

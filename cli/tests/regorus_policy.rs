@@ -450,9 +450,31 @@ fn regorus_matches_every_checked_in_policy_decision() {
     //   may not = 623.
     // + 1 for filed Authority metadata: lawyer admission, lower-tier denial,
     //   and exact method/path checks share one matrix = 624.
+    // + 3 for the relationship-graph views (`/app/api/graph/{view}/{id}`):
+    //   lawyer admission for all three views, non-lawyer denial, and the
+    //   read-only method/path-shape boundary = 627.
+    //
+    // + 5 for the pages the graph islands live on: the lawyer-graph page
+    //   (`/app/people/{id}/graph`) carries its own lawyer-tier rule — the
+    //   avatar rule's shape — with the six-case tier matrix, the lower-tier
+    //   denial, and a read-only pin; the matter page and the firm page ride
+    //   the ENG-81 matter-surface and `/app/lawyer` workbench prefix rules,
+    //   each pinned so a narrowing of either prefix surfaces here rather
+    //   than leaving a page unreachable in production.
+    // 627 + 5 = 632.
+    //
+    // + 10 for the matter-task doors (GET/POST /app/api/projects/{id}/tasks and
+    //   POST .../tasks/{task_id}/{assign,transition}): Lawyer admitted on the
+    //   collection, Admin through the bypass; Clerk and Client denied on the
+    //   create door (the list read rides the matter-read-cluster boundary and
+    //   the handler's LawyerSession gate denies non-lawyers); anonymous denied
+    //   on both doors; and the method/path-shape boundary — DELETE on the
+    //   collection, a bare task read, an unknown verb segment, and a deeper
+    //   path are denied to Lawyer.
+    // 632 + 10 = 642.
     assert_eq!(
         test_names.len(),
-        624,
+        642,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

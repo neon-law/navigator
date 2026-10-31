@@ -16804,7 +16804,12 @@ async fn project_documents_upload_writes_blob_and_document_with_description() {
         .get("location")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    assert_eq!(location, format!("/app/projects/{project_code}"));
+    // The Documents tab, where the table the upload just added to renders;
+    // the workbench opens on Overview, which lists no documents (#176).
+    assert_eq!(
+        location,
+        format!("/app/projects/{project_code}?tab=documents")
+    );
 
     // One document asset — carrying the byte pointer plus upload
     // provenance and the optional description from the form.
@@ -16887,7 +16892,7 @@ async fn project_documents_upload_files_one_document_per_file_in_a_batch() {
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
     assert_eq!(
         resp.headers().get("location").and_then(|v| v.to_str().ok()),
-        Some(format!("/app/projects/{project_code}").as_str())
+        Some(format!("/app/projects/{project_code}?tab=documents").as_str())
     );
 
     let mut docs = store::assets::list_all(&state.surreal).await.unwrap();
@@ -17478,7 +17483,7 @@ async fn project_detail_page_renders_documents_and_upload_form() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}"))
+                .uri(format!("/app/projects/{project_code}?tab=documents"))
                 .header(
                     "cookie",
                     &admin_cookie_on_project(&surreal, project_id).await,
@@ -17844,7 +17849,7 @@ async fn project_detail_page_renders_empty_state_when_project_has_no_documents()
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}"))
+                .uri(format!("/app/projects/{project_code}?tab=documents"))
                 .header(
                     "cookie",
                     &admin_cookie_on_project(&surreal, project_id).await,
@@ -18065,9 +18070,15 @@ async fn lawyer_project_documents_render_grouped_history_and_one_offs() {
     .await;
 
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-    let body =
-        body_string(get_with_cookie(app, &format!("/app/projects/{project_code}"), &cookie).await)
-            .await;
+    let body = body_string(
+        get_with_cookie(
+            app,
+            &format!("/app/projects/{project_code}?tab=documents"),
+            &cookie,
+        )
+        .await,
+    )
+    .await;
 
     assert!(
         body.contains("documents/Work Product/") && body.contains(">agreement<"),

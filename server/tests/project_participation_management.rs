@@ -214,6 +214,26 @@ fn assert_refused(response: &axum::http::Response<Body>, message: &str) {
     );
 }
 
+/// A successful add, edit, or removal returns to the matter's Participants
+/// tab, where the ledger it changed is rendered. The workbench opens on
+/// Overview (#176), which does not list people, so landing there hides the
+/// row the lawyer just wrote.
+fn assert_lands_on_participants(
+    response: &axum::http::Response<Body>,
+    project_code: &str,
+    what: &str,
+) {
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .and_then(|v| v.to_str().ok()),
+        Some(format!("/app/projects/{project_code}?tab=participants").as_str()),
+        "{what} must land back on the Participants tab of the matter it changed",
+    );
+}
+
 async fn body_string(response: axum::http::Response<Body>) -> String {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     String::from_utf8(bytes.to_vec()).unwrap()
@@ -229,7 +249,10 @@ async fn admin_manages_project_participation_from_the_matter_workbench() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", fixture.project_code))
+                .uri(format!(
+                    "/app/projects/{}?tab=participants",
+                    fixture.project_code
+                ))
                 .header("cookie", &fixture.lawyer_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -407,7 +430,7 @@ async fn admin_manages_project_participation_from_the_matter_workbench() {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_lands_on_participants(&response, &fixture.project_code, "an add");
     let role = store::projects::participation_for_person(
         &fixture.surreal,
         fixture.candidate_id,
@@ -507,7 +530,7 @@ async fn admin_manages_project_participation_from_the_matter_workbench() {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_lands_on_participants(&response, &fixture.project_code, "an edit");
     let role = store::projects::participation_by_id(&fixture.surreal, role.id)
         .await
         .unwrap()
@@ -540,7 +563,8 @@ async fn admin_manages_project_participation_from_the_matter_workbench() {
     );
 
     // The remove control is a plain form post, so a successful removal
-    // redirects back to the matter rather than answering a swap fragment.
+    // redirects back to the matter's Participants tab rather than answering a
+    // swap fragment.
     let response = fixture
         .app
         .clone()
@@ -554,15 +578,7 @@ async fn admin_manages_project_participation_from_the_matter_workbench() {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert_eq!(
-        response
-            .headers()
-            .get(axum::http::header::LOCATION)
-            .and_then(|v| v.to_str().ok()),
-        Some(format!("/app/projects/{}", fixture.project_code).as_str()),
-        "a removal must land back on the matter it changed",
-    );
+    assert_lands_on_participants(&response, &fixture.project_code, "a removal");
 
     let response = fixture
         .app
@@ -1151,7 +1167,10 @@ async fn the_matter_people_ledger_labels_the_accountability_marker() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", fixture.project_code))
+                .uri(format!(
+                    "/app/projects/{}?tab=participants",
+                    fixture.project_code
+                ))
                 .header("cookie", &fixture.lawyer_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1341,7 +1360,10 @@ async fn the_workbench_html_form_persists_a_lawyer_dri() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", fixture.project_code))
+                .uri(format!(
+                    "/app/projects/{}?tab=participants",
+                    fixture.project_code
+                ))
                 .header("cookie", &fixture.dri_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1449,6 +1471,23 @@ async fn an_unassigned_admin_designates_from_the_participation_page() {
     assert_eq!(lawyer_dri_holders(&fixture).await.len(), 2);
 }
 
+/// Render the lawyer workbench at `uri`, asserting the page answered.
+async fn workbench_html(app: &axum::Router, uri: String, cookie: &str) -> String {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    body_string(response).await
+}
+
 /// A lawyer already on a matter whose lawyer set is empty can name themselves
 /// from the workbench. That is the write the empty-set gap used to refuse.
 #[tokio::test]
@@ -1499,20 +1538,18 @@ async fn a_lawyer_on_an_unassigned_matter_names_themselves_dri() {
     };
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
-    let page = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/app/projects/{}", project.code))
-                .header("cookie", &cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(page.status(), StatusCode::OK);
-    let html = body_string(page).await;
-    assert!(html.contains("This project has no lawyer DRI"), "{html}");
+    let html = workbench_html(
+        &app,
+        format!("/app/projects/{}?tab=participants", project.code),
+        &cookie,
+    )
+    .await;
+    let overview_html =
+        workbench_html(&app, format!("/app/projects/{}", project.code), &cookie).await;
+    assert!(
+        overview_html.contains("This project has no lawyer DRI"),
+        "{overview_html}"
+    );
     assert!(html.contains("Make DRI"), "{html}");
     let action = format!("/app/projects/{}/people/{}/dri", project.code, row.id);
     assert!(html.contains(&format!(r#"action="{action}""#)), "{html}");
@@ -1530,18 +1567,12 @@ async fn a_lawyer_on_an_unassigned_matter_names_themselves_dri() {
             .unwrap();
     assert_eq!(holders, vec![lawyer.id]);
 
-    let reloaded = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/app/projects/{}", project.code))
-                .header("cookie", &cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = body_string(reloaded).await;
+    let body = workbench_html(
+        &app,
+        format!("/app/projects/{}?tab=participants", project.code),
+        &cookie,
+    )
+    .await;
     assert!(body.contains("Lawyer DRI: On Matter"), "{body}");
     assert!(body.contains(">Lawyer DRI<"), "{body}");
 }

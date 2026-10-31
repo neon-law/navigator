@@ -688,6 +688,79 @@ fn unavailable(project: &store::projects::Project, error: &IntegrationError) -> 
     ProjectOutcome::plain(project.code.clone(), error.slug())
 }
 
+/// `{ "project_code": "…", "all": false, "dry_run": true }` — the ensure
+/// door's selector with a dry-run flag beside it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DeadlineMirrorRequest {
+    #[serde(default)]
+    pub(crate) project_code: Option<String>,
+    #[serde(default)]
+    pub(crate) all: bool,
+    #[serde(default)]
+    pub(crate) dry_run: bool,
+}
+
+/// `POST /app/api/integrations/calendar/deadline-mirror` — reconcile one
+/// Project's mirrored Google Calendar events to its Deadline rows, or every
+/// visible matter's at once. The applied pass ensures the calendar exists
+/// and is shared before mirroring; a dry run plans the same writes without
+/// making them. See [`store::deadline_calendar`].
+pub(crate) async fn calendar_deadline_mirror_door(
+    State(state): State<ApiState>,
+    authed: AdminSession,
+    Json(request): Json<DeadlineMirrorRequest>,
+) -> Result<Response, ApiError> {
+    let selector = ProjectSelector {
+        project_code: request.project_code.clone(),
+        all: request.all,
+    };
+    let mut results = Vec::new();
+    for project in targets(&state, &authed, &selector).await? {
+        results.push(mirror_one(&state, &project, request.dry_run).await);
+    }
+    Ok((StatusCode::OK, Json(IntegrationReport { results })).into_response())
+}
+
+async fn mirror_one(
+    state: &ApiState,
+    project: &store::projects::Project,
+    dry_run: bool,
+) -> ProjectOutcome {
+    let _guard = ensure_lock(format!("deadline-mirror:{}", project.id)).await;
+    let calendar = match state
+        .integration_providers
+        .calendar(&state.surreal, project.id)
+        .await
+    {
+        Ok(calendar) => calendar,
+        Err(error) => return unavailable(project, &error),
+    };
+    match store::deadline_calendar::reconcile(
+        &state.surreal,
+        calendar.as_ref(),
+        project.id,
+        state.canonical_base_url.as_deref(),
+        dry_run,
+    )
+    .await
+    {
+        Ok(report) => ProjectOutcome::with_detail(
+            project.code.clone(),
+            report.outcome.slug(),
+            store::deadline_calendar::report_line(&report),
+        ),
+        Err(store::deadline_calendar::MirrorError::Calendar(
+            cloud::CalendarError::AmbiguousSummary { count },
+        )) => ProjectOutcome::with_detail(
+            project.code.clone(),
+            "duplicate",
+            format!("{count} calendars carry this code"),
+        ),
+        Err(_) => ProjectOutcome::plain(project.code.clone(), "provider_unavailable"),
+    }
+}
+
 fn to_snapshot(page: cloud::NotionPage) -> cloud::NotionPageSnapshot {
     cloud::NotionPageSnapshot {
         accessible: !page.archived,

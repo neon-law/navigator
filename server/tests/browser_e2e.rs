@@ -2272,6 +2272,7 @@ async fn seed_inbox_walkthrough(db: &store::surreal::SurrealDb) -> store::inbox:
     store::inbox::ingest_inbound(
         db,
         &store::inbox::IngestInbound {
+            project_id: None,
             firm_id: firm,
             brand_key: Some("neon"),
             interaction_type: Some("message"),
@@ -2291,7 +2292,7 @@ async fn seed_inbox_walkthrough(db: &store::surreal::SurrealDb) -> store::inbox:
             matter_consent: false,
             promotional_opt_in: false,
             email_conversation_id: None,
-            attachment_asset_id: None,
+            attachments: Vec::new(),
             occurred_at: "2026-10-10T12:00:00Z",
         },
     )
@@ -2857,9 +2858,15 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
         .await
         .expect("disclose logged-in lawyer to project");
 
-    c.goto(&format!("{}/app/projects/{}", base_url(), project.code))
-        .await
-        .unwrap();
+    // The ledger and its "Add person" button live on the Participants tab;
+    // the workbench opens on Overview (#176).
+    c.goto(&format!(
+        "{}/app/projects/{}?tab=participants",
+        base_url(),
+        project.code
+    ))
+    .await
+    .unwrap();
     store::projects::designate_dri_in_surreal(
         &surreal,
         project.id,
@@ -3051,9 +3058,14 @@ async fn lawyer_uploads_several_documents_at_once_from_the_project_page() {
     }
 
     login_as_lawyer(&c).await;
-    c.goto(&format!("{}/app/projects/{project_code}", base_url()))
-        .await
-        .unwrap();
+    // The upload form and the documents table live on the Documents tab; the
+    // workbench opens on Overview (#176).
+    c.goto(&format!(
+        "{}/app/projects/{project_code}?tab=documents",
+        base_url()
+    ))
+    .await
+    .unwrap();
 
     let picker = c
         .wait()
@@ -3082,8 +3094,8 @@ async fn lawyer_uploads_several_documents_at_once_from_the_project_page() {
     )
     .await;
 
-    // The handler redirects back to the project page; every file in the
-    // batch should now be its own row in the documents table.
+    // The handler redirects back to the project's Documents tab; every file
+    // in the batch should now be its own row in the documents table.
     for name in names {
         wait_for_text(&c, name, Duration::from_secs(20)).await;
     }
@@ -4647,5 +4659,218 @@ async fn homepage_signup_prompt_waits_and_stays_dismissed() {
         c.screenshot().await.unwrap(),
     )
     .unwrap();
+    c.close().await.unwrap();
+}
+
+/// The basic will, walked as a matter in a real browser:
+///   1. POST /app/lawyer/retainers/new (template code `basic_will`) → /step
+///   2. POST /step × 8 (one question each) → review
+///   3. Assert the assembled will selected the NV branch and named the
+///      beneficiary the walk entered.
+///
+/// Preconditions (beyond the module's chromedriver + KIND requirements):
+/// the `basic_will` template must be seeded (`navigator site seed
+/// templates/`), and `store/seeds/Question.yaml` must be seeded for the
+/// record-backed walker question codes (`person`, `schedule`,
+/// `custom_single_choice`, `custom_yes_no`, `people`).
+///
+/// The walk ends at lawyer review. The will's declared tail (witnesses,
+/// signature, notarization) has no browser door yet, and `/approve-send`
+/// is the retainer envelope action.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn lawyer_walks_the_basic_will_through_the_matter_workflow() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&c).await;
+
+    // The eight answers we'll submit, in walker order
+    // (custom_single_choice__law → person__testator → person__executor →
+    // person__alternate_executor → person__guardian → people__beneficiaries
+    // → schedule__specific_bequests → custom_yes_no__self_proving).
+    // The four person questions render `<select>`s (the client is a project
+    // participant, seeded by `start_post` before the first question), so a
+    // literal answer is not what those steps submit — the walk records what
+    // each step actually picked, exactly like the retainer walk.
+    // Nevada is the representative state: it is the one branch with
+    // playbook-grounded provisions (the CA/NY/WA branches are deliberately
+    // empty attorney placeholders).
+    let client_email = format!("will-walk-{}@example.com", std::process::id());
+    let answers = [
+        "NV",
+        "", // person__testator — a select pick, recorded below
+        "", // person__executor
+        "", // person__alternate_executor
+        "", // person__guardian
+        "Vera Doe",
+        "The Reno residence to my daughter.",
+        "Yes",
+    ];
+
+    // --- Step 0: create the Notation -------------------------
+    c.goto(&format!("{}/app/lawyer/retainers/new", base_url()))
+        .await
+        .unwrap();
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("input[name='client_email']"))
+        .await
+        .unwrap();
+    // The template picker lists only onboarding and retainer templates;
+    // `basic_will` resolves from the store like any firm template, so the
+    // walk injects its option rather than depending on picker copy.
+    c.execute(
+        "const select = document.querySelector('select[name=\"retainer_template_code\"]'); \
+         const option = document.createElement('option'); \
+         option.value = 'basic_will'; option.textContent = 'Basic will (test)'; \
+         select.appendChild(option); \
+         select.value = 'basic_will'; \
+         select.dispatchEvent(new Event('input', {bubbles: true})); \
+         select.dispatchEvent(new Event('change', {bubbles: true})); \
+         return select.value;",
+        vec![],
+    )
+    .await
+    .unwrap();
+    c.execute(
+        "document.querySelector('input[name=\"client_email\"]').value = arguments[0]; \
+         document.querySelector('input[name=\"client_email\"]').dispatchEvent(new Event('input', {bubbles: true})); \
+         document.querySelector('form.admin-form').submit(); return true;",
+        vec![serde_json::Value::String(client_email)],
+    )
+    .await
+    .unwrap();
+
+    let started = std::time::Instant::now();
+    let notation_id = loop {
+        let url = c.current_url().await.unwrap();
+        if let Some(id) = notation_id_from_step_path(url.path()) {
+            break id;
+        }
+        assert!(
+            started.elapsed() <= Duration::from_secs(10),
+            "never landed on /app/lawyer/notations/:id/step; last URL was {url}",
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+
+    // --- Steps 1–8: walk the will's questionnaire ------------
+    // One script handles every control the will renders, in priority
+    // order: a radio group (`custom_single_choice__law`, values are the
+    // choice keys CA/NV/NY/WA; `custom_yes_no__self_proving` is a
+    // `yes_no` card pair with keys true/false and labels Yes/No), then
+    // the people-list widget (row-0 inputs `p0_*`), then the plain text
+    // input (schedule falls through `question_fields` to the generic
+    // input today — its typed answer is stored as a string, so the
+    // document's bequest loop renders nothing; the journal still
+    // carries what was typed), then the person `<select>`.
+    let set_step_answer_and_submit_script = "\
+        const value = arguments[0]; \
+        let rendered = value; \
+        let raw = value; \
+        const radios = document.querySelectorAll('input[type=\"radio\"][name=\"value\"]'); \
+        if (radios.length > 0) { \
+          const target = Array.from(radios).find(r => { \
+            if (r.value === value) return true; \
+            const label = r.closest('label'); \
+            return label && label.textContent.trim() === value; \
+          }); \
+          if (!target) throw new Error('no radio with value or label ' + value); \
+          target.checked = true; \
+          target.dispatchEvent(new Event('input', {bubbles: true})); \
+          target.dispatchEvent(new Event('change', {bubbles: true})); \
+          raw = target.value; \
+          const label = target.closest('label'); \
+          rendered = label ? label.textContent.trim() : target.value; \
+        } else if (document.querySelector('input[name=\"p0_name\"]')) { \
+          const name = document.querySelector('input[name=\"p0_name\"]'); \
+          name.value = value; \
+          name.dispatchEvent(new Event('input', {bubbles: true})); \
+          name.dispatchEvent(new Event('change', {bubbles: true})); \
+        } else { \
+          const text = document.querySelector(\
+            'input:not([type=\"radio\"]):not([type=\"checkbox\"])[name=\"value\"], \
+             textarea[name=\"value\"]'); \
+          if (text) { \
+            text.value = value; \
+            text.dispatchEvent(new Event('input', {bubbles: true})); \
+            text.dispatchEvent(new Event('change', {bubbles: true})); \
+          } else { \
+            const select = document.querySelector('select[name=\"value\"]'); \
+            if (!select) throw new Error('no answer control found for this step'); \
+            const options = Array.from(select.options).filter(o => o.value && !o.disabled); \
+            const chosen = options[0]; \
+            select.value = chosen.value; \
+            select.dispatchEvent(new Event('input', {bubbles: true})); \
+            select.dispatchEvent(new Event('change', {bubbles: true})); \
+            rendered = chosen.value; \
+            raw = chosen.value; \
+          } \
+        } \
+        document.querySelector('form.admin-form').submit(); \
+        return {rendered, raw};";
+
+    let mut journal_values: Vec<String> = answers.iter().map(|s| (*s).to_string()).collect();
+    let mut picked_people: Vec<String> = Vec::new();
+    for (i, value) in answers.iter().enumerate() {
+        wait_for_text(&c, &format!("Step {} of 8", i + 1), Duration::from_secs(10)).await;
+        let actual = c
+            .execute(
+                set_step_answer_and_submit_script,
+                vec![serde_json::Value::String((*value).to_string())],
+            )
+            .await
+            .unwrap();
+        if let Some(raw) = actual.get("raw").and_then(serde_json::Value::as_str) {
+            journal_values[i] = raw.to_string();
+        }
+        // Only the four person steps render through `<select>` picks whose
+        // shown value differs from the typed `answers[i]` (an empty
+        // placeholder); the other steps' rendered text is the typed answer.
+        if (1..=4).contains(&i) {
+            if let Some(rendered) = actual.get("rendered").and_then(serde_json::Value::as_str) {
+                picked_people.push(rendered.to_string());
+            }
+        }
+    }
+
+    // --- Review: the will is parked at the lawyer gate -------
+    wait_for_text(&c, "Awaiting attorney review", Duration::from_secs(20)).await;
+    let src = c.source().await.unwrap();
+    assert!(
+        src.contains("Nevada provisions"),
+        "the NV branch the walk selected must render in the will: {src}",
+    );
+    for absent in [
+        "California provisions",
+        "New York provisions",
+        "Washington provisions",
+    ] {
+        assert!(
+            !src.contains(absent),
+            "only the selected state's provisions may render, found {absent}",
+        );
+    }
+    assert!(
+        src.contains("Vera Doe"),
+        "the beneficiaries people-list answer must render in the will: {src}",
+    );
+    // The four person questions picked candidates through real `<select>`s;
+    // whatever each pick rendered must appear wherever the will names the
+    // testator, executors, or guardian.
+    for pick in &picked_people {
+        assert!(
+            src.contains(pick.as_str()),
+            "picked candidate `{pick}` must render in the will: {src}",
+        );
+    }
+
+    // The walk ends at lawyer review. `/approve-send` is the retainer
+    // envelope action; the will's declared tail (`witnesses` →
+    // `_signature` → `notarization`) has no browser door yet, and the
+    // review heading after that POST is not the intake-started copy the
+    // retainer walk waits for.
+    let _ = (notation_id, journal_values);
     c.close().await.unwrap();
 }

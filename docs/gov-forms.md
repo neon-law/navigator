@@ -216,5 +216,34 @@ notations/<notation-id>/certificate-of-completion.pdf
 2. Run `navigator forms sync` — it uploads the blank and writes the sibling `.sha256` pin (tracked).
 3. Add a sibling markdown template with matching `code`, `jurisdiction`, `origin_url`, and `form`.
 4. Add a sibling field map if the PDF is fillable — `navigator forms fields <code>` prints the real `/T` names.
-5. Add the form's metadata (with its `include_str!` pin) and field map to the `forms` crate registry.
+5. Add the form's metadata (with its `include_str!` pin) and field map to the `forms` crate registry —
+   and, for a court form, a matching entry in `store/seeds/Court.yaml` (below).
 6. Run `cargo test -p forms` and `cargo run -p cli -- project gate`.
+
+## The Court-Form Registry
+
+Court self-help forms carry their own reference data: which court accepts which form, what the filing office calls it,
+where the blank is published, what filing costs, and which fee-waiver form the office accepts. That data lives in
+`store/seeds/Court.yaml` — the court-form registry, typed and validated by `store::courts`.
+
+Unlike the other canonical seeds it is not written to a database: the registry is compile-time reference data (served by
+the public catalog, reconciled by guard tests), so filing-fee figures never become part of every environment's seed
+state. `store/tests/seed_boundary.rs` still classifies the file in the canonical layer.
+
+The registry keeps three surfaces in lockstep, enforced by `cli/tests/court_registry.rs`:
+
+| Surface | Join key | The guard requires |
+| --- | --- | --- |
+| `store/seeds/Court.yaml` | per-form entry `code` | resolves to a real template; fee-waiver code resolves too |
+| forms-shelf template | its court-key directory | frontmatter `jurisdiction:` matches the court's; no orphans |
+| vendored `FormMeta` | `FormMeta.code` | `origin_url`, pin, fee, and fee-waiver code match the registry row |
+
+Templates sit at `templates/notations/forms/<country>/<jurisdiction>/<office>/<code>.md`. The office directory decides
+what a template is: an agency form (`irs`, `uscis`, `state`) or a court form, whose directory is the registry court's
+key. A court template with no registry entry is an orphan and fails CI; an agency form can never become a registry
+entry.
+
+Fee entries are only as strong as their source: amounts are decimal strings with ISO 4217 currency codes; when a
+published schedule is tiered or varies by county, `fee_note` carries the prose instead of a false flat amount; and rows
+cite the project's verified court-form inventories. Court blanks obey the repository-wide rule — never checked in; the
+registry pins each blank's sha-256 where the court publishes it.

@@ -99,6 +99,7 @@ pub fn document_with_base(base: &str) -> Value {
     add_draft_aliases(&mut document);
     add_journal_operations(&mut document);
     add_blog_operations(&mut document);
+    add_graph_operations(&mut document);
     document["paths"]["/app/api/projects/{id}/section-counts"] = serde_json::json!({
       "get": {
         "operationId": "getProjectSectionCounts", "tags": ["Projects"],
@@ -115,6 +116,81 @@ pub fn document_with_base(base: &str) -> Value {
       }
     });
     document
+}
+
+/// The three read-only relationship-graph doors (`portal/src/api.rs`
+/// `project_graph`/`lawyer_graph`/`firm_graph`): the AGE-backed neighborhood
+/// views. Lawyer-tier only; the project door scopes by matter visibility,
+/// the lawyer door by self-or-firm-directory, the firm door by
+/// `FirmCapability::ViewDirectory` — out-of-scope is always the bare `404`.
+fn add_graph_operations(document: &mut Value) {
+    let node_schema = json!({
+        "type":"object","additionalProperties":false,"required":["id","label","kind"],
+        "properties":{
+            "id":{"type":"string","description":"Canonical vertex id (the projected record's UUID)."},
+            "label":{"type":"string","enum":["Person","Entity","Project","Firm"]},
+            "kind":{"type":"string","description":"Renderer-facing vertex kind; equals the label today."},
+            "name":{"type":"string","description":"Display name, when the vertex carries one."}
+        }
+    });
+    let edge_schema = json!({
+        "type":"object","additionalProperties":false,"required":["source","target","type"],
+        "properties":{
+            "source":{"type":"string"},"target":{"type":"string"},
+            "type":{"type":"string","enum":["HAS_ROLE","RELATIONSHIP","WORKS_ON","MEMBER_OF","HANDLES"],"description":"AGE edge label."},
+            "kind":{"type":"string","description":"Open-ended relationship kind (adverse_to, related_party, …)."},
+            "role":{"type":"string","description":"Open-ended role value on HAS_ROLE and WORKS_ON edges."},
+            "confidence_pct":{"type":"integer","minimum":0,"maximum":100},
+            "source_kind":{"type":"string","description":"Edge provenance: manual, disclosure, relationship_log, or llm."}
+        }
+    });
+    let depth_parameter = |description: &str| {
+        json!({"name":"depth","in":"query","required":false,
+            "schema":{"type":"integer","minimum":1,"maximum":3,"default":2},
+            "description":description})
+    };
+    let seed_parameter = |description: &str| json!({"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"},"description":description});
+    for (path, operation_id, summary, description, depth) in [
+        (
+            "/app/api/graph/project/{id}", "getProjectGraph",
+            "A matter's relationship graph",
+            "The matter's parties, their entity roles, the adverse/related relationships, and the firms handling each side — the conflict check, made visible. Lawyer-tier and matter-scoped: a caller with no view of the matter gets 404. Read-only over the AGE projection; depth caps the frontier walk server-side.",
+            true,
+        ),
+        (
+            "/app/api/graph/lawyer/{id}", "getLawyerGraph",
+            "One person's working relationship graph",
+            "Matters worked on, entity roles, firm membership, and the client/adverse relationships around one person. Lawyer-tier; visible to the person themself or through firm directory authorization — anyone else gets 404.",
+            true,
+        ),
+        (
+            "/app/api/graph/firm/{id}", "getFirmGraph",
+            "A firm's aggregated relationship graph",
+            "Firm-to-firm ties aggregated up from person-level edges: adversary, co-counsel, of-counsel, client. Lawyer-tier and directory-gated (FirmCapability::ViewDirectory on the firm). The aggregation is a fixed three-hop read, so depth is validated for consistency and then ignored.",
+            false,
+        ),
+    ] {
+        let mut parameters = vec![seed_parameter("Seed vertex id.")];
+        if depth {
+            parameters.push(depth_parameter("Neighborhood depth in hops; capped server-side."));
+        }
+        document["paths"][path]["get"] = json!({
+            "operationId":operation_id,"tags":["Graph"],"summary":summary,
+            "description":description,
+            "parameters":parameters,
+            "responses":{
+                "200":{"description":"The {nodes, edges} neighborhood","content":{"application/json":{"schema":{
+                    "type":"object","additionalProperties":false,"required":["nodes","edges"],
+                    "properties":{"nodes":{"type":"array","items":node_schema},"edges":{"type":"array","items":edge_schema}}
+                }}}},
+                "400":{"description":"A depth outside 1–3 (or non-numeric)"},
+                "401":{"description":"Unauthenticated"},
+                "403":{"description":"Non-lawyer tier"},
+                "404":{"description":"Seed or neighborhood outside the caller's scope"},
+                "503":{"description":"The PostgreSQL graph store is not configured"}
+            }
+        });
+    }
 }
 
 fn record_post_schema() -> Value {
@@ -1023,6 +1099,31 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/integrations/calendar/deadline-mirror": {
+          "post": {
+            "summary": "Reconcile each Project's mirrored Deadline events to its rows (admin)",
+            "description":
+              "Reconciles the Project's shared Google Calendar against its Deadline rows: inserts, patches, and deletes the events the nightly mirror owns, carrying the matter-page link beside each. The applied pass ensures the calendar exists and is shared first; a dry run plans the same writes without making them. Outcomes are the reconcile outcomes `mirrored`, `skipped_closed`, `missing_calendar`, plus the ensure outcomes a calendar-less applied pass reaches, `duplicate` for an ambiguous calendar summary, and the resolution outcomes. The response carries outcome lines with counts, never matter content. Authorization: admin-tier, plus `use_integrations` on the Project's owning Firm.",
+            "requestBody": { "required": true, "content": { "application/json": {
+              "schema": { "$ref": "#/components/schemas/DeadlineMirrorRequest" }
+            } } },
+            "responses": {
+              "200": { "description": "One outcome per selected Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IntegrationReport" } } } },
+              "400": { "description": "The selector is not accepted", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "403": { "description": "Authenticated caller is not admin-tier", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "404": { "description": "No Project with that code is visible to the caller, or the caller may not use its Firm's integrations — the two answer identically on purpose", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
         "/app/api/integrations/notion/reconcile": {
           "post": {
             "summary": "Reconcile each Project against the selected Notion database (admin)",
@@ -1189,7 +1290,11 @@ fn canonical_document(base: &str) -> Value {
                Each step is idempotent — an existing folder or repository is adopted, a recorded \
                `repository_url` is left alone, and an entirely absent provider configuration \
                skips that surface with a reason in the response. Partial or invalid provider \
-               configuration fails the request with its initialization error. \
+               configuration fails the request with its initialization error. A Project whose \
+               Firm is missing a Forgejo coordinate (the Forgejo root URL, or the Firm's \
+               `forgejo_access_token` integration secret) answers `422 forgejo_unavailable` \
+               naming every missing piece, so a fleet-wide backfill sweep can report it per \
+               Project and continue. \
                Matter-open runs this pass best-effort; this door is the \
                admin retry for a failed or legacy Project. Project participation is never copied \
                onto the forge. Authorization: admin-tier only (`owner`/`admin`).",
@@ -1205,6 +1310,9 @@ fn canonical_document(base: &str) -> Value {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "404": { "description": "No matter with that id", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "422": { "description": "The Project's Firm is missing a Forgejo coordinate; the message names every missing piece", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "500": { "description": "Drive, forge, or the store failed", "content": { "application/json": {
@@ -1737,6 +1845,39 @@ fn canonical_document(base: &str) -> Value {
         },
         "/app/api/projects/{id}/costs/{cost_id}/events": {
           "get": { "summary": "Read a Project cost's audit history", "description": "Lawyer-only immutable before/after history.", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "cost_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Audit events, oldest first", "content": { "application/json": { "schema": { "type": "object" } } } }, "404": { "description": "No such cost or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } } }
+        },
+        "/app/api/projects/{id}/tasks": {
+          "get": {
+            "summary": "List a matter's tasks",
+            "description": "Returns the Project's tasks with their workflow state and assignee, for the dashboard's Tasks tab. Authorization: lawyer tier and a participation row; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The stored tasks, newest first", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          },
+          "post": {
+            "summary": "Create a task",
+            "description": "Creates one Project task in `todo` and appends an immutable creation audit event. The assignee, when given, must participate in the same Project; due_on is a calendar date. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["title"], "properties": { "title": { "type": "string" }, "body": { "type": "string" }, "assignee_id": { "type": "string", "format": "uuid" }, "due_on": { "type": "string", "format": "date" } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "201": { "description": "The stored task", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "Invalid task or assignee is not a participant", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/projects/{id}/tasks/{task_id}/assign": {
+          "post": {
+            "summary": "Assign or clear a task's assignee",
+            "description": "Sets the assignee to a participant of the same Project, or clears it with null. Repeating the current assignee is a no-op. Every change appends an audit event. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["assignee_id"], "properties": { "assignee_id": { "type": "string", "format": "uuid", "nullable": true } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such task on this Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The updated task; audit event appended", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The assignee is not a participant", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/projects/{id}/tasks/{task_id}/transition": {
+          "post": {
+            "summary": "Transition a task's state",
+            "description": "Moves a task one step through `todo` → `in_progress` → `done` and appends an audit event; Done is a transition, never a delete. An invalid transition is refused and nothing changes. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["state"], "properties": { "state": { "type": "string", "enum": ["todo", "in_progress", "done"] } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such task on this Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The updated task; audit event appended", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The transition is not valid from the current state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
         },
         "/app/api/projects/{id}/deadlines": {
           "get": {
@@ -3314,6 +3455,55 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/inbox-ingest": {
+          "post": {
+            "summary": "File a provider email message into the Firm Inbox",
+            "description":
+              "Files one raw RFC 5322 message the Firm inbox has not yet received — the lawyer's own \\
+               mailbox export or a relay copy — attributed to this matter so it can be routed to a \\
+               conversation. Redelivery is safe: the message dedupes on Firm, channel, provider \\
+               account, and message id, falling back to a SHA-256 of the raw bytes when the message \\
+               carries no Message-ID. Attachments with clean payloads are ingested as \\
+               content-addressed Assets and linked to the message in provider order; the first also \\
+               becomes the conversation's primary asset. `201 Created` carries the conversation, the \\
+               message, and a `deduped` flag that is `true` when this exact message was already \\
+               filed. Authorization: lawyer or admin, and the caller must participate in the matter \\
+               (out-of-scope → 404). A matter without an owning Firm (`project_has_no_firm`), \\
+               undecodable base64 (`invalid_base64`), a message over the inbound size cap \\
+               (`message_too_large`), or unparseable mail (`unparseable_message`) is `400`. \\
+               Ingest-only: this door never sends anything.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": {
+              "required": true,
+              "content": { "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["raw"],
+                  "properties": {
+                    "raw": { "type": "string", "description": "Base64-encoded raw RFC 5322 message bytes" },
+                    "provider_account": { "type": "string", "description": "The account the message was read from. Ingress dedup keys on it, so a caller keeps one value per mailbox; defaults to `cli-ingest`" }
+                  }
+                }
+              } }
+            },
+            "responses": {
+              "201": { "description": "The message was filed into the Firm Inbox, attributed to the matter", "content": { "application/json": {
+                "schema": { "type": "object", "required": ["conversation_id", "message_id", "deduped"], "properties": {
+                  "conversation_id": { "type": "string", "format": "uuid" },
+                  "message_id": { "type": "string", "format": "uuid" },
+                  "deduped": { "type": "boolean", "description": "True when an identical message was already filed" }
+                } }
+              } } },
+              "400": { "description": "The matter has no owning Firm (error `project_has_no_firm`), `raw` is not valid base64 (`invalid_base64`), the decoded message exceeds the inbound size cap (`message_too_large`), or the message is unparseable RFC 5322 mail (`unparseable_message`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Authenticated caller is not Lawyer/admin", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such matter, or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "The message could not be filed — a storage or database fault, never a rejected field", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
         "/app/api/projects/{id}/documents/{asset_id}": {
           "patch": {
             "summary": "Reconcile visibility, set a slug on a slugless row, replace a legacy kind, or move an unrepresentable slug",
@@ -3558,6 +3748,67 @@ fn canonical_document(base: &str) -> Value {
               "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "403": { "description": "Authenticated caller is not Lawyer/admin", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "404": { "description": "No such matter or message, or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "An attachment could not be filed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
+        "/app/api/projects/{id}/mail/eml": {
+          "post": {
+            "summary": "File a raw .eml message as a matter Communication",
+            "description":
+              "Files one raw RFC 822 message the caller already holds (a saved copy, a downloaded export) as a matter \\\n               Communication, entirely server-side — no per-machine Gmail OAuth grant is involved. The message files \\\n               through the idempotent (channel, source_ref) ingest, so re-uploading the same message writes nothing \\\n               a second time. Each attachment files as a linked document under a deterministic slug \\\n               (mail/<message reference>/<index>). Authorization: lawyer or admin, and the caller must participate \\\n               in the matter (out-of-scope → 404). A missing or blank `kind` on a message with attachments is \\\n               `400 kind_required`; non-MIME bytes are `400 not_mime`; a message with no Date header, an \\\n               out-of-range one, or no text body is `400 no_date`, `400 bad_date`, or `400 no_body`. \\\n               `dry_run` lists the attachments and writes nothing.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": {
+              "required": true,
+              "content": { "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["raw_base64"],
+                  "properties": {
+                    "raw_base64": { "type": "string", "description": "The raw .eml message, base64-encoded" },
+                    "mailbox": { "type": "string", "description": "The firm mailbox filing the message; matching From marks it outbound" },
+                    "kind": {
+                      "type": "string",
+                      "description": "Required asset-lane document classification when the message carries attachments.",
+                      "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "onboarding", "offboarding", "memo", "resume", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "unclassified"]
+                    },
+                    "visibility": { "type": "string", "enum": ["client", "internal"] },
+                    "dry_run": { "type": "boolean", "default": false }
+                  }
+                }
+              } }
+            },
+            "responses": {
+              "200": { "description": "Dry run, or a replay of an already-filed message", "content": { "application/json": { "schema": {
+                "type": "object", "required": ["source_ref", "direction", "deduped", "attachments", "filed"], "properties": {
+                  "source_ref": { "type": "string" },
+                  "direction": { "type": "string", "enum": ["inbound", "outbound"] },
+                  "deduped": { "type": "boolean" },
+                  "communication_id": { "type": "string", "format": "uuid" },
+                  "attachments": { "type": "array", "items": { "type": "object", "required": ["filename", "content_type", "size_bytes"], "properties": {
+                    "filename": { "type": "string" },
+                    "content_type": { "type": "string" },
+                    "size_bytes": { "type": "integer" }
+                  } } },
+                  "filed": { "type": "array", "items": { "type": "object", "required": ["kind", "visibility", "current_version"] } }
+                }
+              } } } },
+              "201": { "description": "The message filed as a Communication, with one pointer per filed attachment", "content": { "application/json": { "schema": {
+                "type": "object", "required": ["source_ref", "direction", "deduped", "attachments", "filed"], "properties": {
+                  "source_ref": { "type": "string" },
+                  "direction": { "type": "string", "enum": ["inbound", "outbound"] },
+                  "deduped": { "type": "boolean" },
+                  "communication_id": { "type": "string", "format": "uuid" },
+                  "attachments": { "type": "array", "items": { "type": "object" } },
+                  "filed": { "type": "array", "items": { "type": "object", "required": ["kind", "visibility", "current_version"] } }
+                }
+              } } } },
+              "400": { "description": "Unparseable base64 (`not_base64`), unparseable MIME (`not_mime`), a Date problem (`no_date`/`bad_date`), no text body (`no_body`), or a missing `kind` on a message with attachments (`kind_required`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Authenticated caller is not Lawyer/admin", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such matter, or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "500": { "description": "An attachment could not be filed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
             }
           }
@@ -4157,6 +4408,8 @@ fn canonical_document(base: &str) -> Value {
                                       "description": "The Project's shared Google Calendar id, or `null` before it is created." },
               "booking_url":        { "type": ["string", "null"],
                                       "description": "Where the client books time with the firm, or `null`. Cleared when the Project closes." },
+              "onboarding_jurisdiction": { "type": ["string", "null"],
+                                      "description": "The jurisdiction an onboarding Notation's Clauses bind to (the state whose law and arbitration seat an engagement letter names), or `null` before it is chosen." },
               "inserted_at":        { "type": "string" },
               "updated_at":         { "type": "string" }
             }
@@ -4169,6 +4422,18 @@ fn canonical_document(base: &str) -> Value {
                                 "description": "One Project code. Omit when `all` is true." },
               "all": { "type": "boolean", "default": false,
                        "description": "Act on every Project visible to the caller — the same participation-scoped lens `GET /app/api/projects` uses, so an admin sweep can never reach a matter the read surface would hide." }
+            }
+          },
+          "DeadlineMirrorRequest": {
+            "type": "object",
+            "description": "The ensure door's selector with a dry-run flag beside it: `project_code` and `all` follow the same exactly-one rule.",
+            "properties": {
+              "project_code": { "type": ["string", "null"],
+                                "description": "One Project code. Omit when `all` is true." },
+              "all": { "type": "boolean", "default": false,
+                       "description": "Reconcile every Project visible to the caller — the same participation-scoped lens `GET /app/api/projects` uses." },
+              "dry_run": { "type": "boolean", "default": false,
+                           "description": "Plan the mirror without making writes — the door answers what it would insert, patch, and delete." }
             }
           },
           "SlackIntegrationRequest": {
@@ -4269,8 +4534,13 @@ fn canonical_document(base: &str) -> Value {
                                "description": "The Notion page shared with the client. Omit to leave unchanged; a blank string clears it." },
               "calendar_id": { "type": "string",
                                "description": "The Project's shared Google Calendar id. Omit to leave unchanged; a blank string clears it." },
+              "drive_folder_id": { "type": "string",
+                               "description": "The Project's Drive ingest folder id, in the Firm's Projects shared drive. Omit to leave unchanged; a blank string clears it. Refused when another matter already records the folder." },
               "booking_url": { "type": "string",
-                               "description": "The client's booking page, an http(s) URL. Omit to leave unchanged; a blank string clears it." }
+                               "description": "The client's booking page, an http(s) URL. Omit to leave unchanged; a blank string clears it." },
+              "onboarding_jurisdiction": { "type": "string",
+                               "description": "The jurisdiction an onboarding Notation's Clauses bind to (the state whose law and \
+                                               arbitration seat an engagement letter names). Omit to leave unchanged; a blank string clears it." }
             },
             "additionalProperties": false,
             "example": {

@@ -57,6 +57,23 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# Relationship-graph views: a matter's neighborhood, a person's working
+# neighborhood, and the aggregated firm-to-firm ties. Lawyer tier at route
+# admission; the fine-grained matter scoping, self-or-directory authorization,
+# and FirmCapability::ViewDirectory checks live in the handlers
+# (`portal/src/api.rs` project_graph/lawyer_graph/firm_graph), which answer the
+# non-disclosing 404 for anything out of scope — route admission decides the
+# tier, never the tenant question.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "graph"
+    input.path[3] in {"project", "lawyer", "firm"}
+    count(input.path) == 5
+    input.method == "GET"
+    is_lawyer(input.session)
+}
+
 # Owner and Admin are supersets of Lawyer: either privileged tier
 # passes every lawyer-work gate. Clerk is deliberately absent; adding
 # a non-lawyer role must not inherit legal authority by accident.
@@ -332,6 +349,33 @@ route_allow if {
     input.path[2] == "projects"
     input.path[4] == "costs"
     input.path[6] in {"confirm", "invoice", "resolve"}
+    count(input.path) == 7
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
+# Matter tasks: the Tasks tab's write surface. GET (list) and POST (create)
+# at /app/api/projects/{id}/tasks, and POST .../tasks/{task_id}/{assign,
+# transition}. Lawyer tier, the same gate the `LawyerSession` extractor
+# applies; the handler resolves `store::access::matter_viewer` and answers
+# 404 for a caller with no firm-side participation row, Owner and Admin
+# included.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "tasks"
+    count(input.path) == 5
+    input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "tasks"
+    input.path[6] in {"assign", "transition"}
     count(input.path) == 7
     input.method == "POST"
     is_lawyer(input.session)
@@ -771,6 +815,20 @@ route_allow if {
     count(input.path) == 4
     input.path[3] == "avatar"
     is_authenticated(input.session)
+}
+
+# One person's relationship-graph page rides the avatar rule's shape: lawyer
+# tier at the route, because the `GET /app/api/graph/lawyer/{id}` door the
+# page's island fetches admits the person themself and the firm directory
+# (`FirmCapability::ViewDirectory`) — that check lives there, not here. Clerk
+# and client are denied, the same boundary the lawyer workbench carries.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "people"
+    count(input.path) == 4
+    input.path[3] == "graph"
+    input.method == "GET"
+    is_lawyer(input.session)
 }
 
 # /app/admin/brands is the house-of-brands home: every registered brand's

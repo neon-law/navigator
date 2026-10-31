@@ -1173,6 +1173,40 @@ mod tests {
                 "20261030010000_add_template_firm.sql",
                 include_str!("../postgres/migrations/20261030010000_add_template_firm.sql"),
             ),
+            (
+                "20261030020000_add_asset_evidence.sql",
+                include_str!("../postgres/migrations/20261030020000_add_asset_evidence.sql"),
+            ),
+            (
+                "20261030030000_create_inbox_message_asset.sql",
+                include_str!("../postgres/migrations/20261030030000_create_inbox_message_asset.sql"),
+            ),
+            (
+                "20261030120000_create_project_task.sql",
+                include_str!("../postgres/migrations/20261030120000_create_project_task.sql"),
+            ),
+            (
+                "20261031010000_create_navigator_graph.sql",
+                include_str!("../postgres/migrations/20261031010000_create_navigator_graph.sql"),
+            ),
+            (
+                "20261031020000_create_graph_view_readers.sql",
+                include_str!("../postgres/migrations/20261031020000_create_graph_view_readers.sql"),
+            ),
+            (
+                "20261031025000_graph_conflict_names_and_runtime_grants.sql",
+                include_str!(
+                    "../postgres/migrations/20261031025000_graph_conflict_names_and_runtime_grants.sql"
+                ),
+            ),
+            (
+                "20261031120000_add_project_onboarding_jurisdiction.sql",
+                include_str!("../postgres/migrations/20261031120000_add_project_onboarding_jurisdiction.sql"),
+            ),
+            (
+                "20261031130000_create_case_stage.sql",
+                include_str!("../postgres/migrations/20261031130000_create_case_stage.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

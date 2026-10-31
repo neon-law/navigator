@@ -143,7 +143,10 @@ async fn the_matter_workbench_people_table_omits_a_referenced_person() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", fixture.project_code))
+                .uri(format!(
+                    "/app/projects/{}?tab=participants",
+                    fixture.project_code
+                ))
                 .header(
                     header::COOKIE,
                     format!("{SESSION_COOKIE_NAME}={}", session(fixture.lawyer)),

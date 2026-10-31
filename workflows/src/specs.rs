@@ -102,6 +102,7 @@ pub const BUNDLED_SPEC_YAML: &[(&str, &str)] = &[
         "privacy_policy",
         include_str!("../specs/privacy_policy.yaml"),
     ),
+    ("basic_will", include_str!("../specs/basic_will.yaml")),
     ("onboarding__letter", RETAINER_INTAKE_SPEC_YAML),
     (
         "nv__llc_formation",
@@ -147,6 +148,54 @@ pub const BUNDLED_SPEC_YAML: &[(&str, &str)] = &[
     (
         "us__naturalization",
         include_str!("../specs/us__naturalization.yaml"),
+    ),
+    (
+        "ca__name_change_petition",
+        include_str!("../specs/ca__name_change_petition.yaml"),
+    ),
+    (
+        "ca__name_change_attachment",
+        include_str!("../specs/ca__name_change_attachment.yaml"),
+    ),
+    (
+        "ca__name_change_order_to_show_cause",
+        include_str!("../specs/ca__name_change_order_to_show_cause.yaml"),
+    ),
+    (
+        "ca__name_change_decree",
+        include_str!("../specs/ca__name_change_decree.yaml"),
+    ),
+    (
+        "ca__civil_case_cover_sheet",
+        include_str!("../specs/ca__civil_case_cover_sheet.yaml"),
+    ),
+    (
+        "ca__gender_identity_name_change_petition",
+        include_str!("../specs/ca__gender_identity_name_change_petition.yaml"),
+    ),
+    (
+        "ca__gender_identity_name_change_order_to_show_cause",
+        include_str!("../specs/ca__gender_identity_name_change_order_to_show_cause.yaml"),
+    ),
+    (
+        "ca__gender_identity_name_change_decree",
+        include_str!("../specs/ca__gender_identity_name_change_decree.yaml"),
+    ),
+    (
+        "ca__gender_recognition_petition",
+        include_str!("../specs/ca__gender_recognition_petition.yaml"),
+    ),
+    (
+        "ca__gender_recognition_order",
+        include_str!("../specs/ca__gender_recognition_order.yaml"),
+    ),
+    (
+        "nv__adult_name_change_petition",
+        include_str!("../specs/nv__adult_name_change_petition.yaml"),
+    ),
+    (
+        "nv__dv_protection_order_application",
+        include_str!("../specs/nv__dv_protection_order_application.yaml"),
     ),
 ];
 

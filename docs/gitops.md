@@ -235,9 +235,9 @@ takes the CODEOWNERS half and waits for a real `ci.yml` before it can take the r
 #### Merge gate: integrity checks with auto-merge
 
 Every governed source repository carries `production`. It has no bypass actors and binds everyone to required checks,
-signed commits, linear history, no deletion or force-push, squash-only merges, and resolved review threads. Its pull
-request rule requires zero approvals, disables code-owner approval, and disables the extra-approval condition for
-unattributed changes, so no approval rule can keep an otherwise-green PR from auto-merging.
+linear history, no deletion or force-push, squash-only merges, and resolved review threads. Its pull request rule
+requires zero approvals, disables code-owner approval, and disables the extra-approval condition for unattributed
+changes, so no approval rule can keep an otherwise-green PR from auto-merging.
 
 Repository settings enable auto-merge. Once the required checks pass and all review threads are resolved, GitHub can
 squash-merge the PR. `ops github setup` deletes an existing `production-review` ruleset on governed source repositories;
@@ -343,11 +343,8 @@ both report zero while every `rust` run restores a full match. The `gate` job ru
 entry lives in GitHub's own store and counts against the 10 GB quota. Grep the job for `Cache hit`, `No cache found`,
 and `full match` instead — that is the only authoritative signal.
 
-`ci.yml`'s `gate content` job also runs `navigator ops github check-signatures` over `base.sha..head.sha`. `production`
-already requires verified signatures on `main`, but squash-merge writes a new GitHub-signed commit there, so that rule
-does not prove the pull-request head was signed. Cloud Agents attach an HSM Ed25519 `gpgsig`; disabling `commit.gpgsign`
-does not. The check reads the commit object, not GitHub's verification API, and inspects the PR head rather than the
-workflow merge commit.
+`ci.yml`'s `gate content` job no longer inspects commit signatures. The founder removed that requirement on 2026-10-30:
+Obvious autobuild pushes unsigned commits, so the check blocked every armed auto-merge from firing.
 
 | Workflow | Trigger | Job |
 | --- | --- | --- |
@@ -364,10 +361,10 @@ prerelease stays on staging. `release-cut.yml` opens the version-bump PR once `R
 ### One protection system, not two
 
 `main` is governed by rulesets alone: `production` protects the default branch, and `release-tags` protects release
-tags. The production ruleset has no bypass actors and requires status checks, signed commits, linear history, pull
-requests, resolved review threads, and squash-only merging. Its approval count is zero, and no other approval rule is
-desired. `ops github setup` removes an existing `production-review` ruleset so its approval requirement cannot remain
-active after reconciliation.
+tags. The production ruleset has no bypass actors and requires status checks, linear history, pull requests, resolved
+review threads, and squash-only merging. Its approval count is zero, and no other approval rule is desired. `ops github
+setup` removes an existing `production-review` ruleset so its approval requirement cannot remain active after
+reconciliation.
 
 One caveat learned the hard way: GitHub caches a pull request's merge state. Changing branch protection does **not**
 recompute it for pull requests whose checks have already finished — they stay `BLOCKED` until some later event on the

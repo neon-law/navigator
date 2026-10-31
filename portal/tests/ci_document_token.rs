@@ -450,6 +450,7 @@ async fn a_document_token_reads_only_its_project_surface_coordinates() {
         );
         assert_eq!(body["dangling_dri_person_ids"], serde_json::json!([]));
         assert_eq!(body["calendar_id"], serde_json::Value::Null);
+        assert_eq!(body["drive_folder_id"], serde_json::Value::Null);
         let mut keys: Vec<_> = body.as_object().unwrap().keys().cloned().collect();
         keys.sort();
         assert_eq!(
@@ -459,6 +460,7 @@ async fn a_document_token_reads_only_its_project_surface_coordinates() {
                 "client_dri".to_string(),
                 "code".to_string(),
                 "dangling_dri_person_ids".to_string(),
+                "drive_folder_id".to_string(),
                 "lawyer_dri".to_string(),
                 "private_notion_page".to_string(),
                 "private_slack_channel".to_string(),

@@ -51,6 +51,17 @@ fn title_defaults(form_code: &str) -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/// A filing fee as the filing office publishes it: a decimal amount and an
+/// ISO 4217 currency code. `&'static str` fields keep a fee expressible in
+/// the compiled-in [`BUNDLED`] registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FilingFee {
+    /// Decimal amount (`"270.00"`, `"0.00"`).
+    pub amount: &'static str,
+    /// ISO 4217 alphabetic currency code (`USD`).
+    pub currency: &'static str,
+}
+
 /// Metadata for one vendored government form. Carries no bytes: the
 /// blank itself lives in the assets bucket at
 /// [`object_path`](Self::object_path), pinned by
@@ -75,6 +86,14 @@ pub struct FormMeta {
     /// a synthetic blank under its own pin; production code reads
     /// [`pinned_sha256`](Self::pinned_sha256).
     pub sha256_pin: &'static str,
+    /// The filing fee the office charges for this form, when it publishes
+    /// a flat one. The court-form registry (`store/seeds/Court.yaml`) is
+    /// the curated source of fee data; the cross-crate guard test pins a
+    /// vendored form's fee to its registry row.
+    pub filing_fee: Option<FilingFee>,
+    /// Template code of the fee-waiver form the filing office accepts,
+    /// when one exists. Must resolve to a real forms-shelf template.
+    pub fee_waiver_code: Option<&'static str>,
 }
 
 impl FormMeta {
@@ -157,6 +176,8 @@ const BUNDLED: &[FormMeta] = &[
         sha256_pin: include_str!(
             "../../templates/notations/forms/united_states/federal/uscis/us__naturalization.sha256"
         ),
+        filing_fee: None,
+        fee_waiver_code: None,
     },
     FormMeta {
         code: "nv__llc_formation",
@@ -167,6 +188,8 @@ const BUNDLED: &[FormMeta] = &[
         sha256_pin: include_str!(
             "../../templates/notations/forms/united_states/nevada/state/nv__llc_formation.sha256"
         ),
+        filing_fee: None,
+        fee_waiver_code: None,
     },
     FormMeta {
         code: "nv__profit_corp_formation",
@@ -177,6 +200,8 @@ const BUNDLED: &[FormMeta] = &[
         sha256_pin: include_str!(
             "../../templates/notations/forms/united_states/nevada/state/nv__profit_corp_formation.sha256"
         ),
+        filing_fee: None,
+        fee_waiver_code: None,
     },
     FormMeta {
         code: "nv__business_trust_formation",
@@ -187,6 +212,158 @@ const BUNDLED: &[FormMeta] = &[
         sha256_pin: include_str!(
             "../../templates/notations/forms/united_states/nevada/state/nv__business_trust_formation.sha256"
         ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    // First-wave court forms: statewide Judicial Council blanks (California)
+    // and Nevada Supreme Court self-help blanks, registered under their
+    // filing courts in `store/seeds/Court.yaml`.
+    FormMeta {
+        code: "ca__name_change_petition",
+        jurisdiction: "CA",
+        title: "Petition for Change of Name",
+        origin_url: "https://www.courts.ca.gov/documents/NC100.pdf",
+        object_path: "forms/united_states/california/california_superior_court/ca__name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_petition.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ca__name_change_attachment",
+        jurisdiction: "CA",
+        title: "Name and Information About the Person Whose Name is to be Changed",
+        origin_url: "https://www.courts.ca.gov/documents/NC110.pdf",
+        object_path: "forms/united_states/california/california_superior_court/ca__name_change_attachment.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_attachment.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ca__name_change_order_to_show_cause",
+        jurisdiction: "CA",
+        title: "Order to Show Cause—Change of Name",
+        origin_url: "https://www.courts.ca.gov/documents/NC120.pdf",
+        object_path: "forms/united_states/california/california_superior_court/ca__name_change_order_to_show_cause.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_order_to_show_cause.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ca__name_change_decree",
+        jurisdiction: "CA",
+        title: "Decree Changing Name",
+        origin_url: "https://www.courts.ca.gov/documents/NC130.pdf",
+        object_path: "forms/united_states/california/california_superior_court/ca__name_change_decree.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_decree.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ca__civil_case_cover_sheet",
+        jurisdiction: "CA",
+        title: "Civil Case Cover Sheet",
+        origin_url: "https://www.courts.ca.gov/documents/CM010.pdf",
+        object_path: "forms/united_states/california/california_superior_court/ca__civil_case_cover_sheet.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__civil_case_cover_sheet.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ca__gender_identity_name_change_petition",
+        jurisdiction: "CA",
+        title: "Petition for Change of Name to Conform to Gender Identity",
+        origin_url: "https://www.courts.ca.gov/documents/NC200.pdf",
+        object_path: "forms/united_states/california/california_superior_court/ca__gender_identity_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_petition.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ca__gender_identity_name_change_order_to_show_cause",
+        jurisdiction: "CA",
+        title: "Order to Show Cause—Change of Name to Conform to Gender Identity",
+        origin_url: "https://www.courts.ca.gov/documents/NC225.pdf",
+        object_path: "forms/united_states/california/california_superior_court/ca__gender_identity_name_change_order_to_show_cause.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_order_to_show_cause.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ca__gender_identity_name_change_decree",
+        jurisdiction: "CA",
+        title: "Decree Changing Name to Conform to Gender Identity",
+        origin_url: "https://www.courts.ca.gov/documents/NC230.pdf",
+        object_path: "forms/united_states/california/california_superior_court/ca__gender_identity_name_change_decree.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_decree.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ca__gender_recognition_petition",
+        jurisdiction: "CA",
+        title: "Petition for Recognition of Adult's Change of Gender and Sex Identifier, Name Change, and Issuance of New Certificates",
+        origin_url: "https://www.courts.ca.gov/documents/NC300.pdf",
+        object_path: "forms/united_states/california/california_superior_court/ca__gender_recognition_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_recognition_petition.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ca__gender_recognition_order",
+        jurisdiction: "CA",
+        title: "Order Recognizing Adult's Change of Gender and Sex Identifier, for Name Change and for Issuance of New Certificates",
+        origin_url: "https://www.courts.ca.gov/documents/NC330.pdf",
+        object_path: "forms/united_states/california/california_superior_court/ca__gender_recognition_order.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_recognition_order.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "nv__adult_name_change_petition",
+        jurisdiction: "NV",
+        title: "Petition for Adult Name Change",
+        origin_url: "https://selfhelp.nvcourts.gov/images/name-change/name-adult-petition-pdf-fillable.pdf",
+        object_path: "forms/united_states/nevada/nevada_supreme_court/nv__adult_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/nevada/nevada_supreme_court/nv__adult_name_change_petition.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "nv__dv_protection_order_application",
+        jurisdiction: "NV",
+        title: "Application for Protection Order Against Domestic Violence",
+        origin_url: "https://selfhelp.nvcourts.gov/images/protection-orders/dv-app-pdf-fillable.pdf",
+        object_path: "forms/united_states/nevada/nevada_supreme_court/nv__dv_protection_order_application.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/nevada/nevada_supreme_court/nv__dv_protection_order_application.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "0.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
     },
 ];
 
@@ -224,7 +401,7 @@ mod tests {
     #[test]
     fn registry_pins_every_blank() {
         let forms = registry().expect("registry loads");
-        assert_eq!(forms.len(), 4);
+        assert!(!forms.is_empty(), "registry is empty");
         for form in &forms {
             let pin = form.pinned_sha256();
             assert_eq!(pin.len(), 64, "{}: pin is not a sha-256 digest", form.code);

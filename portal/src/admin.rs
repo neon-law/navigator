@@ -3925,6 +3925,20 @@ async fn project_show_path(surreal: &store::surreal::SurrealDb, project_id: Uuid
         )
 }
 
+/// Where a successful participation add, edit, or removal lands: the matter's
+/// Participants tab, which renders the ledger it changed. The workbench opens
+/// on Overview (#176), which does not list people.
+async fn project_participants_path(
+    surreal: &store::surreal::SurrealDb,
+    project_id: Uuid,
+) -> String {
+    format!(
+        "{}?tab={}",
+        project_show_path(surreal, project_id).await,
+        webapp::lawyer_project_detail::MatterTab::Participants.query_value()
+    )
+}
+
 async fn participation_people(
     surreal: &store::surreal::SurrealDb,
 ) -> Result<Vec<store::persons::Person>, Response> {
@@ -4015,7 +4029,7 @@ async fn project_participation_create(
     )
     .await
     {
-        Ok(_) => Redirect::to(&project_show_path(&surreal, id).await).into_response(),
+        Ok(_) => Redirect::to(&project_participants_path(&surreal, id).await).into_response(),
         Err(e) => {
             use store::participation::AddParticipantError as E;
             let message = match e {
@@ -4084,7 +4098,7 @@ async fn project_participation_update(
     )
     .await
     {
-        Ok(_) => Redirect::to(&project_show_path(&surreal, id).await).into_response(),
+        Ok(_) => Redirect::to(&project_participants_path(&surreal, id).await).into_response(),
         Err(e) => {
             use store::participation::UpdateParticipantError as E;
             let message = match e {
@@ -4120,7 +4134,7 @@ async fn project_participation_delete(
     // removing the DRI's row would strand the matter's accountable lawyer).
     match store::participation::remove_participant(&surreal, id, role_id, dri_actor(session)).await
     {
-        Ok(()) => Redirect::to(&project_show_path(&surreal, id).await).into_response(),
+        Ok(()) => Redirect::to(&project_participants_path(&surreal, id).await).into_response(),
         Err(store::participation::RemoveParticipantError::NotFound) => not_found_response(),
         Err(store::participation::RemoveParticipantError::DriLockout) => {
             delete_refused_response(PROJECT_PARTICIPATION_DRI_LOCKOUT_ERROR, APP_PROJECTS_PATH)
@@ -4335,10 +4349,15 @@ async fn projects_update_lawyer_only(
         } else {
             String::new()
         }),
-        // Set with `navigator project set --calendar` / `--booking-url`; the
-        // form carries neither, so it leaves both alone.
+        // Set with `navigator project set --calendar` / `--booking-url` /
+        // `--jurisdiction`; the form carries none of the three, so it leaves
+        // them all alone.
         calendar_id: None,
         booking_url: None,
+        onboarding_jurisdiction: None,
+        // Set with `navigator project set --drive-folder`; the form does not
+        // carry it, so it leaves the column alone.
+        drive_folder_id: None,
     };
     match store::projects::update_project(&surreal, project_id, &command).await {
         Ok(_) => Redirect::to("/app/projects").into_response(),

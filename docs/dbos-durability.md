@@ -293,6 +293,19 @@ in its own `purchase-<id>` step. A paid one turns active; a subscription's renew
 keyed on the Purchase id, so a re-run never sets up two. The purchase page runs the same check for the viewer's own open
 invoices, so the schedule is the backstop, not the only path. Journals carry Purchase ids, never client content.
 
+## DeadlineMirror
+
+`DeadlineMirror` is born on DBOS. Opt in with `NAVIGATOR_DBOS_ENABLED=true` and
+`NAVIGATOR_DBOS_DEADLINE_MIRROR_ENABLED=true`. The daily run `DeadlineMirror-<UTC date>` starts at 04:03 UTC and judges
+every step at that slot instant, however late a recovery replays it. Its `open-projects` step lists the deployment's
+open matters from PostgreSQL; each is reconciled in its own `reconcile-<id>` step through
+[store::deadline_calendar](glossary/deadline-mirror.md), which upserts and deletes the matter's mirrored calendar events
+from its [Deadline](glossary/deadline.md) rows. A step whose provider refuses is recorded as a failed line and the run
+continues, so one unreachable calendar cannot stall the night; recovery re-runs only the failed matters. The mirrored
+events' private extended properties distinguish drift from a stale cache, so a re-run writes only what changed. Live
+writes against Google Calendar require domain-wide delegation for the calendar scope — an account fact no repository
+carries — and the door and the CLI verb accept `dry-run` to rehearse without them.
+
 ## Port order
 
 Lowest risk first. Each port keeps its Restate twin until a deployment switches engines.

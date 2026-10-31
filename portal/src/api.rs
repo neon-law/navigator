@@ -118,6 +118,9 @@ pub struct ApiState {
     /// stored credential, for the `/app/api/integrations/*` doors. Refuses on
     /// a deployment with no runtime KMS key — see [`crate::integrations`].
     pub integration_providers: Arc<dyn crate::integrations::IntegrationProviders>,
+    /// The deployment's canonical host, for links rendered beside stored
+    /// rows — the Deadline mirror's matter-page line. `None` locally.
+    pub canonical_base_url: Option<String>,
 }
 
 impl FromRef<ApiState> for store::surreal::SurrealDb {
@@ -303,6 +306,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "POST",
+            "/app/api/integrations/calendar/deadline-mirror",
+            post(crate::integrations_api::calendar_deadline_mirror_door),
+        ),
+        (
+            "POST",
             "/app/api/integrations/notion/reconcile",
             post(crate::integrations_api::notion_reconcile_door),
         ),
@@ -451,6 +459,26 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "GET",
             "/app/api/projects/{id}/costs/{cost_id}/events",
             get(crate::project_costs_api::events),
+        ),
+        (
+            "GET",
+            "/app/api/projects/{id}/tasks",
+            get(crate::project_tasks_api::list),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/tasks",
+            post(crate::project_tasks_api::create),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/tasks/{task_id}/assign",
+            post(crate::project_tasks_api::assign),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/tasks/{task_id}/transition",
+            post(crate::project_tasks_api::transition),
         ),
         (
             "POST",
@@ -649,6 +677,9 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "/app/api/projects/{id}/relationships/adverse",
             post(record_adversity),
         ),
+        ("GET", "/app/api/graph/project/{id}", get(project_graph)),
+        ("GET", "/app/api/graph/lawyer/{id}", get(lawyer_graph)),
+        ("GET", "/app/api/graph/firm/{id}", get(firm_graph)),
         (
             "PATCH",
             "/app/api/projects/{id}/participants/{role_id}",
@@ -740,6 +771,16 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             )),
         ),
         (
+            "POST",
+            "/app/api/projects/{id}/inbox-ingest",
+            // This route carries base64 JSON like the document upload door,
+            // so its request cap admits the base64 inflation of a max-size
+            // raw message; the door re-checks the decoded size itself.
+            post(ingest_provider_message_door).layer(DefaultBodyLimit::max(
+                crate::inbound_email::MAX_INBOUND_MESSAGE_BYTES / 3 * 4 + 65_536,
+            )),
+        ),
+        (
             "PATCH",
             "/app/api/projects/{id}/documents/{asset_id}",
             patch(update_document_door),
@@ -778,6 +819,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "POST",
             "/app/api/projects/{id}/mail/file",
             post(mail_file_door),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/mail/eml",
+            post(eml_upload_door),
         ),
         (
             "PATCH",
@@ -1513,6 +1559,9 @@ fn surface_error(error: store::project_surfaces::SurfaceError) -> ApiError {
     match error {
         store::project_surfaces::SurfaceError::NotFound => ApiError::NotFound,
         store::project_surfaces::SurfaceError::Command(error) => ApiError::Project(error),
+        store::project_surfaces::SurfaceError::ForgejoUnavailable(missing) => {
+            ApiError::ForgejoUnavailable(missing)
+        }
         other => ApiError::Db(other.to_string()),
     }
 }
@@ -2083,10 +2132,13 @@ async fn notation_inventory_door(
         return Err(ApiError::NotFound);
     }
 
-    let rows =
-        webapp::lawyer_project_detail::project_notation_board(&state.surreal, &state.storage, id)
-            .await
-            .map_err(ApiError::Db)?;
+    let rows = webapp::lawyer_project_notations::project_notation_board(
+        &state.surreal,
+        &state.storage,
+        id,
+    )
+    .await
+    .map_err(ApiError::Db)?;
     Ok((StatusCode::OK, Json(rows)).into_response())
 }
 
@@ -3107,6 +3159,173 @@ async fn record_adversity(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(edge)).into_response())
+}
+
+/// Query for the `GET /app/api/graph/*` doors: the neighborhood depth.
+/// Defaults to 2; anything above the store's hop ceiling is refused before
+/// the graph is read — the cap is the server's, never the caller's.
+#[derive(Deserialize, Default)]
+struct GraphQuery {
+    #[serde(default)]
+    depth: Option<String>,
+}
+
+/// Parses the `depth` query parameter. `Err` carries the ready 400 response.
+fn graph_depth(query: &GraphQuery) -> Result<u8, Response> {
+    const DEFAULT_DEPTH: &str = "2";
+    let raw = query.depth.as_deref().unwrap_or(DEFAULT_DEPTH);
+    let depth: u8 = raw
+        .parse()
+        .map_err(|_| bad_request("invalid_depth", "depth must be a non-negative integer."))?;
+    if depth == 0 || depth > store::postgres_graph_views::MAX_GRAPH_DEPTH {
+        return Err(bad_request(
+            "depth_out_of_range",
+            "depth must be between 1 and 3.",
+        ));
+    }
+    Ok(depth)
+}
+
+/// The AGE graph pool. The graph views read only from the projection, so a
+/// deployment with no configured PostgreSQL host has nothing to serve — the
+/// door reports 503 rather than pretending the graph is empty.
+async fn graph_store() -> Result<store::postgres::PostgresDb, Response> {
+    store::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "api: graph store unavailable");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": "graph_requires_postgresql" })),
+            )
+                .into_response()
+        })
+}
+
+/// Whether the lawyer-tier caller may read the lawyer graph of `person_id`:
+/// the person themself, or a caller who holds
+/// [`store::firm_capability::FirmCapability::ViewDirectory`] on a Firm the
+/// target belongs to — the same directory signal the firm surface uses,
+/// never an inference from graph shape. Membership or resolution failures
+/// deny, and deny silently (the door answers `404` either way).
+async fn can_view_lawyer_graph(state: &ApiState, lawyer: &LawyerSession, person_id: Uuid) -> bool {
+    if lawyer.0.person_id.is_some_and(|viewer| viewer == person_id) {
+        return true;
+    }
+    let memberships = match store::firms::memberships_for_person(&state.surreal, person_id).await {
+        Ok(memberships) => memberships,
+        Err(error) => {
+            tracing::error!(%error, %person_id, "api: lawyer-graph membership read failed");
+            return false;
+        }
+    };
+    for membership in memberships {
+        let decision = store::firm_capability::FirmCapability::ViewDirectory
+            .resolve(
+                &state.surreal,
+                lawyer.0.role,
+                lawyer.0.person_id,
+                membership.firm_id,
+            )
+            .await;
+        if decision.is_ok_and(store::firm_capability::FirmCapabilityDecision::is_allowed) {
+            return true;
+        }
+    }
+    false
+}
+
+/// `GET /app/api/graph/project/{id}?depth=2` — the matter's neighborhood:
+/// its parties, their entity roles, the adverse/related relationships, and
+/// the firms handling each side — the conflict check, made visible.
+/// Lawyer-tier and matter-scoped like [`record_adversity`]: a caller with no
+/// view of the matter gets the same non-disclosing `404`. The neighborhood
+/// itself is a read-only AGE view (`store::postgres_graph_views`); depth is
+/// capped server-side.
+async fn project_graph(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Query(query): Query<GraphQuery>,
+) -> Result<Response, ApiError> {
+    let depth = match graph_depth(&query) {
+        Ok(depth) => depth,
+        Err(response) => return Ok(response),
+    };
+    let in_scope =
+        store::access::can_see_project(&state.surreal, lawyer.0.person_id, lawyer.0.role, id)
+            .await
+            .unwrap_or(false);
+    if !in_scope {
+        return Err(ApiError::NotFound);
+    }
+    let pg = match graph_store().await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    let view = store::postgres_graph_views::project_view(&pg, id, depth)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    Ok(Json(view).into_response())
+}
+
+/// `GET /app/api/graph/lawyer/{id}?depth=2` — one person's working
+/// neighborhood: matters worked on, entity roles, firm membership, and the
+/// client/adverse relationships around them. Lawyer-tier; visible to the
+/// person themself or to a caller authorized through the firm directory
+/// ([`can_view_lawyer_graph`]) — anyone else gets the non-disclosing `404`.
+async fn lawyer_graph(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Query(query): Query<GraphQuery>,
+) -> Result<Response, ApiError> {
+    let depth = match graph_depth(&query) {
+        Ok(depth) => depth,
+        Err(response) => return Ok(response),
+    };
+    if !can_view_lawyer_graph(&state, &lawyer, id).await {
+        return Err(ApiError::NotFound);
+    }
+    let pg = match graph_store().await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    let view = store::postgres_graph_views::lawyer_view(&pg, id, depth)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    Ok(Json(view).into_response())
+}
+
+/// `GET /app/api/graph/firm/{id}` — firm-to-firm ties aggregated up from
+/// person-level edges: adversary, co-counsel, of-counsel, client. Lawyer-tier
+/// and directory-gated (`FirmCapability::ViewDirectory` on the Firm itself);
+/// the aggregation is a fixed three-hop read, so it takes no meaningful
+/// `depth` — the parameter is validated for consistency and then ignored.
+async fn firm_graph(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Query(query): Query<GraphQuery>,
+) -> Result<Response, ApiError> {
+    if let Err(response) = graph_depth(&query) {
+        return Ok(response);
+    }
+    let allowed = store::firm_capability::FirmCapability::ViewDirectory
+        .resolve(&state.surreal, lawyer.0.role, lawyer.0.person_id, id)
+        .await
+        .is_ok_and(store::firm_capability::FirmCapabilityDecision::is_allowed);
+    if !allowed {
+        return Err(ApiError::NotFound);
+    }
+    let pg = match graph_store().await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    let view = store::postgres_graph_views::firm_view(&pg, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    Ok(Json(view).into_response())
 }
 
 /// Request body for `PATCH /app/api/projects/{id}/participants/{role_id}` — re-point
@@ -4462,12 +4681,136 @@ struct UploadDocumentRequest {
     /// entry is validated before any byte is stored.
     #[serde(default)]
     notarization: Vec<store::documents::Notarization>,
+    /// The exhibit metadata the matter's evidence index reads (LAW-185).
+    /// Optional on every kind; validated before any byte is stored.
+    #[serde(default)]
+    evidence: Option<store::documents::Evidence>,
 }
 
 fn invalid_document_slug_response(filename: &str, slug: &str) -> Option<Response> {
     store::documents::validate_document_slug(filename, slug)
         .err()
         .map(|error| bad_request("invalid_slug", &error.to_string()))
+}
+
+/// The body of `POST /app/api/projects/{id}/inbox-ingest`.
+#[derive(Debug, Deserialize)]
+struct IngestProviderMessageRequest {
+    /// The raw RFC 5322 message bytes, base64-encoded, exactly as the
+    /// provider holds them.
+    raw: String,
+    /// The provider account the message was read from (for example the
+    /// Gmail address the CLI fetched it with). Ingress dedup keys on it,
+    /// so a caller should keep one value per mailbox. Defaults to
+    /// `cli-ingest`.
+    provider_account: Option<String>,
+}
+
+/// `POST /app/api/projects/{id}/inbox-ingest` — file a provider message the
+/// CLI already read (the lawyer's Gmail, a saved `.eml`) into the Firm inbox,
+/// attributed to this Project. Ingest-only: nothing is sent, and the
+/// conversation stays in the Inbox workflow where an Owner can reassign it.
+/// Re-running the verb is safe: the message dedupes on Firm, channel,
+/// provider account, and message id.
+async fn ingest_provider_message_door(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Json(input): Json<IngestProviderMessageRequest>,
+) -> Result<Response, ApiError> {
+    use base64::Engine as _;
+    let in_scope = store::access::can_see_project_as_lawyer(
+        &state.surreal,
+        lawyer.0.person_id,
+        lawyer.0.role,
+        id,
+    )
+    .await
+    .unwrap_or(false);
+    if !in_scope {
+        return Err(ApiError::NotFound);
+    }
+    let Some(project) = store::projects::find_by_id(&state.surreal, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+    else {
+        return Err(ApiError::NotFound);
+    };
+    let Some(firm_id) = project.firm_id else {
+        return Ok(bad_request(
+            "project_has_no_firm",
+            "The matter has no owning Firm, so it has no inbox to file into.",
+        ));
+    };
+    let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(input.raw.as_bytes()) else {
+        return Ok(bad_request("invalid_base64", "raw is not valid base64."));
+    };
+    if raw.len() > crate::inbound_email::MAX_INBOUND_MESSAGE_BYTES {
+        return Ok(bad_request(
+            "message_too_large",
+            "The message exceeds the inbound mail size cap.",
+        ));
+    }
+    let Some(email) = crate::inbound_email::parse_raw_eml(&raw) else {
+        return Ok(bad_request(
+            "unparseable_message",
+            "The message could not be parsed as RFC 5322 mail.",
+        ));
+    };
+    let provider_account = input
+        .provider_account
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("cli-ingest")
+        .to_string();
+    let attachments = crate::inbox::ingest_attachments(&state.surreal, &state.storage, &email)
+        .await
+        .map_err(ApiError::Db)?;
+    let provider_message_id = email
+        .message_id
+        .clone()
+        .unwrap_or_else(|| format!("raw-{}", store::assets::sha256_hex(&raw)));
+    let occurred_at = crate::inbound_email::date_from_raw(&raw)
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let ingested = store::inbox::ingest_inbound(
+        &state.surreal,
+        &store::inbox::IngestInbound {
+            firm_id,
+            project_id: Some(id),
+            brand_key: None,
+            interaction_type: Some("message"),
+            provider_post_id: None,
+            parent_provider_message_id: None,
+            visibility: None,
+            channel: store::inbox::channel::EMAIL,
+            provider_account: &provider_account,
+            provider_message_id: &provider_message_id,
+            provider_thread_ref: None,
+            external_address: &email.from,
+            external_name: None,
+            subject: Some(email.subject.as_str()),
+            body: email.text.as_str(),
+            source_page: None,
+            source_channel: Some(store::inbox::channel::EMAIL),
+            matter_consent: true,
+            promotional_opt_in: false,
+            email_conversation_id: None,
+            attachments,
+            occurred_at: &occurred_at,
+        },
+    )
+    .await
+    .map_err(|error| ApiError::Db(error.to_string()))?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "conversation_id": ingested.conversation_id,
+            "message_id": ingested.message_id,
+            "deduped": ingested.deduped,
+        })),
+    )
+        .into_response())
 }
 
 /// `POST /app/api/projects/{id}/documents` — file a document into a matter, the
@@ -4531,6 +4874,9 @@ async fn upload_document_door(
         .find_map(|notarization| notarization.validate().err())
     {
         return Ok(bad_request("invalid_notarization", &error.to_string()));
+    }
+    if let Some(error) = input.evidence.as_ref().and_then(|e| e.validate().err()) {
+        return Ok(bad_request("invalid_evidence", &error.to_string()));
     }
     if input.derived_from.is_some() && kind != "transcript" {
         return Ok(bad_request(
@@ -4684,6 +5030,7 @@ async fn upload_document_door(
             },
             signing: input.signing,
             notarization: input.notarization.clone(),
+            evidence: input.evidence.clone(),
         },
         &bytes,
     )
@@ -4737,6 +5084,9 @@ async fn document_pointer(
         xero_invoice_id: None,
         signing: current.signing,
         notarization: current.notarization.clone(),
+        // The evidence block rides with the current revision, so a pointer
+        // filed here carries the same provenance `project sync` records.
+        evidence: current.evidence.clone(),
         service: Vec::new(),
     })
 }
@@ -4873,8 +5223,12 @@ async fn mail_file_door(
         id,
         kind,
         visibility,
-        &input.message_id,
-        &message,
+        &MailAttachmentSource {
+            message_id: &input.message_id.to_string(),
+            sender: &message.from_addr,
+            received_at: &message.inserted_at.to_rfc3339(),
+            subject: &message.subject,
+        },
         &attachments,
     )
     .await?;
@@ -4891,6 +5245,19 @@ async fn mail_file_door(
         .into_response())
 }
 
+/// The message-identity half of attachment filing: what the deterministic
+/// slug and the stamped [`store::documents::MailProvenance`] derive from,
+/// shared by both filing doors — a stored inbound hop (`mail_file_door`) and
+/// a raw `.eml` upload (`eml_upload_door`).
+struct MailAttachmentSource<'a> {
+    /// Slug component. A UUID for a stored message; a sanitized `.eml`
+    /// message reference for an upload.
+    message_id: &'a str,
+    sender: &'a str,
+    received_at: &'a str,
+    subject: &'a str,
+}
+
 /// File every parsed attachment as its own slugged revision
 /// (`mail/<message_id>/<index>`), stamping [`store::documents::MailProvenance`]
 /// onto each, and return one pointer per attachment in message-part order.
@@ -4902,12 +5269,11 @@ async fn file_mail_attachments(
     project_id: Uuid,
     kind: &str,
     visibility: &str,
-    message_id: &Uuid,
-    message: &store::email_conversations::EmailConversationMessage,
+    source: &MailAttachmentSource<'_>,
     attachments: &[crate::inbound_email::InboundAttachment],
 ) -> Result<Vec<store::document_pointers::DocumentPointer>, ApiError> {
-    let message_id_str = message_id.to_string();
-    let received_at = message.inserted_at.to_rfc3339();
+    let message_id_str = source.message_id.to_string();
+    let received_at = source.received_at.to_string();
     let mut filed = Vec::with_capacity(attachments.len());
     for (index, attachment) in attachments.iter().enumerate() {
         let slug = format!("mail/{message_id_str}/{index}");
@@ -4929,12 +5295,13 @@ async fn file_mail_attachments(
             transcript_quality: None,
             signing: None,
             notarization: Vec::new(),
+            evidence: None,
         };
         let provenance = store::documents::MailProvenance {
             message_id: &message_id_str,
-            sender: &message.from_addr,
+            sender: source.sender,
             received_at: &received_at,
-            subject: &message.subject,
+            subject: source.subject,
         };
         store::assets::file_revision_with_provenance(
             &state.surreal,
@@ -4949,6 +5316,248 @@ async fn file_mail_attachments(
         filed.push(document_pointer(&state.surreal, project_id, &slug, kind).await?);
     }
     Ok(filed)
+}
+
+/// Request body for `POST /app/api/projects/{id}/mail/eml`.
+#[derive(Deserialize)]
+struct EmlUploadRequest {
+    /// The raw RFC 822 message, base64-encoded: bytes the caller already
+    /// holds (a saved copy, a downloaded export), so no per-machine Gmail
+    /// OAuth grant is involved in filing.
+    raw_base64: String,
+    /// The firm mailbox the filing lawyer files from. When it matches the
+    /// message's `From`, the message files as outbound; without it, inbound.
+    mailbox: Option<String>,
+    /// Required asset-lane kind when the message carries attachments — a
+    /// decision, never a default, matching `POST .../documents`.
+    kind: Option<String>,
+    /// `"client"` makes every filed attachment client-visible; anything else
+    /// (the default) files them as internal work product.
+    visibility: Option<String>,
+    /// List what would file, writing nothing.
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// One attachment as the .eml door reports it, filed or not.
+#[derive(Serialize)]
+struct EmlUploadAttachment {
+    filename: String,
+    content_type: String,
+    size_bytes: usize,
+}
+
+#[derive(Serialize)]
+struct EmlUploadResponse {
+    /// The external id the message deduped on (`eml:<Message-ID or digest>`).
+    source_ref: String,
+    /// `inbound` or `outbound`, decided by the optional mailbox match.
+    direction: String,
+    /// `true` when a message with this `(channel, source_ref)` was already
+    /// filed on this matter — nothing was written a second time.
+    deduped: bool,
+    /// The filed Communication, absent on a dry run.
+    communication_id: Option<Uuid>,
+    attachments: Vec<EmlUploadAttachment>,
+    /// One pointer per filed attachment, in message-part order. Empty when
+    /// `dry_run`, or when the message carried no attachments.
+    filed: Vec<store::document_pointers::DocumentPointer>,
+}
+
+/// The `400` error code a filing refusal names.
+fn eml_parse_error_code(error: &crate::eml_filing::EmlParseError) -> &'static str {
+    match error {
+        crate::eml_filing::EmlParseError::NotMime => "not_mime",
+        crate::eml_filing::EmlParseError::NoDate => "no_date",
+        crate::eml_filing::EmlParseError::BadDate => "bad_date",
+        crate::eml_filing::EmlParseError::NoBody => "no_body",
+    }
+}
+
+/// `POST /app/api/projects/{id}/mail/eml` — file a raw `.eml` the caller
+/// already holds as a matter Communication, each attachment filing as a
+/// linked document. No Gmail OAuth grant is involved anywhere: the MIME is
+/// parsed here, and the message files through the same idempotent
+/// `(channel, source_ref)` ingest every email Communication uses, so
+/// re-uploading the same message writes nothing a second time.
+///
+/// Lawyer-tier and matter-scoped, same as the sibling doors (out-of-scope →
+/// 404). Attachments require a `kind` (`400 kind_required`) and file under
+/// deterministic slugs (`mail/<message reference>/<index>`). `dry_run` lists
+/// the attachments and writes nothing.
+async fn eml_upload_door(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Json(input): Json<EmlUploadRequest>,
+) -> Result<Response, ApiError> {
+    use base64::Engine as _;
+    let in_scope = store::access::can_see_project_as_lawyer(
+        &state.surreal,
+        lawyer.0.person_id,
+        lawyer.0.role,
+        id,
+    )
+    .await
+    .unwrap_or(false);
+    if !in_scope {
+        return Err(ApiError::NotFound);
+    }
+    let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(input.raw_base64.trim()) else {
+        return Ok(bad_request(
+            "not_base64",
+            "raw_base64 must be the raw .eml message, base64-encoded.",
+        ));
+    };
+    let parsed = match crate::eml_filing::parse_eml(&raw, input.mailbox.as_deref()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return Ok(bad_request(
+                eml_parse_error_code(&error),
+                &error.to_string(),
+            ));
+        }
+    };
+    let has_attachments = !parsed.attachments.is_empty();
+    let kind = input
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if !input.dry_run && has_attachments && kind.is_none() {
+        return Ok(bad_request(
+            "kind_required",
+            &format!(
+                "A document kind is required when the message carries attachments. Accepted values are: {}.",
+                accepted_asset_kinds().join(", ")
+            ),
+        ));
+    }
+    let visibility = if input.visibility.as_deref() == Some(store::documents::visibility::CLIENT) {
+        store::documents::visibility::CLIENT
+    } else {
+        store::documents::visibility::INTERNAL
+    };
+    let attachments: Vec<EmlUploadAttachment> = parsed
+        .attachments
+        .iter()
+        .map(|attachment| EmlUploadAttachment {
+            filename: attachment.filename.clone(),
+            content_type: attachment.content_type.clone(),
+            size_bytes: attachment.bytes.len(),
+        })
+        .collect();
+    if input.dry_run {
+        return Ok((
+            StatusCode::OK,
+            Json(EmlUploadResponse {
+                source_ref: parsed.source_ref,
+                direction: parsed.direction.to_string(),
+                deduped: false,
+                communication_id: None,
+                attachments,
+                filed: Vec::new(),
+            }),
+        )
+            .into_response());
+    }
+    file_parsed_eml(&state, id, &lawyer, parsed, kind, visibility, attachments).await
+}
+
+/// The filing half of the .eml door: ingest the parsed message as a
+/// Communication, file its attachments, and report the outcome. Validation
+/// and the dry-run report stay in the handler above.
+async fn file_parsed_eml(
+    state: &ApiState,
+    project_id: Uuid,
+    lawyer: &LawyerSession,
+    parsed: crate::eml_filing::ParsedEml,
+    kind: Option<&str>,
+    visibility: &'static str,
+    attachments: Vec<EmlUploadAttachment>,
+) -> Result<Response, ApiError> {
+    let (channel, direction) = if parsed.direction == "outbound" {
+        (
+            store::communications::channel::EMAIL_OUTBOUND,
+            store::communications::direction::OUTBOUND,
+        )
+    } else {
+        (
+            store::communications::channel::EMAIL_INBOUND,
+            store::communications::direction::INBOUND,
+        )
+    };
+    let counterparty = if parsed.direction == "outbound" {
+        &parsed.to
+    } else {
+        &parsed.from
+    };
+    let author_person_id = lawyer.0.person_id.ok_or(ApiError::NotFound)?;
+    let ingested = store::communications::ingest_email(
+        &state.surreal,
+        &store::communications::IngestArgs {
+            project_id,
+            channel,
+            direction,
+            author_person_id: Some(author_person_id),
+            counterparty: Some(counterparty),
+            subject: parsed.subject.as_deref(),
+            body: &parsed.body,
+            source_ref: Some(&parsed.source_ref),
+            asset_id: None,
+            occurred_at: &parsed.at,
+        },
+        store::communications::EmailDetails::default(),
+    )
+    .await
+    .map_err(crate::communications_api::map_communication)?;
+    let filed = if parsed.attachments.is_empty() {
+        Vec::new()
+    } else {
+        let message_id_slug: String = parsed
+            .message_ref
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let kind = kind.expect("invariant: kind_required returned early without one");
+        file_mail_attachments(
+            state,
+            project_id,
+            kind,
+            visibility,
+            &MailAttachmentSource {
+                message_id: &message_id_slug,
+                sender: &parsed.from,
+                received_at: &parsed.at,
+                subject: parsed.subject.as_deref().unwrap_or(""),
+            },
+            &parsed.attachments,
+        )
+        .await?
+    };
+    let status = if ingested.deduped {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((
+        status,
+        Json(EmlUploadResponse {
+            source_ref: parsed.source_ref,
+            direction: parsed.direction.to_string(),
+            deduped: ingested.deduped,
+            communication_id: Some(ingested.communication_id),
+            attachments,
+            filed,
+        }),
+    )
+        .into_response())
 }
 
 /// `GET /app/api/projects/{id}/documents/revisions?slug=`, the query, not a
@@ -6446,6 +7055,11 @@ pub enum ApiError {
     /// A `pages:` set the gate refuses: a `Y021` shape problem or a D-family
     /// composition finding, one per `;`.
     PagesInvalid(String),
+    /// A Project surface reconcile could not run because the Project's Firm
+    /// is missing a Forgejo coordinate — the message names each piece. An
+    /// expected outcome of a fleet-wide backfill sweep, reported per Project
+    /// rather than a bare internal fault.
+    ForgejoUnavailable(String),
 }
 
 impl From<store::persons::PersonError> for ApiError {
@@ -7071,6 +7685,67 @@ impl IntoResponse for ApiError {
                 })),
             )
                 .into_response(),
+            // The template's declared workflow/questionnaire failed the
+            // engine's parse — a template fault, not a server one (LAW-200:
+            // these answered `500 internal`).
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::Spec(e),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "template_spec",
+                    "message": format!("Template spec: {e}")
+                })),
+            )
+                .into_response(),
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::TemplateSource(
+                    store::template_source::TemplateSourceError::AmbiguousBlueprintDirectories,
+                ),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "ambiguous_blueprint_directories",
+                    "message": "The matter repo contains both `templates/` and `drafts/` blueprint directories; remove one so the template is unambiguous."
+                })),
+            )
+                .into_response(),
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::TemplateSource(
+                    store::template_source::TemplateSourceError::InvalidLayout(details),
+                ),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "invalid_layout",
+                    "message": format!("Invalid matter blueprint layout: {details}")
+                })),
+            )
+                .into_response(),
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::TemplateSource(
+                    store::template_source::TemplateSourceError::NotUtf8(path),
+                ),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "template_not_utf8",
+                    "message": format!("Template `{path}` body is not valid UTF-8.")
+                })),
+            )
+                .into_response(),
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::TemplateSource(
+                    store::template_source::TemplateSourceError::Composition(details),
+                ),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "composition",
+                    "message": format!("Clause composition: {details}")
+                })),
+            )
+                .into_response(),
             Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
                 e,
             )) => {
@@ -7477,6 +8152,20 @@ impl IntoResponse for ApiError {
                 tracing::error!(error = %e, "api: asset error");
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "internal" }))).into_response()
             }
+            // An unconfigured Firm's Forgejo is operator configuration, not
+            // an internal fault: the door answers a classifiable 422 whose
+            // message names the missing coordinates, so a fleet-wide
+            // backfill sweep can record the skip per Project and continue.
+            Self::ForgejoUnavailable(missing) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "forgejo_unavailable",
+                    "message": format!(
+                        "Project surface reconciliation is unavailable until Forgejo is configured: {missing}."
+                    )
+                })),
+            )
+                .into_response(),
         }
     }
 }
@@ -7527,14 +8216,16 @@ mod tests {
     use super::NotationStepResponse;
     use super::{
         api_operation_table, can_see, document_integrity_door, documented_api_operations,
-        get_notation_door, integrity_chains, list_document_revisions_door, list_firms,
-        list_notations_door, mail_file_door, routes, ApiError, ApiState, AuthedSession,
-        IntegrityQuery, LawyerSession, MailFileRequest, RevisionsQuery,
+        eml_upload_door, get_notation_door, integrity_chains, list_document_revisions_door,
+        list_firms, list_notations_door, mail_file_door, routes, ApiError, ApiState, AuthedSession,
+        EmlUploadRequest, IntegrityQuery, LawyerSession, MailFileRequest, RevisionsQuery,
     };
     use axum::extract::{Path, Query, State};
+    use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use axum::Json;
     use std::collections::BTreeSet;
+    use uuid::Uuid;
 
     #[test]
     fn client_notation_list_and_id_visibility_keep_only_client_visible_kinds() {
@@ -7576,6 +8267,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let client = |person_id| {
             AuthedSession(crate::SessionData {
@@ -7952,6 +8644,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let lawyer = integrity_participant(
             &db,
@@ -8159,6 +8852,34 @@ mod tests {
         assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
     }
 
+    /// An unconfigured Firm's Forgejo is operator configuration, not an
+    /// internal fault: the door answers a classifiable `422
+    /// forgejo_unavailable` whose message names every missing piece, so a
+    /// fleet-wide backfill sweep can report it per Project and continue.
+    #[tokio::test]
+    async fn a_firm_missing_its_forgejo_coordinates_is_422_forgejo_unavailable() {
+        let response = ApiError::ForgejoUnavailable(
+            "NAVIGATOR_FORGEJO_ROOT_URL_ENV, the Firm's forgejo_access_token integration secret"
+                .to_string(),
+        )
+        .into_response();
+
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("the 422 response body should be readable");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("the 422 response should be JSON");
+        assert_eq!(json["error"], "forgejo_unavailable");
+        assert!(json["message"]
+            .as_str()
+            .expect("the message names the missing pieces")
+            .contains("forgejo_access_token"));
+    }
+
     #[tokio::test]
     async fn a_person_email_unique_violation_is_409_with_a_field_message() {
         let response = ApiError::Person(store::persons::PersonError::EmailTaken).into_response();
@@ -8200,6 +8921,7 @@ mod tests {
             transcript_quality: None,
             signing: None,
             notarization: Vec::new(),
+            evidence: None,
         };
         store::documents::ingest_bytes_as(
             surreal,
@@ -8270,6 +8992,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let session = crate::SessionData {
             person_id: Some(mixed_role_person.id),
@@ -8327,6 +9050,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         // Owner/Admin bypass project-scoping only at route admission; a
         // matter-content route like this one still applies the participation
@@ -8472,6 +9196,7 @@ filename*=UTF-8''signed%20intake.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let session = crate::SessionData {
             person_id: Some(lawyer_person.id),
@@ -8559,6 +9284,7 @@ filename*=UTF-8''signed%20intake.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let session = crate::SessionData {
             person_id: Some(lawyer_person.id),
@@ -8598,6 +9324,315 @@ filename*=UTF-8''signed%20intake.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\
                 .is_empty(),
             "a dry run writes no asset row"
         );
+    }
+
+    const EML_PLAIN: &str = "Message-ID: <abc-123@example.test>\r\n\
+From: Client <client@example.test>\r\n\
+To: lawyer@neonlaw.test\r\n\
+Subject: Retainer questions\r\n\
+Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+Can I sign electronically?\r\n";
+
+    const EML_WITH_ATTACHMENT: &str = "Message-ID: <order-1@example.test>\r\n\
+From: client@example.test\r\n\
+To: lawyer@neonlaw.test\r\n\
+Subject: The signed order\r\n\
+Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n\
+\r\n\
+--BOUND\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+See the attached order.\r\n\
+--BOUND\r\n\
+Content-Type: application/pdf\r\n\
+Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
+\r\n\
+%PDF-1.4\r\n\
+--BOUND--\r\n";
+
+    /// A lawyer participating in the seeded matter, plus that matter's
+    /// `ApiState` — the .eml door's test rig.
+    async fn eml_lawyer_state(
+        db: &store::surreal::SurrealDb,
+        project_id: Uuid,
+        email: &str,
+    ) -> (ApiState, crate::SessionData) {
+        let app = crate::test_support::app_state(db.clone()).await;
+        let lawyer_person = store::test_support::ensure_person(
+            db,
+            &store::persons::NewPerson {
+                email: email.to_string(),
+                name: "Aries Attorney".to_string(),
+                role: store::persons::Role::Lawyer,
+                ..Default::default()
+            },
+        )
+        .await;
+        store::projects::designate_dri_in_surreal(
+            db,
+            project_id,
+            lawyer_person.id,
+            store::projects::DriSide::Lawyer,
+        )
+        .await
+        .expect("seed the lawyer's participation row");
+        let state = ApiState {
+            surreal: app.surreal.clone(),
+            email: app.email.clone(),
+            bootstrap_owner_email: app.bootstrap_owner_email.clone(),
+            bootstrap_company: "Test Firm".to_string(),
+            questionnaire_runtime: app.questionnaire_runtime.clone(),
+            storage: app.storage.clone(),
+            workflow_runtime: app.workflow_runtime.clone(),
+            assets_storage: app.assets_storage.clone(),
+            forms_registry: app.forms_registry.clone(),
+            signature_provider: app.signature_provider.clone(),
+            contract_reviewer: app.contract_reviewer.clone(),
+            integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
+        };
+        let session = crate::SessionData {
+            person_id: Some(lawyer_person.id),
+            ..crate::SessionData::fresh("lawyer-sub", store::persons::Role::Lawyer)
+        };
+        (state, session)
+    }
+
+    fn eml_request(
+        raw: &[u8],
+        mailbox: Option<String>,
+        kind: Option<String>,
+        dry_run: bool,
+    ) -> EmlUploadRequest {
+        EmlUploadRequest {
+            raw_base64: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, raw),
+            mailbox,
+            kind,
+            visibility: None,
+            dry_run,
+        }
+    }
+
+    #[tokio::test]
+    async fn eml_door_files_raw_eml_without_any_gmail_grant() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        // The request carries only bytes and a session — no Gmail OAuth
+        // account, client id, or Keychain refresh token anywhere in the
+        // flow, which is the point of the door.
+        let response = eml_upload_door(
+            State(state),
+            LawyerSession(session),
+            Path(project_id),
+            Json(eml_request(EML_PLAIN.as_bytes(), None, None, false)),
+        )
+        .await
+        .expect("a lawyer on the matter can file a raw .eml");
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["source_ref"], "eml:abc-123@example.test");
+        assert_eq!(json["direction"], "inbound");
+        assert_eq!(json["deduped"], false);
+        assert!(json["communication_id"].is_string());
+        let filed = store::communications::for_project(&db, project_id)
+            .await
+            .unwrap();
+        assert_eq!(filed.len(), 1);
+        assert_eq!(
+            filed[0].source_ref.as_deref(),
+            Some("eml:abc-123@example.test")
+        );
+        assert_eq!(
+            filed[0].channel,
+            store::communications::channel::EMAIL_INBOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn eml_door_replay_dedupes_on_channel_and_source_ref() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-dup").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        for expected_status in [StatusCode::CREATED, StatusCode::OK] {
+            let response = eml_upload_door(
+                State(state.clone()),
+                LawyerSession(session.clone()),
+                Path(project_id),
+                Json(eml_request(EML_PLAIN.as_bytes(), None, None, false)),
+            )
+            .await
+            .expect("each upload of the same message succeeds");
+            assert_eq!(response.status(), expected_status);
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                json["deduped"],
+                expected_status == StatusCode::OK,
+                "the replay is the deduped one"
+            );
+        }
+        let filed = store::communications::for_project(&db, project_id)
+            .await
+            .unwrap();
+        assert_eq!(filed.len(), 1, "the replay wrote no second row");
+    }
+
+    #[tokio::test]
+    async fn eml_door_files_attachments_as_linked_documents_and_replays_without_duplicates() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-att").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        let raw = EML_WITH_ATTACHMENT.as_bytes();
+        let mut first = None;
+        for round in 0..2 {
+            let response = eml_upload_door(
+                State(state.clone()),
+                LawyerSession(session.clone()),
+                Path(project_id),
+                Json(eml_request(raw, None, Some("exhibit".to_string()), false)),
+            )
+            .await
+            .expect("an attachment-bearing .eml files");
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let filed = json["filed"].as_array().expect("filed array");
+            assert_eq!(filed.len(), 1, "one pointer per attachment");
+            assert_eq!(
+                filed[0]["current_version"]["version"], 1,
+                "the replay filed no second revision"
+            );
+            assert_eq!(json["attachments"][0]["filename"], "order.pdf");
+            if round == 0 {
+                assert_eq!(status, StatusCode::CREATED);
+                first = Some(filed[0]["current_version"]["asset_id"].clone());
+            } else {
+                assert_eq!(status, StatusCode::OK);
+                assert_eq!(
+                    json["deduped"], true,
+                    "the replay dedupes the communication"
+                );
+                assert_eq!(
+                    filed[0]["current_version"]["asset_id"],
+                    first.clone().expect("the first round filed an asset"),
+                    "the replay reads back the same asset"
+                );
+            }
+        }
+        let filed = store::communications::for_project(&db, project_id)
+            .await
+            .unwrap();
+        assert_eq!(filed.len(), 1, "the replay wrote no second row");
+    }
+
+    #[tokio::test]
+    async fn eml_door_dry_run_lists_attachments_without_writing() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-dry").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        let response = eml_upload_door(
+            State(state),
+            LawyerSession(session),
+            Path(project_id),
+            Json(eml_request(
+                EML_WITH_ATTACHMENT.as_bytes(),
+                None,
+                None,
+                true,
+            )),
+        )
+        .await
+        .expect("a dry run succeeds");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["communication_id"], serde_json::Value::Null);
+        assert_eq!(json["attachments"][0]["filename"], "order.pdf");
+        assert!(
+            json["filed"].as_array().unwrap().is_empty(),
+            "a dry run files nothing"
+        );
+        assert!(
+            store::communications::for_project(&db, project_id)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a dry run writes no communication"
+        );
+        assert!(
+            store::assets::for_project(&db, project_id)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a dry run writes no asset row"
+        );
+    }
+
+    #[tokio::test]
+    async fn eml_door_requires_a_kind_to_file_attachments() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-kind").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        let response = eml_upload_door(
+            State(state),
+            LawyerSession(session),
+            Path(project_id),
+            Json(eml_request(
+                EML_WITH_ATTACHMENT.as_bytes(),
+                None,
+                None,
+                false,
+            )),
+        )
+        .await
+        .expect("the request is well-formed; the refusal is the body");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "kind_required");
+    }
+
+    #[tokio::test]
+    async fn eml_door_refuses_out_of_scope_lawyers() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-scope").await;
+        // A lawyer with no participation row on this matter.
+        let (state, session) = eml_lawyer_state(&db, project_id, "outside@neonlaw.com").await;
+        let other = store::test_support::seed_project_surreal(&db, "eml-door-other").await;
+
+        let response = eml_upload_door(
+            State(state),
+            LawyerSession(session),
+            Path(other),
+            Json(eml_request(EML_PLAIN.as_bytes(), None, None, false)),
+        )
+        .await;
+
+        assert!(matches!(response, Err(ApiError::NotFound)));
     }
 
     #[test]

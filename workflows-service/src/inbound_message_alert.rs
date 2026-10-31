@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
-use store::inbox::{direction, Conversation, Message};
+use store::inbox::{direction, Conversation, InboxError, Message};
 use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::{InboundMessageAlertReport, InboundMessageAlertRequest, SlackBot};
@@ -42,6 +42,12 @@ impl InboundMessageAlertService {
         }
     }
 
+    /// The shared `SurrealDB` handle the DBOS twin reads message context from.
+    #[must_use]
+    pub(crate) fn surreal(&self) -> &SurrealDb {
+        &self.surreal
+    }
+
     #[cfg(test)]
     fn channel_id(&self) -> &str {
         if self.simulated {
@@ -64,6 +70,7 @@ mod tests {
         let incoming = inbox::ingest_inbound(
             &db,
             &IngestInbound {
+                project_id: None,
                 firm_id: firm,
                 brand_key: Some("neon"),
                 interaction_type: Some("comment"),
@@ -83,7 +90,7 @@ mod tests {
                 matter_consent: false,
                 promotional_opt_in: false,
                 email_conversation_id: None,
-                attachment_asset_id: None,
+                attachments: Vec::new(),
                 occurred_at: "2026-10-07T12:00:00Z",
             },
         )
@@ -121,6 +128,7 @@ mod tests {
         inbox::ingest_inbound(
             db,
             &IngestInbound {
+                project_id: None,
                 firm_id,
                 brand_key: Some(brand),
                 interaction_type: Some("message"),
@@ -140,7 +148,7 @@ mod tests {
                 matter_consent: false,
                 promotional_opt_in: false,
                 email_conversation_id: None,
-                attachment_asset_id: None,
+                attachments: Vec::new(),
                 occurred_at: "2026-10-10T00:00:00Z",
             },
         )
@@ -281,7 +289,7 @@ mod tests {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-struct AlertContext {
+pub(crate) struct AlertContext {
     conversation_id: Uuid,
     #[serde(default)]
     firm_id: Uuid,
@@ -290,25 +298,35 @@ struct AlertContext {
     interaction_type: String,
 }
 
-async fn alert_context(
+/// Why the metadata-only context read failed. Terminal variants end the run
+/// on either engine; `Store` is a retriable read failure.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AlertContextError {
+    #[error("inbound message not found")]
+    MessageNotFound,
+    #[error("inbound conversation not found")]
+    ConversationNotFound,
+    #[error("inbound message store: {0}")]
+    Store(#[from] InboxError),
+}
+
+/// The metadata-only context read shared by both engines. Message text,
+/// external names, and addresses stay in the Firm inbox.
+pub(crate) async fn alert_context(
     surreal: &SurrealDb,
     message_id: Uuid,
-) -> Result<Option<AlertContext>, HandlerError> {
-    let Some(message): Option<Message> = store::inbox::message_by_id(surreal, message_id)
-        .await
-        .map_err(HandlerError::from)?
+) -> Result<Option<AlertContext>, AlertContextError> {
+    let Some(message): Option<Message> = store::inbox::message_by_id(surreal, message_id).await?
     else {
-        return Err(TerminalError::new("inbound message not found").into());
+        return Err(AlertContextError::MessageNotFound);
     };
     if message.direction != direction::INBOUND {
         return Ok(None);
     }
     let Some(conversation): Option<Conversation> =
-        store::inbox::conversation_by_id(surreal, message.conversation_id)
-            .await
-            .map_err(HandlerError::from)?
+        store::inbox::conversation_by_id(surreal, message.conversation_id).await?
     else {
-        return Err(TerminalError::new("inbound conversation not found").into());
+        return Err(AlertContextError::ConversationNotFound);
     };
     Ok(Some(AlertContext {
         conversation_id: conversation.id,
@@ -317,6 +335,14 @@ async fn alert_context(
         channel: conversation.channel,
         interaction_type: conversation.interaction_type,
     }))
+}
+
+/// Map the shared context-read error onto the Restate step's error type.
+fn alert_context_handler_error(error: AlertContextError) -> HandlerError {
+    match error {
+        AlertContextError::Store(inner) => inner.into(),
+        terminal => TerminalError::new(terminal.to_string()).into(),
+    }
 }
 
 #[restate_sdk::workflow(name = "InboundMessageAlert")]
@@ -330,10 +356,15 @@ impl InboundMessageAlertService {
         let message_id = request.message_id;
         let context = {
             let surreal = self.surreal.clone();
-            ctx.run(move || async move { Ok(Json(alert_context(&surreal, message_id).await?)) })
-                .name("load-inbound-message-context")
-                .await?
-                .into_inner()
+            ctx.run(move || async move {
+                alert_context(&surreal, message_id)
+                    .await
+                    .map(Json)
+                    .map_err(alert_context_handler_error)
+            })
+            .name("load-inbound-message-context")
+            .await?
+            .into_inner()
         };
         let Some(context) = context else {
             return Ok(Json(InboundMessageAlertReport {
@@ -389,7 +420,9 @@ impl InboundMessageAlertService {
         Ok("unknown".into())
     }
 
-    async fn deliver_alert(
+    /// Deliver one alert. Shared by the Restate handler and the DBOS twin
+    /// (`dbos_inbound_message_alert`) so Slack routing stays single-sourced.
+    pub(crate) async fn deliver_alert(
         &self,
         message_id: Uuid,
         _context: &AlertContext,

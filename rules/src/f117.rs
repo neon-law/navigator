@@ -106,6 +106,19 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "contractor_term",    // e.g. "until the project completes"
     "disputed_reason",    // client's own words for the dispute
     "dissolution_reason", // stated grounds for dissolution
+    // Court-form self-help blanks (the forms registry's court templates).
+    // The typed states carry the people; the blanks also ask for geographic
+    // facts the jurisdiction lookup does not seed (it carries states, not
+    // counties) and for the petitioner's own reasons, which are prose only
+    // the client can supply.
+    "county_of_residence", // county name for the filing court; the jurisdiction lookup seeds states, not counties
+    "place_of_birth", // birthplace as the form prints it (city/county and state); the country lookup covers country-level birthplaces
+    "reason_for_change", // NC-110 item: the petitioner's own words for the requested name change
+    "birthplace_city", // the NV name petition's separate city-of-birth field; no city lookup exists
+    "felony_details", // NC-110/NV petition: narrative about a past felony conviction, if any
+    "incident_date", // the DV application's most-recent-incident date, which intake may answer "ongoing" — the lawyer confirms the field
+    "incident_location", // where the most recent DV incident happened
+    "what_happened", // the DV application's own-words incident narrative
     // The engagement letter's minimum scope — the one sentence saying what
     // the Firm is committing to right now. It cannot be typed: the Matter
     // does not exist as a record until this letter opens it, and the scope

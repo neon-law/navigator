@@ -34,6 +34,7 @@ const NEON_NOTATIONS_YAML: &str = include_str!("../locales/en/neon/notations.yam
 const NEON_LEGAL_AID_YAML: &str = include_str!("../locales/en/neon/legal-aid.yaml");
 const NEON_NAVIGATOR_YAML: &str = include_str!("../locales/en/neon/navigator.yaml");
 const NEON_SERVICES_YAML: &str = include_str!("../locales/en/neon/services.yaml");
+const NEON_FREE_RESOURCES_YAML: &str = include_str!("../locales/en/neon/free-resources.yaml");
 /// `/delete-your-debt` — Neon's own gateway to the DeleteYourDebt.com
 /// practice. The first of a family of Neon-only practice gateways; see
 /// [`views::locales::KNOWN_PAGES`].
@@ -49,6 +50,22 @@ const NEON_NAUTILUS_YAML: &str = include_str!("../locales/en/neon/nautilus.yaml"
 /// Same family as [`NEON_GATEWAY_DELETE_YOUR_DEBT_YAML`].
 const NEON_GATEWAY_IMMIGRATION_YAML: &str =
     include_str!("../locales/en/neon/gateway-immigration.yaml");
+const NEON_IMMIGRATION_FAMILY_GREEN_CARDS_YAML: &str =
+    include_str!("../locales/en/neon/immigration-family-green-cards.yaml");
+const NEON_IMMIGRATION_CITIZENSHIP_YAML: &str =
+    include_str!("../locales/en/neon/immigration-citizenship.yaml");
+const NEON_IMMIGRATION_EMPLOYMENT_VISAS_YAML: &str =
+    include_str!("../locales/en/neon/immigration-employment-visas.yaml");
+const NEON_IMMIGRATION_CONSULAR_PROCESSING_YAML: &str =
+    include_str!("../locales/en/neon/immigration-consular-processing.yaml");
+const NEON_IMMIGRATION_USCIS_NOTICES_YAML: &str =
+    include_str!("../locales/en/neon/immigration-uscis-notices.yaml");
+const NEON_IMMIGRATION_HUMANITARIAN_RELIEF_YAML: &str =
+    include_str!("../locales/en/neon/immigration-humanitarian-relief.yaml");
+const NEON_IMMIGRATION_REMOVAL_DEFENSE_YAML: &str =
+    include_str!("../locales/en/neon/immigration-removal-defense.yaml");
+const NEON_IMMIGRATION_FREE_SUPPORT_YAML: &str =
+    include_str!("../locales/en/neon/immigration-free-support.yaml");
 /// `/estate-planning` — Neon's own gateway to the Vesta Estate Planning
 /// practice. Same family as [`NEON_GATEWAY_DELETE_YOUR_DEBT_YAML`].
 const NEON_GATEWAY_ESTATE_PLANNING_YAML: &str =
@@ -64,6 +81,7 @@ const NEON_GATEWAY_DIVORCE_YAML: &str = include_str!("../locales/en/neon/gateway
 const NEON_SERVICES_CATALOG_YAML: &str = include_str!("../locales/en/neon/services-catalog.yaml");
 const DELETE_YOUR_DATA_HOME_YAML: &str = include_str!("../locales/en/delete-your-data/home.yaml");
 const VESTA_HOME_YAML: &str = include_str!("../locales/en/vesta/home.yaml");
+const VESTA_FREE_RESOURCES_YAML: &str = include_str!("../locales/en/vesta/free-resources.yaml");
 const LAWYER_SHOOK_HOME_YAML: &str = include_str!("../locales/en/lawyer-shook/home.yaml");
 const VESTA_SERVICES_YAML: &str = include_str!("../locales/en/vesta/services.yaml");
 const MISERICORDIA_HOME_YAML: &str = include_str!("../locales/en/misericordia/home.yaml");
@@ -80,6 +98,13 @@ const SUMMONS_SERVICES_YAML: &str = include_str!("../locales/en/summons/services
 const CYBER_INJURY_SERVICES_YAML: &str =
     include_str!("../locales/en/cyber-injury-law/services.yaml");
 const CYBER_INJURY_HOME_YAML: &str = include_str!("../locales/en/cyber-injury-law/home.yaml");
+const CYBER_INJURY_CAR_ACCIDENTS_YAML: &str =
+    include_str!("../locales/en/cyber-injury-law/car-accidents.yaml");
+const CYBER_INJURY_CYBERCRIME_YAML: &str =
+    include_str!("../locales/en/cyber-injury-law/cybercrime.yaml");
+const CYBER_INJURY_THEFT_YAML: &str = include_str!("../locales/en/cyber-injury-law/theft.yaml");
+const CYBER_INJURY_DATA_THEFT_YAML: &str =
+    include_str!("../locales/en/cyber-injury-law/data-theft.yaml");
 const AEGIS_HOME_YAML: &str = include_str!("../locales/en/aegis/home.yaml");
 const AEGIS_SERVICES_YAML: &str = include_str!("../locales/en/aegis/services.yaml");
 const GUIEB_SHOOK_HOME_YAML: &str = include_str!("../locales/en/guieb-shook/home.yaml");
@@ -136,7 +161,9 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         )),
         (BrandKey::Neon, "home") => Some(NEON_HOME_YAML),
         (BrandKey::Neon, "team") => Some(NEON_TEAM_YAML),
+        (BrandKey::Neon, "free-resources") => Some(NEON_FREE_RESOURCES_YAML),
         (BrandKey::Vesta, "home") => Some(VESTA_HOME_YAML),
+        (BrandKey::Vesta, "free-resources") => Some(VESTA_FREE_RESOURCES_YAML),
         (BrandKey::Vesta, "explainer-probate") => {
             Some(include_str!("../locales/en/vesta/explainer-probate.yaml"))
         }
@@ -155,6 +182,10 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Summons, "services") => Some(SUMMONS_SERVICES_YAML),
         (BrandKey::CyberInjuryLaw, "services") => Some(CYBER_INJURY_SERVICES_YAML),
         (BrandKey::CyberInjuryLaw, "home") => Some(CYBER_INJURY_HOME_YAML),
+        (BrandKey::CyberInjuryLaw, "car-accidents") => Some(CYBER_INJURY_CAR_ACCIDENTS_YAML),
+        (BrandKey::CyberInjuryLaw, "cybercrime") => Some(CYBER_INJURY_CYBERCRIME_YAML),
+        (BrandKey::CyberInjuryLaw, "theft") => Some(CYBER_INJURY_THEFT_YAML),
+        (BrandKey::CyberInjuryLaw, "data-theft") => Some(CYBER_INJURY_DATA_THEFT_YAML),
         (BrandKey::Aegis, "home") => Some(AEGIS_HOME_YAML),
         (BrandKey::Aegis, "services") => Some(AEGIS_SERVICES_YAML),
         (BrandKey::Groundwork, "home") => Some(GROUNDWORK_HOME_YAML),
@@ -177,6 +208,24 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Neon, "gateway-delete-your-debt") => Some(NEON_GATEWAY_DELETE_YOUR_DEBT_YAML),
         (BrandKey::Neon, "gateway-delete-your-data") => Some(NEON_GATEWAY_DELETE_YOUR_DATA_YAML),
         (BrandKey::Neon, "gateway-immigration") => Some(NEON_GATEWAY_IMMIGRATION_YAML),
+        (BrandKey::Neon, "immigration-family-green-cards") => {
+            Some(NEON_IMMIGRATION_FAMILY_GREEN_CARDS_YAML)
+        }
+        (BrandKey::Neon, "immigration-citizenship") => Some(NEON_IMMIGRATION_CITIZENSHIP_YAML),
+        (BrandKey::Neon, "immigration-employment-visas") => {
+            Some(NEON_IMMIGRATION_EMPLOYMENT_VISAS_YAML)
+        }
+        (BrandKey::Neon, "immigration-consular-processing") => {
+            Some(NEON_IMMIGRATION_CONSULAR_PROCESSING_YAML)
+        }
+        (BrandKey::Neon, "immigration-uscis-notices") => Some(NEON_IMMIGRATION_USCIS_NOTICES_YAML),
+        (BrandKey::Neon, "immigration-humanitarian-relief") => {
+            Some(NEON_IMMIGRATION_HUMANITARIAN_RELIEF_YAML)
+        }
+        (BrandKey::Neon, "immigration-removal-defense") => {
+            Some(NEON_IMMIGRATION_REMOVAL_DEFENSE_YAML)
+        }
+        (BrandKey::Neon, "immigration-free-support") => Some(NEON_IMMIGRATION_FREE_SUPPORT_YAML),
         (BrandKey::Neon, "gateway-estate-planning") => Some(NEON_GATEWAY_ESTATE_PLANNING_YAML),
         (BrandKey::Neon, "gateway-accidents") => Some(NEON_GATEWAY_ACCIDENTS_YAML),
         (BrandKey::Neon, "gateway-divorce") => Some(NEON_GATEWAY_DIVORCE_YAML),
@@ -198,6 +247,23 @@ pub fn team(branding: &views::brand::Branding) -> views::locales::TeamCopy {
     let interpolated = interpolate(raw, branding.firm.site_name, branding.firm_email);
     serde_yaml::from_str(&interpolated)
         .expect("invariant: navigator project gate validates the team catalog")
+}
+/// The free court-form catalog's copy, when the brand publishes one —
+/// the brand's free-of-charge and no-outcome promises included, the
+/// page-kind gate (`Y002`) the same one every other page's YAML passes.
+///
+/// `None` for a brand with no `free-resources` catalog; the router
+/// mounts the pages only for brands with a catalog.
+#[must_use]
+pub fn free_resources(
+    branding: &views::brand::Branding,
+) -> Option<views::locales::FreeResourcesCopy> {
+    let raw = catalog_yaml(branding.brand_key, "free-resources")?;
+    let interpolated = interpolate(raw, branding.firm.site_name, branding.firm_email);
+    Some(
+        serde_yaml::from_str(&interpolated)
+            .expect("invariant: navigator project gate validates the free-resources catalog"),
+    )
 }
 
 /// Load one catalog file as `T`, after resolving shared copy and the mounted
@@ -929,6 +995,11 @@ fn sibling_practices(
         .filter_map(|copy| {
             let key = views::brand::BrandKey::parse(&copy.brand)?;
             let href = sibling_practice_href(key, deployment_host)?;
+            let href = if copy.path.is_empty() {
+                href
+            } else {
+                format!("{href}{}", copy.path)
+            };
             Some(webapp::home::SiblingPractice {
                 eyebrow: copy.eyebrow,
                 heading: copy.heading,
@@ -1380,6 +1451,18 @@ pub fn explainer(branding: &views::brand::Branding, stem: &str) -> PageContent {
     content
 }
 
+/// A brand's own practice-area page (`/car-accidents` on Cyber Injury Law),
+/// loaded from the brand's English catalog. The hero CTA resolves to the
+/// brand's consultation door exactly as the explainers do, so the page's
+/// intake path follows the deployment it renders on.
+pub fn practice_page(branding: &views::brand::Branding, stem: &str) -> PageContent {
+    let mut content = marketing_page(load_page(branding, stem), None, branding);
+    if let Some(cta) = content.hero_cta.as_mut() {
+        cta.href = branding.consultation_url.to_string();
+    }
+    content
+}
+
 /// `/delete-your-debt` — Neon's own gateway page naming DeleteYourDebt.com as
 /// a way to work with `PandA` Law on debt relief.
 ///
@@ -1466,20 +1549,119 @@ pub fn nautilus(branding: &views::brand::Branding, _deployment_host: Option<&str
     content
 }
 
-/// `/immigration` — Neon's own gateway page naming Abhaya Immigration as the
-/// destination for immigration work. See [`delete_your_debt_gateway`], whose
-/// CTA-resolution shape this mirrors.
+/// `/immigration` — Neon's own gateway landing naming Abhaya Immigration as
+/// the destination for immigration work, and routing to every practice page
+/// beneath it. The landing is the same catalog machinery as the practice
+/// pages (see [`immigration_practice_page`]): its hero button and closing
+/// Cta band resolve to this deployment's Abhaya Immigration host.
 pub fn immigration_gateway(
     branding: &views::brand::Branding,
     deployment_host: Option<&str>,
 ) -> PageContent {
-    let mut content = marketing_page(load_page(branding, "gateway-immigration"), None, branding);
+    immigration_practice_page(branding, deployment_host, "gateway-immigration")
+}
+
+/// Every `/immigration` catalog page — the seven practice pages, the
+/// free-support hub, and the gateway landing itself — in the
+/// statement/steps/cta vocabulary, closing on an Abhaya Immigration CTA.
+///
+/// What a deployment resolves is [`sibling_practice_href`]: the hero button
+/// when the catalog carries one (the gateway landing does), and every Cta
+/// band's action `href`.
+fn immigration_practice_page(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+    stem: &str,
+) -> PageContent {
+    let mut content = marketing_page(load_page(branding, stem), None, branding);
     if let Some(href) = sibling_practice_href(views::brand::BrandKey::Abhaya, deployment_host) {
         if let Some(cta) = content.hero_cta.as_mut() {
-            cta.href = href;
+            cta.href.clone_from(&href);
+        }
+        for band in &mut content.bands {
+            if let Band::Cta {
+                action: Some(action),
+                ..
+            } = band
+            {
+                action.href.clone_from(&href);
+            }
         }
     }
     content
+}
+
+/// `/immigration/family-green-cards` — family petitions and marriage-based
+/// green cards. See [`immigration_practice_page`].
+pub fn immigration_family_green_cards(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    immigration_practice_page(branding, deployment_host, "immigration-family-green-cards")
+}
+
+/// `/immigration/citizenship` — naturalization from the N-400 to the oath.
+/// See [`immigration_practice_page`].
+pub fn immigration_citizenship(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    immigration_practice_page(branding, deployment_host, "immigration-citizenship")
+}
+
+/// `/immigration/employment-visas` — employment-based visas and employer
+/// sponsorship. See [`immigration_practice_page`].
+pub fn immigration_employment_visas(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    immigration_practice_page(branding, deployment_host, "immigration-employment-visas")
+}
+
+/// `/immigration/consular-processing` — the NVC, DS-260, and embassy
+/// interview stage. See [`immigration_practice_page`].
+pub fn immigration_consular_processing(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    immigration_practice_page(branding, deployment_host, "immigration-consular-processing")
+}
+
+/// `/immigration/uscis-notices` — RFE, NOID, and other USCIS notice
+/// responses. See [`immigration_practice_page`].
+pub fn immigration_uscis_notices(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    immigration_practice_page(branding, deployment_host, "immigration-uscis-notices")
+}
+
+/// `/immigration/humanitarian-relief` — asylum, T and U visas, and VAWA.
+/// See [`immigration_practice_page`].
+pub fn immigration_humanitarian_relief(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    immigration_practice_page(branding, deployment_host, "immigration-humanitarian-relief")
+}
+
+/// `/immigration/removal-defense` — immigration-court defense. See
+/// [`immigration_practice_page`].
+pub fn immigration_removal_defense(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    immigration_practice_page(branding, deployment_host, "immigration-removal-defense")
+}
+
+/// `/immigration/free-support` — official tools, checklists,
+/// know-your-rights material, and nonprofit referrals. See
+/// [`immigration_practice_page`].
+pub fn immigration_free_support(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    immigration_practice_page(branding, deployment_host, "immigration-free-support")
 }
 
 /// `/estate-planning` — Neon's own gateway page naming Vesta Estate Planning
@@ -2581,14 +2763,15 @@ mod tests {
         assert!(text.contains("attorney-client privilege"));
     }
 
-    /// Vesta Estate Planning and Cyber Injury Law each link back to
-    /// DeleteYourData.com, resolved for the rendering deployment, so the
-    /// referral runs both ways.
+    /// Vesta Estate Planning links back to DeleteYourData.com and Cyber
+    /// Injury Law links to the Nautilus plan (the same privacy product under
+    /// its current name), each resolved for the rendering deployment, so the
+    /// referrals run both ways.
     #[test]
-    fn vesta_and_cyber_injury_link_back_to_delete_your_data_per_deployment() {
-        for (host, expected) in [
-            ("www.example.test", "https://www.deleteyourdata.com"),
-            ("staging.example.test", "https://staging.deleteyourdata.com"),
+    fn vesta_links_to_delete_your_data_and_cyber_injury_to_nautilus_per_deployment() {
+        for (host, prefix) in [
+            ("www.example.test", "https://www"),
+            ("staging.example.test", "https://staging"),
         ] {
             let vesta = home_for_host(&views::brand::VESTA_BRANDING, Some(host))
                 .estate
@@ -2598,15 +2781,28 @@ mod tests {
                 .cyber_injury
                 .expect("cyber injury campaign")
                 .sibling_practices;
-            for (brand, cards) in [("vesta", &vesta), ("cyber-injury-law", &cyber)] {
-                assert_eq!(cards.len(), 1, "{brand} on {host}");
-                assert_eq!(cards[0].href, expected, "{brand} on {host}");
-                assert_eq!(cards[0].cta_label, "Visit DeleteYourData.com", "{brand}");
-                assert!(cards[0].body.contains("$29/mo"), "{brand}");
-                assert!(cards[0].body.contains("$290/year"), "{brand}");
-                assert!(!cards[0].body.contains("additional member"), "{brand}");
-            }
+            assert_eq!(vesta.len(), 1, "vesta on {host}");
+            assert_eq!(
+                vesta[0].href,
+                format!("{prefix}.deleteyourdata.com"),
+                "{host}"
+            );
+            assert_eq!(vesta[0].cta_label, "Visit DeleteYourData.com", "{host}");
+            assert!(vesta[0].body.contains("$29/mo"), "{host}");
+            assert!(vesta[0].body.contains("$290/year"), "{host}");
+            assert!(!vesta[0].body.contains("additional member"), "{host}");
             assert!(vesta[0].body.contains("death check"), "{host}");
+
+            assert_eq!(cyber.len(), 1, "cyber-injury-law on {host}");
+            assert_eq!(
+                cyber[0].href,
+                format!("{prefix}.neonlaw.com/nautilus"),
+                "{host}"
+            );
+            assert_eq!(cyber[0].cta_label, "Visit the Nautilus plan", "{host}");
+            assert!(cyber[0].body.contains("$29/mo"), "{host}");
+            assert!(cyber[0].body.contains("$290/year"), "{host}");
+            assert!(!cyber[0].body.contains("additional member"), "{host}");
         }
     }
 
@@ -2735,6 +2931,45 @@ mod tests {
         );
     }
 
+    /// Every word of rendered band copy — statement and step prose plus
+    /// the closing Cta — in reading order, for the copy guards.
+    fn band_copy(content: &PageContent) -> String {
+        let mut text = String::new();
+        for band in &content.bands {
+            match band {
+                RenderedBand::Statement { body, .. } => {
+                    for paragraph in body {
+                        for run in paragraph {
+                            text.push_str(&run.text);
+                            text.push(' ');
+                        }
+                    }
+                }
+                RenderedBand::Steps { items, .. } => {
+                    for step in items {
+                        text.push_str(&step.title);
+                        text.push(' ');
+                        for paragraph in &step.body {
+                            for run in paragraph {
+                                text.push_str(&run.text);
+                                text.push(' ');
+                            }
+                        }
+                    }
+                }
+                RenderedBand::Cta { heading, body, .. } => {
+                    text.push_str(heading);
+                    if let Some(body) = body {
+                        text.push(' ');
+                        text.push_str(body);
+                    }
+                }
+                _ => {}
+            }
+        }
+        text
+    }
+
     /// The `/immigration` gateway's CTA resolves per deployment, names
     /// Abhaya Immigration, never promises USCIS approval or timing, and
     /// never coins a fused "Neon Law Immigration" trade name.
@@ -2761,6 +2996,27 @@ mod tests {
             "https://staging.abhayaimmigration.com"
         );
 
+        // The landing closes on a Cta band, and it resolves to the same
+        // deployment's destination as the hero button.
+        for (host, expected) in [
+            ("www.neonlaw.com", "https://www.abhayaimmigration.com"),
+            (
+                "staging.neonlaw.com",
+                "https://staging.abhayaimmigration.com",
+            ),
+        ] {
+            let page = immigration_gateway(&views::brand::DEFAULT_BRANDING, Some(host));
+            let closing = page.bands.iter().find_map(|band| match band {
+                RenderedBand::Cta { action, .. } => action.as_ref().map(|cta| cta.href.clone()),
+                _ => None,
+            });
+            assert_eq!(
+                closing.as_deref(),
+                Some(expected),
+                "the closing CTA must resolve to {expected} on {host}"
+            );
+        }
+
         let content = immigration_gateway(&views::brand::DEFAULT_BRANDING, None);
         assert!(matches!(
             content.skin,
@@ -2770,26 +3026,35 @@ mod tests {
             content.hero_cta.as_ref().expect("hero CTA").label,
             "Visit Abhaya Immigration"
         );
-        let text = format!(
-            "{} {}",
-            content.hero_lead,
-            content
-                .bands
-                .iter()
-                .filter_map(|band| match band {
-                    RenderedBand::Statement { body, .. } => Some(
-                        body.iter()
-                            .flatten()
-                            .map(|run| run.text.clone())
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    ),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        )
-        .to_lowercase();
+        // The landing is the map of the practice: every page beneath
+        // `/immigration` is linked from its prose.
+        let linked = content
+            .bands
+            .iter()
+            .filter_map(|band| match band {
+                RenderedBand::Statement { body, .. } => Some(body),
+                _ => None,
+            })
+            .flatten()
+            .flatten()
+            .filter_map(|run| run.href.clone())
+            .collect::<Vec<_>>();
+        for path in [
+            "/immigration/family-green-cards",
+            "/immigration/citizenship",
+            "/immigration/employment-visas",
+            "/immigration/consular-processing",
+            "/immigration/uscis-notices",
+            "/immigration/humanitarian-relief",
+            "/immigration/removal-defense",
+            "/immigration/free-support",
+        ] {
+            assert!(
+                linked.iter().any(|href| href == path),
+                "the gateway must link {path}"
+            );
+        }
+        let text = format!("{} {}", content.hero_lead, band_copy(&content)).to_lowercase();
         assert!(text.contains("abhaya immigration"), "{text}");
         // "neon law immigration" may appear only inside the explicit denial
         // sentence, keeping the firms distinct.
@@ -2806,6 +3071,8 @@ mod tests {
             "fast-track",
             "expedite your case",
             "approval is certain",
+            "we win",
+            "guarantee",
         ] {
             assert!(
                 !text.contains(claim),
@@ -2816,6 +3083,94 @@ mod tests {
             text.contains("cannot promise"),
             "and says so plainly: {text}"
         );
+    }
+
+    /// Every practice stem the Neon brand publishes beneath `/immigration`.
+    const IMMIGRATION_PRACTICE_STEMS: &[&str] = &[
+        "immigration-family-green-cards",
+        "immigration-citizenship",
+        "immigration-employment-visas",
+        "immigration-consular-processing",
+        "immigration-uscis-notices",
+        "immigration-humanitarian-relief",
+        "immigration-removal-defense",
+        "immigration-free-support",
+    ];
+
+    /// Each practice page resolves its closing CTA to Abhaya Immigration
+    /// per deployment: production on www.neonlaw.com, staging on
+    /// staging.neonlaw.com.
+    #[test]
+    fn immigration_practice_pages_resolve_the_abhaya_cta() {
+        const PRODUCTION_HREF: &str = "https://www.abhayaimmigration.com";
+        const STAGING_HREF: &str = "https://staging.abhayaimmigration.com";
+
+        for stem in IMMIGRATION_PRACTICE_STEMS {
+            for (deployment_host, expected) in [
+                ("www.neonlaw.com", PRODUCTION_HREF),
+                ("staging.neonlaw.com", STAGING_HREF),
+            ] {
+                let page = immigration_practice_page(
+                    &views::brand::DEFAULT_BRANDING,
+                    Some(deployment_host),
+                    stem,
+                );
+                let cta_href = page.bands.iter().find_map(|band| match band {
+                    RenderedBand::Cta { action, .. } => action.as_ref().map(|cta| cta.href.clone()),
+                    _ => None,
+                });
+                assert_eq!(
+                    cta_href.as_deref(),
+                    Some(expected),
+                    "{stem} CTA must resolve to {expected}"
+                );
+            }
+        }
+    }
+
+    /// Every practice page names Abhaya Immigration, states plainly that it
+    /// cannot promise outcomes, promises none anyway, and fuses the firms'
+    /// names nowhere outside the denial sentence.
+    #[test]
+    fn immigration_practice_pages_promise_no_outcome_and_name_the_practice() {
+        for stem in IMMIGRATION_PRACTICE_STEMS {
+            let page = immigration_practice_page(
+                &views::brand::DEFAULT_BRANDING,
+                Some("www.neonlaw.com"),
+                stem,
+            );
+
+            let text = band_copy(&page).to_lowercase();
+
+            assert!(
+                text.contains("abhaya immigration"),
+                "{stem} never names the practice: {text}"
+            );
+            // "neon law immigration" may appear only inside the explicit
+            // denial sentence, keeping the firms distinct.
+            for sentence in text.split('.') {
+                if sentence.contains("neon law immigration") {
+                    assert!(
+                        sentence.contains("not offered as"),
+                        "{stem} fused trade name outside a denial: {sentence:?}"
+                    );
+                }
+            }
+            for claim in [
+                "guaranteed approval",
+                "fast-track",
+                "expedite your case",
+                "approval is certain",
+                "we win",
+                "guarantee",
+            ] {
+                assert!(!text.contains(claim), "{stem} implies {claim:?}");
+            }
+            assert!(
+                text.contains("cannot promise"),
+                "{stem} must say plainly that it cannot promise outcomes: {text}"
+            );
+        }
     }
 
     /// The `/estate-planning` gateway's CTA resolves per deployment, names

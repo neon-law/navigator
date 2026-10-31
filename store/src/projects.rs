@@ -54,6 +54,13 @@ pub struct Project {
     /// time. `None` while the jurisdiction is unsettled, and never guessed
     /// from the client entity or the owning firm.
     pub jurisdiction_id: Option<Uuid>,
+    /// The jurisdiction an onboarding Notation's Clauses bind to: the state
+    /// whose law and arbitration seat an engagement letter names. Distinct
+    /// from [`Self::jurisdiction_id`] — that one governs whose law the
+    /// *matter* answers to; this one is the Firm's chosen drafting default
+    /// for onboarding prose, deliberately editable, and read live at render
+    /// time by a Clause input bound to `project.onboarding_jurisdiction`.
+    pub onboarding_jurisdiction: Option<String>,
     pub description: Option<String>,
     pub drive_folder_id: Option<String>,
     /// The full URL of the one source repository holding this Project's
@@ -141,6 +148,10 @@ struct ProjectRow {
     shared_notion_page_url: Option<String>,
     calendar_id: Option<String>,
     booking_url: Option<String>,
+    /// The onboarding-jurisdiction value a Clause input may bind directly.
+    /// Optional because rows written before the field existed keep no value;
+    /// reads collapse the absence to `None`.
+    onboarding_jurisdiction: Option<String>,
     inserted_at: String,
     updated_at: String,
 }
@@ -162,6 +173,7 @@ impl ProjectRow {
                 None => None,
                 Some(id) => Some(record_uuid(id)?),
             },
+            onboarding_jurisdiction: self.onboarding_jurisdiction,
             description: self.description,
             drive_folder_id: self.drive_folder_id,
             repository_url: self.repository_url,
@@ -187,7 +199,7 @@ pub(crate) const PROJECT_TABLE: &str = "project";
 const ENTITY_TABLE: &str = "entity";
 const PERSON_PROJECT_ROLE_TABLE: &str = "person_project_role";
 const PROJECT_SELECT: &str = "id, code, name, status, brand, entity_id, firm_id, \
-                              jurisdiction_id, description, \
+                              jurisdiction_id, onboarding_jurisdiction, description, \
                               drive_folder_id, repository_url, git_initialized_at, \
                               forge_provisioned_at, closed_at, closure_reason, \
                               internal_slack_channel_url, external_slack_channel_url, \
@@ -1556,12 +1568,6 @@ pub async fn all(surreal: &SurrealDb) -> Result<Vec<Project>, ProjectStoreError>
         .collect())
 }
 
-/// A Google Drive resource id is opaque, but its documented wire form is an
-/// ASCII identifier. Accept only that form at this boundary so an operator
-/// cannot accidentally persist a copied Drive URL in the address column.
-const DRIVE_FOLDER_ID_INVALID: &str =
-    "Drive folder id must contain only letters, digits, hyphens, or underscores.";
-
 /// Which side of a matter a DRI designation applies to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DriSide {
@@ -1747,6 +1753,29 @@ pub fn is_valid_resource_url(url: &str) -> bool {
 /// Human-readable reason [`is_valid_calendar_id`] refuses a value.
 pub const CALENDAR_ID_INVALID: &str =
     "A calendar id is the Calendar ID shown in the Google Calendar's settings, not a link.";
+
+/// Human-readable reason [`is_valid_drive_folder_id`] refuses a value.
+pub const DRIVE_FOLDER_ID_INVALID: &str =
+    "A Drive folder id is the opaque id of the folder in the Firm's Projects shared drive, not a link.";
+
+/// Human-readable reason [`drive_folder_recorded_elsewhere`] refuses a patch.
+pub const DRIVE_FOLDER_RECORDED_ELSEWHERE: &str = "That Drive folder is already the ingest folder of another matter; a folder scopes its import to the one matter that records it.";
+
+/// Whether a value has the shape of a Google Drive file id: one token of at
+/// most 128 characters, letters, digits, `-`, and `_` only.
+///
+/// The id is placed in a Drive API path, so anything that could change the
+/// path or the query is refused rather than escaped. Whether the folder
+/// exists — and whether it is the Project's ingest folder — is the provider's
+/// answer (`DriveService::is_ingest_folder`), not this one.
+#[must_use]
+pub fn is_valid_drive_folder_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+}
 
 /// Whether a value has the shape of a Google Calendar id: one token of at most
 /// 255 characters, letters, digits, and `.`, `_`, `-`, `+`, `@` only.
@@ -2510,10 +2539,22 @@ pub struct UpdateProjectCommand {
     /// terms. Checked by [`is_valid_calendar_id`].
     #[serde(default)]
     pub calendar_id: Option<String>,
+    /// The Project's Drive ingest folder id, on the same blank-clears terms.
+    /// Checked by [`is_valid_drive_folder_id`] for shape and by
+    /// [`drive_folder_recorded_elsewhere`] for ownership — a folder another
+    /// matter already imports is refused, never silently shared.
+    #[serde(default)]
+    pub drive_folder_id: Option<String>,
     /// The client's booking link, on the same blank-clears terms. Rendered as
     /// an `href` to the client, so it passes [`is_valid_resource_url`].
     #[serde(default)]
     pub booking_url: Option<String>,
+    /// The onboarding jurisdiction a Clause input may bind directly (the
+    /// LAW-228 replacement for the questionnaire-state binding hack). Set by
+    /// `navigator project set --jurisdiction`. A blank submission clears it;
+    /// an omitted one leaves it untouched.
+    #[serde(default)]
+    pub onboarding_jurisdiction: Option<String>,
 }
 
 /// Set or clear the Project's source repository URL.
@@ -2677,7 +2718,7 @@ pub enum ProjectCommandError {
 /// `SET` clause carries and which parameters are bound — so a new optional
 /// column is one row here instead of two `if` blocks that must agree. `None`
 /// means "leave this column alone"; `Some("")` means "clear it".
-fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 8] {
+fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 10] {
     [
         ("description", input.description.as_ref()),
         (
@@ -2698,7 +2739,12 @@ fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option
             input.shared_notion_page_url.as_ref(),
         ),
         ("calendar_id", input.calendar_id.as_ref()),
+        ("drive_folder_id", input.drive_folder_id.as_ref()),
         ("booking_url", input.booking_url.as_ref()),
+        (
+            "onboarding_jurisdiction",
+            input.onboarding_jurisdiction.as_ref(),
+        ),
     ]
 }
 
@@ -2718,6 +2764,11 @@ fn validate_resource_links(input: &UpdateProjectCommand) -> Result<(), ProjectCo
     if let Some(calendar_id) = &input.calendar_id {
         if !calendar_id.trim().is_empty() && !is_valid_calendar_id(calendar_id) {
             return Err(ProjectCommandError::Invalid(CALENDAR_ID_INVALID));
+        }
+    }
+    if let Some(drive_folder_id) = &input.drive_folder_id {
+        if !drive_folder_id.trim().is_empty() && !is_valid_drive_folder_id(drive_folder_id) {
+            return Err(ProjectCommandError::Invalid(DRIVE_FOLDER_ID_INVALID));
         }
     }
     Ok(())
@@ -2808,6 +2859,20 @@ pub async fn update_project(
             .is_none()
         {
             return Err(ProjectCommandError::Invalid("That entity does not exist."));
+        }
+    }
+    // A Drive ingest folder scopes its import to exactly one matter, so a
+    // patch naming a folder another matter already records is refused at the
+    // command seam rather than discovered as a misdirected import later.
+    if let Some(drive_folder_id) = input.drive_folder_id.as_deref() {
+        if !drive_folder_id.trim().is_empty()
+            && drive_folder_recorded_elsewhere(surreal, id, drive_folder_id.trim())
+                .await
+                .map_err(probe_failed)?
+        {
+            return Err(ProjectCommandError::Invalid(
+                DRIVE_FOLDER_RECORDED_ELSEWHERE,
+            ));
         }
     }
     // The optional text columns are handled from one table, so a column is set

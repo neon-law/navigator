@@ -58,8 +58,6 @@ const ALLOWED: &[&str] = &[
     // follow-on identifier/CSS pass the ENG-391 triage named, not this one.
     "matter-directory",
     "matter-flag",
-    "matter-dri-cell",
-    "matter-dri-toggle",
     "matter-not-found",
     // `matter_directory.rs` test fixtures: `row()`'s own made-up project name,
     // and the assertion reading it back. Test data, not chrome.

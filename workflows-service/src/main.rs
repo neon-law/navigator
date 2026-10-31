@@ -200,6 +200,31 @@ async fn main() -> anyhow::Result<()> {
             workflows_service::dbos_nightly_project_update::enabled(lookup)
                 .map_err(anyhow::Error::msg)
                 .context("read NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED")?;
+        let email_summary_enabled = workflows_service::dbos_email_summary::enabled(lookup)
+            .map_err(anyhow::Error::msg)
+            .context("read NAVIGATOR_DBOS_EMAIL_SUMMARY_ENABLED")?;
+        let inbound_message_alert_enabled =
+            workflows_service::dbos_inbound_message_alert::enabled(lookup)
+                .map_err(anyhow::Error::msg)
+                .context("read NAVIGATOR_DBOS_INBOUND_MESSAGE_ALERT_ENABLED")?;
+        let project_slack_enabled = workflows_service::dbos_project_slack::enabled(lookup)
+            .map_err(anyhow::Error::msg)
+            .context("read NAVIGATOR_DBOS_PROJECT_SLACK_ENABLED")?;
+        if project_slack_enabled {
+            anyhow::ensure!(
+                workflows_service::notify_config::bot_enabled(lookup),
+                "DBOS ProjectSlack requires SLACK_BOT_TOKEN"
+            );
+        }
+        let project_slack_postgres = if project_slack_enabled {
+            Some(
+                store::postgres::PostgresDb::from_env()
+                    .await
+                    .context("connect PostgreSQL for the DBOS Project Slack lane")?,
+            )
+        } else {
+            None
+        };
         let finance_claim_postgres = if finance_aggregate_enabled {
             Some(
                 store::postgres::PostgresDb::from_env()
@@ -212,6 +237,9 @@ async fn main() -> anyhow::Result<()> {
         let dbos_ingress_token = if finance_aggregate_enabled
             || reconcile_enabled
             || nightly_project_update_enabled
+            || email_summary_enabled
+            || inbound_message_alert_enabled
+            || project_slack_enabled
         {
             let token = lookup("NAVIGATOR_DBOS_INGRESS_TOKEN")
                 .filter(|token| !token.trim().is_empty())
@@ -232,6 +260,9 @@ async fn main() -> anyhow::Result<()> {
             || reconcile_enabled
             || finance_aggregate_enabled
             || nightly_project_update_enabled
+            || email_summary_enabled
+            || inbound_message_alert_enabled
+            || project_slack_enabled
         {
             let surreal = store::surreal::connect_from_env()
                 .await
@@ -357,6 +388,15 @@ async fn main() -> anyhow::Result<()> {
             dbos_ingress_token,
             finance_claim_postgres,
             nightly_project_update_enabled,
+            email_summary_enabled,
+            inbound_message_alert_enabled,
+            if email_summary_enabled || inbound_message_alert_enabled {
+                surreal.clone()
+            } else {
+                None
+            },
+            project_slack_enabled,
+            project_slack_postgres,
         ))
     } else {
         None
@@ -484,6 +524,8 @@ async fn main() -> anyhow::Result<()> {
     };
     let dbos_nightly_surreal = surreal.clone();
     let dbos_nightly_slack = slack_bot.clone();
+    let dbos_project_slack_surreal = surreal.clone();
+    let dbos_project_slack_bot = slack_bot.clone();
     let dbos_nightly_repository_forge = repository_forge.clone();
     let dbos_nightly_github_forge = forge.clone();
     let dbos_nightly_portal_origin = portal_origin.clone();
@@ -509,8 +551,16 @@ async fn main() -> anyhow::Result<()> {
         surreal.clone(),
         storage.clone(),
         slack_bot.clone(),
-        summary_providers,
+        summary_providers.clone(),
     );
+    // Event-driven DBOS twins are registered after the Restate endpoint is
+    // built, so their captures of the shared transports happen here.
+    let dbos_email_storage = storage.clone();
+    let dbos_email_slack = slack_bot.clone();
+    let dbos_alert_slack = slack_bot.clone();
+    let dbos_alert_messages_channel = messages_channel.clone();
+    let dbos_alert_staging_messages_channel = staging_messages_channel.clone();
+    let dbos_alert_portal_origin = portal_origin.clone();
 
     let listen: SocketAddr = std::env::var("WORKFLOWS_SERVICE_LISTEN")
         .unwrap_or_else(|_| "0.0.0.0:9080".into())
@@ -571,12 +621,47 @@ async fn main() -> anyhow::Result<()> {
         dbos_ingress_token,
         finance_claim_postgres,
         nightly_project_update_enabled,
+        email_summary_enabled,
+        inbound_message_alert_enabled,
+        event_surreal,
+        project_slack_enabled,
+        project_slack_postgres,
     )) = dbos_hosting
     {
         let finance_aggregate_surreal_for_ingress = finance_aggregate_surreal.clone();
         let finance_aggregate_context = finance_aggregate_surreal.map(|surreal| {
             workflows_service::dbos_finance_aggregate::Context::new(surreal, dbos_finance_storage)
         });
+        let email_summary_context = if email_summary_enabled {
+            let surreal = event_surreal
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("EmailSummary database not configured"))?;
+            Some(workflows_service::dbos_email_summary::Context::new(
+                surreal,
+                Arc::clone(&dbos_email_storage),
+                Arc::clone(&dbos_email_slack),
+                summary_providers.clone(),
+            ))
+        } else {
+            None
+        };
+        let alert_context = if inbound_message_alert_enabled {
+            let surreal = event_surreal
+                .ok_or_else(|| anyhow::anyhow!("InboundMessageAlert database not configured"))?;
+            Some(workflows_service::dbos_inbound_message_alert::Context::new(
+                InboundMessageAlertService::new(
+                    surreal,
+                    Arc::clone(&dbos_alert_slack),
+                    dbos_alert_messages_channel,
+                    dbos_alert_staging_messages_channel,
+                    simulated_matters,
+                    slack_bot_enabled,
+                    dbos_alert_portal_origin,
+                ),
+            ))
+        } else {
+            None
+        };
         let dbos_ingress_for_registration = Arc::clone(&dbos_ingress);
         Some(
             dbos_engine::Executor::launch_hosting_with(
@@ -645,6 +730,60 @@ async fn main() -> anyhow::Result<()> {
                                 workflow, stop,
                             ))
                         }));
+                    }
+                    if let Some(context) = email_summary_context {
+                        let workflow =
+                            workflows_service::dbos_email_summary::register(dbos, context)?;
+                        if let Some(token) = dbos_ingress_token.as_ref() {
+                            registered_ingress.email_summary = Some(
+                                workflows_service::dbos_ingress::EmailSummaryIngress::new(
+                                    token.clone(),
+                                    workflow,
+                                ),
+                            );
+                        }
+                    }
+                    if let Some(context) = alert_context {
+                        let workflow =
+                            workflows_service::dbos_inbound_message_alert::register(dbos, context)?;
+                        if let Some(token) = dbos_ingress_token.as_ref() {
+                            registered_ingress.inbound_message_alert = Some(
+                                workflows_service::dbos_ingress::AlertIngress::new(
+                                    token.clone(),
+                                    workflow,
+                                ),
+                            );
+                        }
+                    }
+                    if project_slack_enabled {
+                        // Registered before Finance consumes the shared
+                        // startup values, so the lane is live ahead of any
+                        // sibling workflow that may want it later.
+                        let workflow = workflows_service::dbos_project_slack::register(
+                            dbos,
+                            workflows_service::dbos_project_slack::Context::new(
+                                dbos_project_slack_surreal.clone(),
+                                dbos_project_slack_bot.clone(),
+                                project_slack_postgres
+                                    .clone()
+                                    .expect("ProjectSlack lane has no PostgreSQL connection"),
+                                simulated_matters,
+                            ),
+                        )?;
+                        if let (Some(token), Some(postgres)) = (
+                            dbos_ingress_token.clone(),
+                            project_slack_postgres.clone(),
+                        ) {
+                            registered_ingress.project_slack = Some(
+                                workflows_service::dbos_ingress::ProjectSlackIngress::new(
+                                    token,
+                                    workflow,
+                                    dbos.clone(),
+                                    dbos_project_slack_surreal.clone(),
+                                    postgres,
+                                ),
+                            );
+                        }
                     }
                     if let Some(context) = finance_aggregate_context {
                         let workflow =

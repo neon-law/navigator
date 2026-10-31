@@ -2253,3 +2253,915 @@ CREATE INDEX communication_acknowledges ON communication (project_id, acknowledg
 -- A Firm Library version: the Firm whose library repository the Template was synced from.
 ALTER TABLE template ADD COLUMN firm_id UUID REFERENCES firm(id);
 ALTER TABLE template ADD CONSTRAINT template_one_scope CHECK (project_id IS NULL OR firm_id IS NULL);
+
+-- Migration: 20261030020000_add_asset_evidence.sql
+-- The exhibit metadata the matter page's evidence index reads (LAW-185):
+-- `{ dated_at, source, confidence, supports }` as a JSON object. NULL for
+-- rows written before exhibits carried provenance; the shape is
+-- `store::documents::Evidence`, validated before the write.
+ALTER TABLE asset ADD COLUMN evidence JSONB;
+
+-- Migration: 20261030030000_create_inbox_message_asset.sql
+-- SurrealDB remains the write authority; Inbox rows are opt-in mirrors.
+CREATE TABLE inbox_message_asset (
+    id UUID PRIMARY KEY,
+    firm_id UUID NOT NULL REFERENCES firm(id),
+    message_id UUID NOT NULL REFERENCES message(id),
+    asset_id UUID NOT NULL REFERENCES asset(id),
+    filename TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    inserted_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT inbox_message_asset_key UNIQUE (message_id, sha256)
+);
+CREATE INDEX inbox_message_asset_message ON inbox_message_asset (message_id);
+
+CREATE TRIGGER inbox_message_asset_immutable
+    BEFORE UPDATE OR DELETE ON inbox_message_asset
+    FOR EACH ROW EXECUTE FUNCTION reject_inbox_audit_mutation();
+
+-- Migration: 20261030120000_create_project_task.sql
+-- Net-new matter work tracking: assignable Project tasks with audited state
+-- transitions. A Task is work someone does, with a workflow state; it is not a
+-- Deadline (a docket obligation the date binds). See docs/glossary/task.md.
+-- PostgreSQL-native, following the project_costs pattern: retained rows,
+-- trigger-enforced audit events, immutable event log.
+--
+-- The composite foreign key below pins an assignee to a Person who already
+-- holds a participation row on the same Project. A UNIQUE (project_id,
+-- person_id) index is required for it, in the FK's column order.
+CREATE UNIQUE INDEX person_project_role_project_person
+    ON person_project_role (project_id, person_id);
+
+CREATE TABLE project_task (
+    id UUID PRIMARY KEY,
+    project_id UUID NOT NULL REFERENCES project(id),
+    title TEXT NOT NULL CHECK (length(btrim(title)) BETWEEN 1 AND 300),
+    body TEXT CHECK (body IS NULL OR length(btrim(body)) BETWEEN 1 AND 2000),
+    assignee_id UUID,
+    due_on DATE,
+    state TEXT NOT NULL CHECK (state IN ('todo', 'in_progress', 'done')),
+    inserted_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    FOREIGN KEY (project_id, assignee_id)
+        REFERENCES person_project_role (project_id, person_id)
+);
+CREATE INDEX project_task_project ON project_task (project_id, state, due_on, id);
+CREATE INDEX project_task_assignee ON project_task (assignee_id);
+
+CREATE TABLE project_task_events (
+    id UUID PRIMARY KEY,
+    project_task_id UUID NOT NULL REFERENCES project_task(id),
+    actor_person_id UUID NOT NULL REFERENCES person(id),
+    event_kind TEXT NOT NULL CHECK (event_kind IN ('created', 'assignee_changed', 'state_changed')),
+    before_state JSONB,
+    after_state JSONB NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX project_task_events_task_time ON project_task_events (project_task_id, occurred_at, id);
+
+CREATE FUNCTION enforce_project_task_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE actor_id UUID;
+        event_kind_value TEXT;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'Project tasks are retained; a state transition, never a delete';
+    END IF;
+    actor_id := nullif(current_setting('navigator.project_task_actor', true), '')::UUID;
+    event_kind_value := current_setting('navigator.project_task_event_kind', true);
+    IF actor_id IS NULL OR event_kind_value NOT IN ('assignee_changed', 'state_changed') THEN
+        RAISE EXCEPTION 'Project task updates require an actor and audit event';
+    END IF;
+    INSERT INTO project_task_events(id,project_task_id,actor_person_id,event_kind,before_state,after_state,occurred_at)
+    VALUES(gen_random_uuid(),NEW.id,actor_id,event_kind_value,to_jsonb(OLD),to_jsonb(NEW),now());
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER project_task_audit_update
+    BEFORE UPDATE OR DELETE ON project_task
+    FOR EACH ROW EXECUTE FUNCTION enforce_project_task_audit();
+
+CREATE FUNCTION record_project_task_creation() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE actor_id UUID;
+BEGIN
+    actor_id := nullif(current_setting('navigator.project_task_actor', true), '')::UUID;
+    IF actor_id IS NULL OR current_setting('navigator.project_task_event_kind', true) IS DISTINCT FROM 'created' THEN
+        RAISE EXCEPTION 'Project task creation requires an actor and audit event';
+    END IF;
+    INSERT INTO project_task_events(id,project_task_id,actor_person_id,event_kind,before_state,after_state,occurred_at)
+    VALUES(gen_random_uuid(),NEW.id,actor_id,'created',NULL,to_jsonb(NEW),now());
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER project_task_audit_create
+    AFTER INSERT ON project_task
+    FOR EACH ROW EXECUTE FUNCTION record_project_task_creation();
+
+CREATE FUNCTION reject_project_task_event_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Project task audit events are immutable';
+END;
+$$;
+CREATE TRIGGER project_task_events_immutable
+    BEFORE UPDATE OR DELETE ON project_task_events
+    FOR EACH ROW EXECUTE FUNCTION reject_project_task_event_mutation();
+
+-- Migration: 20261031010000_create_navigator_graph.sql
+-- The Apache AGE relationship graph, projected from the relational mirrors.
+--
+-- `CREATE EXTENSION age` normally runs earlier, in the superuser init path
+-- (k8s/postgres/access/roles.sql); this migration owns the graph itself so the
+-- migration login owns every graph object. Environments that apply the
+-- canonical schema directly with no privileged init step (CI fixtures, scratch
+-- databases) bootstrap the extension in the block below under IF-NOT-EXISTS
+-- semantics: a no-op when the init path already created it, and a loud
+-- permission error for a non-superuser login when the init path never ran.
+-- The loader helpers are the only
+-- Cypher entry points for backfill batches: AGE's three-argument cypher()
+-- accepts a bound parameter only as a bare Param node, so each helper takes
+-- one JSON text payload, parses it into an agtype once, and passes it as a
+-- PL/pgSQL variable — which the engine substitutes as exactly that Param.
+-- The Cypher in each branch is a fixed dollar-quoted constant: no value ever
+-- becomes query text.
+
+-- The extension bootstrap lives in a DO block because the canonical-SQL
+-- parser tracks procedural blocks as opaque and every bare statement it does
+-- not know is rejected; the guard follows for the same reason.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'age') THEN
+        CREATE EXTENSION age;
+    END IF;
+END
+$$;
+
+-- The guard lives in a DO block because the canonical-SQL parser tracks
+-- procedural blocks as opaque and every bare statement it does not know
+-- is rejected; the migration login owns the graph either way.
+DO $$
+DECLARE
+    graph_id oid;
+    label text;
+BEGIN
+    SELECT graphid INTO graph_id
+    FROM ag_catalog.ag_graph WHERE ag_catalog.ag_graph.name = 'navigator_graph';
+    IF graph_id IS NULL THEN
+        PERFORM ag_catalog.create_graph('navigator_graph');
+        graph_id := (
+            SELECT graphid FROM ag_catalog.ag_graph
+            WHERE ag_catalog.ag_graph.name = 'navigator_graph'
+        );
+    END IF;
+    -- Every label exists before any load: validation and the property
+    -- indexes read the label tables even when a family has no rows yet,
+    -- and a label created lazily by the first batch would not exist on an
+    -- empty projection.
+    FOREACH label IN ARRAY ARRAY['Person', 'Entity', 'Project', 'Firm'] LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM ag_catalog.ag_label
+            WHERE ag_catalog.ag_label.graph = graph_id AND ag_catalog.ag_label.name = label
+        ) THEN
+            PERFORM ag_catalog.create_vlabel('navigator_graph', label::cstring);
+        END IF;
+    END LOOP;
+    FOREACH label IN ARRAY ARRAY[
+        'HAS_ROLE', 'RELATIONSHIP', 'WORKS_ON', 'MEMBER_OF', 'HANDLES'
+    ] LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM ag_catalog.ag_label
+            WHERE ag_catalog.ag_label.graph = graph_id AND ag_catalog.ag_label.name = label
+        ) THEN
+            PERFORM ag_catalog.create_elabel('navigator_graph', label::cstring);
+        END IF;
+    END LOOP;
+END
+$$;
+
+-- Runtime read access: cypher() executes as the calling login, so the app
+-- needs USAGE on the graph's schema and SELECT on its label tables; writes
+-- stay with the migration login through the loader helpers. The grant is
+-- guarded because environments that apply the canonical schema directly
+-- (CI fixtures) have no navigator_app role to grant to, and skipped when the
+-- role is absent rather than failing the schema application.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'navigator_app') THEN
+        GRANT USAGE ON SCHEMA navigator_graph TO navigator_app;
+        GRANT SELECT ON ALL TABLES IN SCHEMA navigator_graph TO navigator_app;
+        ALTER DEFAULT PRIVILEGES FOR ROLE navigator_owner IN SCHEMA navigator_graph
+            GRANT SELECT ON TABLES TO navigator_app;
+    END IF;
+END
+$$;
+
+-- Vertex batches. `kind` selects the fixed label; ids are the Surreal record
+-- UUIDs, so relationship source_id chains and mirror parity stay traceable.
+CREATE OR REPLACE FUNCTION graph_load_vertices(kind text, rows text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    payload agtype := rows::agtype;
+BEGIN
+    IF kind = 'person' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            CREATE (:Person {id: row.id, name: row.name})
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'entity' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            CREATE (:Entity {id: row.id, name: row.name})
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'project' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            CREATE (:Project {id: row.id, name: row.name})
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'firm' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            CREATE (:Firm {id: row.id, name: row.name})
+        $Q$, payload) AS (v agtype);
+    ELSE
+        RAISE EXCEPTION 'unknown graph vertex kind %', kind;
+    END IF;
+END
+$fn$;
+
+-- Edge batches. Endpoints match by vertex id, so a batch may reference
+-- vertices loaded in an earlier batch of the same transaction.
+CREATE OR REPLACE FUNCTION graph_load_edges(kind text, rows text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    payload agtype := rows::agtype;
+BEGIN
+    IF kind = 'has_role' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            MATCH (a), (b) WHERE a.id = row.from_id AND b.id = row.to_id
+            CREATE (a)-[:HAS_ROLE {role: row.role}]->(b)
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'relationship' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            MATCH (a), (b) WHERE a.id = row.from_id AND b.id = row.to_id
+            CREATE (a)-[:RELATIONSHIP {kind: row.kind, confidence_pct: row.confidence_pct,
+                                       source_kind: row.source_kind, source_id: row.source_id,
+                                       detail: row.detail}]->(b)
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'works_on' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            MATCH (a), (b) WHERE a.id = row.from_id AND b.id = row.to_id
+            CREATE (a)-[:WORKS_ON {role: row.role}]->(b)
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'member_of' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            MATCH (a), (b) WHERE a.id = row.from_id AND b.id = row.to_id
+            CREATE (a)-[:MEMBER_OF]->(b)
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'handles' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            MATCH (a), (b) WHERE a.id = row.from_id AND b.id = row.to_id
+            CREATE (a)-[:HANDLES]->(b)
+        $Q$, payload) AS (v agtype);
+    ELSE
+        RAISE EXCEPTION 'unknown graph edge kind %', kind;
+    END IF;
+END
+$fn$;
+
+-- Full projection rebuild: the graph arm clears and reloads inside one
+-- transaction, so a run leaves either the old graph or the new one.
+CREATE OR REPLACE FUNCTION graph_clear_navigator()
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+BEGIN
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$ MATCH (n) DETACH DELETE n $Q$)
+        AS (v agtype);
+END
+$fn$;
+
+-- One frontier hop of the conflict walk, both conflict edge types. AGE 1.6.0
+-- rejects multi-type edge patterns (`[:RELATIONSHIP|HAS_ROLE]`), so each type
+-- is its own fixed query and the results union in PL/pgSQL; the frontier
+-- arrives as a bound parameter (an agtype object with a `frontier` id array),
+-- never as query text.
+CREATE OR REPLACE FUNCTION graph_conflict_frontier(frontier text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    payload agtype := frontier::agtype;
+BEGIN
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (a)-[r:RELATIONSHIP]-(x)
+        WHERE a.id IN $frontier
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'RELATIONSHIP', kind: r.kind, role: null,
+                         confidence_pct: r.confidence_pct, from_id: startNode(r).id,
+                         from_label: label(startNode(r)), to_id: endNode(r).id,
+                         to_label: label(endNode(r))}
+    $Q$, payload) AS (edge agtype);
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (a)-[r:HAS_ROLE]-(x)
+        WHERE a.id IN $frontier
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'HAS_ROLE', kind: null, role: r.role,
+                         confidence_pct: null, from_id: startNode(r).id,
+                         from_label: label(startNode(r)), to_id: endNode(r).id,
+                         to_label: label(endNode(r))}
+    $Q$, payload) AS (edge agtype);
+END
+$fn$;
+
+-- The bounded conflict walk: every conflict edge within 3 hops of the anchors,
+-- expanded one frontier at a time exactly as the Surreal conflict traversal is
+-- (store/src/conflicts.rs `MAX_HOPS` = 3; keep the two bounds in step). The
+-- unrestricted variable-length walk is not used here: it would cross
+-- participation edges (WORKS_ON, MEMBER_OF, HANDLES) that Surreal's walk never
+-- follows, so the graph arm's parity check would disagree with the source
+-- engine. Cross-hop duplicates are deduplicated by the caller.
+CREATE OR REPLACE FUNCTION graph_conflict_edges(anchors text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    frontier jsonb := anchors::jsonb;
+    round_edges jsonb;
+    all_edges jsonb := '[]'::jsonb;
+    visited jsonb := anchors::jsonb;
+BEGIN
+    FOR hop IN 1..3 LOOP
+        EXIT WHEN jsonb_array_length(frontier) = 0;
+        SELECT coalesce(jsonb_agg(DISTINCT edge), '[]'::jsonb)
+        INTO round_edges
+        FROM (
+            SELECT (edge::text)::jsonb AS edge
+            FROM graph_conflict_frontier('{"frontier": ' || frontier::text || '}') AS edge
+        ) rounds;
+        all_edges := all_edges || round_edges;
+        -- An edge matched in an earlier hop can be matched again from its
+        -- far side in a later hop (the frontier matcher is undirected), so
+        -- dedup the accumulator, not just each round.
+        SELECT coalesce(jsonb_agg(DISTINCT edge), '[]'::jsonb)
+        INTO all_edges
+        FROM jsonb_array_elements(all_edges) AS edge;
+        -- Expand only unvisited endpoints: re-seeding the frontier with
+        -- both endpoints of every found edge re-matched the same edge
+        -- from its far side and accumulated duplicate rows per hop.
+        SELECT coalesce(jsonb_agg(DISTINCT endpoint), '[]'::jsonb)
+        INTO frontier
+        FROM (
+            SELECT edge->>'from_id' AS endpoint
+            FROM jsonb_array_elements(round_edges) AS edge
+            UNION
+            SELECT edge->>'to_id'
+            FROM jsonb_array_elements(round_edges) AS edge
+        ) endpoints
+        WHERE NOT visited ? endpoint;
+        visited := visited || frontier;
+    END LOOP;
+    RETURN QUERY
+    SELECT (edge::text)::agtype
+    FROM jsonb_array_elements(all_edges) AS edge;
+END
+$fn$;
+
+-- Loaders are the migration login's write path; the runtime login runs
+-- read-only Cypher of its own and never executes these.
+REVOKE EXECUTE ON FUNCTION graph_load_vertices(text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION graph_load_edges(text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION graph_clear_navigator() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION graph_conflict_frontier(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION graph_conflict_edges(text) FROM PUBLIC;
+
+-- Migration: 20261031020000_create_graph_view_readers.sql
+-- Read-only reader functions for the graph views: bounded neighborhood
+-- expansion (project, lawyer) and the firm-to-firm aggregation. These are
+-- the Cypher entry points for the graph REST endpoints, the same pattern
+-- as the conflict readers in 20261031010000_create_navigator_graph.sql:
+-- each helper takes one JSON text payload, parses it into an agtype once,
+-- and passes it as a PL/pgSQL variable. The Cypher in each branch is a
+-- fixed dollar-quoted constant: no value ever becomes query text.
+--
+-- AGE 1.6.0 constraints honored here (docs/age-cypher-parity-probe.md):
+-- no multi-type edge patterns — every label is matched in its own query,
+-- hop by hop; no order-by on a Cypher alias (ordering happens SQL-side or
+-- in Rust); `id(e)`/`label(n)` rather than property access.
+
+-- The seed vertex for a view: id, label, and name. An absent vertex means
+-- the graph projection has not been run yet — callers render an empty
+-- neighborhood, not an error.
+CREATE OR REPLACE FUNCTION graph_view_seed(seed text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    payload agtype := seed::agtype;
+BEGIN
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (n)
+        WHERE n.id = $seed
+        RETURN DISTINCT {id: n.id, label: label(n), name: n.name}
+    $Q$, payload) AS (vertex agtype);
+END
+$fn$;
+
+-- Hop 1 of the project view: everything hanging directly off the project
+-- vertex — the parties (WORKS_ON, undirected) and the firms whose members
+-- participate on it (HANDLES, directed at the project).
+CREATE OR REPLACE FUNCTION graph_project_attach(seed text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    payload agtype := seed::agtype;
+BEGIN
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (n)-[r:WORKS_ON]-(p:Project)
+        WHERE p.id = $seed
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'WORKS_ON', kind: null, role: r.role,
+                         confidence_pct: null, from_id: startNode(r).id,
+                         from_label: label(startNode(r)), to_id: endNode(r).id,
+                         to_label: label(endNode(r)),
+                         from_name: startNode(r).name,
+                         to_name: endNode(r).name}
+    $Q$, payload) AS (edge agtype);
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (n)-[r:HANDLES]->(p:Project)
+        WHERE p.id = $seed
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'HANDLES', kind: null, role: null,
+                         confidence_pct: null, from_id: startNode(r).id,
+                         from_label: label(startNode(r)), to_id: endNode(r).id,
+                         to_label: label(endNode(r)),
+                         from_name: startNode(r).name,
+                         to_name: endNode(r).name}
+    $Q$, payload) AS (edge agtype);
+END
+$fn$;
+
+-- Hops 2+ of the project view: one frontier step outward from the already
+-- reached persons, entities, and firms. Only persons expand — relationships
+-- and entity roles anchor on persons, and a firm's participation is already
+-- materialized as its HANDLES edges. Because each hop passes its own
+-- frontier, no vertex is expanded twice (same bounded walk as the conflict
+-- readers).
+CREATE OR REPLACE FUNCTION graph_project_expand(frontier text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    payload agtype := frontier::agtype;
+BEGIN
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (a)-[r:RELATIONSHIP]-(x)
+        WHERE a.id IN $frontier
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'RELATIONSHIP', kind: r.kind, role: null,
+                         confidence_pct: r.confidence_pct, source_kind: r.source_kind,
+                         from_id: startNode(r).id, from_label: label(startNode(r)),
+                         to_id: endNode(r).id, to_label: label(endNode(r)),
+                         from_name: startNode(r).name,
+                         to_name: endNode(r).name}
+    $Q$, payload) AS (edge agtype);
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (a)-[r:HAS_ROLE]->(x)
+        WHERE a.id IN $frontier
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'HAS_ROLE', kind: null, role: r.role,
+                         confidence_pct: null, source_kind: null,
+                         from_id: startNode(r).id, from_label: label(startNode(r)),
+                         to_id: endNode(r).id, to_label: label(endNode(r)),
+                         from_name: startNode(r).name,
+                         to_name: endNode(r).name}
+    $Q$, payload) AS (edge agtype);
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (a)-[r:MEMBER_OF]->(x)
+        WHERE a.id IN $frontier
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'MEMBER_OF', kind: null, role: null,
+                         confidence_pct: null, source_kind: null,
+                         from_id: startNode(r).id, from_label: label(startNode(r)),
+                         to_id: endNode(r).id, to_label: label(endNode(r)),
+                         from_name: startNode(r).name,
+                         to_name: endNode(r).name}
+    $Q$, payload) AS (edge agtype);
+END
+$fn$;
+
+-- Every hop of the lawyer view: everything around the lawyer-person seed
+-- and then one frontier step outward. Persons expand through their
+-- relationships, entity roles, memberships, and participations; reached
+-- projects and firms are endpoint-only (only persons expand — the project
+-- view owns project-rooted neighborhoods).
+CREATE OR REPLACE FUNCTION graph_lawyer_expand(frontier text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    payload agtype := frontier::agtype;
+BEGIN
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (a)-[r:RELATIONSHIP]-(x)
+        WHERE a.id IN $frontier
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'RELATIONSHIP', kind: r.kind, role: null,
+                         confidence_pct: r.confidence_pct, source_kind: r.source_kind,
+                         from_id: startNode(r).id, from_label: label(startNode(r)),
+                         to_id: endNode(r).id, to_label: label(endNode(r)),
+                         from_name: startNode(r).name,
+                         to_name: endNode(r).name}
+    $Q$, payload) AS (edge agtype);
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (a)-[r:HAS_ROLE]->(x)
+        WHERE a.id IN $frontier
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'HAS_ROLE', kind: null, role: r.role,
+                         confidence_pct: null, source_kind: null,
+                         from_id: startNode(r).id, from_label: label(startNode(r)),
+                         to_id: endNode(r).id, to_label: label(endNode(r)),
+                         from_name: startNode(r).name,
+                         to_name: endNode(r).name}
+    $Q$, payload) AS (edge agtype);
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (a)-[r:MEMBER_OF]->(x)
+        WHERE a.id IN $frontier
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'MEMBER_OF', kind: null, role: null,
+                         confidence_pct: null, source_kind: null,
+                         from_id: startNode(r).id, from_label: label(startNode(r)),
+                         to_id: endNode(r).id, to_label: label(endNode(r)),
+                         from_name: startNode(r).name,
+                         to_name: endNode(r).name}
+    $Q$, payload) AS (edge agtype);
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (a)-[r:WORKS_ON]-(x)
+        WHERE a.id IN $frontier
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'WORKS_ON', kind: null, role: r.role,
+                         confidence_pct: null, source_kind: null,
+                         from_id: startNode(r).id, from_label: label(startNode(r)),
+                         to_id: endNode(r).id, to_label: label(endNode(r)),
+                         from_name: startNode(r).name,
+                         to_name: endNode(r).name}
+    $Q$, payload) AS (edge agtype);
+END
+$fn$;
+
+-- The firm view: person-level edges aggregated up to firm-firm ties for the
+-- seed firm. Every counterpart firm in a person's edge sits three hops away
+-- (member -> person-level edge -> member's firm), so this is one aggregation
+-- read, not a frontier walk — depth-independent by construction.
+--
+-- kind values mirror the lens a viewer reads: adversary (an adverse_to
+-- relationship between members), co_counsel (members firm-side on the same
+-- matter), of_counsel (any other cross-firm relationship between members),
+-- client (a counterparty-firm member client-side on a matter this firm's
+-- members participate firm-side). strength counts the distinct person-level edges
+-- behind the tie.
+CREATE OR REPLACE FUNCTION graph_firm_view(seed text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    payload agtype := seed::agtype;
+BEGIN
+    -- Each arm returns plain grouping columns (AGE rejects a RETURN map that
+    -- mixes grouping keys with aggregates) and the SELECT wraps them into one
+    -- JSON map per tie. The `(x::text)::jsonb` round-trip re-homes an agtype
+    -- value into the JSON object verbatim.
+    RETURN QUERY
+    SELECT jsonb_build_object(
+        'other_firm_id', t.other_id::text,
+        'other_firm_name', t.other_name::text,
+        'kind', 'adversary',
+        'strength', (t.strength::text)::bigint)::text::agtype
+    FROM cypher('navigator_graph', $Q$
+        MATCH (a:Person)-[:MEMBER_OF]->(fa:Firm)
+        WHERE fa.id = $seed
+        MATCH (a)-[r:RELATIONSHIP]-(b:Person)
+        WHERE r.kind = 'adverse_to'
+        MATCH (b)-[:MEMBER_OF]->(fb:Firm)
+        WHERE fb.id <> fa.id
+        RETURN fb.id AS other_id, fb.name AS other_name, count(DISTINCT r) AS strength
+    $Q$, payload) AS t(other_id agtype, other_name agtype, strength agtype);
+    RETURN QUERY
+    SELECT jsonb_build_object(
+        'other_firm_id', t.other_id::text,
+        'other_firm_name', t.other_name::text,
+        'kind', 'co_counsel',
+        'strength', (t.strength::text)::bigint)::text::agtype
+    FROM cypher('navigator_graph', $Q$
+        MATCH (a:Person)-[:MEMBER_OF]->(fa:Firm)
+        WHERE fa.id = $seed
+        MATCH (a)-[r:WORKS_ON]->(p:Project)
+        WHERE r.role <> 'client'
+        MATCH (m2:Person)-[r2:WORKS_ON]->(p)
+        MATCH (m2)-[:MEMBER_OF]->(fb:Firm)
+        WHERE m2 <> a AND fb.id <> fa.id AND r2.role <> 'client'
+        RETURN fb.id AS other_id, fb.name AS other_name, count(DISTINCT p) AS strength
+    $Q$, payload) AS t(other_id agtype, other_name agtype, strength agtype);
+    RETURN QUERY
+    SELECT jsonb_build_object(
+        'other_firm_id', t.other_id::text,
+        'other_firm_name', t.other_name::text,
+        'kind', 'of_counsel',
+        'strength', (t.strength::text)::bigint)::text::agtype
+    FROM cypher('navigator_graph', $Q$
+        MATCH (a:Person)-[:MEMBER_OF]->(fa:Firm)
+        WHERE fa.id = $seed
+        MATCH (a)-[r:RELATIONSHIP]-(b:Person)
+        WHERE r.kind <> 'adverse_to'
+        MATCH (b)-[:MEMBER_OF]->(fb:Firm)
+        WHERE fb.id <> fa.id
+        RETURN fb.id AS other_id, fb.name AS other_name, count(DISTINCT r) AS strength
+    $Q$, payload) AS t(other_id agtype, other_name agtype, strength agtype);
+    RETURN QUERY
+    SELECT jsonb_build_object(
+        'other_firm_id', t.other_id::text,
+        'other_firm_name', t.other_name::text,
+        'kind', 'client',
+        'strength', (t.strength::text)::bigint)::text::agtype
+    FROM cypher('navigator_graph', $Q$
+        MATCH (a:Person)-[:MEMBER_OF]->(fa:Firm)
+        WHERE fa.id = $seed
+        MATCH (a)-[r:WORKS_ON]->(p:Project)
+        WHERE r.role <> 'client'
+        MATCH (c:Person)-[r2:WORKS_ON]->(p)
+        MATCH (c)-[:MEMBER_OF]->(fb:Firm)
+        WHERE c <> a AND fb.id <> fa.id AND r2.role = 'client'
+        RETURN fb.id AS other_id, fb.name AS other_name, count(DISTINCT c) AS strength
+    $Q$, payload) AS t(other_id agtype, other_name agtype, strength agtype);
+END
+$fn$;
+
+-- View readers are the runtime login's only graph entry points, like the
+-- conflict readers before them: revoking PUBLIC and granting navigator_app
+-- when the role exists (guarded, because role-less CI fixtures skip it).
+REVOKE EXECUTE ON FUNCTION graph_view_seed(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION graph_project_attach(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION graph_project_expand(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION graph_lawyer_expand(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION graph_firm_view(text) FROM PUBLIC;
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'navigator_app') THEN
+        GRANT EXECUTE ON FUNCTION graph_view_seed(text) TO navigator_app;
+        GRANT EXECUTE ON FUNCTION graph_project_attach(text) TO navigator_app;
+        GRANT EXECUTE ON FUNCTION graph_project_expand(text) TO navigator_app;
+        GRANT EXECUTE ON FUNCTION graph_lawyer_expand(text) TO navigator_app;
+        GRANT EXECUTE ON FUNCTION graph_firm_view(text) TO navigator_app;
+    END IF;
+END
+$$;
+
+-- Migration: 20261031025000_graph_conflict_names_and_runtime_grants.sql
+-- The conflict traversal's runtime read shape, and the runtime login's graph
+-- access.
+--
+-- 1. `graph_conflict_frontier` projects each endpoint's `name` beside its id
+--    and label. The conflict check prints the parties a finding reached by
+--    name, and the Surreal traversal dereferenced names in the same round
+--    trip (`store/src/conflicts.rs` `TRAVERSAL_FIELDS`); the AGE walk reads
+--    the same shape, so an explanation never depends on which engine served
+--    it. `store/src/conflicts.rs`'s neighborhood builds identical adjacency
+--    and labels from either engine's rows. The body is the graph migration's
+--    function verbatim plus the two name projections; the signature and
+--    return type are unchanged, so `CREATE OR REPLACE` rewrites it in place.
+--
+-- 2. `graph_ensure_vertices` covers the case the wholesale projection
+--    cannot: the runtime write path records an edge whose endpoints may
+--    have been minted after the last projection rebuild — the intake walk
+--    creates a person and immediately records a relationship about them.
+--    It reads back only what is already in the graph and creates at most
+--    the endpoints of the one new edge, so the loader's CREATE stays safe.
+--    `graph_load_vertices` and `graph_clear_navigator` stay with the
+--    migration login: the projection rebuilds whole.
+--
+-- 3. The runtime login may execute the graph readers, the edge loader, and
+--    the vertex-ensure the runtime write path needs. A conflict check on the
+--    matter-open path runs as `navigator_app`, not as the migration login
+--    that built the graph. Execute was revoked from PUBLIC by the graph's
+--    own migration; these grants are the narrow re-grant, and they stay
+--    guarded on the role's existence so a role-less schema apply skips them
+--    unchanged. The catalog (`ag_catalog`) stays closed to the runtime
+--    login; `cypher()` needs no catalog reads.
+--
+-- 4. The PostgreSQL-authoritative write path (the `age` engine authority)
+--    inserts the relational source rows (`entity_role`, `relationship`)
+--    and reads the endpoint names the vertex payload carries. The Surreal
+--    engine path needs none of these: it writes through SurrealDB and
+--    mirrors, as before.
+
+CREATE OR REPLACE FUNCTION graph_conflict_frontier(frontier text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    payload agtype := frontier::agtype;
+BEGIN
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (a)-[r:RELATIONSHIP]-(x)
+        WHERE a.id IN $frontier
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'RELATIONSHIP', kind: r.kind, role: null,
+                         confidence_pct: r.confidence_pct, from_id: startNode(r).id,
+                         from_label: label(startNode(r)), from_name: startNode(r).name,
+                         to_id: endNode(r).id,
+                         to_label: label(endNode(r)), to_name: endNode(r).name}
+    $Q$, payload) AS (edge agtype);
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (a)-[r:HAS_ROLE]-(x)
+        WHERE a.id IN $frontier
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'HAS_ROLE', kind: null, role: r.role,
+                         confidence_pct: null, from_id: startNode(r).id,
+                         from_label: label(startNode(r)), from_name: startNode(r).name,
+                         to_id: endNode(r).id,
+                         to_label: label(endNode(r)), to_name: endNode(r).name}
+    $Q$, payload) AS (edge agtype);
+END
+$fn$;
+
+CREATE OR REPLACE FUNCTION graph_ensure_vertices(kind text, rows text)
+RETURNS integer
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    payload agtype;
+    missing jsonb := '[]'::jsonb;
+    source jsonb;
+    vname text;
+    found integer;
+BEGIN
+    IF kind NOT IN ('person', 'entity', 'project', 'firm') THEN
+        RAISE EXCEPTION 'unknown vertex kind %', kind;
+    END IF;
+    -- The runtime wrapper posts {"rows": [...]}: the Cypher `$rows`
+    -- parameter maps to that object key, matching graph_load_vertices.
+    FOR source IN SELECT * FROM jsonb_array_elements(rows::jsonb->'rows') LOOP
+        payload := jsonb_build_object('id', source->>'id')::text::agtype;
+        SELECT count(*) INTO found FROM cypher('navigator_graph', $Q$
+            MATCH (v) WHERE v.id = $id RETURN v LIMIT 1
+        $Q$, payload) AS t(v agtype);
+        IF found = 0 THEN
+            -- The caller's name wins — it reads the row that minted the
+            -- vertex before PostgreSQL's copy exists. The fallback is the
+            -- relational row's own name; a row the table does not have
+            -- (deleted between the edge write and this load) projects
+            -- with no name, and the explanation falls back to the id
+            -- until the next rebuild refreshes names.
+            vname := source->>'name';
+            IF vname IS NULL THEN
+                EXECUTE format('SELECT name::text FROM %I WHERE id = ($1)::uuid', kind)
+                    INTO vname USING source->>'id';
+            END IF;
+            missing := missing || jsonb_build_array(
+                jsonb_build_object('id', source->>'id', 'name', vname));
+        END IF;
+    END LOOP;
+    IF jsonb_array_length(missing) > 0 THEN
+        PERFORM graph_load_vertices(
+            kind, jsonb_build_object('rows', missing)::text);
+    END IF;
+    RETURN jsonb_array_length(missing);
+END
+$fn$;
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'navigator_app') THEN
+        -- The conflict check's readers, and the loaders the runtime write
+        -- path calls when it records one relationship or entity role.
+        GRANT EXECUTE ON FUNCTION graph_conflict_frontier(text) TO navigator_app;
+        GRANT EXECUTE ON FUNCTION graph_conflict_edges(text) TO navigator_app;
+        GRANT EXECUTE ON FUNCTION graph_load_edges(text, text) TO navigator_app;
+        GRANT EXECUTE ON FUNCTION graph_ensure_vertices(text, text) TO navigator_app;
+        -- The authoritative graph-table rows, and the names the vertex
+        -- payload carries. No UPDATE, DELETE, or TRUNCATE: graph rows are
+        -- append-only from the runtime's seat, and the mirror's
+        -- reconciliation is retired at this cutover.
+        GRANT SELECT, INSERT ON TABLE entity_role TO navigator_app;
+        GRANT SELECT, INSERT ON TABLE "relationship" TO navigator_app;
+        GRANT SELECT ON TABLE person, entity, project, firm TO navigator_app;
+    END IF;
+END
+$$;
+
+-- Migration: 20261031120000_add_project_onboarding_jurisdiction.sql
+-- The jurisdiction an onboarding Notation's Clauses bind to. NULL until recorded.
+ALTER TABLE project ADD COLUMN onboarding_jurisdiction TEXT;
+
+-- Migration: 20261031130000_create_case_stage.sql
+-- Firm-authored Case Stage vocabulary and audited per-matter transitions.
+-- A Case Stage is where the matter sits in the Firm's own workflow; it is
+-- distinct from project.status (the lifecycle: open/closed/archived) and
+-- case.status (per-forum: open/stayed/closed). See docs/glossary/case-stage.md.
+-- PostgreSQL-native, following the project_tasks pattern: a retained,
+-- immutable history table whose writes the database itself polices.
+
+CREATE TABLE stage_definition (
+    id UUID PRIMARY KEY,
+    firm_id UUID NOT NULL REFERENCES firm(id),
+    label TEXT NOT NULL CHECK (length(btrim(label)) BETWEEN 1 AND 100),
+    position INTEGER NOT NULL CHECK (position >= 0),
+    case_type TEXT CHECK (case_type IS NULL OR length(btrim(case_type)) BETWEEN 1 AND 100),
+    inserted_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (firm_id, position)
+);
+CREATE INDEX stage_definition_firm ON stage_definition (firm_id, position);
+
+-- The per-matter history: one append-only row per transition. The current
+-- stage is the newest row; there is no mutable "current stage" column to
+-- drift from the history.
+CREATE TABLE stage_event (
+    id UUID PRIMARY KEY,
+    project_id UUID NOT NULL REFERENCES project(id),
+    from_stage_id UUID REFERENCES stage_definition(id),
+    to_stage_id UUID NOT NULL REFERENCES stage_definition(id),
+    actor_person_id UUID NOT NULL REFERENCES person(id),
+    note TEXT CHECK (note IS NULL OR length(btrim(note)) BETWEEN 1 AND 500),
+    occurred_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX stage_event_project_time ON stage_event (project_id, occurred_at, id);
+
+-- Every write is validated where the data lives: the target (and origin) must
+-- come from the matter Firm's own vocabulary, and the chain must continue
+-- from the current stage. The advisory lock serializes concurrent transitions
+-- on one matter so two writers cannot both read the same "current" stage.
+CREATE FUNCTION enforce_stage_event_validity() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE project_firm UUID;
+        current_stage UUID;
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtext(NEW.project_id::text));
+    SELECT firm_id INTO project_firm FROM project WHERE id = NEW.project_id;
+    IF project_firm IS NULL THEN
+        RAISE EXCEPTION 'A Case Stage transition requires a Project that belongs to a Firm';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM stage_definition d
+        WHERE d.id = NEW.to_stage_id AND d.firm_id IS DISTINCT FROM project_firm
+    ) OR (
+        NEW.from_stage_id IS NOT NULL AND EXISTS (
+            SELECT 1 FROM stage_definition d
+            WHERE d.id = NEW.from_stage_id AND d.firm_id IS DISTINCT FROM project_firm
+        )
+    ) THEN
+        RAISE EXCEPTION 'A Case Stage must come from the matter Firm''s own vocabulary';
+    END IF;
+    SELECT to_stage_id INTO current_stage FROM stage_event
+    WHERE project_id = NEW.project_id
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT 1;
+    IF current_stage IS DISTINCT FROM NEW.from_stage_id THEN
+        RAISE EXCEPTION 'A Case Stage transition must continue from the matter''s current stage';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER stage_event_validity
+    BEFORE INSERT ON stage_event
+    FOR EACH ROW EXECUTE FUNCTION enforce_stage_event_validity();
+
+CREATE FUNCTION reject_stage_event_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Case Stage history is immutable; a new transition, never an edit';
+END;
+$$;
+CREATE TRIGGER stage_event_immutable
+    BEFORE UPDATE OR DELETE ON stage_event
+    FOR EACH ROW EXECUTE FUNCTION reject_stage_event_mutation();

@@ -1,7 +1,7 @@
 //! Read-only access to the Solana Attestation Service program on devnet.
 //!
-//! The official generated SAS client supplies the program identity. Solana
-//! JSON-RPC supplies the finalized account observation. Transaction
+//! The published SAS program address identifies the account. Solana JSON-RPC
+//! supplies the finalized account observation. Transaction
 //! construction and submission belong behind Navigator's authenticated REST
 //! command boundary, not in an operator probe.
 
@@ -10,7 +10,10 @@ use std::{process::ExitCode, time::Duration};
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
-use solana_attestation_service_client::programs::SOLANA_ATTESTATION_SERVICE_ID;
+
+// Published by the SAS program and its generated client:
+// https://github.com/solana-foundation/solana-attestation-service/blob/master/program/src/lib.rs
+const SOLANA_ATTESTATION_SERVICE_ID: &str = "22zoJMtdu4tQc2PzL74ZUT7FrwgB1Udec8DdW4yw4BdG";
 
 const DEVNET_RPC_URL: &str = "https://api.devnet.solana.com";
 const DEVNET_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -41,7 +44,7 @@ async fn program_with_client(client: &reqwest::Client, endpoint: &str) -> Result
             "id": 1,
             "method": "getAccountInfo",
             "params": [
-                SOLANA_ATTESTATION_SERVICE_ID.to_string(),
+                SOLANA_ATTESTATION_SERVICE_ID,
                 { "commitment": "finalized", "encoding": "base64" }
             ]
         }))
@@ -125,7 +128,7 @@ mod tests {
             .and(body_partial_json(json!({
                 "method": "getAccountInfo",
                 "params": [
-                    SOLANA_ATTESTATION_SERVICE_ID.to_string(),
+                    "22zoJMtdu4tQc2PzL74ZUT7FrwgB1Udec8DdW4yw4BdG",
                     { "commitment": "finalized", "encoding": "base64" },
                 ],
             })))

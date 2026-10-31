@@ -489,6 +489,7 @@ fn HomePageBody(
                 og_description: content.og_description.clone(),
                 site_name: chrome.brand_name.clone(),
                 image: chrome.social_image.clone(),
+                url: crate::components::canonical_url(&chrome.canonical_origin, "/"),
             }
             BrandFavicon { logo_href: chrome.logo_href.clone() }
             // The base theme (background/text from tokens) and the resolved
@@ -588,6 +589,7 @@ fn HomePageBody(
             og_description: content.og_description.clone(),
             site_name: chrome.brand_name.clone(),
             image: chrome.social_image.clone(),
+            url: crate::components::canonical_url(&chrome.canonical_origin, "/"),
         }
         document::Stylesheet { href: crate::brand_style::BRAND_STYLESHEET_HREF }
         document::Stylesheet { href: HOME_STYLESHEET_HREF }

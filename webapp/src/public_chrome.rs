@@ -51,6 +51,10 @@ pub struct PublicChrome {
     /// drop relative image URLs, so it is resolved against the site origin on
     /// the server.
     pub social_image: String,
+    /// The brand-resolved absolute origin (`https://…`), the base
+    /// `canonical_url` builds each page's canonical link from. Main's page
+    /// consumers read it directly; the simplified footer keeps it.
+    pub canonical_origin: String,
     pub destinations: Vec<ChromeNavLink>,
     pub utility: Vec<ChromeNavLink>,
     pub firm_name: String,
@@ -215,7 +219,23 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         brand_name: brand.site_name.to_string(),
         home_href: brand.home_href.to_string(),
         logo_href: brand.logo_href.to_string(),
-        social_image: views::assets::absolute_url(brand.social_image),
+        // The brand's absolute `og:image` URL (ported from main): the
+        // deployment's `NAV_BASE_URL` resolution wins, and when the
+        // deployment advertises no origin (dev, tests, an OSS fork), the
+        // brand's own canonical origin resolves the path instead, so a share
+        // card never falls back to the relative path a scraper drops.
+        social_image: {
+            let resolved = views::assets::absolute_url(brand.social_image);
+            if resolved.starts_with('/') {
+                format!(
+                    "https://{}{resolved}",
+                    views::brand::brand_key().canonical_host()
+                )
+            } else {
+                resolved
+            }
+        },
+        canonical_origin: format!("https://{}", views::brand::brand_key().canonical_host()),
         destinations,
         utility,
         firm_name: FIRM_BRAND.site_name.to_string(),

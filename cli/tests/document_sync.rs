@@ -1937,6 +1937,9 @@ fn site_sync_and_site_pull_are_gone() {
 
 /// LAW-189: a fresh checkout gets every matter folder under `documents/`,
 /// and `blobs/`, even with no documents.
+/// LAW-215: a fresh checkout gets the extended matter folder tree, which
+/// creates `Discovery (Served)` and the seven `Work Product` subfolders and
+/// leaves the bare `Discovery` folder to a migration.
 #[tokio::test(flavor = "multi_thread")]
 async fn project_sync_gives_a_fresh_checkout_the_matter_folder_tree() {
     let fx = checkout().await;
@@ -1949,13 +1952,23 @@ async fn project_sync_gives_a_fresh_checkout_the_matter_folder_tree() {
     for folder in [
         "documents/Client Production",
         "documents/Correspondence (Served)",
-        "documents/Discovery",
+        "documents/Discovery (Served)",
         "documents/Docket Filings",
+        "documents/Court Rules",
+        "documents/Engagement",
         "documents/Work Product",
+        "documents/Work Product/Client Calls (Work Product)",
+        "documents/Work Product/Correspondence (Work Product)",
+        "documents/Work Product/Discovery (Work Product)",
+        "documents/Work Product/Motions (Work Product)",
+        "documents/Work Product/Pleadings (Work Product)",
+        "documents/Work Product/Research (Work Product)",
+        "documents/Work Product/Stipulations (Work Product)",
         "blobs",
     ] {
         assert!(root.join(folder).is_dir(), "missing {folder}/");
     }
+    assert!(!root.join("documents/Discovery").exists());
     assert!(writes(&fx.server).await.is_empty());
 }
 
@@ -2002,7 +2015,7 @@ async fn project_sync_migrates_a_flat_project_without_changing_a_checksum_or_ass
     for expected in [
         "moved 2 pointer(s) from documents/ to blobs/",
         "moved documents/complaint.pdf -> documents/Docket Filings/complaint.pdf",
-        "moved documents/memos/analysis.pdf -> documents/Work Product/memos/analysis.pdf",
+        "moved documents/memos/analysis.pdf -> documents/Work Product/Research (Work Product)/memos/analysis.pdf",
     ] {
         assert!(
             stdout.contains(expected),
@@ -2035,7 +2048,8 @@ async fn project_sync_migrates_a_flat_project_without_changing_a_checksum_or_ass
         FILED
     );
     assert_eq!(
-        fs::read(root.join("documents/Work Product/memos/analysis.pdf")).unwrap(),
+        fs::read(root.join("documents/Work Product/Research (Work Product)/memos/analysis.pdf"))
+            .unwrap(),
         NEWER
     );
     assert!(
@@ -2100,10 +2114,142 @@ fn migrate_documents_moves_flat_pointers_offline_and_is_idempotent() {
         fs::read(root.path().join("documents/Docket Filings/complaint.pdf")).unwrap(),
         FILED
     );
-    assert!(root.path().join("documents/Discovery").is_dir());
+    assert!(root.path().join("documents/Discovery (Served)").is_dir());
 
     let second = migrate(&[]);
     assert!(second.contains("0 file(s) moved"), "{second}");
+}
+
+/// Seeds a five-folder checkout for the offline migration: a bare
+/// `Discovery` pointer with its bytes, a memo under `Work Product`, and an
+/// orphan byte file no pointer names. Returns the served pointer.
+fn seed_five_folder_checkout(root: &Path) -> serde_json::Value {
+    let mut served = committed_pointer(Uuid::now_v7(), FILED, 1, None, "internal");
+    served["kind"] = "unclassified".into();
+    served["folder"] = "Discovery".into();
+    let mut memo = committed_pointer(Uuid::now_v7(), NEWER, 1, None, "internal");
+    memo["kind"] = "memo".into();
+    write(
+        root,
+        "blobs/set-one/responses.pdf.yaml",
+        serde_yaml::to_string(&served).unwrap(),
+    );
+    write(root, "documents/Discovery/set-one/responses.pdf", FILED);
+    write(
+        root,
+        "blobs/memo.pdf.yaml",
+        serde_yaml::to_string(&memo).unwrap(),
+    );
+    write(root, "documents/Work Product/memo.pdf", NEWER);
+    // Bytes no pointer names: the migration lists them, never guesses.
+    write(root, "documents/Discovery/orphan.pdf", FILED);
+    served
+}
+
+fn migrate_folders(root: &Path, extra: &[&str]) -> String {
+    String::from_utf8(
+        navigator()
+            .current_dir(root)
+            .args(["project", "repository", "migrate-folders"])
+            .args(extra)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap()
+}
+
+/// LAW-215: the offline one-shot refiles a five-folder checkout into the
+/// extended tree — bare `Discovery` pointers onto `Discovery (Served)` with
+/// their bytes, kind-default moves onto the new `Work Product` subfolders —
+/// without changing an asset id or checksum, lists the bytes it cannot
+/// place, and is idempotent.
+#[test]
+fn migrate_folders_reslugs_the_five_folder_tree_offline_and_is_idempotent() {
+    let root = TempDir::new().unwrap();
+    manifest(root.path(), "https://navigator.example.test");
+    let served = seed_five_folder_checkout(root.path());
+
+    let preview = migrate_folders(root.path(), &["--dry-run"]);
+    assert!(
+        preview.contains("would refile blobs/set-one/responses.pdf.yaml"),
+        "{preview}"
+    );
+    assert!(
+        preview
+            .contains("would move documents/Discovery/set-one/responses.pdf -> documents/Discovery (Served)/set-one/responses.pdf"),
+        "{preview}"
+    );
+    assert!(
+        fs::read_to_string(
+            root.path()
+                .join("documents/Discovery/set-one/responses.pdf")
+        )
+        .is_ok(),
+        "a dry run touches nothing"
+    );
+    assert!(
+        fs::read_to_string(root.path().join("blobs/set-one/responses.pdf.yaml"))
+            .unwrap()
+            .contains("folder: Discovery\n"),
+        "a dry run rewrites nothing"
+    );
+
+    let first = migrate_folders(root.path(), &[]);
+    assert!(
+        first.contains("1 pointer(s) refiled, 2 file(s) moved"),
+        "{first}"
+    );
+    assert!(
+        first.contains("unplaced documents/Discovery/orphan.pdf"),
+        "{first}"
+    );
+
+    let refiled = fs::read_to_string(root.path().join("blobs/set-one/responses.pdf.yaml")).unwrap();
+    assert!(
+        !refiled.contains("folder: Discovery\n")
+            && refiled.contains("folder: Discovery (Served)\n"),
+        "{refiled}"
+    );
+    let reslug: serde_json::Value = serde_yaml::from_str(&refiled).unwrap();
+    assert_eq!(
+        reslug["current_version"]["asset_id"], served["current_version"]["asset_id"],
+        "the asset id never changes"
+    );
+    assert_eq!(
+        reslug["current_version"]["sha256"], served["current_version"]["sha256"],
+        "the checksum never changes"
+    );
+    assert_eq!(
+        fs::read(
+            root.path()
+                .join("documents/Discovery (Served)/set-one/responses.pdf")
+        )
+        .unwrap(),
+        FILED
+    );
+    assert_eq!(
+        fs::read(
+            root.path()
+                .join("documents/Work Product/Research (Work Product)/memo.pdf")
+        )
+        .unwrap(),
+        NEWER,
+        "a memo's bytes follow the kind's new default"
+    );
+    assert_eq!(
+        fs::read(root.path().join("documents/Discovery/orphan.pdf")).unwrap(),
+        FILED,
+        "unplaced bytes stay where the lawyer can see them"
+    );
+
+    let second = migrate_folders(root.path(), &[]);
+    assert!(
+        second.contains("0 pointer(s) refiled, 0 file(s) moved"),
+        "{second}"
+    );
 }
 
 /// LAW-189: a file dropped into a matter folder is uploaded with that

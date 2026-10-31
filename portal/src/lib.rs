@@ -98,10 +98,12 @@ mod dev_reload;
 pub(crate) mod docket_api;
 pub(crate) mod efilings_api;
 pub(crate) mod handoffs_api;
+pub(crate) mod lawyer_mailbox;
 pub(crate) mod matter_caption_api;
 pub(crate) mod module_records_api;
 pub(crate) mod pages_api;
 pub(crate) mod project_costs_api;
+pub(crate) mod project_tasks_api;
 pub(crate) mod recovery_archives_api;
 pub(crate) mod service_api;
 pub mod site_brand;
@@ -113,6 +115,8 @@ pub use billing;
 pub use billing::xero_auth;
 pub mod admin_contract_reviews;
 pub mod admin_playbooks;
+/// The nightly Deadline mirror's host-side source.
+pub(crate) mod calendar_mirror;
 pub mod canonical_host;
 pub mod ci_auth;
 pub mod clauses;
@@ -132,6 +136,7 @@ mod email_acknowledgment;
 pub mod email_confirm;
 pub mod email_events;
 pub mod email_threads;
+pub mod eml_filing;
 pub mod esign_view;
 pub mod esignature_webhook;
 pub mod expunge;
@@ -892,6 +897,7 @@ pub fn bootstrap_with_forgejo_oidc(
                 signature_provider: state.signature_provider.clone(),
                 contract_reviewer: state.contract_reviewer.clone(),
                 integration_providers: state.integration_providers.clone(),
+                canonical_base_url: state.canonical_host.host().map(str::to_string),
             })
             .layer(axum::middleware::from_fn_with_state(
                 (state.sessions.clone(), crate::csrf::CsrfMode::Strict),
@@ -1448,6 +1454,15 @@ pub fn bootstrap_with_forgejo_oidc(
         state.policy.clone(),
         state.auth.clone(),
     );
+    // The relationship-graph pages (project, lawyer, firm) render through
+    // Dioxus with a first-party Sigma.js island fed by the read-only
+    // `GET /app/api/graph/*` doors.
+    let dioxus_graph_views = dioxus_app::graph_views_router(
+        state.surreal.clone(),
+        state.sessions.clone(),
+        state.policy.clone(),
+        state.auth.clone(),
+    );
     // #956 Phase 4: the admin governed-expunge confirmation + result renders
     // through Dioxus at `/app/lawyer/documents/{doc_id}/expunge`. Its form posts to
     // the unchanged `POST` handler, which redirects back here with `?record=`
@@ -1935,6 +1950,9 @@ pub fn bootstrap_with_forgejo_oidc(
         // Dioxus at `/app/admin/entity-types`, replacing the read view.
         dioxus_entity_types,
         dioxus_expunge_queue,
+        // The relationship-graph pages (project, lawyer, firm): read-only
+        // Sigma.js islands over the `GET /app/api/graph/*` doors.
+        dioxus_graph_views,
         // The lawyer-tier Clauses pages: the library list and one Clause's versions,
         // read-only, at `/app/admin/clauses` and `/app/admin/clauses/{code}`.
         dioxus_clauses,

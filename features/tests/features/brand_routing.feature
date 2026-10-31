@@ -59,6 +59,19 @@ Feature: Public routing on the firm's own host
       | staging.summonsdefense.nyc | Summons Defense | Summons Defense \| Home  | A city summons. A clear next step.      |
       | staging.guiebandshook.com  | Guieb & Shook   | Guieb & Shook PC \| Home | Attorneys at Law.                       |
 
+  Scenario Outline: A Cyber Injury Law practice page serves on its own host
+    When a visitor opens <path> on host "<host>"
+    Then the response status is 200
+    And the page is branded "CyberInjuryLaw"
+    And the response body contains "<og-title>"
+
+    Examples:
+      | host                       | path           | og-title                            |
+      | staging.cyberinjurylaw.com | /car-accidents | CyberInjuryLaw \| Car accident lawyers |
+      | staging.cyberinjurylaw.com | /cybercrime    | CyberInjuryLaw \| Cybercrime lawyers   |
+      | staging.cyberinjurylaw.com | /theft         | CyberInjuryLaw \| Theft claims      |
+      | staging.cyberinjurylaw.com | /data-theft    | CyberInjuryLaw \| Data theft lawyers  |
+
   Scenario Outline: The firm's published anonymous surface serves at the root
     # Each is anonymous: a stranger deciding whether to hire a lawyer must not
     # meet a login door.

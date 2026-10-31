@@ -911,6 +911,22 @@ pub async fn body_pinned_to(
     String::from_utf8(bytes).map_err(|_| TemplateBodyError::NotUtf8)
 }
 
+/// Whether an open run pinned at `pinned_sha` has been overtaken by the
+/// template's current definition on the repository's main (LAW-201).
+///
+/// `None` on either side means staleness cannot be proven, and a run is
+/// never flagged on what cannot be proven: a run pinned before digests
+/// existed, or a template removed from main (a removal is its own
+/// lifecycle, not a hash change). Conservative by design — the board
+/// flags only a provably stale run.
+#[must_use]
+pub fn run_is_stale(pinned_sha: Option<&str>, current_sha: Option<&str>) -> bool {
+    match (pinned_sha, current_sha) {
+        (Some(pinned), Some(current)) => pinned != current,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -949,6 +965,17 @@ mod tests {
             .unwrap()
             .into_model()
             .id
+    }
+
+    #[test]
+    fn a_run_is_stale_only_when_both_digests_are_known_and_differ() {
+        assert!(super::run_is_stale(Some("aaa"), Some("bbb")));
+        assert!(!super::run_is_stale(Some("aaa"), Some("aaa")));
+        // Nothing provable is never flagged: a run pinned before digests
+        // existed, or a template no longer on main.
+        assert!(!super::run_is_stale(None, Some("bbb")));
+        assert!(!super::run_is_stale(Some("aaa"), None));
+        assert!(!super::run_is_stale(None, None));
     }
 
     #[tokio::test]

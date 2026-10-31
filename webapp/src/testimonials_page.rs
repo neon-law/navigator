@@ -106,6 +106,7 @@ pub fn TestimonialsPage(
             description: "Testimonials".to_string(),
             site_name: chrome.brand_name.clone(),
             image: chrome.social_image.clone(),
+            url: crate::components::canonical_url(&chrome.canonical_origin, "/testimonials"),
         }
         PublicShell { header, footer,
             section { class: "testimonials-page", "aria-labelledby": "testimonials-title",

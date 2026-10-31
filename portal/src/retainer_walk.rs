@@ -2851,8 +2851,16 @@ async fn render_assembled_document(
         .await
         .map_err(|error| WorkflowDriveError::Db(error.to_string()))?;
     let template_body = store::notation_clauses::splice(&raw_template_body, &clauses);
-    let ctx = render_context_from_answers(deps.surreal, notation_id).await?;
-    Ok(views::notation::render_filled_in(&template_body, &ctx))
+    // Conditions read stored choice keys (`=NV`); placeholders print labels
+    // (`Nevada`). The public preview already splits those maps. Using labels
+    // for both dropped every `{{#if state=KEY}}` branch on review and PDF.
+    let keys = render_form_context_from_answers(deps.surreal, notation_id).await?;
+    let labels = render_context_from_answers(deps.surreal, notation_id).await?;
+    Ok(views::notation::render_filled_in_with_display(
+        &template_body,
+        &keys,
+        &labels,
+    ))
 }
 
 /// Storage-key convention for the offboarding letter PDF of a notation.
@@ -3292,7 +3300,7 @@ async fn build_answer_context(
     // asks `person__client` for the name only, so `{{person__client.email}}`
     // (and the N-400's email field) fills from `persons.email`. Answers win:
     // only fill a gap, never overwrite a captured value.
-    if let Some(person) = match notation_row {
+    if let Some(person) = match notation_row.as_ref() {
         Some(n) => store::persons::find_by_id(surreal, n.person_id).await?,
         None => None,
     } {
@@ -3300,6 +3308,21 @@ async fn build_answer_context(
             .or_insert(person.email);
         ctx.entry("person__client.name".to_string())
             .or_insert(person.name);
+    }
+    // Seed the onboarding jurisdiction the notation's Project carries, so a
+    // Clause input bound to `project.onboarding_jurisdiction` (`rules::clauses`)
+    // fills from the live row instead of a questionnaire answer. Answers and
+    // the Person row win: this only fills a gap.
+    if let Some(n) = notation_row.as_ref() {
+        if let Some(project) = store::projects::find_by_id(surreal, n.project_id)
+            .await
+            .map_err(|error| ContextError::Db(error.to_string()))?
+        {
+            if let Some(jurisdiction) = project.onboarding_jurisdiction {
+                ctx.entry("project.onboarding_jurisdiction".to_string())
+                    .or_insert(jurisdiction);
+            }
+        }
     }
     default_governing_law(&mut ctx, choice_rendering);
     Ok(ctx)
@@ -3432,12 +3455,12 @@ async fn sync_notation_state(
     Ok(())
 }
 
-/// The linear question order the walker presents: follow the `_`
-/// transition from BEGIN until END. This chain is the source of the
-/// rendered "step N of M", so it must cover every question state the
-/// spec declares — the corpus test
-/// `every_shipped_questionnaire_renders_an_honest_step_count` holds
-/// the two shapes equal for every shipped template.
+/// The linear fallback question order when the notation's frozen
+/// snapshot cannot be read: the bundled retainer spec, which is linear
+/// (`_` edge from BEGIN to END). The route-aware order lives in
+/// `workflows::notation_session::questionnaire_chain_for_notation` —
+/// `walker_progress` prefers it, so a branched questionnaire's progress
+/// tracks the answers recorded so far; this helper never sees a branch.
 fn questionnaire_chain(spec: &workflows::QuestionnaireSpec) -> Vec<StateName> {
     let mut order: Vec<StateName> = Vec::new();
     let mut here = StateName::begin();
@@ -3614,6 +3637,249 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(saved.state, "lawyer_review");
+    }
+
+    /// The branched onboarding fixture the LAW-209 walk tests route
+    /// through: one branch question whose choices each carry their
+    /// own route and share no fallback.
+    const BRANCHED_TEMPLATE: &str =
+        include_str!("../../workflows/tests/fixtures/onboarding_branched.txt");
+
+    async fn branched_fixture(
+        surreal: &store::surreal::SurrealDb,
+    ) -> (
+        tempfile::TempDir,
+        std::sync::Arc<dyn cloud::StorageService>,
+        store::persons::Person,
+        store::projects::Project,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let storage: std::sync::Arc<dyn cloud::StorageService> =
+            std::sync::Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
+        let project = store::test_support::seed_project(surreal, "Synthetic project").await;
+        let person = store::persons::create(
+            surreal,
+            &store::persons::NewPerson::new("Client", "client@example.com"),
+        )
+        .await
+        .unwrap();
+        store::template_source::persist_contents(
+            surreal,
+            &storage,
+            project.id,
+            "onboarding",
+            BRANCHED_TEMPLATE.into(),
+            "synthetic-commit".into(),
+        )
+        .await
+        .unwrap();
+        (dir, storage, person, project)
+    }
+
+    async fn branched_ask(
+        surreal: &store::surreal::SurrealDb,
+        runtime: &workflows::InMemoryRuntime,
+        storage: &std::sync::Arc<dyn cloud::StorageService>,
+        notation_id: Uuid,
+        expected: &str,
+    ) {
+        let step =
+            workflows::notation_session::current_step(surreal, runtime, Some(storage), notation_id)
+                .await
+                .unwrap();
+        let workflows::NextStep::NeedsAnswer { question } = step else {
+            panic!("expected the next ask to be {expected}");
+        };
+        assert_eq!(question.code, expected);
+    }
+
+    async fn branched_route(
+        surreal: &store::surreal::SurrealDb,
+        storage: &std::sync::Arc<dyn cloud::StorageService>,
+        notation_id: Uuid,
+        expected: &[&str],
+    ) {
+        let chain = workflows::notation_session::questionnaire_chain_for_notation(
+            surreal,
+            Some(storage),
+            notation_id,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            chain,
+            expected.iter().map(ToString::to_string).collect::<Vec<_>>()
+        );
+    }
+
+    async fn branched_complete(
+        surreal: &store::surreal::SurrealDb,
+        runtime: &workflows::InMemoryRuntime,
+        storage: &std::sync::Arc<dyn cloud::StorageService>,
+        notation_id: Uuid,
+    ) {
+        assert!(matches!(
+            workflows::notation_session::current_step(surreal, runtime, Some(storage), notation_id)
+                .await
+                .unwrap(),
+            workflows::NextStep::QuestionnaireComplete
+        ));
+    }
+
+    /// LAW-209: the portal walker routes on the answered branch. The
+    /// step the pre-layer resolves and the progress rail's question
+    /// count both come from the route-aware order, so the not-taken
+    /// branch's questions never render and the walk ends on the taken
+    /// branch's last question — never a runtime dead end.
+    #[tokio::test]
+    async fn branched_onboarding_walk_follows_the_answered_route() {
+        let surreal = store::test_support::mem_surreal().await;
+        let (_dir, storage, person, project) = branched_fixture(&surreal).await;
+        let runtime = workflows::InMemoryRuntime::new();
+        let branch_code = "custom_single_choice__path";
+
+        // Before any answer the walk fans only what the route policy
+        // can reach: the branch question itself — its choices each
+        // carry their own route and none shares a fallback.
+        let started = workflows::start_notation(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            "onboarding",
+            person.id,
+            project.id,
+            None,
+        )
+        .await
+        .unwrap();
+        branched_ask(
+            &surreal,
+            &runtime,
+            &storage,
+            started.notation_id,
+            branch_code,
+        )
+        .await;
+        branched_route(&surreal, &storage, started.notation_id, &[branch_code]).await;
+
+        // Answering "transactional" takes that route: the closing date
+        // is the next ask, the governing-law question never appears,
+        // and the rail fans through the rejoin — the seat question
+        // both branches share stays on the taken route.
+        workflows::answer_step(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            started.notation_id,
+            branch_code,
+            "transactional",
+            workflows::AnswerAuthor::lawyer(None),
+        )
+        .await
+        .unwrap();
+        branched_ask(
+            &surreal,
+            &runtime,
+            &storage,
+            started.notation_id,
+            "custom_datetime__closing_date",
+        )
+        .await;
+        branched_route(
+            &surreal,
+            &storage,
+            started.notation_id,
+            &[
+                branch_code,
+                "custom_datetime__closing_date",
+                "jurisdiction__arbitration_seat",
+            ],
+        )
+        .await;
+        workflows::answer_step(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            started.notation_id,
+            "custom_datetime__closing_date",
+            "2026-12-01",
+            workflows::AnswerAuthor::lawyer(None),
+        )
+        .await
+        .unwrap();
+        // The rejoin: the seat question both branches share is next —
+        // convergence, not completion.
+        branched_ask(
+            &surreal,
+            &runtime,
+            &storage,
+            started.notation_id,
+            "jurisdiction__arbitration_seat",
+        )
+        .await;
+        workflows::answer_step(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            started.notation_id,
+            "jurisdiction__arbitration_seat",
+            "NV",
+            workflows::AnswerAuthor::lawyer(None),
+        )
+        .await
+        .unwrap();
+        branched_complete(&surreal, &runtime, &storage, started.notation_id).await;
+    }
+
+    /// LAW-209: the litigation route asks governing law — the closing
+    /// date the transactional route owns never enters the chain.
+    #[tokio::test]
+    async fn branched_walk_litigation_route_skips_the_closing_date() {
+        let surreal = store::test_support::mem_surreal().await;
+        let (_dir, storage, person, project) = branched_fixture(&surreal).await;
+        let runtime = workflows::InMemoryRuntime::new();
+        let branch_code = "custom_single_choice__path";
+        let other = workflows::start_notation(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            "onboarding",
+            person.id,
+            project.id,
+            None,
+        )
+        .await
+        .unwrap();
+        workflows::answer_step(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            other.notation_id,
+            branch_code,
+            "litigation",
+            workflows::AnswerAuthor::lawyer(None),
+        )
+        .await
+        .unwrap();
+        branched_ask(
+            &surreal,
+            &runtime,
+            &storage,
+            other.notation_id,
+            "jurisdiction__governing_law",
+        )
+        .await;
+        branched_route(
+            &surreal,
+            &storage,
+            other.notation_id,
+            &[
+                branch_code,
+                "jurisdiction__governing_law",
+                "jurisdiction__arbitration_seat",
+            ],
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -4516,7 +4782,12 @@ Sign: {{client.signature}}";
             .expect("brand lookup")
             .expect("seed practice wears neon");
 
-        let resp = start_walk_on_brand(state, &views::brand::DEFAULT_BRANDING, &email).await;
+        let resp = Box::pin(start_walk_on_brand(
+            state,
+            &views::brand::DEFAULT_BRANDING,
+            &email,
+        ))
+        .await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
 
         let project = store::projects::find_by_name(&surreal, &format!("(pending) {email}"))
@@ -4575,7 +4846,12 @@ Sign: {{client.signature}}";
         .expect("other firm wears lawyer-shook");
 
         let email = format!("walk-other-firm-{}@example.com", Uuid::now_v7());
-        let resp = start_walk_on_brand(state, &views::brand::LAWYER_SHOOK_BRANDING, &email).await;
+        let resp = Box::pin(start_walk_on_brand(
+            state,
+            &views::brand::LAWYER_SHOOK_BRANDING,
+            &email,
+        ))
+        .await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
 
         let project = store::projects::find_by_name(&surreal, &format!("(pending) {email}"))
@@ -4605,8 +4881,12 @@ Sign: {{client.signature}}";
         .expect("detach delete-your-data so no Firm wears it");
 
         let email = format!("walk-unworn-{}@example.com", Uuid::now_v7());
-        let resp =
-            start_walk_on_brand(state, &views::brand::DELETE_YOUR_DATA_BRANDING, &email).await;
+        let resp = Box::pin(start_walk_on_brand(
+            state,
+            &views::brand::DELETE_YOUR_DATA_BRANDING,
+            &email,
+        ))
+        .await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         let loc = resp
             .headers()

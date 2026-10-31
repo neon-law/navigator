@@ -12,7 +12,20 @@
 //! agree. A rerun is safe: unchanged bytes are a no-op, a new Drive version
 //! becomes a new revision of the same document, and an interrupted pass
 //! converges when it runs again.
+//!
+//! A file's document identity is its own Drive filename (LAW-216):
+//! `report.pdf` files as the document named `report.pdf`, not an opaque
+//! `drive-{file.id}` slug, so the matter checkout and the documents board
+//! carry the names the lawyer gave them. The Drive file id, version, and
+//! checksum stay on the asset row as metadata. Two controls keep a
+//! filename-derived identity safe: a name that could not live in a Project
+//! checkout (path separators, control characters, over 255 bytes) is refused
+//! as `unusable_name`, and files in one pass whose names collide
+//! case-insensitively are refused together as `name_collision` rather than
+//! silently merged into one revision chain. A `dry_run` pass runs everything
+//! but the writes, so its report is exactly what a real pass would do.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -23,6 +36,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::assets::{self, Filed, RevisionError};
+use crate::document_pointers::MatterFolder;
 use crate::documents::{self, DocumentIdentity, IngestArgs};
 use crate::persons;
 use crate::projects;
@@ -45,6 +59,8 @@ pub enum DriveImportError {
     Person(#[from] persons::PersonError),
     #[error("asset: {0}")]
     Asset(#[from] RevisionError),
+    #[error("reading the document's head: {0}")]
+    Head(#[from] assets::AssetError),
     #[error("Project has no Drive ingest folder")]
     MissingFolder,
     #[error("Drive import is not authorized for this Project")]
@@ -67,6 +83,10 @@ pub struct DriveImportArgs<'a> {
     pub kind: &'a str,
     pub visibility: &'a str,
     pub description: Option<&'a str>,
+    /// Run the pass to its decision points and write nothing: every download,
+    /// receipt check, screen, and refusal is real, and each reported import
+    /// predicts whether a real pass would file a revision or change nothing.
+    pub dry_run: bool,
 }
 
 /// The malware screen a Drive file passes before it is filed.
@@ -83,6 +103,9 @@ pub struct ImportedDriveFile {
     pub drive_file_id: String,
     pub asset_id: Uuid,
     pub filename: String,
+    /// The matter folder a Project checkout downloads this document into,
+    /// resolved from the pass's document kind (LAW-189).
+    pub matter_folder: MatterFolder,
     /// `false` when the bytes matched the document's newest revision and
     /// nothing was written.
     pub changed: bool,
@@ -93,7 +116,10 @@ pub struct ImportedDriveFile {
 pub struct RefusedDriveFile {
     pub drive_file_id: String,
     /// `receipt_mismatch` when the download disagrees with Drive's size or
-    /// MD5, `malware_found` when the screen flagged it.
+    /// MD5, `malware_found` when the screen flagged it, `name_collision`
+    /// when another file in the same pass names the same document
+    /// case-insensitively, and `unusable_name` when the name could not be a
+    /// document in a Project checkout.
     pub reason: &'static str,
 }
 
@@ -117,6 +143,10 @@ pub struct DriveImportReport {
 /// refused without filing anything, as is one the screen flags. The stored
 /// row carries `source = "drive"` and the Drive file id, version, modified
 /// time, and checksum; later reads use only the asset row and object storage.
+///
+/// With `args.dry_run` the pass is read-only: every download, receipt check,
+/// and screen runs, but nothing is filed, and each reported import predicts
+/// whether a real pass would write a revision or change nothing.
 ///
 /// # Errors
 /// [`DriveImportError`] when the actor is not authorized, the folder is
@@ -158,10 +188,25 @@ pub async fn import_project_files(
             actual: listed_files.len(),
         });
     }
+    let collisions = colliding_names(&listed_files);
 
     let mut total_bytes = 0usize;
     let mut report = DriveImportReport::default();
     for file in listed_files {
+        if collisions.contains(&file.id) {
+            report.refused.push(RefusedDriveFile {
+                drive_file_id: file.id,
+                reason: "name_collision",
+            });
+            continue;
+        }
+        if !usable_name(&file.name) {
+            report.refused.push(RefusedDriveFile {
+                drive_file_id: file.id,
+                reason: "unusable_name",
+            });
+            continue;
+        }
         validate_declared_size(&file.id, file.size_bytes, total_bytes)?;
 
         let downloaded = drive.download_file(&file.id).await?;
@@ -216,6 +261,12 @@ async fn ingest_one(
         }
         Err(()) => return Err(DriveImportError::ScreenUnavailable),
     }
+    let matter_folder = MatterFolder::for_kind(args.kind);
+    if args.dry_run {
+        return Ok(Outcome::Imported(
+            plan_one(db, project_id, args, file, &downloaded.bytes, matter_folder).await?,
+        ));
+    }
     let content_type = if downloaded.content_type == "application/octet-stream"
         && !file.mime_type.trim().is_empty()
     {
@@ -223,9 +274,8 @@ async fn ingest_one(
     } else {
         downloaded.content_type.as_str()
     };
-    let slug = format!("drive-{}", file.id);
     let identity = DocumentIdentity {
-        slug: Some(&slug),
+        slug: Some(file.name.as_str()),
         published_at: None,
         metadata: Some(json!({
             "drive_file_id": file.id,
@@ -237,6 +287,7 @@ async fn ingest_one(
         transcript_quality: None,
         signing: None,
         notarization: Vec::new(),
+        evidence: None,
     };
     let ingest = IngestArgs {
         project_id,
@@ -256,9 +307,54 @@ async fn ingest_one(
     Ok(Outcome::Imported(ImportedDriveFile {
         drive_file_id: file.id,
         asset_id,
+        matter_folder,
         filename: file.name,
         changed,
     }))
+}
+
+/// The read-only prediction [`ingest_one`] reports for a `dry_run` pass: what
+/// [`crate::assets::file_revision`] would do with these bytes — its rules 2
+/// and 3, read and not written — or that a real pass would file the first
+/// revision. A planned file carries the nil asset id, because nothing was
+/// filed.
+async fn plan_one(
+    db: &SurrealDb,
+    project_id: Uuid,
+    args: &DriveImportArgs<'_>,
+    file: cloud::DriveFile,
+    bytes: &[u8],
+    matter_folder: MatterFolder,
+) -> Result<ImportedDriveFile, DriveImportError> {
+    let head = assets::current(db, project_id, &file.name, assets::Lens::Lawyer).await?;
+    if let Some(head) = head {
+        if let Some(existing) = head.kind.as_deref() {
+            if existing != args.kind {
+                return Err(RevisionError::KindChanged {
+                    slug: file.name.clone(),
+                    existing: existing.to_string(),
+                    attempted: args.kind.to_string(),
+                }
+                .into());
+            }
+        }
+        if head.sha256_hex == assets::sha256_hex(bytes) {
+            return Ok(ImportedDriveFile {
+                drive_file_id: file.id,
+                asset_id: head.id,
+                matter_folder,
+                filename: file.name,
+                changed: false,
+            });
+        }
+    }
+    Ok(ImportedDriveFile {
+        drive_file_id: file.id,
+        asset_id: Uuid::nil(),
+        matter_folder,
+        filename: file.name,
+        changed: true,
+    })
 }
 
 /// Whether downloaded bytes match what Drive listed. A listed size or MD5 that
@@ -295,4 +391,96 @@ fn validate_declared_size(
         return Err(DriveImportError::BatchTooLarge);
     }
     Ok(())
+}
+
+/// Whether a Drive filename can be a document identity in a Project checkout,
+/// which names a downloaded document by its slug: no separators, no control
+/// characters, no `.`/`..`, and no more than 255 bytes. A name the checkout
+/// tree could never write is refused before its bytes are downloaded.
+#[must_use]
+fn usable_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name
+            .chars()
+            .any(|c| c == '/' || c == '\\' || c.is_control())
+        && name.len() <= 255
+}
+
+/// The drive file ids whose names collide case-insensitively: every member of
+/// a same-name group, because a pass has no honest way to pick which one the
+/// lawyer meant. ASCII-only folding matches what the checkout filesystems
+/// (APFS, NTFS) fold; anything finer is one rename away in Drive.
+#[must_use]
+fn colliding_names(files: &[cloud::DriveFile]) -> HashSet<String> {
+    let mut groups: HashMap<String, Vec<&str>> = HashMap::new();
+    for file in files {
+        groups
+            .entry(file.name.to_ascii_lowercase())
+            .or_default()
+            .push(&file.id);
+    }
+    groups
+        .into_values()
+        .filter(|ids| ids.len() > 1)
+        .flatten()
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{colliding_names, usable_name};
+    use cloud::DriveFile;
+
+    fn file(id: &str, name: &str) -> DriveFile {
+        DriveFile {
+            id: id.to_string(),
+            name: name.to_string(),
+            mime_type: "application/pdf".into(),
+            size_bytes: Some(4),
+            modified_time: None,
+            md5_checksum: None,
+            version: None,
+        }
+    }
+
+    #[test]
+    fn a_checkout_writable_name_is_usable_and_its_escapes_are_not() {
+        assert!(usable_name("signed agreement.pdf"));
+        assert!(usable_name("LICENSE"));
+        assert!(usable_name(&"x".repeat(255)));
+        let long = "x".repeat(256);
+        for unusable in [
+            "",
+            ".",
+            "..",
+            "a/b.pdf",
+            "a\\b.pdf",
+            "a\u{7}b.pdf",
+            long.as_str(),
+        ] {
+            assert!(!usable_name(unusable), "{unusable:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn every_member_of_a_same_name_group_collides_case_insensitively() {
+        let files = [
+            file("a", "report.pdf"),
+            file("b", "Report.PDF"),
+            file("c", "notes.md"),
+            file("d", "REPORT.pdf"),
+        ];
+        let mut collided = colliding_names(&files).into_iter().collect::<Vec<_>>();
+        collided.sort();
+        assert_eq!(collided, ["a", "b", "d"]);
+    }
+
+    #[test]
+    fn distinct_names_never_collide() {
+        let files = [file("a", "a.pdf"), file("b", "b.pdf")];
+        assert!(colliding_names(&files).is_empty());
+    }
 }

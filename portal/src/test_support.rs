@@ -93,6 +93,27 @@ pub async fn embedded_surreal() -> store::surreal::SurrealDb {
     db
 }
 
+/// A throwaway filesystem storage rooted in a temp directory, for tests that
+/// call ingest helpers directly instead of through an [`AppState`]. The
+/// directory leaks to the OS on purpose: dropping it would race the async
+/// writes of a still-running test.
+pub async fn fs_storage() -> std::sync::Arc<dyn cloud::StorageService> {
+    // A unique name instead of a TempDir handle: this module compiles into
+    // the library itself (not a dev-dependency unit), and the directory
+    // leaks to the OS on purpose — dropping it would race the async writes
+    // of a still-running test.
+    let root = std::env::temp_dir().join(format!(
+        "navigator-fs-storage-{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    std::fs::create_dir_all(&root).expect("create temp storage directory");
+    std::sync::Arc::new(
+        cloud::FsStorage::new(root)
+            .await
+            .expect("open temp storage"),
+    )
+}
+
 /// The caller supplies **both** stores.
 ///
 /// The Surreal handle is an argument rather than something this builder

@@ -331,6 +331,20 @@ async fn check_live_handles(dir: &Path, base: &str, token: &str) -> Result<()> {
         super::docket::renumber::validate_checkout(dir, &metadata)?;
     }
 
+    // The records' drift check needs the docket rows, and only a checkout
+    // that carries records gives it anything to refuse — the same sparing
+    // of live reads the filings check just applied.
+    if super::docket::timeline_write::has_records(dir)? {
+        let coordinates = super::docket::entries::Coordinates {
+            base: base.to_string(),
+            token: token.to_string(),
+            project_id,
+            project_code: project_code.to_string(),
+        };
+        let rows = super::docket::entries::list_rows(&coordinates).await?;
+        super::document_check::check_timeline_records(dir, &rows)?;
+    }
+
     let mut differing = Vec::new();
     if !manifest.lawyer_dri.as_deref().is_some_and(|value| {
         live.lawyer_dri

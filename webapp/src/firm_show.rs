@@ -606,6 +606,16 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                         }
                     }
                 }
+                // The firm-graph page, the aggregated read-only neighborhood
+                // of this firm — a lawyer-tier view, independent of edit
+                // permission; the destination's policy rule gates it.
+                p {
+                    a {
+                        class: "nav-btn nav-btn--secondary",
+                        href: "/app/lawyer/firms/{view.id}/graph",
+                        "Relationship graph",
+                    }
+                }
             }
             section { id: "firm-brands",
                 h2 { "Brands" }

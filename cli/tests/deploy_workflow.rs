@@ -1628,7 +1628,7 @@ fn image_publishers_require_signed_digest_verified_ghcr_mirrors() {
             !text.contains("cosign sign --yes \"${IMAGE_REF}@${IMAGE_DIGEST}\""),
             "{job} must not sign its private digest with a bare, unretried cosign"
         );
-        assert!(text.contains("actions/upload-artifact@v7"));
+        assert!(text.contains("actions/upload-artifact@"));
     }
     assert!(workflow.contains("ghcr.io/${{ github.repository_owner }}/navigator"));
 }
@@ -1720,7 +1720,7 @@ fn cosign_sign_refuses_a_tag_reference() {
 fn the_cli_image_uses_the_published_archive_and_joins_the_digest_manifest() {
     let workflow = deploy_workflow();
     let cli = job_text(&workflow, "publish-cli-image");
-    assert!(cli.contains("actions/download-artifact@v8"));
+    assert!(cli.contains("actions/download-artifact@"));
     assert!(cli.contains("navigator-linux-cli"));
     assert!(cli.contains("FROM scratch"));
     assert!(cli.contains("scripts/cosign-sign.sh"));

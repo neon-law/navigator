@@ -43,6 +43,7 @@ pub const RESERVED_SLUGS: &[&str] = &[
     "conversation",
     "documents",
     "edit",
+    "graph",
     "inbox",
     "intake",
     "notations",

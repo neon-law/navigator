@@ -109,6 +109,7 @@ RUN cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked \
     && wasm-bindgen --version
 
 COPY rules             rules
+COPY project-scaffold project-scaffold
 COPY skills            skills
 COPY store             store
 COPY repos             repos
@@ -153,6 +154,11 @@ COPY docs              docs
 # ../examples/deploy/k8s/exports/kustomization.yaml: No such file or
 # directory".
 COPY examples          examples
+# `store` depends on `project-scaffold`, which embeds the synced Project
+# skills with include_str! from the canonical `.agents/skills/` catalog, so
+# that tree must be staged too (deploy run 41198940005 failed on the missing
+# council/SKILL.md).
+COPY .agents           .agents
 
 # The same image carries `navigator-migrate`, the PostgreSQL migration
 # entrypoint the `navigator-migrate` Job runs before `web` rolls

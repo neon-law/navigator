@@ -2,8 +2,9 @@ use cloud::{FakeKms, KmsContext, RuntimeKms};
 use serde_json::Value;
 use store::firm_capability::FirmCapability;
 use store::firm_secrets::{
-    list_metadata_for_firm, metadata_for_firm, put, resolve_project_credential, revoke,
-    IntegrationProvider, IntegrationSecretKind, SecretPutRequest, SecretStoreError, ALL_KINDS,
+    list_metadata_for_firm, metadata_for_firm, put, resolve_firm_credential,
+    resolve_project_credential, revoke, IntegrationProvider, IntegrationSecretKind,
+    SecretPutRequest, SecretStoreError, ALL_KINDS,
 };
 use store::firms::{self, FirmMembership, NewFirm, NewPersonFirmRole};
 use store::persons::{self, NewPerson, Role};
@@ -328,7 +329,7 @@ async fn list_metadata_for_firm_lists_every_configured_kind_and_is_firm_scoped()
 /// unreachable from any write door.
 #[test]
 fn all_kinds_covers_the_closed_vocabulary_with_no_duplicates() {
-    assert_eq!(ALL_KINDS.len(), 10);
+    assert_eq!(ALL_KINDS.len(), 11);
     let mut slugs: Vec<&str> = ALL_KINDS.iter().map(|kind| kind.as_str()).collect();
     slugs.sort_unstable();
     slugs.dedup();
@@ -348,4 +349,86 @@ async fn kms_context_mismatch_and_unavailability_fail_closed() {
     assert!(kms.unwrap_data_key(&wrapped, &two).await.is_err());
     kms.set_available(false);
     assert!(kms.wrap_data_key(b"data-key", &one).await.is_err());
+}
+
+/// The docket scraper's credential lane: a `court_portal` `portal_login`
+/// round-trips through `resolve_firm_credential` with the raw row storing
+/// only the slugs and ciphertext, the resolved value zeroizes through the
+/// named helper when dropped, and a missing row names the provider, the
+/// kind, and the capability that must store one first.
+#[tokio::test]
+async fn court_portal_login_round_trips_and_missing_row_names_the_capability() {
+    const LOGIN: &str = "clerk+la-superior:correct-horse-battery";
+    let db = mem_surreal().await;
+    let (firm, dri) = firm_with_dri(&db, "portal").await;
+    let kms =
+        FakeKms::new("projects/fixture/locations/global/keyRings/runtime/cryptoKeys/integration");
+
+    // Missing row first: the error must name the provider, the kind, and the
+    // capability, so a lawyer reading the scraper's failure knows what to do.
+    let missing = resolve_firm_credential(
+        &db,
+        firm.id,
+        IntegrationProvider::CourtPortal,
+        IntegrationSecretKind::PortalLogin,
+        &kms,
+    )
+    .await
+    .expect_err("nothing configured yet");
+    let message = missing.to_string();
+    assert!(
+        message.contains("court_portal"),
+        "names provider: {message}"
+    );
+    assert!(message.contains("portal_login"), "names kind: {message}");
+    assert!(
+        message.contains("ManageIntegrationSecrets"),
+        "names the capability: {message}"
+    );
+
+    put(
+        &db,
+        SecretPutRequest {
+            actor_role: Role::Admin,
+            actor_person_id: Some(dri.id),
+            firm_id: firm.id,
+            provider: IntegrationProvider::CourtPortal,
+            kind: IntegrationSecretKind::PortalLogin,
+            value: LOGIN,
+        },
+        &kms,
+    )
+    .await
+    .expect("DRI stores the portal login");
+
+    let resolved = resolve_firm_credential(
+        &db,
+        firm.id,
+        IntegrationProvider::CourtPortal,
+        IntegrationSecretKind::PortalLogin,
+        &kms,
+    )
+    .await
+    .expect("stored portal login resolves");
+    assert_eq!(resolved.expose_for_provider_call(), LOGIN);
+    assert_eq!(format!("{resolved:?}"), "ResolvedCredential(REDACTED)");
+    drop(resolved); // Drop runs the named zeroize helper over the bytes.
+
+    let mut raw = db
+        .query(
+            "SELECT provider, kind, ciphertext, wrapped_dek, kms_context \
+             FROM firm_integration_secret",
+        )
+        .await
+        .expect("raw row query succeeds")
+        .check()
+        .expect("raw row query checks");
+    let rows: Vec<Value> = raw.take(0).expect("raw rows deserialize");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["provider"], "court_portal");
+    assert_eq!(rows[0]["kind"], "portal_login");
+    let rendered = serde_json::to_string(&rows).expect("rows serialize");
+    assert!(!rendered.contains("correct-horse-battery"));
+    assert!(!rendered.contains("clerk+la-superior"));
+    assert!(rows[0]["ciphertext"].is_string());
 }
