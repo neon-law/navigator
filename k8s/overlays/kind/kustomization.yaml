@@ -26,6 +26,7 @@ resources:
   - billing-canary-trigger
   - billing-digest-trigger
   - dri-digest-trigger
+  - sandbox-credit-reset-trigger
   - nightly-project-update-trigger
   - notation-reset-trigger
   - social-publish-reconciler-trigger

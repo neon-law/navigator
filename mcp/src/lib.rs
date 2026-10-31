@@ -20,8 +20,10 @@
 
 pub mod principal;
 pub mod protocol;
+pub mod search;
 pub mod server;
 pub mod tools;
 
 pub use principal::Principal;
+pub use search::SearchBackends;
 pub use server::{build_router, McpState};

@@ -60,6 +60,8 @@ COPY archives          archives
 COPY import            import
 COPY billing           billing
 COPY billing-workflows billing-workflows
+COPY gateway gateway
+COPY sandbox-skills sandbox-skills
 # The `views` crate bakes in `docs/lsp/*.md` via include_str! of paths that
 # live outside its crate dir. `-p cloud` does not compile `views` today, but
 # the whole workspace is staged here (see the resolve-time note above), so
