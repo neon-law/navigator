@@ -450,9 +450,12 @@ fn regorus_matches_every_checked_in_policy_decision() {
     //   may not = 623.
     // + 1 for filed Authority metadata: lawyer admission, lower-tier denial,
     //   and exact method/path checks share one matrix = 624.
+    // + 3 for the relationship-graph views (`/app/api/graph/{view}/{id}`):
+    //   lawyer admission for all three views, non-lawyer denial, and the
+    //   read-only method/path-shape boundary = 627.
     assert_eq!(
         test_names.len(),
-        624,
+        627,
         "the policy decision inventory changed; review every new or removed rule"
     );
 
