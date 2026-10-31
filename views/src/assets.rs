@@ -395,6 +395,9 @@ pub enum Theme {
     Global,
     /// The beautiful things in life: blossoms, birds, gardens.
     Beauty,
+    /// People helping people: consultations, recovery, and the
+    /// paperwork gathered back after harm.
+    Helping,
 }
 
 /// Editorial aspect classification for a curated photo.
@@ -522,6 +525,28 @@ pub static GALLERY: &[GalleryImage] = &[
         aspect: Aspect::Portrait,
         alt: "The Washington State Capitol dome framed by pink cherry blossoms at golden hour",
         source: "photo_14.jpg",
+    },
+    // ── People helping (Cyber Injury Law) ─────────────────────────
+    GalleryImage {
+        slug: "attorney-consultation",
+        theme: Theme::Helping,
+        aspect: Aspect::Landscape,
+        alt: "An attorney and a couple discussing documents together in a modern office",
+        source: "pexels-7876052.jpeg",
+    },
+    GalleryImage {
+        slug: "family-recovery",
+        theme: Theme::Helping,
+        aspect: Aspect::Landscape,
+        alt: "Family members caring for a woman in a wheelchair in a bright kitchen",
+        source: "pexels-7446775.jpeg",
+    },
+    GalleryImage {
+        slug: "records-organized",
+        theme: Theme::Helping,
+        aspect: Aspect::Landscape,
+        alt: "Hands organizing documents, a pen, and a notebook on a wooden desk",
+        source: "pexels-7968075.jpeg",
     },
 ];
 
@@ -815,11 +840,35 @@ mod tests {
 
     #[test]
     fn gallery_covers_every_theme() {
-        for theme in [Theme::Nevada, Theme::Global, Theme::Beauty] {
+        for theme in [Theme::Nevada, Theme::Global, Theme::Beauty, Theme::Helping] {
             assert!(
                 GALLERY.iter().any(|i| i.theme == theme),
                 "every brand theme needs at least one photo: {theme:?}"
             );
+        }
+    }
+
+    #[test]
+    fn helping_photos_render_responsively() {
+        use super::{responsive_picture, FALLBACK_WIDTH, WIDTHS};
+        // Every Cyber Injury Law helping-people photo must resolve through
+        // `responsive_picture` — the manifest is the single source of
+        // truth, so a slug typo would render nothing rather than 404.
+        for slug in [
+            "attorney-consultation",
+            "family-recovery",
+            "records-organized",
+        ] {
+            let picture =
+                responsive_picture(slug, "100vw").unwrap_or_else(|| panic!("{slug} must resolve"));
+            let image = find(slug).expect("slug in manifest");
+            assert_eq!(picture.alt, image.alt);
+            for source in &picture.sources {
+                assert_eq!(source.srcset.split(',').count(), WIDTHS.len());
+            }
+            assert!(picture
+                .fallback_src
+                .contains(&format!("{slug}-{FALLBACK_WIDTH}w.jpg")));
         }
     }
 

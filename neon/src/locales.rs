@@ -98,6 +98,13 @@ const SUMMONS_SERVICES_YAML: &str = include_str!("../locales/en/summons/services
 const CYBER_INJURY_SERVICES_YAML: &str =
     include_str!("../locales/en/cyber-injury-law/services.yaml");
 const CYBER_INJURY_HOME_YAML: &str = include_str!("../locales/en/cyber-injury-law/home.yaml");
+const CYBER_INJURY_CAR_ACCIDENTS_YAML: &str =
+    include_str!("../locales/en/cyber-injury-law/car-accidents.yaml");
+const CYBER_INJURY_CYBERCRIME_YAML: &str =
+    include_str!("../locales/en/cyber-injury-law/cybercrime.yaml");
+const CYBER_INJURY_THEFT_YAML: &str = include_str!("../locales/en/cyber-injury-law/theft.yaml");
+const CYBER_INJURY_DATA_THEFT_YAML: &str =
+    include_str!("../locales/en/cyber-injury-law/data-theft.yaml");
 const AEGIS_HOME_YAML: &str = include_str!("../locales/en/aegis/home.yaml");
 const AEGIS_SERVICES_YAML: &str = include_str!("../locales/en/aegis/services.yaml");
 const GUIEB_SHOOK_HOME_YAML: &str = include_str!("../locales/en/guieb-shook/home.yaml");
@@ -175,6 +182,10 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Summons, "services") => Some(SUMMONS_SERVICES_YAML),
         (BrandKey::CyberInjuryLaw, "services") => Some(CYBER_INJURY_SERVICES_YAML),
         (BrandKey::CyberInjuryLaw, "home") => Some(CYBER_INJURY_HOME_YAML),
+        (BrandKey::CyberInjuryLaw, "car-accidents") => Some(CYBER_INJURY_CAR_ACCIDENTS_YAML),
+        (BrandKey::CyberInjuryLaw, "cybercrime") => Some(CYBER_INJURY_CYBERCRIME_YAML),
+        (BrandKey::CyberInjuryLaw, "theft") => Some(CYBER_INJURY_THEFT_YAML),
+        (BrandKey::CyberInjuryLaw, "data-theft") => Some(CYBER_INJURY_DATA_THEFT_YAML),
         (BrandKey::Aegis, "home") => Some(AEGIS_HOME_YAML),
         (BrandKey::Aegis, "services") => Some(AEGIS_SERVICES_YAML),
         (BrandKey::Groundwork, "home") => Some(GROUNDWORK_HOME_YAML),
@@ -984,6 +995,11 @@ fn sibling_practices(
         .filter_map(|copy| {
             let key = views::brand::BrandKey::parse(&copy.brand)?;
             let href = sibling_practice_href(key, deployment_host)?;
+            let href = if copy.path.is_empty() {
+                href
+            } else {
+                format!("{href}{}", copy.path)
+            };
             Some(webapp::home::SiblingPractice {
                 eyebrow: copy.eyebrow,
                 heading: copy.heading,
@@ -1428,6 +1444,18 @@ pub fn legal_services(branding: &views::brand::Branding) -> PageContent {
 
 /// A catalogued explainer; callers choose stems from `BrandKey::explainer_pages`.
 pub fn explainer(branding: &views::brand::Branding, stem: &str) -> PageContent {
+    let mut content = marketing_page(load_page(branding, stem), None, branding);
+    if let Some(cta) = content.hero_cta.as_mut() {
+        cta.href = branding.consultation_url.to_string();
+    }
+    content
+}
+
+/// A brand's own practice-area page (`/car-accidents` on Cyber Injury Law),
+/// loaded from the brand's English catalog. The hero CTA resolves to the
+/// brand's consultation door exactly as the explainers do, so the page's
+/// intake path follows the deployment it renders on.
+pub fn practice_page(branding: &views::brand::Branding, stem: &str) -> PageContent {
     let mut content = marketing_page(load_page(branding, stem), None, branding);
     if let Some(cta) = content.hero_cta.as_mut() {
         cta.href = branding.consultation_url.to_string();
@@ -2735,14 +2763,15 @@ mod tests {
         assert!(text.contains("attorney-client privilege"));
     }
 
-    /// Vesta Estate Planning and Cyber Injury Law each link back to
-    /// DeleteYourData.com, resolved for the rendering deployment, so the
-    /// referral runs both ways.
+    /// Vesta Estate Planning links back to DeleteYourData.com and Cyber
+    /// Injury Law links to the Nautilus plan (the same privacy product under
+    /// its current name), each resolved for the rendering deployment, so the
+    /// referrals run both ways.
     #[test]
-    fn vesta_and_cyber_injury_link_back_to_delete_your_data_per_deployment() {
-        for (host, expected) in [
-            ("www.example.test", "https://www.deleteyourdata.com"),
-            ("staging.example.test", "https://staging.deleteyourdata.com"),
+    fn vesta_links_to_delete_your_data_and_cyber_injury_to_nautilus_per_deployment() {
+        for (host, prefix) in [
+            ("www.example.test", "https://www"),
+            ("staging.example.test", "https://staging"),
         ] {
             let vesta = home_for_host(&views::brand::VESTA_BRANDING, Some(host))
                 .estate
@@ -2752,15 +2781,28 @@ mod tests {
                 .cyber_injury
                 .expect("cyber injury campaign")
                 .sibling_practices;
-            for (brand, cards) in [("vesta", &vesta), ("cyber-injury-law", &cyber)] {
-                assert_eq!(cards.len(), 1, "{brand} on {host}");
-                assert_eq!(cards[0].href, expected, "{brand} on {host}");
-                assert_eq!(cards[0].cta_label, "Visit DeleteYourData.com", "{brand}");
-                assert!(cards[0].body.contains("$29/mo"), "{brand}");
-                assert!(cards[0].body.contains("$290/year"), "{brand}");
-                assert!(!cards[0].body.contains("additional member"), "{brand}");
-            }
+            assert_eq!(vesta.len(), 1, "vesta on {host}");
+            assert_eq!(
+                vesta[0].href,
+                format!("{prefix}.deleteyourdata.com"),
+                "{host}"
+            );
+            assert_eq!(vesta[0].cta_label, "Visit DeleteYourData.com", "{host}");
+            assert!(vesta[0].body.contains("$29/mo"), "{host}");
+            assert!(vesta[0].body.contains("$290/year"), "{host}");
+            assert!(!vesta[0].body.contains("additional member"), "{host}");
             assert!(vesta[0].body.contains("death check"), "{host}");
+
+            assert_eq!(cyber.len(), 1, "cyber-injury-law on {host}");
+            assert_eq!(
+                cyber[0].href,
+                format!("{prefix}.neonlaw.com/nautilus"),
+                "{host}"
+            );
+            assert_eq!(cyber[0].cta_label, "Visit the Nautilus plan", "{host}");
+            assert!(cyber[0].body.contains("$29/mo"), "{host}");
+            assert!(cyber[0].body.contains("$290/year"), "{host}");
+            assert!(!cyber[0].body.contains("additional member"), "{host}");
         }
     }
 

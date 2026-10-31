@@ -1,0 +1,135 @@
+# Cyber Injury Law's theft practice page: civil claims for stolen money and
+# property. Same band vocabulary as the other practice pages; the copy keeps
+# the firm's notices and promises no outcome.
+head_title: "{site_name} | Theft claims"
+meta_description: >-
+  Someone took your money or your property? Cyber Injury Law preserves the
+  proof, follows the records, and pursues the person who took it. Attorney
+  advertisement. A lawyer reviews the facts before any engagement.
+og_description: >-
+  Civil theft claims: stolen money, stolen property, fraud. We preserve the
+  proof and we pursue. Attorney advertisement.
+title: Theft claims
+hero_mark: gavel
+tagline: We use AI to put more money in your pocket.
+hero_lines:
+  - text: Someone took what's yours. We take that personally.
+    accent_words: 0
+hero_lead: >-
+  Theft of money or property, by a person, a business, or through fraud. A
+  police report may go nowhere; a civil claim does not wait for one. We
+  preserve the proof, follow the records — receipts, ledgers, statements,
+  messages — and pursue the person who took it. A lawyer reviews the facts
+  before any engagement.
+hero_cta:
+  href: /consultation
+  label: Tell us what happened
+skin: practice
+bands:
+  - kind: statement
+    heading: What you are up against
+    lead: A police report is not a recovery. The proof is.
+    body:
+      - - text: >-
+            Theft leaves records: the payment that went to the wrong account,
+            the property that shows up in a marketplace listing, the ledger
+            that stops adding up. The report may sit unassigned while the
+            records scatter and the trail cools.
+      - - text: We build the civil claim in parallel.
+          emphasis: true
+        - text: >-
+              We preserve the proof, demand the records in the form the law
+              allows, and put the person who took it under the weight of a
+              documented claim. A lawyer reviews the facts and the applicable
+              law before any engagement.
+  - kind: cards
+    anchor: damages
+    overline: What a claim can recover
+    heading: What was taken gets a number, record by record.
+    description: >-
+      Every claim depends on its facts. These are the losses the law may
+      allow, and each one is proven with records, which is why we preserve
+      them first.
+    items:
+      - title: What was taken
+        body:
+          - - text: >-
+                The value of the money and property the records show were
+                taken, proven from statements, receipts, and appraisals.
+      - title: Costs the theft caused
+        body:
+          - - text: >-
+                The fees, replacements, and out-of-pocket costs of undoing
+                the theft, proven with receipts and invoices.
+      - title: Records and credit harms
+        body:
+          - - text: >-
+                Accounts frozen, credit damaged, and services that have to
+                be rebuilt, documented the way it happened.
+      - title: The harm you carry
+        body:
+          - - text: >-
+                The disruption and the sleep a theft takes from you, argued
+                from the record rather than from a formula.
+  - kind: steps
+    anchor: how-we-fight
+    overline: How we fight
+    heading: Tell us. We preserve the proof. Then we pursue.
+    items:
+      - title: Tell us what happened
+        body:
+          - - text: >-
+                A short conversation: what was taken, when, and who had
+                access. A lawyer reviews the facts before any engagement.
+        image:
+          asset_key: img/attorney-consultation/attorney-consultation-800w.jpg
+          alt: >-
+            A man in a suit talking with a couple across a desk, going over
+            documents together.
+      - title: We preserve the proof and follow the records
+        body:
+          - - text: >-
+                Statements, receipts, ledgers, listings, and messages:
+                preserved now and demanded in the form the law allows, before
+                the trail cools.
+      - title: We pursue the person who took it
+        body:
+          - - text: >-
+                We name the people the records support, we put the claim in
+                writing, and we file when the answer is silence.
+  - kind: cards
+    anchor: faq
+    overline: Questions
+    heading: Straight answers.
+    items:
+      - title: Do I need a police report first?
+        body:
+          - - text: >-
+                Report it; the report is one record among many. A civil claim
+                stands on the proof, and we build it either way.
+      - title: The police didn't press charges. Can I still act?
+        body:
+          - - text: >-
+                Criminal charges belong to the state. A civil claim belongs
+                to you, and it asks a different question: who took it, and
+                what do the records show.
+      - title: What does it cost to find out where I stand?
+        body:
+          - - text: >-
+                The first conversation is a review of the facts. Fees are set
+                by the signed engagement agreement; no fee percentage is
+                advertised.
+      - title: How long do I have to act?
+        body:
+          - - text: >-
+                Deadlines can end a claim before it starts. We check which
+                deadlines apply to your facts, and we move.
+  - kind: cta
+    heading: Robbed? Tell us. We'll look.
+    body: >-
+      Call 1.510.800.2090 or tell us what happened. Attorney advertisement; a
+      lawyer must review the facts before an engagement.
+    email: "{firm_email}"
+    action:
+      href: /consultation
+      label: Tell us what happened

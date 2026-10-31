@@ -2,9 +2,14 @@ head_title: "{site_name} | We use AI to put more money in your pocket"
 meta_description: >-
   Car accidents, negligence, medical malpractice, data theft, and cybercrime.
   We use AI to put more money in your pocket. Attorney advertisement.
+og_description: >-
+  Car accidents, negligence, medical malpractice, data theft, cybercrime. We
+  investigate, preserve evidence, and go after whoever cut the corner. Tell us
+  what happened. Attorney advertisement.
 heading: We use AI to put more money in your pocket
 lead: >-
-  Cyber Injury Law reviews car accidents, negligence, medical malpractice,
+  We go after insurers that lowball you, companies that leak your data, and
+  platforms that blame you. Car accidents, negligence, medical malpractice,
   data theft, cybercrime, and online abuse. Tell us what happened. A lawyer
   reviews the facts before any engagement.
 contact_label: Ask about your situation
@@ -74,58 +79,83 @@ cyber_injury:
   hero_note: Attorney advertisement. A lawyer must review the facts before an engagement.
   discovery_heading: [INJURY AND, CYBERCRIME.]
   discovery_body: >-
-    We review vehicle collisions, negligence, medical malpractice, data theft,
-    cybercrime, and digital stalking. Each situation depends on its facts and
-    the applicable law.
+    We take on vehicle collisions, negligence, medical malpractice, data theft,
+    cybercrime, and digital stalking — and we move before evidence disappears.
+    Each situation depends on its facts and the applicable law.
   discovery_cards:
     - - VEHICLE COLLISIONS
       - >-
-        Car, truck, motorcycle, and pedestrian claims. A lawyer can review
-        what happened and what records exist.
+        Car, truck, motorcycle, and pedestrian claims. Insurers secure their
+        advantage in the first days — we secure yours: we obtain the crash
+        report, scene photos, and witness accounts, and we go after the
+        insurer that lowballs you.
       - CAR AND OTHER COLLISIONS
+      - /car-accidents
     - - NEGLIGENCE AND LIABILITY
       - >-
         Injuries from someone else's carelessness, such as unsafe products,
-        dog bites, or workplace conditions.
+        dog bites, or workplace conditions. We prove who was careless and
+        hold them to it.
       - CARELESSNESS
+      - ""
     - - MEDICAL NEGLIGENCE
       - >-
-        Injuries involving medical care. We review the circumstances and
-        available records with you.
+        Injuries involving medical care. We demand the records others will
+        not hand over and read them line by line.
       - MEDICAL CARE
-    - - DATA THEFT AND CYBERCRIME
+      - ""
+    - - DATA THEFT
       - >-
-        Stolen personal information, compromised accounts, online fraud, or
-        other cybercrime. A lawyer can review what happened.
+        Stolen personal information or compromised accounts. Companies blame
+        users. We demand the breach records, find out what was taken, and
+        put the blame where it belongs.
       - STOLEN DATA OR ACCOUNTS
+      - /data-theft
+    - - CYBERCRIME
+      - >-
+        Online fraud, account takeovers, and impersonation scams. Platforms
+        close tickets. We preserve the evidence and move against the person
+        behind it.
+      - ONLINE FRAUD AND SCAMS
+      - /cybercrime
+    - - THEFT
+      - >-
+        Someone took your money or your property. We preserve the proof,
+        follow the records, and pursue the person who took it.
+      - STOLEN MONEY OR PROPERTY
+      - /theft
     - - DIGITAL STALKING AND ONLINE ABUSE
       - >-
         Repeated unwanted contact, monitoring, or harassment using digital
-        tools. We can discuss the circumstances with you.
+        tools. We take it seriously: we preserve the evidence and move
+        against the person behind it.
       - DIGITAL CONDUCT
+      - ""
     - - SLIP AND FALL INJURIES
       - >-
-        Falls on wet floors, icy walkways, or poorly kept property. A lawyer
-        can review what happened and who was responsible for the space.
+        Falls on wet floors, icy walkways, or poorly kept property. Owners
+        blame the victim. We prove who was responsible for the space.
       - UNSAFE PROPERTY
+      - ""
   discovery_note: >-
     Descriptions are general. A lawyer must review the facts and applicable
     law to determine whether the firm can help.
   assessment_heading: ["HURT?", "TELL US.", "WE'LL LOOK."]
   assessment_body: >-
-    Answer a few questions for general information about preserving records
-    and asking a lawyer to review your situation.
+    Answer a few questions and get the steps that protect your claim. Evidence
+    disappears — we tell you what to save before it is gone.
   assessment_note: >-
     This browser-based checklist gives general information, not legal advice
     or an assessment of a claim. It does not accept your case or create an
     attorney-client relationship. Deadlines may apply. Your answers stay in
     this browser tab.
   recent_result: >-
-    A lawyer can review the circumstances and discuss whether the firm may be
-    able to help. This checklist cannot determine whether you have a claim.
+    We are ready to hear what happened and tell you how we would fight it.
+    This checklist cannot determine whether you have a claim.
   deadline_result: >-
-    Ask a lawyer to review any deadlines that may apply. This checklist
-    cannot determine which deadlines apply or whether time remains.
+    Deadlines can end a claim before it starts. Contact us and we check which
+    notice or filing deadlines may apply. This checklist cannot determine
+    which deadlines apply or whether time remains.
   evidence_tips:
     - Keep the crash report, scene photos, and medical records from the collision.
     - Keep medical records, bills, and a dated timeline of the care.
@@ -133,9 +163,11 @@ cyber_injury:
     - Keep dated messages and a timeline of unwanted digital contact.
   record_tips:
     - Keep copies of relevant records and messages with their dates.
-    - Consider saving relevant records and messages before they are lost.
+    - Save relevant records and messages now, before they are lost. Evidence
+      disappears; we move first.
   deadline_tip: >-
-    A lawyer can review whether any notice or filing deadlines may apply.
+    Notice and filing deadlines move fast. We check which ones may apply to
+    your situation.
   result_note: >-
     Only a lawyer who reviews the facts can assess legal options or deadlines.
   closing_lines: [WE USE AI TO PUT, MORE MONEY IN YOUR POCKET.]
@@ -143,11 +175,13 @@ cyber_injury:
     Attorney advertisement. Submitting an inquiry does not create an
     attorney-client relationship. Any engagement requires a written agreement.
   sibling_practices:
-    - brand: delete-your-data
-      eyebrow: "BEFORE THE NEXT LEAK"
-      heading: "MAKE YOUR DATA HARDER TO FIND."
+    - brand: neon
+      path: /nautilus
+      eyebrow: "BEFORE YOU NEED US"
+      heading: "PROTECT YOUR PRIVACY FIRST."
       body: >-
-        DeleteYourData.com is a non-legal service that helps you ask companies to
-        delete the personal data they hold about you, for $29/mo or $290/year prepaid. Basic form filings, such as forming an LLC, are included. Government fees are separate. Data removal
-        does not guarantee that a company will comply or prevent a future leak.
-      cta_label: Visit DeleteYourData.com
+        Nautilus is a non-legal service from Neon Law: data removal, credit
+        and dark-web monitoring, and identity-theft insurance, for $29/mo or
+        $290/year prepaid. Data removal does not guarantee that a company
+        will comply or prevent a future leak.
+      cta_label: Visit the Nautilus plan

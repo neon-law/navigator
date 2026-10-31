@@ -96,6 +96,14 @@ pub const PUBLIC_PATHS: &[&str] = &[
     // The Neon-hosted gateway to the Daybridge Divorce Law practice. Same
     // Neon-only shape as `/delete-your-debt` above.
     "/divorce",
+    // Cyber Injury Law's own practice-area pages, one per major tort. Cyber
+    // Injury Law-only — every other brand's allow-list does not name them;
+    // see `views::brand::BrandKey::publishes_firm_path` and
+    // `views::brand::BrandKey::practice_pages`.
+    "/car-accidents",
+    "/cybercrime",
+    "/theft",
+    "/data-theft",
     "/notations",
     "/notations/{slug}",
     "/contact",
@@ -170,8 +178,9 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
                 .collect()
         }
         BrandKey::CyberInjuryLaw => ["/", "/contact", "/testimonials"]
-            .iter()
-            .map(|path| (*path).to_string())
+            .into_iter()
+            .chain(key.practice_pages().iter().map(|(path, _)| *path))
+            .map(str::to_string)
             .collect(),
         BrandKey::LawyerShook | BrandKey::GuiebShook => ["/", "/testimonials"]
             .iter()
