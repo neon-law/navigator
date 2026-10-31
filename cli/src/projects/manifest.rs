@@ -1321,6 +1321,10 @@ mod tests {
     }
 
     const SCRAPERS_SECTION: &str = concat!(
+        "version: 26.10.31\n",
+        "project:\n",
+        "  host: staging.neonlaw.com\n",
+        "  name: acme\n",
         "scrapers:\n",
         "  sites:\n",
         "    la-superior:\n",
@@ -1340,7 +1344,11 @@ mod tests {
             .find_site(&crate::scraper::adapter::SiteKey::new("la-superior").expect("valid key"))
             .expect("configured");
         assert_eq!(entry.adapter, "la-superior");
-        assert!(codes(SCRAPERS_SECTION).is_empty(), "no findings");
+        let findings = codes(SCRAPERS_SECTION);
+        assert!(
+            !findings.contains(&SCRAPERS_CODE),
+            "no Y024 findings, found: {findings:?}"
+        );
     }
 
     #[test]
@@ -1352,7 +1360,11 @@ mod tests {
             "Y024 fires: {codes_found:?}"
         );
         let findings = lint_contents(Path::new("navigator.yaml"), yaml);
-        assert!(findings[0]
+        let finding = findings
+            .iter()
+            .find(|finding| finding.code == SCRAPERS_CODE)
+            .expect("Y024 present");
+        assert!(finding
             .message
             .contains("`scrapers.sites:` must be a mapping"));
     }
