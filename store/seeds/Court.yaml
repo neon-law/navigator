@@ -1684,5 +1684,5 @@ records:
         filing_fee:
           amount: "0.00"
           currency: USD
-        fee_note: It is free to file in Family Court. The published petition has zero AcroForm fields — print-and-write; filers can also complete it with court staff, and no DIY program exists for family offense petitions. The order forms (8-3 through 8-7) are court-issued, not litigant-fillable. sha256 pins a Wayback-archived copy (Cloudflare).
+        fee_note: It is free to file in Family Court. The published petition has zero AcroForm fields — print-and-write; filers can also complete it with help from court personnel, and no DIY program exists for family offense petitions. The order forms (8-3 through 8-7) are court-issued, not litigant-fillable. sha256 pins a Wayback-archived copy (Cloudflare).
         fillability: unfillable_source

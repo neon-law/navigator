@@ -358,7 +358,7 @@ NY_SURR = "\n".join([
 NY_FAMILY = "\n".join([
     sf("FC82", "Family Offense Petition (FCA §§812, 818, 821)", "UCS-FC8-2", LEG + "FORMS/familycourt/pdfs/8-2.pdf", FILL["flat"], "Family Court clerk, any county",
        fee="0.00", note=("It is free to file in Family Court. The published petition has zero AcroForm fields — print-and-write; "
-                         "filers can also complete it with court staff, and no DIY program exists for family offense petitions. "
+                         "filers can also complete it with help from court personnel, and no DIY program exists for family offense petitions. "
                          "The order forms (8-3 through 8-7) are court-issued, not litigant-fillable. "
                          "sha256 pins a Wayback-archived copy (Cloudflare).")),
 ])
