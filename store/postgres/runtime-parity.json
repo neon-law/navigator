@@ -38,6 +38,29 @@
       "Equivalent document application queries and Project visibility enforcement require separate acceptance."
     ]
   },
+  "assistant_turn": {
+    "scenario": "owner-scoped conversation history; cross-owner isolation; purge removes every stored turn",
+    "runtime_tests": [
+      {
+        "file": "store/src/assistant_turns.rs",
+        "function": "append_returns_the_stored_row_and_history_reads_it_back",
+        "proves": "Owner-scoped turns append and read back in minted order through the store seam."
+      },
+      {
+        "file": "store/src/assistant_turns.rs",
+        "function": "another_person_gets_an_empty_history",
+        "proves": "History is owner-scoped: another person reads an empty transcript."
+      },
+      {
+        "file": "store/src/assistant_turns.rs",
+        "function": "purge_removes_one_subscribers_chat_and_repeats_cleanly",
+        "proves": "Purge removes every stored turn for one owner and repeats cleanly without touching other owners."
+      }
+    ],
+    "remaining": [
+      "The identity-storage PostgreSQL migration and its convergence tests are pending; application-read parity through the portal route requires separate acceptance."
+    ]
+  },
   "attestation": {
     "scenario": "pending, recorded, and failed attestations; source identity and Notation retention",
     "runtime_tests": [

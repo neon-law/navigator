@@ -59,6 +59,17 @@ erDiagram
         datetime updated_at
         string visibility
     }
+    assistant_turn {
+        string id
+        string content
+        number input_tokens
+        datetime inserted_at
+        string kind
+        number output_tokens
+        uuid person_id
+        string tool_name
+        datetime updated_at
+    }
     attestation {
         string id
         string chain
@@ -1323,6 +1334,7 @@ erDiagram
     question }o--|| answer : question_id
     person }o--|| asset : deleted_by_person_id
     project }o--|| asset : project_id
+    person }o--|| assistant_turn : person_id
     notation }o--|| attestation : notation_id
     asset }o--|| authority : archived_asset_id
     authority }o--|| authority_use : authority_id

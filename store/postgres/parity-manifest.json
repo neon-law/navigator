@@ -333,6 +333,13 @@
       "extra_column": null,
       "extra_table": null,
       "missing_column": null,
+      "missing_table": "assistant_turn",
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": null,
       "missing_table": "draft",
       "table": null
     },
@@ -353,7 +360,7 @@
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 108,
+    "table_count": 109,
     "tables": {
       "address": {
         "city": "string",
@@ -414,6 +421,17 @@
         "transcript_quality": "option<string>",
         "updated_at": "datetime",
         "visibility": "string"
+      },
+      "assistant_turn": {
+        "content": "string",
+        "id": "record",
+        "input_tokens": "option<int>",
+        "inserted_at": "datetime",
+        "kind": "string",
+        "output_tokens": "option<int>",
+        "person_id": "record<person>",
+        "tool_name": "option<string>",
+        "updated_at": "datetime"
       },
       "attestation": {
         "chain": "string",
