@@ -18,10 +18,13 @@
 //! house fixture: an isolated database off the CI test container
 //! (`NAVIGATOR_TEST_POSTGRES_PORT`), skipped where it is absent.
 
+use std::sync::Arc;
+
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use axum::Router;
 use chrono::Utc;
+use gateway::StubModelProvider;
 use portal::test_support::{app_state, TEST_SESSION_KEY};
 use portal::{nautilus, SessionData, SessionStore};
 use store::persons::{NewPerson, Role};
@@ -83,8 +86,18 @@ async fn fixture_with(pg: store::postgres::PostgresDb, auth: portal::AuthConfig)
     let surreal = state.surreal.clone();
     // Bootstrap applies the cookie manager around the whole application; the
     // session boundary reads cookies through it. Mirror that layering here.
-    let app = nautilus::routes_with(&state, Some(pg.clone()))
-        .layer(tower_cookies::CookieManagerLayer::new());
+    let app = nautilus::routes_with(
+        &state,
+        Some(pg.clone()),
+        nautilus::SandboxBackends {
+            model: Some(Arc::new(gateway::StubModelProvider::new())),
+            search: mcp::SearchBackends {
+                case_law: None,
+                legal_aid: None,
+            },
+        },
+    )
+    .layer(tower_cookies::CookieManagerLayer::new());
     Fixture { app, surreal, pg }
 }
 
@@ -212,7 +225,7 @@ async fn a_caller_without_a_subscription_sees_the_preview() {
     let (status, _, body) = get(&fx.app, Some(&bearer)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        body.contains("data-sandbox=\"preview\""),
+        body.contains("legal-sandbox-preview"),
         "an unsubscribed caller must see the preview, got: {body}"
     );
 }
@@ -238,7 +251,7 @@ async fn an_unpaid_subscription_still_previews() {
     let (status, _, body) = get(&fx.app, Some(&bearer)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        body.contains("data-sandbox=\"preview\""),
+        body.contains("legal-sandbox-preview"),
         "an unactivated subscription must still preview, got: {body}"
     );
 }
@@ -262,7 +275,7 @@ async fn an_active_subscriber_sees_the_composer() {
     let (status, _, body) = get(&fx.app, Some(&bearer)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        body.contains("data-sandbox=\"composer\""),
+        body.contains("legal-sandbox-composer"),
         "an active subscriber must reach the composer, got: {body}"
     );
 }
@@ -310,7 +323,7 @@ async fn an_enforced_deployment_admits_a_raw_oidc_bearer_jwt() {
     let (status, _, body) = get(&fx.app, Some(&format!("Bearer {jwt}"))).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        body.contains("data-sandbox=\"composer\""),
+        body.contains("legal-sandbox-composer"),
         "a bearer-JWT subscriber must reach the composer, got: {body}"
     );
 }
