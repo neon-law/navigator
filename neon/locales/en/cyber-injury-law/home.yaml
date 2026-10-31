@@ -175,14 +175,6 @@ cyber_injury:
     Attorney advertisement. Submitting an inquiry does not create an
     attorney-client relationship. Any engagement requires a written agreement.
   sibling_practices:
-    - brand: delete-your-data
-      eyebrow: "BEFORE THE NEXT LEAK"
-      heading: "MAKE YOUR DATA HARDER TO FIND."
-      body: >-
-        DeleteYourData.com is a non-legal service that helps you ask companies to
-        delete the personal data they hold about you, for $29/mo or $290/year prepaid. Basic form filings, such as forming an LLC, are included. Government fees are separate. Data removal
-        does not guarantee that a company will comply or prevent a future leak.
-      cta_label: Visit DeleteYourData.com
     - brand: neon
       path: /nautilus
       eyebrow: "BEFORE YOU NEED US"

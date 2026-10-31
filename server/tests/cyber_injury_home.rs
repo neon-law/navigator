@@ -180,21 +180,19 @@ async fn cyber_injury_testimonials_are_public() {
     }
 }
 
-/// The campaign links back to DeleteYourData.com, the sibling practice that
-/// helps a reader make their data harder to find before the next leak.
+/// Nautilus is the only privacy-plan card: the retired DeleteYourData.com
+/// sibling card (the same product under its former name) must not resurface
+/// on the home page.
 #[tokio::test]
-async fn cyber_injury_home_links_to_delete_your_data() {
+async fn cyber_injury_home_no_longer_links_to_delete_your_data() {
     for host in HOSTS {
         let (status, html) = page(host, "/").await;
         assert_eq!(status, StatusCode::OK, "{host}");
-        for expected in [
-            "sibling-practices",
-            "MAKE YOUR DATA HARDER TO FIND.",
-            "Visit DeleteYourData.com",
-            "deleteyourdata.com\"",
-            "$29/mo",
-        ] {
-            assert!(html.contains(expected), "{host} is missing {expected:?}");
+        for banned in ["DeleteYourData.com", "MAKE YOUR DATA HARDER TO FIND."] {
+            assert!(
+                !html.contains(banned),
+                "{host} still carries the retired DeleteYourData card copy {banned:?}"
+            );
         }
     }
 }

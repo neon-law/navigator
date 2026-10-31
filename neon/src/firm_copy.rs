@@ -1084,7 +1084,7 @@ mod firm_copy_tests {
         );
         assert!(
             home.contains("$29/mo") && home.contains("$290/year prepaid"),
-            "the DeleteYourData referral keeps its prices: {home}"
+            "the Nautilus referral keeps its prices: {home}"
         );
     }
 }
