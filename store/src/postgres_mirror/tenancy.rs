@@ -80,6 +80,7 @@ const PROJECT_COLUMNS: &[&str] = &[
     "shared_notion_page_url",
     "calendar_id",
     "booking_url",
+    "onboarding_jurisdiction",
     "inserted_at",
     "updated_at",
 ];
@@ -389,6 +390,7 @@ struct ProjectImage {
     shared_notion_page_url: Option<String>,
     calendar_id: Option<String>,
     booking_url: Option<String>,
+    onboarding_jurisdiction: Option<String>,
     inserted_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -418,6 +420,7 @@ impl ProjectImage {
             shared_notion_page_url: project.shared_notion_page_url.clone(),
             calendar_id: project.calendar_id.clone(),
             booking_url: project.booking_url.clone(),
+            onboarding_jurisdiction: project.onboarding_jurisdiction.clone(),
             inserted_at: timestamp(&project.inserted_at)?,
             updated_at: timestamp(&project.updated_at)?,
         })
@@ -450,6 +453,7 @@ impl ProjectImage {
             shared_notion_page_url: row.try_get("shared_notion_page_url")?,
             calendar_id: row.try_get("calendar_id")?,
             booking_url: row.try_get("booking_url")?,
+            onboarding_jurisdiction: row.try_get("onboarding_jurisdiction")?,
             inserted_at: row.try_get("inserted_at")?,
             updated_at: row.try_get("updated_at")?,
         })
@@ -753,6 +757,7 @@ async fn upsert_project(pg: &PostgresDb, project: &ProjectImage) -> Result<Mirro
         .bind(&project.shared_notion_page_url)
         .bind(&project.calendar_id)
         .bind(&project.booking_url)
+        .bind(&project.onboarding_jurisdiction)
         .bind(project.inserted_at)
         .bind(project.updated_at)
         .execute(&mut *tx)

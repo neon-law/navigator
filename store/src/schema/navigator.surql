@@ -87,6 +87,15 @@ DEFINE FIELD OVERWRITE firm_id ON project TYPE option<record<firm>>;
 -- counted by the nightly IOLTA mirror rather than being attached to the
 -- entity's or the firm's state.
 DEFINE FIELD OVERWRITE jurisdiction_id ON project TYPE option<record<jurisdiction>>;
+-- The jurisdiction an onboarding Notation's Clauses bind to — the state whose
+-- law and arbitration seat an engagement letter names. Distinct from
+-- `jurisdiction_id`: that one governs whose law the *matter* answers to (and
+-- derives the pooled IOLTA account); this one is the Firm's chosen drafting
+-- default for onboarding prose, set at or after matter-open, deliberately
+-- editable, and read live at render time by a Clause input bound to
+-- `project.onboarding_jurisdiction` (see `rules::clauses`). Optional: a
+-- historical row has none, and nothing infers one.
+DEFINE FIELD OVERWRITE onboarding_jurisdiction ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE description ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE drive_folder_id ON project TYPE option<string>;
 -- The full URL of the one source repository this Project's templates and

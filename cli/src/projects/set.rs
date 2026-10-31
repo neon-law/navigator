@@ -27,6 +27,10 @@ pub struct LiveFields<'a> {
     /// `--booking-url`: written to the live row only. The client lens reads
     /// it from there; the repository has no use for it.
     pub booking_url: Option<&'a str>,
+    /// `--jurisdiction`: written to the live row only. The onboarding Clause
+    /// binding (`project.onboarding_jurisdiction`) reads the live value at
+    /// render time; the repository has no use for it.
+    pub jurisdiction: Option<&'a str>,
 }
 
 pub async fn run(
@@ -181,9 +185,9 @@ async fn fill_from_live(host: &str, project: &str, values: &mut [Option<String>;
     Ok(())
 }
 
-/// The live-row fields `--calendar` and `--booking-url` name, checked before
-/// any file or network write so a malformed value changes nothing. An empty
-/// value clears the field on the live row.
+/// The live-row fields `--calendar`, `--booking-url`, and `--jurisdiction`
+/// name, checked before any file or network write so a malformed value
+/// changes nothing. An empty value clears the field on the live row.
 fn live_patch(fields: LiveFields<'_>) -> Result<serde_json::Map<String, serde_json::Value>> {
     let mut patch = serde_json::Map::new();
     if let Some(calendar_id) = fields.calendar_id.map(str::trim) {
@@ -199,6 +203,9 @@ fn live_patch(fields: LiveFields<'_>) -> Result<serde_json::Map<String, serde_js
             ));
         }
         patch.insert("booking_url".into(), booking_url.into());
+    }
+    if let Some(jurisdiction) = fields.jurisdiction.map(str::trim) {
+        patch.insert("onboarding_jurisdiction".into(), jurisdiction.into());
     }
     Ok(patch)
 }
@@ -273,6 +280,7 @@ mod tests {
         let patch = live_patch(LiveFields {
             calendar_id: Some(" c_0123@group.calendar.example.com "),
             booking_url: Some("https://calendar.app.google/synthetic"),
+            ..LiveFields::default()
         })
         .unwrap();
         assert_eq!(patch["calendar_id"], "c_0123@group.calendar.example.com");

@@ -1097,6 +1097,7 @@ mod tests {
             shared_notion_page_url: None,
             calendar_id: None,
             booking_url: None,
+            onboarding_jurisdiction: None,
             inserted_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
         }

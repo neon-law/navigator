@@ -54,6 +54,13 @@ pub struct Project {
     /// time. `None` while the jurisdiction is unsettled, and never guessed
     /// from the client entity or the owning firm.
     pub jurisdiction_id: Option<Uuid>,
+    /// The jurisdiction an onboarding Notation's Clauses bind to: the state
+    /// whose law and arbitration seat an engagement letter names. Distinct
+    /// from [`Self::jurisdiction_id`] — that one governs whose law the
+    /// *matter* answers to; this one is the Firm's chosen drafting default
+    /// for onboarding prose, deliberately editable, and read live at render
+    /// time by a Clause input bound to `project.onboarding_jurisdiction`.
+    pub onboarding_jurisdiction: Option<String>,
     pub description: Option<String>,
     pub drive_folder_id: Option<String>,
     /// The full URL of the one source repository holding this Project's
@@ -141,6 +148,10 @@ struct ProjectRow {
     shared_notion_page_url: Option<String>,
     calendar_id: Option<String>,
     booking_url: Option<String>,
+    /// The onboarding-jurisdiction value a Clause input may bind directly.
+    /// Optional because rows written before the field existed keep no value;
+    /// reads collapse the absence to `None`.
+    onboarding_jurisdiction: Option<String>,
     inserted_at: String,
     updated_at: String,
 }
@@ -162,6 +173,7 @@ impl ProjectRow {
                 None => None,
                 Some(id) => Some(record_uuid(id)?),
             },
+            onboarding_jurisdiction: self.onboarding_jurisdiction,
             description: self.description,
             drive_folder_id: self.drive_folder_id,
             repository_url: self.repository_url,
@@ -187,7 +199,7 @@ pub(crate) const PROJECT_TABLE: &str = "project";
 const ENTITY_TABLE: &str = "entity";
 const PERSON_PROJECT_ROLE_TABLE: &str = "person_project_role";
 const PROJECT_SELECT: &str = "id, code, name, status, brand, entity_id, firm_id, \
-                              jurisdiction_id, description, \
+                              jurisdiction_id, onboarding_jurisdiction, description, \
                               drive_folder_id, repository_url, git_initialized_at, \
                               forge_provisioned_at, closed_at, closure_reason, \
                               internal_slack_channel_url, external_slack_channel_url, \
@@ -2514,6 +2526,12 @@ pub struct UpdateProjectCommand {
     /// an `href` to the client, so it passes [`is_valid_resource_url`].
     #[serde(default)]
     pub booking_url: Option<String>,
+    /// The onboarding jurisdiction a Clause input may bind directly (the
+    /// LAW-228 replacement for the questionnaire-state binding hack). Set by
+    /// `navigator project set --jurisdiction`. A blank submission clears it;
+    /// an omitted one leaves it untouched.
+    #[serde(default)]
+    pub onboarding_jurisdiction: Option<String>,
 }
 
 /// Set or clear the Project's source repository URL.
@@ -2677,7 +2695,7 @@ pub enum ProjectCommandError {
 /// `SET` clause carries and which parameters are bound — so a new optional
 /// column is one row here instead of two `if` blocks that must agree. `None`
 /// means "leave this column alone"; `Some("")` means "clear it".
-fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 8] {
+fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 9] {
     [
         ("description", input.description.as_ref()),
         (
@@ -2699,6 +2717,10 @@ fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option
         ),
         ("calendar_id", input.calendar_id.as_ref()),
         ("booking_url", input.booking_url.as_ref()),
+        (
+            "onboarding_jurisdiction",
+            input.onboarding_jurisdiction.as_ref(),
+        ),
     ]
 }
 

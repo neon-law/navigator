@@ -2626,3 +2626,7 @@ REVOKE EXECUTE ON FUNCTION graph_load_edges(text, text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION graph_clear_navigator() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION graph_conflict_frontier(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION graph_conflict_edges(text) FROM PUBLIC;
+
+-- Migration: 20261031120000_add_project_onboarding_jurisdiction.sql
+-- The jurisdiction an onboarding Notation's Clauses bind to. NULL until recorded.
+ALTER TABLE project ADD COLUMN onboarding_jurisdiction TEXT;
