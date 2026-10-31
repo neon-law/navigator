@@ -5480,6 +5480,25 @@ a.nav-steps__step:focus-visible {
 .nav-theme a.matter-notations__title,
 .nav-theme .matter-checklist__step a { text-decoration: underline; }
 
+/* The navigator-signature seal (`webapp/src/components/signature_seal.rs`):
+ * the executed mark beside an executed document, set off from the text it
+ * seals by a rule and a label, and reflowing at every width. */
+.navigator-signature {
+  border-top: 2px solid var(--nav-color-border);
+  margin: var(--nav-space-4) 0 0;
+  padding-top: var(--nav-space-3);
+}
+.navigator-signature__label {
+  font-size: .8rem;
+  font-weight: 600;
+  letter-spacing: .08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+.navigator-signature__meta { color: var(--nav-color-text-muted); margin: var(--nav-space-1) 0 0; }
+.navigator-signature__links { margin: var(--nav-space-1) 0 0; overflow-wrap: anywhere; }
+.navigator-signature a { text-decoration: underline; }
+
 /* `discovery_pairs` (`webapp/src/sections/discovery.rs`): one card per
  * numbered request, the objection and the answer boxed and attributed, and
  * the firm-only commentary set apart. */

@@ -70,6 +70,7 @@ pub mod resource_mark;
 pub mod row_actions;
 pub mod sample_matters_banner;
 pub mod separator;
+pub mod signature_seal;
 pub mod site_footer;
 pub mod site_header;
 pub mod social;
@@ -141,6 +142,7 @@ pub use row_actions::RowActions;
 pub use sample_matters_banner::render_sample_matters_banner;
 pub use sample_matters_banner::{SampleMattersBanner, SAMPLE_MATTERS_BANNER_ID};
 pub use separator::{Separator, SeparatorOrientation};
+pub use signature_seal::{provider_label, signed_on, SignatureSeal, SignatureSealData};
 pub use site_footer::{
     FooterAttorney, FooterBarLicense, FooterBrandLink, FooterMembership, FooterNavLink,
     FooterOffice, FooterSocialLink, SiteFooterLegal, FOOTER_TAGLINE,
