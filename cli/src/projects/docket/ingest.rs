@@ -564,6 +564,9 @@ enum Handoff {
 
 /// The two notices a docket ingest reads: a court's CM/ECF notice of
 /// electronic filing and a claims agent's notice of the same case.
+/// The variant sizes are unalike by design: both arms are short-lived parse
+/// output, so boxing the larger one would complicate every match for nothing.
+#[allow(clippy::large_enum_variant)]
 enum ParsedNotice {
     Nef(Notice),
     Claims(ClaimsNotice),
@@ -635,17 +638,17 @@ fn accept(scope: &ProjectScope, options: &Options, report: &mut Report) -> Vec<A
         };
         let parsed = match nef::parse_eml(&bytes).map_err(anyhow::Error::from) {
             Ok(notice) => ParsedNotice::Nef(notice),
-            Err(_) => match claims_agent::parse(&bytes) {
-                Some(claims) => ParsedNotice::Claims(claims),
-                None => {
+            Err(_) => {
+                let Some(claims) = claims_agent::parse(&bytes) else {
                     println!(
                         "skipped {}: not a CM/ECF notice or a claims-agent notice",
                         path.display()
                     );
                     report.skipped_notices += 1;
                     continue;
-                }
-            },
+                };
+                ParsedNotice::Claims(claims)
+            }
         };
         let Some(case_no) = parsed.case_no().map(str::to_string) else {
             println!(
@@ -1049,6 +1052,9 @@ async fn record_entries(
     }
 }
 
+// The operator-facing signature reads as a table row; grouping the nine
+// arguments would obscure the order the CLI passes them in.
+#[allow(clippy::too_many_arguments)]
 async fn file_planned(
     root: &Path,
     host: Option<&str>,
@@ -1363,7 +1369,7 @@ mod tests {
         }
     }
 
-    /// Serves PDFs or a CloudFront block page, and counts how often the
+    /// Serves PDFs or a `CloudFront` block page, and counts how often the
     /// agent's site was asked.
     struct FakeAgentFetch {
         calls: AtomicUsize,
