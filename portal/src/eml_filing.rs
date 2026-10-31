@@ -95,7 +95,7 @@ pub fn parse_eml(raw: &[u8], mailbox: Option<&str>) -> Result<ParsedEml, EmlPars
 
 /// The Date header as an RFC 3339 instant, read as UTC: the timestamp the
 /// Communication log shows alongside the message.
-fn eml_sent_at(date: Option<&mail_parser::DateTime>) -> Result<String, EmlParseError> {
+fn eml_sent_at(date: Option<mail_parser::DateTime>) -> Result<String, EmlParseError> {
     let date = date.ok_or(EmlParseError::NoDate)?;
     chrono::NaiveDate::from_ymd_opt(
         i32::from(date.year),
@@ -133,22 +133,17 @@ fn eml_message_ref(message_id: Option<&str>, bytes: &[u8]) -> String {
 
 /// `From`/`To` as the filed Communication shows them: `Name <a@b>` when the
 /// message carries a display name, the bare address otherwise.
-fn address_text(address: Option<&mail_parser::Address<'_>>) -> String {
-    match address {
-        None => String::new(),
-        Some(mail_parser::Address::List(addrs)) => {
-            addrs.iter().map(addr_text).collect::<Vec<_>>().join(", ")
-        }
-        Some(mail_parser::Address::Group(groups)) => groups
-            .iter()
-            .flat_map(|group| group.addresses.iter().map(addr_text))
+fn address_text(address: Option<mail_parser::AddressList<'_>>) -> String {
+    address.map_or_else(String::new, |list| {
+        list.mailboxes()
+            .map(mailbox_text)
             .collect::<Vec<_>>()
-            .join(", "),
-    }
+            .join(", ")
+    })
 }
 
-fn addr_text(addr: &mail_parser::Addr<'_>) -> String {
-    match (addr.name(), addr.address()) {
+fn mailbox_text(mailbox: mail_parser::Mailbox<'_>) -> String {
+    match (mailbox.name(), mailbox.address()) {
         (Some(name), Some(address)) => format!("{name} <{address}>"),
         (Some(name), None) => name.to_string(),
         (None, Some(address)) => address.to_string(),
@@ -158,13 +153,12 @@ fn addr_text(addr: &mail_parser::Addr<'_>) -> String {
 
 /// The bare lowercase address of a header's first recipient — what a
 /// `mailbox` match compares against.
-fn from_address(address: Option<&mail_parser::Address<'_>>) -> String {
-    let Some(mail_parser::Address::List(addrs)) = address else {
-        return String::new();
-    };
-    addrs
-        .iter()
-        .find_map(|addr| addr.address().map(str::to_ascii_lowercase))
+fn from_address(address: Option<mail_parser::AddressList<'_>>) -> String {
+    address
+        .and_then(|list| {
+            list.mailboxes()
+                .find_map(|mailbox| mailbox.address().map(str::to_ascii_lowercase))
+        })
         .unwrap_or_default()
 }
 

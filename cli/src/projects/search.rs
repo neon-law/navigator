@@ -357,7 +357,7 @@ async fn extract(path: &Path, bytes: &[u8]) -> Extracted {
         }
         "eml" => match mail_parser::MessageParser::default().parse(bytes) {
             Some(message) => {
-                let bodies = (0..message.text_body_count())
+                let bodies = (0..message.text_body().len())
                     .filter_map(|index| message.body_text(index))
                     .map(std::borrow::Cow::into_owned)
                     .collect::<Vec<_>>();

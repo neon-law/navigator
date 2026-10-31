@@ -49,13 +49,14 @@ fn receipt_allowed(email: &InboundEmail) -> bool {
         &email.raw
     };
     if let Some(message) = mail_parser::MessageParser::default().parse(headers) {
-        let header = |name| message.header(name).and_then(|value| value.as_text());
+        let headers = message.headers();
+        let header = |name| headers.value(name).and_then(|value| value.as_text());
         if header("Auto-Submitted").is_some_and(|value| !value.trim().eq_ignore_ascii_case("no"))
             || header("Precedence").is_some_and(|value| {
                 ["bulk", "list", "junk"].contains(&value.trim().to_lowercase().as_str())
             })
-            || message.header("List-Id").is_some()
-            || message.header("Return-Path").is_some_and(|value| {
+            || headers.contains("List-Id")
+            || headers.value("Return-Path").is_some_and(|value| {
                 matches!(value, mail_parser::HeaderValue::Empty)
                     || value.as_text().is_some_and(|value| value.trim() == "<>")
             })
