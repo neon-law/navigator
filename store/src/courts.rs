@@ -60,6 +60,56 @@ pub struct Court {
     pub level: CourtLevel,
     /// The forms this court's filing offices accept.
     pub forms: Vec<CourtForm>,
+    /// Surveyed forms the court accepts that are not yet vendored as
+    /// templates: registry data only, with the same provenance fields, so
+    /// the catalog can show the full surveyed inventory before a form has
+    /// a guided workflow. Unlike [`Court::forms`], these entries carry no
+    /// forms-shelf template and no template-resolution obligation.
+    #[serde(default)]
+    pub surveyed_forms: Vec<SurveyedForm>,
+}
+
+/// A surveyed form a court's filing office accepts that has no forms-shelf
+/// template yet — registry data only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurveyedForm {
+    /// Stable slug within the court's record (`nc_100_info`).
+    pub key: String,
+    /// Human title, as the filing office publishes it.
+    pub title: String,
+    /// The form number the filing office publishes, when it publishes one.
+    pub form_number: Option<String>,
+    /// Official page where the blank is published.
+    pub source_url: String,
+    /// Lowercase sha-256 hex digest of the official blank PDF — the blank
+    /// itself is never checked in.
+    pub sha256: String,
+    /// The office within the court that accepts the filing.
+    pub filing_office: String,
+    /// The filing fee, when the office publishes a flat one.
+    pub filing_fee: Option<FilingFee>,
+    /// Prose for tiered, county-varying, or unverified fee schedules —
+    /// including the fee-waiver form the office accepts when that waiver
+    /// form has no template code to point at.
+    pub fee_note: Option<String>,
+    /// How the blank's fillability was verified.
+    pub fillability: Option<Fillability>,
+}
+
+/// The verified fillability of an official blank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fillability {
+    /// The blank's AcroForm field dictionary carries widgets — a program
+    /// can fill it in place.
+    Fillable,
+    /// The official source publishes a flat, print-only PDF: no AcroForm
+    /// fields, whatever the filename claims.
+    UnfillableSource,
+    /// Fillability is not established — the blank could not be
+    /// binary-checked (bot challenge, no archive copy, or not downloaded).
+    Unverified,
 }
 
 /// The class of court a form is filed in. Closed: a new class is an edit
@@ -87,6 +137,8 @@ pub enum CourtLevel {
     Surrogate,
     /// A city court outside the municipal-court name (New York).
     City,
+    /// A family court handling domestic-relations matters (New York).
+    Family,
 }
 
 /// One form a court's filing office accepts, keyed to a forms-shelf
@@ -258,6 +310,57 @@ fn validate(courts: &[Court]) -> Result<(), RegistryError> {
             }
             form_courts.insert(&form.code, &court.key);
             validate_form(court, form)?;
+        }
+        for surveyed in &court.surveyed_forms {
+            validate_surveyed_form(court, surveyed)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_surveyed_form(court: &Court, surveyed: &SurveyedForm) -> Result<(), RegistryError> {
+    let court_key = court.key.as_str();
+    let key = surveyed.key.as_str();
+    if surveyed.title.trim().is_empty() {
+        return Err(RegistryError::BlankField(
+            court_key.to_string(),
+            key.to_string(),
+            "title",
+        ));
+    }
+    if surveyed.filing_office.trim().is_empty() {
+        return Err(RegistryError::BlankField(
+            court_key.to_string(),
+            key.to_string(),
+            "filing_office",
+        ));
+    }
+    if !surveyed.source_url.starts_with("https://") {
+        return Err(RegistryError::InsecureSourceUrl(
+            court_key.to_string(),
+            key.to_string(),
+        ));
+    }
+    if !is_sha256_pin(&surveyed.sha256) {
+        return Err(RegistryError::BadSha256(
+            court_key.to_string(),
+            key.to_string(),
+        ));
+    }
+    if let Some(fee) = &surveyed.filing_fee {
+        if !is_iso_4217(&fee.currency) {
+            return Err(RegistryError::BadFeeCurrency(
+                court_key.to_string(),
+                key.to_string(),
+                fee.currency.clone(),
+            ));
+        }
+        if !is_decimal_amount(&fee.amount) {
+            return Err(RegistryError::BadFeeAmount(
+                court_key.to_string(),
+                key.to_string(),
+                fee.amount.clone(),
+            ));
         }
     }
     Ok(())

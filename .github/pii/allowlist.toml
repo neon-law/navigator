@@ -27,6 +27,13 @@ values = [
 ]
 
 [[paths]]
+reason = "Generated court registry data and its generator: only published form titles, court addresses, and fee schedules appear here — no personal contact data. (Presidio false-positives: the Latin phrase 'in forma pauperis' as a PERSON, street names, and dollar amounts in fee notes as PHONE_NUMBER.)"
+values = [
+  "store/seeds/Court.yaml",
+  "gen_court.py",
+]
+
+[[paths]]
 reason = "Copyright attributions the licences require."
 values = [
   "third-party-notices.txt",
