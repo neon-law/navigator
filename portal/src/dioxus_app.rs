@@ -3639,17 +3639,18 @@ pub fn free_resources_jurisdiction_content(
     copy: &views::locales::FreeResourcesCopy,
     group: &JurisdictionCourts,
 ) -> webapp::free_resources::FreeResourcesJurisdictionContent {
-    let fill = |template: &str| template.replace("{jurisdiction}", &group.name);
     let slug = jurisdiction_slug(&group.name);
     webapp::free_resources::FreeResourcesJurisdictionContent {
         head_title: copy.head_title.clone(),
-        meta_description: fill(&copy.meta_description),
+        meta_description: copy.meta_description.clone(),
         title: copy.title.clone(),
         lede: copy.lede.clone(),
         free_statement: copy.free_statement.clone(),
         no_outcome: copy.no_outcome.clone(),
         jurisdiction_name: group.name.clone(),
-        courts_heading: fill(&copy.courts_heading),
+        // Page catalogs only accept brand placeholders, so the jurisdiction
+        // name is composed here from the copy's generic heading.
+        courts_heading: format!("{} in {}", copy.courts_heading, group.name),
         courts: group
             .courts
             .iter()
@@ -3787,7 +3788,7 @@ mod free_resources_guards {
             lede: "The practical facts around every form.".to_string(),
             free_statement: "Everything on these pages is free of charge.".to_string(),
             no_outcome: "These pages promise no outcome.".to_string(),
-            courts_heading: "Courts and forms in {jurisdiction}".to_string(),
+            courts_heading: "Courts and forms".to_string(),
             filing_office_label: "Filing office".to_string(),
             fee_label: "Filing fee".to_string(),
             fee_waiver_label: "Fee waiver".to_string(),

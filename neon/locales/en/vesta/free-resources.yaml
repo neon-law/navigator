@@ -1,16 +1,17 @@
 # The Free Legal Resources catalog's brand copy, Vesta voice. The page's rows
 # never pass through this file — they come from store/seeds/Court.yaml — so
 # this catalog holds only the words around them: the promises (free of
-# charge, no outcome promised), the table labels, and the empty states.
-# `{jurisdiction}` in meta_description and courts_heading is filled with the
-# jurisdiction's seeded display name by the page builder.
+# charge, no outcome promised), the table labels, and the empty states. The
+# jurisdiction page builder composes the jurisdiction's seeded display name
+# onto the generic courts_heading; page catalogs only accept brand
+# placeholders.
 head_title: "{site_name} | Free Legal Resources"
-meta_description: Free court self-help forms and filing information for {jurisdiction} — the filing office, the fee, the fee waiver, and the official source. Free of charge, promising no outcome.
+meta_description: Free court self-help forms and filing information — the filing office, the fee, the fee waiver, and the official source. Free of charge, promising no outcome.
 title: Free Legal Resources
 lede: Vesta collects each court's self-help forms together with the practical facts around them — where to file, what it costs, how to ask the court to waive the fee, and a direct link to the official source.
 free_statement: Everything on these pages is free of charge. Vesta charges nothing for the information, the links, or the blank downloads — the courts publish their forms free, and Vesta adds no paywall.
 no_outcome: These pages promise no outcome. Downloading or filing a form does not promise that a court will grant anything; Vesta has not reviewed your situation and no lawyer–client relationship exists.
-courts_heading: Courts and forms in {jurisdiction}
+courts_heading: Courts and forms
 filing_office_label: Filing office
 fee_label: Filing fee
 fee_waiver_label: Fee waiver
