@@ -744,7 +744,7 @@ DEFINE INDEX OVERWRITE person_delegate_pair ON person_delegate
 DEFINE TABLE IF NOT EXISTS person_external_identity SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE person_id ON person_external_identity TYPE record<person>;
 DEFINE FIELD OVERWRITE system ON person_external_identity TYPE string
-    ASSERT $value IN ['github', 'slack', 'docusign', 'google', 'linear', 'claude', 'chatgpt', 'notion'];
+    ASSERT $value IN ['github', 'slack', 'docusign', 'google', 'linear', 'claude', 'chatgpt', 'notion', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok'];
 DEFINE FIELD OVERWRITE external_id ON person_external_identity TYPE string;
 DEFINE FIELD OVERWRITE handle ON person_external_identity TYPE option<string>;
 DEFINE FIELD OVERWRITE inserted_at ON person_external_identity TYPE datetime DEFAULT time::now();

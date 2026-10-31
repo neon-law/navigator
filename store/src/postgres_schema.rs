@@ -115,8 +115,8 @@ pub enum Error {
 /// Parses the canonical PostgreSQL DDL in a deliberately small, stable subset.
 /// The subset is sufficient for the checked-in migrations: CREATE TABLE,
 /// column declarations, inline REFERENCES, named table constraints,
-/// standalone indexes, and named CHECK constraints (which do not change
-/// table/column parity).
+/// standalone indexes, and named CHECK constraints and dropped named
+/// constraints (neither changes table/column parity).
 #[expect(
     clippy::too_many_lines,
     reason = "single ordered pass tracks SQL table and procedural block state"
@@ -267,6 +267,21 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
                         .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
                     && constraint.as_bytes()[0].is_ascii_alphabetic();
                 if expression.is_empty() || !valid_identifier || !tables.contains_key(*name) {
+                    return Err(Error::UnsupportedSql(line.to_string()));
+                }
+                continue;
+            }
+            if let Some((name, constraint)) =
+                rest.trim_end_matches(';').split_once(" DROP CONSTRAINT ")
+            {
+                // Dropping a named constraint changes no table, column, or
+                // foreign key the parity model records; validate the shape
+                // and move on.
+                let valid_identifier = !constraint.is_empty()
+                    && constraint
+                        .chars()
+                        .all(|character| character.is_ascii_alphanumeric() || character == '_');
+                if !valid_identifier || !tables.contains_key(name) {
                     return Err(Error::UnsupportedSql(line.to_string()));
                 }
                 continue;
@@ -1177,6 +1192,10 @@ mod tests {
                 "20261030120000_create_inbox_triage.sql",
                 include_str!("../postgres/migrations/20261030120000_create_inbox_triage.sql"),
             ),
+            (
+                "20261031090000_extend_identity_systems.sql",
+                include_str!("../postgres/migrations/20261031090000_extend_identity_systems.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
@@ -1627,6 +1646,24 @@ mod tests {
         assert!(parse_schema("ALTER TABLE brand ADD CONSTRAINT x CHECK (a);\n").is_err());
         assert!(parse_schema("ALTER TABLE absent ADD CONSTRAINT x CHECK (a);\n").is_err());
         assert!(parse_schema("ALTER TABLE brand ADD CONSTRAINT x CHECK a;\n").is_err());
+    }
+
+    #[test]
+    fn a_dropped_constraint_parses_without_changing_parity_shape() {
+        let ddl = "CREATE TABLE brand (\n id UUID PRIMARY KEY\n);\n\
+                   ALTER TABLE brand DROP CONSTRAINT brand_font_licence_check;";
+        let tables = parse_schema(ddl).expect("dropped constraint parses");
+        assert_eq!(tables["brand"].columns.len(), 1);
+        assert!(parse_schema(
+            "CREATE TABLE brand (\n id UUID PRIMARY KEY\n);\n\
+             ALTER TABLE absent DROP CONSTRAINT x;"
+        )
+        .is_err());
+        assert!(parse_schema(
+            "CREATE TABLE brand (\n id UUID PRIMARY KEY\n);\n\
+             ALTER TABLE brand DROP CONSTRAINT has space;"
+        )
+        .is_err());
     }
 
     #[test]
