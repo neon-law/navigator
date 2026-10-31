@@ -163,16 +163,12 @@ pub(crate) struct RunReport {
 impl std::fmt::Display for RunReport {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.since {
-            Some(at) => write!(
+            Some(at) => writeln!(
                 formatter,
-                "scrape of {} docket {} since {at}:\n",
+                "scrape of {} docket {} since {at}",
                 self.site, self.docket
             )?,
-            None => write!(
-                formatter,
-                "scrape of {} docket {}:\n",
-                self.site, self.docket
-            )?,
+            None => writeln!(formatter, "scrape of {} docket {}", self.site, self.docket)?,
         }
         writeln!(
             formatter,
@@ -235,7 +231,7 @@ pub(crate) async fn run_scraper(
     login.ensure_complete(adapter.credential_key())?;
 
     let session = deps.sessions.open(adapter.site()).await?;
-    let outcome = scrape_notices(adapter, query, deps, &session, &login).await;
+    let outcome = scrape_notices(adapter, query, deps, &session, login).await;
     if let Err(error) = session.shutdown().await {
         // Teardown runs on every path; report it only when it is the
         // primary failure rather than piling onto one.
@@ -298,64 +294,8 @@ async fn scrape_notices(
             report.skipped_completed += 1;
             continue;
         }
-        let (sha256, bytes, resumed, newly_fetched) = match ledger.completed(&key) {
-            Some(entry) if entry.path.is_file() => {
-                report.skipped_filed += 1;
-                report.bytes += entry.bytes;
-                let bytes = std::fs::read(&entry.path).map_err(|source| ScraperError::Io {
-                    path: entry.path.clone(),
-                    source,
-                })?;
-                (entry.sha256.clone(), bytes, false, false)
-            }
-            entry => {
-                if entry.is_some() {
-                    ledger.forget(&key)?;
-                }
-                let staged_path =
-                    deps.downloads_dir
-                        .join(format!("{}.{}", staging_name(&key), notice.extension));
-                // Each attempt reopens the sink: a failed attempt's bytes are
-                // already in the part file, so the next attempt — this run's
-                // or a later run's — continues from that byte offset.
-                let had_partial =
-                    DownloadSink::open(&deps.staging_dir, staged_path.clone(), key.clone())
-                        .map(|sink| sink.resume_offset() > 0)?;
-                let staging_dir = deps.staging_dir.clone();
-                let final_path = staged_path.clone();
-                let final_key = key.clone();
-                // The closure owns a copy; the original key stays for the
-                // intake bookkeeping below.
-                let closure_key = key.clone();
-                with_retries(&deps.fetch_policy, deps.clock, is_transient, move || {
-                    // Owned clones move into the future, so nothing borrowed
-                    // from the closure body escapes across attempts.
-                    let staged_path = staged_path.clone();
-                    let staging_dir = staging_dir.clone();
-                    let key = closure_key.clone();
-                    async move {
-                        let mut sink = DownloadSink::open(&staging_dir, staged_path, key).map_err(
-                            |error| AdapterError::Transient {
-                                step: "download staging".to_owned(),
-                                detail: error.to_string(),
-                            },
-                        )?;
-                        adapter.download(deps.fetcher, notice, &mut sink).await
-                    }
-                })
-                .await
-                .map_err(|failure| map_step_failure(&format!("download of {key}"), failure))?;
-                let sink = DownloadSink::open(&deps.staging_dir, final_path, final_key)?;
-                let completed = sink.finish()?;
-                ledger.record(completed.clone())?;
-                report.bytes += completed.bytes;
-                let bytes = std::fs::read(&completed.path).map_err(|source| ScraperError::Io {
-                    path: completed.path.clone(),
-                    source,
-                })?;
-                (completed.sha256, bytes, had_partial, true)
-            }
-        };
+        let (sha256, bytes, resumed, newly_fetched) =
+            fetch_document_bytes(adapter, deps, notice, &key, &mut ledger, &mut report).await?;
 
         let document = ScrapedDocument::from_download(
             adapter.site().clone(),
@@ -392,6 +332,77 @@ async fn scrape_notices(
         }
     }
     Ok(report)
+}
+/// The bytes of one notice document: read back from a download the ledger
+/// already recorded, or streamed now through resumable retries. Counts the
+/// bytes on whichever path ran.
+async fn fetch_document_bytes(
+    adapter: &dyn SiteAdapter,
+    deps: &ScraperDeps<'_>,
+    notice: &crate::scraper::adapter::NoticeRef,
+    key: &NoticeKey,
+    ledger: &mut DownloadLedger,
+    report: &mut RunReport,
+) -> Result<(String, Vec<u8>, bool, bool), ScraperError> {
+    match ledger.completed(key) {
+        Some(entry) if entry.path.is_file() => {
+            report.skipped_filed += 1;
+            report.bytes += entry.bytes;
+            let bytes = std::fs::read(&entry.path).map_err(|source| ScraperError::Io {
+                path: entry.path.clone(),
+                source,
+            })?;
+            Ok((entry.sha256.clone(), bytes, false, false))
+        }
+        entry => {
+            if entry.is_some() {
+                ledger.forget(key)?;
+            }
+            let staged_path =
+                deps.downloads_dir
+                    .join(format!("{}.{}", staging_name(key), notice.extension));
+            // Each attempt reopens the sink: a failed attempt's bytes are
+            // already in the part file, so the next attempt — this run's
+            // or a later run's — continues from that byte offset.
+            let had_partial =
+                DownloadSink::open(&deps.staging_dir, staged_path.clone(), key.clone())
+                    .map(|sink| sink.resume_offset() > 0)?;
+            let staging_dir = deps.staging_dir.clone();
+            let final_path = staged_path.clone();
+            let final_key = key.clone();
+            // The closure owns a copy; the original key stays for the
+            // intake bookkeeping in the caller.
+            let closure_key = key.clone();
+            with_retries(&deps.fetch_policy, deps.clock, is_transient, move || {
+                // Owned clones move into the future, so nothing borrowed
+                // from the closure body escapes across attempts.
+                let staged_path = staged_path.clone();
+                let staging_dir = staging_dir.clone();
+                let key = closure_key.clone();
+                async move {
+                    let mut sink =
+                        DownloadSink::open(&staging_dir, staged_path, key).map_err(|error| {
+                            AdapterError::Transient {
+                                step: "download staging".to_owned(),
+                                detail: error.to_string(),
+                            }
+                        })?;
+                    adapter.download(deps.fetcher, notice, &mut sink).await
+                }
+            })
+            .await
+            .map_err(|failure| map_step_failure(&format!("download of {key}"), failure))?;
+            let sink = DownloadSink::open(&deps.staging_dir, final_path, final_key)?;
+            let completed = sink.finish()?;
+            ledger.record(completed.clone())?;
+            report.bytes += completed.bytes;
+            let bytes = std::fs::read(&completed.path).map_err(|source| ScraperError::Io {
+                path: completed.path.clone(),
+                source,
+            })?;
+            Ok((completed.sha256, bytes, had_partial, true))
+        }
+    }
 }
 
 /// Only transient adapter failures retry; structure drift is a hard stop.

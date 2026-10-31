@@ -1,7 +1,7 @@
 //! Chromium-driven portal sessions, built on the pins the browser e2e
 //! harness already uses: the Chrome for Testing resolver
 //! (`crate::devx::chrome`) picks the browser, a spawned matching
-//! chromedriver serves WebDriver, and a fantoccini client drives it.
+//! chromedriver serves `WebDriver`, and a fantoccini client drives it.
 //!
 //! The session owns two things for its site: the driver process (killed on
 //! teardown, however the run ends) and the cookie file under the site's
@@ -53,7 +53,7 @@ pub(crate) enum SessionError {
     NonUtf8Path { path: PathBuf },
 }
 
-/// One cookie as it persists between runs: the WebDriver subset that
+/// One cookie as it persists between runs: the `WebDriver` subset that
 /// restores a session, with `expiry` kept for fidelity but never restored
 /// (an expired cookie is worthless to re-import).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,7 +124,7 @@ pub(crate) trait SessionFactory: Send + Sync {
     async fn open(&self, site: &SiteKey) -> Result<BrowserSession, SessionError>;
 }
 
-/// One live portal session: the WebDriver client, the chromedriver process
+/// One live portal session: the `WebDriver` client, the chromedriver process
 /// backing it, and the cookie file the session restores from and persists to.
 pub(crate) struct BrowserSession {
     client: Option<Client>,
@@ -204,7 +204,7 @@ impl BrowserSession {
     ///
     /// # Errors
     ///
-    /// When the WebDriver read or the state-file write fails.
+    /// When the `WebDriver` read or the state-file write fails.
     pub(crate) async fn persist_cookies(&self) -> Result<(), SessionError> {
         let Some(client) = self.client.as_ref() else {
             return Ok(());
@@ -219,7 +219,7 @@ impl BrowserSession {
         save_state(&self.state_path, &state)
     }
 
-    /// Persist cookies, close the WebDriver session, and stop the driver
+    /// Persist cookies, close the `WebDriver` session, and stop the driver
     /// process. Runs on every orchestration path, success or failure.
     ///
     /// # Errors
@@ -289,7 +289,7 @@ impl Drop for BrowserSession {
     }
 }
 
-/// A WebDriver cookie as the fantoccini client reports it, reduced to the
+/// A `WebDriver` cookie as the fantoccini client reports it, reduced to the
 /// persisted subset.
 fn persisted_cookie(cookie: &Cookie<'_>) -> PersistedCookie {
     PersistedCookie {
@@ -300,7 +300,7 @@ fn persisted_cookie(cookie: &Cookie<'_>) -> PersistedCookie {
         secure: cookie.secure(),
         expiry: cookie
             .expires()
-            .and_then(|expires| expires.datetime())
+            .and_then(cookie::expiration::Expiration::datetime)
             .and_then(|at| u64::try_from(at.unix_timestamp()).ok()),
     }
 }
@@ -342,7 +342,7 @@ fn chromedriver_command(driver: &Path, port: u16) -> std::process::Command {
     command
 }
 
-/// The WebDriver capabilities for a pinned Chrome: the binary to drive, the
+/// The `WebDriver` capabilities for a pinned Chrome: the binary to drive, the
 /// sandbox flags the e2e harness uses, and headless mode unless the operator
 /// asked to watch. Pure so the capability shape is pinned by test.
 fn webdriver_capabilities(

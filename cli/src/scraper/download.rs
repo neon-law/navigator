@@ -300,9 +300,12 @@ pub(crate) fn staging_name(key: &NoticeKey) -> String {
 }
 
 fn hex_digest(digest: &[u8]) -> String {
+    use std::fmt::Write as _;
+
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in digest {
-        hex.push_str(&format!("{byte:02x}"));
+        // Infallible on a `String`.
+        let _ = write!(hex, "{byte:02x}");
     }
     hex
 }
