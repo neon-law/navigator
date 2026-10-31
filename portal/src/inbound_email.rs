@@ -1682,10 +1682,12 @@ Content-Type: text/plain\r\n\r\nhello\r\n--nav--\r\n";
 
     #[test]
     fn the_webhook_adapter_feeds_the_same_pure_core() {
-        let mut email = InboundEmail::default();
-        email.from = "<ECF_Reply@uscourts.gov>".into();
-        email.subject = "Notice of Electronic Filing".into();
-        email.text = "This is an automatic email message from the CM/ECF system.".into();
+        let email = InboundEmail {
+            from: "<ECF_Reply@uscourts.gov>".into(),
+            subject: "Notice of Electronic Filing".into(),
+            text: "This is an automatic email message from the CM/ECF system.".into(),
+            ..Default::default()
+        };
         let adapted = classify_inbound(&email);
         let facts = classify_inbound_facts(&email.from, &email.subject, &email.text);
         assert_eq!(adapted, facts);
