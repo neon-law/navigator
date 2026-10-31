@@ -31,6 +31,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{FromRequest, Multipart, Path, State};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::IntoResponse;
+use mail_parser::MimeHeaders as _;
 use serde::Deserialize;
 use thiserror::Error;
 use uuid::Uuid;
@@ -205,6 +206,68 @@ pub fn message_id_from_raw(raw: &[u8]) -> Option<String> {
     mail_parser::MessageParser::default()
         .parse(raw)
         .and_then(|m| m.message_id().map(str::to_string))
+}
+
+/// Parse raw RFC 5322 bytes into the shared inbound shape — the path the
+/// CLI ingest door takes (`POST /app/api/projects/{id}/inbox-ingest`),
+/// where the lawyer's mail client or the CLI hands over the message it
+/// read, rather than SendGrid posting a webhook. Attachments come out
+/// with their bytes, ready for the same clean-attachment Asset lane the
+/// webhook path uses; quarantine is the caller's decision.
+///
+/// Returns `None` when the bytes carry no parseable sender or recipient —
+/// the door turns that into a 400, not a half-ingested row.
+#[must_use]
+pub fn parse_raw_eml(raw: &[u8]) -> Option<InboundEmail> {
+    let message = mail_parser::MessageParser::default().parse(raw)?;
+    let from = message.from()?.first()?.address().map(str::to_string)?;
+    if from.is_empty() {
+        return None;
+    }
+    let to = message.to()?.first()?.address().map(str::to_string)?;
+    let subject = message.subject().unwrap_or_default().to_string();
+    let text = message.body_text(0).unwrap_or_default().to_string();
+    let attachments = message
+        .attachments()
+        .filter_map(|part| {
+            let filename = part.attachment_name()?.to_string();
+            let content_type = part
+                .content_type()
+                .map(|ct| match ct.c_subtype.as_deref() {
+                    Some(sub) => format!("{}/{}", ct.c_type, sub),
+                    None => ct.c_type.to_string(),
+                })
+                .unwrap_or_else(|| "application/octet-stream".to_string());
+            Some(InboundAttachment {
+                filename,
+                content_type,
+                bytes: part.contents().to_vec(),
+            })
+        })
+        .collect();
+    Some(InboundEmail {
+        from,
+        to,
+        envelope: None,
+        subject,
+        text,
+        raw: raw.to_vec(),
+        headers: String::new(),
+        dkim: String::new(),
+        attachments,
+        quarantined_attachments: Vec::new(),
+        message_id: message.message_id().map(str::to_string),
+    })
+}
+
+/// The message's `Date` header rendered as RFC 3339 in UTC, or `None`
+/// when the raw bytes carry no parseable date.
+#[must_use]
+pub fn date_from_raw(raw: &[u8]) -> Option<String> {
+    let parsed = mail_parser::MessageParser::default().parse(raw)?;
+    let date = parsed.date()?;
+    let stamped = chrono::DateTime::from_timestamp(date.to_timestamp(), 0)?;
+    Some(stamped.to_rfc3339())
 }
 
 /// True for a SendGrid attachment-part field (`attachment1`, `attachment2`,

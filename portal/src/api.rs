@@ -751,6 +751,16 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             )),
         ),
         (
+            "POST",
+            "/app/api/projects/{id}/inbox-ingest",
+            // This route carries base64 JSON like the document upload door,
+            // so its request cap admits the base64 inflation of a max-size
+            // raw message; the door re-checks the decoded size itself.
+            post(ingest_provider_message_door).layer(DefaultBodyLimit::max(
+                crate::inbound_email::MAX_INBOUND_MESSAGE_BYTES / 3 * 4 + 65_536,
+            )),
+        ),
+        (
             "PATCH",
             "/app/api/projects/{id}/documents/{asset_id}",
             patch(update_document_door),
@@ -4655,6 +4665,129 @@ fn invalid_document_slug_response(filename: &str, slug: &str) -> Option<Response
     store::documents::validate_document_slug(filename, slug)
         .err()
         .map(|error| bad_request("invalid_slug", &error.to_string()))
+}
+
+/// The body of `POST /app/api/projects/{id}/inbox-ingest`.
+#[derive(Debug, Deserialize)]
+struct IngestProviderMessageRequest {
+    /// The raw RFC 5322 message bytes, base64-encoded, exactly as the
+    /// provider holds them.
+    raw: String,
+    /// The provider account the message was read from (for example the
+    /// Gmail address the CLI fetched it with). Ingress dedup keys on it,
+    /// so a caller should keep one value per mailbox. Defaults to
+    /// `cli-ingest`.
+    provider_account: Option<String>,
+}
+
+/// `POST /app/api/projects/{id}/inbox-ingest` — file a provider message the
+/// CLI already read (the lawyer's Gmail, a saved `.eml`) into the Firm inbox,
+/// attributed to this Project. Ingest-only: nothing is sent, and the
+/// conversation stays in the Inbox workflow where an Owner can reassign it.
+/// Re-running the verb is safe: the message dedupes on Firm, channel,
+/// provider account, and message id.
+async fn ingest_provider_message_door(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Json(input): Json<IngestProviderMessageRequest>,
+) -> Result<Response, ApiError> {
+    let in_scope = store::access::can_see_project_as_lawyer(
+        &state.surreal,
+        lawyer.0.person_id,
+        lawyer.0.role,
+        id,
+    )
+    .await
+    .unwrap_or(false);
+    if !in_scope {
+        return Err(ApiError::NotFound);
+    }
+    let Some(project) = store::projects::find_by_id(&state.surreal, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+    else {
+        return Err(ApiError::NotFound);
+    };
+    let Some(firm_id) = project.firm_id else {
+        return Ok(bad_request(
+            "project_has_no_firm",
+            "The matter has no owning Firm, so it has no inbox to file into.",
+        ));
+    };
+    use base64::Engine as _;
+    let raw = match base64::engine::general_purpose::STANDARD.decode(input.raw.as_bytes()) {
+        Ok(raw) => raw,
+        Err(_) => {
+            return Ok(bad_request("invalid_base64", "raw is not valid base64."));
+        }
+    };
+    if raw.len() > crate::inbound_email::MAX_INBOUND_MESSAGE_BYTES {
+        return Ok(bad_request(
+            "message_too_large",
+            "The message exceeds the inbound mail size cap.",
+        ));
+    }
+    let Some(email) = crate::inbound_email::parse_raw_eml(&raw) else {
+        return Ok(bad_request(
+            "unparseable_message",
+            "The message could not be parsed as RFC 5322 mail.",
+        ));
+    };
+    let provider_account = input
+        .provider_account
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("cli-ingest")
+        .to_string();
+    let attachments = crate::inbox::ingest_attachments(&state.surreal, &state.storage, &email)
+        .await
+        .map_err(ApiError::Db)?;
+    let provider_message_id = email
+        .message_id
+        .clone()
+        .unwrap_or_else(|| format!("raw-{}", store::assets::sha256_hex(&raw)));
+    let occurred_at = crate::inbound_email::date_from_raw(&raw)
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let ingested = store::inbox::ingest_inbound(
+        &state.surreal,
+        &store::inbox::IngestInbound {
+            firm_id,
+            project_id: Some(id),
+            brand_key: None,
+            interaction_type: Some("message"),
+            provider_post_id: None,
+            parent_provider_message_id: None,
+            visibility: None,
+            channel: store::inbox::channel::EMAIL,
+            provider_account: &provider_account,
+            provider_message_id: &provider_message_id,
+            provider_thread_ref: None,
+            external_address: &email.from,
+            external_name: None,
+            subject: Some(email.subject.as_str()),
+            body: email.text.as_str(),
+            source_page: None,
+            source_channel: Some(store::inbox::channel::EMAIL),
+            matter_consent: true,
+            promotional_opt_in: false,
+            email_conversation_id: None,
+            attachments,
+            occurred_at: &occurred_at,
+        },
+    )
+    .await
+    .map_err(|error| ApiError::Db(error.to_string()))?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "conversation_id": ingested.conversation_id,
+            "message_id": ingested.message_id,
+            "deduped": ingested.deduped,
+        })),
+    )
+        .into_response())
 }
 
 /// `POST /app/api/projects/{id}/documents` — file a document into a matter, the
