@@ -196,14 +196,14 @@ struct GkeClusterConnectionResponse {
 #[derive(Debug, Deserialize)]
 struct GkeMasterAuth {
     #[serde(rename = "clusterCaCertificate")]
-    cluster_ca_certificate: String,
+    cluster_ca: String,
 }
 
 struct GkeClusterConnection {
     endpoint: String,
     /// One DER body per certificate in the cluster CA bundle — the shape
     /// `reqwest::Certificate::from_der` takes, not the PEM the API returns.
-    ca_certificate: Vec<Vec<u8>>,
+    ca_bundle: Vec<Vec<u8>>,
 }
 
 /// Options parsed from the `devx observability apply` flags.
@@ -557,12 +557,14 @@ fn wait_for_gmp_operator(cfg: &ShipConfig, dry_run: bool) -> Result<()> {
         .context("create GKE readiness runtime")?;
     let token_provider = runtime.block_on(adc_token_provider())?;
     let gcp = GcpClient::new(token_provider.clone());
-    let connection = runtime.block_on(gke_cluster_connection(&gcp, cfg))?;
+    let GkeClusterConnection {
+        endpoint,
+        ca_bundle,
+    } = runtime.block_on(gke_cluster_connection(&gcp, cfg))?;
     let token = runtime.block_on(token_provider.token())?;
-    let client = kubernetes_client(&connection)?;
+    let client = kubernetes_client(&ca_bundle)?;
     let url = format!(
-        "https://{}/api/v1/namespaces/{GMP_SYSTEM_NAMESPACE}/endpoints/{GMP_OPERATOR_ENDPOINTS}",
-        connection.endpoint
+        "https://{endpoint}/api/v1/namespaces/{GMP_SYSTEM_NAMESPACE}/endpoints/{GMP_OPERATOR_ENDPOINTS}"
     );
 
     for attempt in 1..=GMP_WEBHOOK_PROPAGATION_ATTEMPTS {
@@ -620,15 +622,15 @@ fn parse_gke_cluster_connection(response: &str) -> Result<GkeClusterConnection> 
     if response.endpoint.trim().is_empty() {
         bail!("GKE Container API returned an empty cluster endpoint");
     }
-    let ca_certificate = BASE64_STANDARD
-        .decode(response.master_auth.cluster_ca_certificate)
+    let ca_bundle = BASE64_STANDARD
+        .decode(response.master_auth.cluster_ca)
         .context("decode GKE cluster CA certificate")?;
-    if ca_certificate.is_empty() {
+    if ca_bundle.is_empty() {
         bail!("GKE Container API returned an empty cluster CA certificate");
     }
     Ok(GkeClusterConnection {
         endpoint: response.endpoint,
-        ca_certificate: pem_certificates_to_der(&ca_certificate)?,
+        ca_bundle: pem_bundle_to_der(&ca_bundle)?,
     })
 }
 
@@ -645,7 +647,7 @@ fn parse_gke_cluster_connection(response: &str) -> Result<GkeClusterConnection> 
 /// A bundle rather than a single certificate because a cluster CA may be
 /// issued under a chain, and dropping every block but the first would
 /// fail only for the clusters that have one.
-fn pem_certificates_to_der(pem: &[u8]) -> Result<Vec<Vec<u8>>> {
+fn pem_bundle_to_der(pem: &[u8]) -> Result<Vec<Vec<u8>>> {
     const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
     const END: &str = "-----END CERTIFICATE-----";
 
@@ -674,7 +676,7 @@ fn pem_certificates_to_der(pem: &[u8]) -> Result<Vec<Vec<u8>>> {
 /// An HTTPS client that trusts only the cluster's own CA. The GKE API
 /// server presents a certificate from that private CA, so the public
 /// roots would reject it and adding them would only widen trust.
-fn kubernetes_client(connection: &GkeClusterConnection) -> Result<reqwest::Client> {
+fn kubernetes_client(ca_bundle: &[Vec<u8>]) -> Result<reqwest::Client> {
     // The GKE API server is HTTPS, and reqwest handshakes through rustls,
     // which panics rather than choosing between the two providers this
     // workspace links. `store::surreal::connect` installs one for its own
@@ -683,14 +685,13 @@ fn kubernetes_client(connection: &GkeClusterConnection) -> Result<reqwest::Clien
     // aborts mid-run — after applying the collector and before the
     // `Rules` object that needs the operator it was about to wait for.
     store::surreal::install_tls_provider();
-    let certificates = connection
-        .ca_certificate
+    let roots = ca_bundle
         .iter()
         .map(|der| reqwest::Certificate::from_der(der))
         .collect::<std::result::Result<Vec<_>, _>>()
         .context("load GKE cluster CA certificate")?;
     reqwest::Client::builder()
-        .tls_certs_only(certificates)
+        .tls_certs_only(roots)
         .build()
         .context("create GKE Kubernetes API client")
 }
@@ -1803,7 +1804,7 @@ mod tests {
         ))
         .expect("running cluster connection must parse");
         assert_eq!(connection.endpoint, "10.0.0.1");
-        assert_eq!(connection.ca_certificate, vec![b"ca-bytes".to_vec()]);
+        assert_eq!(connection.ca_bundle, vec![b"ca-bytes".to_vec()]);
     }
 
     #[test]
@@ -1811,7 +1812,7 @@ mod tests {
         // Dropping every block but the first would fail only for the
         // clusters whose CA is issued under a chain — the worst shape of
         // bug to carry into one deployment out of several.
-        let der = pem_certificates_to_der(
+        let der = pem_bundle_to_der(
             &BASE64_STANDARD
                 .decode(base64_pem(&[b"leaf", b"intermediate"]))
                 .expect("fixture decodes"),
@@ -1825,7 +1826,7 @@ mod tests {
         // What the old fixture actually encoded. It must not be mistaken
         // for a certificate: failing here names the encoding, while
         // passing it through blames the cluster's certificate instead.
-        let error = pem_certificates_to_der(b"ca-bytes")
+        let error = pem_bundle_to_der(b"ca-bytes")
             .expect_err("a payload with no PEM armor is not a certificate");
         assert!(
             error.to_string().contains("no PEM certificate block"),
@@ -1835,7 +1836,7 @@ mod tests {
 
     #[test]
     fn a_truncated_pem_block_is_refused() {
-        let error = pem_certificates_to_der(b"-----BEGIN CERTIFICATE-----\nY2E=\n")
+        let error = pem_bundle_to_der(b"-----BEGIN CERTIFICATE-----\nY2E=\n")
             .expect_err("a block with no END marker is malformed");
         assert!(error.to_string().contains("no END marker"), "{error}");
     }
