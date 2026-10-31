@@ -244,7 +244,9 @@ async fn invoice_closed_overage(
             contact_email: person.email.clone(),
             reference: format!("Nautilus sandbox usage {closed_period}"),
             line_items: vec![InvoiceLine {
-                description: format!("Legal Sandbox model usage beyond the included $5.00, {closed_period}"),
+                description: format!(
+                    "Legal Sandbox model usage beyond the included $5.00, {closed_period}"
+                ),
                 quantity: 1,
                 unit_amount_cents: overage_cents,
                 account_code: purchase.account_code.clone(),
