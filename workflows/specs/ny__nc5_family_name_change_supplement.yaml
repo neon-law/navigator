@@ -1,0 +1,221 @@
+questionnaire:
+  BEGIN:
+    _: person__client
+  person__client:
+    _: custom_single_choice__filing_court
+  custom_single_choice__filing_court:
+    _: custom_single_choice__filing_county
+  custom_single_choice__filing_county:
+    _: custom_text__member_present_name
+  custom_text__member_present_name:
+    _: custom_single_choice__member_role
+  custom_single_choice__member_role:
+    _: custom_single_choice__member_convicted
+  custom_single_choice__member_convicted:
+    _: custom_text__court_of_conviction
+  custom_text__court_of_conviction:
+    _: custom_text__crime_of_conviction
+  custom_text__crime_of_conviction:
+    _: custom_single_choice__member_bankruptcy
+  custom_single_choice__member_bankruptcy:
+    _: custom_single_choice__member_judgments_liens
+  custom_single_choice__member_judgments_liens:
+    _: custom_single_choice__member_party_to_action
+  custom_single_choice__member_party_to_action:
+    _: custom_text__member_disclosure_details
+  custom_text__member_disclosure_details:
+    _: custom_single_choice__currently_married
+  custom_single_choice__currently_married:
+    _: custom_single_choice__previously_married
+  custom_single_choice__previously_married:
+    _: custom_single_choice__children_under_21
+  custom_single_choice__children_under_21:
+    _: custom_single_choice__member_child_support
+  custom_single_choice__member_child_support:
+    _: custom_single_choice__child_support_current
+  custom_single_choice__child_support_current:
+    _: custom_text__child_support_arrears
+  custom_text__child_support_arrears:
+    _: custom_text__child_support_order_court
+  custom_text__child_support_order_court:
+    _: custom_text__child_support_collection_unit
+  custom_text__child_support_collection_unit:
+    _: custom_single_choice__member_spousal_support
+  custom_single_choice__member_spousal_support:
+    _: custom_single_choice__spousal_support_current
+  custom_single_choice__spousal_support_current:
+    _: custom_text__spousal_support_arrears
+  custom_text__spousal_support_arrears:
+    _: custom_text__spousal_support_order_court
+  custom_text__spousal_support_order_court:
+    _: END
+  END: {}
+choices:
+  filing_court:
+    Supreme Court: Supreme
+    County Court: County
+    New York City Civil Court: New York City Civil
+  filing_county:
+    Albany: Albany
+    Allegany: Allegany
+    Bronx: Bronx
+    Broome: Broome
+    Cattaraugus: Cattaraugus
+    Cayuga: Cayuga
+    Chautauqua: Chautauqua
+    Chemung: Chemung
+    Chenango: Chenango
+    Clinton: Clinton
+    Columbia: Columbia
+    Cortland: Cortland
+    Delaware: Delaware
+    Dutchess: Dutchess
+    Erie: Erie
+    Essex: Essex
+    Franklin: Franklin
+    Fulton: Fulton
+    Genesee: Genesee
+    Greene: Greene
+    Hamilton: Hamilton
+    Herkimer: Herkimer
+    Jefferson: Jefferson
+    Kings: Kings
+    Lewis: Lewis
+    Livingston: Livingston
+    Madison: Madison
+    Monroe: Monroe
+    Montgomery: Montgomery
+    Nassau: Nassau
+    New York: New York
+    Niagara: Niagara
+    Oneida: Oneida
+    Onondaga: Onondaga
+    Ontario: Ontario
+    Orange: Orange
+    Orleans: Orleans
+    Oswego: Oswego
+    Otsego: Otsego
+    Putnam: Putnam
+    Queens: Queens
+    Rensselaer: Rensselaer
+    Richmond: Richmond
+    Rockland: Rockland
+    Saratoga: Saratoga
+    Schenectady: Schenectady
+    Schoharie: Schoharie
+    Schuyler: Schuyler
+    Seneca: Seneca
+    St. Lawrence: St. Lawrence
+    Steuben: Steuben
+    Suffolk: Suffolk
+    Sullivan: Sullivan
+    Tioga: Tioga
+    Tompkins: Tompkins
+    Ulster: Ulster
+    Warren: Warren
+    Washington: Washington
+    Wayne: Wayne
+    Westchester: Westchester
+    Wyoming: Wyoming
+    Yates: Yates
+  member_role:
+    The petitioner: "0"
+    The co-petitioner: "1"
+    A minor under 18: "2"
+  member_convicted:
+    Yes: "1"
+    "No": "0"
+  member_bankruptcy:
+    Yes: "1"
+    "No": "0"
+  member_judgments_liens:
+    Yes: "1"
+    "No": "0"
+  member_party_to_action:
+    Yes: "1"
+    "No": "0"
+  currently_married:
+    Yes: "1"
+    "No": "0"
+  previously_married:
+    Yes: "1"
+    "No": "0"
+  children_under_21:
+    Yes: "1"
+    "No": "0"
+  member_child_support:
+    Yes: "0"
+    "No": "1"
+  child_support_current:
+    Yes: "0"
+    "No": "1"
+  member_spousal_support:
+    Yes: "0"
+    "No": "1"
+  spousal_support_current:
+    Yes: "0"
+    "No": "1"
+prompts:
+  client_name: >-
+    What is the petitioner's full legal name as it appears on the family
+    petition's caption? (The supplement repeats that caption.)
+  filing_court: >-
+    Which court will the supplement ride with — the same court as the
+    petition? (Supreme Court, County Court, or New York City Civil Court.)
+  filing_county: The county where the petition is filed.
+  member_present_name: >-
+    Whose answers are these? Type that family member's full present name —
+    each member who answered yes to a petition question files their own
+    supplement.
+  member_role: >-
+    What is that member's role in the petition — the petitioner, a
+    co-petitioner, or a minor under 18?
+  member_convicted: >-
+    Has that member ever been convicted of a crime (misdemeanor or felony)?
+  court_of_conviction: Which court convicted them? (Leave blank if the
+    previous question was no.)
+  crime_of_conviction: What was the crime? (Leave blank if there was no
+    conviction.)
+  member_bankruptcy: Has that member ever filed for bankruptcy?
+  member_judgments_liens: Are there any judgments or liens of record against
+    that member?
+  member_party_to_action: Is that member a party to any actions or
+    proceedings?
+  member_disclosure_details: >-
+    Details the court should know about the bankruptcy, judgments or liens,
+    or pending actions — case names, courts, and dates. (Leave blank when
+    all three answers were no.)
+  currently_married: Is that member currently married?
+  previously_married: Has that member been previously married?
+  children_under_21: Does that member have any children under 21?
+  member_child_support: Does that member have to pay child support?
+  child_support_current: >-
+    Are those child support payments satisfied and up to date?
+  child_support_arrears: >-
+    If payments are not up to date, how much does that member owe? (A
+    number; leave blank when payments are current.)
+  child_support_order_court: Which court issued the child support order?
+    (Leave blank when there is none.)
+  child_support_collection_unit: The Child Support Collections Unit handling
+    the order, if any.
+  member_spousal_support: Is that member responsible for spousal support?
+  spousal_support_current: >-
+    Are those spousal support payments satisfied and up to date?
+  spousal_support_arrears: >-
+    If payments are not up to date, how much does that member owe? (A
+    number; leave blank when payments are current.)
+  spousal_support_order_court: Which court issued the spousal support order?
+    (Leave blank when there is none.)
+workflow:
+  BEGIN:
+    intake_submitted: intake_persisted__member
+  intake_persisted__member:
+    supplement_rendered: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__ny__nc5_family_name_change_supplement_pdf
+    rejected: END
+  generate_pdf__ny__nc5_family_name_change_supplement_pdf:
+    pdf_persisted: filing__new_york_supreme_court
+  filing__new_york_supreme_court:
+    filed: END
+  END: {}
