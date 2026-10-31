@@ -1261,7 +1261,10 @@ impl BrandKey {
             Self::DeleteYourData => matches!(path, "/" | "/contact" | "/testimonials"),
             Self::LawyerShook | Self::GuiebShook => matches!(path, "/" | "/testimonials"),
             Self::CyberInjuryLaw => {
-                matches!(path, "/" | "/contact" | "/consultation" | "/testimonials")
+                matches!(
+                    path,
+                    "/" | "/services" | "/contact" | "/consultation" | "/testimonials"
+                )
             }
             Self::Summons => matches!(path, "/" | "/services" | "/contact" | "/testimonials"),
             Self::Aegis
@@ -3414,6 +3417,7 @@ mod tests {
         assert!(BrandKey::Neon.publishes_firm_path("/services"));
         assert!(!BrandKey::Neon.publishes_firm_path("/business"));
         assert!(!BrandKey::Neon.publishes_firm_path("/disputes"));
+        assert!(BrandKey::CyberInjuryLaw.publishes_firm_path("/services"));
     }
 
     /// A mounted white-label manifest replaces the *default* brand's identity,

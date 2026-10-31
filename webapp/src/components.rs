@@ -151,6 +151,7 @@ pub use toggle_group::{ToggleGroup, ToggleOption};
 pub(crate) use site_footer::tel_href;
 pub(crate) use site_header::BrandFavicon;
 pub use site_header::{SiteHeader, SiteNavLink};
+pub(crate) use social::canonical_url;
 pub use social::SocialMeta;
 pub use tabs::{Tab, Tabs};
 pub use testimonial::{TestimonialCard, TestimonialCards, TestimonialSection};

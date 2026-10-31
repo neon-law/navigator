@@ -61,7 +61,7 @@ async fn cyber_injury_home_serves_its_copy_assets_and_fonts() {
             "tel:+15108002090",
             "1.510.800.2090",
             "support@cyberinjurylaw.com",
-            "href=\"https://www.cyberinjurylaw.com/testimonials\"",
+            "href=\"/testimonials?via=home-nav-testimonials\"",
             "cyber-incident",
             "cyber-timing",
             "Guieb &#38; Shook PC",
@@ -76,6 +76,60 @@ async fn cyber_injury_home_serves_its_copy_assets_and_fonts() {
         assert!(!html.contains("fonts.googleapis.com"), "{host}");
         assert!(!html.contains("fonts.gstatic.com"), "{host}");
         assert!(!html.contains("assets/app.js"), "{host}");
+    }
+}
+
+/// The share-card contract: every public page advertises the full Open Graph
+/// + Twitter Card set with absolute brand URLs, and one canonical address.
+#[tokio::test]
+async fn public_pages_emit_complete_open_graph_and_canonical_metadata() {
+    // Canonical URLs and absolute social images always point at the brand's
+    // canonical www host — a staging mirror canonicalizes to production.
+    let origin = "https://www.cyberinjurylaw.com";
+    for host in HOSTS {
+        for (path, title, description) in [
+            (
+                "/",
+                "CyberInjuryLaw | We use AI to put more money in your pocket",
+                "Car accidents, negligence, medical malpractice, data theft, cybercrime. We investigate, preserve evidence, and go after whoever cut the corner. Tell us what happened. Attorney advertisement.",
+            ),
+            (
+                "/services",
+                "CyberInjuryLaw | Injury and cybercrime claims",
+                "We go after insurers that lowball you, companies that leak your data, and platforms that blame you. We investigate, preserve evidence, and file when necessary. A lawyer reviews the facts before any engagement. Attorney advertisement.",
+            ),
+        ] {
+            let (status, html) = page(host, path).await;
+            assert_eq!(status, StatusCode::OK, "{host}{path}");
+            let url = format!("{origin}{path}");
+            for tag in [
+                format!(r#"content="{title}" property="og:title""#),
+                r#"content="CyberInjuryLaw" property="og:site_name""#.to_string(),
+                format!(r#"content="{description}" property="og:description""#),
+                format!(r#"content="{url}" property="og:url""#),
+                format!(
+                    r#"content="{origin}/assets/img/cyber-injury-law/canal-street-ad-f9faa356.png" property="og:image""#
+                ),
+                r#"property="og:image:alt""#.to_string(),
+                format!(r#"rel="canonical" href="{url}""#),
+                r#"name="twitter:card" content="summary""#.to_string(),
+                format!(r#"name="twitter:title" content="{title}""#),
+                r#"name="twitter:description""#.to_string(),
+                format!(
+                    r#"name="twitter:image" content="{origin}/assets/img/cyber-injury-law/canal-street-ad-f9faa356.png""#
+                ),
+            ] {
+                assert!(
+                    html.contains(&tag),
+                    "{host}{path}: missing social head fragment {tag}; emitted social metas: {}",
+                    html
+                        .split("<meta")
+                        .filter(|m| m.contains("twitter") || m.contains("og:"))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                );
+            }
+        }
     }
 }
 
