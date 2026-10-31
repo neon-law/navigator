@@ -296,7 +296,7 @@ mod tests {
     /// any future consumer share the format.
     #[test]
     fn tel_href_keeps_digits_and_the_plus() {
-        assert_eq!(tel_href("+1 (510) 250-0134"), "tel:+15102500134");
-        assert_eq!(tel_href("510.250.0134"), "tel:5102500134");
+        assert_eq!(tel_href("+1 (555) 555-0134"), "tel:+15555550134");
+        assert_eq!(tel_href("555.555.0134"), "tel:5555550134");
     }
 }
