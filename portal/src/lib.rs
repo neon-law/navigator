@@ -198,6 +198,7 @@ pub mod visitor_analytics;
 pub mod webhook_auth;
 pub mod welcome;
 pub mod workshops;
+pub mod x_activity;
 
 pub use oauth::{AuthState as OAuthState, OAuthConfig};
 pub use session::{SessionData, SessionSource, SessionStore};
@@ -707,6 +708,7 @@ fn public_ingress_routes() -> Router<AppState> {
         .route("/assets/{*key}", get(public_asset))
         .merge(social_webhooks::routes())
         .merge(tiktok_comments::routes())
+        .merge(x_activity::routes())
         .merge(journal_webhooks::routes())
         .merge(social_oauth::public_routes())
         .route(
