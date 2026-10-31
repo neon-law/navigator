@@ -221,7 +221,7 @@ RJC = "\n".join([
 # ---------------- Washington ----------------
 WA_URL = "https://www.courts.wa.gov/forms/documents/"
 wa_statewide = []
-PO_OFF = "Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office"
+PO_OFF = "Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office"
 wa_statewide.append(sf("PO001", "Petition for Protection Order", "PO 001", WA_URL + "PO%20001%20Petition%20for%20Protection%20Order_06_2026.pdf", FILL["flat"], PO_OFF,
     note="One unified petition covers all five RCW ch. 7.105 order types (DV, sexual assault, stalking, vulnerable adult, anti-harassment). The published PDF has zero AcroForm fields — overlay fields or route through the official Guide & File. Anti-harassment is the only type the petition flags '(fee may be required)' (Pierce: $53 Superior / $83 District); DV/SA/stalking petitions have no fee line in county schedules; vulnerable-adult filing is 'None (7.105)'. Fee waiver: PO 012/PO 014 (harassment) or GR 34."))
 wa_statewide.append(sf("POI001", "Instructions for Petition for Protection Order", "POi 001", WA_URL + "POi%20001%20Instructions%20Petition%20for%20Protection%20Order_2026_01.pdf", FILL["unv"], PO_OFF, note="n/a (instructions)."))

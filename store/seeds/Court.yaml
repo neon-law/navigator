@@ -1068,7 +1068,7 @@ records:
         form_number: PO 001
         source_url: https://www.courts.wa.gov/forms/documents/PO%20001%20Petition%20for%20Protection%20Order_06_2026.pdf
         sha256: ffcf053c303e3019cf76236929f256a14b32398dbb88bdc3bd3a747484026d12
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fee_note: "One unified petition covers all five RCW ch. 7.105 order types (DV, sexual assault, stalking, vulnerable adult, anti-harassment). The published PDF has zero AcroForm fields — overlay fields or route through the official Guide & File. Anti-harassment is the only type the petition flags '(fee may be required)' (Pierce: $53 Superior / $83 District); DV/SA/stalking petitions have no fee line in county schedules; vulnerable-adult filing is 'None (7.105)'. Fee waiver: PO 012/PO 014 (harassment) or GR 34."
         fillability: unfillable_source
       - key: POI001
@@ -1076,7 +1076,7 @@ records:
         form_number: POi 001
         source_url: https://www.courts.wa.gov/forms/documents/POi%20001%20Instructions%20Petition%20for%20Protection%20Order_2026_01.pdf
         sha256: 4da46bc5c6e3489ff80bd7d77aa0769199babb05eb9db4f11d0d4d5cfa2d6d28
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fee_note: n/a (instructions).
         fillability: unverified
       - key: PO003
@@ -1084,21 +1084,21 @@ records:
         form_number: PO 003
         source_url: https://www.courts.wa.gov/forms/documents/PO%20003%20Law%20Enforcement%20and%20Confidential%20Info_2026_03.pdf
         sha256: 0e97647445df9cff3c82ed79e4fad21f8faf3b44cab61c4918e36cc5bd97994f
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fillability: unverified
       - key: PO003R
         title: LECIF — Restrained Person
         form_number: PO 003R
         source_url: https://www.courts.wa.gov/forms/documents/PO%20003R%20Law%20Enforcement%20and%20Confidential%20Info%20Restrained%20Person_2026_01.pdf
         sha256: b6d5d4e39833347d28146b21e0557d22821024d2405c69abf5b31a3cb83689fa
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fillability: unverified
       - key: PO030
         title: Temporary Protection Order and Hearing Notice
         form_number: PO 030
         source_url: https://www.courts.wa.gov/forms/documents/PO%20030%20Temporary%20Protection%20Order%20and%20Hearing%20Notice_07_2025.pdf
         sha256: 504584d1ad3f108d2d15f35861b9c8a8e22f75a9a563096aed312f3056a12b50
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fee_note: No filing fee for the petition types other than anti-harassment.
         fillability: unfillable_source
       - key: PO040
@@ -1106,63 +1106,63 @@ records:
         form_number: PO 040
         source_url: https://www.courts.wa.gov/forms/documents/PO%20040%20Protection%20Order_06_2026.pdf
         sha256: 925fc132d9f90d3b91a420b89051a8ea67c9b3e50620e78b672288782bd07b50
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fillability: unverified
       - key: PO018
         title: Declaration
         form_number: PO 018
         source_url: https://www.courts.wa.gov/forms/documents/PO%20018%20Declaration_2022_07.pdf
         sha256: 27a93dd4552aa4ac429fcb16f1660ce66f509102deefa92f2ecd23c307c37d49
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fillability: unverified
       - key: PO010
         title: Statement
         form_number: PO 010
         source_url: https://www.courts.wa.gov/forms/documents/PO%20010%20Statement_2022_07.pdf
         sha256: b0fbcfccbb0eb7a93536f6ea7bc13fa22ab40f8cc901d2a6aed282d471ae76a8
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fillability: unverified
       - key: PO012
         title: Motion and Declaration for Waiver of Filing Fees and Surcharges — Harassment
         form_number: PO 012
         source_url: https://www.courts.wa.gov/forms/documents/PO%20012%20Motion%20Filing%20Fee%20Waiver%20-%20Harassment_%202023_01.pdf
         sha256: 167a887eb729ff6817b9abb6a8299643d56fb8ab593ed2a765d7d400c38b06f0
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fillability: unfillable_source
       - key: PO014
         title: Order re Waiver of Filing Fees and Surcharges — Harassment
         form_number: PO 014
         source_url: https://www.courts.wa.gov/forms/documents/PO%20014%20Order%20re%20Filing%20Fee%20Waiver-Harassment_07_2025.pdf
         sha256: b62058a005d98dee5321081dd3f9dff09e689b2107f448194464302c0c0dabed
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fillability: unverified
       - key: PO004
         title: Proof of Service (RTS)
         form_number: PO 004
         source_url: https://www.courts.wa.gov/forms/documents/PO%20004%20Proof%20of%20Service_2026_01.pdf
         sha256: e33553f8997b4f4d7294a6120e4ac97b1a25c7c6a2a9fd722ef15c97cc232b6d
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fillability: unverified
       - key: PO050
         title: Motion to Renew Protection Order
         form_number: PO 050
         source_url: https://www.courts.wa.gov/forms/documents/PO%20050%20Motion%20for%20Renewal%20of%20Protection%20Order_07_2025.pdf
         sha256: 67168e5fb726d788709c8300ea1686325916e63d000ea200dfd26bca6c5045f8
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fillability: unverified
       - key: PO063
         title: Motion to Modify or Terminate Protection Order
         form_number: PO 063
         source_url: https://www.courts.wa.gov/forms/documents/PO%20063%20Motion%20to%20Modify%20or%20Terminate_07_2025.pdf
         sha256: 76590871290b9255284a0e6d391838aae712a8c96894b1385fe34ef647b3501e
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fillability: unverified
       - key: WS001
         title: Order to Surrender and Prohibit Weapons
         form_number: WS 001
         source_url: https://www.courts.wa.gov/forms/documents/WS%20001%20Order%20to%20Surrender%20and%20Prohibit%20Weapons_06_2026.pdf
         sha256: 3c0dc72dc887689b7b441f54b71ccba9e37f6bf30c2e1716bf4117ab446c91cc
-        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
         fillability: unverified
       - key: MISC050100
         title: Notice of Small Claim
