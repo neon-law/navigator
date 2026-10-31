@@ -762,6 +762,18 @@ mod tests {
             "../../templates/notations/forms/united_states/nevada/second_judicial_district_court/washoe__fee_waiver_application.fields"
         ),
     ),
+    (
+        "las_vegas__small_claims_complaint",
+        include_str!(
+            "../../templates/notations/forms/united_states/nevada/las_vegas_justice_court/las_vegas__small_claims_complaint.fields"
+        ),
+    ),
+    (
+        "las_vegas__small_claims_counterclaim",
+        include_str!(
+            "../../templates/notations/forms/united_states/nevada/las_vegas_justice_court/las_vegas__small_claims_counterclaim.fields"
+        ),
+    ),
 ];
         let err = plan(&map, &names, &llc_states()).expect_err("must refuse");
         assert!(
