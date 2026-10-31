@@ -1,4 +1,3 @@
--- Migration: 20261031010000_create_navigator_graph.sql
 -- The Apache AGE relationship graph, projected from the relational mirrors.
 --
 -- `CREATE EXTENSION age` normally runs earlier, in the superuser init path

@@ -2367,7 +2367,6 @@ CREATE TRIGGER project_task_events_immutable
     FOR EACH ROW EXECUTE FUNCTION reject_project_task_event_mutation();
 
 -- Migration: 20261031010000_create_navigator_graph.sql
--- Migration: 20261031010000_create_navigator_graph.sql
 -- The Apache AGE relationship graph, projected from the relational mirrors.
 --
 -- `CREATE EXTENSION age` normally runs earlier, in the superuser init path
@@ -2646,7 +2645,6 @@ REVOKE EXECUTE ON FUNCTION graph_clear_navigator() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION graph_conflict_frontier(text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION graph_conflict_edges(text) FROM PUBLIC;
 
--- Migration: 20261031020000_create_graph_view_readers.sql
 -- Migration: 20261031020000_create_graph_view_readers.sql
 -- Read-only reader functions for the graph views: bounded neighborhood
 -- expansion (project, lawyer) and the firm-to-firm aggregation. These are
@@ -2939,7 +2937,6 @@ $$;
 -- Migration: 20261031120000_add_project_onboarding_jurisdiction.sql
 -- The jurisdiction an onboarding Notation's Clauses bind to. NULL until recorded.
 ALTER TABLE project ADD COLUMN onboarding_jurisdiction TEXT;
-
 
 -- Migration: 20261031130000_create_case_stage.sql
 -- Firm-authored Case Stage vocabulary and audited per-matter transitions.
