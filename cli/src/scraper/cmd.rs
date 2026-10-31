@@ -20,7 +20,7 @@ use std::process::ExitCode;
 use clap::Subcommand;
 use uuid::Uuid;
 
-use crate::scraper::adapter::{find_adapter, NoticeQuery, SiteAdapter, SiteKey};
+use crate::scraper::adapter::{NoticeQuery, SiteAdapter, SiteKey};
 use crate::scraper::browser::ChromiumSessions;
 use crate::scraper::config::{self, ConfigError, ScraperConfig};
 use crate::scraper::credentials::{CredentialsError, LoginPresence, PortalLogins};
@@ -185,7 +185,8 @@ async fn sites_listing(firm_id: Uuid) -> ExitCode {
         Err(error) => return exit_failure("connecting to the store", error),
     };
     let kms = cloud::runtime_kms_from_env().await;
-    let resolved = credentials::resolve_portal_logins(&surreal, firm_id, kms.as_ref()).await;
+    let resolved =
+        crate::scraper::credentials::resolve_portal_logins(&surreal, firm_id, kms.as_ref()).await;
     // A store the run cannot use at all is an environment failure, not a
     // status; a Firm with no credential row is a status: all disabled.
     if let Err(
@@ -771,42 +772,45 @@ mod tests {
     fn the_plan_rejects_an_unconfigured_site() {
         let config = config_with_la_superior();
         let pacer = SiteKey::new("pacer").expect("valid key");
-        let error = plan_run(
+        let Err(error) = plan_run(
             &config,
             &allowed("canvas.lasuperiorcourt.org"),
             &[],
             &pacer,
             Path::new("/proj"),
-        )
-        .expect_err("not configured");
+        ) else {
+            panic!("pacer is not configured in this fixture");
+        };
         assert!(error.to_string().contains("configured sites: la-superior"));
     }
 
     #[test]
     fn the_plan_rejects_an_unbound_adapter() {
         let config = config_with_la_superior();
-        let error = plan_run(
+        let Err(error) = plan_run(
             &config,
             &allowed("canvas.lasuperiorcourt.org"),
             &[],
             &site(),
             Path::new("/proj"),
-        )
-        .expect_err("no adapters registered");
+        ) else {
+            panic!("no adapters are registered in this fixture");
+        };
         assert!(error.to_string().contains("binds adapter `la-superior`"));
     }
 
     #[test]
     fn the_plan_rejects_a_host_outside_allowed_hosts() {
         let config = config_with_la_superior();
-        let error = plan_run(
+        let Err(error) = plan_run(
             &config,
             &allowed("pacer.example"),
             &[],
             &site(),
             Path::new("/proj"),
-        )
-        .expect_err("the portal host is not allowed");
+        ) else {
+            panic!("the portal host is not allowed in this fixture");
+        };
         assert!(error.to_string().contains("`allowed_hosts:`"));
     }
 

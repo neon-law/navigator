@@ -372,7 +372,7 @@ pub(crate) fn default_state_root(project_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_section, parse_value, resolve_bound_adapter, ConfigError, ScraperConfig};
+    use super::{parse_section, parse_value, resolve_bound_adapter, ConfigError};
     use crate::scraper::adapter::{SiteAdapter, SiteKey};
     use crate::scraper::testing::MockAdapter;
     use std::collections::BTreeMap;
@@ -560,7 +560,9 @@ mod tests {
     fn an_unbound_adapter_names_the_binding_and_the_registry() {
         let config = parse_section(Some(&yaml_section(""))).expect("valid");
         let entry = config.find_site(&site()).expect("configured");
-        let error = resolve_bound_adapter(&[], &site(), entry).expect_err("no adapters registered");
+        let Err(error) = resolve_bound_adapter(&[], &site(), entry) else {
+            panic!("no adapters are registered in this fixture");
+        };
         assert!(
             error.to_string().contains("binds adapter `la-superior`"),
             "the error names the binding: {error}"
