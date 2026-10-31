@@ -98,7 +98,7 @@ pub struct SurveyedForm {
 }
 
 /// The verified fillability of an official blank.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Fillability {
     /// The blank's AcroForm field dictionary carries widgets — a program
