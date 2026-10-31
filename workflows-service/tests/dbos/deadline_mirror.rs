@@ -47,10 +47,12 @@ impl MirrorSource for Matters {
         if self.failed_project == Some(project_id) {
             return Err("calendar unreachable".into());
         }
-        let mut pass = store::deadline_calendar::MirrorReport::default();
-        pass.outcome = store::deadline_calendar::MirrorOutcome::Mirrored;
-        pass.dry_run = dry_run;
-        pass.upserted = vec![Uuid::now_v7()];
+        let pass = store::deadline_calendar::MirrorReport {
+            outcome: store::deadline_calendar::MirrorOutcome::Mirrored,
+            dry_run,
+            upserted: vec![Uuid::now_v7()],
+            ..Default::default()
+        };
         Ok(pass)
     }
 }
