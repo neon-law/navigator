@@ -63,7 +63,20 @@ pub fn fill_signer_boxes<'a>(
 /// (blank-line-separated).
 #[must_use]
 pub fn render_filled_in(body: &str, context: &BTreeMap<String, String>) -> String {
-    let filled = fill(body, context);
+    render_filled_in_with_display(body, context, context)
+}
+
+/// Like [`render_filled_in`], but `{{#if}}` / `{{#for}}` read `context`
+/// (stored choice keys) while bare `{{state}}` placeholders read `display`
+/// (human labels). The public preview already splits those maps; a matter
+/// review that used labels for both dropped every `{{#if state=KEY}}` branch.
+#[must_use]
+pub fn render_filled_in_with_display(
+    body: &str,
+    context: &BTreeMap<String, String>,
+    display: &BTreeMap<String, String>,
+) -> String {
+    let filled = fill_with_display(body, context, display);
     let paragraphs: Vec<&str> = filled
         .split("\n\n")
         .map(str::trim)
@@ -269,6 +282,23 @@ The retainer covers the project {{project_name}}.";
             ("people__members", r#"[{"name": "Aries"}]"#),
         ]);
         assert_eq!(super::fill(body, &context), "Roster: Aries ");
+    }
+
+    #[test]
+    fn assembled_html_matches_conditions_on_keys_and_prints_labels() {
+        let body = "{{#if custom_single_choice__law=NV}}\n\n### A. Nevada provisions\n\n{{custom_single_choice__law}}\n\n{{/if}}";
+        let keys = ctx(&[("custom_single_choice__law", "NV")]);
+        let labels = ctx(&[("custom_single_choice__law", "Nevada")]);
+        let html = super::render_filled_in_with_display(body, &keys, &labels);
+        assert!(
+            html.contains("Nevada provisions") && html.contains("Nevada"),
+            "got: {html}"
+        );
+        let labels_only = super::render_filled_in(body, &labels);
+        assert!(
+            !labels_only.contains("Nevada provisions"),
+            "labels in the condition map must not satisfy a key equality: {labels_only}"
+        );
     }
 
     #[test]

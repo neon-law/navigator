@@ -180,7 +180,7 @@ async fn basic_will_preview_offers_every_states_question() {
         let state_label = client
             .execute(
                 &format!(
-                    "const el = document.querySelector('{state_radio}'); \
+                    "const el = document.querySelector(\"{state_radio}\"); \
                      return el ? el.closest('label').textContent.trim() : null;"
                 ),
                 vec![],

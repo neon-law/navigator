@@ -1568,12 +1568,6 @@ pub async fn all(surreal: &SurrealDb) -> Result<Vec<Project>, ProjectStoreError>
         .collect())
 }
 
-/// A Google Drive resource id is opaque, but its documented wire form is an
-/// ASCII identifier. Accept only that form at this boundary so an operator
-/// cannot accidentally persist a copied Drive URL in the address column.
-const DRIVE_FOLDER_ID_INVALID: &str =
-    "Drive folder id must contain only letters, digits, hyphens, or underscores.";
-
 /// Which side of a matter a DRI designation applies to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DriSide {
@@ -1759,6 +1753,29 @@ pub fn is_valid_resource_url(url: &str) -> bool {
 /// Human-readable reason [`is_valid_calendar_id`] refuses a value.
 pub const CALENDAR_ID_INVALID: &str =
     "A calendar id is the Calendar ID shown in the Google Calendar's settings, not a link.";
+
+/// Human-readable reason [`is_valid_drive_folder_id`] refuses a value.
+pub const DRIVE_FOLDER_ID_INVALID: &str =
+    "A Drive folder id is the opaque id of the folder in the Firm's Projects shared drive, not a link.";
+
+/// Human-readable reason [`drive_folder_recorded_elsewhere`] refuses a patch.
+pub const DRIVE_FOLDER_RECORDED_ELSEWHERE: &str = "That Drive folder is already the ingest folder of another matter; a folder scopes its import to the one matter that records it.";
+
+/// Whether a value has the shape of a Google Drive file id: one token of at
+/// most 128 characters, letters, digits, `-`, and `_` only.
+///
+/// The id is placed in a Drive API path, so anything that could change the
+/// path or the query is refused rather than escaped. Whether the folder
+/// exists — and whether it is the Project's ingest folder — is the provider's
+/// answer (`DriveService::is_ingest_folder`), not this one.
+#[must_use]
+pub fn is_valid_drive_folder_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+}
 
 /// Whether a value has the shape of a Google Calendar id: one token of at most
 /// 255 characters, letters, digits, and `.`, `_`, `-`, `+`, `@` only.
@@ -2522,6 +2539,12 @@ pub struct UpdateProjectCommand {
     /// terms. Checked by [`is_valid_calendar_id`].
     #[serde(default)]
     pub calendar_id: Option<String>,
+    /// The Project's Drive ingest folder id, on the same blank-clears terms.
+    /// Checked by [`is_valid_drive_folder_id`] for shape and by
+    /// [`drive_folder_recorded_elsewhere`] for ownership — a folder another
+    /// matter already imports is refused, never silently shared.
+    #[serde(default)]
+    pub drive_folder_id: Option<String>,
     /// The client's booking link, on the same blank-clears terms. Rendered as
     /// an `href` to the client, so it passes [`is_valid_resource_url`].
     #[serde(default)]
@@ -2695,7 +2718,7 @@ pub enum ProjectCommandError {
 /// `SET` clause carries and which parameters are bound — so a new optional
 /// column is one row here instead of two `if` blocks that must agree. `None`
 /// means "leave this column alone"; `Some("")` means "clear it".
-fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 9] {
+fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option<&String>); 10] {
     [
         ("description", input.description.as_ref()),
         (
@@ -2716,6 +2739,7 @@ fn optional_text_columns(input: &UpdateProjectCommand) -> [(&'static str, Option
             input.shared_notion_page_url.as_ref(),
         ),
         ("calendar_id", input.calendar_id.as_ref()),
+        ("drive_folder_id", input.drive_folder_id.as_ref()),
         ("booking_url", input.booking_url.as_ref()),
         (
             "onboarding_jurisdiction",
@@ -2740,6 +2764,11 @@ fn validate_resource_links(input: &UpdateProjectCommand) -> Result<(), ProjectCo
     if let Some(calendar_id) = &input.calendar_id {
         if !calendar_id.trim().is_empty() && !is_valid_calendar_id(calendar_id) {
             return Err(ProjectCommandError::Invalid(CALENDAR_ID_INVALID));
+        }
+    }
+    if let Some(drive_folder_id) = &input.drive_folder_id {
+        if !drive_folder_id.trim().is_empty() && !is_valid_drive_folder_id(drive_folder_id) {
+            return Err(ProjectCommandError::Invalid(DRIVE_FOLDER_ID_INVALID));
         }
     }
     Ok(())
@@ -2830,6 +2859,20 @@ pub async fn update_project(
             .is_none()
         {
             return Err(ProjectCommandError::Invalid("That entity does not exist."));
+        }
+    }
+    // A Drive ingest folder scopes its import to exactly one matter, so a
+    // patch naming a folder another matter already records is refused at the
+    // command seam rather than discovered as a misdirected import later.
+    if let Some(drive_folder_id) = input.drive_folder_id.as_deref() {
+        if !drive_folder_id.trim().is_empty()
+            && drive_folder_recorded_elsewhere(surreal, id, drive_folder_id.trim())
+                .await
+                .map_err(probe_failed)?
+        {
+            return Err(ProjectCommandError::Invalid(
+                DRIVE_FOLDER_RECORDED_ELSEWHERE,
+            ));
         }
     }
     // The optional text columns are handled from one table, so a column is set

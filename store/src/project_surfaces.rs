@@ -78,6 +78,12 @@ pub enum SurfaceStatus {
     Created,
     /// Already recorded on the Project row before this call; nothing changed.
     Present,
+    /// The Project row's column was null, but the resource already existed
+    /// outside the store — a folder a person made by hand before opening
+    /// the matter, named for the code. This call is what recorded it, but
+    /// it did not create anything, so an operator reading the report can
+    /// tell an adopted folder from a fresh one.
+    Adopted,
     /// No Drive or forge service is configured for this deployment, so the
     /// surface was never attempted.
     Skipped,
@@ -202,6 +208,12 @@ pub struct ProjectHandles {
     /// response from a server that predates the column still deserializes.
     #[serde(default)]
     pub calendar_id: Option<String>,
+    /// The Project's Drive ingest folder id, so `navigator project set
+    /// --from-live` can fill `project.drive_folder_id` from the live row the
+    /// same way it fills the calendar. `#[serde(default)]` for the same
+    /// older-server reason.
+    #[serde(default)]
+    pub drive_folder_id: Option<String>,
     /// Person ids named by a DRI participation row (`is_lawyer_dri` or
     /// `is_client_dri`) that no longer resolve to a Person — the row survived
     /// a Person delete that should have cleared it (see
@@ -301,6 +313,7 @@ pub async fn read_handles(
         private_slack_channel: project.internal_slack_channel_url,
         private_notion_page: project.private_notion_page_url,
         calendar_id: project.calendar_id,
+        drive_folder_id: project.drive_folder_id,
         dangling_dri_person_ids,
     })
 }
@@ -330,11 +343,23 @@ where
         if let Some(existing) = project.drive_folder_id.as_deref() {
             (Some(existing.to_string()), SurfaceStatus::Present, None)
         } else if let Some(drive) = drive {
-            let folder = drive.create_folder(&project.code).await?;
-            set_drive_folder_id(surreal, project_id, Some(&folder.id))
-                .await?
-                .ok_or(SurfaceError::NotFound)?;
-            (Some(folder.id), SurfaceStatus::Created, None)
+            // LAW-213: a folder named for the code that predates the matter
+            // is adopted, not shadowed by a second folder. Only a genuinely
+            // absent folder is created.
+            let (folder_id, status) =
+                if let Some(existing) = drive.find_folder_by_name(&project.code).await? {
+                    set_drive_folder_id(surreal, project_id, Some(&existing.id))
+                        .await?
+                        .ok_or(SurfaceError::NotFound)?;
+                    (existing.id, SurfaceStatus::Adopted)
+                } else {
+                    let folder = drive.create_folder(&project.code).await?;
+                    set_drive_folder_id(surreal, project_id, Some(&folder.id))
+                        .await?
+                        .ok_or(SurfaceError::NotFound)?;
+                    (folder.id, SurfaceStatus::Created)
+                };
+            (Some(folder_id), status, None)
         } else {
             (
                 None,
@@ -1133,12 +1158,24 @@ mod tests {
         );
         assert_eq!(
             surfaces.drive_status,
-            SurfaceStatus::Created,
-            "adopting an untracked external folder is this call's own work, \
-             so it is reported the same as a fresh create"
+            SurfaceStatus::Adopted,
+            "adopting an untracked external folder is reported as its own outcome, \
+             distinct from a fresh create, so `project setup` never claims to \
+             have made a folder it only found"
         );
         let folders = drive.list_folders().await.expect("list");
         assert_eq!(folders.len(), 1);
+
+        // Adoption records the pre-existing folder on the Project row, so a
+        // later reconcile takes the "present" branch and never touches Drive.
+        let reloaded = projects::find_by_id(&surreal, project.id)
+            .await
+            .expect("load")
+            .expect("exists");
+        assert_eq!(
+            reloaded.drive_folder_id.as_deref(),
+            Some(already.id.as_str())
+        );
     }
 
     #[tokio::test]
