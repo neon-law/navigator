@@ -169,7 +169,7 @@ async fn build_fixture() -> Fixture {
         &surreal,
         &store::persons::NewPerson::with_role(
             "Lawyer",
-            &format!("lawyer-{run}@example.com"),
+            format!("lawyer-{run}@example.com"),
             Role::Lawyer,
         ),
     )
@@ -185,7 +185,7 @@ async fn build_fixture() -> Fixture {
         &surreal,
         &store::persons::NewPerson::with_role(
             "Client",
-            &format!("client-{run}@example.com"),
+            format!("client-{run}@example.com"),
             Role::Client,
         ),
     )
@@ -198,7 +198,7 @@ async fn build_fixture() -> Fixture {
         &surreal,
         &store::persons::NewPerson::with_role(
             "Outsider",
-            &format!("outsider-{run}@example.com"),
+            format!("outsider-{run}@example.com"),
             Role::Lawyer,
         ),
     )
@@ -208,7 +208,7 @@ async fn build_fixture() -> Fixture {
         &surreal,
         &store::persons::NewPerson::with_role(
             "Clerk",
-            &format!("clerk-{run}@example.com"),
+            format!("clerk-{run}@example.com"),
             Role::Clerk,
         ),
     )
