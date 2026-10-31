@@ -119,7 +119,7 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "claim_facts", // the small-claims notice's statement of claim, in the plaintiff's own words
     "claim_other_description", // the small-claims notice's Other-claim-type explanation, in the plaintiff's own words
     "birthplace_city", // the NV name petition's separate city-of-birth field; no city lookup exists
-    "felony_details", // NC-110/NV petition: narrative about a past felony conviction, if any
+    "felony_details",  // NC-110/NV petition: narrative about a past felony conviction, if any
     "incident_date", // the DV application's most-recent-incident date, which intake may answer "ongoing" — the lawyer confirms the field
     "incident_location", // where the most recent DV incident happened
     "what_happened", // the DV application's own-words incident narrative
