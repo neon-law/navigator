@@ -127,3 +127,59 @@ pub async fn get_matter_tasks() -> Result<Vec<TaskRow>, ServerFnError> {
             .collect();
     Ok(task_rows(&tasks, &names))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TaskRow;
+    use std::collections::HashMap;
+    use store::tasks::ProjectTask;
+    use uuid::Uuid;
+
+    fn a_task(state: store::tasks::TaskState, assignee_id: Option<Uuid>) -> ProjectTask {
+        ProjectTask {
+            id: Uuid::nil(),
+            project_id: Uuid::nil(),
+            title: "Serve the request for production".to_string(),
+            body: None,
+            state,
+            assignee_id,
+            due_on: Some(
+                chrono::NaiveDate::from_ymd_opt(2026, 11, 9).expect("invariant: fixed date"),
+            ),
+            inserted_at: Default::default(),
+            updated_at: Default::default(),
+        }
+    }
+
+    #[test]
+    fn rows_carry_the_stored_state_word_and_resolved_assignee_name() {
+        let assignee = Uuid::max();
+        let tasks = [
+            a_task(store::tasks::TaskState::Todo, Some(assignee)),
+            a_task(store::tasks::TaskState::Done, None),
+        ];
+        let names = HashMap::from([(assignee, "A. Rivera".to_string())]);
+
+        let rows = super::task_rows(&tasks, &names);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].state, "todo");
+        assert_eq!(rows[0].assignee.as_deref(), Some("A. Rivera"));
+        assert_eq!(rows[0].due_on.as_deref(), Some("2026-11-09"));
+        assert_eq!(rows[1].state, "done");
+        assert_eq!(rows[1].assignee, None);
+    }
+
+    #[test]
+    fn a_row_whose_assignee_is_not_in_the_directory_carries_no_name() {
+        let tasks = [a_task(
+            store::tasks::TaskState::InProgress,
+            Some(Uuid::nil()),
+        )];
+
+        let rows: Vec<TaskRow> = super::task_rows(&tasks, &HashMap::new());
+
+        assert_eq!(rows[0].state, "in_progress");
+        assert_eq!(rows[0].assignee, None);
+    }
+}
