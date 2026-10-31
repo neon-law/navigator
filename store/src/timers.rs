@@ -157,7 +157,11 @@ pub async fn stop_timer(
 
 /// Discard the Timer without recording anything. Deliberate, owner-only, and
 /// transactional — the row is simply gone.
-pub async fn discard_timer(pg: &PostgresDb, timer_id: Uuid, actor_id: Uuid) -> Result<(), TimerError> {
+pub async fn discard_timer(
+    pg: &PostgresDb,
+    timer_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), TimerError> {
     let mut tx = pg.0.begin().await?;
     let timer = fetch_for_update(&mut tx, timer_id).await?;
     if timer.person_id != actor_id {
@@ -189,15 +193,13 @@ async fn fetch_for_update(
     tx: &mut Transaction<'_, sqlx::Postgres>,
     id: Uuid,
 ) -> Result<Timer, TimerError> {
-    sqlx::query(
-        "SELECT id,person_id,project_id,started_at,note FROM timer WHERE id=$1 FOR UPDATE",
-    )
-    .bind(id)
-    .fetch_optional(&mut **tx)
-    .await?
-    .as_ref()
-    .map(from_row)
-    .ok_or(TimerError::NotFound)
+    sqlx::query("SELECT id,person_id,project_id,started_at,note FROM timer WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .as_ref()
+        .map(from_row)
+        .ok_or(TimerError::NotFound)
 }
 
 fn from_row(row: &sqlx::postgres::PgRow) -> Timer {
@@ -221,20 +223,30 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let at = |secs: i64| start + chrono::Duration::seconds(secs);
-        assert_eq!(elapsed_minutes(start, at(0)), 1, "a stop shorter than a minute still records a minute");
+        assert_eq!(
+            elapsed_minutes(start, at(0)),
+            1,
+            "a stop shorter than a minute still records a minute"
+        );
         assert_eq!(elapsed_minutes(start, at(59)), 1);
         assert_eq!(elapsed_minutes(start, at(60)), 1);
         assert_eq!(elapsed_minutes(start, at(61)), 1);
         assert_eq!(elapsed_minutes(start, at(125)), 2, "whole minutes, floored");
-        assert_eq!(elapsed_minutes(at(30), start), 1, "clock skew cannot go negative");
+        assert_eq!(
+            elapsed_minutes(at(30), start),
+            1,
+            "clock skew cannot go negative"
+        );
     }
 
     // The remaining assertions need a live PostgreSQL: the firm-wide
     // single-open-Timer invariant is a database constraint, and the
     // stop-must-be-atomic contract spans two tables.
     mod database {
-        use super::super::{discard_timer, running_for_person, start_timer, stop_timer, TimerError};
         use super::super::super::time_entries::{list_for_project, NewTimeEntry, TimeEntrySource};
+        use super::super::{
+            discard_timer, running_for_person, start_timer, stop_timer, TimerError,
+        };
         use crate::postgres::PostgresDb;
         use crate::postgres_mirror::tests::{connect, fresh_schema};
         use chrono::Utc;
@@ -309,7 +321,11 @@ mod tests {
             .execute(pg.pool())
             .await
             .unwrap();
-            Seed { project_id, attorney, outsider }
+            Seed {
+                project_id,
+                attorney,
+                outsider,
+            }
         }
 
         async fn seed_participant(pg: &PostgresDb, project_id: Uuid, who: Uuid) {
@@ -342,10 +358,19 @@ mod tests {
             };
             let pg = connect(&options, &database).await;
             let seed = seed(&pg).await;
-            let started = start_timer(&pg, seed.attorney, seed.project_id, Some("  drafting  ".into()))
-                .await
-                .unwrap();
-            assert_eq!(started.note.as_deref(), Some("drafting"), "the note is trimmed");
+            let started = start_timer(
+                &pg,
+                seed.attorney,
+                seed.project_id,
+                Some("  drafting  ".into()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                started.note.as_deref(),
+                Some("drafting"),
+                "the note is trimmed"
+            );
             // A second timer, even on another matter of the firm, is refused.
             assert!(
                 matches!(
@@ -356,7 +381,9 @@ mod tests {
             );
             // A different attorney may run their own timer on the same matter.
             seed_participant(&pg, seed.project_id, seed.outsider).await;
-            assert!(start_timer(&pg, seed.outsider, seed.project_id, None).await.is_ok());
+            assert!(start_timer(&pg, seed.outsider, seed.project_id, None)
+                .await
+                .is_ok());
         }
 
         #[tokio::test]
@@ -379,17 +406,39 @@ mod tests {
             };
             let pg = connect(&options, &database).await;
             let seed = seed(&pg).await;
-            let started = start_timer(&pg, seed.attorney, seed.project_id, None).await.unwrap();
-            let captured = stop_timer(&pg, started.id, seed.attorney, entry_input(seed.attorney, Utc::now().date_naive()))
+            let started = start_timer(&pg, seed.attorney, seed.project_id, None)
                 .await
                 .unwrap();
+            let captured = stop_timer(
+                &pg,
+                started.id,
+                seed.attorney,
+                entry_input(seed.attorney, Utc::now().date_naive()),
+            )
+            .await
+            .unwrap();
             assert_eq!(captured.source, TimeEntrySource::Timer);
             assert_eq!(captured.minutes, 1, "a sub-minute stop records one minute");
-            assert_eq!(captured.rate_cents_per_hour, 25_000, "the snapshot is the caller's resolution");
-            assert_eq!(captured.performed_on, started.started_at.date_naive(), "performed_on follows the start");
-            assert!(running_for_person(&pg, seed.attorney).await.unwrap().is_none(), "the timer is gone");
+            assert_eq!(
+                captured.rate_cents_per_hour, 25_000,
+                "the snapshot is the caller's resolution"
+            );
+            assert_eq!(
+                captured.performed_on,
+                started.started_at.date_naive(),
+                "performed_on follows the start"
+            );
+            assert!(
+                running_for_person(&pg, seed.attorney)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "the timer is gone"
+            );
             // One audit event: the capture is an ordinary Time Entry creation.
-            let events = crate::time_entries::list_events(&pg, captured.id).await.unwrap();
+            let events = crate::time_entries::list_events(&pg, captured.id)
+                .await
+                .unwrap();
             assert_eq!(events.len(), 1);
         }
 
@@ -401,16 +450,27 @@ mod tests {
             let pg = connect(&options, &database).await;
             let seed = seed(&pg).await;
             seed_participant(&pg, seed.project_id, seed.outsider).await;
-            let started = start_timer(&pg, seed.attorney, seed.project_id, None).await.unwrap();
+            let started = start_timer(&pg, seed.attorney, seed.project_id, None)
+                .await
+                .unwrap();
             assert!(matches!(
-                stop_timer(&pg, started.id, seed.outsider, entry_input(seed.attorney, Utc::now().date_naive())).await,
+                stop_timer(
+                    &pg,
+                    started.id,
+                    seed.outsider,
+                    entry_input(seed.attorney, Utc::now().date_naive())
+                )
+                .await,
                 Err(TimerError::NotOwner)
             ));
             assert!(matches!(
                 discard_timer(&pg, started.id, seed.outsider).await,
                 Err(TimerError::NotOwner)
             ));
-            assert!(running_for_person(&pg, seed.attorney).await.unwrap().is_some());
+            assert!(running_for_person(&pg, seed.attorney)
+                .await
+                .unwrap()
+                .is_some());
         }
 
         #[tokio::test]
@@ -420,11 +480,19 @@ mod tests {
             };
             let pg = connect(&options, &database).await;
             let seed = seed(&pg).await;
-            let started = start_timer(&pg, seed.attorney, seed.project_id, None).await.unwrap();
+            let started = start_timer(&pg, seed.attorney, seed.project_id, None)
+                .await
+                .unwrap();
             discard_timer(&pg, started.id, seed.attorney).await.unwrap();
-            assert!(running_for_person(&pg, seed.attorney).await.unwrap().is_none());
+            assert!(running_for_person(&pg, seed.attorney)
+                .await
+                .unwrap()
+                .is_none());
             assert!(
-                list_for_project(&pg, seed.project_id).await.unwrap().is_empty(),
+                list_for_project(&pg, seed.project_id)
+                    .await
+                    .unwrap()
+                    .is_empty(),
                 "a discard never bills"
             );
         }
@@ -447,13 +515,22 @@ mod tests {
             .unwrap()
             .get(0);
             assert!(matches!(
-                stop_timer(&pg, stale, seed.attorney, entry_input(seed.attorney, Utc::now().date_naive())).await,
+                stop_timer(
+                    &pg,
+                    stale,
+                    seed.attorney,
+                    entry_input(seed.attorney, Utc::now().date_naive())
+                )
+                .await,
                 Err(TimerError::Invalid(
                     "timer ran longer than a single day; discard it or log the time by hand",
                 ))
             ));
             // The stale timer stays put until its attorney decides.
-            assert!(running_for_person(&pg, seed.attorney).await.unwrap().is_some());
+            assert!(running_for_person(&pg, seed.attorney)
+                .await
+                .unwrap()
+                .is_some());
         }
     }
 }

@@ -165,7 +165,10 @@ pub async fn set_flat_fee(
 }
 
 /// The matter's current flat fee, if one is agreed.
-pub async fn flat_fee_cents(pg: &PostgresDb, project_id: Uuid) -> Result<Option<i64>, FeeStructureError> {
+pub async fn flat_fee_cents(
+    pg: &PostgresDb,
+    project_id: Uuid,
+) -> Result<Option<i64>, FeeStructureError> {
     sqlx::query("SELECT fee_cents FROM matter_flat_fee WHERE project_id=$1")
         .bind(project_id)
         .fetch_optional(&pg.0)
@@ -197,8 +200,10 @@ mod tests {
     // The remaining assertions need a live PostgreSQL: resolution order,
     // effective dating, and the update-rejecting trigger are database rules.
     mod database {
-        use super::super::{flat_fee_cents, resolve_hourly_rate_cents, set_flat_fee, set_hourly_rate,
-            FeeStructureError, NewAttorneyRate};
+        use super::super::{
+            flat_fee_cents, resolve_hourly_rate_cents, set_flat_fee, set_hourly_rate,
+            FeeStructureError, NewAttorneyRate,
+        };
         use crate::postgres::PostgresDb;
         use crate::postgres_mirror::tests::{connect, fresh_schema};
         use crate::time_entries::{create, NewTimeEntry, TimeEntrySource};
@@ -265,10 +270,18 @@ mod tests {
             .execute(pg.pool())
             .await
             .unwrap();
-            Seed { project_id, attorney }
+            Seed {
+                project_id,
+                attorney,
+            }
         }
 
-        fn rate(attorney: Uuid, project_id: Option<Uuid>, cents: i32, on: chrono::NaiveDate) -> NewAttorneyRate {
+        fn rate(
+            attorney: Uuid,
+            project_id: Option<Uuid>,
+            cents: i32,
+            on: chrono::NaiveDate,
+        ) -> NewAttorneyRate {
             NewAttorneyRate {
                 person_id: attorney,
                 project_id,
@@ -287,13 +300,19 @@ mod tests {
             let on = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
             // No rate at all yet.
             assert_eq!(
-                resolve_hourly_rate_cents(&pg, seed.attorney, seed.project_id, on).await.unwrap(),
+                resolve_hourly_rate_cents(&pg, seed.attorney, seed.project_id, on)
+                    .await
+                    .unwrap(),
                 None
             );
             // Firm default appears.
-            set_hourly_rate(&pg, rate(seed.attorney, None, 25_000, on)).await.unwrap();
+            set_hourly_rate(&pg, rate(seed.attorney, None, 25_000, on))
+                .await
+                .unwrap();
             assert_eq!(
-                resolve_hourly_rate_cents(&pg, seed.attorney, seed.project_id, on).await.unwrap(),
+                resolve_hourly_rate_cents(&pg, seed.attorney, seed.project_id, on)
+                    .await
+                    .unwrap(),
                 Some(25_000)
             );
             // The matter override beats the firm default.
@@ -301,12 +320,16 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(
-                resolve_hourly_rate_cents(&pg, seed.attorney, seed.project_id, on).await.unwrap(),
+                resolve_hourly_rate_cents(&pg, seed.attorney, seed.project_id, on)
+                    .await
+                    .unwrap(),
                 Some(30_000)
             );
             // The default still governs the attorney's other matters.
             assert_eq!(
-                resolve_hourly_rate_cents(&pg, seed.attorney, Uuid::new_v4(), on).await.unwrap(),
+                resolve_hourly_rate_cents(&pg, seed.attorney, Uuid::new_v4(), on)
+                    .await
+                    .unwrap(),
                 Some(25_000)
             );
         }
@@ -321,16 +344,24 @@ mod tests {
             let jan = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
             let mar = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
             let feb = chrono::NaiveDate::from_ymd_opt(2026, 2, 15).unwrap();
-            set_hourly_rate(&pg, rate(seed.attorney, None, 20_000, jan)).await.unwrap();
+            set_hourly_rate(&pg, rate(seed.attorney, None, 20_000, jan))
+                .await
+                .unwrap();
             // A future raise is on file but must not govern today.
-            set_hourly_rate(&pg, rate(seed.attorney, None, 40_000, mar)).await.unwrap();
+            set_hourly_rate(&pg, rate(seed.attorney, None, 40_000, mar))
+                .await
+                .unwrap();
             assert_eq!(
-                resolve_hourly_rate_cents(&pg, seed.attorney, seed.project_id, feb).await.unwrap(),
+                resolve_hourly_rate_cents(&pg, seed.attorney, seed.project_id, feb)
+                    .await
+                    .unwrap(),
                 Some(20_000),
                 "a future rate never prices present work"
             );
             assert_eq!(
-                resolve_hourly_rate_cents(&pg, seed.attorney, seed.project_id, mar).await.unwrap(),
+                resolve_hourly_rate_cents(&pg, seed.attorney, seed.project_id, mar)
+                    .await
+                    .unwrap(),
                 Some(40_000)
             );
         }
@@ -343,7 +374,9 @@ mod tests {
             let pg = connect(&options, &database).await;
             let seed = seed(&pg).await;
             let on = Utc::now().date_naive();
-            set_hourly_rate(&pg, rate(seed.attorney, None, 25_000, on)).await.unwrap();
+            set_hourly_rate(&pg, rate(seed.attorney, None, 25_000, on))
+                .await
+                .unwrap();
             // The attorney logs time at the resolved rate — the snapshot.
             let participation: bool = sqlx::query(
                 "SELECT EXISTS(SELECT 1 FROM person_project_role WHERE person_id=$1 AND project_id=$2)",
@@ -365,10 +398,15 @@ mod tests {
                     minutes: 60,
                     description: "Deposition preparation".into(),
                     billable: true,
-                    rate_cents_per_hour: resolve_hourly_rate_cents(&pg, seed.attorney, seed.project_id, on)
-                        .await
-                        .unwrap()
-                        .expect("the firm default resolves"),
+                    rate_cents_per_hour: resolve_hourly_rate_cents(
+                        &pg,
+                        seed.attorney,
+                        seed.project_id,
+                        on,
+                    )
+                    .await
+                    .unwrap()
+                    .expect("the firm default resolves"),
                     source: TimeEntrySource::Manual,
                 },
             )
@@ -376,10 +414,15 @@ mod tests {
             .unwrap();
             assert_eq!(entry.rate_cents_per_hour, 25_000);
             // The rate rises for future work — captured work is untouched.
-            set_hourly_rate(&pg, rate(seed.attorney, None, 90_000, on + Duration::days(1)))
+            set_hourly_rate(
+                &pg,
+                rate(seed.attorney, None, 90_000, on + Duration::days(1)),
+            )
+            .await
+            .unwrap();
+            let reread = crate::time_entries::find_by_id(&pg, entry.id)
                 .await
                 .unwrap();
-            let reread = crate::time_entries::find_by_id(&pg, entry.id).await.unwrap();
             assert_eq!(
                 reread.rate_cents_per_hour, 25_000,
                 "later rate edits never reprice captured work"
@@ -395,7 +438,10 @@ mod tests {
                 .bind(existing)
                 .execute(pg.pool())
                 .await;
-            assert!(refused.is_err(), "rate rows are effective-dated, never edited");
+            assert!(
+                refused.is_err(),
+                "rate rows are effective-dated, never edited"
+            );
         }
 
         #[tokio::test]
@@ -406,8 +452,14 @@ mod tests {
             let pg = connect(&options, &database).await;
             let seed = seed(&pg).await;
             assert_eq!(flat_fee_cents(&pg, seed.project_id).await.unwrap(), None);
-            assert_eq!(set_flat_fee(&pg, seed.project_id, 750_000).await.unwrap(), 750_000);
-            assert_eq!(set_flat_fee(&pg, seed.project_id, 800_000).await.unwrap(), 800_000);
+            assert_eq!(
+                set_flat_fee(&pg, seed.project_id, 750_000).await.unwrap(),
+                750_000
+            );
+            assert_eq!(
+                set_flat_fee(&pg, seed.project_id, 800_000).await.unwrap(),
+                800_000
+            );
             assert_eq!(
                 flat_fee_cents(&pg, seed.project_id).await.unwrap(),
                 Some(800_000),

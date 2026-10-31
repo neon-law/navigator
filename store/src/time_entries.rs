@@ -306,16 +306,15 @@ pub async fn mark_invoiced(
     if before.len() != entry_ids.len() {
         return Err(TimeEntryError::NotFound);
     }
-    let rows = before
-        .iter()
-        .map(from_row)
-        .collect::<Result<Vec<_>, _>>()?;
+    let rows = before.iter().map(from_row).collect::<Result<Vec<_>, _>>()?;
     for entry in &rows {
         match &entry.billing_status {
             // Unbilled: nothing to check yet.
             BillingStatus::Unbilled => {}
             // Already invoiced under the same invoice id: the replay no-op.
-            BillingStatus::Invoiced { xero_invoice_id: id } if id.as_str() == xero_invoice_id => {}
+            BillingStatus::Invoiced {
+                xero_invoice_id: id,
+            } if id.as_str() == xero_invoice_id => {}
             // Invoiced under a different invoice, or written off: the caller
             // is composing a different batch than the one that marked these.
             BillingStatus::Invoiced { .. } => return Err(TimeEntryError::Conflict),
@@ -484,7 +483,9 @@ async fn fetch(pg: &PostgresDb, id: Uuid) -> Result<TimeEntry, TimeEntryError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{entry_amount_cents, parse_source, validate, NewTimeEntry, TimeEntryError, TimeEntrySource};
+    use super::{
+        entry_amount_cents, parse_source, validate, NewTimeEntry, TimeEntryError, TimeEntrySource,
+    };
     use chrono::NaiveDate;
     use uuid::Uuid;
 
@@ -510,7 +511,10 @@ mod tests {
         for minutes in [0, -1, 1441] {
             let mut value = input();
             value.minutes = minutes;
-            assert!(matches!(validate(&value), Err(TimeEntryError::Invalid("minutes"))));
+            assert!(matches!(
+                validate(&value),
+                Err(TimeEntryError::Invalid("minutes"))
+            ));
         }
         let mut value = input();
         value.minutes = 1440;
@@ -537,7 +541,10 @@ mod tests {
     fn refuses_a_negative_rate() {
         let mut value = input();
         value.rate_cents_per_hour = -1;
-        assert!(matches!(validate(&value), Err(TimeEntryError::Invalid("rate"))));
+        assert!(matches!(
+            validate(&value),
+            Err(TimeEntryError::Invalid("rate"))
+        ));
         let mut value = input();
         value.rate_cents_per_hour = 0;
         assert!(validate(&value).is_ok(), "a pro bono rate is legitimate");
@@ -547,7 +554,11 @@ mod tests {
     fn line_amounts_stay_in_integer_cents() {
         assert_eq!(entry_amount_cents(60, 25_000), 25_000);
         assert_eq!(entry_amount_cents(90, 25_000), 37_500);
-        assert_eq!(entry_amount_cents(1, 25_000), 416, "the fractional cent truncates");
+        assert_eq!(
+            entry_amount_cents(1, 25_000),
+            416,
+            "the fractional cent truncates"
+        );
         assert_eq!(entry_amount_cents(30, 12_345), 6_172);
         assert_eq!(entry_amount_cents(120, 0), 0);
     }
@@ -683,7 +694,10 @@ mod tests {
                 .unwrap();
             assert_eq!(created.attorney_id, seed.attorney);
             assert_eq!(created.minutes, 90);
-            assert_eq!(created.rate_cents_per_hour, 25_000, "the rate is snapshotted");
+            assert_eq!(
+                created.rate_cents_per_hour, 25_000,
+                "the rate is snapshotted"
+            );
             assert_eq!(created.source, TimeEntrySource::Manual);
             assert_eq!(created.billing_status, BillingStatus::Unbilled);
         }
@@ -703,21 +717,32 @@ mod tests {
             let invoiced = create(&pg, seed.project_id, actor, &entry(seed.attorney, 30, true))
                 .await
                 .unwrap();
-            let non_billable = create(&pg, seed.project_id, actor, &entry(seed.attorney, 45, false))
-                .await
-                .unwrap();
+            let non_billable = create(
+                &pg,
+                seed.project_id,
+                actor,
+                &entry(seed.attorney, 45, false),
+            )
+            .await
+            .unwrap();
             let written_off = create(&pg, seed.project_id, actor, &entry(seed.attorney, 15, true))
                 .await
                 .unwrap();
 
-            mark_invoiced(&pg, &[invoiced.id], actor, "inv-1").await.unwrap();
+            mark_invoiced(&pg, &[invoiced.id], actor, "inv-1")
+                .await
+                .unwrap();
             write_off(&pg, written_off.id, actor, "Included in the flat fee")
                 .await
                 .unwrap();
             drop(non_billable);
 
             let outstanding = unbilled_billable(&pg, seed.project_id).await.unwrap();
-            assert_eq!(outstanding.len(), 1, "only the unbilled billable entry remains");
+            assert_eq!(
+                outstanding.len(),
+                1,
+                "only the unbilled billable entry remains"
+            );
             assert_eq!(outstanding[0].id, kept.id);
         }
 
@@ -817,7 +842,9 @@ mod tests {
             let created = create(&pg, seed.project_id, actor, &entry(seed.attorney, 60, true))
                 .await
                 .unwrap();
-            mark_invoiced(&pg, &[created.id], actor, "inv-9").await.unwrap();
+            mark_invoiced(&pg, &[created.id], actor, "inv-9")
+                .await
+                .unwrap();
 
             let events = list_events(&pg, created.id).await.unwrap();
             let kinds: Vec<&str> = events
@@ -829,8 +856,14 @@ mod tests {
                 events[0].before_state.is_none(),
                 "creation has no prior state"
             );
-            assert_eq!(events[0].actor_person_id, actor, "every event names its actor");
-            assert_eq!(events[1].after_state["xero_invoice_id"], serde_json::json!("inv-9"));
+            assert_eq!(
+                events[0].actor_person_id, actor,
+                "every event names its actor"
+            );
+            assert_eq!(
+                events[1].after_state["xero_invoice_id"],
+                serde_json::json!("inv-9")
+            );
 
             // The database itself refuses a mutation that carries no audit
             // context, so the event log cannot be bypassed.
