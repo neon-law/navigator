@@ -83,8 +83,10 @@ async fn cyber_injury_home_serves_its_copy_assets_and_fonts() {
 /// + Twitter Card set with absolute brand URLs, and one canonical address.
 #[tokio::test]
 async fn public_pages_emit_complete_open_graph_and_canonical_metadata() {
+    // Canonical URLs and absolute social images always point at the brand's
+    // canonical www host — a staging mirror canonicalizes to production.
+    let origin = "https://www.cyberinjurylaw.com";
     for host in HOSTS {
-        let origin = format!("https://{host}");
         for (path, title, description) in [
             (
                 "/",
