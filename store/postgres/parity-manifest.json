@@ -331,6 +331,20 @@
     },
     {
       "extra_column": null,
+      "extra_table": "stage_definition",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "stage_event",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": null,
       "missing_column": null,
       "missing_table": "assistant_turn",
@@ -1693,7 +1707,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 130,
+    "table_count": 132,
     "tables": {
       "address": {
         "columns": {
@@ -4598,6 +4612,62 @@
         "name": "social_publication",
         "references": [
           "post"
+        ]
+      },
+      "stage_definition": {
+        "columns": {
+          "case_type": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "label": "TEXT",
+          "position": "INTEGER",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "stage_definition",
+        "references": [
+          "firm"
+        ]
+      },
+      "stage_event": {
+        "columns": {
+          "actor_person_id": "UUID",
+          "from_stage_id": "UUID",
+          "id": "UUID",
+          "note": "TEXT",
+          "occurred_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "to_stage_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "actor_person_id",
+            "person"
+          ],
+          [
+            "from_stage_id",
+            "stage_definition"
+          ],
+          [
+            "project_id",
+            "project"
+          ],
+          [
+            "to_stage_id",
+            "stage_definition"
+          ]
+        ],
+        "name": "stage_event",
+        "references": [
+          "person",
+          "project",
+          "stage_definition"
         ]
       },
       "statutory_deadline": {
