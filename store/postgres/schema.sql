@@ -3085,6 +3085,12 @@ $$;
 -- The jurisdiction an onboarding Notation's Clauses bind to. NULL until recorded.
 ALTER TABLE project ADD COLUMN onboarding_jurisdiction TEXT;
 
+-- Migration: 20261031130000_add_message_process_state.sql
+-- Inbox-process state: the route the classification layer assigned and when
+-- a process run recorded it. NULL for messages that were never processed.
+ALTER TABLE message ADD COLUMN route TEXT CHECK (route IS NULL OR route IN ('nef', 'claims_agent', 'chambers', 'other'));
+ALTER TABLE message ADD COLUMN processed_at TEXT;
+
 -- Migration: 20261031130000_create_case_stage.sql
 -- Firm-authored Case Stage vocabulary and audited per-matter transitions.
 -- A Case Stage is where the matter sits in the Firm's own workflow; it is
