@@ -3019,3 +3019,9 @@ CREATE TRIGGER stage_event_immutable
     BEFORE UPDATE OR DELETE ON stage_event
     FOR EACH ROW EXECUTE FUNCTION reject_stage_event_mutation();
 
+-- Migration: 20261031140000_add_project_cost_source_reference.sql
+-- Where a Project Cost's money came from: `mercury::<transaction-id>` for
+-- Mercury-sourced costs. NULL for costs recorded before source references
+-- were required; new costs are validated at the store boundary.
+ALTER TABLE project_costs ADD COLUMN source_reference TEXT;
+

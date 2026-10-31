@@ -395,6 +395,313 @@ async fn private_evidence(
     .asset_id)
 }
 
+/// The firm-level cap a single bulk import may touch. A window past it is
+/// refused rather than partially imported; narrow the window.
+const MERCURY_IMPORT_CAP: usize = 5_000;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MercuryImportRequest {
+    account_id: Uuid,
+    /// Inclusive posted-date window start.
+    start: chrono::NaiveDate,
+    /// Inclusive posted-date window end.
+    end: chrono::NaiveDate,
+    dry_run: bool,
+}
+
+/// One transaction's disposition in a bulk import.
+#[derive(serde::Serialize)]
+struct MercuryImportOutcome {
+    transaction_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cost_id: Option<Uuid>,
+    /// `planned` (dry run), `imported`, or `skipped`.
+    disposition: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+/// Everything one import transaction needs, grouped so the per-transaction
+/// step stays readable.
+struct MercuryImportContext<'a> {
+    surreal: &'a store::surreal::SurrealDb,
+    storage: &'a std::sync::Arc<dyn cloud::StorageService>,
+    pg: &'a store::postgres::PostgresDb,
+    /// The Firm's Projects as `(code, id)`, sorted by code, so allocation is
+    /// deterministic and first-match wins on an exact duplicate.
+    projects: &'a [(String, Uuid)],
+    client: &'a cloud::mercury::Mercury,
+    actor_id: Uuid,
+    dry_run: bool,
+}
+
+/// Bulk-import one bounded posted-date window: list, allocate each
+/// transaction to at most one Firm Project by code token in its free text,
+/// and create one confirmed, receipt-backed Project cost per allocated
+/// transaction. Dry runs list and allocate but file no evidence and create
+/// no rows. Every created cost carries the transaction's Mercury source
+/// reference, so a rerun skips instead of double-charging.
+pub(super) async fn mercury_import(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Path(firm): Path<Uuid>,
+    Json(request): Json<MercuryImportRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &session, firm).await?;
+    if request.end < request.start {
+        return Ok((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error":"window_end_precedes_start"})),
+        )
+            .into_response());
+    }
+    let refused = |error: &'static str| {
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response()
+    };
+    let kms = crate::integrations::runtime_kms_from_env().await;
+    let credential = store::firm_secrets::resolve_firm_credential(
+        &state.surreal,
+        firm,
+        store::firm_secrets::IntegrationProvider::Mercury,
+        store::firm_secrets::IntegrationSecretKind::MercuryReadToken,
+        kms.as_ref(),
+    )
+    .await;
+    let Ok(credential) = credential else {
+        return Ok(refused("bank_credential_unavailable"));
+    };
+    let Ok(client) = cloud::mercury::Mercury::new(credential.expose_for_provider_call()) else {
+        return Ok(refused("bank_credential_unavailable"));
+    };
+    let window = match client
+        .transactions_window(
+            request.account_id,
+            request.start,
+            request.end,
+            MERCURY_IMPORT_CAP,
+        )
+        .await
+    {
+        Ok(window) => window,
+        Err(cloud::mercury::MercuryError::Overflow) => {
+            return Ok((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({"error":"window_exceeds_import_cap"})),
+            )
+                .into_response());
+        }
+        Err(_) => return Ok(refused("bank_evidence_unavailable")),
+    };
+    let mut projects: Vec<(String, Uuid)> = store::projects::all(&state.surreal)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+        .into_iter()
+        .filter(|project| project.firm_id == Some(firm))
+        .map(|project| (project.code, project.id))
+        .collect();
+    projects.sort();
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|_| ApiError::Db("PostgreSQL cost store unavailable".to_string()))?;
+    let context = MercuryImportContext {
+        surreal: &state.surreal,
+        storage: &state.storage,
+        pg: &pg,
+        projects: &projects,
+        client: &client,
+        actor_id: session.person_id.ok_or(ApiError::Forbidden)?,
+        dry_run: request.dry_run,
+    };
+    let mut outcomes = Vec::with_capacity(window.len());
+    for transaction in &window {
+        outcomes.push(import_one(&context, transaction).await);
+    }
+    let imported = outcomes
+        .iter()
+        .filter(|outcome| outcome.disposition == "imported")
+        .count();
+    let skipped = outcomes
+        .iter()
+        .filter(|outcome| outcome.disposition == "skipped")
+        .count();
+    Ok(Json(serde_json::json!({
+        "account_id": request.account_id,
+        "start": request.start,
+        "end": request.end,
+        "dry_run": request.dry_run,
+        "total_transactions": window.len(),
+        "imported": imported,
+        "skipped": skipped,
+        "outcomes": outcomes,
+    }))
+    .into_response())
+}
+
+/// Allocate, evidence, and create the cost for one listed transaction.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one transaction's eligibility, allocation, evidence, and creation stay together"
+)]
+async fn import_one(
+    context: &MercuryImportContext<'_>,
+    transaction: &cloud::mercury::Transaction,
+) -> MercuryImportOutcome {
+    use store::project_costs as costs;
+    let mut outcome = MercuryImportOutcome {
+        transaction_id: transaction.id,
+        project_code: None,
+        cost_id: None,
+        disposition: "skipped".into(),
+        reason: None,
+    };
+    let skip = |outcome: &mut MercuryImportOutcome, reason: &str| {
+        outcome.reason = Some(reason.to_string());
+    };
+    let Some(posted_at) = transaction.posted_at.as_deref() else {
+        skip(&mut outcome, "unposted");
+        return outcome;
+    };
+    let Some(occurred_on) =
+        chrono::NaiveDate::parse_from_str(&posted_at[..posted_at.len().min(10)], "%Y-%m-%d").ok()
+    else {
+        skip(&mut outcome, "unreadable_posted_at");
+        return outcome;
+    };
+    if transaction.status != "sent" {
+        skip(&mut outcome, "status");
+        return outcome;
+    }
+    let Ok(amount_cents) = costs::cents_from_exact_decimal(transaction.amount.get()) else {
+        skip(&mut outcome, "unreadable_amount");
+        return outcome;
+    };
+    if amount_cents <= 0 {
+        skip(&mut outcome, "non_positive_amount");
+        return outcome;
+    }
+    let text = [
+        transaction.counterparty_name.as_deref(),
+        transaction.source_description.as_deref(),
+        transaction.note.as_deref(),
+        transaction.category.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ");
+    let matching: Vec<&(String, Uuid)> = context
+        .projects
+        .iter()
+        .filter(|(code, _)| costs::project_code_token_match(code, &text))
+        .collect();
+    let (code, project_id) = match matching.len() {
+        0 => {
+            skip(&mut outcome, "unallocated");
+            return outcome;
+        }
+        1 => matching[0].clone(),
+        _ => {
+            skip(&mut outcome, "ambiguous");
+            return outcome;
+        }
+    };
+    outcome.project_code = Some(code);
+    let source_reference = costs::mercury_source_reference(transaction.id);
+    if let Some(existing) =
+        costs::find_by_source_reference(context.pg, project_id, &source_reference)
+            .await
+            .ok()
+            .flatten()
+    {
+        outcome.cost_id = Some(existing.id);
+        skip(&mut outcome, "already_imported");
+        return outcome;
+    }
+    if context.dry_run {
+        outcome.disposition = "planned".into();
+        return outcome;
+    }
+    let evidence_bytes = serde_json::to_vec_pretty(transaction).unwrap_or_default();
+    let Ok(evidence_document) = private_evidence(
+        context.surreal,
+        context.storage,
+        project_id,
+        &format!("accounting-source-{}.json", transaction.id),
+        "application/json",
+        &evidence_bytes,
+    )
+    .await
+    else {
+        skip(&mut outcome, "evidence_unavailable");
+        return outcome;
+    };
+    let mut receipt_document = None;
+    for attachment in &transaction.attachments {
+        let Ok(bytes) = context.client.receipt(attachment).await else {
+            skip(&mut outcome, "receipt_unavailable");
+            return outcome;
+        };
+        let digest = store::documents::sha256_hex(&bytes);
+        let Ok(document) = private_evidence(
+            context.surreal,
+            context.storage,
+            project_id,
+            &format!("accounting-receipt-{digest}"),
+            "application/octet-stream",
+            &bytes,
+        )
+        .await
+        else {
+            skip(&mut outcome, "receipt_unavailable");
+            return outcome;
+        };
+        receipt_document.get_or_insert(document);
+    }
+    let draft = costs::MercuryCostDraft {
+        transaction_id: transaction.id,
+        occurred_on,
+        payee: transaction
+            .counterparty_name
+            .clone()
+            .unwrap_or_else(|| "Mercury".into()),
+        description: transaction
+            .note
+            .clone()
+            .or_else(|| transaction.source_description.clone())
+            .unwrap_or_else(|| "Mercury transaction".into()),
+        amount_cents,
+    };
+    let Ok(cost_input) =
+        costs::draft_mercury_cost(&draft, receipt_document.unwrap_or(evidence_document))
+    else {
+        skip(&mut outcome, "cost_rejected");
+        return outcome;
+    };
+    match costs::create(
+        context.surreal,
+        context.pg,
+        project_id,
+        context.actor_id,
+        &cost_input,
+    )
+    .await
+    {
+        Ok(cost) => {
+            outcome.disposition = "imported".into();
+            outcome.cost_id = Some(cost.id);
+        }
+        Err(_) => skip(&mut outcome, "cost_rejected"),
+    }
+    outcome
+}
+
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum XeroKind {
@@ -990,6 +1297,252 @@ mod tests {
             assert_eq!(payment_quantity(kind, "123").unwrap(), "-123");
         }
         assert!(payment_quantity("UNKNOWN", "123").is_err());
+    }
+
+    // --- bulk Mercury import ---
+
+    /// One listed transaction, with optional JSON-field overrides; a `null`
+    /// override removes the field. `amount` stays a raw JSON numeral because
+    /// the import must read the provider's exact decimal text.
+    fn mercury_tx(id: Uuid, overrides: &serde_json::Value) -> cloud::mercury::Transaction {
+        let mut base = serde_json::json!({
+            "id": id,
+            "accountId": Uuid::now_v7(),
+            "amount": 12.34,
+            "status": "sent",
+            "postedAt": "2026-10-01T00:00:00+00:00",
+            "counterpartyName": "Acme Supplies",
+            "attachments": []
+        });
+        if let (Some(target), Some(patch)) = (base.as_object_mut(), overrides.as_object()) {
+            for (key, value) in patch {
+                if value.is_null() {
+                    target.remove(key);
+                } else {
+                    target.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        serde_json::from_value(base).unwrap()
+    }
+
+    /// The shared PostgreSQL fixture migrates the canonical schema once per
+    /// process.
+    static MIGRATED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
+    /// The Postgres handle the import writes through, with the schema
+    /// migrated once per process. `None` where no PostgreSQL fixture is
+    /// configured — CI sets `NAV_REQUIRE_POSTGRES=1` so its tests never skip.
+    async fn import_pg() -> Option<store::postgres::PostgresDb> {
+        if std::env::var("NAVIGATOR_POSTGRES_HOST").is_err() {
+            assert!(
+                std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
+                "PostgreSQL fixture required"
+            );
+            return None;
+        }
+        MIGRATED
+            .get_or_init(|| async {
+                let pg = store::postgres::PostgresDb::from_env().await.unwrap();
+                pg.migrate_embedded(None).await.unwrap();
+            })
+            .await;
+        Some(store::postgres::PostgresDb::from_env().await.unwrap())
+    }
+
+    /// A synthetic Project whose hyphenated code appears verbatim as one
+    /// token of a provider free-text field.
+    async fn import_project(surreal: &store::surreal::SurrealDb) -> (String, Uuid) {
+        let jurisdiction = store::jurisdictions::create(
+            surreal,
+            &store::jurisdictions::NewJurisdiction::new(
+                "Mercury import jurisdiction",
+                format!("MERCURY-{}", Uuid::new_v4()),
+                "state",
+            ),
+        )
+        .await
+        .unwrap();
+        let entity_type = store::entity_types::create(
+            surreal,
+            &format!("Mercury import entity type {}", Uuid::new_v4()),
+        )
+        .await
+        .unwrap();
+        let entity = store::entities::create(
+            surreal,
+            &store::entities::NewEntity {
+                name: "Mercury import matter entity".into(),
+                entity_type_id: entity_type.id,
+                jurisdiction_id: jurisdiction.id,
+                phone: None,
+                url: None,
+                xero_id: None,
+                firm_anchor_key: None,
+            },
+        )
+        .await
+        .unwrap();
+        let code = format!("mercury-import-{}", Uuid::new_v4().simple());
+        let project = store::projects::create(
+            surreal,
+            &store::projects::NewProject {
+                code: code.clone(),
+                name: "Mercury import matter".into(),
+                status: "open".into(),
+                entity_id: entity.id,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        (code, project.id)
+    }
+
+    fn import_context<'a>(
+        surreal: &'a store::surreal::SurrealDb,
+        pg: &'a store::postgres::PostgresDb,
+        storage: &'a std::sync::Arc<dyn cloud::StorageService>,
+        projects: &'a [(String, Uuid)],
+        client: &'a cloud::mercury::Mercury,
+        dry_run: bool,
+    ) -> MercuryImportContext<'a> {
+        MercuryImportContext {
+            surreal,
+            storage,
+            pg,
+            projects,
+            client,
+            actor_id: Uuid::now_v7(),
+            dry_run,
+        }
+    }
+
+    #[tokio::test]
+    async fn import_one_skips_each_ineligible_transaction_for_its_named_reason() {
+        let Some(pg) = import_pg().await else {
+            return;
+        };
+        let surreal = store::test_support::mem_surreal().await;
+        let state = crate::test_support::app_state(surreal.clone()).await;
+        let (code, project_id) = import_project(&surreal).await;
+        let (other, other_id) = import_project(&surreal).await;
+        let projects = vec![(code, project_id), (other, other_id)];
+        let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
+        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false);
+        let cases = [
+            (serde_json::json!({ "postedAt": null }), "unposted"),
+            (
+                serde_json::json!({ "postedAt": "01-02-2026" }),
+                "unreadable_posted_at",
+            ),
+            (serde_json::json!({ "status": "pending" }), "status"),
+            (serde_json::json!({ "amount": "abc" }), "unreadable_amount"),
+            (serde_json::json!({ "amount": 1.005 }), "unreadable_amount"),
+            (serde_json::json!({ "amount": 0 }), "non_positive_amount"),
+            (
+                serde_json::json!({ "counterpartyName": "Unrelated Vendor" }),
+                "unallocated",
+            ),
+            (
+                serde_json::json!({
+                    "counterpartyName": format!("{} and {}", projects[0].0, projects[1].0)
+                }),
+                "ambiguous",
+            ),
+        ];
+        for (patch, reason) in cases {
+            let outcome = import_one(&context, &mercury_tx(Uuid::now_v7(), &patch)).await;
+            assert_eq!(outcome.disposition, "skipped", "case {reason}");
+            assert_eq!(outcome.reason.as_deref(), Some(reason), "case {reason}");
+            assert_eq!(outcome.project_code, None, "case {reason}");
+            assert_eq!(outcome.cost_id, None, "case {reason}");
+        }
+    }
+
+    #[tokio::test]
+    async fn import_one_plans_a_dry_run_without_creating_a_cost() {
+        let Some(pg) = import_pg().await else {
+            return;
+        };
+        let surreal = store::test_support::mem_surreal().await;
+        let state = crate::test_support::app_state(surreal.clone()).await;
+        let (code, project_id) = import_project(&surreal).await;
+        let projects = vec![(code.clone(), project_id)];
+        let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
+        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, true);
+        let transaction = mercury_tx(
+            Uuid::now_v7(),
+            &serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
+        );
+        let outcome = import_one(&context, &transaction).await;
+        assert_eq!(outcome.disposition, "planned");
+        assert_eq!(outcome.project_code.as_deref(), Some(code.as_str()));
+        assert!(outcome.cost_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn import_one_files_evidence_creates_the_cost_and_skips_the_rerun() {
+        let Some(pg) = import_pg().await else {
+            return;
+        };
+        let surreal = store::test_support::mem_surreal().await;
+        let state = crate::test_support::app_state(surreal.clone()).await;
+        let (code, project_id) = import_project(&surreal).await;
+        let projects = vec![(code.clone(), project_id)];
+        let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
+        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false);
+        let transaction = mercury_tx(
+            Uuid::now_v7(),
+            &serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
+        );
+        let first = import_one(&context, &transaction).await;
+        assert_eq!(first.disposition, "imported");
+        assert_eq!(first.project_code.as_deref(), Some(code.as_str()));
+        let cost_id = first.cost_id.expect("an imported cost carries its id");
+        let second = import_one(&context, &transaction).await;
+        assert_eq!(second.disposition, "skipped");
+        assert_eq!(second.reason.as_deref(), Some("already_imported"));
+        assert_eq!(second.cost_id, Some(cost_id));
+        // A payee the cost store refuses still files the evidence first,
+        // then reports the rejection instead of charging the card.
+        let refused = mercury_tx(
+            Uuid::now_v7(),
+            &serde_json::json!({
+                "counterpartyName": "",
+                "note": format!("Acme Supplies {code}")
+            }),
+        );
+        let outcome = import_one(&context, &refused).await;
+        assert_eq!(outcome.disposition, "skipped");
+        assert_eq!(outcome.reason.as_deref(), Some("cost_rejected"));
+    }
+
+    #[tokio::test]
+    async fn import_one_skips_a_transaction_whose_receipt_cannot_be_fetched() {
+        let Some(pg) = import_pg().await else {
+            return;
+        };
+        let surreal = store::test_support::mem_surreal().await;
+        let state = crate::test_support::app_state(surreal.clone()).await;
+        let (code, project_id) = import_project(&surreal).await;
+        let projects = vec![(code.clone(), project_id)];
+        let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
+        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false);
+        let transaction = mercury_tx(
+            Uuid::now_v7(),
+            &serde_json::json!({
+                "counterpartyName": format!("Acme Supplies {code}"),
+                "attachments": [{
+                    "fileName": "receipt.pdf",
+                    "attachmentType": "receipt",
+                    "url": "http://127.0.0.1/private"
+                }]
+            }),
+        );
+        let outcome = import_one(&context, &transaction).await;
+        assert_eq!(outcome.disposition, "skipped");
+        assert_eq!(outcome.reason.as_deref(), Some("receipt_unavailable"));
     }
 }
 

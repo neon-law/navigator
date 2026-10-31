@@ -1201,6 +1201,12 @@ mod tests {
                 "20261031130000_create_case_stage.sql",
                 include_str!("../postgres/migrations/20261031130000_create_case_stage.sql"),
             ),
+            (
+                "20261031140000_add_project_cost_source_reference.sql",
+                include_str!(
+                    "../postgres/migrations/20261031140000_add_project_cost_source_reference.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

@@ -4013,6 +4013,7 @@
           "payee": "TEXT",
           "project_id": "UUID",
           "receipt_document_id": "UUID",
+          "source_reference": "TEXT",
           "updated_at": "TIMESTAMPTZ",
           "xero_invoice_id": "TEXT"
         },
