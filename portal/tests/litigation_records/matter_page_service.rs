@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 struct Fixture {
     app: axum::Router,
+    surreal: store::surreal::SurrealDb,
     code: String,
     project_id: Uuid,
     lawyer_cookie: String,
@@ -75,6 +76,7 @@ async fn fixture() -> Fixture {
     state.policy = portal::policy::PolicyClient::embedded().expect("embedded policy compiles");
     Fixture {
         app: portal::router(state),
+        surreal,
         code: project.code,
         project_id: project.id,
         lawyer_cookie,
@@ -145,4 +147,93 @@ async fn a_lawyer_records_service_and_the_document_history_lists_it() {
         html.contains("Served by certified mail on 2026-03-05 on Example Counsel, counsel for Defendant Example Co."),
         "{html}"
     );
+}
+
+#[tokio::test]
+async fn the_correspondence_tab_lists_logged_email_and_overview_carries_the_notes() {
+    let f = fixture().await;
+
+    store::communications::log_note(
+        &f.surreal,
+        &store::communications::NewNote {
+            project_id: f.project_id,
+            author_person_id: None,
+            subject: Some("Interrogatories review".into()),
+            body: "Reviewed the answered interrogatories this morning.".into(),
+        },
+    )
+    .await
+    .unwrap();
+    store::communications::ingest(
+        &f.surreal,
+        &store::communications::IngestArgs {
+            project_id: f.project_id,
+            channel: store::communications::channel::EMAIL_INBOUND,
+            direction: store::communications::direction::INBOUND,
+            author_person_id: None,
+            counterparty: Some("client@example.com"),
+            subject: Some("Hearing date"),
+            body: "The hearing was rescheduled to the spring docket.",
+            source_ref: Some("msg-1"),
+            asset_id: None,
+            occurred_at: "2026-03-04T09:30:00Z",
+        },
+    )
+    .await
+    .unwrap();
+
+    let response = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/app/projects/{}?tab=correspondence", f.code))
+                .header("cookie", &f.lawyer_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = String::from_utf8_lossy(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .into_owned();
+    assert!(
+        html.contains("The hearing was rescheduled to the spring docket."),
+        "{html}"
+    );
+    assert!(html.contains("with client@example.com"), "{html}");
+    // The firm-internal note stays on Overview, never on this tab.
+    assert!(
+        !html.contains("Reviewed the answered interrogatories"),
+        "{html}"
+    );
+
+    let response = f
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/app/projects/{}", f.code))
+                .header("cookie", &f.lawyer_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = String::from_utf8_lossy(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .into_owned();
+    assert!(
+        html.contains("Reviewed the answered interrogatories this morning."),
+        "{html}"
+    );
+    assert!(html.contains("Interrogatories review"), "{html}");
 }
