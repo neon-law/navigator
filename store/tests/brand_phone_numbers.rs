@@ -38,11 +38,14 @@ async fn postgres() -> Option<PostgresDb> {
 }
 
 fn registration(number: &str, brand: &str, kinds: ChannelKinds) -> NewBrandPhoneNumber {
+    // Deterministic credentials, as the store's own unit tests use: the
+    // idempotent-put test relies on two calls producing IDENTICAL content,
+    // which per-call `now_v7()` values never are.
     NewBrandPhoneNumber {
         number_e164: number.into(),
         brand_key: brand.into(),
-        twilio_account_sid: format!("AC{}", Uuid::now_v7().simple()),
-        auth_token_secret_ref: Uuid::now_v7(),
+        twilio_account_sid: "AC7f5ab4c8de0123456789abcdef01234".into(),
+        auth_token_secret_ref: Uuid::from_u128(1),
         channel_kinds: kinds,
     }
 }

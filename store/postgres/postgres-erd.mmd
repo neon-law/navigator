@@ -102,6 +102,17 @@ erDiagram
         string role
         datetime updated_at
     }
+    billed_call {
+        string call_sid
+        datetime call_started_at
+        uuid conversation_id
+        int duration_seconds
+        uuid firm_id
+        datetime inserted_at
+        uuid project_id
+        int tenths
+        datetime updated_at
+    }
     blog_video {
         string brand_key
         int height
