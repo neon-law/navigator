@@ -168,13 +168,14 @@ fn triage_row(row: &TriageRowView, csrf: &str) -> Element {
         .map(|confidence| format!(" · confidence {confidence}"))
         .unwrap_or_default();
     let confirm = row.confirm_action.clone().map(|action| {
+        let project = row.suggested_project.clone().unwrap_or_default();
         rsx! {
             FormCard {
                 title: "Confirm the suggestion".to_string(),
                 action,
                 submit_label: format!("Assign to {project}"),
-                heading: Heading::H3,
-                csrf_token: Some(csrf.clone()),
+                heading: Heading::Hidden,
+                csrf_token: Some(csrf.to_string()),
                 fields: vec![],
             }
         }
@@ -210,7 +211,7 @@ fn triage_row(row: &TriageRowView, csrf: &str) -> Element {
                 title: "Assign a different project".to_string(),
                 action: row.override_action.clone(),
                 submit_label: "Override".to_string(),
-                heading: Heading::H3,
+                heading: Heading::Hidden,
                 csrf_token: Some(csrf.to_string()),
                 fields: vec![
                     Field::select("Project", "project_id", override_choices, None).required(),
@@ -221,15 +222,15 @@ fn triage_row(row: &TriageRowView, csrf: &str) -> Element {
                 title: "Settle the privilege label".to_string(),
                 action: row.resolve_action.clone(),
                 submit_label: "Resolve".to_string(),
-                heading: Heading::H3,
+                heading: Heading::Hidden,
                 csrf_token: Some(csrf.to_string()),
                 fields: vec![
                     Field::select(
                         "Privilege",
                         "privilege",
                         vec![
-                            Choice::new("privileged".into(), "Privileged".into()),
-                            Choice::new("not_privileged".into(), "Not privileged".into()),
+                            Choice::new("privileged", "Privileged"),
+                            Choice::new("not_privileged", "Not privileged"),
                         ],
                         None,
                     )
@@ -241,7 +242,7 @@ fn triage_row(row: &TriageRowView, csrf: &str) -> Element {
                 title: "Re-run the rule layer".to_string(),
                 action: row.rerun_action.clone(),
                 submit_label: "Re-run triage".to_string(),
-                heading: Heading::H3,
+                heading: Heading::Hidden,
                 csrf_token: Some(csrf.to_string()),
                 fields: vec![],
             }
