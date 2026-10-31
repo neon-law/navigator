@@ -903,17 +903,16 @@ fn images_that_copy_cli_also_copy_the_root_files_it_embeds() {
 /// exactly this in `Containerfile.trigger` and `Containerfile.runner`, while
 /// no PR check builds an image and so stayed green.
 ///
-/// Every Containerfile stages the whole workspace (`COPY cli cli` included)
-/// to satisfy Cargo's manifest resolution, so `copies_crate(body, "cli")`
-/// alone cannot tell which images actually *compile* `cli`'s sources versus
-/// which merely need its `Cargo.toml` present as a workspace member. The
-/// `k8s`/`examples` COPY pair is the already-established, correctly-scoped
-/// signal for that: `cli` embeds both with `include_dir!` (see the comment
-/// above `COPY k8s k8s` in `Containerfile.trigger`), and only the two images
-/// that build the `cli` binary — `Containerfile.trigger` and
-/// `Containerfile.runner` — stage them.
+/// Every Containerfile stages the whole workspace to satisfy Cargo's manifest
+/// resolution, so a `COPY` line cannot tell which images actually *compile*
+/// `project-scaffold`. The lockfile can: any image whose `cargo build -p
+/// <crate>` reaches `project-scaffold` must stage `.agents`. Once `store`
+/// took that dependency (#239), `neon` and `workflows-service` started
+/// compiling it too, and deploy run 41198940005 failed on them. Images that
+/// parameterise their target (`-p ${CRATE}` in `Containerfile.trigger`) are
+/// still caught by the `k8s`/`examples` pair `cli` embeds with `include_dir!`.
 #[test]
-fn every_containerfile_that_builds_cli_also_copies_dot_agents() {
+fn every_containerfile_that_builds_project_scaffold_also_copies_dot_agents() {
     let scaffold_lib_rs =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../project-scaffold/src/lib.rs");
     let scaffold_body = fs::read_to_string(&scaffold_lib_rs)
@@ -922,6 +921,14 @@ fn every_containerfile_that_builds_cli_also_copies_dot_agents() {
         scaffold_body.contains("include_str!(\"../../.agents/skills/council/SKILL.md\")"),
         "{} no longer embeds the council skill; if that is deliberate, drop this guard",
         scaffold_lib_rs.display()
+    );
+
+    let graph = lockfile_dependency_graph();
+    let dependents = crates_depending_on(&graph, "project-scaffold");
+    assert!(
+        dependents.contains("store"),
+        "Cargo.lock no longer has `store` depending on `project-scaffold`; \
+         re-check which images this guard should cover"
     );
 
     let dir = images_dir();
@@ -941,7 +948,11 @@ fn every_containerfile_that_builds_cli_also_copies_dot_agents() {
         }
         let body =
             fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        if copies_crate(&body, "k8s") && copies_crate(&body, "examples") {
+        let builds_scaffold = regex_lite_build_targets(&body)
+            .iter()
+            .any(|target| target == "project-scaffold" || dependents.contains(target));
+        let builds_cli = copies_crate(&body, "k8s") && copies_crate(&body, "examples");
+        if builds_scaffold || builds_cli {
             checked += 1;
             if !copies_crate(&body, ".agents") {
                 offenders.push(name);
@@ -951,13 +962,13 @@ fn every_containerfile_that_builds_cli_also_copies_dot_agents() {
 
     assert!(
         checked > 0,
-        "no Containerfiles copy both `k8s` and `examples` — this guard has lost its subject"
+        "no Containerfile builds a crate reaching `project-scaffold` — this guard has lost its subject"
     );
     assert!(
         offenders.is_empty(),
-        "these Containerfiles build `cli` but not `.agents`, so the build fails on its \
-         include_str! of `.agents/skills/*/SKILL.md`; add `COPY .agents .agents`: \
-         {offenders:?}"
+        "these Containerfiles build a crate that compiles `project-scaffold` but do not \
+         stage `.agents`, so the build fails on its include_str! of \
+         `.agents/skills/*/SKILL.md`; add `COPY .agents .agents`: {offenders:?}"
     );
 }
 
