@@ -625,6 +625,9 @@ pub fn font_head(key: views::brand::BrandKey) -> &'static str {
         views::brand::BrandKey::Aegis | views::brand::BrandKey::CyberInjuryLaw => {
             &CYBER_INJURY_HEAD
         }
+        // IEP is held out of `BrandKey::LIVE`: it serves no public pages, so
+        // it ships no font bytes until its host launches.
+        views::brand::BrandKey::Iep => "",
     }
 }
 

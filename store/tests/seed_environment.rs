@@ -55,7 +55,11 @@ async fn persistent_boot_registers_vesta_idempotently() {
         }
         brand_id = Some(vesta.id);
         let firms = store::firms::all(&surreal).await.unwrap();
-        assert!(store::firms::brand_keys_for_firm(&surreal, firms[0].id)
+        let practice = firms
+            .iter()
+            .find(|firm| firm.name == store::seed::FIRM_ENTITY_NAME)
+            .expect("the practice firm is seeded");
+        assert!(store::firms::brand_keys_for_firm(&surreal, practice.id)
             .await
             .unwrap()
             .contains(&"vesta".to_string()));
@@ -132,10 +136,13 @@ async fn a_seed_without_sample_matters_has_no_disposable_projects_or_people() {
     );
 
     let firms = store::firms::all(&surreal).await.unwrap();
-    assert_eq!(firms.len(), 1);
-    assert_eq!(firms[0].name, store::seed::FIRM_ENTITY_NAME);
-    assert!(firms[0].entity_id.is_some());
-    let brands = store::firms::brand_keys_for_firm(&surreal, firms[0].id)
+    assert_eq!(firms.len(), store::seed::FIRM_ENTITY_NAMES.len());
+    let practice = firms
+        .iter()
+        .find(|firm| firm.name == store::seed::FIRM_ENTITY_NAME)
+        .expect("the practice firm is seeded");
+    assert!(practice.entity_id.is_some());
+    let brands = store::firms::brand_keys_for_firm(&surreal, practice.id)
         .await
         .unwrap();
     assert_eq!(
@@ -740,8 +747,12 @@ async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
     }
 
     let firms = store::firms::all(&surreal).await.unwrap();
-    assert_eq!(firms.len(), 1);
-    let brands = store::firms::brand_keys_for_firm(&surreal, firms[0].id)
+    assert_eq!(firms.len(), store::seed::FIRM_ENTITY_NAMES.len());
+    let practice = firms
+        .iter()
+        .find(|firm| firm.name == store::seed::FIRM_ENTITY_NAME)
+        .expect("the practice firm is seeded");
+    let brands = store::firms::brand_keys_for_firm(&surreal, practice.id)
         .await
         .unwrap();
     assert_eq!(
@@ -751,6 +762,14 @@ async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
             .map(|key| (*key).to_string())
             .collect::<Vec<_>>(),
     );
+    let lex = firms
+        .iter()
+        .find(|firm| firm.name == store::seed::LEX_FIRM_NAME)
+        .expect("the Lex firm is seeded");
+    let lex_brands = store::firms::brand_keys_for_firm(&surreal, lex.id)
+        .await
+        .unwrap();
+    assert_eq!(lex_brands, vec!["iep".to_string()]);
 }
 
 #[tokio::test]
@@ -770,8 +789,11 @@ async fn the_dev_boot_seeds_the_practice_once() {
     }
 
     let firms = store::firms::all(&surreal).await.unwrap();
-    assert_eq!(firms.len(), 1);
-    let firm = &firms[0];
+    assert_eq!(firms.len(), store::seed::FIRM_ENTITY_NAMES.len());
+    let firm = firms
+        .iter()
+        .find(|firm| firm.name == store::seed::FIRM_ENTITY_NAME)
+        .expect("the practice firm is seeded");
     assert_eq!(firm.name, store::seed::FIRM_ENTITY_NAME);
     let entity_id = firm.entity_id.expect("the seeded practice is an entity");
     let entity = store::entities::find_by_id(&surreal, entity_id)
