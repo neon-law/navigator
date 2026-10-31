@@ -70,7 +70,7 @@ async fn the_gateway_renders_on_neon_hosts_with_neon_chrome_and_the_approved_cop
         for expected in [
             "<title>Neon Law | Immigration</title>",
             r#"content="Neon Law | Immigration" property="og:title""#,
-            "Immigration help, through Abhaya.",
+            "Your next chapter, without fear.",
             "Abhaya Immigration",
             "Guieb &#38; Shook PC",
             "cannot promise",
@@ -83,6 +83,31 @@ async fn the_gateway_renders_on_neon_hosts_with_neon_chrome_and_the_approved_cop
         assert!(
             body.contains(r#"href="https://www.abhayaimmigration.com""#),
             "{host:?}: the CTA does not open the production Abhaya Immigration destination: {body}"
+        );
+    }
+}
+
+/// The gateway routes to every `/immigration` subpage: the landing's prose
+/// carries a link to each of the seven practice pages and the free-support
+/// hub — the routing job the landing exists for.
+#[tokio::test]
+async fn the_gateway_links_every_practice_page_and_the_hub() {
+    let app = app(state().await);
+    let (status, body) = get_on_host(&app, "/immigration", Some("www.neonlaw.com")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    for path in [
+        "/immigration/family-green-cards",
+        "/immigration/citizenship",
+        "/immigration/employment-visas",
+        "/immigration/consular-processing",
+        "/immigration/uscis-notices",
+        "/immigration/humanitarian-relief",
+        "/immigration/removal-defense",
+        "/immigration/free-support",
+    ] {
+        assert!(
+            body.contains(&format!(r#"href="{path}""#)),
+            "the gateway must link {path}: {body}"
         );
     }
 }

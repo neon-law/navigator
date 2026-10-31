@@ -1500,29 +1500,25 @@ pub fn nautilus(branding: &views::brand::Branding, _deployment_host: Option<&str
     content
 }
 
-/// `/immigration` — Neon's own gateway page naming Abhaya Immigration as the
-/// destination for immigration work. See [`delete_your_debt_gateway`], whose
-/// CTA-resolution shape this mirrors.
+/// `/immigration` — Neon's own gateway landing naming Abhaya Immigration as
+/// the destination for immigration work, and routing to every practice page
+/// beneath it. The landing is the same catalog machinery as the practice
+/// pages (see [`immigration_practice_page`]): its hero button and closing
+/// Cta band resolve to this deployment's Abhaya Immigration host.
 pub fn immigration_gateway(
     branding: &views::brand::Branding,
     deployment_host: Option<&str>,
 ) -> PageContent {
-    let mut content = marketing_page(load_page(branding, "gateway-immigration"), None, branding);
-    if let Some(href) = sibling_practice_href(views::brand::BrandKey::Abhaya, deployment_host) {
-        if let Some(cta) = content.hero_cta.as_mut() {
-            cta.href = href;
-        }
-    }
-    content
+    immigration_practice_page(branding, deployment_host, "gateway-immigration")
 }
 
-/// Every `/immigration/<page>` practice page: a starter catalog in the
+/// Every `/immigration` catalog page — the seven practice pages, the
+/// free-support hub, and the gateway landing itself — in the
 /// statement/steps/cta vocabulary, closing on an Abhaya Immigration CTA.
 ///
-/// A practice page carries no hero button, so what a deployment resolves is
-/// the Cta band's action `href` (see [`immigration_gateway`] for the
-/// hero-button variant): the same [`sibling_practice_href`] resolution,
-/// applied to the closing band.
+/// What a deployment resolves is [`sibling_practice_href`]: the hero button
+/// when the catalog carries one (the gateway landing does), and every Cta
+/// band's action `href`.
 fn immigration_practice_page(
     branding: &views::brand::Branding,
     deployment_host: Option<&str>,
@@ -2872,6 +2868,45 @@ mod tests {
         );
     }
 
+    /// Every word of rendered band copy — statement and step prose plus
+    /// the closing Cta — in reading order, for the copy guards.
+    fn band_copy(content: &PageContent) -> String {
+        let mut text = String::new();
+        for band in &content.bands {
+            match band {
+                RenderedBand::Statement { body, .. } => {
+                    for paragraph in body {
+                        for run in paragraph {
+                            text.push_str(&run.text);
+                            text.push(' ');
+                        }
+                    }
+                }
+                RenderedBand::Steps { items, .. } => {
+                    for step in items {
+                        text.push_str(&step.title);
+                        text.push(' ');
+                        for paragraph in &step.body {
+                            for run in paragraph {
+                                text.push_str(&run.text);
+                                text.push(' ');
+                            }
+                        }
+                    }
+                }
+                RenderedBand::Cta { heading, body, .. } => {
+                    text.push_str(heading);
+                    if let Some(body) = body {
+                        text.push(' ');
+                        text.push_str(body);
+                    }
+                }
+                _ => {}
+            }
+        }
+        text
+    }
+
     /// The `/immigration` gateway's CTA resolves per deployment, names
     /// Abhaya Immigration, never promises USCIS approval or timing, and
     /// never coins a fused "Neon Law Immigration" trade name.
@@ -2898,6 +2933,27 @@ mod tests {
             "https://staging.abhayaimmigration.com"
         );
 
+        // The landing closes on a Cta band, and it resolves to the same
+        // deployment's destination as the hero button.
+        for (host, expected) in [
+            ("www.neonlaw.com", "https://www.abhayaimmigration.com"),
+            (
+                "staging.neonlaw.com",
+                "https://staging.abhayaimmigration.com",
+            ),
+        ] {
+            let page = immigration_gateway(&views::brand::DEFAULT_BRANDING, Some(host));
+            let closing = page.bands.iter().find_map(|band| match band {
+                RenderedBand::Cta { action, .. } => action.as_ref().map(|cta| cta.href.clone()),
+                _ => None,
+            });
+            assert_eq!(
+                closing.as_deref(),
+                Some(expected),
+                "the closing CTA must resolve to {expected} on {host}"
+            );
+        }
+
         let content = immigration_gateway(&views::brand::DEFAULT_BRANDING, None);
         assert!(matches!(
             content.skin,
@@ -2907,26 +2963,35 @@ mod tests {
             content.hero_cta.as_ref().expect("hero CTA").label,
             "Visit Abhaya Immigration"
         );
-        let text = format!(
-            "{} {}",
-            content.hero_lead,
-            content
-                .bands
-                .iter()
-                .filter_map(|band| match band {
-                    RenderedBand::Statement { body, .. } => Some(
-                        body.iter()
-                            .flatten()
-                            .map(|run| run.text.clone())
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    ),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        )
-        .to_lowercase();
+        // The landing is the map of the practice: every page beneath
+        // `/immigration` is linked from its prose.
+        let linked = content
+            .bands
+            .iter()
+            .filter_map(|band| match band {
+                RenderedBand::Statement { body, .. } => Some(body),
+                _ => None,
+            })
+            .flatten()
+            .flatten()
+            .filter_map(|run| run.href.clone())
+            .collect::<Vec<_>>();
+        for path in [
+            "/immigration/family-green-cards",
+            "/immigration/citizenship",
+            "/immigration/employment-visas",
+            "/immigration/consular-processing",
+            "/immigration/uscis-notices",
+            "/immigration/humanitarian-relief",
+            "/immigration/removal-defense",
+            "/immigration/free-support",
+        ] {
+            assert!(
+                linked.iter().any(|href| href == path),
+                "the gateway must link {path}"
+            );
+        }
+        let text = format!("{} {}", content.hero_lead, band_copy(&content)).to_lowercase();
         assert!(text.contains("abhaya immigration"), "{text}");
         // "neon law immigration" may appear only inside the explicit denial
         // sentence, keeping the firms distinct.
@@ -2943,6 +3008,8 @@ mod tests {
             "fast-track",
             "expedite your case",
             "approval is certain",
+            "we win",
+            "guarantee",
         ] {
             assert!(
                 !text.contains(claim),
@@ -3010,40 +3077,7 @@ mod tests {
                 stem,
             );
 
-            let mut text = String::new();
-            for band in &page.bands {
-                match band {
-                    RenderedBand::Statement { body, .. } => {
-                        for paragraph in body {
-                            for run in paragraph {
-                                text.push_str(&run.text);
-                                text.push(' ');
-                            }
-                        }
-                    }
-                    RenderedBand::Steps { items, .. } => {
-                        for step in items {
-                            text.push_str(&step.title);
-                            text.push(' ');
-                            for paragraph in &step.body {
-                                for run in paragraph {
-                                    text.push_str(&run.text);
-                                    text.push(' ');
-                                }
-                            }
-                        }
-                    }
-                    RenderedBand::Cta { heading, body, .. } => {
-                        text.push_str(heading);
-                        if let Some(body) = body {
-                            text.push(' ');
-                            text.push_str(body);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            let text = text.to_lowercase();
+            let text = band_copy(&page).to_lowercase();
 
             assert!(
                 text.contains("abhaya immigration"),
