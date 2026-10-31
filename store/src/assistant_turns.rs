@@ -23,7 +23,9 @@
 //! seam — not a schema migration.
 
 use crate::surreal::{record_id, retry, SurrealDb};
+use std::str::FromStr;
 use strum::EnumString;
+use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 /// The SurrealDB table holding Assistant Turns.
@@ -108,7 +110,7 @@ pub enum AssistantTurnError {
 }
 
 /// The row as the engine reads and writes it.
-#[derive(surrealdb::types::SurrealValue)]
+#[derive(SurrealValue)]
 struct AssistantTurnRow {
     id: surrealdb::types::RecordId,
     person_id: surrealdb::types::RecordId,
@@ -157,12 +159,17 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<AssistantTurn>, A
 }
 
 /// Run a write under the shared retry policy — the same one policy the
-/// rest of the crate writes under ([`crate::surreal::retry`]).
-async fn writing<F>(attempt: F) -> Result<surrealdb::IndexedResults, AssistantTurnError>
+/// rest of the crate writes under ([`crate::surreal::retry`]). Only the
+/// mapping lives here; how long a lost race is re-run is the crate's
+/// one policy.
+async fn writing<F, Q>(attempt: F) -> Result<surrealdb::IndexedResults, AssistantTurnError>
 where
-    F: Fn() -> futures::future::BoxFuture<'static, Result<surrealdb::IndexedResults, surrealdb::Error>>,
+    F: FnMut() -> Q,
+    Q: std::future::IntoFuture<Output = Result<surrealdb::IndexedResults, surrealdb::Error>>,
 {
-    retry::writing(attempt).await.map_err(AssistantTurnError::Db)
+    retry::writing(attempt)
+        .await
+        .map_err(AssistantTurnError::Db)
 }
 
 /// Append one turn to a subscriber's chat and return the stored row.
@@ -172,40 +179,24 @@ where
 /// [`AssistantTurnError::Db`] when SurrealDB refuses the write, or
 /// [`AssistantTurnError::WriteReturnedNothing`] when a write that claimed
 /// success returns no usable row.
-pub async fn append(
-    db: &SurrealDb,
-    turn: NewTurn,
-) -> Result<AssistantTurn, AssistantTurnError> {
+pub async fn append(db: &SurrealDb, turn: NewTurn) -> Result<AssistantTurn, AssistantTurnError> {
     let id = Uuid::now_v7();
-    let person = record_id(PERSON_TABLE, turn.person_id);
-    let kind = turn.kind.to_string();
-    let attempt = {
-        let db = db.clone();
-        let turn = turn.clone();
-        move || {
-            let db = db.clone();
-            let person = person.clone();
-            let kind = kind.clone();
-            let record = record_id(TABLE, id);
-            Box::pin(async move {
-                db.query(&format!(
-                    "CREATE $id SET person_id = $person_id, kind = $kind, \
-                     content = $content, tool_name = $tool_name, \
-                     input_tokens = $input_tokens, output_tokens = $output_tokens \
-                     RETURN {SELECT}"
-                ))
-                .bind(("id", record))
-                .bind(("person_id", person))
-                .bind(("kind", kind))
-                .bind(("content", turn.content))
-                .bind(("tool_name", turn.tool_name))
-                .bind(("input_tokens", turn.input_tokens))
-                .bind(("output_tokens", turn.output_tokens))
-                .await
-            }) as futures::future::BoxFuture<'static, Result<surrealdb::IndexedResults, surrealdb::Error>>
-        }
-    };
-    let response = writing(attempt).await?;
+    let response = writing(|| {
+        db.query(format!(
+            "CREATE $id SET person_id = $person_id, kind = $kind, \
+             content = $content, tool_name = $tool_name, \
+             input_tokens = $input_tokens, output_tokens = $output_tokens \
+             RETURN {SELECT}"
+        ))
+        .bind(("id", record_id(TABLE, id)))
+        .bind(("person_id", record_id(PERSON_TABLE, turn.person_id)))
+        .bind(("kind", turn.kind.to_string()))
+        .bind(("content", turn.content.clone()))
+        .bind(("tool_name", turn.tool_name.clone()))
+        .bind(("input_tokens", turn.input_tokens))
+        .bind(("output_tokens", turn.output_tokens))
+    })
+    .await?;
     one(response)?.ok_or(AssistantTurnError::WriteReturnedNothing)
 }
 
@@ -247,10 +238,177 @@ const HISTORY_LIMIT: i64 = 200;
 ///
 /// [`AssistantTurnError::Db`] when SurrealDB cannot run the delete.
 pub async fn purge(db: &SurrealDb, person_id: Uuid) -> Result<u64, AssistantTurnError> {
-    let response = db
-        .query(&format!("DELETE {TABLE} WHERE person_id = $person_id RETURN BEFORE"))
+    let mut response = db
+        .query(&format!(
+            "DELETE {TABLE} WHERE person_id = $person_id RETURN BEFORE"
+        ))
         .bind(("person_id", record_id(PERSON_TABLE, person_id)))
         .await?;
     let rows: Vec<AssistantTurnRow> = response.take(0)?;
     Ok(rows.len() as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::mem_surreal;
+
+    fn prompt(person_id: Uuid, content: &str) -> NewTurn {
+        NewTurn {
+            person_id,
+            kind: TurnKind::Prompt,
+            content: content.to_string(),
+            tool_name: None,
+            input_tokens: None,
+            output_tokens: None,
+        }
+    }
+
+    /// The row that comes back from `append` is the row `history` reads:
+    /// same id, same owner, same content, same timestamps.
+    #[tokio::test]
+    async fn append_returns_the_stored_row_and_history_reads_it_back() {
+        let db = mem_surreal().await;
+        let person = Uuid::now_v7();
+        let stored = append(&db, prompt(person, "Is my lease assignable?"))
+            .await
+            .unwrap();
+        assert_eq!(stored.person_id, person);
+        assert_eq!(stored.kind, TurnKind::Prompt);
+        assert_eq!(stored.content, "Is my lease assignable?");
+        assert_eq!(stored.tool_name, None);
+
+        let history = history(&db, person).await.unwrap();
+        assert_eq!(history, vec![stored]);
+    }
+
+    /// UUIDv7 ids are time-ordered, so history returns the transcript in
+    /// the order turns were appended, and tool rounds keep their order.
+    #[tokio::test]
+    async fn history_orders_by_the_minted_ids() {
+        let db = mem_surreal().await;
+        let person = Uuid::now_v7();
+        for (kind, content, tool) in [
+            (
+                TurnKind::Prompt,
+                "Is my lease assignable?".to_string(),
+                None,
+            ),
+            (
+                TurnKind::ToolCall,
+                "{\"query\":\"lease assignment\"}".to_string(),
+                Some("search_case_law".to_string()),
+            ),
+            (
+                TurnKind::ToolResult,
+                "{\"cases\":[]}".to_string(),
+                Some("search_case_law".to_string()),
+            ),
+            (
+                TurnKind::Reply,
+                "Generally, yes — with notice.".to_string(),
+                None,
+            ),
+        ] {
+            append(
+                &db,
+                NewTurn {
+                    person_id: person,
+                    kind,
+                    content,
+                    tool_name: tool,
+                    input_tokens: None,
+                    output_tokens: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let history = history(&db, person).await.unwrap();
+        let kinds: Vec<TurnKind> = history.iter().map(|turn| turn.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TurnKind::Prompt,
+                TurnKind::ToolCall,
+                TurnKind::ToolResult,
+                TurnKind::Reply
+            ]
+        );
+        assert_eq!(history[1].tool_name.as_deref(), Some("search_case_law"));
+    }
+
+    /// Ownership is the glossary's rule: another caller asking for the
+    /// chat gets the same answer as for a chat that does not exist.
+    #[tokio::test]
+    async fn another_person_gets_an_empty_history() {
+        let db = mem_surreal().await;
+        let owner = Uuid::now_v7();
+        let stranger = Uuid::now_v7();
+        append(&db, prompt(owner, "private question"))
+            .await
+            .unwrap();
+        assert!(history(&db, stranger).await.unwrap().is_empty());
+    }
+
+    /// Token counts are part of the stored row — the ledger's metering
+    /// input, recorded where the completion happened.
+    #[tokio::test]
+    async fn token_counts_round_trip() {
+        let db = mem_surreal().await;
+        let person = Uuid::now_v7();
+        let stored = append(
+            &db,
+            NewTurn {
+                person_id: person,
+                kind: TurnKind::Reply,
+                content: "Generally, yes.".to_string(),
+                tool_name: None,
+                input_tokens: Some(12),
+                output_tokens: Some(34),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(stored.input_tokens, Some(12));
+        assert_eq!(stored.output_tokens, Some(34));
+        let history = history(&db, person).await.unwrap();
+        assert_eq!(history[0].output_tokens, Some(34));
+    }
+
+    /// `purge` removes exactly the one subscriber's chat, reports the
+    /// count, and is safe to run again.
+    #[tokio::test]
+    async fn purge_removes_one_subscribers_chat_and_repeats_cleanly() {
+        let db = mem_surreal().await;
+        let owner = Uuid::now_v7();
+        let other = Uuid::now_v7();
+        append(&db, prompt(owner, "one")).await.unwrap();
+        append(&db, prompt(other, "two")).await.unwrap();
+
+        assert_eq!(purge(&db, owner).await.unwrap(), 1);
+        assert!(history(&db, owner).await.unwrap().is_empty());
+        assert_eq!(history(&db, other).await.unwrap().len(), 1);
+        assert_eq!(purge(&db, owner).await.unwrap(), 0);
+    }
+
+    /// A row written by a bypassing writer with an undefined kind is
+    /// skipped by reads, not reported as something the glossary defines.
+    #[tokio::test]
+    async fn a_row_with_an_unknown_kind_is_skipped() {
+        let db = mem_surreal().await;
+        let person = Uuid::now_v7();
+        append(&db, prompt(person, "real")).await.unwrap();
+        db.query(format!(
+            "CREATE assistant_turn SET person_id = $person_id, \
+             kind = 'vision', content = 'not one of the four'"
+        ))
+        .bind(("person_id", record_id(PERSON_TABLE, person)))
+        .await
+        .unwrap();
+
+        let history = history(&db, person).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].content, "real");
+    }
 }

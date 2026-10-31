@@ -12,12 +12,12 @@
 //! output per `MTok` on the global endpoint).
 //!
 //! The provider executes no tools: when the model answers with a
-//! `tool_use` block the completion errors rather than dropping the call —
-//! executing MCP tools inside the completion loop is the sandbox
-//! session's job (the wiring task), and silently returning text beside an
-//! unexecuted tool call would lie about the exchange. There is no retry
-//! policy here either: a failed completion returns `Err` with no usage,
-//! and the metered session decides what a retry costs.
+//! `tool_use` block the calls are surfaced on the completion's
+//! `tool_calls` for the sandbox session loop to execute — dropping one
+//! would lie about the exchange, and executing MCP tools inside the
+//! completion loop is the session's job, not the provider's. There is no
+//! retry policy here either: a failed completion returns `Err` with no
+//! usage, and the metered session decides what a retry costs.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -215,39 +215,50 @@ impl VertexProvider {
         body
     }
 
-    /// Pull the reply text out of a Vertex response. Text blocks
-    /// concatenate in order; a `tool_use` block is an error — the gateway
-    /// does not execute tools (see the module docs).
-    fn reply_text(content: &[VertexContentBlock]) -> Result<String> {
-        if content.iter().any(|b| b.kind == "tool_use") {
-            bail!(
-                "the model requested a tool call; the gateway does not execute \
-                 tools — the sandbox session loop does"
-            );
-        }
+    /// Split a Vertex reply into its reply text and its tool calls. Text
+    /// blocks concatenate in order; `tool_use` blocks surface as
+    /// [`crate::ToolCall`]s for the session loop to execute.
+    fn reply_parts(content: &[VertexContentBlock]) -> Result<(String, Vec<crate::ToolCall>)> {
         let text: String = content
             .iter()
             .filter(|b| b.kind == "text")
             .filter_map(|b| b.text.as_deref())
             .collect::<Vec<_>>()
             .join("");
-        if text.is_empty() {
-            bail!("vertex response carried no text content");
+        let tool_calls: Vec<crate::ToolCall> = content
+            .iter()
+            .filter(|b| b.kind == "tool_use")
+            .filter_map(|b| {
+                b.name.clone().map(|name| crate::ToolCall {
+                    id: b.id.clone().unwrap_or_default(),
+                    name,
+                    input: b.input.clone().unwrap_or(serde_json::Value::Null),
+                })
+            })
+            .collect();
+        if text.is_empty() && tool_calls.is_empty() {
+            bail!("vertex response carried no text content and no tool calls");
         }
-        Ok(text)
+        Ok((text, tool_calls))
     }
 }
 
 /// One content block of a Vertex reply. Anthropic names the kind field
-/// `type`, which is reserved in Rust. Only `text` blocks carry a payload
-/// the gateway transports; `tool_use` blocks are surfaced as an error
-/// (see the module docs).
+/// `type`, which is reserved in Rust. Text blocks carry a payload in
+/// `text`; `tool_use` blocks name the catalog tool in `name` and carry
+/// the call's arguments in `input`.
 #[derive(Debug, Deserialize)]
 struct VertexContentBlock {
     #[serde(rename = "type")]
     kind: String,
     #[serde(default)]
     text: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    input: Option<serde_json::Value>,
 }
 
 /// Token usage as the provider reports it. Both fields are required — a
@@ -295,15 +306,22 @@ impl ModelProvider for VertexProvider {
         }
         let parsed: VertexResponse = serde_json::from_str(&body)
             .with_context(|| format!("parse vertex response: {}", truncate(&body, 500)))?;
-        let content = VertexProvider::reply_text(&parsed.content)?;
-        Ok(CompletionResult {
-            messages: vec![crate::Message {
-                role: Role::Assistant,
-                content,
-            }],
+        let (content, tool_calls) = VertexProvider::reply_parts(&parsed.content)?;
+        let mut result = CompletionResult {
+            messages: Vec::new(),
+            tool_calls,
             input_tokens: parsed.usage.input_tokens,
             output_tokens: parsed.usage.output_tokens,
-        })
+        };
+        // A tool-call-only reply carries no text: sending an empty
+        // assistant turn would ask the next request to quote nothing.
+        if !content.is_empty() {
+            result.messages.push(crate::Message {
+                role: Role::Assistant,
+                content,
+            });
+        }
+        Ok(result)
     }
 
     fn price_cents(&self, usage: &CompletionResult) -> u64 {
@@ -517,11 +535,56 @@ mod tests {
             .mount(&server)
             .await;
 
-        let error = a_provider(server.uri())
+        let result = a_provider(server.uri())
             .complete(a_request())
             .await
-            .expect_err("a tool_use reply is not silently dropped");
-        assert!(error.to_string().contains("tool call"));
+            .expect("a tool_use reply is surfaced, not dropped");
+        assert_eq!(
+            result.tool_calls,
+            vec![crate::ToolCall {
+                id: "toolu_1".into(),
+                name: "search_case_law".into(),
+                input: json!({"query": "rent increase mid-lease"}),
+            }]
+        );
+        // No text block beside the call, so no empty assistant turn.
+        assert!(result.messages.is_empty());
+        assert_eq!(result.input_tokens, 10);
+        assert_eq!(result.output_tokens, 20);
+    }
+
+    #[tokio::test]
+    async fn a_mixed_text_and_tool_use_reply_carries_both() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "content": [
+                    {"type": "text", "text": "Let me look that up."},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_2",
+                        "name": "search_legal_aid",
+                        "input": {"query": "eviction help Nevada"}
+                    }
+                ],
+                "usage": {"input_tokens": 8, "output_tokens": 16}
+            })))
+            .mount(&server)
+            .await;
+
+        let result = a_provider(server.uri())
+            .complete(a_request())
+            .await
+            .expect("text and tool calls coexist");
+        assert_eq!(
+            result.messages,
+            vec![Message {
+                role: Role::Assistant,
+                content: "Let me look that up.".into(),
+            }]
+        );
+        assert_eq!(result.tool_calls.len(), 1);
+        assert_eq!(result.tool_calls[0].name, "search_legal_aid");
     }
 
     #[test]

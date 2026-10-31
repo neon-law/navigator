@@ -21,6 +21,14 @@ use serde::{Deserialize, Serialize};
 /// The page title in the browser tab.
 const PAGE_TITLE: &str = "Legal Sandbox";
 
+/// The production backend's label — the Sonnet the glossary promises. The
+/// selector's first option, and the session default.
+pub const VERTEX_BACKEND: &str = "Claude Sonnet (Vertex AI)";
+
+/// The privacy-maximal local backend, offered in the selector. It serves
+/// through the same provider seam once it lands.
+pub const LOCAL_BACKEND: &str = "Local open-weights";
+
 /// The billing-month credit row for the current subscriber, in integer cents —
 /// the same unit the `billing` contract prices in. `None` renders the preview
 /// state: an authenticated visitor without an active Nautilus subscription.
@@ -37,6 +45,23 @@ pub struct SandboxCredit {
     pub backends: Vec<String>,
 }
 
+/// One exchange turn in the subscriber's transcript, rendered in page order.
+/// The four kinds mirror the `assistant_turn` store seam one-for-one; text is
+/// wasm-safe — the store's JSON arguments and results arrive as rendered
+/// strings. `None` turns (rows the store skipped) never reach this list.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SandboxTurn {
+    /// The subscriber's prompt.
+    Prompt { content: String },
+    /// The assistant's reply.
+    Reply { content: String },
+    /// A tool call the assistant made: the catalog tool and its arguments.
+    ToolCall { tool: String, arguments: String },
+    /// What that tool returned, paired to its call.
+    ToolResult { tool: String, content: String },
+}
+
 /// The wasm-safe page contract the portal injects. Every field renders.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct SandboxView {
@@ -48,6 +73,15 @@ pub struct SandboxView {
     pub credit: Option<SandboxCredit>,
     /// The CSRF token the composer's native POST carries.
     pub csrf_token: String,
+    /// This subscriber's transcript so far, oldest first. `default` keeps
+    /// older payloads (and the tests' fixtures) valid without it.
+    #[serde(default)]
+    pub turns: Vec<SandboxTurn>,
+    /// True when the last exchange's completion failed: the model backend
+    /// didn't answer, nothing was charged, and the composer stands with a
+    /// quiet notice. The failed ask still shows in the transcript.
+    #[serde(default)]
+    pub completion_failed: bool,
 }
 
 /// The four credit states a sandbox session can render, per the spec's
@@ -170,6 +204,60 @@ fn composer(view: &SandboxView) -> Element {
     }
 }
 
+/// The subscriber's own transcript — every turn is their data, so the
+/// arguments and results render in full, muted, in page order. An empty
+/// transcript renders the quiet empty state; the page never reads like a
+/// broken frame.
+fn transcript(turns: &[SandboxTurn]) -> Element {
+    if turns.is_empty() {
+        return rsx! {
+            p { class: "nav-muted legal-sandbox-transcript-empty", "No exchanges yet." }
+        };
+    }
+    rsx! {
+        section { class: "legal-sandbox-transcript portal-detail__section",
+            h2 { "This month's exchanges" }
+            for turn in turns.iter() {
+                match turn {
+                    SandboxTurn::Prompt { content } => rsx! {
+                        div { class: "legal-sandbox-turn legal-sandbox-turn--prompt",
+                            p { class: "legal-sandbox-turn__meta", "You asked" }
+                            p { class: "legal-sandbox-turn__body", "{content}" }
+                        }
+                    },
+                    SandboxTurn::Reply { content } => rsx! {
+                        div { class: "legal-sandbox-turn legal-sandbox-turn--reply",
+                            p { class: "legal-sandbox-turn__meta", "Sandbox" }
+                            p { class: "legal-sandbox-turn__body", "{content}" }
+                        }
+                    },
+                    SandboxTurn::ToolCall { tool, arguments } => rsx! {
+                        div { class: "legal-sandbox-turn legal-sandbox-turn--tool-call",
+                            p { class: "legal-sandbox-turn__meta", "Searched with {tool}" }
+                            p { class: "legal-sandbox-turn__body", "{arguments}" }
+                        }
+                    },
+                    SandboxTurn::ToolResult { tool, content } => rsx! {
+                        div { class: "legal-sandbox-turn legal-sandbox-turn--tool-result",
+                            p { class: "legal-sandbox-turn__meta", "{tool} returned" }
+                            p { class: "legal-sandbox-turn__body", "{content}" }
+                        }
+                    },
+                }
+            }
+        }
+    }
+}
+
+/// The page as server-rendered HTML — what the portal route returns.
+/// Server-only: `dioxus-ssr` is a native dependency the wasm client does
+/// not carry.
+#[cfg(feature = "server")]
+#[must_use]
+pub fn page_html(view: &SandboxView) -> String {
+    dioxus_ssr::render_element(sandbox_body(view))
+}
+
 /// The loaded page. Split from the component so the tests render a fixed view
 /// without standing up the server function — and so the wiring layer can
 /// mount exactly this body once the route lands.
@@ -187,6 +275,15 @@ pub fn sandbox_body(view: &SandboxView) -> Element {
                 "month; anything beyond that is priced à la carte."
             }
             {disclosure()}
+
+            {view.completion_failed.then(|| rsx! {
+                p { class: "status-chip status-chip--due legal-sandbox-error",
+                    "The model backend didn't answer that one — nothing was "
+                    "charged. Your question is saved below; try again."
+                }
+            })}
+
+            {transcript(&view.turns)}
 
             match view.credit.as_ref() {
                 Some(credit) => {
@@ -242,11 +339,8 @@ mod tests {
         SandboxCredit {
             granted_cents: 500,
             remaining_cents,
-            model_backend: "Claude Sonnet (Vertex AI)".to_string(),
-            backends: vec![
-                "Claude Sonnet (Vertex AI)".to_string(),
-                "Local open-weights".to_string(),
-            ],
+            model_backend: VERTEX_BACKEND.to_string(),
+            backends: vec![VERTEX_BACKEND.to_string(), LOCAL_BACKEND.to_string()],
         }
     }
 
@@ -255,6 +349,8 @@ mod tests {
             tokens_href: String::new(),
             credit,
             csrf_token: "TOK".to_string(),
+            turns: Vec::new(),
+            completion_failed: false,
         }
     }
 
@@ -389,5 +485,98 @@ mod tests {
         assert!(html.contains("$3.75"), "{html}");
         assert!(html.contains("75% remaining"), "{html}");
         assert!(!html.contains("375¢"), "{html}");
+    }
+
+    // -- transcript ------------------------------------------------------------
+
+    /// An empty transcript renders the quiet empty state — not a broken
+    /// frame, not an empty section heading.
+    #[test]
+    fn an_empty_transcript_renders_the_empty_state() {
+        let html = render(&view(Some(credit(500))));
+        assert!(html.contains("legal-sandbox-transcript-empty"), "{html}");
+        assert!(html.contains("No exchanges yet."), "{html}");
+        assert!(
+            !html.contains("legal-sandbox-transcript portal-detail"),
+            "{html}"
+        );
+    }
+
+    /// The four turn kinds render in page order with their content.
+    #[test]
+    fn every_turn_kind_renders_in_page_order() {
+        let mut page = view(Some(credit(375)));
+        page.turns = vec![
+            SandboxTurn::Prompt {
+                content: "Can my landlord raise rent mid-lease?".into(),
+            },
+            SandboxTurn::ToolCall {
+                tool: "search_case_law".into(),
+                arguments: "{\"query\": \"rent increase mid-lease\"}".into(),
+            },
+            SandboxTurn::ToolResult {
+                tool: "search_case_law".into(),
+                content: "1 hit".into(),
+            },
+            SandboxTurn::Reply {
+                content: "Generally no.".into(),
+            },
+        ];
+        let html = render(&page);
+        assert!(html.contains("legal-sandbox-turn--prompt"), "{html}");
+        assert!(html.contains("legal-sandbox-turn--tool-call"), "{html}");
+        assert!(html.contains("legal-sandbox-turn--tool-result"), "{html}");
+        assert!(html.contains("legal-sandbox-turn--reply"), "{html}");
+        assert!(
+            html.find("legal-sandbox-turn--prompt") < html.find("legal-sandbox-turn--tool-call"),
+            "prompt must precede its tool call: {html}"
+        );
+        assert!(
+            html.find("legal-sandbox-turn--tool-call")
+                < html.find("legal-sandbox-turn--tool-result"),
+            "a call precedes its result: {html}"
+        );
+        assert!(
+            html.find("legal-sandbox-turn--tool-result") < html.find("legal-sandbox-turn--reply"),
+            "the reply follows the results it used: {html}"
+        );
+        assert!(
+            html.contains("Can my landlord raise rent mid-lease?"),
+            "{html}"
+        );
+    }
+
+    /// The transcript is the subscriber's own data: it renders even in the
+    /// preview state (a lapsed month), where no composer ever appears.
+    #[test]
+    fn the_transcript_renders_in_the_preview_state_without_a_composer() {
+        let mut page = view(None);
+        page.turns = vec![SandboxTurn::Reply {
+            content: "Last month's answer.".into(),
+        }];
+        let html = render(&page);
+        assert!(html.contains("legal-sandbox-preview"), "{html}");
+        assert!(html.contains("legal-sandbox-turn--reply"), "{html}");
+        assert!(html.contains("Last month's answer."), "{html}");
+        assert!(!html.contains("legal-sandbox-composer"), "{html}");
+    }
+
+    /// The completion-failure notice renders only when flagged: nothing
+    /// charged, the composer still standing, the saved question below.
+    #[test]
+    fn the_failure_notice_renders_only_when_flagged() {
+        let clean = render(&view(Some(credit(500))));
+        assert!(!clean.contains("legal-sandbox-error"), "{clean}");
+
+        let mut failed = view(Some(credit(500)));
+        failed.completion_failed = true;
+        failed.turns = vec![SandboxTurn::Prompt {
+            content: "Is my lease assignable?".into(),
+        }];
+        let html = render(&failed);
+        assert!(html.contains("legal-sandbox-error"), "{html}");
+        assert!(html.contains("nothing was charged"), "{html}");
+        assert!(html.contains("legal-sandbox-composer"), "{html}");
+        assert!(html.contains("Is my lease assignable?"), "{html}");
     }
 }

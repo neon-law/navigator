@@ -76,8 +76,8 @@ pub(crate) mod test_tracing {
 pub mod access;
 pub mod addresses;
 pub mod answers;
-pub mod assistant_turns;
 pub mod assets;
+pub mod assistant_turns;
 pub mod attestations;
 pub mod authorities;
 pub mod brand_domains;

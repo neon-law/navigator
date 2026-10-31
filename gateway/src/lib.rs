@@ -41,7 +41,7 @@ pub use metered::{MeteredError, MeteredOutcome, MeteredSession, StoreLedger, Usa
 pub use stub::StubModelProvider;
 pub use vertex::{adc_token_provider, StaticToken, TokenProvider, VertexProvider};
 
-pub use sandbox_skills::{render_system_context, SkillId};
+pub use sandbox_skills::{catalog, render_system_context, SkillId};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -89,14 +89,37 @@ pub struct CompletionRequest {
     pub tools: Vec<ToolSpec>,
 }
 
+/// One tool call the model asked for: which catalog tool, its input,
+/// and the provider's call id. The gateway only surfaces it — executing
+/// the call is the sandbox session loop's job (the tool entries are
+/// read-only Navigator MCP search tools, executed behind the session's
+/// authorization). Serializable so the transcript can pair the call to
+/// its result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCall {
+    /// The provider's id for this call — the transcript pairs a `tool_use`
+    /// block to the `tool_result` that answers it by this id.
+    pub id: String,
+    /// The catalog tool's name, e.g. `search_case_law`.
+    pub name: String,
+    /// The call's arguments, as the model produced them.
+    pub input: serde_json::Value,
+}
+
 /// One sandbox completion: what the model replied plus the usage it
-/// reported, in tokens. Costs are derived from this usage by
-/// [`ModelProvider::price_cents`] — a failed completion returns `Err`,
+/// reported, in tokens. A reply may ask for tool calls instead of (or
+/// alongside) final text — [`ToolCall`]s surface here for the session
+/// loop to execute and re-prompt with. Costs are derived from this usage
+/// by [`ModelProvider::price_cents`] — a failed completion returns `Err`,
 /// carries no usage, and is never priced. Serializable so the meter can
 /// journal the usage it debits.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct CompletionResult {
     pub messages: Vec<Message>,
+    /// Tool calls the model asked for, in the order it asked for them.
+    /// Empty for a plain text reply.
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCall>,
     pub input_tokens: u64,
     pub output_tokens: u64,
 }

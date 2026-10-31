@@ -27,6 +27,10 @@ pub struct StubModelProvider {
     output_rate_cents_per_mtok: u64,
     /// When set, every completion fails with this message.
     failure: Option<String>,
+    /// Scripted tool-call rounds: each successful completion pops the
+    /// front entry and reports those calls instead of none. An empty
+    /// script means every completion is a plain text reply.
+    tool_script: Mutex<Vec<Vec<crate::ToolCall>>>,
     /// Every `complete` call, successful or not, in call order.
     calls: Mutex<Vec<CompletionRequest>>,
 }
@@ -39,6 +43,7 @@ impl Default for StubModelProvider {
             input_rate_cents_per_mtok: 200,
             output_rate_cents_per_mtok: 1_000,
             failure: None,
+            tool_script: Mutex::new(Vec::new()),
             calls: Mutex::new(Vec::new()),
         }
     }
@@ -70,6 +75,17 @@ impl StubModelProvider {
         self.failure = message;
     }
 
+    /// Script one round of tool calls: the next successful completion
+    /// reports them, the one after reports none (unless more rounds are
+    /// queued). Models the search-tool loop deterministically — the
+    /// session asks, the model answers with a call, the loop re-prompts.
+    pub fn queue_tool_calls(&mut self, calls: Vec<crate::ToolCall>) {
+        self.tool_script
+            .lock()
+            .expect("stub provider tool-script lock")
+            .push(calls);
+    }
+
     /// Snapshot of every call so far, in call order — successful or
     /// failed. Cheap clone; callers can hold onto it across `await`
     /// points.
@@ -93,11 +109,18 @@ impl ModelProvider for StubModelProvider {
                 return Err(anyhow::anyhow!("stub model provider: {message}"));
             }
             let seq = calls.len();
+            let tool_calls = self
+                .tool_script
+                .lock()
+                .expect("stub provider tool-script lock")
+                .pop()
+                .unwrap_or_default();
             Ok(CompletionResult {
                 messages: vec![Message {
                     role: Role::Assistant,
                     content: format!("Stub reply {seq}."),
                 }],
+                tool_calls,
                 input_tokens: self.input_tokens,
                 output_tokens: self.output_tokens,
             })
@@ -163,6 +186,26 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].active_skills, skills);
         assert_eq!(calls[0].messages, request.messages);
+    }
+
+    #[tokio::test]
+    async fn a_scripted_tool_call_round_is_emitted_once() {
+        let mut provider = StubModelProvider::new();
+        provider.queue_tool_calls(vec![crate::ToolCall {
+            id: "toolu_1".into(),
+            name: "search_case_law".into(),
+            input: serde_json::json!({"query": "quiet title"}),
+        }]);
+
+        let first = provider.complete(a_request()).await.unwrap();
+        assert_eq!(first.tool_calls.len(), 1);
+        assert_eq!(first.tool_calls[0].name, "search_case_law");
+
+        // The round is spent: the next completion is a plain reply, which
+        // is the session loop's "call executed, re-prompt" step.
+        let second = provider.complete(a_request()).await.unwrap();
+        assert!(second.tool_calls.is_empty());
+        assert_eq!(second.messages[0].content, "Stub reply 2.");
     }
 
     #[tokio::test]

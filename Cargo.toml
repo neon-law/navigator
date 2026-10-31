@@ -187,6 +187,7 @@ forms = { path = "forms" }
 ipnet = "2"
 import = { path = "import" }
 live-inquiry = { path = "live-inquiry" }
+gateway = { path = "gateway" }
 mcp = { path = "mcp" }
 pdf = { path = "pdf" }
 portal = { path = "portal" }
