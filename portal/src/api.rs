@@ -461,6 +461,26 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             get(crate::project_costs_api::events),
         ),
         (
+            "GET",
+            "/app/api/projects/{id}/tasks",
+            get(crate::project_tasks_api::list),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/tasks",
+            post(crate::project_tasks_api::create),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/tasks/{task_id}/assign",
+            post(crate::project_tasks_api::assign),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/tasks/{task_id}/transition",
+            post(crate::project_tasks_api::transition),
+        ),
+        (
             "POST",
             "/app/api/projects/{id}/deadlines",
             post(crate::deadlines_api::create_deadline),
