@@ -417,11 +417,7 @@ impl QuestionnaireSpec {
         choices: &BTreeMap<String, BTreeMap<String, String>>,
     ) -> Result<(), WorkflowSpecError> {
         for (state, transitions) in &self.0.states {
-            let named: Vec<&str> = transitions
-                .conditions()
-                .into_iter()
-                .filter(|c| *c != "_")
-                .collect();
+            let named: Vec<&str> = transitions.conditions().filter(|c| *c != "_").collect();
             if named.is_empty() {
                 continue;
             }
