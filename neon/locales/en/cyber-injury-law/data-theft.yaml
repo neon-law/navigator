@@ -1,0 +1,161 @@
+# Cyber Injury Law's data-theft practice page. Same band vocabulary as the
+# other practice pages; the copy names the company that lost the data, keeps
+# every notice, and promises no outcome.
+head_title: "{site_name} | Data theft lawyers"
+meta_description: >-
+  Your personal information was stolen or exposed? Cyber Injury Law demands
+  the breach records, finds out what was taken, and goes after the company
+  that lost it. Attorney advertisement. A lawyer reviews the facts before any
+  engagement.
+og_description: >-
+  Data theft and breach claims. We demand the records and put the blame
+  where it belongs. Attorney advertisement.
+title: Data theft lawyers
+hero_mark: scales
+tagline: We use AI to put more money in your pocket.
+hero_lines:
+  - text: Your data was taken. We demand the records.
+    accent_words: 0
+hero_lead: >-
+  A company lost your personal information: the breach notice, the drained
+  account, the credit application you never made. The company's answer is a
+  "sophisticated attack" and an apology. The duty to protect the data was
+  theirs. We demand the breach records, find out what was taken and who had
+  access, and go after the company that lost it. A lawyer reviews the facts
+  before any engagement.
+hero_cta:
+  href: /consultation
+  label: Tell us what happened
+skin: practice
+bands:
+  - kind: statement
+    heading: What you are up against
+    lead: The company that lost your data wrote the playbook.
+    body:
+      - - text: >-
+            The breach notice arrives weeks late, written to sound like
+            weather: an incident, an investigation, a year of credit
+            monitoring. Nobody says what the company knew, when it knew it,
+            or what its security actually was.
+      - - text: We put the records on the table.
+          emphasis: true
+        - text: >-
+              We demand the breach records in the form the law allows: what
+              was taken, when, who had access, and what protections were
+              promised and not kept. Then we go after the company that lost
+              it. A lawyer reviews the facts and the applicable law before
+              any engagement.
+  - kind: cards
+    anchor: damages
+    overline: What a claim can recover
+    heading: The exposure gets documented, record by record.
+    description: >-
+      Every claim depends on its facts. These are the harms the law may
+      allow, and each one is proven with records, which is why we demand
+      them early.
+    items:
+      - title: Money taken from your accounts
+        body:
+          - - text: >-
+                The fraudulent charges and drained accounts that follow an
+                exposure, proven from statements and transaction records.
+      - title: What securing your life costs
+        body:
+          - - text: >-
+                Frozen credit, replaced documents, monitoring, and the hours
+                of untangling an identity, proven with receipts and records.
+      - title: The loan you didn't get
+        body:
+          - - text: >-
+                The credit you built is the credit the exposure costs you.
+                Rejections and rate increases tied to it belong in the claim.
+      - title: The harm you carry
+        body:
+          - - text: >-
+                Living with your identity in someone else's hands is a harm
+                the law may recognize, argued from the record.
+  - kind: steps
+    anchor: how-we-fight
+    overline: How we fight
+    heading: Tell us. We demand the records. Then we pursue.
+    items:
+      - title: Tell us what happened
+        body:
+          - - text: >-
+                A short conversation: the notice you got, the accounts
+                affected, and what you have seen since. A lawyer reviews the
+                facts before any engagement.
+        image:
+          asset_key: img/records-organized/records-organized-800w.jpg
+          alt: >-
+            Hands organizing folders and papers across a desk, putting
+            records in order.
+      - title: We demand the breach records
+        body:
+          - - text: >-
+                What was taken, when the company knew, who had access, and
+                what protections were promised: demanded in the form the law
+                allows, before the company's version hardens.
+      - title: We pursue the company that lost it
+        body:
+          - - text: >-
+                We put the record in writing and name every person it
+                supports, and we file when the offer is an apology and a
+                coupon.
+  - kind: cards
+    anchor: faq
+    overline: Questions
+    heading: Straight answers.
+    items:
+      - title: The company offered credit monitoring. Is that enough?
+        body:
+          - - text: >-
+                Credit monitoring watches for the harm; it does not pay for
+                it. What the company offers up front is an opening position,
+                not a legal conclusion.
+      - title: I don't know what was taken. Can I still act?
+        body:
+          - - text: >-
+                Most people can't, at first. The breach records say — which
+                is why demanding them is the first thing we do.
+      - title: I got the notice long after the breach. Too late?
+        body:
+          - - text: >-
+                Deadlines run from facts that include what the company knew
+                and when it told you. We check which deadlines apply to your
+                facts.
+      - title: What does it cost to find out where I stand?
+        body:
+          - - text: >-
+                The first conversation is a review of the facts. Fees are set
+                by the signed engagement agreement; no fee percentage is
+                advertised.
+  - kind: cards
+    anchor: nautilus
+    overline: Protect your privacy
+    heading: Make your data harder to use before you need us.
+    description: >-
+      Prevention and claims are different jobs. While we go after the company
+      that lost your data, this non-legal service from Neon Law shrinks the
+      footprint the next company can take.
+    items:
+      - title: The Nautilus plan
+        chips: ["$29/mo", "$290/year prepaid"]
+        body:
+          - - text: >-
+                Data removal, credit and dark-web monitoring, and
+                identity-theft insurance — a non-legal service from Neon Law
+                that runs for you and reports back in the app. Data removal
+                does not guarantee that a company will comply or prevent a
+                future leak.
+        href: "https://www.neonlaw.com/nautilus"
+        href_label: Visit the Nautilus plan
+  - kind: cta
+    heading: Data stolen? Tell us. We'll look.
+    body: >-
+      Call 1.510.800.2090 or tell us what happened. Attorney advertisement; a
+      lawyer must review the facts before an engagement.
+    email: "{firm_email}"
+    action:
+      href: /consultation
+      label: Tell us what happened

@@ -1212,8 +1212,18 @@ impl BrandKey {
             // Every practice brand publishes the two stems it actually
             // serves; a missing file is a loader-test failure rather than a
             // first-request panic.
-            Self::CyberInjuryLaw
-            | Self::LawyerShook
+            //
+            // Cyber Injury Law also publishes its own practice-area pages,
+            // one catalog per major tort.
+            Self::CyberInjuryLaw => &[
+                "home",
+                "services",
+                "car-accidents",
+                "cybercrime",
+                "data-theft",
+                "theft",
+            ],
+            Self::LawyerShook
             | Self::GuiebShook
             | Self::DeleteYourData
             | Self::Misericordia
@@ -1238,6 +1248,20 @@ impl BrandKey {
     pub fn publishes_firm_path(self, path: &str) -> bool {
         if path == "/probate" {
             return self == Self::Vesta;
+        }
+        // A brand's own practice-area page is admitted only on the brand
+        // whose [`Self::practice_pages`] names the route. The early return
+        // keeps the Neon arm's catch-all from answering another brand's
+        // pages, the same work the `/explainers/` prefix check does for
+        // explainers.
+        if BrandKey::ALL
+            .iter()
+            .any(|key| key.practice_pages().iter().any(|(route, _)| *route == path))
+        {
+            return self
+                .practice_pages()
+                .iter()
+                .any(|(route, _)| *route == path);
         }
         // The free court-form catalog publishes on the two house hosts that
         // serve the public self-help surface; every practice brand 404s it.
@@ -1266,7 +1290,10 @@ impl BrandKey {
             Self::DeleteYourData => matches!(path, "/" | "/contact" | "/testimonials"),
             Self::LawyerShook | Self::GuiebShook => matches!(path, "/" | "/testimonials"),
             Self::CyberInjuryLaw => {
-                matches!(path, "/" | "/contact" | "/consultation" | "/testimonials")
+                matches!(
+                    path,
+                    "/" | "/services" | "/contact" | "/consultation" | "/testimonials"
+                )
             }
             Self::Summons => matches!(path, "/" | "/services" | "/contact" | "/testimonials"),
             Self::Aegis
@@ -1291,6 +1318,27 @@ impl BrandKey {
                 ("/explainers/first-steps", "explainer-first-steps"),
                 ("/explainers/process", "explainer-process"),
                 ("/explainers/documents", "explainer-documents"),
+            ],
+            _ => &[],
+        }
+    }
+
+    /// The routes and catalog stems for this brand's own practice-area
+    /// pages.
+    ///
+    /// A practice page is a brand's own surface, like an explainer: the
+    /// route answers only on the brand that declares it, and the catalog
+    /// stem lives under that brand's English catalog. See
+    /// [`Self::publishes_firm_path`], which admits these routes on the
+    /// declaring brand alone.
+    #[must_use]
+    pub fn practice_pages(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::CyberInjuryLaw => &[
+                ("/car-accidents", "car-accidents"),
+                ("/cybercrime", "cybercrime"),
+                ("/theft", "theft"),
+                ("/data-theft", "data-theft"),
             ],
             _ => &[],
         }
@@ -3419,6 +3467,7 @@ mod tests {
         assert!(BrandKey::Neon.publishes_firm_path("/services"));
         assert!(!BrandKey::Neon.publishes_firm_path("/business"));
         assert!(!BrandKey::Neon.publishes_firm_path("/disputes"));
+        assert!(BrandKey::CyberInjuryLaw.publishes_firm_path("/services"));
     }
 
     /// The free court-form catalog publishes on the two house hosts and

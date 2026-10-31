@@ -79,6 +79,14 @@ erDiagram
         string tx_signature
         datetime updated_at
     }
+    attorney_rate {
+        string effective_on
+        string hourly_rate_cents
+        string id
+        string inserted_at
+        string person_id
+        string project_id
+    }
     authority {
         uuid archived_asset_id
         string canonical_url
@@ -798,6 +806,11 @@ erDiagram
         datetime synced_at
         string trial_on
     }
+    matter_flat_fee {
+        string fee_cents
+        string inserted_at
+        string project_id
+    }
     matter_page {
         string clerk_sections
         string client_sections
@@ -827,9 +840,11 @@ erDiagram
         datetime inserted_at
         string occurred_at
         uuid parent_message_id
+        string processed_at
         string provider_message_id
         string provider_ref
         string purpose
+        string route
         datetime updated_at
         string visibility
     }
@@ -1547,6 +1562,40 @@ erDiagram
         string quote
         datetime updated_at
     }
+    time_entry {
+        string (billing_status
+        string REFERENCES
+        uuid attorney_id
+        boolean billable
+        string billing_status
+        string description
+        uuid id
+        datetime inserted_at
+        int minutes
+        datetime performed_on
+        uuid project_id
+        int rate_cents_per_hour
+        string source
+        datetime updated_at
+        string written_off_reason
+        string xero_invoice_id
+    }
+    time_entry_events {
+        uuid actor_person_id
+        json after_state
+        json before_state
+        string event_kind
+        uuid id
+        datetime occurred_at
+        uuid time_entry_id
+    }
+    timer {
+        string id
+        string note
+        string person_id
+        string project_id
+        string started_at
+    }
     verification {
         uuid citation_id
         uuid id
@@ -1592,6 +1641,8 @@ erDiagram
     person }o--|| asset : references
     project }o--|| asset : references
     notation }o--|| attestation : references
+    person }o--|| attorney_rate : references
+    project }o--|| attorney_rate : references
     asset }o--|| authority : references
     brand }o--|| blog_video : references
     firm }o--|| brand : references
@@ -1650,6 +1701,7 @@ erDiagram
     address }o--|| mailroom : references
     firm }o--|| matter_caption : references
     project }o--|| matter_caption : references
+    project }o--|| matter_flat_fee : references
     firm }o--|| matter_page : references
     project }o--|| matter_page : references
     asset }o--|| message : references
@@ -1735,3 +1787,9 @@ erDiagram
     project }o--|| template : references
     person }o--|| testimonial : references
     project }o--|| testimonial : references
+    person_project_role }o--|| time_entry : references
+    project }o--|| time_entry : references
+    person }o--|| time_entry_events : references
+    time_entry }o--|| time_entry_events : references
+    person }o--|| timer : references
+    project }o--|| timer : references

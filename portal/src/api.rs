@@ -776,6 +776,16 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             )),
         ),
         (
+            "GET",
+            "/app/api/inbox/unprocessed",
+            get(crate::inbox_api::unprocessed),
+        ),
+        (
+            "POST",
+            "/app/api/inbox/process",
+            post(crate::inbox_api::process),
+        ),
+        (
             "POST",
             "/app/api/projects/{id}/inbox-ingest",
             // This route carries base64 JSON like the document upload door,

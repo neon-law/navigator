@@ -74,7 +74,7 @@ values = [
 ]
 
 [[email_domains]]
-reason = "Claims-agent vendors' public notice addresses and a court ECF clerk mailbox: synthetic senders in the docket-ingest tests, no person reads them."
+reason = "Claims-agent vendors' public notice addresses, court ECF clerk mailboxes, and the inbox classifier's test fixtures: institutional senders and invented lookalikes, no person reads them."
 values = [
   "stretto.com",
   "kroll.com",
@@ -82,6 +82,8 @@ values = [
   "epiq.com",
   "notkroll.com",
   "ecf.nvb.uscourts.gov",
+  "uscourts.gov",
+  "notuscourts.gov",
 ]
 
 [[values]]
@@ -128,6 +130,9 @@ values = [
   "Juan Moccagatta",
   "Karen Rustad Tölva",
   "Steve Matteson",
+  "Karolina Grabowska",
+  "Gustavo Fring",
+  "Ron Lach",
 ]
 
 [[names]]

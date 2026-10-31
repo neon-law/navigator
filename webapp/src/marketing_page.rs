@@ -413,9 +413,17 @@ impl PageSkin {
     }
 }
 
-/// The [`PageContent`] the portal router injects for one marketing page.
+/// The [`PageContent`] — and the request path it publishes at — that the
+/// portal router injects for one marketing page. The path is what `og:url`
+/// and the canonical link are built from: the router knows it statically,
+/// so the page never parses its own request string.
 #[derive(Clone, Default)]
-pub struct InjectedMarketingPage(pub PageContent);
+pub struct InjectedMarketingPage {
+    pub content: PageContent,
+    /// The path this router serves the content at (`/services`). Empty in
+    /// tests that construct the injection directly.
+    pub path: String,
+}
 
 /// A marketing page's resolved view.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
@@ -427,6 +435,10 @@ pub struct MarketingPageView {
     /// on every page that has no such band, and on an absent or unreadable
     /// query string.
     pub query: String,
+    /// The request path the router publishes this page at, for `og:url` and
+    /// the canonical link. Empty in direct constructions (tests), which then
+    /// publish no canonical URL.
+    pub path: String,
 }
 
 /// The one query parameter a marketing page reads.
@@ -440,11 +452,11 @@ struct MarketingQuery {
 /// Resolve the public chrome and one marketing page's static copy.
 #[server]
 pub async fn marketing_page_view() -> Result<MarketingPageView, ServerFnError> {
-    let content = crate::public_chrome::copy_from_request_or_context(
+    let injected = crate::public_chrome::copy_from_request_or_context(
         consume_context::<InjectedMarketingPage>,
     )
-    .await
-    .0;
+    .await;
+    let InjectedMarketingPage { content, path } = injected;
     Ok(MarketingPageView {
         chrome: crate::public_chrome::firm_public_chrome_from_context().await,
         content,
@@ -453,6 +465,7 @@ pub async fn marketing_page_view() -> Result<MarketingPageView, ServerFnError> {
         )
         .await,
         query: search_query().await,
+        path,
     })
 }
 
@@ -485,6 +498,7 @@ pub fn MarketingPageEntry() -> Element {
             content: view.content,
             lead_capture: view.lead_capture,
             query: view.query,
+            path: view.path,
         }
     }
 }
@@ -501,6 +515,11 @@ fn MarketingShell(
     /// The page's YAML `og_description`, previewed in place of `description`.
     #[props(default)]
     og_description: Option<String>,
+    /// The request path the router publishes this page at, for `og:url` and
+    /// the canonical link. Empty in direct constructions (tests), which then
+    /// publish no canonical URL.
+    #[props(default)]
+    path: String,
     /// Hoist the firm's component layer (`brand-firm.css`) alongside this
     /// page's own rules. The practice skin is written against that layer's
     /// vocabulary — the card, the glow, the eyebrow — so a page wearing it
@@ -547,6 +566,7 @@ fn MarketingShell(
             og_description,
             site_name: chrome.brand_name.clone(),
             image: chrome.social_image.clone(),
+            url: crate::components::canonical_url(&chrome.canonical_origin, &path),
         }
         // The palette comes from the shared token layer `PublicShell` hoists.
         // A practice-skin page also needs the firm's component layer, whose
@@ -577,6 +597,11 @@ pub fn MarketingPage(
     content: PageContent,
     lead_capture: LeadCaptureContext,
     query: String,
+    /// The request path the router publishes this page at, for `og:url` and
+    /// the canonical link. Empty in direct constructions (tests), which then
+    /// publish no canonical URL.
+    #[props(default)]
+    path: String,
 ) -> Element {
     let hero_day_rate = content.bands.iter().find_map(|band| match band {
         Band::Cards {
@@ -592,6 +617,7 @@ pub fn MarketingPage(
             title: content.head_title.clone(),
             description: content.meta_description.clone(),
             og_description: content.og_description.clone(),
+            path: path.clone(),
             firm_components: matches!(content.skin, PageSkin::Practice | PageSkin::Nautilus) || content.hero_mark.is_some(),
             commitment_components: matches!(content.skin, PageSkin::Practice | PageSkin::Nautilus),
             home_components: content.bands.iter().any(Band::is_downloads),
@@ -1906,6 +1932,7 @@ mod tests {
                     content,
                     lead_capture: LeadCaptureContext::default(),
                     query: String::new(),
+                    path: String::new(),
                 },
             );
             dom.rebuild_in_place();

@@ -61,7 +61,11 @@ async fn cyber_injury_home_serves_its_copy_assets_and_fonts() {
             "tel:+15108002090",
             "1.510.800.2090",
             "support@cyberinjurylaw.com",
-            "href=\"https://www.cyberinjurylaw.com/testimonials\"",
+            "href=\"/testimonials?via=home-nav-testimonials\"",
+            // The QR card links the absolute testimonials URL; the share
+            // reference (`?via=home-qr-testimonials`) rides along since the
+            // share-tag convention landed on every site-built link.
+            "href=\"https://www.cyberinjurylaw.com/testimonials?via=home-qr-testimonials\"",
             "cyber-incident",
             "cyber-timing",
             "Guieb &#38; Shook PC",
@@ -76,6 +80,60 @@ async fn cyber_injury_home_serves_its_copy_assets_and_fonts() {
         assert!(!html.contains("fonts.googleapis.com"), "{host}");
         assert!(!html.contains("fonts.gstatic.com"), "{host}");
         assert!(!html.contains("assets/app.js"), "{host}");
+    }
+}
+
+/// The share-card contract: every public page advertises the full Open Graph
+/// + Twitter Card set with absolute brand URLs, and one canonical address.
+#[tokio::test]
+async fn public_pages_emit_complete_open_graph_and_canonical_metadata() {
+    // Canonical URLs and absolute social images always point at the brand's
+    // canonical www host — a staging mirror canonicalizes to production.
+    let origin = "https://www.cyberinjurylaw.com";
+    for host in HOSTS {
+        for (path, title, description) in [
+            (
+                "/",
+                "CyberInjuryLaw | We use AI to put more money in your pocket",
+                "Car accidents, negligence, medical malpractice, data theft, cybercrime. We investigate, preserve evidence, and go after whoever cut the corner. Tell us what happened. Attorney advertisement.",
+            ),
+            (
+                "/services",
+                "CyberInjuryLaw | Injury and cybercrime claims",
+                "We go after insurers that lowball you, companies that leak your data, and platforms that blame you. We investigate, preserve evidence, and file when necessary. A lawyer reviews the facts before any engagement. Attorney advertisement.",
+            ),
+        ] {
+            let (status, html) = page(host, path).await;
+            assert_eq!(status, StatusCode::OK, "{host}{path}");
+            let url = format!("{origin}{path}");
+            for tag in [
+                format!(r#"content="{title}" property="og:title""#),
+                r#"content="CyberInjuryLaw" property="og:site_name""#.to_string(),
+                format!(r#"content="{description}" property="og:description""#),
+                format!(r#"content="{url}" property="og:url""#),
+                format!(
+                    r#"content="{origin}/assets/img/cyber-injury-law/canal-street-ad-f9faa356.png" property="og:image""#
+                ),
+                r#"property="og:image:alt""#.to_string(),
+                format!(r#"rel="canonical" href="{url}""#),
+                r#"name="twitter:card" content="summary""#.to_string(),
+                format!(r#"name="twitter:title" content="{title}""#),
+                r#"name="twitter:description""#.to_string(),
+                format!(
+                    r#"name="twitter:image" content="{origin}/assets/img/cyber-injury-law/canal-street-ad-f9faa356.png""#
+                ),
+            ] {
+                assert!(
+                    html.contains(&tag),
+                    "{host}{path}: missing social head fragment {tag}; emitted social metas: {}",
+                    html
+                        .split("<meta")
+                        .filter(|m| m.contains("twitter") || m.contains("og:"))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                );
+            }
+        }
     }
 }
 
@@ -122,21 +180,160 @@ async fn cyber_injury_testimonials_are_public() {
     }
 }
 
-/// The campaign links back to DeleteYourData.com, the sibling practice that
-/// helps a reader make their data harder to find before the next leak.
+/// Nautilus is the only privacy-plan card: the retired DeleteYourData.com
+/// sibling card (the same product under its former name) must not resurface
+/// on the home page.
 #[tokio::test]
-async fn cyber_injury_home_links_to_delete_your_data() {
+async fn cyber_injury_home_no_longer_links_to_delete_your_data() {
     for host in HOSTS {
         let (status, html) = page(host, "/").await;
         assert_eq!(status, StatusCode::OK, "{host}");
-        for expected in [
-            "sibling-practices",
-            "MAKE YOUR DATA HARDER TO FIND.",
-            "Visit DeleteYourData.com",
-            "deleteyourdata.com\"",
-            "$29/mo",
-        ] {
-            assert!(html.contains(expected), "{host} is missing {expected:?}");
+        for banned in ["DeleteYourData.com", "MAKE YOUR DATA HARDER TO FIND."] {
+            assert!(
+                !html.contains(banned),
+                "{host} still carries the retired DeleteYourData card copy {banned:?}"
+            );
         }
+    }
+}
+
+/// Each practice page answers on the brand's own hosts with its per-page
+/// share identity (the catalog's `head_title` and `og_description` reach the
+/// page as `og:title` and `og:description`; the statement itself renders
+/// word-by-word, so the raw HTML carries no contiguous headline), the
+/// repeated consultation CTA, the phone number, straight answers, and its
+/// helping-photo alt.
+#[tokio::test]
+async fn cyber_injury_practice_pages_serve_their_fight() {
+    for host in HOSTS {
+        for (path, og_title, share_line, alt) in [
+            (
+                "/car-accidents",
+                "CyberInjuryLaw | Car accident lawyers",
+                "We move before evidence disappears",
+                "Two people sitting together at a kitchen table",
+            ),
+            (
+                "/cybercrime",
+                "CyberInjuryLaw | Cybercrime lawyers",
+                "We preserve the evidence",
+                "A man in a suit talking with a couple across a desk",
+            ),
+            (
+                "/theft",
+                "CyberInjuryLaw | Theft claims",
+                "We preserve the proof and we pursue",
+                "A man in a suit talking with a couple across a desk",
+            ),
+            (
+                "/data-theft",
+                "CyberInjuryLaw | Data theft lawyers",
+                "We demand the records and put the blame where it belongs",
+                "Hands organizing folders and papers across a desk",
+            ),
+        ] {
+            let (status, html) = page(host, path).await;
+            assert_eq!(status, StatusCode::OK, "{host}{path}");
+            for expected in [
+                og_title,
+                share_line,
+                "Tell us what happened",
+                "/consultation",
+                "tel:+15108002090",
+                "1.510.800.2090",
+                "Straight answers.",
+                alt,
+            ] {
+                assert!(
+                    html.contains(expected),
+                    "{host}{path} is missing {expected:?}"
+                );
+            }
+        }
+    }
+}
+
+/// The Nautilus panel travels with the brand: the home page's sibling card
+/// and the data-theft page's plan band both name the plan, its price and
+/// scope, the non-legal-service note, and the link to Neon's hosted page.
+#[tokio::test]
+async fn cyber_injury_home_and_data_theft_link_the_nautilus_plan() {
+    for host in HOSTS {
+        let (status, home) = page(host, "/").await;
+        assert_eq!(status, StatusCode::OK, "{host}");
+        for expected in [
+            "PROTECT YOUR PRIVACY FIRST.",
+            "$29/mo",
+            "$290/year prepaid",
+            "dark-web monitoring",
+            "identity-theft insurance",
+            "non-legal service",
+            "Visit the Nautilus plan",
+            "neonlaw.com/nautilus",
+        ] {
+            assert!(
+                home.contains(expected),
+                "{host}: home is missing {expected:?}"
+            );
+        }
+
+        let (status, data_theft) = page(host, "/data-theft").await;
+        assert_eq!(status, StatusCode::OK, "{host}/data-theft");
+        for expected in [
+            "Make your data harder to use before you need us.",
+            "The Nautilus plan",
+            "$29/mo",
+            "$290/year prepaid",
+            "dark-web monitoring",
+            "identity-theft insurance",
+            "non-legal service",
+            "Visit the Nautilus plan",
+            "https://www.neonlaw.com/nautilus",
+        ] {
+            assert!(
+                data_theft.contains(expected),
+                "{host}/data-theft is missing {expected:?}"
+            );
+        }
+    }
+}
+
+/// The home page's "Matters we review" cards link to the practice pages
+/// they name, with the share-reference tag the campaign traces in Plausible.
+#[tokio::test]
+async fn cyber_injury_home_cards_link_their_practice_pages() {
+    for host in HOSTS {
+        let (status, html) = page(host, "/").await;
+        assert_eq!(status, StatusCode::OK, "{host}");
+        for path in ["/car-accidents", "/cybercrime", "/theft", "/data-theft"] {
+            assert!(
+                html.contains(&format!("href=\"{path}?via=")),
+                "{host}: the home cards must link {path} with a via tag"
+            );
+        }
+    }
+}
+
+/// Every practice path the Cyber Injury Law sitemap advertises is a page
+/// its host serves.
+#[tokio::test]
+async fn cyber_injury_sitemap_advertises_its_practice_pages() {
+    for host in HOSTS {
+        let (status, xml) = page(host, "/sitemap.xml").await;
+        assert_eq!(status, StatusCode::OK, "{host}");
+        for path in ["/car-accidents", "/cybercrime", "/theft", "/data-theft"] {
+            let url = format!("https://{host}{path}");
+            assert!(xml.contains(&url), "{host}: sitemap is missing {url}");
+        }
+    }
+}
+
+/// A practice path answers only on the brand that declares it: the Neon
+/// Law host 404s every Cyber Injury Law practice page.
+#[tokio::test]
+async fn cyber_injury_practice_paths_do_not_answer_on_the_neon_host() {
+    for path in ["/car-accidents", "/cybercrime", "/theft", "/data-theft"] {
+        let (status, _) = page("www.neonlaw.com", path).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path} on www.neonlaw.com");
     }
 }

@@ -12,6 +12,11 @@ pub struct SiblingPracticeCopy {
     /// A [`crate::brand::BrandKey`] slug such as `vesta` or
     /// `delete-your-data`.
     pub brand: String,
+    /// A path appended to the brand's resolved public home href, when the
+    /// card points at a specific page of the sibling brand rather than its
+    /// front door. Empty publishes the home href alone.
+    #[serde(default)]
+    pub path: String,
     pub eyebrow: String,
     pub heading: String,
     pub body: String,

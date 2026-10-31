@@ -23,6 +23,7 @@ mod document_sync;
 mod firms_doctor;
 mod forms_sync;
 mod glossary;
+mod inbox;
 #[allow(dead_code)]
 mod intake;
 mod journal;
@@ -831,6 +832,10 @@ enum Command {
     Mail {
         #[command(subcommand)]
         action: mail::MailAction,
+    },
+    Inbox {
+        #[command(subcommand)]
+        action: inbox::InboxAction,
     },
     // ─────────────── Authoring a notation locally ───────────────
     // The notation author's workbench: everything here runs offline (or
@@ -4734,6 +4739,7 @@ fn run() -> ExitCode {
             runtime().block_on(journal::run(firm, host, action))
         }
         Command::Mail { action } => runtime().block_on(mail::run(action)),
+        Command::Inbox { action } => runtime().block_on(inbox::run(action)),
         Command::Projects { action } => runtime().block_on(run_projects(action)),
         Command::Scraper { action } => runtime().block_on(scraper::run(action)),
         // The docs reference helpers need no cluster, so they are handled

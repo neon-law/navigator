@@ -262,6 +262,37 @@ mod tests {
         )
     }
 
+    /// The glossary is one page, so one entry whose Markdown emits a raw-text
+    /// element (`<title>`, `<script>`, ...) turns every later term into inert
+    /// text. A wrapped code span did exactly that: `DKT NNNN -` ended a line
+    /// and `<title>.yaml` began the next, which CommonMark opens as an HTML
+    /// block. The public page lost 249 of 277 terms, and the release browser
+    /// gate saw no Mermaid diagram (deploy run 41221043324).
+    #[test]
+    fn no_entry_emits_a_raw_text_element() {
+        const RAW_TEXT: [&str; 8] = [
+            "<title",
+            "<script",
+            "<style",
+            "<textarea",
+            "<xmp",
+            "<iframe",
+            "<noscript",
+            "<plaintext",
+        ];
+        for entry in &content().entries {
+            let body = entry.body_html.to_ascii_lowercase();
+            for tag in RAW_TEXT {
+                assert!(
+                    !body.contains(tag),
+                    "docs/glossary/{}.md renders a raw `{tag}` element, which swallows the rest \
+                     of the glossary page; keep `<...>` placeholders inside one-line code spans",
+                    entry.slug
+                );
+            }
+        }
+    }
+
     #[test]
     fn rewrite_link_maps_a_sibling_term_to_its_anchor() {
         assert_eq!(rewrite_link("matter.md"), "#matter");

@@ -2618,3 +2618,83 @@ fn gate_counts_a_half_renamed_documents_directory_in_full() {
         ))
         .stderr(str::contains("live Project check is inconclusive"));
 }
+
+#[test]
+fn page_draft_targets_must_exist_and_be_tracked_in_a_draft_directory() {
+    for (target, present, tracked, valid) in [
+        ("drafts/letter.md", true, true, true),
+        ("templates/letter.md", true, true, true),
+        ("drafts/missing.md", false, false, false),
+        ("drafts/untracked.md", true, false, false),
+        ("drafts/*.md", true, false, false),
+        ("drafts/deleted.md", false, true, false),
+        ("drafts/link.md", true, true, false),
+        ("drafts/link-untracked.md", true, true, false),
+        ("README.md", true, true, false),
+        ("drafts/../README.md", true, true, false),
+    ] {
+        let dir = TempDir::new().unwrap();
+        write(
+            dir.path(),
+            "navigator.yaml",
+            &format!(
+                "pages:\n  - slug: engagement\n    kind: engagement_billing_records\n    title: Engagement\n    draft: {target}\n"
+            ),
+        );
+        let mut command = gate(dir.path());
+        if present {
+            write(dir.path(), target, "# Letter\n");
+        }
+        if target == "drafts/link.md" {
+            fs::remove_file(dir.path().join(target)).unwrap();
+            std::os::unix::fs::symlink("../README", dir.path().join(target)).unwrap();
+        }
+        if target == "drafts/link-untracked.md" {
+            fs::remove_file(dir.path().join(target)).unwrap();
+            write(dir.path(), "drafts/source.md", "# Letter\n");
+            std::os::unix::fs::symlink("source.md", dir.path().join(target)).unwrap();
+        }
+        if target == "drafts/*.md" {
+            write(dir.path(), "drafts/sibling.md", "# Letter\n");
+            assert!(std::process::Command::new("git")
+                .args(["add", "--", "drafts/sibling.md"])
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success());
+        }
+        if tracked {
+            if !present {
+                write(dir.path(), target, "# Letter\n");
+            }
+            assert!(std::process::Command::new("git")
+                .args(["add", "--", target])
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success());
+        }
+        if tracked && !present {
+            fs::remove_file(dir.path().join(target)).unwrap();
+        }
+        let output = command.output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(stdout.contains("Y026"), !valid, "{target}: {stdout}");
+        if !valid {
+            assert!(!output.status.success(), "{stdout}");
+        }
+    }
+}
+
+#[test]
+fn page_without_a_draft_has_no_draft_target_finding() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "navigator.yaml",
+        "pages:\n  - slug: engagement\n    kind: engagement_billing_records\n    title: Engagement\n",
+    );
+    gate(dir.path())
+        .assert()
+        .stdout(str::contains("Y026").not());
+}

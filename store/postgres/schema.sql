@@ -3166,8 +3166,184 @@ CREATE TRIGGER stage_event_immutable
     BEFORE UPDATE OR DELETE ON stage_event
     FOR EACH ROW EXECUTE FUNCTION reject_stage_event_mutation();
 
--- Migration: 20261031140000_add_project_cost_source_reference.sql
+-- Migration: 20261031140000_add_message_process_state.sql
+-- Inbox-process state: the route the classification layer assigned and when
+-- a process run recorded it. NULL for messages that were never processed.
+ALTER TABLE message ADD COLUMN route TEXT CHECK (route IS NULL OR route IN ('nef', 'claims_agent', 'chambers', 'other'));
+ALTER TABLE message ADD COLUMN processed_at TEXT;
+
+-- Migration: 20261031150000_add_project_cost_source_reference.sql
 -- Where a Project Cost's money came from: `mercury::<transaction-id>` for
 -- Mercury-sourced costs. NULL for costs recorded before source references
 -- were required; new costs are validated at the store boundary.
 ALTER TABLE project_costs ADD COLUMN source_reference TEXT;
+
+-- Migration: 20261101000000_create_time_entry.sql
+-- Attributed attorney time on a matter, with the hourly rate snapshotted at
+-- creation so later fee-structure edits can never reprice captured work (the
+-- notation_meter_entry precedent). Minutes are integers, money is integer
+-- cents, never floats. A Time Entry is work done and priced; a Project Task
+-- is work still to do. See docs/glossary/time-entry.md.
+-- PostgreSQL-native, following the project_tasks pattern: retained rows,
+-- trigger-enforced audit events, immutable event log.
+
+CREATE TABLE time_entry (
+    id UUID PRIMARY KEY,
+    project_id UUID NOT NULL REFERENCES project(id),
+    -- The attorney who performed the work: a Person already holding a
+    -- participation row on the same Project, refused at the database too.
+    attorney_id UUID NOT NULL,
+    performed_on DATE NOT NULL,
+    minutes INTEGER NOT NULL CHECK (minutes BETWEEN 1 AND 1440),
+    description TEXT NOT NULL CHECK (length(btrim(description)) BETWEEN 1 AND 2000),
+    billable BOOLEAN NOT NULL,
+    -- Frozen at creation; a later rate edit never touches a captured entry.
+    rate_cents_per_hour INTEGER NOT NULL CHECK (rate_cents_per_hour >= 0),
+    source TEXT NOT NULL CHECK (source IN ('timer', 'manual')),
+    billing_status TEXT NOT NULL CHECK (billing_status IN ('unbilled', 'invoiced', 'written_off')),
+    xero_invoice_id TEXT,
+    written_off_reason TEXT CHECK (written_off_reason IS NULL OR length(btrim(written_off_reason)) BETWEEN 1 AND 1000),
+    inserted_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    FOREIGN KEY (project_id, attorney_id)
+        REFERENCES person_project_role (project_id, person_id),
+    CONSTRAINT time_entry_status_evidence CHECK (
+        (billing_status = 'unbilled' AND xero_invoice_id IS NULL AND written_off_reason IS NULL) OR (billing_status = 'invoiced' AND xero_invoice_id IS NOT NULL AND written_off_reason IS NULL) OR (billing_status = 'written_off' AND xero_invoice_id IS NULL AND written_off_reason IS NOT NULL)
+    )
+);
+CREATE INDEX time_entry_project ON time_entry (project_id, billing_status, performed_on, id);
+CREATE INDEX time_entry_attorney ON time_entry (attorney_id);
+
+CREATE TABLE time_entry_events (
+    id UUID PRIMARY KEY,
+    time_entry_id UUID NOT NULL REFERENCES time_entry(id),
+    actor_person_id UUID NOT NULL REFERENCES person(id),
+    event_kind TEXT NOT NULL CHECK (event_kind IN ('created', 'invoiced', 'written_off')),
+    before_state JSONB,
+    after_state JSONB NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX time_entry_events_entry_time ON time_entry_events (time_entry_id, occurred_at, id);
+
+CREATE FUNCTION enforce_time_entry_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE actor_id UUID;
+        event_kind_value TEXT;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'Time entries are retained; a write-off, never a delete';
+    END IF;
+    actor_id := nullif(current_setting('navigator.time_entry_actor', true), '')::UUID;
+    event_kind_value := current_setting('navigator.time_entry_event_kind', true);
+    IF actor_id IS NULL OR event_kind_value NOT IN ('invoiced', 'written_off') THEN
+        RAISE EXCEPTION 'Time entry updates require an actor and audit event';
+    END IF;
+    INSERT INTO time_entry_events(id,time_entry_id,actor_person_id,event_kind,before_state,after_state,occurred_at)
+    VALUES(gen_random_uuid(),NEW.id,actor_id,event_kind_value,to_jsonb(OLD),to_jsonb(NEW),now());
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER time_entry_audit_update
+    BEFORE UPDATE OR DELETE ON time_entry
+    FOR EACH ROW EXECUTE FUNCTION enforce_time_entry_audit();
+
+CREATE FUNCTION record_time_entry_creation() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE actor_id UUID;
+BEGIN
+    actor_id := nullif(current_setting('navigator.time_entry_actor', true), '')::UUID;
+    IF actor_id IS NULL OR current_setting('navigator.time_entry_event_kind', true) IS DISTINCT FROM 'created' THEN
+        RAISE EXCEPTION 'Time entry creation requires an actor and audit event';
+    END IF;
+    INSERT INTO time_entry_events(id,time_entry_id,actor_person_id,event_kind,before_state,after_state,occurred_at)
+    VALUES(gen_random_uuid(),NEW.id,actor_id,'created',NULL,to_jsonb(NEW),now());
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER time_entry_audit_create
+    AFTER INSERT ON time_entry
+    FOR EACH ROW EXECUTE FUNCTION record_time_entry_creation();
+
+CREATE FUNCTION reject_time_entry_event_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Time entry audit events are immutable';
+END;
+$$;
+CREATE TRIGGER time_entry_events_immutable
+    BEFORE UPDATE OR DELETE ON time_entry_events
+    FOR EACH ROW EXECUTE FUNCTION reject_time_entry_event_mutation();
+
+-- Migration: 20261101010000_create_timer.sql
+-- A durable running Timer on a matter: the attorney's live stopwatch, whose
+-- durable row is the source of truth (a page script only animates the
+-- display). The row is inserted when the Timer starts and deleted the moment
+-- stop_timer captures its elapsed minutes as a Time Entry or discard_timer
+-- cancels it — a Timer never rests in a stopped state, and its durable
+-- billing artifact is the Time Entry it created. See docs/glossary/timer.md.
+CREATE TABLE timer (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    person_id uuid NOT NULL REFERENCES person (id) ON DELETE CASCADE,
+    project_id uuid NOT NULL REFERENCES project (id) ON DELETE CASCADE,
+    started_at timestamptz NOT NULL DEFAULT now(),
+    note text,
+    CONSTRAINT timer_note_length CHECK (note IS NULL OR char_length(note) <= 500)
+);
+
+-- The firm-wide single-open-Timer invariant: at most one open Timer per
+-- attorney, on any matter. A Timer row exists only while it runs, so
+-- uniqueness on the attorney IS the invariant. start_timer pre-checks the
+-- same condition for a friendly error; the index is the backstop against a
+-- race between two tabs.
+CREATE UNIQUE INDEX timer_one_open_per_attorney ON timer (person_id);
+
+-- The matter header reads open Timers by attorney (covered above); the
+-- Billing tab reads them by matter. Timers carry no audit-event table of
+-- their own: the row is transient by design, and the durable billing
+-- artifact is the Time Entry stop_timer captures — audited there.
+CREATE INDEX timer_project_idx ON timer (project_id);
+
+-- Migration: 20261101020000_create_attorney_rates.sql
+-- Attorney fee structures: effective-dated hourly rates and one flat fee per
+-- matter. An attorney_rate row prices one attorney's hour either firm-wide
+-- (project_id IS NULL) or on one matter (the override). Rates are
+-- effective-dated and never edited — a change inserts a row with a new
+-- effective_on, so the table is its own history. Captured Time Entries are
+-- immune by design: they snapshot rate_cents_per_hour at creation
+-- (docs/glossary/fee-structure.md, docs/glossary/time-entry.md).
+CREATE TABLE attorney_rate (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    person_id uuid NOT NULL REFERENCES person (id) ON DELETE CASCADE,
+    project_id uuid REFERENCES project (id) ON DELETE CASCADE,
+    hourly_rate_cents integer NOT NULL CHECK (hourly_rate_cents >= 0),
+    effective_on date NOT NULL,
+    inserted_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- One rate per attorney per scope per effective date: the matter scope and
+-- the firm-default scope are each unique (partial indexes, because NULL
+-- project_id never equals anything in a plain unique constraint).
+CREATE UNIQUE INDEX attorney_rate_matter_effective
+    ON attorney_rate (person_id, project_id, effective_on) WHERE project_id IS NOT NULL;
+CREATE UNIQUE INDEX attorney_rate_firm_effective
+    ON attorney_rate (person_id, effective_on) WHERE project_id IS NULL;
+
+-- Rate lookups by attorney and effective date (both scopes).
+CREATE INDEX attorney_rate_person_idx ON attorney_rate (person_id, effective_on);
+
+-- The rate table is append-only history: a correction is a new effective
+-- date, never an edit in place. Deleting a mistyped row is permitted —
+-- captured Time Entries carry their own snapshot and are unaffected.
+CREATE FUNCTION reject_attorney_rate_update() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Attorney rates are effective-dated history; insert a new effective_on instead of updating';
+END;
+$$;
+CREATE TRIGGER attorney_rate_immutable
+    BEFORE UPDATE ON attorney_rate
+    FOR EACH ROW EXECUTE FUNCTION reject_attorney_rate_update();
+
+-- A matter's current flat fee — the agreed figure, replaceable, not history.
+CREATE TABLE matter_flat_fee (
+    project_id uuid PRIMARY KEY REFERENCES project (id) ON DELETE CASCADE,
+    fee_cents bigint NOT NULL CHECK (fee_cents >= 0),
+    inserted_at timestamptz NOT NULL DEFAULT now()
+);
+

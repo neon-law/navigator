@@ -1352,8 +1352,7 @@ mod tests {
         };
         let database = FIXTURE_DB
             .get_or_init(|| async {
-                let database =
-                    format!("navigator_firm_journal_{}", uuid::Uuid::new_v4().simple());
+                let database = format!("navigator_firm_journal_{}", uuid::Uuid::new_v4().simple());
                 let admin = sqlx::postgres::PgPoolOptions::new()
                     .max_connections(1)
                     .connect_with(options("postgres"))
@@ -1473,7 +1472,8 @@ mod tests {
         let (other, other_id) = import_project(&surreal).await;
         let projects = vec![(code, project_id), (other, other_id)];
         let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
+        let context =
+            import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
         let cases = [
             (serde_json::json!({ "postedAt": null }), "unposted"),
             (
@@ -1535,7 +1535,8 @@ mod tests {
         let (code, project_id) = import_project(&surreal).await;
         let projects = vec![(code.clone(), project_id)];
         let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
+        let context =
+            import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
         let transaction = mercury_tx(
             Uuid::now_v7(),
             &serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
@@ -1572,7 +1573,8 @@ mod tests {
         let (code, project_id) = import_project(&surreal).await;
         let projects = vec![(code.clone(), project_id)];
         let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
+        let context =
+            import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
         let transaction = mercury_tx(
             Uuid::now_v7(),
             &serde_json::json!({

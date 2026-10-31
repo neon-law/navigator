@@ -339,17 +339,33 @@ fn insert_position(template: &str, from: usize) -> usize {
 /// baseline block's own Markdown shape, at the level the template wrote.
 fn rewrite(template: &str, block: &SourceBlock, edited: &str) -> String {
     let text = match block.kind {
-        SourceBlockKind::ListItem => edited
-            .trim_start()
-            .trim_start_matches("• ")
-            .trim_start()
-            .to_string(),
+        SourceBlockKind::ListItem => {
+            let edited = edited.trim_start();
+            let marker = block
+                .text
+                .trim_start()
+                .split_once(' ')
+                .map(|(marker, _)| marker);
+            marker
+                .and_then(|marker| edited.strip_prefix(&format!("{marker} ")))
+                .unwrap_or(edited)
+                .trim_start()
+                .to_string()
+        }
         SourceBlockKind::Quote => edited.trim_start().to_string(),
         _ => edited.to_string(),
     };
     match block.kind {
         SourceBlockKind::Heading => format!("{} {}", heading_prefix(template, block), text),
-        SourceBlockKind::ListItem => format!("- {text}"),
+        SourceBlockKind::ListItem => {
+            let source = template
+                .get(block.source.clone())
+                .unwrap_or("")
+                .trim_start();
+            let prefix = source.split_whitespace().next().unwrap_or("-");
+            let trailing = &source[source.trim_end().len()..];
+            format!("{prefix} {text}{trailing}")
+        }
         SourceBlockKind::Quote => format!("> {text}"),
         SourceBlockKind::Paragraph | SourceBlockKind::Rule | SourceBlockKind::Table => text,
     }
@@ -801,5 +817,15 @@ mod tests {
             ],
         };
         assert_eq!(apply_import(template, &plan).unwrap(), "ONE\ntwo\nTHREE\n");
+    }
+    #[test]
+    fn an_ordered_item_edit_keeps_its_marker_without_duplicating_the_number() {
+        let template = "3) Original item\n4) Untouched item\n";
+        let bytes = export_then_edit(template, |document| {
+            *document = replace_paragraph_text(document, "3. Original item", "3. Revised item");
+        });
+        let (plan, applied) = dry_run_import(template, template.as_bytes(), &bytes).unwrap();
+        assert_eq!(plan.hunks.len(), 1);
+        assert_eq!(applied, "3) Revised item\n4) Untouched item\n");
     }
 }
