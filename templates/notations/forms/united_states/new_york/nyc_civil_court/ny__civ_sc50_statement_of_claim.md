@@ -6,7 +6,7 @@ jurisdiction: NY
 origin_url: https://www.nycourts.gov/LegacyPDFS/courts/nyc/civil/forms/CIV-SC-50.pdf
 confidential: true
 output: form
-form: ny__civ_sc_50_small_claims_complaint
+form: ny__civ_sc50_statement_of_claim
 questionnaire:
   BEGIN:
     _: person__client

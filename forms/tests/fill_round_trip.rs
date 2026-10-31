@@ -177,6 +177,7 @@ fn court_form_answers(form_code: &str) -> Vec<(&'static str, String)> {
         | "ny__nc4_family_name_change_petition"
         | "ny__nc5_family_name_change_supplement"
         | "ny__civ_sc50_statement_of_claim"
+        | "ny__probate_petition"
         | "wa__adult_name_change_petition"
         | "wa__minor_name_change_petition"
         | "wa__small_claims_notice"
@@ -691,9 +692,9 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
                 "custom_single_choice__child_support_current",
                 "No".to_string(),
             ),
-            ("custom_single_choice__children_under_21", "No".to_string()),
+            ("custom_single_choice__children_under_21", "".to_string()),
             ("custom_single_choice__convicted", "No".to_string()),
-            ("custom_single_choice__currently_married", "No".to_string()),
+            ("custom_single_choice__currently_married", "".to_string()),
             ("custom_single_choice__documents_attached", "No".to_string()),
             (
                 "custom_single_choice__filing_county",
@@ -708,7 +709,7 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ("custom_single_choice__new_sex_designation", "X".to_string()),
             ("custom_single_choice__party_to_action", "No".to_string()),
             ("custom_single_choice__previously_married", "No".to_string()),
-            ("custom_single_choice__prior_name_change", "No".to_string()),
+            ("custom_single_choice__prior_name_change", "".to_string()),
             (
                 "custom_single_choice__prior_sex_designation_change",
                 "No".to_string(),
@@ -1091,7 +1092,7 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ),
             ("custom_single_choice__judgments_liens", "No".to_string()),
             ("custom_single_choice__party_to_action", "No".to_string()),
-            ("custom_single_choice__prior_name_change", "No".to_string()),
+            ("custom_single_choice__prior_name_change", "".to_string()),
             ("custom_single_choice__sealing_requested", "No".to_string()),
             ("custom_single_choice__spousal_support", "No".to_string()),
             (
@@ -1494,7 +1495,7 @@ fn flattened_text_smoke_values(form_code: &str) -> &'static [&'static str] {
         }
         "nv__las_vegas_small_claims_complaint" => &["Sample entry for defendant_caption"],
         "nv__las_vegas_small_claims_counterclaim" => &["Sample entry for counterdefendant_caption"],
-        "nv__washoe_adult_name_change_petition" => &["Sample entry for birthplace_city"],
+        "nv__washoe_adult_name_change_petition" => &["Reno"],
         "nv__washoe_fee_waiver_application" => &["Sample entry for account_one"],
         "ny__nc1_adult_name_change_petition" => &["Sample entry for child_support_court"],
         "ny__nc2_minor_name_change_petition" => &["Sample entry for minor_child_support_court"],
@@ -1504,6 +1505,12 @@ fn flattened_text_smoke_values(form_code: &str) -> &'static [&'static str] {
             &["Sample entry for child_support_collection_unit"]
         }
         "ny__civ_sc50_statement_of_claim" => &["Sample entry for auto_accident_place"],
+        "ny__probate_petition" => &[
+            "Jordan Avery Blake",
+            "Jordan A. Blake",
+            "Casey Devon Ellis, Morgan Riley Reese",
+            "NONE",
+        ],
         "wa__adult_name_change_petition" => {
             &["The new name reflects the petitioner's family ties."]
         }

@@ -125,15 +125,15 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     // print as single lines but the intake keeps typed in the matter record.
     // Where a form prints a whole address in one box, the box is the form's
     // composition; the durable address stays a typed state.
-    "plaintiff_caption",   // the complaint caption's name-and-address line, as it should read
-    "defendant_caption",   // the defendant caption's name-and-address line
+    "plaintiff_caption", // the complaint caption's name-and-address line, as it should read
+    "defendant_caption", // the defendant caption's name-and-address line
     "counterplaintiff_caption", // the counterclaim's plaintiff-caption line
     "counterdefendant_caption", // the counterclaim's defendant-caption line
-    "current_address",     // a form's single composed address line (street/city/state/zip in one box)
+    "current_address",   // a form's single composed address line (street/city/state/zip in one box)
     "minor_current_address", // the NC2 minor's composed address line
-    "petitioner_address",  // the NC2 petitioner's composed address line
-    "parent_1_address",    // NC4: the first non-petitioning parent's composed address line
-    "parent_2_address",    // NC4: the second non-petitioning parent's composed address line
+    "petitioner_address", // the NC2 petitioner's composed address line
+    "parent_1_address",  // NC4: the first non-petitioning parent's composed address line
+    "parent_2_address",  // NC4: the second non-petitioning parent's composed address line
     "child_support_court", // the court that issued the support order, as the filer states it
     "petitioner_child_support_court", // the NC2 petitioner's support-order court
     "minor_child_support_court", // the NC2 minor's support-order court
@@ -148,7 +148,7 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "spousal_support_order_court", // NC5's spousal-support order court
     "court_of_conviction", // NC5: the court that heard the conviction
     "crime_of_conviction", // NC5: the offense of conviction, as the filer states it
-    "sealing_details",     // the safety reasons supporting a sealing request, in the petitioner's words
+    "sealing_details", // the safety reasons supporting a sealing request, in the petitioner's words
     "supporting_documents_list", // the attachments the petitioner lists on the form itself
     "sex_designation_reasons", // the petition's sex-designation reasons, in the petitioner's own words
     "minor_sex_designation_reasons", // the NC2 minor's sex-designation reasons
@@ -157,27 +157,27 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "financial_matters_details", // NC1's financial-matters narrative the petitioner supplies
     "minor_financial_details", // the NC2 minor's financial narrative
     "petitioner_financial_details", // the NC2 petitioner's financial narrative
-    "minor_felony_details", // the NC2 minor's felony narrative
+    "minor_felony_details",    // the NC2 minor's felony narrative
     "petitioner_felony_details", // the NC2 petitioner's felony narrative
     "member_disclosure_details", // NC5: the member's disclosure narrative for the checked disclosures
-    "other_relation",      // NC2: the Other-relationship label for a household member
-    "reason_owed",         // the counterclaim's reason the debt is owed, in the defendant's words
-    "reason_owed_2",       // second counterclaim item's reason
-    "reason_owed_3",       // third counterclaim item's reason
-    "reason_owed_4",       // fourth counterclaim item's reason
-    "reason_owed_5",       // fifth counterclaim item's reason
-    "reason_owed_6",       // sixth counterclaim item's reason
-    "account_one",         // F-6: the first bank account's institution and identifier, as disclosed
-    "account_two",         // F-6: the second bank account's line
-    "vehicle_one",         // F-6: the first vehicle's description and value line
-    "vehicle_two",         // F-6: the second vehicle's line
+    "other_relation",            // NC2: the Other-relationship label for a household member
+    "reason_owed", // the counterclaim's reason the debt is owed, in the defendant's words
+    "reason_owed_2", // second counterclaim item's reason
+    "reason_owed_3", // third counterclaim item's reason
+    "reason_owed_4", // fourth counterclaim item's reason
+    "reason_owed_5", // fifth counterclaim item's reason
+    "reason_owed_6", // sixth counterclaim item's reason
+    "account_one", // F-6: the first bank account's institution and identifier, as disclosed
+    "account_two", // F-6: the second bank account's line
+    "vehicle_one", // F-6: the first vehicle's description and value line
+    "vehicle_two", // F-6: the second vehicle's line
     "real_estate_address", // F-6: the real property's location, as disclosed
     "expense_other_label", // F-6: the Other-expense line's label
-    "hours_per_week",      // F-6: the not-employed box's weekly hours, which intake may answer "varies"
+    "hours_per_week", // F-6: the not-employed box's weekly hours, which intake may answer "varies"
     "no_income_explanation", // F-6: why the household shows no income
     "other_benefits_program", // F-6: the Other-benefits program's name
     "additional_information", // F-6's Anything-else box, in the applicant's words
-    "household_age_1",     // F-6 flat row: the household member's age (no numeric state exists)
+    "household_age_1", // F-6 flat row: the household member's age (no numeric state exists)
     "household_age_2",
     "household_age_3",
     "household_age_4",
@@ -191,9 +191,9 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "household_relationship_5",
     "household_relationship_6",
     "household_relationship_7",
-    "household_person_1",  // F-6 flat row: the member's name line — the row shape (age, relationship,
-    "household_person_2",  // contribution) cannot ride a people__ aggregate, whose parts carry
-    "household_person_3",  // contact fields only, so the table stays flat and the lawyer reviews it
+    "household_person_1", // F-6 flat row: the member's name line — the row shape (age, relationship,
+    "household_person_2", // contribution) cannot ride a people__ aggregate, whose parts carry
+    "household_person_3", // contact fields only, so the table stays flat and the lawyer reviews it
     "household_person_4",
     "household_person_5",
     "household_person_6",

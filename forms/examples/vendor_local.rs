@@ -27,12 +27,10 @@ fn main() -> Result<(), BoxErr> {
     // every run must transform from a pristine source snapshot instead of
     // re-reading its own output.
     std::fs::create_dir_all("/tmp/vendor")?;
-    let official_copy =
-        PathBuf::from("/tmp/vendor").join(format!("{code}-official.pdf"));
+    let official_copy = PathBuf::from("/tmp/vendor").join(format!("{code}-official.pdf"));
     if !official_copy.exists() {
-        std::fs::copy(&blank_path, &official_copy).map_err(|e| -> BoxErr {
-            format!("seed {}: {e}", official_copy.display()).into()
-        })?;
+        std::fs::copy(&blank_path, &official_copy)
+            .map_err(|e| -> BoxErr { format!("seed {}: {e}", official_copy.display()).into() })?;
     }
     let raw = std::fs::read(&official_copy)
         .map_err(|e| -> BoxErr { format!("read {}: {e}", official_copy.display()).into() })?;
@@ -79,7 +77,10 @@ fn main() -> Result<(), BoxErr> {
         literals: plan.literals,
     };
     let reauthored = pdf::reauthor(&blank, &spec)?;
-    println!("re-authored {} fields", pdf::field_names(&reauthored)?.len());
+    println!(
+        "re-authored {} fields",
+        pdf::field_names(&reauthored)?.len()
+    );
 
     std::fs::write(&blank_path, &reauthored)
         .map_err(|e| -> BoxErr { format!("write {}: {e}", blank_path.display()).into() })?;
@@ -89,12 +90,21 @@ fn main() -> Result<(), BoxErr> {
     std::fs::write(&manifest_path, manifest.join("\n") + "\n")
         .map_err(|e| -> BoxErr { format!("write {}: {e}", manifest_path.display()).into() })?;
     println!("working copy:   {}", blank_path.display());
-    println!("manifest:       {} ({} fields)", manifest_path.display(), manifest.len());
+    println!(
+        "manifest:       {} ({} fields)",
+        manifest_path.display(),
+        manifest.len()
+    );
 
     let digest = forms::sha256_hex(&reauthored);
     println!("pin:            {digest}");
 
-    fill_sample(&code, &reauthored, &manifest, &choice_first_exports(&template_raw)?)?;
+    fill_sample(
+        &code,
+        &reauthored,
+        &manifest,
+        &choice_first_exports(&template_raw)?,
+    )?;
     Ok(())
 }
 
@@ -205,14 +215,11 @@ fn fill_sample(
         let Err(pdf::PdfError::InvalidChoice { field, .. }) = &filled else {
             break;
         };
-        let Some((_, (_, export))) = choices
-            .iter()
-            .find(|(state, _)| {
-                field
-                    .strip_prefix("custom_single_choice__")
-                    .is_some_and(|tail| tail == state.as_str())
-            })
-        else {
+        let Some((_, (_, export))) = choices.iter().find(|(state, _)| {
+            field
+                .strip_prefix("custom_single_choice__")
+                .is_some_and(|tail| tail == state.as_str())
+        }) else {
             break;
         };
         let Some(name) = names.iter().find(|n| n.ends_with(field)) else {

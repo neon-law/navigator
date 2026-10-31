@@ -206,8 +206,7 @@ impl Rule for F110JurisdictionPath {
         };
 
         if !project_repository && matched_shelf == Some("forms") {
-            if !frontmatter::field(fm, "origin_url")
-                .is_some_and(|url| origin_url_is_official(&url))
+            if !frontmatter::field(fm, "origin_url").is_some_and(|url| origin_url_is_official(&url))
             {
                 violations.push(Self::violation(
                     file,
@@ -406,9 +405,7 @@ mod tests {
             "templates/notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_fee_waiver_application.md",
             "title: T\ncode: nv__washoe_fee_waiver_application\njurisdiction: NV\norigin_url: https://www.washoecourts.com/Forms/F-6.pdf",
         ));
-        assert!(!v
-            .iter()
-            .any(|v| v.message.contains("origin_url")));
+        assert!(!v.iter().any(|v| v.message.contains("origin_url")));
     }
 
     #[test]
@@ -417,9 +414,7 @@ mod tests {
             "templates/notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_fee_waiver_application.md",
             "title: T\ncode: nv__washoe_fee_waiver_application\njurisdiction: NV\norigin_url: https://forms.example.com/F-6.pdf",
         ));
-        assert!(v
-            .iter()
-            .any(|v| v.message.contains("origin_url")));
+        assert!(v.iter().any(|v| v.message.contains("origin_url")));
     }
 
     #[test]

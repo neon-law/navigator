@@ -1483,7 +1483,7 @@ records:
       - code: ny__nc1_adult_name_change_petition
         title: Name Change and/or Sex Designation Change Petition for Individual Adult (18+)
         source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/AdultName-SexDesignationChangePetition-fillable.pdf
-        sha256: 5139cf708a05ac98f4a283c7667b4bbc62a88540cb784a0643af2b7bc32ff45e
+        sha256: 8c771a7ce619ebb9f717f613fb47ff7a8acfd2019980d4e757182afa0ee2174e
         filing_office: Supreme Court County Clerk's Office in the county of residence
         filing_fee:
           amount: "210.00"
@@ -1493,7 +1493,7 @@ records:
       - code: ny__nc3_lip_name_change_petition
         title: Name Change and/or Sex Designation Change Petition for a Legally Incapacitated Person
         source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/LIPName-SexDesignationChangePetition-fillable.pdf
-        sha256: e658bbef40bc907264418c090d2206077b5cb2f7f4290358df1a15d6ff8486d4
+        sha256: 10a0ab457acbbb88b0439cf81699418fda7eaef776d23d96ebd47f1b4b8f11b9
         filing_office: Supreme Court County Clerk's Office in the county of residence
         filing_fee:
           amount: "210.00"
@@ -1503,7 +1503,7 @@ records:
       - code: ny__nc2_minor_name_change_petition
         title: Name Change and/or Sex Designation Change Petition for an Individual Minor (under 18)
         source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/MinorName-SexDesignationChangePetition-fillable.pdf
-        sha256: dcd747ecd7e53ab7964490644dc88c9874363d5f51f0ada4953e7e23829dd9a7
+        sha256: fc1aa34c334da4b45932de1ee0a582771fdcf29524eb690adde21de48a44d905
         filing_office: Supreme Court County Clerk's Office in the county of residence
         filing_fee:
           amount: "210.00"
