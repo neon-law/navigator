@@ -10,6 +10,7 @@
 //! check for Lawyers/Clerks. A Lawyer approval is not a send. System
 //! acknowledgments only confirm persisted intake.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -1397,25 +1398,110 @@ pub async fn record_promotional_opt_out(
 ///
 /// [`InboxError::Denied`] when the actor cannot access any Firm inbox.
 pub async fn list_intake(db: &SurrealDb, actor_id: Uuid) -> Result<Vec<IntakeRow>, InboxError> {
+    intake_rows(db, actor_id, None).await
+}
+
+/// The Firm intake list narrowed to one Brand, in the store: the same
+/// Firm-scoped rule as [`list_intake`] decides what the actor may see, and
+/// the Brand narrowing happens beside it so a caller cannot widen the view.
+/// Message bodies are not included.
+///
+/// # Errors
+///
+/// [`InboxError::Denied`] when the actor cannot access any Firm inbox.
+pub async fn list_intake_in_brand(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    brand_key: &str,
+) -> Result<Vec<IntakeRow>, InboxError> {
+    intake_rows(db, actor_id, Some(brand_key)).await
+}
+
+/// The Brand keys across the conversations this actor may see, sorted and
+/// deduplicated — the filter vocabulary an inbox renders. A Brand with no
+/// conversations this actor may see does not appear.
+///
+/// # Errors
+///
+/// [`InboxError::Denied`] when the actor cannot access any Firm inbox.
+pub async fn intake_brands(db: &SurrealDb, actor_id: Uuid) -> Result<Vec<String>, InboxError> {
     let actor = load_person(db, actor_id).await?;
-    let visible_firms = if actor.role == Role::Owner {
-        None
-    } else if matches!(actor.role, Role::Lawyer | Role::Clerk | Role::Admin) {
-        Some(
-            crate::firms::memberships_for_person(db, actor_id)
+    let brands: BTreeSet<String> = visible_conversations(db, &actor, None)
+        .await?
+        .into_iter()
+        .filter_map(|conversation| conversation.brand_key)
+        .collect();
+    Ok(brands.into_iter().collect())
+}
+
+/// The Firms whose inbox conversations this actor may see; `None` for the
+/// Owner, who reads across every Firm. A Client is refused — they read the
+/// matter log, not the inbox.
+async fn visible_firms(
+    db: &SurrealDb,
+    actor: &persons::Person,
+) -> Result<Option<Vec<Uuid>>, InboxError> {
+    if actor.role == Role::Owner {
+        return Ok(None);
+    }
+    if matches!(actor.role, Role::Lawyer | Role::Clerk | Role::Admin) {
+        return Ok(Some(
+            crate::firms::memberships_for_person(db, actor.id)
                 .await
                 .map_err(|error| InboxError::Db(error.to_string()))?
                 .into_iter()
                 .map(|membership| membership.firm_id)
                 .collect::<Vec<_>>(),
-        )
-    } else {
-        return Err(InboxError::Denied);
+        ));
+    }
+    Err(InboxError::Denied)
+}
+
+async fn conversations_in_brand(
+    db: &SurrealDb,
+    brand: Option<&str>,
+) -> Result<Vec<Conversation>, InboxError> {
+    let Some(brand) = brand else {
+        return all_conversations(db).await;
     };
-    let mut conversations = all_conversations(db).await?;
+    let mut response = db
+        .query(format!(
+            "SELECT {CONVERSATION_SELECT} FROM {CONVERSATION} \
+             WHERE brand_key = $brand ORDER BY updated_at DESC"
+        ))
+        .bind(("brand", brand.to_string()))
+        .await?
+        .check()?;
+    let rows: Vec<ConversationRow> = response.take(0)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(ConversationRow::into_conversation)
+        .collect())
+}
+
+/// Conversations the actor may see, optionally narrowed to one Brand. The
+/// Firm scope is decided here in the store, and the Brand narrowing happens
+/// beside it, before any row reaches a caller.
+async fn visible_conversations(
+    db: &SurrealDb,
+    actor: &persons::Person,
+    brand: Option<&str>,
+) -> Result<Vec<Conversation>, InboxError> {
+    let visible_firms = visible_firms(db, actor).await?;
+    let mut conversations = conversations_in_brand(db, brand).await?;
     if let Some(firms) = visible_firms {
         conversations.retain(|conversation| firms.contains(&conversation.firm_id));
     }
+    Ok(conversations)
+}
+
+async fn intake_rows(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    brand: Option<&str>,
+) -> Result<Vec<IntakeRow>, InboxError> {
+    let actor = load_person(db, actor_id).await?;
+    let conversations = visible_conversations(db, &actor, brand).await?;
     let phones = phone_directory(db, &conversations).await?;
     let mut rows = Vec::with_capacity(conversations.len());
     for conversation in conversations {
@@ -3391,6 +3477,95 @@ mod tests {
                 && call.account == "+15550100000"
                 && call.to == "+15555550123"
         }));
+    }
+
+    #[tokio::test]
+    async fn brand_scoping_keeps_the_firm_scope_when_narrowing() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let mut branded = inbound(
+            world.firm,
+            channel::EMAIL,
+            "support",
+            "msg-vesta-1",
+            "vesta-sender@example.com",
+        );
+        branded.brand_key = Some("vesta".to_string());
+        let firm_vesta = ingest_inbound(&db, &branded).await.unwrap();
+        let mut other_branded = inbound(
+            world.other_firm,
+            channel::EMAIL,
+            "support",
+            "msg-vesta-2",
+            "other-sender@example.com",
+        );
+        other_branded.brand_key = Some("vesta".to_string());
+        let other_firm_vesta = ingest_inbound(&db, &other_branded).await.unwrap();
+        let mut firm_neon = inbound(
+            world.firm,
+            channel::EMAIL,
+            "support",
+            "msg-neon-1",
+            "neon-sender@example.com",
+        );
+        firm_neon.brand_key = Some("neon".to_string());
+        ingest_inbound(&db, &firm_neon).await.unwrap();
+        let mut firm_other_brand = inbound(
+            world.other_firm,
+            channel::EMAIL,
+            "support",
+            "msg-ob-1",
+            "ob-sender@example.com",
+        );
+        firm_other_brand.brand_key = Some("otherfirm-brand".to_string());
+        ingest_inbound(&db, &firm_other_brand).await.unwrap();
+
+        // The Owner reads across Firms: one Brand view carries both Firms'
+        // rows, and the brand vocabulary is everything visible.
+        let scoped = list_intake_in_brand(&db, world.owner, "vesta")
+            .await
+            .unwrap();
+        assert_eq!(scoped.len(), 2);
+        assert!(scoped
+            .iter()
+            .any(|row| row.id == firm_vesta.conversation_id));
+        assert!(scoped
+            .iter()
+            .any(|row| row.id == other_firm_vesta.conversation_id));
+        assert_eq!(
+            intake_brands(&db, world.owner).await.unwrap(),
+            vec![
+                "neon".to_string(),
+                "otherfirm-brand".to_string(),
+                "vesta".to_string()
+            ]
+        );
+
+        // The firm member sees the same Brand narrowed to their Firms, and
+        // never a Brand that only exists in a Firm they cannot see.
+        let scoped = list_intake_in_brand(&db, world.lawyer, "vesta")
+            .await
+            .unwrap();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].id, firm_vesta.conversation_id);
+        assert_eq!(scoped[0].firm_id, world.firm);
+        assert_eq!(
+            intake_brands(&db, world.lawyer).await.unwrap(),
+            vec!["neon".to_string(), "vesta".to_string()]
+        );
+
+        // A Client reads the matter log, not the inbox — brand views included.
+        assert!(matches!(
+            list_intake_in_brand(&db, world.client, "vesta")
+                .await
+                .map(|_| ())
+                .unwrap_err(),
+            InboxError::Denied
+        ));
+        assert!(matches!(
+            intake_brands(&db, world.client).await.unwrap_err(),
+            InboxError::Denied
+        ));
     }
 
     #[tokio::test]
