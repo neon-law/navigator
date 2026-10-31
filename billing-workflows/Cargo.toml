@@ -30,6 +30,10 @@ path = "src/bin/reconcile_trigger.rs"
 name = "billing-digest-trigger"
 path = "src/bin/billing_digest_trigger.rs"
 
+[[bin]]
+name = "sandbox-credit-reset-trigger"
+path = "src/bin/sandbox_reset_trigger.rs"
+
 [dependencies]
 async-trait.workspace = true
 anyhow.workspace = true
@@ -45,12 +49,14 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "
 telemetry.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-uuid = { workspace = true, features = ["v5", "v7", "serde"] }
+uuid = { workspace = true, features = ["v4", "v5", "v7", "serde"] }
 workflows = { workspace = true, features = ["dbos"] }
 
 [dev-dependencies]
-# Only the reconcile workflow's tests touch the database directly (seed a
-# project + mirror row); the worker itself reaches the DB through `store`.
+sqlx.workspace = true
+# Only the sandbox reset workflow's tests touch the database directly (open
+# purchases, grant/debit a closed month); the worker itself reaches the DB
+# through `store`.
 store = { workspace = true, features = ["test-support"] }
 
 [lints]

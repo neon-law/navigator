@@ -77,6 +77,29 @@ test_purchase_rules_are_exact if {
 	not authz.allow with input as {"path": ["purchases", "consultation", "extra"], "method": "POST", "session": client_session}
 }
 
+# ---------- /app/nautilus ----------
+
+# The Legal Sandbox carries the same client-only role contract as the
+# purchase page it bills through: the page reads, the message route posts.
+test_client_reads_the_sandbox_page_and_posts_a_prompt if {
+	authz.allow with input as {"path": ["app", "nautilus"], "method": "GET", "session": client_session}
+	authz.allow with input as {"path": ["app", "nautilus", "messages"], "method": "POST", "session": client_session}
+}
+
+test_the_sandbox_page_denies_everyone_else if {
+	not authz.allow with input as {"path": ["app", "nautilus"], "method": "GET", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "nautilus"], "method": "GET", "session": clerk_session}
+	not authz.allow with input as {"path": ["app", "nautilus"], "method": "GET", "session": null}
+	not authz.allow with input as {"path": ["app", "nautilus", "messages"], "method": "POST", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "nautilus", "messages"], "method": "POST", "session": null}
+}
+
+test_sandbox_rules_are_exact if {
+	not authz.allow with input as {"path": ["app", "nautilus"], "method": "POST", "session": client_session}
+	not authz.allow with input as {"path": ["app", "nautilus", "messages"], "method": "GET", "session": client_session}
+	not authz.allow with input as {"path": ["app", "nautilus", "messages", "extra"], "method": "POST", "session": client_session}
+}
+
 # ---------- /app/projects/* (any authenticated caller; ENG-81) ----------
 # The policy admits every tier onto the one matter surface. Row scoping is the
 # handler's job, so these tests pin admission only — the denial that matters

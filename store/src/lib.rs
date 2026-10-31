@@ -77,6 +77,7 @@ pub mod access;
 pub mod addresses;
 pub mod answers;
 pub mod assets;
+pub mod assistant_turns;
 pub mod attestations;
 pub mod authorities;
 pub mod brand_domains;
@@ -195,6 +196,8 @@ pub mod relationships;
 pub mod review_documents;
 /// Publishing a built sample-project bundle into the applications bucket.
 pub mod sample_project;
+/// The metered-credit ledger behind the Nautilus Legal Sandbox.
+pub mod sandbox_usage;
 /// The schema, applied as one idempotent `DEFINE` file (#1093).
 pub mod schema;
 pub mod seed;

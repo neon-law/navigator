@@ -163,6 +163,7 @@ pub mod lead_confirm;
 pub mod marketing;
 pub mod matter_documents;
 pub mod mcp_principal;
+pub mod nautilus;
 pub mod notation_draft;
 pub mod notation_preview_doc;
 pub mod oauth;
@@ -1211,6 +1212,11 @@ pub fn bootstrap_with_forgejo_oidc(
             forms_registry: state.forms_registry.clone(),
         },
     ));
+    // The sandbox search tools' provider clients, built once from
+    // environment configuration (COURTLISTENER_TOKEN, DESCRYBE_*). An
+    // unconfigured provider degrades its tool's searches to "search
+    // unavailable" — boot never depends on a search credential.
+    mcp_state.search = Some(mcp::SearchBackends::from_env());
     let mcp_layered = |mcp_state: mcp::McpState| {
         mcp::build_router(mcp_state)
             .route_layer(axum::middleware::from_fn_with_state(
@@ -1894,6 +1900,10 @@ pub fn bootstrap_with_forgejo_oidc(
     // composition is merged behind this same boundary.
     let boundary_sessions = state.sessions.clone();
     let boundary_auth = state.auth.clone();
+    // The Nautilus Legal Sandbox rides the same boundary plus its own
+    // active-subscription layer; build it before `state` moves into the
+    // chain below.
+    let sandbox = nautilus::routes(&state);
     let firm_context_store = state.surreal.clone();
     let mut router = mount_brand_assets(router, brand_bundle.as_ref())
         .route("/site-brand.json", get(site_brand::site_brand))
@@ -1912,7 +1922,8 @@ pub fn bootstrap_with_forgejo_oidc(
         .merge(a2a_card)
         .merge(a2a_rpc)
         .merge(cli_auth)
-        .merge(seed_token_auth);
+        .merge(seed_token_auth)
+        .merge(sandbox);
     if let Some(oauth) = oauth_routes {
         router = router.merge(oauth);
     }
