@@ -73,6 +73,17 @@ values = [
   "sms.twilio.com",
 ]
 
+[[email_domains]]
+reason = "Claims-agent vendors' public notice addresses and a court ECF clerk mailbox: synthetic senders in the docket-ingest tests, no person reads them."
+values = [
+  "stretto.com",
+  "kroll.com",
+  "epiq11.com",
+  "epiq.com",
+  "notkroll.com",
+  "ecf.nvb.uscourts.gov",
+]
+
 [[values]]
 reason = "Negative-test and parser fixtures: placeholder mailboxes no person reads."
 values = [

@@ -20,6 +20,7 @@ use std::process::ExitCode;
 use anyhow::{anyhow, Context, Result};
 
 use super::case_timeline;
+use super::claims_agent::{self, AgentFetch, ClaimsNotice};
 use super::nef::{self, Notice};
 use crate::projects::manifest;
 
@@ -48,6 +49,13 @@ pub struct Options {
 #[async_trait::async_trait]
 pub trait FreeLook: Send + Sync {
     async fn fetch(&self, url: &str) -> Result<Vec<u8>>;
+}
+
+/// The `%PDF` magic-byte check every download path applies before anything
+/// is written: a block page is HTML wearing a `.pdf` name, and only the
+/// bytes say so (LAW-159).
+pub(super) fn is_pdf(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF")
 }
 
 /// Follows a CM/ECF free-look link over HTTPS. A court that answers with a
@@ -116,10 +124,6 @@ impl FreeLook for HttpFreeLook {
     }
 }
 
-fn is_pdf(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"%PDF")
-}
-
 /// The `src` of the first `<iframe>` or `<embed>` on a free-look wrapper page.
 fn embedded_document(page: &str) -> Option<String> {
     let lower = page.to_ascii_lowercase();
@@ -148,7 +152,14 @@ pub async fn run(options: Options) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match ingest(Path::new("."), &options, &free_look).await {
+    let agent = match claims_agent::HttpAgentFetch::new() {
+        Ok(agent) => agent,
+        Err(error) => {
+            eprintln!("navigator project docket ingest: {error:#}");
+            return ExitCode::from(2);
+        }
+    };
+    match ingest(Path::new("."), &options, &free_look, &agent).await {
         Ok(report) if report.failures == 0 => ExitCode::SUCCESS,
         Ok(report) => {
             eprintln!(
@@ -174,6 +185,10 @@ pub struct Report {
     /// Docket entries recorded through `POST /app/api/projects/{id}/docket`,
     /// one per main document and numbered attachment.
     pub entries: usize,
+    /// Documents handed to a person: a claims-agent link that no fetch and
+    /// no free-look fallback could satisfy, or a link that names no docket
+    /// entry number to file under.
+    pub manual: usize,
 }
 
 /// The Project this checkout declares, and the dockets it owns.
@@ -426,6 +441,9 @@ struct Item {
     title: String,
     kind: String,
     free_look_url: Option<String>,
+    /// The claims-agent download link, when the notice came from a claims
+    /// agent. Blocked by the agent's site before any PDF exists.
+    agent_url: Option<String>,
     original_filename: Option<String>,
     description: String,
 }
@@ -460,6 +478,7 @@ fn items_for(notice: &Notice, docket: &str, kind_override: Option<&str>) -> Vec<
             .unwrap_or_else(|| suggested_kind(&notice.docket_text, None))
             .to_string(),
         free_look_url: notice.free_look_url.clone(),
+        agent_url: None,
         original_filename: notice.original_filename.clone(),
         description: format!(
             "D.I. {doc_no} in {}: {}",
@@ -481,6 +500,7 @@ fn items_for(notice: &Notice, docket: &str, kind_override: Option<&str>) -> Vec<
                 })
                 .to_string(),
             free_look_url: attachment.free_look_url.clone(),
+            agent_url: None,
             original_filename: attachment.original_filename.clone(),
             description: format!(
                 "D.I. {doc_no}-{} in {}: {}",
@@ -498,15 +518,108 @@ fn truncate(text: &str, max: usize) -> &str {
     }
 }
 
+/// The documents a claims-agent notice links. Only links whose label names a
+/// docket entry number can be filed automatically; a link without one is
+/// handed to a person in [`accept`].
+fn items_for_claims(claims: &ClaimsNotice, docket: &str, kind_override: Option<&str>) -> Vec<Item> {
+    let folder = case_folder(docket);
+    claims
+        .links
+        .iter()
+        .filter_map(|link| {
+            let doc_no = claims_agent::docket_entry_number(&link.label)?;
+            let title = claims_agent::link_title(&link.label);
+            let case_no = claims.case_no.clone().unwrap_or_default();
+            Some(Item {
+                case_no: case_no.clone(),
+                folder: folder.clone(),
+                doc_no: doc_no.clone(),
+                attachment: None,
+                filename: document_filename(&doc_no, None, &title),
+                title: title.clone(),
+                kind: kind_override
+                    .unwrap_or_else(|| suggested_kind(&title, None))
+                    .to_string(),
+                free_look_url: None,
+                agent_url: Some(link.url.clone()),
+                original_filename: None,
+                description: format!("D.I. {doc_no} in {case_no}: {}", truncate(&title, 400)),
+            })
+        })
+        .collect()
+}
+
+/// Why one document could not be fetched at all. The handoff is a reported
+/// outcome, not a failure: the run keeps going, and the Docket Entry is
+/// recorded source pending so the gap shows on the matter page.
+#[derive(Debug, thiserror::Error)]
+enum Handoff {
+    #[error(
+        "manual download needed: D.I. {doc_no} could not be fetched from {url} — download it in a \
+         browser and file it with `navigator site document upload`; the Docket Entry is recorded \
+         as source pending"
+    )]
+    Manual { doc_no: String, url: String },
+}
+
+/// The two notices a docket ingest reads: a court's CM/ECF notice of
+/// electronic filing and a claims agent's notice of the same case.
+/// The variant sizes are unalike by design: both arms are short-lived parse
+/// output, so boxing the larger one would complicate every match for nothing.
+#[allow(clippy::large_enum_variant)]
+enum ParsedNotice {
+    Nef(Notice),
+    Claims(ClaimsNotice),
+}
+
+impl ParsedNotice {
+    fn nef(&self) -> Option<&Notice> {
+        match self {
+            Self::Nef(notice) => Some(notice),
+            Self::Claims(_) => None,
+        }
+    }
+
+    /// The case number the notice prints, judge initials included.
+    fn case_no(&self) -> Option<&str> {
+        match self {
+            Self::Nef(notice) => Some(notice.case_no.as_str()),
+            Self::Claims(claims) => claims.case_no.as_deref(),
+        }
+    }
+
+    /// The text `--skip-pattern` reads: the docket text of a notice, the
+    /// joined link labels of a claims notice.
+    fn filter_text(&self) -> String {
+        match self {
+            Self::Nef(notice) => notice.docket_text.clone(),
+            Self::Claims(claims) => claims
+                .links
+                .iter()
+                .map(|link| link.label.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    }
+
+    fn items(&self, docket: &str, kind_override: Option<&str>) -> Vec<Item> {
+        match self {
+            Self::Nef(notice) => items_for(notice, docket, kind_override),
+            Self::Claims(claims) => items_for_claims(claims, docket, kind_override),
+        }
+    }
+}
+
 /// One notice that belongs to this Project and passed the filters.
 struct Accepted {
-    notice: Notice,
+    parsed: ParsedNotice,
     /// The manifest docket the notice's case number matched.
     docket: String,
     items: Vec<Item>,
 }
 
 /// Parse and filter every notice. Nothing here touches the network.
+#[allow(clippy::too_many_lines)]
 fn accept(scope: &ProjectScope, options: &Options, report: &mut Report) -> Vec<Accepted> {
     let patterns: Vec<String> = options
         .skip_patterns
@@ -515,32 +628,41 @@ fn accept(scope: &ProjectScope, options: &Options, report: &mut Report) -> Vec<A
         .collect();
     let mut accepted = Vec::new();
     for path in &options.notices {
-        let notice = match std::fs::read(path)
-            .with_context(|| format!("read {}", path.display()))
-            .and_then(|bytes| nef::parse_eml(&bytes).map_err(anyhow::Error::from))
-        {
-            Ok(notice) => notice,
+        let bytes = match std::fs::read(path).with_context(|| format!("read {}", path.display())) {
+            Ok(bytes) => bytes,
             Err(error) => {
                 println!("skipped {}: {error:#}", path.display());
                 report.skipped_notices += 1;
                 continue;
             }
         };
-        let Some(docket) = docket_for(&notice.case_no, &scope.dockets) else {
+        let parsed = if let Ok(notice) = nef::parse_eml(&bytes).map_err(anyhow::Error::from) {
+            ParsedNotice::Nef(notice)
+        } else {
+            let Some(claims) = claims_agent::parse(&bytes) else {
+                println!(
+                    "skipped {}: not a CM/ECF notice or a claims-agent notice",
+                    path.display()
+                );
+                report.skipped_notices += 1;
+                continue;
+            };
+            ParsedNotice::Claims(claims)
+        };
+        let Some(case_no) = parsed.case_no().map(str::to_string) else {
+            println!(
+                "skipped {}: no case number — match it to a docket by hand",
+                path.display()
+            );
+            report.skipped_notices += 1;
+            continue;
+        };
+        let Some(docket) = docket_for(&case_no, &scope.dockets) else {
             println!("skipped {}: not a docket of this Project", path.display());
             report.skipped_notices += 1;
             continue;
         };
-        if !options.only.is_empty()
-            && !notice
-                .doc_no
-                .as_ref()
-                .is_some_and(|doc_no| options.only.contains(doc_no))
-        {
-            report.skipped_notices += 1;
-            continue;
-        }
-        let text = notice.docket_text.to_ascii_lowercase();
+        let text = parsed.filter_text().to_ascii_lowercase();
         if let Some(pattern) = patterns
             .iter()
             .find(|pattern| text.contains(pattern.as_str()))
@@ -552,9 +674,40 @@ fn accept(scope: &ProjectScope, options: &Options, report: &mut Report) -> Vec<A
             report.skipped_notices += 1;
             continue;
         }
-        let items = items_for(&notice, docket, options.kind.as_deref());
+        let mut items = parsed.items(docket, options.kind.as_deref());
+        match &parsed {
+            ParsedNotice::Claims(claims) => {
+                // A link that names no docket entry number cannot be filed
+                // automatically under a DKT name: hand it to a person.
+                items.retain(|item| options.only.is_empty() || options.only.contains(&item.doc_no));
+                for link in &claims.links {
+                    if claims_agent::docket_entry_number(&link.label).is_none() {
+                        println!(
+                            "{} · manual download needed: {} names no docket entry number — \
+                             download {} in a browser and file it with \
+                             `navigator site document upload`",
+                            case_no,
+                            truncate(&link.label, 80),
+                            link.url
+                        );
+                        report.manual += 1;
+                    }
+                }
+            }
+            ParsedNotice::Nef(notice) => {
+                if !options.only.is_empty()
+                    && !notice
+                        .doc_no
+                        .as_ref()
+                        .is_some_and(|doc_no| options.only.contains(doc_no))
+                {
+                    report.skipped_notices += 1;
+                    continue;
+                }
+            }
+        }
         accepted.push(Accepted {
-            notice,
+            parsed,
             docket: docket.to_string(),
             items,
         });
@@ -570,7 +723,12 @@ fn accept(scope: &ProjectScope, options: &Options, report: &mut Report) -> Vec<A
 /// `documents/` tree. A failure on one document is counted in
 /// [`Report::failures`] and the run continues with the next.
 #[allow(clippy::too_many_lines)]
-pub async fn ingest(root: &Path, options: &Options, free_look: &dyn FreeLook) -> Result<Report> {
+pub async fn ingest(
+    root: &Path,
+    options: &Options,
+    free_look: &dyn FreeLook,
+    agent: &dyn AgentFetch,
+) -> Result<Report> {
     let scope = project_scope(root)?;
     crate::document_sync::refuse_legacy_layout(root)?;
     let mut report = Report::default();
@@ -579,13 +737,15 @@ pub async fn ingest(root: &Path, options: &Options, free_look: &dyn FreeLook) ->
     let mut planned: Vec<Item> = Vec::new();
     let mut seen: BTreeSet<(String, String, Option<u32>)> = BTreeSet::new();
 
-    for Accepted { notice, items, .. } in &accepted {
-        if notice.doc_no.is_none() {
-            println!(
-                "{} · no document attached · {}",
-                notice.case_no,
-                truncate(&notice.docket_text, 80)
-            );
+    for Accepted { parsed, items, .. } in &accepted {
+        if let Some(notice) = parsed.nef() {
+            if notice.doc_no.is_none() {
+                println!(
+                    "{} · no document attached · {}",
+                    notice.case_no,
+                    truncate(&notice.docket_text, 80)
+                );
+            }
         }
         for item in items {
             let key = (item.folder.clone(), item.doc_no.clone(), item.attachment);
@@ -605,7 +765,7 @@ pub async fn ingest(root: &Path, options: &Options, free_look: &dyn FreeLook) ->
             let on_disk = docket_bytes(root, &item.slug()).is_file()
                 || crate::document_sync::document_path_for_slug(root, Path::new(&item.slug()))
                     .is_file();
-            if item.free_look_url.is_none() && !on_disk {
+            if item.free_look_url.is_none() && item.agent_url.is_none() && !on_disk {
                 println!(
                     "{} · {} · no free-look link in the notice; download it from {}'s document page",
                     item.case_no,
@@ -630,16 +790,18 @@ pub async fn ingest(root: &Path, options: &Options, free_look: &dyn FreeLook) ->
         }
     }
 
+    let free_looks: BTreeMap<String, String> = accepted
+        .iter()
+        .filter_map(|accepted| accepted.parsed.nef())
+        .flat_map(free_look_index)
+        .collect();
     let service_list = ServiceList::from_notices(
         &scope.code,
-        accepted.iter().map(|accepted| &accepted.notice),
+        accepted.iter().filter_map(|accepted| accepted.parsed.nef()),
     );
     service_list.print();
 
-    let entries: Vec<serde_json::Value> = accepted
-        .iter()
-        .flat_map(|accepted| docket_entry_bodies(&accepted.notice, &accepted.docket, &filed))
-        .collect();
+    let entries = entry_bodies(&accepted, &filed);
     for entry in &entries {
         println!(
             "{} · D.I. {} · docket entry · {}",
@@ -669,16 +831,15 @@ pub async fn ingest(root: &Path, options: &Options, free_look: &dyn FreeLook) ->
             host,
             &scope.code,
             free_look,
+            agent,
+            &free_looks,
             &planned,
             &mut filed,
             &mut report,
         )
         .await?;
     }
-    let entries: Vec<_> = accepted
-        .iter()
-        .flat_map(|accepted| docket_entry_bodies(&accepted.notice, &accepted.docket, &filed))
-        .collect();
+    let entries = entry_bodies(&accepted, &filed);
     if !entries.is_empty() {
         record_entries(root, host, &scope.code, &entries, &mut report).await;
     }
@@ -758,6 +919,63 @@ fn docket_entry_bodies(notice: &Notice, docket: &str, filed: &Filed) -> Vec<serd
         .collect()
 }
 
+/// The docket entries a run records: a court notice's entries carry the
+/// notice's caption, forum, party, and filed date; a claims-agent notice's
+/// entries carry the link label as the title. A document that never files
+/// leaves the entry source pending — no `slug` — so the gap shows on the
+/// matter page (LAW-159).
+fn entry_bodies(accepted: &[Accepted], filed: &Filed) -> Vec<serde_json::Value> {
+    accepted
+        .iter()
+        .flat_map(|accepted| match &accepted.parsed {
+            ParsedNotice::Nef(notice) => docket_entry_bodies(notice, &accepted.docket, filed),
+            ParsedNotice::Claims(_) => {
+                claims_entry_bodies(&accepted.items, &accepted.docket, filed)
+            }
+        })
+        .collect()
+}
+
+/// The source-pending-able entries of a claims-agent notice, one per link
+/// that names a docket entry number.
+fn claims_entry_bodies(items: &[Item], docket: &str, filed: &Filed) -> Vec<serde_json::Value> {
+    items
+        .iter()
+        .map(|item| {
+            let mut body = serde_json::json!({
+                "docket_number": docket,
+                "entry_number": item.doc_no,
+                "kind": entry_kind(&item.title),
+                "title": item.title,
+            });
+            if let Some(slug) = filed.existing(item) {
+                body["slug"] = serde_json::json!(slug);
+            }
+            body
+        })
+        .collect()
+}
+
+/// The free-look link of every document a court notice names, keyed the way
+/// a claims-agent item names its entry: unpadded for the main document,
+/// `entry-attachment` for a numbered attachment. A claims-agent link that
+/// the agent's site blocks falls back to these.
+fn free_look_index(notice: &Notice) -> Vec<(String, String)> {
+    let mut index = Vec::new();
+    if let (Some(doc_no), Some(url)) = (&notice.doc_no, &notice.free_look_url) {
+        index.push((unpadded(doc_no), url.clone()));
+    }
+    for attachment in &notice.attachments {
+        if let (Some(doc_no), Some(url)) = (&notice.doc_no, &attachment.free_look_url) {
+            index.push((
+                format!("{}-{}", unpadded(doc_no), attachment.number),
+                url.clone(),
+            ));
+        }
+    }
+    index
+}
+
 /// The docket entry kind a notice's text names: its first word, when that
 /// word is a kind the spine knows; `other` when it is not. A hearing or
 /// trial is never recorded from a notice, because the notice does not carry
@@ -833,11 +1051,16 @@ async fn record_entries(
     }
 }
 
+// The operator-facing signature reads as a table row; grouping the nine
+// arguments would obscure the order the CLI passes them in.
+#[allow(clippy::too_many_arguments)]
 async fn file_planned(
     root: &Path,
     host: Option<&str>,
     code: &str,
     free_look: &dyn FreeLook,
+    agent: &dyn AgentFetch,
+    free_looks: &BTreeMap<String, String>,
     planned: &[Item],
     filed: &mut Filed,
     report: &mut Report,
@@ -845,10 +1068,14 @@ async fn file_planned(
     let client = crate::remote::DocumentClient::connect(host, code).await?;
     crate::document_sync::ensure_documents_ignored(root)?;
     for item in planned {
-        match file_one(root, &client, free_look, item, filed).await {
+        match file_one(root, &client, free_look, agent, free_looks, item, filed).await {
             Ok(pointer_path) => {
                 println!("staged {}", pointer_path.display());
                 report.filed += 1;
+            }
+            Err(error) if error.downcast_ref::<Handoff>().is_some() => {
+                eprintln!("{} · {} · {error:#}", item.case_no, item.label());
+                report.manual += 1;
             }
             Err(error) => {
                 eprintln!("{} · {} · {error:#}", item.case_no, item.label());
@@ -984,10 +1211,67 @@ fn docket_bytes(root: &Path, slug: &str) -> PathBuf {
     )
 }
 
+/// The bytes of one planned document: from the claims agent's site when the
+/// notice is one of theirs, from the free look when it is the court's. An
+/// agent link the site blocks falls back to the same entry's free look;
+/// when neither yields a PDF, the document is handed to a person.
+async fn fetch_document(
+    free_look: &dyn FreeLook,
+    agent: &dyn AgentFetch,
+    free_looks: &BTreeMap<String, String>,
+    item: &Item,
+) -> Result<(Vec<u8>, &'static str)> {
+    if let Some(agent_url) = item.agent_url.as_deref() {
+        match agent.fetch(agent_url).await {
+            Ok(bytes) => return Ok((bytes, "from the claims agent")),
+            Err(error) => {
+                eprintln!(
+                    "{} · {} · claims-agent link refused: {error:#}",
+                    item.case_no,
+                    item.label()
+                );
+                if let Some(url) = free_looks.get(&unpadded(&item.doc_no)) {
+                    println!(
+                        "{} · {} · falling back to the CM/ECF free look for D.I. {}",
+                        item.case_no,
+                        item.label(),
+                        item.doc_no
+                    );
+                    match free_look.fetch(url).await {
+                        Ok(bytes) => return Ok((bytes, "from the free-look fallback")),
+                        Err(fallback_error) => {
+                            eprintln!(
+                                "{} · {} · the free-look fallback failed too: {fallback_error:#}",
+                                item.case_no,
+                                item.label()
+                            );
+                        }
+                    }
+                }
+                return Err(Handoff::Manual {
+                    doc_no: item.doc_no.clone(),
+                    url: agent_url.to_string(),
+                }
+                .into());
+            }
+        }
+    }
+    let url = item
+        .free_look_url
+        .as_deref()
+        .ok_or_else(|| anyhow!("no free-look link"))?;
+    free_look
+        .fetch(url)
+        .await
+        .map(|bytes| (bytes, "from the free-look link"))
+}
+
 async fn file_one(
     root: &Path,
     client: &crate::remote::DocumentClient,
     free_look: &dyn FreeLook,
+    agent: &dyn AgentFetch,
+    free_looks: &BTreeMap<String, String>,
     item: &Item,
     filed: &mut Filed,
 ) -> Result<PathBuf> {
@@ -1001,22 +1285,29 @@ async fn file_one(
     } else if legacy.is_file() {
         std::fs::read(&legacy).with_context(|| format!("read {}", legacy.display()))?
     } else {
+        let (bytes, source) = fetch_document(free_look, agent, free_looks, item).await?;
         let parent = target
             .parent()
             .ok_or_else(|| anyhow!("{} has no parent", target.display()))?;
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         crate::document_sync::ensure_managed_copy_target(root, &target)?;
-        let url = item
-            .free_look_url
-            .as_deref()
-            .ok_or_else(|| anyhow!("no free-look link"))?;
-        let bytes = free_look.fetch(url).await?;
+        // The belt under every fetcher's own check: nothing that is not a
+        // PDF is ever saved under a `.pdf` name (LAW-159).
+        if !is_pdf(&bytes) {
+            return Err(anyhow!(
+                "the download is not a PDF; it may be a block page saved under a PDF name"
+            ));
+        }
         write_atomically(&target, &bytes)?;
-        println!("saved {}", target.display());
+        println!("saved {} ({source})", target.display());
         bytes
     };
     let metadata = serde_json::json!({
-        "source": "cm_ecf_notice",
+        "source": if item.agent_url.is_some() {
+            "claims_agent_notice"
+        } else {
+            "cm_ecf_notice"
+        },
         "case_number": item.case_no,
         "docket_entry": item.doc_no,
         "attachment": item.attachment,
@@ -1045,10 +1336,13 @@ async fn file_one(
 
 #[cfg(test)]
 mod tests {
+    use super::claims_agent::AgentFetchError;
     use super::{
         case_folder, docket_for, docket_key, document_filename, embedded_document, entry_kind,
-        filing_slug, ingest, suggested_kind, text_slug, FreeLook, Options, Report,
+        filing_slug, ingest, is_pdf, suggested_kind, text_slug, AgentFetch, FreeLook, Options,
+        Report,
     };
+
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::LazyLock;
@@ -1071,6 +1365,52 @@ mod tests {
         async fn fetch(&self, url: &str) -> anyhow::Result<Vec<u8>> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(format!("%PDF-1.7 synthetic {url}").into_bytes())
+        }
+    }
+
+    /// Serves PDFs or a `CloudFront` block page, and counts how often the
+    /// agent's site was asked.
+    struct FakeAgentFetch {
+        calls: AtomicUsize,
+        /// `true` answers every link with a PDF; `false` answers with the
+        /// block page the agent sites put in front of a scripted fetch.
+        pdfs: bool,
+        /// `true` makes every link fail outright, as a blocked request does
+        /// before any bytes arrive.
+        fails: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl AgentFetch for FakeAgentFetch {
+        async fn fetch(&self, url: &str) -> Result<Vec<u8>, AgentFetchError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.fails {
+                return Err(AgentFetchError::Other(anyhow::anyhow!(
+                    "HTTP 403 Forbidden"
+                )));
+            }
+            if self.pdfs {
+                Ok(format!("%PDF-1.7 agent {url}").into_bytes())
+            } else {
+                Ok(b"<html>ERROR: The request could not be satisfied.</html>".to_vec())
+            }
+        }
+    }
+
+    /// The default agent for tests that never reach the agent's site.
+    static NO_AGENT: FakeAgentFetch = FakeAgentFetch {
+        calls: AtomicUsize::new(0),
+        pdfs: true,
+        fails: false,
+    };
+
+    /// A free look that always fails, as an expired CM/ECF link does.
+    struct FailingFreeLook;
+
+    #[async_trait::async_trait]
+    impl FreeLook for FailingFreeLook {
+        async fn fetch(&self, _url: &str) -> anyhow::Result<Vec<u8>> {
+            Err(anyhow::anyhow!("free look expired"))
         }
     }
 
@@ -1213,6 +1553,7 @@ mod tests {
                 ..Options::default()
             },
             &free_look,
+            &NO_AGENT,
         )
         .await
         .unwrap();
@@ -1258,6 +1599,7 @@ mod tests {
                 ..Options::default()
             },
             &free_look,
+            &NO_AGENT,
         )
         .await
         .unwrap();
@@ -1272,6 +1614,7 @@ mod tests {
                 ..Options::default()
             },
             &free_look,
+            &NO_AGENT,
         )
         .await
         .unwrap();
@@ -1376,7 +1719,9 @@ mod tests {
             ..Options::default()
         };
 
-        let report = ingest(dir.path(), &options, &free_look).await.unwrap();
+        let report = ingest(dir.path(), &options, &free_look, &NO_AGENT)
+            .await
+            .unwrap();
         assert_eq!(report.filed, 1, "{report:?}");
         assert_eq!(report.failures, 0, "{report:?}");
         assert_eq!(report.entries, 1, "one docket entry per notice: {report:?}");
@@ -1426,7 +1771,9 @@ mod tests {
             posted[1].1
         );
 
-        let rerun = ingest(dir.path(), &options, &free_look).await.unwrap();
+        let rerun = ingest(dir.path(), &options, &free_look, &NO_AGENT)
+            .await
+            .unwrap();
         assert_eq!(rerun.filed, 0);
         assert_eq!(rerun.duplicates, 1);
         assert_eq!(
@@ -1458,6 +1805,7 @@ mod tests {
                 ..Options::default()
             },
             &free_look,
+            &NO_AGENT,
         )
         .await
         .unwrap();
@@ -1600,6 +1948,7 @@ mod tests {
                 ..Options::default()
             },
             &free_look,
+            &NO_AGENT,
         )
         .await
         .unwrap();
@@ -1652,6 +2001,7 @@ mod tests {
                 ..Options::default()
             },
             &free_look,
+            &NO_AGENT,
         )
         .await
         .unwrap();
@@ -1718,6 +2068,7 @@ mod tests {
                 ..Options::default()
             },
             &free_look,
+            &NO_AGENT,
         )
         .await
         .unwrap();
@@ -1761,6 +2112,7 @@ mod tests {
                 ..Options::default()
             },
             &free_look,
+            &NO_AGENT,
         )
         .await
         .unwrap();
@@ -1780,5 +2132,252 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn a_filing_made_under_a_dkt_name_is_recognised_whatever_its_title() {
         a_filing_under_this_name_is_not_filed_again("DKT 0029 - Retitled by hand.pdf").await;
+    }
+
+    #[test]
+    fn only_pdf_bytes_pass_the_magic_byte_check() {
+        assert!(is_pdf(b"%PDF-1.7"));
+        assert!(!is_pdf(
+            b"<html>ERROR: The request could not be satisfied.</html>"
+        ));
+        assert!(!is_pdf(b""));
+    }
+
+    /// A claims-agent notice files every link that names a docket entry,
+    /// records its Docket Entries through the same door as a court notice,
+    /// and hands the link that names no entry to a person.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_claims_agent_notice_files_its_docket_links_and_hands_the_rest_to_a_person() {
+        let project_id = Uuid::now_v7();
+        let server = upload_server(project_id).await;
+        let dir = checkout("host: navigator.example.com\nproject: acme\ndockets:\n  - 26-10042\n");
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let _env = CredentialsEnv::logged_in(&server.uri());
+        let agent = FakeAgentFetch {
+            calls: AtomicUsize::new(0),
+            pdfs: true,
+            fails: false,
+        };
+
+        let report = ingest(
+            dir.path(),
+            &Options {
+                notices: vec![fixture("claims-agent-notice.eml")],
+                host: Some(server.uri()),
+                ..Options::default()
+            },
+            &FakeFreeLook {
+                calls: AtomicUsize::new(0),
+            },
+            &agent,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            report,
+            Report {
+                filed: 2,
+                manual: 1,
+                entries: 2,
+                ..Report::default()
+            }
+        );
+        assert_eq!(agent.calls.load(Ordering::SeqCst), 2);
+        for name in [
+            "DKT 0029 - Notice of Transfer of Claim.pdf",
+            "DKT 0033 - Notice of Amendments.pdf",
+        ] {
+            let saved = dir.path().join(format!("documents/Docket Filings/{name}"));
+            assert!(
+                std::fs::read(&saved).unwrap().starts_with(b"%PDF"),
+                "{name}"
+            );
+            let blob = dir.path().join(format!("blobs/{name}.yaml"));
+            assert!(blob.is_file(), "{name}: {blob:?}");
+        }
+        let uploads: Vec<serde_json::Value> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| {
+                request.method == "POST" && request.url.path().ends_with("/documents")
+            })
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .collect();
+        assert_eq!(uploads.len(), 2, "{uploads:?}");
+        let metadata = &uploads[0]["metadata"];
+        assert_eq!(metadata["source"], "claims_agent_notice");
+        let entries = docket_entries(&server).await;
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert_eq!(entries[0]["entry_number"], "29");
+        assert_eq!(entries[0]["kind"], "notice");
+        assert!(
+            entries[0].get("slug").is_some(),
+            "a filed document is linked to its entry"
+        );
+        assert_eq!(entries[1]["entry_number"], "33");
+    }
+
+    /// When no download succeeds, the run still records the Docket Entries —
+    /// source pending, no `slug` — and hands both links to a person. Nothing
+    /// is a failure: the gap shows on the matter page.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_claims_agent_notice_records_source_pending_entries_when_every_download_fails() {
+        let project_id = Uuid::now_v7();
+        let server = upload_server(project_id).await;
+        let dir = checkout("host: navigator.example.com\nproject: acme\ndockets:\n  - 26-10042\n");
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let _env = CredentialsEnv::logged_in(&server.uri());
+        let agent = FakeAgentFetch {
+            calls: AtomicUsize::new(0),
+            pdfs: false,
+            fails: true,
+        };
+
+        let report = ingest(
+            dir.path(),
+            &Options {
+                notices: vec![fixture("claims-agent-notice.eml")],
+                host: Some(server.uri()),
+                ..Options::default()
+            },
+            &FakeFreeLook {
+                calls: AtomicUsize::new(0),
+            },
+            &agent,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            report,
+            Report {
+                manual: 3,
+                entries: 2,
+                ..Report::default()
+            }
+        );
+        assert_eq!(agent.calls.load(Ordering::SeqCst), 2);
+        assert!(!dir.path().join("documents/Docket Filings").exists());
+        let entries = docket_entries(&server).await;
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        for entry in &entries {
+            assert!(
+                entry.get("slug").is_none(),
+                "an unfetched document leaves its entry source pending: {entry}"
+            );
+        }
+        assert_eq!(entries[0]["entry_number"], "29");
+        assert_eq!(entries[1]["entry_number"], "33");
+    }
+
+    /// A link the agent's site blocks falls back to the same entry's
+    /// CM/ECF free look, and an entry with no free look is handed to a
+    /// person. A document the free look already filed is not filed twice.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_blocked_agent_link_falls_back_to_the_free_look_of_the_same_entry() {
+        let project_id = Uuid::now_v7();
+        let server = upload_server(project_id).await;
+        let dir = checkout("host: navigator.example.com\nproject: acme\ndockets:\n  - 26-10042\n");
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let _env = CredentialsEnv::logged_in(&server.uri());
+        let agent = FakeAgentFetch {
+            calls: AtomicUsize::new(0),
+            pdfs: false,
+            fails: true,
+        };
+        let free_look = FakeFreeLook {
+            calls: AtomicUsize::new(0),
+        };
+
+        let report = ingest(
+            dir.path(),
+            &Options {
+                notices: vec![
+                    fixture("claims-agent-notice.eml"),
+                    fixture("bankruptcy-transfer.eml"),
+                ],
+                host: Some(server.uri()),
+                ..Options::default()
+            },
+            &free_look,
+            &agent,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            report,
+            Report {
+                filed: 1,
+                duplicates: 1,
+                manual: 2,
+                entries: 3,
+                ..Report::default()
+            },
+            "the court's own notice names the same entry 29: the second item of the pair is a duplicate"
+        );
+        assert_eq!(agent.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(free_look.calls.load(Ordering::SeqCst), 1);
+        assert!(dir
+            .path()
+            .join("documents/Docket Filings/DKT 0029 - Notice of Transfer of Claim.pdf")
+            .is_file());
+        let entries = docket_entries(&server).await;
+        assert_eq!(entries.len(), 3, "{entries:?}");
+        assert_eq!(entries[0]["entry_number"], "29");
+        assert_eq!(entries[2]["entry_number"], "29");
+    }
+
+    /// An expired CM/ECF link is the ordinary case: the agent's link
+    /// fails AND the entry's own free look fails. Both entries still
+    /// land — source pending — and every link is handed to a person.
+    #[tokio::test(flavor = "current_thread")]
+    async fn when_the_free_look_fails_too_the_entries_stay_source_pending() {
+        let project_id = Uuid::now_v7();
+        let server = upload_server(project_id).await;
+        let dir = checkout("host: navigator.example.com\nproject: acme\ndockets:\n  - 26-10042\n");
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let _env = CredentialsEnv::logged_in(&server.uri());
+        let agent = FakeAgentFetch {
+            calls: AtomicUsize::new(0),
+            pdfs: false,
+            fails: true,
+        };
+
+        let report = ingest(
+            dir.path(),
+            &Options {
+                notices: vec![
+                    fixture("claims-agent-notice.eml"),
+                    fixture("bankruptcy-transfer.eml"),
+                ],
+                host: Some(server.uri()),
+                ..Options::default()
+            },
+            &FailingFreeLook,
+            &agent,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.filed, 0, "{report:?}");
+        assert!(
+            !dir.path().join("documents/Docket Filings").exists(),
+            "nothing is saved when every source fails"
+        );
+        let entries = docket_entries(&server).await;
+        assert_eq!(entries.len(), 3, "{entries:?}");
+        for entry in &entries {
+            assert!(
+                entry.get("slug").is_none(),
+                "an unfetched document leaves its entry source pending: {entry}"
+            );
+        }
+        assert_eq!(entries[0]["entry_number"], "29");
+        assert_eq!(entries[1]["entry_number"], "33");
+        assert_eq!(entries[2]["entry_number"], "29");
     }
 }
