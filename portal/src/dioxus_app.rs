@@ -625,9 +625,10 @@ pub fn font_head(key: views::brand::BrandKey) -> &'static str {
         views::brand::BrandKey::Aegis | views::brand::BrandKey::CyberInjuryLaw => {
             &CYBER_INJURY_HEAD
         }
-        // IEP is held out of `BrandKey::LIVE`: it serves no public pages, so
-        // it ships no font bytes until its host launches.
-        views::brand::BrandKey::Iep => "",
+        // IEP Defenders pairs the same serif display / sans body faces as
+        // Misericordia, so the brand shares Misericordia's head fragment
+        // (matched separately above).
+        views::brand::BrandKey::IepDefenders => &MISERICORDIA_HEAD,
     }
 }
 

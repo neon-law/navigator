@@ -147,10 +147,8 @@ async fn a_seed_without_sample_matters_has_no_disposable_projects_or_people() {
         .unwrap();
     assert_eq!(
         brands,
-        store::firms::CLOSED_BRAND_KEYS
-            .iter()
-            .map(|key| (*key).to_string())
-            .collect::<Vec<_>>(),
+        store::seed::practice_worn_brand_keys(),
+        "the practice firm wears every closed key the Lex firm does not"
     );
 }
 
@@ -757,10 +755,8 @@ async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
         .unwrap();
     assert_eq!(
         brands,
-        store::firms::CLOSED_BRAND_KEYS
-            .iter()
-            .map(|key| (*key).to_string())
-            .collect::<Vec<_>>(),
+        store::seed::practice_worn_brand_keys(),
+        "the practice firm wears every closed key the Lex firm does not"
     );
     let lex = firms
         .iter()
@@ -769,7 +765,7 @@ async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
     let lex_brands = store::firms::brand_keys_for_firm(&surreal, lex.id)
         .await
         .unwrap();
-    assert_eq!(lex_brands, vec!["iep".to_string()]);
+    assert_eq!(lex_brands, vec!["iep-defenders".to_string()]);
 }
 
 #[tokio::test]
@@ -807,10 +803,8 @@ async fn the_dev_boot_seeds_the_practice_once() {
         .unwrap();
     assert_eq!(
         brands,
-        store::firms::CLOSED_BRAND_KEYS
-            .iter()
-            .map(|key| (*key).to_string())
-            .collect::<Vec<_>>(),
+        store::seed::practice_worn_brand_keys(),
+        "the practice firm wears every closed key the Lex firm does not"
     );
 
     for project in projects::all(&surreal).await.unwrap() {

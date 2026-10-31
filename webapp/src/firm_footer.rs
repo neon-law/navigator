@@ -280,10 +280,9 @@ pub async fn resolve_firm_footer_model(
     }
 
     // The resolved Firm's home: the production home of the firm's own brand
-    // when the Firm wears it. A Firm with no compiled firm brand (Lex, wearing
-    // only the held-out IEP practice) publishes no home yet — its entity name
-    // then renders unlinked on the public pages rather than linked to some
-    // other firm's site.
+    // when the Firm wears it. A Firm with no compiled firm brand publishes
+    // no home yet — its entity name then renders unlinked on the public pages
+    // rather than linked to some other firm's site.
     let firm_home_href = if keys
         .iter()
         .any(|key| key == views::brand::BrandKey::GuiebShook.as_str())

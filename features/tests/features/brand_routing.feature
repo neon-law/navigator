@@ -46,7 +46,7 @@ Feature: Public routing on the firm's own host
       | staging.misericordialaw.com     | Misericordia Injury Law  | Misericordia Injury Law \| Home  | You were hurt. We are here to listen.  |
       | staging.abhayaimmigration.com   | Abhaya Immigration       | Abhaya Immigration \| Home       | Your next chapter, without fear.       |
       | staging.deleteyourdebt.com      | DeleteYourDebt.com       | DeleteYourDebt.com \| Home        | A next step beyond debt.                |
-      | staging.guiebandshook.com       | Guieb & Shook            | Guieb & Shook \| Home                       | written engagement before work begins   |
+      | staging.iepdefenders.com        | IEP Defenders            | IEP Defenders \| Home                       | the one who loses time                 |
 
   Scenario Outline: A live holding host serves its explicit holding page
     When a visitor opens / on host "<host>"

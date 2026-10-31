@@ -675,6 +675,45 @@ pub const PALETTE: &[Palette] = &[
             border: Some("#493a34"),
         },
     },
+    // Deep violet — clarity and advocacy for the special-education practice,
+    // deliberately unlike any sibling palette so a directory card is
+    // recognizable without reading the label.
+    Palette {
+        id: "iep-defenders",
+        label: "IEP Defenders violet",
+        light: PaletteScheme {
+            primary: "#5B21B6",
+            primary_hover: "#4C1D95",
+            primary_active: "#3B1178",
+            on_primary: "#ffffff",
+            on_brand: "#ffffff",
+            link: "#5B21B6",
+            link_hover: "#3B1178",
+            surface_subtle: "#f4f0fb",
+            bg: None,
+            surface: None,
+            surface_raised: None,
+            text: None,
+            text_muted: None,
+            border: None,
+        },
+        dark: PaletteScheme {
+            primary: "#C4B5FD",
+            primary_hover: "#D2C4FE",
+            primary_active: "#E0D3FE",
+            on_primary: "#0d1117",
+            on_brand: "#0d1117",
+            link: "#C4B5FD",
+            link_hover: "#E0D3FE",
+            surface_subtle: "#26183d",
+            bg: None,
+            surface: None,
+            surface_raised: None,
+            text: None,
+            text_muted: None,
+            border: None,
+        },
+    },
 ];
 
 /// Look up a typeface by the id stored on a brand row.
@@ -705,7 +744,7 @@ impl BrandKey {
             Self::GuiebShook | Self::Vesta => {
                 typeface_by_id("eb-garamond").expect("eb-garamond is catalogued")
             }
-            Self::Misericordia => {
+            Self::Misericordia | Self::IepDefenders => {
                 typeface_by_id("source-sans-3").expect("source-sans-3 is catalogued")
             }
             Self::Abhaya => typeface_by_id("mukta").expect("mukta is catalogued"),
@@ -715,7 +754,7 @@ impl BrandKey {
             Self::Summons => {
                 typeface_by_id("libre-franklin").expect("libre-franklin is catalogued")
             }
-            Self::Groundwork | Self::Daybridge | Self::Iep => {
+            Self::Groundwork | Self::Daybridge => {
                 typeface_by_id("source-serif-4").expect("source-serif-4 is catalogued")
             }
             Self::DeathAndDivorce => {
@@ -739,8 +778,9 @@ impl BrandKey {
                 typeface_by_id("barlow-condensed")
                     .expect("invariant: barlow-condensed is catalogued above"),
             ),
-            // Misericordia pairs serif headings with a sans body.
-            Self::Misericordia => {
+            // Misericordia and IEP Defenders pair serif headings with a sans
+            // body.
+            Self::Misericordia | Self::IepDefenders => {
                 Some(typeface_by_id("source-serif-4").expect("source-serif-4 is catalogued"))
             }
             // One face throughout. For most of these that is simply how the
@@ -757,8 +797,7 @@ impl BrandKey {
             | Self::Summons
             | Self::Daybridge
             | Self::Groundwork
-            | Self::DeathAndDivorce
-            | Self::Iep => None,
+            | Self::DeathAndDivorce => None,
         }
     }
 
@@ -782,10 +821,11 @@ impl BrandKey {
             Self::DeleteYourDebt => {
                 palette_by_id("delete-your-debt").expect("delete-your-debt is catalogued")
             }
-            // Summons wears the OATH charcoal, and IEP borrows it as a
-            // placeholder palette; its own identity waits for its launch
-            // decisions.
-            Self::Summons | Self::Iep => palette_by_id("oath").expect("oath is catalogued"),
+            // Summons wears the OATH charcoal.
+            Self::Summons => palette_by_id("oath").expect("oath is catalogued"),
+            Self::IepDefenders => {
+                palette_by_id("iep-defenders").expect("iep-defenders is catalogued")
+            }
             Self::Aegis => palette_by_id("aegis").expect("invariant: aegis is catalogued above"),
             Self::Groundwork => {
                 palette_by_id("groundwork").expect("invariant: groundwork is catalogued above")
@@ -1340,6 +1380,18 @@ mod tests {
         );
         assert_eq!(BrandKey::LawyerShook.default_typeface().id, "tinos");
         assert_eq!(BrandKey::LawyerShook.default_palette().id, "lawyer-shook");
+        assert_eq!(
+            BrandKey::IepDefenders.default_typeface().id,
+            "source-sans-3"
+        );
+        assert_eq!(
+            BrandKey::IepDefenders
+                .display_typeface()
+                .expect("IEP Defenders pairs a display face")
+                .id,
+            "source-serif-4"
+        );
+        assert_eq!(BrandKey::IepDefenders.default_palette().id, "iep-defenders");
     }
 
     #[test]
@@ -1499,6 +1551,7 @@ mod tests {
             "abhaya",
             "delete-your-debt",
             "oath",
+            "iep-defenders",
         ] {
             let palette = palette_by_id(id).expect("practice brand is catalogued");
 

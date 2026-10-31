@@ -1,0 +1,89 @@
+head_title: "{site_name} | Home"
+meta_description: >-
+  IEP Defenders is the special education practice of Lex Tecnica LLP. Help
+  with evaluations, eligibility, IEP implementation, placement, school
+  discipline, state complaints, mediation, and due process for families in
+  Nevada, Arizona, California, New York, Utah, New Hampshire, Hawaii, and
+  North Carolina. Attorney advertisement.
+heading: Free Special Education Lawyers Defending Your Child's Rights
+lead: >-
+  When the school keeps delaying, denying, or ignoring the IEP, your child
+  is the one who loses time. Our special education attorneys help you
+  understand what the school should be doing and what your legal options
+  are when it is not happening. You do not need to know the legal term for
+  the problem before you call. Start with what your child is missing.
+  IEP Defenders works with families in Nevada, Arizona, California, New
+  York, Utah, New Hampshire, Hawaii, and North Carolina. Do not rule out
+  legal help because you assume you cannot afford it: how attorney's fees
+  are handled depends on the type of case and applicable law, and in many
+  qualifying due process matters families may not need to pay attorney's
+  fees upfront.
+contact_label: Call 743.IEP.HELP
+service:
+  heading: What happens when you contact a special education lawyer
+  body:
+    - - text: >-
+          Tell us where things broke down. What did you ask the school to
+          do? What was the response? What is your child still missing?
+    - - text: >-
+          We review the record. Our team looks at the IEP, timeline, and
+          prior requests to determine whether the matter fits the legal
+          work we handle.
+    - - text: >-
+          Understand your next step. If we can take the matter, we explain
+          the scope, fees, and next legal step before you decide how to
+          proceed.
+    - - text: "Call "
+      - text: "+1-743-437-4357"
+        href: "tel:+17434374357"
+      - text: " or write to "
+      - text: "{firm_email}"
+      - text: >-
+          . Bring the IEP, emails, evaluations, or notices you have, and we
+          can tell you what else we need. We do not represent families
+          directly at IEP meetings.
+practices_heading: When the school is not following through
+practices:
+  - mark: scales
+    heading: The IEP promises services your child is not getting
+    body: >-
+      Speech, OT, accommodations, behavioral support, specialized
+      instruction. If it is written into the plan but not happening, that
+      gap matters.
+    href: /services
+  - mark: scales
+    heading: You asked for an evaluation. The answer is delay after delay.
+    body: >-
+      The school keeps asking for more time, pushing the meeting back, or
+      leaving you unsure whether testing is even moving forward.
+    href: /services
+  - mark: gavel
+    heading: The school wants to change placement or cut support
+    body: >-
+      You are being asked to agree to a plan that does not match what you
+      are seeing your child need.
+    href: /services
+  - mark: scales
+    heading: Your child is being removed instead of supported
+    body: >-
+      Suspensions, shortened days, repeated calls home, or behavior
+      responses are becoming the way the school manages the problem.
+    href: /services
+  - mark: scales
+    heading: You've already had the meeting. And the meeting after that.
+    body: >-
+      Everyone talks. Notes are taken. Promises are made. Then your child
+      goes back to the same problem.
+    href: /services
+  - mark: gavel
+    heading: The school says the IEP is working, but your child is still struggling
+    body: >-
+      Progress reports, evaluations, grades, or what you are seeing at home
+      may tell a different story. If the school's description of your
+      child's progress does not match the record or your child's
+      experience, that deserves a closer look.
+    href: /services
+photo:
+  src: img/architecture/library-reading-room.jpg
+  alt: Bookshelves and arched windows in a historic library.
+  caption: ""
