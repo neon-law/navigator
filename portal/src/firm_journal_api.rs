@@ -477,9 +477,8 @@ pub(super) async fn mercury_import(
     let Ok(credential) = credential else {
         return Ok(refused("bank_credential_unavailable"));
     };
-    let client = match cloud::mercury::Mercury::new(credential.expose_for_provider_call()) {
-        Ok(client) => client,
-        Err(_) => return Ok(refused("bank_credential_unavailable")),
+    let Ok(client) = cloud::mercury::Mercury::new(credential.expose_for_provider_call()) else {
+        return Ok(refused("bank_credential_unavailable"));
     };
     let window = match client
         .transactions_window(
@@ -630,7 +629,7 @@ async fn import_one(
         return outcome;
     }
     let evidence_bytes = serde_json::to_vec_pretty(transaction).unwrap_or_default();
-    let evidence_document = match private_evidence(
+    let Ok(evidence_document) = private_evidence(
         context.surreal,
         context.storage,
         project_id,
@@ -639,24 +638,18 @@ async fn import_one(
         &evidence_bytes,
     )
     .await
-    {
-        Ok(document) => document,
-        Err(_) => {
-            skip(&mut outcome, "evidence_unavailable");
-            return outcome;
-        }
+    else {
+        skip(&mut outcome, "evidence_unavailable");
+        return outcome;
     };
     let mut receipt_document = None;
     for attachment in &transaction.attachments {
-        let bytes = match context.client.receipt(attachment).await {
-            Ok(bytes) => bytes,
-            Err(_) => {
-                skip(&mut outcome, "receipt_unavailable");
-                return outcome;
-            }
+        let Ok(bytes) = context.client.receipt(attachment).await else {
+            skip(&mut outcome, "receipt_unavailable");
+            return outcome;
         };
         let digest = store::documents::sha256_hex(&bytes);
-        let document = match private_evidence(
+        let Ok(document) = private_evidence(
             context.surreal,
             context.storage,
             project_id,
@@ -665,12 +658,9 @@ async fn import_one(
             &bytes,
         )
         .await
-        {
-            Ok(document) => document,
-            Err(_) => {
-                skip(&mut outcome, "receipt_unavailable");
-                return outcome;
-            }
+        else {
+            skip(&mut outcome, "receipt_unavailable");
+            return outcome;
         };
         receipt_document.get_or_insert(document);
     }
