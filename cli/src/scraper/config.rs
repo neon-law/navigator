@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use url::Url;
 
-use crate::scraper::adapter::{SiteAdapter, SiteKey};
+use crate::scraper::adapter::{find_adapter, SiteAdapter, SiteKey};
 
 /// The manifest key the site registry lives under.
 pub(crate) const SECTION: &str = "scrapers";
@@ -81,14 +81,10 @@ pub(crate) struct SiteEntry {
 
 impl SiteEntry {
     /// The portal URL's host — the value `allowed_hosts:` is checked
-    /// against.
-    ///
-    /// # Errors
-    ///
-    /// When the URL does not parse; parse rejects that at the door, so a
+    /// against. Parse rejects hostless URLs at the door, so a
     /// constructed entry always carries a host.
-    pub(crate) fn portal_host(&self) -> Result<String, ConfigError> {
-        portal_host(&self.portal_url).ok_or_else(|| ConfigError::BadPortalUrl(String::new()))
+    pub(crate) fn portal_host(&self) -> Option<String> {
+        portal_host(&self.portal_url)
     }
 }
 
@@ -152,7 +148,8 @@ impl ScraperConfig {
         allowed_hosts: &BTreeMap<String, String>,
     ) -> Result<(), ConfigError> {
         let entry = self.find_site(site)?;
-        let host = portal_host(&entry.portal_url)
+        let host = entry
+            .portal_host()
             .ok_or_else(|| ConfigError::BadPortalUrl(format!("scrapers.sites.{site}")))?;
         if !allowed_hosts.contains_key(&host) {
             return Err(ConfigError::HostNotAllowed {
@@ -179,10 +176,12 @@ pub(crate) fn resolve_bound_adapter<'a>(
         .iter()
         .map(|adapter| adapter.site().to_string())
         .collect::<Vec<_>>();
-    adapters
-        .iter()
-        .find(|adapter| adapter.site().as_str() == entry.adapter)
-        .map(|adapter| &**adapter)
+    // A binding that is not a valid site key cannot match any adapter,
+    // and `find_adapter` is the one lookup seam for the registry.
+    let bound = SiteKey::new(&entry.adapter).ok();
+    bound
+        .as_ref()
+        .and_then(|key| find_adapter(adapters, key))
         .ok_or_else(|| ConfigError::UnboundAdapter {
             site: site.to_string(),
             adapter: entry.adapter.clone(),
