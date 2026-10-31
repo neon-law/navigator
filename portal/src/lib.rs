@@ -1441,6 +1441,15 @@ pub fn bootstrap_with_forgejo_oidc(
         state.policy.clone(),
         state.auth.clone(),
     );
+    // The relationship-graph pages (project, lawyer, firm) render through
+    // Dioxus with a first-party Sigma.js island fed by the read-only
+    // `GET /app/api/graph/*` doors.
+    let dioxus_graph_views = dioxus_app::graph_views_router(
+        state.surreal.clone(),
+        state.sessions.clone(),
+        state.policy.clone(),
+        state.auth.clone(),
+    );
     // #956 Phase 4: the admin governed-expunge confirmation + result renders
     // through Dioxus at `/app/lawyer/documents/{doc_id}/expunge`. Its form posts to
     // the unchanged `POST` handler, which redirects back here with `?record=`
@@ -1928,6 +1937,9 @@ pub fn bootstrap_with_forgejo_oidc(
         // Dioxus at `/app/admin/entity-types`, replacing the read view.
         dioxus_entity_types,
         dioxus_expunge_queue,
+        // The relationship-graph pages (project, lawyer, firm): read-only
+        // Sigma.js islands over the `GET /app/api/graph/*` doors.
+        dioxus_graph_views,
         // The lawyer-tier Clauses pages: the library list and one Clause's versions,
         // read-only, at `/app/admin/clauses` and `/app/admin/clauses/{code}`.
         dioxus_clauses,
