@@ -152,7 +152,7 @@ fn authority_class_belongs_in_folder(class: &str, folder: &str) -> bool {
 }
 
 /// Whether `relative` is a `documents/invoices/**` staged file.
-fn is_invoice_capture(relative: &Path) -> bool {
+pub(crate) fn is_invoice_capture(relative: &Path) -> bool {
     relative
         .components()
         .next()
@@ -166,7 +166,7 @@ fn is_invoice_capture(relative: &Path) -> bool {
 /// is firm-confidential and not modeled here — this is a simple, documented
 /// placeholder a synthetic fixture can satisfy, not an attempt to reproduce
 /// a real numbering scheme.
-fn is_invoice_filename(filename: &str) -> bool {
+pub(crate) fn is_invoice_filename(filename: &str) -> bool {
     let Some((stem, _extension)) = filename.rsplit_once('.') else {
         return false;
     };
@@ -178,7 +178,7 @@ fn is_invoice_filename(filename: &str) -> bool {
 /// Refuse a `documents/invoices/**` file whose name does not match
 /// [`is_invoice_filename`], per the issue's optional (but in-scope) folder
 /// rule.
-fn validate_invoice_filename(path: &Path) -> Result<()> {
+pub(crate) fn validate_invoice_filename(path: &Path) -> Result<()> {
     let filename = path
         .file_name()
         .and_then(|name| name.to_str())

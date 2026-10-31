@@ -1081,6 +1081,11 @@ enum ProjectsCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Run the read-only document checks over a documents tree (LAW-217).
+    Documents {
+        #[command(subcommand)]
+        action: DocumentsCmd,
+    },
     /// Reconcile the Git-ignored `documents/` and the committed `blobs/` with
     /// the live Project in both directions: download live revisions, upload
     /// local edits as new revisions, and ask before overwriting either side.
@@ -1458,6 +1463,37 @@ enum ProjectRepositoryCmd {
         /// Print the refiles and moves without making them.
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum DocumentsCmd {
+    /// Read-only check of a documents tree with the same matter-folder,
+    /// filename, and collision rules a checkout's `documents/` lives under:
+    /// nothing is uploaded, renamed, or moved (LAW-217).
+    Check {
+        /// Project checkout root whose committed pointers `--deep` compares
+        /// against. Defaults to the current directory. Without
+        /// `--documents-dir` or `--drive-local`, the tree checked is this
+        /// checkout's own `documents/`.
+        dir: Option<PathBuf>,
+        /// Check this tree instead of the checkout's `documents/`. Any tree
+        /// laid out like `documents/` works — a Google-Drive matter folder
+        /// included — and no `navigator.yaml` is read without `--deep`.
+        #[arg(long, value_name = "PATH")]
+        documents_dir: Option<PathBuf>,
+        /// Check the Project's matter folder in Google Drive for desktop
+        /// instead, resolved from `~/Library/CloudStorage` by the Project
+        /// code in `navigator.yaml`.
+        #[arg(long, conflicts_with = "documents_dir")]
+        drive_local: bool,
+        /// Also compare each committed pointer under `<dir>/blobs` against
+        /// its `sha256` and `size_bytes`, wherever the bytes live.
+        #[arg(long)]
+        deep: bool,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -5659,6 +5695,21 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 }
             }
         },
+        ProjectsCmd::Documents { action } => match action {
+            DocumentsCmd::Check {
+                dir,
+                documents_dir,
+                drive_local,
+                deep,
+                json,
+            } => run_documents_check(
+                dir.as_deref().unwrap_or(Path::new(".")),
+                documents_dir,
+                drive_local,
+                deep,
+                json,
+            ),
+        },
         ProjectsCmd::Search {
             pattern,
             dir,
@@ -6918,6 +6969,142 @@ impl rules::FileFilter for ProjectGateMarkdownFilter<'_> {
 
     fn include_file(&self, path: &Path) -> bool {
         !self.is_project_documents_path(path) && self.default.include_file(path)
+    }
+}
+
+/// Sort `local_bytes::verify_with`'s findings into check failures (modified
+/// bytes) and reported-missing pointers, the checkout's ordinary state.
+fn split_byte_findings(
+    byte_findings: &[projects::local_bytes::Finding],
+    findings: &mut Vec<projects::document_check::CheckFailure>,
+    missing: &mut Vec<String>,
+) {
+    for finding in byte_findings {
+        match &finding.status {
+            projects::local_bytes::Status::Match => {}
+            projects::local_bytes::Status::Missing => {
+                // A checkout that never downloaded a document's bytes is
+                // ordinary, so a missing pointer passes — reported, not failed.
+                missing.push(finding.pointer.clone());
+            }
+            projects::local_bytes::Status::Modified { reason } => {
+                findings.push(projects::document_check::CheckFailure {
+                    location: finding.pointer.clone(),
+                    message: format!("modified: {reason}"),
+                });
+            }
+        }
+    }
+}
+
+/// `navigator project documents check` (LAW-217) — the read-only document
+/// checks over one documents tree: the checkout's own `documents/` by
+/// default, or any tree laid out like it via `--documents-dir` or
+/// `--drive-local`. Unlike `project gate --check` it never contacts a
+/// deployment and never writes — a Drive copy is not a checkout to fix — so
+/// the only failure exit but `2` is a finding. `--deep` additionally hashes
+/// each committed pointer's bytes against its `sha256` and `size_bytes`,
+/// reading them from whichever tree is being checked.
+fn run_documents_check(
+    dir: &Path,
+    documents_dir: Option<PathBuf>,
+    drive_local: bool,
+    deep: bool,
+    json: bool,
+) -> ExitCode {
+    let documents = if let Some(path) = documents_dir {
+        path
+    } else if drive_local {
+        let (project, _) = match crate::document_sync::read_manifest(dir) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                eprintln!("navigator: --drive-local needs a Project checkout: {error:#}");
+                return ExitCode::from(2);
+            }
+        };
+        match projects::document_check::resolve_drive_local(&project) {
+            Ok(path) => path,
+            Err(error) => {
+                eprintln!("navigator: {error:#}");
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        dir.join(document_sync::DOCUMENT_DIRECTORY)
+    };
+
+    let mut findings = match projects::document_check::check_documents_root(&documents) {
+        Ok(findings) => findings,
+        Err(error) => {
+            eprintln!("navigator: {error:#}");
+            return ExitCode::from(2);
+        }
+    };
+
+    // The pointer byte checks are a checkout question `--deep` answers
+    // against whichever tree holds the bytes (LAW-217): the checkout's
+    // `documents/` by default, or `--documents-dir` / the Drive copy.
+    let checkout = dir.join(projects::manifest::FILE).is_file();
+    let mut missing: Vec<String> = Vec::new();
+    if deep && checkout {
+        match projects::local_bytes::verify_with(dir, &documents) {
+            Ok(byte_findings) => split_byte_findings(&byte_findings, &mut findings, &mut missing),
+            Err(error) => {
+                eprintln!("navigator: {error:#}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    if json {
+        let report = serde_json::json!({
+            "root": documents.display().to_string(),
+            "findings": findings
+                .iter()
+                .map(|finding| serde_json::json!({
+                    "location": finding.location,
+                    "message": finding.message,
+                }))
+                .collect::<Vec<_>>(),
+            "missing": missing,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).expect("the report is valid JSON")
+        );
+    } else {
+        for pointer in &missing {
+            println!("{}", palette::dim(format!("{pointer}: missing")));
+        }
+        for finding in &findings {
+            println!(
+                "{}",
+                diagnostic_line(
+                    rules::Severity::Error,
+                    &finding.location,
+                    None,
+                    &finding.message,
+                )
+            );
+        }
+        println!(
+            "{}",
+            palette::dim(if findings.is_empty() {
+                format!("documents check: no findings in {}", documents.display())
+            } else {
+                format!(
+                    "documents check: {} finding(s) in {}; nothing was written",
+                    findings.len(),
+                    documents.display()
+                )
+            })
+        );
+    }
+
+    if findings.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
     }
 }
 
