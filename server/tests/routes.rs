@@ -11056,6 +11056,7 @@ fn assert_holding_host_chrome(body: &str) {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One linear host-path-brand matrix reads best as one function.
 async fn host_brand_path_matrix_resolves_every_combination() {
     let default_host = "www.neonlaw.com";
     let delete_your_data_host = "staging.deleteyourdata.com";
