@@ -1513,7 +1513,17 @@ async fn sync_case_timeline(
         project_id: client.project_id(),
         project_code: project.to_string(),
     };
-    let rows = crate::projects::docket::entries::list_rows(&coordinates).await?;
+    // A refused docket read keeps every existing record rather than
+    // failing the whole sync — the same grace `list_service` gets.
+    let rows = match crate::projects::docket::entries::list_rows(&coordinates).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!(
+                "could not read the live docket entries; Case Timeline records are kept: {error:#}"
+            );
+            return Ok(());
+        }
+    };
     let timeline = crate::projects::docket::timeline_write::plan(root, &rows)?;
     for write in &timeline.writes {
         if dry_run {

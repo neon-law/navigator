@@ -75,7 +75,17 @@ pub(crate) fn write_after(root: &Path, project_code: &str, row: &Value) -> Resul
     if !matching {
         return Ok(());
     }
-    let record = render(row).map_err(anyhow::Error::msg)?;
+    // The store write already succeeded; the record is a rendering of it
+    // that `navigator project sync` will reconcile. A row the store did
+    // not return in full (or a checkout whose tree refuses the write) is
+    // a warning, not a failure of the verb that just stored the entry.
+    let record = match render(row) {
+        Ok(record) => record,
+        Err(error) => {
+            eprintln!("could not render the Case Timeline record; `navigator project sync` will reconcile it: {error}");
+            return Ok(());
+        }
+    };
     let relative = record_relative(&record.file_name);
     document_sync::ensure_documents_tree_is_safe(&root.join(document_sync::DOCUMENT_DIRECTORY))?;
     document_sync::write_pointer_atomically(&root.join(&relative), &record.yaml)
