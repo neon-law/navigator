@@ -3679,6 +3679,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_sender_identity_never_satisfies_a_dispatch_or_privilege_check() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let mut incoming = inbound(
+            world.firm,
+            channel::FACEBOOK,
+            "page-account",
+            "fb-msg-9",
+            "fb-psid-9",
+        );
+        incoming.interaction_type = Some("comment");
+        incoming.visibility = Some("public");
+        let saved = ingest_inbound(&db, &incoming).await.unwrap();
+        let sender = person(
+            &db,
+            "Identity Sender",
+            "identity-sender@example.com",
+            Role::Client,
+        )
+        .await;
+
+        // Before the link exists: a Lawyer with no participation on the
+        // conversation cannot queue a social reply.
+        assert!(queue_social_reply(
+            &db,
+            world.lawyer,
+            saved.conversation_id,
+            "Reply",
+            "public"
+        )
+        .await
+        .is_err());
+
+        // The address book learns who the sender is...
+        external_identities::link(
+            &db,
+            sender,
+            external_identities::ExternalSystem::Facebook,
+            "fb-psid-9",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // ...and nothing changes about who may act: the link is display
+        // data, not authority.
+        assert!(queue_social_reply(
+            &db,
+            world.lawyer,
+            saved.conversation_id,
+            "Reply",
+            "public"
+        )
+        .await
+        .is_err());
+        assert!(queue_social_reply(
+            &db,
+            world.owner,
+            saved.conversation_id,
+            "Reply",
+            "public"
+        )
+        .await
+        .is_ok());
+
+        // The privilege rule layer never consults the address book either:
+        // the social channel's structural rule stands with the identity
+        // present, and no classifier is admitted for it.
+        assert_eq!(
+            crate::inbox_triage::privilege_label(channel::FACEBOOK, None),
+            crate::inbox_triage::PrivilegeLabel::NotPrivileged
+        );
+        assert!(!crate::inbox_triage::classifier_may_run(channel::FACEBOOK));
+    }
+
+    #[tokio::test]
     async fn a_text_shows_which_person_owns_the_number_once_it_is_linked() {
         let db = mem_surreal().await;
         let world = world(&db).await;
