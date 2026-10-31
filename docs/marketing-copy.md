@@ -286,8 +286,9 @@ or $290/year prepaid — and basic form filings such as forming an LLC included 
 separate. Gift cards are available, and privacy and credit monitoring requires opt-in at enrollment. Its
 `sibling_practices` cards point at two sibling practices: the optional [Death Check](glossary/death-check.md) through
 Vesta Estate Planning, which sets the triggers written into a client's Vesta estate plan in motion while their
-subscription is active, and cyber-crime claims through Cyber Injury Law. Vesta's `estate` and Cyber Injury Law's
-`cyber_injury` blocks carry a `sibling_practices` card pointing back at DeleteYourData.com. Each card names its
+subscription is active, and cyber-crime claims through Cyber Injury Law. Vesta's `estate` block carries a
+`sibling_practices` card pointing back at DeleteYourData.com; Cyber Injury Law's `cyber_injury` block points to the
+Nautilus plan (the same subscription under its current name) hosted on Neon. Each card names its
 destination by brand key; the address is resolved per deployment, and a card for a brand that is not live is dropped.
 Signup and gift-card links use the same Notion booking calendar as Neon and Vesta. Plus Jakarta Sans is used throughout
 the page and footer. Pricing uses the shared `PricingSection` with the brand palette and typeface. The cloak crossing an
