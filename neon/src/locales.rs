@@ -940,6 +940,11 @@ fn sibling_practices(
         .filter_map(|copy| {
             let key = views::brand::BrandKey::parse(&copy.brand)?;
             let href = sibling_practice_href(key, deployment_host)?;
+            let href = if copy.path.is_empty() {
+                href
+            } else {
+                format!("{href}{}", copy.path)
+            };
             Some(webapp::home::SiblingPractice {
                 eyebrow: copy.eyebrow,
                 heading: copy.heading,

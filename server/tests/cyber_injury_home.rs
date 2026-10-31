@@ -255,6 +255,51 @@ async fn cyber_injury_practice_pages_serve_their_fight() {
     }
 }
 
+/// The Nautilus panel travels with the brand: the home page's sibling card
+/// and the data-theft page's plan band both name the plan, its price and
+/// scope, the non-legal-service note, and the link to Neon's hosted page.
+#[tokio::test]
+async fn cyber_injury_home_and_data_theft_link_the_nautilus_plan() {
+    for host in HOSTS {
+        let (status, home) = page(host, "/").await;
+        assert_eq!(status, StatusCode::OK, "{host}");
+        for expected in [
+            "PROTECT YOUR PRIVACY FIRST.",
+            "$29/mo",
+            "$290/year prepaid",
+            "dark-web monitoring",
+            "identity-theft insurance",
+            "non-legal service",
+            "Visit the Nautilus plan",
+            "neonlaw.com/nautilus",
+        ] {
+            assert!(
+                home.contains(expected),
+                "{host}: home is missing {expected:?}"
+            );
+        }
+
+        let (status, data_theft) = page(host, "/data-theft").await;
+        assert_eq!(status, StatusCode::OK, "{host}/data-theft");
+        for expected in [
+            "Make your data harder to use before you need us.",
+            "The Nautilus plan",
+            "$29/mo",
+            "$290/year prepaid",
+            "dark-web monitoring",
+            "identity-theft insurance",
+            "non-legal service",
+            "Visit the Nautilus plan",
+            "https://www.neonlaw.com/nautilus",
+        ] {
+            assert!(
+                data_theft.contains(expected),
+                "{host}/data-theft is missing {expected:?}"
+            );
+        }
+    }
+}
+
 /// The home page's "Matters we review" cards link to the practice pages
 /// they name, with the share-reference tag the campaign traces in Plausible.
 #[tokio::test]

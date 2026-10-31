@@ -183,3 +183,13 @@ cyber_injury:
         delete the personal data they hold about you, for $29/mo or $290/year prepaid. Basic form filings, such as forming an LLC, are included. Government fees are separate. Data removal
         does not guarantee that a company will comply or prevent a future leak.
       cta_label: Visit DeleteYourData.com
+    - brand: neon
+      path: /nautilus
+      eyebrow: "BEFORE YOU NEED US"
+      heading: "PROTECT YOUR PRIVACY FIRST."
+      body: >-
+        Nautilus is a non-legal service from Neon Law: data removal, credit
+        and dark-web monitoring, and identity-theft insurance, for $29/mo or
+        $290/year prepaid. Data removal does not guarantee that a company
+        will comply or prevent a future leak.
+      cta_label: Visit the Nautilus plan
