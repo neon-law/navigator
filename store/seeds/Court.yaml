@@ -1490,6 +1490,16 @@ records:
           currency: USD
         fee_note: "One template serves both routes the form itself supports: NYC Civil Court at $65.00, or Supreme/County Court of the county of residence at $210.00 (the intake asks which court, confirmed by the lawyer at review). Fee waiver: poor person relief by motion with a sworn financial affidavit — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the NC1 surveyed_forms entry."
         fee_waiver_code: null
+      - code: ny__nc3_lip_name_change_petition
+        title: Name Change and/or Sex Designation Change Petition for a Legally Incapacitated Person
+        source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/LIPName-SexDesignationChangePetition-fillable.pdf
+        sha256: e658bbef40bc907264418c090d2206077b5cb2f7f4290358df1a15d6ff8486d4
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        filing_fee:
+          amount: "210.00"
+          currency: USD
+        fee_note: "Brought by the person's guardian, committee, or parent as petitioner (the intake captures both names). Same dual-route fees as NC1: NYC Civil Court $65.00 or Supreme/County Court $210.00. Fee waiver: poor person relief by motion — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the NC3 surveyed_forms entry."
+        fee_waiver_code: null
     surveyed_forms:
       - key: NC1
         title: Name Change and/or Sex Designation Change Petition for Individual Adult (18+)

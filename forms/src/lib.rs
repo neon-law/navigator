@@ -490,6 +490,21 @@ const BUNDLED: &[FormMeta] = &[
         }),
         fee_waiver_code: None,
     },
+    FormMeta {
+        code: "ny__nc3_lip_name_change_petition",
+        jurisdiction: "NY",
+        title: "Name Change and/or Sex Designation Change Petition for a Legally Incapacitated Person",
+        origin_url: "https://www.nycourts.gov/forms/Name-SexDesignationChange/LIPName-SexDesignationChangePetition-fillable.pdf",
+        object_path: "forms/united_states/new_york/new_york_supreme_court/ny__nc3_lip_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc3_lip_name_change_petition.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "210.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
 ];
 
 /// Return the bundled form registry.
