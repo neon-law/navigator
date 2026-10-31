@@ -34,6 +34,7 @@ const ATTEMPT: &str = "inbox_delivery_attempt";
 pub mod channel {
     pub const EMAIL: &str = "email";
     pub const SMS: &str = "sms";
+    pub const VOICE: &str = "voice";
     pub const FACEBOOK: &str = "facebook";
     pub const INSTAGRAM: &str = "instagram";
     pub const THREADS: &str = "threads";
@@ -490,8 +491,10 @@ pub async fn ingest_inbound(
     db: &SurrealDb,
     inbound: &IngestInbound<'_>,
 ) -> Result<IngestedInbound, InboxError> {
-    let channel_supported = matches!(inbound.channel, channel::EMAIL | channel::SMS)
-        || is_social_channel(inbound.channel);
+    let channel_supported = matches!(
+        inbound.channel,
+        channel::EMAIL | channel::SMS | channel::VOICE
+    ) || is_social_channel(inbound.channel);
     if !channel_supported
         || !matches!(
             inbound.interaction_type.unwrap_or("message"),
@@ -854,7 +857,7 @@ async fn phone_directory(
 ) -> Result<Vec<persons::Person>, InboxError> {
     if conversations
         .iter()
-        .any(|conversation| conversation.channel == channel::SMS)
+        .any(|conversation| has_phone_counterparty(&conversation.channel))
     {
         Ok(persons::list_with_phone(db).await?)
     } else {
@@ -1740,6 +1743,13 @@ fn is_social_channel(channel_name: &str) -> bool {
             | channel::YOUTUBE
             | channel::TIKTOK
     )
+}
+
+/// Whether a conversation's counterparty address is a phone number. A call
+/// arrives from the same E.164 address a text does, so the display-only
+/// contact link applies to both.
+fn has_phone_counterparty(channel_name: &str) -> bool {
+    matches!(channel_name, channel::SMS | channel::VOICE)
 }
 
 async fn authorize_social_reply(
@@ -3967,6 +3977,84 @@ mod tests {
         let listed = list_intake(&db, world.owner).await.unwrap();
         assert_eq!(listed[0].assignee, "Alpha Matter");
         assert_eq!(listed[0].channel, channel::EMAIL);
+    }
+
+    #[tokio::test]
+    async fn a_call_opens_one_thread_per_caller_and_dedups_by_call_sid() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        fn call<'a>(firm: Uuid, call_sid: &'a str) -> IngestInbound<'a> {
+            IngestInbound {
+                firm_id: firm,
+                brand_key: Some("neon"),
+                interaction_type: Some("message"),
+                provider_post_id: None,
+                parent_provider_message_id: None,
+                visibility: Some("private"),
+                channel: channel::VOICE,
+                provider_account: "+15550100000",
+                provider_message_id: call_sid,
+                provider_thread_ref: None,
+                external_address: "+15555550100",
+                external_name: None,
+                subject: None,
+                body: "Call from +15555550100 — completed (42s).",
+                source_page: Some("+15550100000"),
+                source_channel: Some(channel::VOICE),
+                matter_consent: false,
+                promotional_opt_in: false,
+                email_conversation_id: None,
+                attachment_asset_id: None,
+                occurred_at: "2026-10-30T18:00:00+00:00",
+            }
+        }
+        let first = ingest_inbound(&db, &call(world.firm, "CA1111111"))
+            .await
+            .unwrap();
+        assert!(!first.deduped);
+        let again = ingest_inbound(&db, &call(world.firm, "CA1111111"))
+            .await
+            .unwrap();
+        assert!(
+            again.deduped,
+            "a redelivered CallSid returns the original row"
+        );
+        assert_eq!(again.message_id, first.message_id);
+        assert_eq!(again.conversation_id, first.conversation_id);
+
+        // A later call from the same caller threads onto the open one.
+        let second_call = ingest_inbound(&db, &call(world.firm, "CA2222222"))
+            .await
+            .unwrap();
+        assert!(!second_call.deduped);
+        assert_eq!(second_call.conversation_id, first.conversation_id);
+
+        let listed = list_intake(&db, world.owner).await.unwrap();
+        let row = listed
+            .iter()
+            .find(|row| row.id == first.conversation_id)
+            .unwrap();
+        assert_eq!(row.channel, channel::VOICE);
+        assert_eq!(row.brand_key.as_deref(), Some("neon"));
+    }
+
+    /// The whitelist stays closed: adding the voice lane admits no others.
+    #[tokio::test]
+    async fn an_unlisted_channel_is_still_denied() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let mut fax = inbound(
+            world.firm,
+            "fax",
+            "+15550100000",
+            "fax-1",
+            "+15555550100",
+        );
+        fax.brand_key = Some("neon");
+        assert!(matches!(
+            ingest_inbound(&db, &fax).await,
+            Err(InboxError::Denied)
+        ));
     }
 
     #[test]
