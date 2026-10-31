@@ -56,3 +56,67 @@ fn finish(tagged: &str, fragment: Option<&str>) -> String {
         None => tagged.to_string(),
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_without_a_query_gains_a_via_parameter() {
+        assert_eq!(
+            via_tagged("/testimonials", "home-nav-testimonials"),
+            "/testimonials?via=home-nav-testimonials"
+        );
+        assert_eq!(
+            via_tagged("https://www.cyberinjurylaw.com/android", "home-qr-android"),
+            "https://www.cyberinjurylaw.com/android?via=home-qr-android"
+        );
+    }
+
+    #[test]
+    fn an_existing_query_string_gains_the_via_parameter() {
+        assert_eq!(
+            via_tagged("/consultation?plan=privacy", "home-booking"),
+            "/consultation?plan=privacy&via=home-booking"
+        );
+    }
+
+    #[test]
+    fn an_existing_via_parameter_wins_over_the_new_tag() {
+        assert_eq!(
+            via_tagged("/services?via=home-hero", "home-booking"),
+            "/services?via=home-hero"
+        );
+        assert_eq!(
+            via_tagged("/services?plan=privacy&via", "home-booking"),
+            "/services?plan=privacy&via"
+        );
+    }
+
+    #[test]
+    fn an_empty_or_malformed_tag_leaves_the_href_alone() {
+        let href = "/testimonials";
+        assert_eq!(via_tagged(href, ""), href);
+        assert_eq!(via_tagged(href, "Home Hero"), href);
+        assert_eq!(via_tagged(href, "home&plan=x"), href);
+    }
+
+    #[test]
+    fn an_empty_query_does_not_double_the_separator() {
+        assert_eq!(
+            via_tagged("/consultation?", "home-booking"),
+            "/consultation?via=home-booking"
+        );
+    }
+
+    #[test]
+    fn a_fragment_survives_the_tag() {
+        assert_eq!(
+            via_tagged("/testimonials#watch", "home-qr-testimonials"),
+            "/testimonials?via=home-qr-testimonials#watch"
+        );
+        assert_eq!(
+            via_tagged("/services?a=1#watch", "home-booking"),
+            "/services?a=1&via=home-booking#watch"
+        );
+    }
+}
