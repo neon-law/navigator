@@ -325,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_github_in_the_footer_and_out_of_firm_contact_channels() {
+    fn keeps_github_out_of_the_footer_and_firm_contact_channels() {
         let out = html();
         let contact = out
             .split_once(r#"class="contact-page""#)
@@ -338,9 +338,11 @@ mod tests {
             !contact.contains("github"),
             "firm contact channels: {contact}"
         );
+        // The GitHub Stars row was part of the removed footer marketing
+        // surface; the simplified footer carries only the legal strip.
         assert!(
-            out.contains(r#"href="https://github.com/neon-law/navigator""#),
-            "the shared footer links the public source repository: {out}"
+            !out.contains(r#"href="https://github.com/neon-law/navigator""#),
+            "the simplified footer no longer links the repository: {out}"
         );
     }
 

@@ -310,11 +310,14 @@ mod tests {
     }
 
     #[test]
-    fn published_preview_links_the_repository_without_a_template_source_action() {
+    fn published_preview_carries_no_repository_links_or_source_actions() {
         let out = html();
+        // The GitHub Stars row left the footer with the rest of the
+        // removed marketing surface, so the preview no longer links the
+        // repository at all.
         assert!(
-            out.contains(r#"href="https://github.com/neon-law/navigator""#),
-            "public footer repository link: {out}"
+            !out.contains(r#"href="https://github.com/neon-law/navigator""#),
+            "no public footer repository link: {out}"
         );
         assert!(
             !out.contains(&letter_content().source_href),
