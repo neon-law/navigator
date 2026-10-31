@@ -1275,6 +1275,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261101100000_create_document_upload_session.sql"),
             ),
             (
+                "20261101110000_add_deadline_category.sql",
+                include_str!("../postgres/migrations/20261101110000_add_deadline_category.sql"),
+            ),
+            (
                 "20261101130000_create_firm_forgejo_organization.sql",
                 include_str!(
                     "../postgres/migrations/20261101130000_create_firm_forgejo_organization.sql"

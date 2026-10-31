@@ -24,6 +24,11 @@ const AUTHORITY_KINDS: &[&str] = &[
 pub const MAX_TITLE_CHARS: usize = 200;
 const CALENDAR_ROLES: &[&str] = &["firm", "opponent", "hearing"];
 
+/// The closed category vocabulary: what kind of date the deadline is. The
+/// calendar mirror renders each category in its fixed Google color
+/// (`deadline_calendar::category_color`).
+pub const CATEGORIES: &[&str] = &["court", "hearing", "discovery", "internal"];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Deadline {
     pub id: Uuid,
@@ -39,6 +44,9 @@ pub struct Deadline {
     pub owner_person_id: Option<Uuid>,
     pub status: String,
     pub calendar_role: String,
+    /// What kind of date this is: `court`, `hearing`, `discovery`, or
+    /// `internal`. Rows written before categories existed have none.
+    pub category: Option<String>,
     pub internal_lead_days: Option<i64>,
     pub client_lead_days: Option<i64>,
     pub replay_key: Option<String>,
@@ -62,6 +70,7 @@ struct DeadlineRow {
     owner_person_id: Option<surrealdb::types::RecordId>,
     status: String,
     calendar_role: String,
+    category: Option<String>,
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
     replay_key: Option<String>,
@@ -85,6 +94,7 @@ impl DeadlineRow {
             owner_person_id: self.owner_person_id.as_ref().and_then(record_uuid),
             status: self.status,
             calendar_role: self.calendar_role,
+            category: self.category,
             internal_lead_days: self.internal_lead_days,
             client_lead_days: self.client_lead_days,
             replay_key: self.replay_key,
@@ -97,8 +107,8 @@ impl DeadlineRow {
 
 const SELECT: &str =
     "id, project_id, title, description, due_at, authority_kind, authority, source, \
-     source_document_id, owner_person_id, status, calendar_role, internal_lead_days, \
-     client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence";
+     source_document_id, owner_person_id, status, calendar_role, category, \
+     internal_lead_days, client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence";
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeadlineError {
@@ -124,6 +134,9 @@ pub struct NewDeadline {
     pub source_document_id: Option<Uuid>,
     pub owner_person_id: Option<Uuid>,
     pub calendar_role: String,
+    /// What kind of date this is. When absent, creation settles it from the
+    /// calendar role and authority kind and refuses when neither does.
+    pub category: Option<String>,
     pub internal_lead_days: Option<i64>,
     pub client_lead_days: Option<i64>,
     pub replay_key: Option<String>,
@@ -141,6 +154,8 @@ pub struct DeadlinePatch {
     pub source_document_id: Option<Option<Uuid>>,
     pub owner_person_id: Option<Option<Uuid>>,
     pub calendar_role: Option<String>,
+    /// `Some(None)` clears the category.
+    pub category: Option<Option<String>>,
     pub internal_lead_days: Option<Option<i64>>,
     pub client_lead_days: Option<Option<i64>>,
 }
@@ -153,6 +168,7 @@ struct Normalized {
     authority: String,
     source: String,
     calendar_role: String,
+    category: Option<String>,
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
     replay_key: Option<String>,
@@ -167,6 +183,7 @@ struct DeadlineInput<'a> {
     authority: &'a str,
     source: &'a str,
     calendar_role: &'a str,
+    category: Option<&'a str>,
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
     replay_key: Option<&'a str>,
@@ -181,6 +198,7 @@ fn normalize(input: &DeadlineInput<'_>) -> Result<Normalized, DeadlineError> {
         authority,
         source,
         calendar_role,
+        category,
         internal_lead_days,
         client_lead_days,
         replay_key,
@@ -208,6 +226,13 @@ fn normalize(input: &DeadlineInput<'_>) -> Result<Normalized, DeadlineError> {
         return Err(DeadlineError::Invalid(format!(
             "calendar_role must be one of {}",
             CALENDAR_ROLES.join(", ")
+        )));
+    }
+    let category = category.map(str::trim).filter(|value| !value.is_empty());
+    if category.is_some_and(|value| !CATEGORIES.contains(&value)) {
+        return Err(DeadlineError::Invalid(format!(
+            "category must be one of {}",
+            CATEGORIES.join(", ")
         )));
     }
     for (name, days) in [
@@ -258,10 +283,31 @@ fn normalize(input: &DeadlineInput<'_>) -> Result<Normalized, DeadlineError> {
         authority,
         source,
         calendar_role: calendar_role.to_string(),
+        category: category.map(str::to_string),
         internal_lead_days,
         client_lead_days,
         replay_key: replay_key.map(str::to_string),
     })
+}
+
+/// The category creation settles on when the caller names none: a hearing
+/// role is a hearing date, an internal authority is an internal target, and
+/// everything else is the caller's to choose — `court` and `discovery` are
+/// never guessed.
+fn settle_category(
+    calendar_role: &str,
+    authority_kind: &str,
+) -> Result<Option<String>, DeadlineError> {
+    if calendar_role == "hearing" {
+        return Ok(Some("hearing".to_string()));
+    }
+    if authority_kind == "internal" {
+        return Ok(Some("internal".to_string()));
+    }
+    Err(DeadlineError::Invalid(format!(
+        "a deadline with this calendar role and authority needs a category: pass one of {}",
+        CATEGORIES.join(", ")
+    )))
 }
 
 async fn require_links(
@@ -383,7 +429,7 @@ async fn persist(
             "UPSERT $id SET project_id = $project_id, title = $title, description = $description, due_at = $due_at, \
              authority_kind = $authority_kind, authority = $authority, source = $source, \
              source_document_id = $source_document_id, owner_person_id = $owner_person_id, \
-             status = $status, calendar_role = $calendar_role, \
+             status = $status, calendar_role = $calendar_role, category = $category, \
              internal_lead_days = $internal_lead_days, client_lead_days = $client_lead_days, \
              replay_key = $replay_key, calendar_sequence = IF updated_at IS NONE THEN 0 ELSE \
              (calendar_sequence ?? math::max([0, time::unix(<datetime>updated_at)])) + 1 END, \
@@ -408,6 +454,7 @@ async fn persist(
         ))
         .bind(("status", status.to_string()))
         .bind(("calendar_role", normalized.calendar_role.clone()))
+        .bind(("category", normalized.category.clone()))
         .bind(("internal_lead_days", normalized.internal_lead_days))
         .bind(("client_lead_days", normalized.client_lead_days))
         .bind(("replay_key", normalized.replay_key.clone()))
@@ -432,7 +479,7 @@ async fn persist(
 /// Cancelled rows refuse replay until explicitly reopened. Complete rows keep
 /// their status while their fields update.
 pub async fn create(surreal: &SurrealDb, new: &NewDeadline) -> Result<Deadline, DeadlineError> {
-    let normalized = normalize(&DeadlineInput {
+    let mut normalized = normalize(&DeadlineInput {
         title: new.title.as_deref(),
         description: new.description.as_deref(),
         due_at: &new.due_at,
@@ -440,10 +487,15 @@ pub async fn create(surreal: &SurrealDb, new: &NewDeadline) -> Result<Deadline, 
         authority: &new.authority,
         source: &new.source,
         calendar_role: &new.calendar_role,
+        category: new.category.as_deref(),
         internal_lead_days: new.internal_lead_days,
         client_lead_days: new.client_lead_days,
         replay_key: new.replay_key.as_deref(),
     })?;
+    if normalized.category.is_none() {
+        normalized.category =
+            settle_category(&normalized.calendar_role, &normalized.authority_kind)?;
+    }
     require_links(
         surreal,
         new.project_id,
@@ -513,6 +565,7 @@ pub async fn update(
         .calendar_role
         .clone()
         .unwrap_or(existing.calendar_role);
+    let category = patch.category.clone().unwrap_or(existing.category);
     let internal_lead_days = patch
         .internal_lead_days
         .unwrap_or(existing.internal_lead_days);
@@ -529,6 +582,7 @@ pub async fn update(
         authority: &authority,
         source: &source,
         calendar_role: &calendar_role,
+        category: category.as_deref(),
         internal_lead_days,
         client_lead_days,
         replay_key: existing.replay_key.as_deref(),
@@ -578,6 +632,7 @@ async fn transition(
         authority: &existing.authority,
         source: &existing.source,
         calendar_role: &existing.calendar_role,
+        category: existing.category.as_deref(),
         internal_lead_days: existing.internal_lead_days,
         client_lead_days: existing.client_lead_days,
         replay_key: existing.replay_key.as_deref(),
@@ -641,6 +696,7 @@ mod tests {
             source_document_id: None,
             owner_person_id: None,
             calendar_role: "firm".into(),
+            category: Some("court".into()),
             internal_lead_days: Some(14),
             client_lead_days: Some(7),
             replay_key: None,
@@ -695,6 +751,134 @@ mod tests {
             list(&surreal, project_id).await.unwrap()[0].status,
             STATUS_COMPLETE
         );
+    }
+
+    #[tokio::test]
+    async fn a_create_without_a_settleable_category_is_refused() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let mut input = sample(project_id);
+        input.category = None;
+        let error = create(&surreal, &input).await.unwrap_err();
+        assert!(matches!(error, DeadlineError::Invalid(_)), "{error}");
+        assert!(error.to_string().contains("category"), "{error}");
+        assert!(list(&surreal, project_id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unknown_category_is_refused() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let mut input = sample(project_id);
+        input.category = Some("filing".into());
+        let error = create(&surreal, &input).await.unwrap_err();
+        assert!(matches!(error, DeadlineError::Invalid(_)), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("court, hearing, discovery, internal"),
+            "{error}"
+        );
+        // Whitespace is trimmed before the vocabulary check, and an empty
+        // value means "unsettled", so the default rule answers it.
+        let mut trimmed = sample(project_id);
+        trimmed.calendar_role = "hearing".into();
+        trimmed.category = Some("  hearing  ".into());
+        assert_eq!(
+            create(&surreal, &trimmed).await.unwrap().category,
+            Some("hearing".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hearing_role_settles_a_hearing_category() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let mut input = sample(project_id);
+        input.calendar_role = "hearing".into();
+        input.category = None;
+        assert_eq!(
+            create(&surreal, &input).await.unwrap().category,
+            Some("hearing".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_internal_authority_settles_an_internal_category() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let mut input = sample(project_id);
+        input.authority_kind = "internal".into();
+        input.authority = "Firm preparation target".into();
+        input.category = None;
+        assert_eq!(
+            create(&surreal, &input).await.unwrap().category,
+            Some("internal".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn update_preserves_the_category_until_it_is_cleared_or_changed() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let created = create(&surreal, &sample(project_id)).await.unwrap();
+        // A patch that names no category leaves the stored one alone.
+        let untouched = update(&surreal, project_id, created.id, &DeadlinePatch::default())
+            .await
+            .unwrap();
+        assert_eq!(untouched.category, Some("court".into()));
+        let renamed = update(
+            &surreal,
+            project_id,
+            created.id,
+            &DeadlinePatch {
+                category: Some(Some("discovery".into())),
+                ..DeadlinePatch::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(renamed.category, Some("discovery".into()));
+        let cleared = update(
+            &surreal,
+            project_id,
+            created.id,
+            &DeadlinePatch {
+                category: Some(None),
+                ..DeadlinePatch::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.category, None);
+    }
+
+    #[tokio::test]
+    async fn a_historical_row_without_a_category_reads_and_updates() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let created = create(&surreal, &sample(project_id)).await.unwrap();
+        surreal
+            .query("UPDATE $id UNSET category")
+            .bind((
+                "id",
+                crate::surreal::record_id("project_deadlines", created.id),
+            ))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let row = find(&surreal, project_id, created.id)
+            .await
+            .unwrap()
+            .expect("row still reads");
+        assert_eq!(row.category, None);
+        // A historical row still updates: an absent patch preserves its lack
+        // of a category rather than inventing one.
+        let untouched = update(&surreal, project_id, created.id, &DeadlinePatch::default())
+            .await
+            .unwrap();
+        assert_eq!(untouched.category, None);
     }
 
     #[tokio::test]

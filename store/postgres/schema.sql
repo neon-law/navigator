@@ -3431,6 +3431,12 @@ CREATE INDEX document_upload_session_resume
     ON document_upload_session (project_id, filename, declared_sha256, declared_size);
 CREATE INDEX document_upload_session_expiry ON document_upload_session (expires_at);
 
+-- Migration: 20261101110000_add_deadline_category.sql
+-- Deadline categories: what kind of date the deadline is, rendered by the
+-- matter calendar's fixed category-to-color map. Nullable: rows written
+-- before categories existed read back without one.
+ALTER TABLE project_deadlines ADD COLUMN category TEXT CHECK (category IN ('court', 'hearing', 'discovery', 'internal'));
+
 -- Migration: 20261101130000_create_firm_forgejo_organization.sql
 -- A Firm's organization on the installation's Forgejo, as Navigator's
 -- provisioning identity last reconciled it. The organization is named by the
@@ -3448,4 +3454,3 @@ CREATE TABLE firm_forgejo_organization (
     provisioned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     reconciled_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-

@@ -50,6 +50,17 @@ malpractice-relevant records.
 **Whose date it is.** `calendar_role` is closed: `firm` (our obligation), `opponent` (the other side's deadline), or
 `hearing` (an appearance). A hearing is not our filing obligation.
 
+**What kind of date it is.** `category` is closed: `court` (a filing or response the court's rules or orders require),
+`hearing` (an appearance; the reminder for a scheduled hearing [Docket Entry](docket-entry.md)), `discovery` (a
+discovery request, response, disclosure, or cutoff), or `internal` (a firm preparation target). It answers a different
+question than `calendar_role` and `authority_kind` — not whose the date is or why it binds, but what kind it is — which
+is why a court deadline and a discovery deadline can both be `firm` plus `court_rule` yet sort differently. Creation
+defaults to `hearing` when the calendar role is `hearing` and `internal` when the authority kind is `internal`;
+otherwise it must be supplied rather than guessed, because `court` and `discovery` share authority kinds. The matter
+calendar colors each category from a fixed map — Tomato for `court`, Grape for `hearing`, Banana for `discovery`,
+Graphite for `internal` — so every matter calendar looks the same, and the map is Navigator's, never set per Project.
+The ICS feed renders no category; the color travels only with the mirrored Google Calendar event.
+
 **Status.** `status` is `open`, `complete`, or `cancelled`. Complete and cancel are transitions. Neither deletes the
 row. Reopen restores a cancelled row to open and preserves its id, replay key, and stored fields. Reopening an open row
 is a no-op; a complete row cannot be reopened. Replaying a cancelled row refuses without changing it and directs the
