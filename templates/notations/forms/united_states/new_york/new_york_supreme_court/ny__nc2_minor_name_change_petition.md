@@ -33,8 +33,8 @@ questionnaire:
   custom_text__reason_for_change:
     _: custom_single_choice__prior_name_change
   custom_single_choice__prior_name_change:
-    _: custom_text__prior_name_change_details
-  custom_text__prior_name_change_details:
+    _: custom_text__prior_petition_details
+  custom_text__prior_petition_details:
     _: custom_single_choice__minor_convicted
   custom_single_choice__minor_convicted:
     _: custom_text__minor_felony_details
@@ -148,7 +148,7 @@ prompts:
   custom_single_choice__sex_designation_change: Are you asking the court to change the child's sex designation?
   custom_text__reason_for_change: Why are you asking to change the child's name? Tell the story plainly; the judge reads this.
   custom_single_choice__prior_name_change: Has a name change petition ever been filed for the child in any court?
-  custom_text__prior_name_change_details: If yes, give the court, the date filed, the case number if known, and the result.
+  custom_text__prior_petition_details: If yes, give the court, the date filed, the case number if known, and the result.
   custom_single_choice__minor_convicted: Has the child ever been convicted of a crime?
   custom_text__minor_felony_details: If yes, the court and the crime. The attorney confirms the exact wording at review.
   custom_single_choice__minor_bankruptcy: Has the child ever filed for bankruptcy?

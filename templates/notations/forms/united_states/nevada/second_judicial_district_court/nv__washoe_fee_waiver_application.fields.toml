@@ -1,4 +1,4 @@
-form_code = "washoe__fee_waiver_application"
+form_code = "nv__washoe_fee_waiver_application"
 
 # Second Judicial District Court (Washoe) local form — Application and
 # Declaration to Waive Fees and Costs (F-6, revised 03/19/2026 SB, 5 pages,
@@ -46,7 +46,7 @@ question = "person__client.name"
 
 [[field]]
 name = "Defendant, Respondent, or Joint Petitioner"
-question = "custom_text__opposing_party"
+question = "person__opposing_party.name"
 
 [[field]]
 name = "Your name"
@@ -314,7 +314,7 @@ question = "custom_usd__cash"
 
 [[field]]
 name = "First person's name"
-question = "custom_text__household_name_1"
+question = "custom_text__household_person_1"
 
 [[field]]
 name = "First person's age"
@@ -330,7 +330,7 @@ question = "custom_usd__household_contribution_1"
 
 [[field]]
 name = "Second person's name"
-question = "custom_text__household_name_2"
+question = "custom_text__household_person_2"
 
 [[field]]
 name = "Second person's age"
@@ -346,7 +346,7 @@ question = "custom_usd__household_contribution_2"
 
 [[field]]
 name = "Third person's name"
-question = "custom_text__household_name_3"
+question = "custom_text__household_person_3"
 
 [[field]]
 name = "Third person's age"
@@ -362,7 +362,7 @@ question = "custom_usd__household_contribution_3"
 
 [[field]]
 name = "Fourth person's name"
-question = "custom_text__household_name_4"
+question = "custom_text__household_person_4"
 
 [[field]]
 name = "Fourth person's age"
@@ -378,7 +378,7 @@ question = "custom_usd__household_contribution_4"
 
 [[field]]
 name = "Fifth person's name"
-question = "custom_text__household_name_5"
+question = "custom_text__household_person_5"
 
 [[field]]
 name = "Fifth person's age"
@@ -394,7 +394,7 @@ question = "custom_usd__household_contribution_5"
 
 [[field]]
 name = "Sixth person's name"
-question = "custom_text__household_name_6"
+question = "custom_text__household_person_6"
 
 [[field]]
 name = "Sixth person's age"
@@ -410,7 +410,7 @@ question = "custom_usd__household_contribution_6"
 
 [[field]]
 name = "Seventh person's name"
-question = "custom_text__household_name_7"
+question = "custom_text__household_person_7"
 
 [[field]]
 name = "Seventh person's age"

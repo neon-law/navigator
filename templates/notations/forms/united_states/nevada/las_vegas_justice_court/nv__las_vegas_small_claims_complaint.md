@@ -6,7 +6,7 @@ jurisdiction: NV
 origin_url: https://www.civillawselfhelpcenter.org/images/small-claims/complaints/complaint---small-claims.pdf
 confidential: true
 output: form
-form: las_vegas__small_claims_complaint
+form: nv__las_vegas_small_claims_complaint
 questionnaire:
   BEGIN:
     _: person__client
@@ -15,8 +15,8 @@ questionnaire:
   custom_text__plaintiff_caption:
     _: custom_text__defendant_caption
   custom_text__defendant_caption:
-    _: custom_text__defendant_contact
-  custom_text__defendant_contact:
+    _: custom_phone__defendant_contact
+  custom_phone__defendant_contact:
     _: custom_usd__amount_owed
   custom_usd__amount_owed:
     _: custom_text__reason_owed
@@ -49,7 +49,7 @@ prompts:
   defendant_caption: >-
     The defendant's full name and mailing address. (The court serves the
     complaint at this address.)
-  defendant_contact: >-
+  custom_phone__defendant_contact: >-
     The defendant's telephone number, if you know it. (Leave blank if you
     do not — the complaint carries one telephone box for the defendant.)
   amount_owed: >-

@@ -1,4 +1,4 @@
-form_code = "las_vegas__small_claims_complaint"
+form_code = "nv__las_vegas_small_claims_complaint"
 # Las Vegas Justice Court (Clark County) — Complaint, Small Claims.
 # The parser reports 14 AcroForm fields on the official blank; this map
 # renames the 9 the questionnaire fills and records the rest for the
@@ -29,7 +29,7 @@ question = "custom_text__defendant_caption"
 
 [[field]]
 name = "Defendants Telephone Number"
-question = "custom_text__defendant_contact"
+question = "custom_phone__defendant_contact"
 
 [[field]]
 name = "Plaintiffs Telephone Number"

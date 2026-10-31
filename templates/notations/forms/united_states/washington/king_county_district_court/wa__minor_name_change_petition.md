@@ -6,7 +6,7 @@ jurisdiction: WA
 origin_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-minor-october-2024.pdf
 confidential: true
 output: form
-form: kc__minor_name_change_petition
+form: wa__minor_name_change_petition
 questionnaire:
   BEGIN:
     _: person__client

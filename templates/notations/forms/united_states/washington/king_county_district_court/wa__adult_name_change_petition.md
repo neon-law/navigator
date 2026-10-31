@@ -6,7 +6,7 @@ jurisdiction: WA
 origin_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-individual-july_2026.pdf
 confidential: true
 output: form
-form: kc__adult_name_change_petition
+form: wa__adult_name_change_petition
 questionnaire:
   BEGIN:
     _: person__client

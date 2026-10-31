@@ -15,8 +15,8 @@ questionnaire:
   custom_single_choice__filing_court:
     _: custom_single_choice__filing_county
   custom_single_choice__filing_county:
-    _: custom_text__member_present_name
-  custom_text__member_present_name:
+    _: person__member
+  person__member:
     _: custom_single_choice__member_role
   custom_single_choice__member_role:
     _: custom_single_choice__member_convicted
@@ -43,8 +43,8 @@ questionnaire:
   custom_single_choice__member_child_support:
     _: custom_single_choice__child_support_current
   custom_single_choice__child_support_current:
-    _: custom_text__child_support_arrears
-  custom_text__child_support_arrears:
+    _: custom_usd__child_support_arrears
+  custom_usd__child_support_arrears:
     _: custom_text__child_support_order_court
   custom_text__child_support_order_court:
     _: custom_text__child_support_collection_unit
@@ -53,8 +53,8 @@ questionnaire:
   custom_single_choice__member_spousal_support:
     _: custom_single_choice__spousal_support_current
   custom_single_choice__spousal_support_current:
-    _: custom_text__spousal_support_arrears
-  custom_text__spousal_support_arrears:
+    _: custom_usd__spousal_support_arrears
+  custom_usd__spousal_support_arrears:
     _: custom_text__spousal_support_order_court
   custom_text__spousal_support_order_court:
     _: END
@@ -172,7 +172,7 @@ prompts:
     Which court will the supplement ride with — the same court as the
     petition? (Supreme Court, County Court, or New York City Civil Court.)
   filing_county: The county where the petition is filed.
-  member_present_name: >-
+  person__member: >-
     Whose answers are these? Type that family member's full present name —
     each member who answered yes to a petition question files their own
     supplement.
@@ -200,7 +200,7 @@ prompts:
   member_child_support: Does that member have to pay child support?
   child_support_current: >-
     Are those child support payments satisfied and up to date?
-  child_support_arrears: >-
+  custom_usd__child_support_arrears: >-
     If payments are not up to date, how much does that member owe? (A
     number; leave blank when payments are current.)
   child_support_order_court: Which court issued the child support order?
@@ -210,7 +210,7 @@ prompts:
   member_spousal_support: Is that member responsible for spousal support?
   spousal_support_current: >-
     Are those spousal support payments satisfied and up to date?
-  spousal_support_arrears: >-
+  custom_usd__spousal_support_arrears: >-
     If payments are not up to date, how much does that member owe? (A
     number; leave blank when payments are current.)
   spousal_support_order_court: Which court issued the spousal support order?

@@ -1,4 +1,4 @@
-form_code = "las_vegas__small_claims_counterclaim"
+form_code = "nv__las_vegas_small_claims_counterclaim"
 # Las Vegas Justice Court (Clark County) — Counterclaim, Small Claims.
 # The parser reports 18 AcroForm fields on the official blank; this map
 # renames the 13 the questionnaire fills and records the rest for the

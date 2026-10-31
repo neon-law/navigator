@@ -207,7 +207,11 @@ fn fill_sample(
         };
         let Some((_, (_, export))) = choices
             .iter()
-            .find(|(state, _)| field.ends_with(state.as_str()))
+            .find(|(state, _)| {
+                field
+                    .strip_prefix("custom_single_choice__")
+                    .is_some_and(|tail| tail == state.as_str())
+            })
         else {
             break;
         };
@@ -230,29 +234,29 @@ fn fill_sample(
 fn object_path_for(code: &str) -> Result<String, BoxErr> {
     // Mirrors the FormMeta object_path registered for the code.
     let path: &str = match code {
-        "kc__adult_name_change_petition" => {
-            "forms/united_states/washington/king_county_district_court/kc__adult_name_change_petition.pdf"
+        "wa__adult_name_change_petition" => {
+            "forms/united_states/washington/king_county_district_court/wa__adult_name_change_petition.pdf"
         }
-        "kc__minor_name_change_petition" => {
-            "forms/united_states/washington/king_county_district_court/kc__minor_name_change_petition.pdf"
+        "wa__minor_name_change_petition" => {
+            "forms/united_states/washington/king_county_district_court/wa__minor_name_change_petition.pdf"
         }
-        "kc__small_claims_notice" => {
-            "forms/united_states/washington/king_county_district_court/kc__small_claims_notice.pdf"
+        "wa__small_claims_notice" => {
+            "forms/united_states/washington/king_county_district_court/wa__small_claims_notice.pdf"
         }
-        "kc__small_claims_plaintiff_packet" => {
-            "forms/united_states/washington/king_county_district_court/kc__small_claims_plaintiff_packet.pdf"
+        "wa__small_claims_plaintiff_packet" => {
+            "forms/united_states/washington/king_county_district_court/wa__small_claims_plaintiff_packet.pdf"
         }
-        "washoe__adult_name_change_petition" => {
-            "forms/united_states/nevada/second_judicial_district_court/washoe__adult_name_change_petition.pdf"
+        "nv__washoe_adult_name_change_petition" => {
+            "forms/united_states/nevada/second_judicial_district_court/nv__washoe_adult_name_change_petition.pdf"
         }
-        "washoe__fee_waiver_application" => {
-            "forms/united_states/nevada/second_judicial_district_court/washoe__fee_waiver_application.pdf"
+        "nv__washoe_fee_waiver_application" => {
+            "forms/united_states/nevada/second_judicial_district_court/nv__washoe_fee_waiver_application.pdf"
         }
-        "las_vegas__small_claims_complaint" => {
-            "forms/united_states/nevada/las_vegas_justice_court/las_vegas__small_claims_complaint.pdf"
+        "nv__las_vegas_small_claims_complaint" => {
+            "forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_complaint.pdf"
         }
-        "las_vegas__small_claims_counterclaim" => {
-            "forms/united_states/nevada/las_vegas_justice_court/las_vegas__small_claims_counterclaim.pdf"
+        "nv__las_vegas_small_claims_counterclaim" => {
+            "forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_counterclaim.pdf"
         }
         "ny__nc1_adult_name_change_petition" => {
             "forms/united_states/new_york/new_york_supreme_court/ny__nc1_adult_name_change_petition.pdf"

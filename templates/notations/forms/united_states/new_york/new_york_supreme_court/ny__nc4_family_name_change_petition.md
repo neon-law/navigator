@@ -13,14 +13,14 @@ questionnaire:
   person__client:
     _: people__family_members
   people__family_members:
-    _: custom_text__new_family_name
-  custom_text__new_family_name:
+    _: person__new_family_name
+  person__new_family_name:
     _: custom_single_choice__filing_court
   custom_single_choice__filing_court:
     _: custom_single_choice__filing_county
   custom_single_choice__filing_county:
-    _: custom_text__co_petitioners
-  custom_text__co_petitioners:
+    _: people__co_petitioners
+  people__co_petitioners:
     _: custom_single_choice__convicted
   custom_single_choice__convicted:
     _: custom_single_choice__bankruptcy
@@ -37,8 +37,8 @@ questionnaire:
   custom_text__reason_for_change:
     _: custom_single_choice__prior_name_change
   custom_single_choice__prior_name_change:
-    _: custom_text__prior_name_change_details
-  custom_text__prior_name_change_details:
+    _: custom_text__prior_petition_details
+  custom_text__prior_petition_details:
     _: custom_text__current_address
   custom_text__current_address:
     _: custom_datetime__address_since
@@ -51,18 +51,18 @@ questionnaire:
   custom_text__parent_1_name:
     _: custom_text__parent_1_address
   custom_text__parent_1_address:
-    _: custom_text__parent_1_present_names
-  custom_text__parent_1_present_names:
-    _: custom_text__parent_1_proposed_names
-  custom_text__parent_1_proposed_names:
+    _: custom_text__parent_1_consent_children
+  custom_text__parent_1_consent_children:
+    _: custom_text__parent_1_consent_new_names
+  custom_text__parent_1_consent_new_names:
     _: custom_text__parent_2_name
   custom_text__parent_2_name:
     _: custom_text__parent_2_address
   custom_text__parent_2_address:
-    _: custom_text__parent_2_present_names
-  custom_text__parent_2_present_names:
-    _: custom_text__parent_2_proposed_names
-  custom_text__parent_2_proposed_names:
+    _: custom_text__parent_2_consent_children
+  custom_text__parent_2_consent_children:
+    _: custom_text__parent_2_consent_new_names
+  custom_text__parent_2_consent_new_names:
     _: END
   END: {}
 choices:
@@ -165,7 +165,7 @@ prompts:
     co-petitioners, and each minor under 18. (List minors in the order they
     appear; the consent pages follow that order. Proof of birth is required
     for each member and is attached to the petition.)
-  new_family_name: >-
+  person__new_family_name: >-
     What new family (last) name are you asking the court to order for the
     whole household?
   filing_court: >-
@@ -175,7 +175,7 @@ prompts:
     The attorney confirms your venue before filing.)
   filing_county: The county where you will file. (For NYC residents, your
     borough's county.)
-  co_petitioners: >-
+  people__co_petitioners: >-
     Any co-petitioners — other adult family members joining the petition —
     by full name. (Leave blank if you are the only petitioner.)
   convicted: >-
@@ -201,7 +201,7 @@ prompts:
     In your own words, why does the family want its name changed? (The
     petition tells the judge this under oath.)
   prior_name_change: Have you ever filed a name change petition in any court?
-  prior_name_change_details: >-
+  prior_petition_details: >-
     If you answered yes: where you filed it, when, the case number if you
     know it, and how it came out. (Leave blank if you answered no.)
   current_address: Your current address as the form prints it — street
@@ -222,18 +222,18 @@ prompts:
     parent-consent questions blank when every parent or guardian is already
     a petitioner — the law skips their consent then.)
   parent_1_address: The non-petitioning parent's or guardian's address.
-  parent_1_present_names: >-
+  parent_1_consent_children: >-
     The children's present name(s) as that parent's consent page reads them.
-  parent_1_proposed_names: The children's proposed name(s) for that consent
+  parent_1_consent_new_names: The children's proposed name(s) for that consent
     page.
   parent_2_name: >-
     A second non-petitioning parent or guardian, if there is one. (Leave
     blank when there is none.)
   parent_2_address: The second non-petitioning parent's or guardian's
     address.
-  parent_2_present_names: The children's present name(s) for that second
+  parent_2_consent_children: The children's present name(s) for that second
     consent page.
-  parent_2_proposed_names: The children's proposed name(s) for that second
+  parent_2_consent_new_names: The children's proposed name(s) for that second
     consent page.
 workflow:
   BEGIN:

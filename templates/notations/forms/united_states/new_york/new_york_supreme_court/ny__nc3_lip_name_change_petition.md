@@ -27,8 +27,8 @@ questionnaire:
   custom_text__reason_for_change:
     _: custom_single_choice__prior_name_change
   custom_single_choice__prior_name_change:
-    _: custom_text__prior_name_change_details
-  custom_text__prior_name_change_details:
+    _: custom_text__prior_petition_details
+  custom_text__prior_petition_details:
     _: custom_text__place_of_birth
   custom_text__place_of_birth:
     _: custom_text__current_address
@@ -118,7 +118,7 @@ prompts:
     In your own words, why do you want their name changed? (The petition
     tells the judge this under oath.)
   prior_name_change: Has a name change petition ever been filed for them before?
-  prior_name_change_details: >-
+  prior_petition_details: >-
     If you answered yes: where it was filed, when, the case number if you
     know it, and how it came out. (Leave blank if you answered no.)
   place_of_birth: >-

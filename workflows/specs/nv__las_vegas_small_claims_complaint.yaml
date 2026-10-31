@@ -6,8 +6,8 @@ questionnaire:
   custom_text__plaintiff_caption:
     _: custom_text__defendant_caption
   custom_text__defendant_caption:
-    _: custom_text__defendant_contact
-  custom_text__defendant_contact:
+    _: custom_phone__defendant_contact
+  custom_phone__defendant_contact:
     _: custom_usd__amount_owed
   custom_usd__amount_owed:
     _: custom_text__reason_owed
@@ -16,6 +16,20 @@ questionnaire:
   custom_single_choice__venue_township:
     _: END
   END: {}
+choices:
+  venue_township:
+    Las Vegas: Las Vegas
+    Henderson: Henderson
+    North Las Vegas: North Las Vegas
+    Boulder: Boulder
+    Bunkerville: Bunkerville
+    Goodsprings: Goodsprings
+    Laughlin: Laughlin
+    Mesquite: Mesquite
+    Moapa: Moapa
+    Moapa Valley: Moapa Valley
+    Searchlight: Searchlight
+
 prompts:
   client_name: >-
     What is your full legal name? (It appears on the sworn statement and
@@ -26,7 +40,7 @@ prompts:
   defendant_caption: >-
     The defendant's full name and mailing address. (The court serves the
     complaint at this address.)
-  defendant_contact: >-
+  custom_phone__defendant_contact: >-
     The defendant's telephone number, if you know it. (Leave blank if you
     do not — the complaint carries one telephone box for the defendant.)
   amount_owed: >-
