@@ -3852,7 +3852,8 @@ mod free_resources_guards {
                             .or_else(|| form.filing_fee.as_ref().map(fee_display))
                     );
                     assert!(
-                        row.blank_url.starts_with("https://"),
+                        !row.blank_url.starts_with("/public")
+                            && !row.blank_url.contains("github.com"),
                         "the blank points at the public assets bucket, never a repository file: {}",
                         row.blank_url
                     );
