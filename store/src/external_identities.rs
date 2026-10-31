@@ -117,6 +117,23 @@ pub enum ExternalSystem {
     Chatgpt,
     /// Notion. `external_id` is the stable workspace user id.
     Notion,
+    /// Facebook. `external_id` is the Page-scoped sender id an inbound
+    /// Meta webhook recorded — the same value `Conversation`'s
+    /// `external_address` carries, so the inbox can say who is behind a
+    /// bare id.
+    Facebook,
+    /// Instagram. `external_id` is the Instagram-scoped sender id an
+    /// inbound Meta webhook recorded.
+    Instagram,
+    /// Threads. `external_id` is the Threads user id an inbound Meta
+    /// webhook recorded.
+    Threads,
+    /// YouTube. `external_id` is the commenter's channel id, as the
+    /// comments poller records it.
+    Youtube,
+    /// TikTok. `external_id` is the commenter id the Business comment
+    /// webhook recorded.
+    Tiktok,
 }
 
 impl ExternalSystem {
@@ -132,6 +149,11 @@ impl ExternalSystem {
         Self::Claude,
         Self::Chatgpt,
         Self::Notion,
+        Self::Facebook,
+        Self::Instagram,
+        Self::Threads,
+        Self::Youtube,
+        Self::Tiktok,
     ];
 
     /// The stored spelling — what goes in the column and what the ASSERT
@@ -147,6 +169,11 @@ impl ExternalSystem {
             Self::Claude => "claude",
             Self::Chatgpt => "chatgpt",
             Self::Notion => "notion",
+            Self::Facebook => "facebook",
+            Self::Instagram => "instagram",
+            Self::Threads => "threads",
+            Self::Youtube => "youtube",
+            Self::Tiktok => "tiktok",
         }
     }
 

@@ -121,10 +121,7 @@ pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
             confirm_action: row.triage.suggested_project_id.map(|project_id| {
                 // The id rides the path — the same shape the assign form's
                 // action uses — so the form itself needs no hidden field.
-                format!(
-                    "{href}/triage/{}/confirm/{}",
-                    row.triage.id, project_id
-                )
+                format!("{href}/triage/{}/confirm/{}", row.triage.id, project_id)
             }),
             override_action: format!("{href}/triage/{}/override", row.triage.id),
             resolve_action: format!("{href}/triage/{}/resolve", row.triage.id),
@@ -356,7 +353,10 @@ mod tests {
     #[test]
     fn the_empty_queue_says_so() {
         let html = dioxus_ssr::render_element(triage_queue_body(&page(Vec::new())));
-        assert!(html.contains("No messages are waiting for review"), "{html}");
+        assert!(
+            html.contains("No messages are waiting for review"),
+            "{html}"
+        );
         assert!(!html.contains("Assign a different project"), "{html}");
     }
 }

@@ -1635,7 +1635,13 @@ mod tests {
     ) -> (Uuid, store::inbox::IngestedInbound) {
         let message = store::inbox::ingest_inbound(
             db,
-            &inbound(firm, store::inbox::channel::EMAIL, "support", tag, "reader@example.com"),
+            &inbound(
+                firm,
+                store::inbox::channel::EMAIL,
+                "support",
+                tag,
+                "reader@example.com",
+            ),
         )
         .await
         .unwrap();
@@ -1730,13 +1736,11 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         assert_eq!(location(&response).as_deref(), Some(TRIAGE_QUEUE));
 
-        let conversation = store::inbox::conversation_by_id(
-            &state.surreal,
-            message.conversation_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let conversation =
+            store::inbox::conversation_by_id(&state.surreal, message.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
         assert_eq!(conversation.project_id, Some(project.id));
         let row = store::inbox_triage::find_by_id(&state.surreal, triage_id)
             .await
@@ -1797,13 +1801,11 @@ mod tests {
         assert!(location(&denied)
             .unwrap_or_default()
             .starts_with(&format!("{TRIAGE_QUEUE}?error=")));
-        let conversation = store::inbox::conversation_by_id(
-            &state.surreal,
-            message.conversation_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let conversation =
+            store::inbox::conversation_by_id(&state.surreal, message.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
         assert_eq!(conversation.project_id, None);
 
         // With active participation the same action lands.
@@ -1826,13 +1828,11 @@ mod tests {
         )
         .await;
         assert_eq!(confirmed.status(), StatusCode::SEE_OTHER);
-        let conversation = store::inbox::conversation_by_id(
-            &state.surreal,
-            message.conversation_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let conversation =
+            store::inbox::conversation_by_id(&state.surreal, message.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
         assert_eq!(conversation.project_id, Some(project.id));
         // The Owner's own door still works on another row: sanity in one.
         assert!(
@@ -1847,8 +1847,7 @@ mod tests {
     async fn an_override_persists_the_correction_as_a_labeled_example() {
         let db = store::test_support::mem_surreal().await;
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
-        let (triage_id, message) =
-            triaged_email(&db, firm.id, "triage-override", None).await;
+        let (triage_id, message) = triaged_email(&db, firm.id, "triage-override", None).await;
         let state = crate::test_support::app_state(db).await;
 
         let response = triage_override_post(
@@ -1874,13 +1873,11 @@ mod tests {
             .unwrap();
         assert_eq!(row.disposition, TriageDisposition::Overridden);
         assert!(row.labeled_example);
-        let conversation = store::inbox::conversation_by_id(
-            &state.surreal,
-            message.conversation_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let conversation =
+            store::inbox::conversation_by_id(&state.surreal, message.conversation_id)
+                .await
+                .unwrap()
+                .unwrap();
         assert_eq!(conversation.project_id, Some(project.id));
     }
 

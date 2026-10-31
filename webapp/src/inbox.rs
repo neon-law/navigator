@@ -359,17 +359,19 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
     let channel_filter = selected_channel().await;
     let unread_only = unread_only().await;
     let brand_filter = selected_brand().await;
-    let all_rows = store::inbox::list_intake(&surreal, actor)
+    let brands = store::inbox::intake_brands(&surreal, actor)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
-    let brands = inbox_brands(&all_rows);
     let brand_filter = brand_filter.filter(|brand| brands.contains(brand));
-    let rows = all_rows
+    let scoped_rows = match brand_filter.as_deref() {
+        Some(brand) => store::inbox::list_intake_in_brand(&surreal, actor, brand).await,
+        None => store::inbox::list_intake(&surreal, actor).await,
+    }
+    .map_err(|error| ServerFnError::new(error.to_string()))?;
+    let rows = scoped_rows
         .into_iter()
         .filter(|row| {
-            channel_matches(&row.channel, channel_filter.as_deref())
-                && brand_matches(row.brand_key.as_deref(), brand_filter.as_deref())
-                && (!unread_only || row.unread)
+            channel_matches(&row.channel, channel_filter.as_deref()) && (!unread_only || row.unread)
         })
         .collect::<Vec<_>>();
     let (logo, tokens_href, firm_name) = chrome().await;

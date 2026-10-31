@@ -486,7 +486,10 @@ async fn conversation_for_message(
 /// # Errors
 ///
 /// Returns a database error.
-pub async fn find_by_id(db: &SurrealDb, triage_id: Uuid) -> Result<Option<InboxTriage>, InboxError> {
+pub async fn find_by_id(
+    db: &SurrealDb,
+    triage_id: Uuid,
+) -> Result<Option<InboxTriage>, InboxError> {
     let mut response = db
         .query(format!("SELECT {SELECT} FROM $id"))
         .bind(("id", record_id(TABLE, triage_id)))
@@ -576,7 +579,9 @@ pub async fn confirm_project(
     triage_id: Uuid,
     project_id: Uuid,
 ) -> Result<InboxTriage, InboxError> {
-    let row = find_by_id(db, triage_id).await?.ok_or(InboxError::NotFound)?;
+    let row = find_by_id(db, triage_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
     require_open(&row)?;
     // Authorize before reading any suggestion state: an unauthorized actor
     // is denied outright and learns nothing about the row.
@@ -634,9 +639,13 @@ pub async fn override_project(
 ) -> Result<InboxTriage, InboxError> {
     let rationale = rationale.trim();
     if rationale.is_empty() {
-        return Err(InboxError::Invalid("an override carries a rationale".into()));
+        return Err(InboxError::Invalid(
+            "an override carries a rationale".into(),
+        ));
     }
-    let row = find_by_id(db, triage_id).await?.ok_or(InboxError::NotFound)?;
+    let row = find_by_id(db, triage_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
     require_open(&row)?;
     let project = crate::projects::find_by_id(db, project_id)
         .await?
@@ -692,9 +701,13 @@ pub async fn resolve_privilege(
 ) -> Result<InboxTriage, InboxError> {
     let rationale = rationale.trim();
     if rationale.is_empty() {
-        return Err(InboxError::Invalid("a resolution carries a rationale".into()));
+        return Err(InboxError::Invalid(
+            "a resolution carries a rationale".into(),
+        ));
     }
-    let row = find_by_id(db, triage_id).await?.ok_or(InboxError::NotFound)?;
+    let row = find_by_id(db, triage_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
     require_open(&row)?;
     let actor = crate::persons::find_by_id(db, actor_id)
         .await?
@@ -702,9 +715,7 @@ pub async fn resolve_privilege(
     if !crate::inbox::triage_reviewer_may_resolve(db, &actor, row.firm_id).await? {
         return Err(InboxError::Denied);
     }
-    let channel = conversation_for_message(db, row.message_id)
-        .await?
-        .channel;
+    let channel = conversation_for_message(db, row.message_id).await?.channel;
     // The structural rule outranks the form: a social-origin channel is
     // never privileged, however the human asked.
     let privilege = if crate::inbox::is_social_channel(&channel) {
@@ -751,16 +762,16 @@ pub async fn rerun(
     actor_id: Uuid,
     triage_id: Uuid,
 ) -> Result<InboxTriage, InboxError> {
-    let row = find_by_id(db, triage_id).await?.ok_or(InboxError::NotFound)?;
+    let row = find_by_id(db, triage_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
     let actor = crate::persons::find_by_id(db, actor_id)
         .await?
         .ok_or(InboxError::NotFound)?;
     if !crate::inbox::triage_reviewer_may_resolve(db, &actor, row.firm_id).await? {
         return Err(InboxError::Denied);
     }
-    let channel = conversation_for_message(db, row.message_id)
-        .await?
-        .channel;
+    let channel = conversation_for_message(db, row.message_id).await?.channel;
     let privilege = privilege_label(&channel, None);
     write_review_decision(
         db,
@@ -779,10 +790,7 @@ pub async fn rerun(
 }
 
 /// The conversation id behind a triage row — the assignment doors need it.
-async fn row_conversation_id(
-    db: &SurrealDb,
-    row: &InboxTriage,
-) -> Result<Uuid, InboxError> {
+async fn row_conversation_id(db: &SurrealDb, row: &InboxTriage) -> Result<Uuid, InboxError> {
     Ok(conversation_for_message(db, row.message_id).await?.id)
 }
 
@@ -1304,8 +1312,8 @@ mod tests {
         let db = crate::test_support::mem_surreal().await;
         let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
         let project = seed_project(&db, firm, "Participation Matter").await;
-        let (outside_id, _) = needs_human_with_suggestion(&db, firm, "confirm-lawyer-out", None)
-            .await;
+        let (outside_id, _) =
+            needs_human_with_suggestion(&db, firm, "confirm-lawyer-out", None).await;
         let (triage_id, message) =
             needs_human_with_suggestion(&db, firm, "confirm-lawyer", Some(project.id)).await;
         let lawyer = person(&db, "Firm Lawyer", Role::Lawyer).await;
@@ -1402,8 +1410,7 @@ mod tests {
         let error = override_project(&db, owner, open_row, foreign.id, "cross firm").await;
         assert!(matches!(error, Err(InboxError::CrossFirm)));
         // And an override carries a rationale.
-        let (blank_row, _) =
-            needs_human_with_suggestion(&db, firm, "override-blank", None).await;
+        let (blank_row, _) = needs_human_with_suggestion(&db, firm, "override-blank", None).await;
         let error = override_project(&db, owner, blank_row, corrected.id, "  ").await;
         assert!(matches!(error, Err(InboxError::Invalid(_))));
     }
@@ -1435,7 +1442,8 @@ mod tests {
             .starts_with("human review:"));
 
         // The human may call client email not privileged — a person can.
-        let (email_two, _) = needs_human_with_suggestion(&db, firm, "resolve-email-two", None).await;
+        let (email_two, _) =
+            needs_human_with_suggestion(&db, firm, "resolve-email-two", None).await;
         let settled = resolve_privilege(
             &db,
             owner,
@@ -1481,8 +1489,14 @@ mod tests {
         // a reason.
         let (open_row, _) = needs_human_with_suggestion(&db, firm, "resolve-open", None).await;
         assert!(matches!(
-            resolve_privilege(&db, owner, open_row, PrivilegeLabel::Uncertain, "keep guessing")
-                .await,
+            resolve_privilege(
+                &db,
+                owner,
+                open_row,
+                PrivilegeLabel::Uncertain,
+                "keep guessing"
+            )
+            .await,
             Err(InboxError::Invalid(_))
         ));
         assert!(matches!(
@@ -1499,8 +1513,14 @@ mod tests {
         ));
         let outsider = person(&db, "Resolve Outsider", Role::Lawyer).await;
         assert!(matches!(
-            resolve_privilege(&db, outsider, open_row, PrivilegeLabel::Privileged, "not mine")
-                .await,
+            resolve_privilege(
+                &db,
+                outsider,
+                open_row,
+                PrivilegeLabel::Privileged,
+                "not mine"
+            )
+            .await,
             Err(InboxError::Denied)
         ));
     }
@@ -1514,9 +1534,11 @@ mod tests {
 
         // A confirmed email row reopens as Uncertain — the portal re-runs
         // the rule layer, and email without a classifier is uncertain.
-        let (triage_id, _) = needs_human_with_suggestion(&db, firm, "rerun-email", Some(project.id))
-            .await;
-        confirm_project(&db, owner, triage_id, project.id).await.unwrap();
+        let (triage_id, _) =
+            needs_human_with_suggestion(&db, firm, "rerun-email", Some(project.id)).await;
+        confirm_project(&db, owner, triage_id, project.id)
+            .await
+            .unwrap();
         let reopened = rerun(&db, owner, triage_id).await.unwrap();
         assert_eq!(reopened.privilege, PrivilegeLabel::Uncertain);
         assert_eq!(reopened.disposition, TriageDisposition::NeedsHuman);
@@ -1527,7 +1549,9 @@ mod tests {
         );
 
         // A labeled example survives the re-run.
-        let overridden = override_project(&db, owner, triage_id, project.id, "still right").await.unwrap();
+        let overridden = override_project(&db, owner, triage_id, project.id, "still right")
+            .await
+            .unwrap();
         assert!(overridden.labeled_example);
         let rerun_row = rerun(&db, owner, triage_id).await.unwrap();
         assert!(rerun_row.labeled_example);
