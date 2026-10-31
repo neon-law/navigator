@@ -4484,6 +4484,7 @@ Sign: {{client.signature}}";
             secure_cookies: false,
             attachment_scanner: app.attachment_scanner,
             runtime_kms: app.runtime_kms,
+            twilio_registry: None,
         };
         (state, surreal)
     }

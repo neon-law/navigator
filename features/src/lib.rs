@@ -169,6 +169,7 @@ pub async fn app_state_with_email(
         inbound_email_secret: None,
         summary_intake: None,
         sms_intake: None,
+        twilio_registry: None,
         email_events_secret: None,
         sendgrid_events_public_key: None,
         bootstrap_owner_email: None,

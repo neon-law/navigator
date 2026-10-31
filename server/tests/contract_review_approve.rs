@@ -61,6 +61,7 @@ async fn harness() -> Harness {
         secure_cookies: false,
         attachment_scanner: Arc::new(portal::attachment_scanner::FakeAttachmentScanner::clean()),
         runtime_kms: Arc::new(cloud::NoRuntimeKms),
+        twilio_registry: None,
     };
     let state = AppState {
         storage: storage.clone(),

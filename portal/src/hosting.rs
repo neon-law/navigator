@@ -438,6 +438,20 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
 
     tracing::info!(enabled = sms_intake.is_some(), "SMS inbox intake");
 
+    // The Firm registry of Twilio receiving numbers, in PostgreSQL. Every
+    // Twilio webhook resolves through it; without a registry the deployment
+    // has no receiving numbers and the lanes answer 404.
+    let twilio_registry = match store::postgres::PostgresDb::from_env().await {
+        Ok(db) => Some(std::sync::Arc::new(db)),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "Twilio receiving-number registry unavailable; webhook lanes off"
+            );
+            None
+        }
+    };
+
     let state = crate::AppState {
         brand_bundle,
         surreal,
@@ -482,6 +496,7 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         inbound_email_secret,
         summary_intake,
         sms_intake,
+        twilio_registry,
         email_events_secret,
         sendgrid_events_public_key,
         bootstrap_owner_email: crate::oauth::bootstrap_owner_email_from_env(),

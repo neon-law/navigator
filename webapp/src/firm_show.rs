@@ -201,6 +201,7 @@ fn secret_kind_choices() -> Vec<Choice> {
         Choice::new("notion_token", "Notion token"),
         Choice::new("github_app_private_key", "GitHub App private key"),
         Choice::new("forgejo_access_token", "Forgejo access token"),
+        Choice::new("twilio_auth_token", "Twilio auth token"),
     ]
 }
 
