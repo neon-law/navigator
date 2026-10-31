@@ -980,13 +980,12 @@ async fn sender_identity(
     conversation: &Conversation,
 ) -> Result<Option<ContactLink>, InboxError> {
     match conversation.channel.as_str() {
-        channel::EMAIL => Ok(persons::find_by_email_ci(
-            db,
-            conversation.external_address.trim(),
-        )
-        .await?
-        .as_ref()
-        .map(ContactLink::of)),
+        channel::EMAIL => Ok(
+            persons::find_by_email_ci(db, conversation.external_address.trim())
+                .await?
+                .as_ref()
+                .map(ContactLink::of),
+        ),
         channel::SMS => Ok(persons::find_by_phone(db, &conversation.external_address)
             .await?
             .as_ref()
@@ -3627,9 +3626,14 @@ mod tests {
         .await
         .unwrap();
         let sam = person(&db, "Sam Texter", "sam.texter@example.com", Role::Client).await;
-        link_contact_phone(&db, world.owner, text.conversation_id, "sam.texter@example.com")
-            .await
-            .unwrap();
+        link_contact_phone(
+            &db,
+            world.owner,
+            text.conversation_id,
+            "sam.texter@example.com",
+        )
+        .await
+        .unwrap();
         let rows = list_intake(&db, world.owner).await.unwrap();
         let row = rows
             .iter()
@@ -3675,7 +3679,10 @@ mod tests {
             .find(|row| row.id == social.conversation_id)
             .unwrap();
         assert_eq!(row.contact.as_ref().map(|c| c.person_id), Some(pat));
-        assert_eq!(row.contact.as_ref().map(|c| c.role.as_str()), Some("client"));
+        assert_eq!(
+            row.contact.as_ref().map(|c| c.role.as_str()),
+            Some("client")
+        );
     }
 
     #[tokio::test]
@@ -3702,15 +3709,11 @@ mod tests {
 
         // Before the link exists: a Lawyer with no participation on the
         // conversation cannot queue a social reply.
-        assert!(queue_social_reply(
-            &db,
-            world.lawyer,
-            saved.conversation_id,
-            "Reply",
-            "public"
-        )
-        .await
-        .is_err());
+        assert!(
+            queue_social_reply(&db, world.lawyer, saved.conversation_id, "Reply", "public")
+                .await
+                .is_err()
+        );
 
         // The address book learns who the sender is...
         external_identities::link(
@@ -3725,24 +3728,16 @@ mod tests {
 
         // ...and nothing changes about who may act: the link is display
         // data, not authority.
-        assert!(queue_social_reply(
-            &db,
-            world.lawyer,
-            saved.conversation_id,
-            "Reply",
-            "public"
-        )
-        .await
-        .is_err());
-        assert!(queue_social_reply(
-            &db,
-            world.owner,
-            saved.conversation_id,
-            "Reply",
-            "public"
-        )
-        .await
-        .is_ok());
+        assert!(
+            queue_social_reply(&db, world.lawyer, saved.conversation_id, "Reply", "public")
+                .await
+                .is_err()
+        );
+        assert!(
+            queue_social_reply(&db, world.owner, saved.conversation_id, "Reply", "public")
+                .await
+                .is_ok()
+        );
 
         // The privilege rule layer never consults the address book either:
         // the social channel's structural rule stands with the identity
