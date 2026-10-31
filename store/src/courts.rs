@@ -71,7 +71,7 @@ pub struct Court {
 
 /// A surveyed form a court's filing office accepts that has no forms-shelf
 /// template yet — registry data only.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SurveyedForm {
     /// Stable slug within the court's record (`nc_100_info`).
