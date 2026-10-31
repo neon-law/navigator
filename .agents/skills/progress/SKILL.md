@@ -20,8 +20,8 @@ implementation, and shipping. Keep client data out of the repository and fixture
 2. Run the [`triage-projects`](../triage-projects/SKILL.md) audit: read `docs/public-contributor-safety.md`,
    `docs/glossary/`, relevant docs, and complete Linear conversations. Reconcile project updates and issue states with
    shipped code, tests, merged PRs, open PRs, and active worktrees. Adjudicate each issue as still valid, shipped,
-   duplicate/superseded, or blocked. `triage-projects` proposes tracker changes; this pass applies the certain closes
-   and the uncertainty comments.
+   duplicate/superseded, or blocked. `triage-projects` applies conclusive tracker cleanup; this pass adds uncertainty
+   comments and continues into implementation.
 3. Read every open pull request before changing a Linear issue. Record its repository, number, changed paths, and
    linked issues; do the same for active worktrees. An open pull request is in-flight work: leave its linked issues
    open, exclude them from this PR, and keep their paths out of the change. Shipped code is the tree on refreshed
