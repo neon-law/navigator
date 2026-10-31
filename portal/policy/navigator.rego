@@ -790,6 +790,20 @@ route_allow if {
     is_authenticated(input.session)
 }
 
+# One person's relationship-graph page rides the avatar rule's shape: lawyer
+# tier at the route, because the `GET /app/api/graph/lawyer/{id}` door the
+# page's island fetches admits the person themself and the firm directory
+# (`FirmCapability::ViewDirectory`) — that check lives there, not here. Clerk
+# and client are denied, the same boundary the lawyer workbench carries.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "people"
+    count(input.path) == 4
+    input.path[3] == "graph"
+    input.method == "GET"
+    is_lawyer(input.session)
+}
+
 # /app/admin/brands is the house-of-brands home: every registered brand's
 # typeface. Owner and Admin reach it through the route bypass at the top of
 # this policy; Lawyer and Clerk stay denied. The handler then refuses anyone

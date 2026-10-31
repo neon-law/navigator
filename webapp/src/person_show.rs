@@ -425,6 +425,14 @@ fn person_actions(view: &PersonShowView, welcome_recipient: &str) -> Element {
                         }
                     },
                 }
+                // The lawyer-graph page is the read-only neighborhood view of
+                // this person; every viewer of an admin record page is at
+                // least admin tier, which the graph door admits.
+                a {
+                    class: "nav-btn nav-btn--secondary",
+                    href: "/app/people/{view.id}/graph",
+                    "Relationship graph"
+                }
             }
         }
     }

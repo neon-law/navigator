@@ -18,6 +18,43 @@ lookup_fields:
 # This file is canonical reference data consumed at compile time
 # (`store::courts`), not a database table — the seed boundary test classifies
 # it in the canonical layer.
+#
+# ---------------------------------------------------------------------
+# Provenance (populated 2026-10-31 from the four verified regional surveys
+# of 2026-10-30 — see the project artifacts "California/Washington/Nevada/
+# New York Court Self-Help Form Inventory"):
+#
+# - Every `forms:` entry is a template-backed form (the 12 templates from
+#   the notation wave); everything else lives in `surveyed_forms:`, which
+#   is registry data only — the same provenance fields, no template join.
+# - Every sha256 was computed from the official blank downloaded 2026-10-31
+#   and is never the bytes themselves. New York blanks are pinned from
+#   Wayback-archived copies (nycourts.gov serves a Cloudflare bot challenge
+#   to plain clients); the live URLs are the ones the UCS pages link today.
+# - `fillability` is the survey's binary AcroForm check: `fillable` (field
+#   dictionary carries widgets), `unfillable_source` (0 fields, whatever
+#   the filename claims), or `unverified` (not binary-checked).
+# - `fee_waiver_code` stays null throughout: the guard test resolves it to
+#   a forms-shelf template, and no fee-waiver template is vendored yet —
+#   the waiver form each office accepts is named in the fee note instead.
+# - CA Drupal JSON:API harvest: the root endpoint
+#   (https://selfhelp.courts.ca.gov/jsonapi) was live on 2026-10-31 but
+#   returns an empty default collection, and content-type probes beneath
+#   it serve HTML, not JSON:API envelopes — no form index to harvest; the
+#   2026-10-30 survey remains the freshest data for California.
+# - Explicitly unknown (survey-flagged, not guessed): the Washoe name-change
+#   filing fee; NY SE-3A small-estate affidavit fillability (page-claimed
+#   fillable, never binary-verified, no Wayback copy — so it carries no
+#   entry at all); the NY commercial-claims filing fee; the CA civil-
+#   harassment filing fee; WA statewide PO fees beyond the Pierce schedule's
+#   lines. Clark's "Fillable-Affidavit-of-Entitlement" is registered as an
+#   unfillable source.
+# - Agency forms (WA DOH birth-certificate sex-designation forms 422-143/
+#   422-144 — flat; DOL 520043 — fillable; the NV DPBH vital-records
+#   affidavit route) are not court filings and are not registered here.
+# - Pierce County's name-change/small-claims petitions and the WA statewide
+#   PO 003A are delivered through portal pages with no stable static PDF
+#   captured; they are described in notes rather than registered.
 records:
   # California's Judicial Council statewide name-change and gender-recognition
   # blanks are accepted in every county's superior court; the first-paper
@@ -27,6 +64,20 @@ records:
     name: Superior Court of California
     jurisdiction: CA
     level: superior
+    # One entry per form this court accepts, keyed to the template code:
+    #
+    # forms:
+    #   - code: ca__name_change_petition
+    #     title: Petition for Change of Name
+    #     form_number: NC-100          # official form number, when the office publishes one
+    #     source_url: https://www.courts.ca.gov/documents/NC100.pdf
+    #     sha256: 0000000000000000000000000000000000000000000000000000000000000000
+    #     filing_office: Superior Court Clerk's Office in the petitioner's county of residence
+    #     filing_fee:                  # flat fee; omit when the office publishes none
+    #       amount: "435.00"
+    #       currency: USD
+    #     fee_note: null               # tiered or county-varying schedules go here as prose
+    #     fee_waiver_code: ca__fee_waiver_request
     forms:
       - code: ca__name_change_petition
         title: Petition for Change of Name
@@ -101,6 +152,484 @@ records:
         sha256: fd1d3e765ae0c77199453020e53b825ea311ab9423a4021b21f44c5d3a67f634
         filing_office: Entered by the Superior Court after the hearing
         fee_waiver_code: null
+    surveyed_forms:
+      - key: nc100info
+        title: Instructions for Filing a Petition for Change of Name
+        form_number: NC-100-INFO
+        source_url: https://www.courts.ca.gov/documents/NC100INFO.pdf
+        sha256: 305137cb24c5838a153313d33d9af29621940c16b960b04dfbd178ea16ab4635
+        filing_office: Superior Court Clerk's Office in the petitioner's county of residence
+        fee_note: n/a (information sheet). First-paper filing fee varies by county (the published statewide range is $435-$450); the accepted fee-waiver paperwork is FW-001 with the FW-003 order, which has no template code on the forms shelf yet.
+        fillability: fillable
+      - key: nc400info
+        title: Information Sheet for Name Change Proceedings Under Address Confidentiality Program (Safe at Home)
+        form_number: NC-400-INFO
+        source_url: https://www.courts.ca.gov/documents/NC400INFO.pdf
+        sha256: 000feab817ba5f76ccaf1faa28d9ce80af3a4e7d6d7aece3c3dbc5998ee5e42e
+        filing_office: Superior Court Clerk's Office in the petitioner's county of residence
+        fee_note: n/a (information sheet).
+        fillability: fillable
+      - key: nc200info
+        title: Instructions for the Petition for Change of Name to Conform to Gender Identity
+        form_number: NC-200-INFO
+        source_url: https://www.courts.ca.gov/documents/NC200INFO.pdf
+        sha256: 781f44e9ba20cc361111d810317188b42dd63e0276b0a01bb3c77000766c72bb
+        filing_office: Superior Court Clerk's Office in the petitioner's county of residence
+        fee_note: n/a (information sheet). First-paper filing fee varies by county (the published statewide range is $435-$450); the accepted fee-waiver paperwork is FW-001 with the FW-003 order, which has no template code on the forms shelf yet.
+        fillability: fillable
+      - key: nc312
+        title: Marriage License and Certificate—Attachment
+        form_number: NC-312
+        source_url: https://www.courts.ca.gov/documents/NC312.pdf
+        sha256: 07f52c90bce99b8dad9a2d2cb419e0e3dc81b7d1f348dfcb2ebfbb1243bfce85
+        filing_office: Superior Court Clerk's Office in the petitioner's county of residence
+        fee_note: First-paper filing fee varies by county (the published statewide range is $435-$450); the accepted fee-waiver paperwork is FW-001 with the FW-003 order, which has no template code on the forms shelf yet.
+        fillability: fillable
+      - key: nc325
+        title: Order to Show Cause—Issuance of New Marriage License and Certificate
+        form_number: NC-325
+        source_url: https://www.courts.ca.gov/documents/NC325.pdf
+        sha256: 99dd5332bcfaa4596bda59c39eeed7f55e7cff80a76a65f18b873a4c15831a5e
+        filing_office: Superior Court Clerk's Office in the petitioner's county of residence
+        fee_note: First-paper filing fee varies by county (the published statewide range is $435-$450); the accepted fee-waiver paperwork is FW-001 with the FW-003 order, which has no template code on the forms shelf yet.
+        fillability: fillable
+      - key: nc500info
+        title: "Information Sheet: Petition for Recognition of Minor's Change of Gender and Sex Identifier"
+        form_number: NC-500-INFO
+        source_url: https://www.courts.ca.gov/documents/NC500INFO.pdf
+        sha256: 29c1e9d7a4ecc54c7af1700b30a966edc77e22cf0f9021aafbd05769cdcc11d8
+        filing_office: Superior Court Clerk's Office in the petitioner's county of residence
+        fee_note: n/a (information sheet); NC-500-series petition PDFs follow the same documents/ URL pattern.
+        fillability: fillable
+      - key: dv100
+        title: Request for Domestic Violence Restraining Order
+        form_number: DV-100
+        source_url: https://www.courts.ca.gov/documents/DV100.pdf
+        sha256: 6ff055a34d989ec691fd9e6533e6a25aafa59342455438ebedd29ce0ed36a958
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        filing_fee:
+          amount: "0.00"
+          currency: USD
+        fee_note: There is no court fee to file for a domestic violence restraining order.
+        fillability: fillable
+      - key: dv109
+        title: Notice of Court Hearing
+        form_number: DV-109
+        source_url: https://www.courts.ca.gov/documents/DV109.pdf
+        sha256: e32dd4fac6e53429ba2a1dbc750d0084fdd6f4f97b34b16cf90098e600c39569
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fillability: fillable
+      - key: dv110
+        title: Temporary Restraining Order
+        form_number: DV-110
+        source_url: https://www.courts.ca.gov/documents/DV110.pdf
+        sha256: 55f28920e87d6e02511c3070f667cc8af24c35e8bcbd351c798aab5779df5967
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fillability: fillable
+      - key: dv120
+        title: Response to Request for Domestic Violence Restraining Order
+        form_number: DV-120
+        source_url: https://www.courts.ca.gov/documents/DV120.pdf
+        sha256: 3728758b79486eb3aa35b6c84d0b0a4190f9ad2c38a9f3855c760d6e7f0252ec
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fillability: fillable
+      - key: dv130
+        title: Restraining Order After Hearing
+        form_number: DV-130
+        source_url: https://www.courts.ca.gov/documents/DV130.pdf
+        sha256: 9d7e52d8a9b2a44cfb83aac85299273292bd6e206333bfca68c57a71a84faf64
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fillability: fillable
+      - key: dv200
+        title: Confidential Contact Information (screening)
+        form_number: DV-200
+        source_url: https://www.courts.ca.gov/documents/DV200.pdf
+        sha256: c02b4aa46365ff8724236e573b7c618cfe1060dd0775e905b772e865d160581d
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fillability: fillable
+      - key: dv250
+        title: Proof of Service by Mail
+        form_number: DV-250
+        source_url: https://www.courts.ca.gov/documents/DV250.pdf
+        sha256: 6425637127086701a4e6b818063ae64926c3887e35720e1ef5c559f03b02f5a4
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fillability: fillable
+      - key: dv300
+        title: Request to Change or End Restraining Order
+        form_number: DV-300
+        source_url: https://www.courts.ca.gov/documents/DV300.pdf
+        sha256: f639648ec222fa14283d2f0bb4d0c46f6abac39a37802e0b2a4938a3c15481ab
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        filing_fee:
+          amount: "0.00"
+          currency: USD
+        fillability: fillable
+      - key: dv305
+        title: Request to Change Child Custody and Visitation Orders
+        form_number: DV-305
+        source_url: https://www.courts.ca.gov/documents/DV305.pdf
+        sha256: f685e88ee77c7fac66fa9f786523ea32b2066b18669c46bf60689bed315aa2b5
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fillability: fillable
+      - key: dv310
+        title: Notice of Court Hearing and Temporary Order to Change or End Restraining Order
+        form_number: DV-310
+        source_url: https://www.courts.ca.gov/documents/DV310.pdf
+        sha256: e9a29acb02496ae8753660a5467b11442e7ab6d267d2051e3d19d600a2d06ea0
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fillability: fillable
+      - key: dv530info
+        title: How to Enforce Your Restraining Order
+        form_number: DV-530-INFO
+        source_url: https://www.courts.ca.gov/documents/DV530INFO.pdf
+        sha256: 98e7b4b2323a559dda41cbe7cd805a1f5fe369c3fc10d3d1c1bb0527934a1978
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fee_note: n/a (information sheet); fillability asserted on the self-help page but not binary-verified in the survey.
+        fillability: unverified
+      - key: ser001
+        title: Request for Sheriff to Serve Court Papers
+        form_number: SER-001
+        source_url: https://www.courts.ca.gov/documents/SER001.pdf
+        sha256: 8197529a8646a662fbd7e89bdea1a06f61a9b9c4d75bfc8a4d8f795c62475893
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fee_note: The sheriff serves DV restraining-order papers free.
+        fillability: fillable
+      - key: ch100
+        title: Request for Civil Harassment Restraining Orders
+        form_number: CH-100
+        source_url: https://www.courts.ca.gov/documents/CH100.pdf
+        sha256: 4a2c52233d85489857cbafd4e66bd891e075a00060e0813701b34fdb11b804c8
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fee_note: Filing fee was not stated on any page surveyed (2026-10-30); any court fee can be waived with FW-001, which has no template code on the forms shelf yet.
+        fillability: fillable
+      - key: ch109
+        title: Notice of Court Hearing
+        form_number: CH-109
+        source_url: https://www.courts.ca.gov/documents/CH109.pdf
+        sha256: 8f02eb6d79fa00299a5a21850b691bca0ff20c23f15871c3857f48fbef13e4bd
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fillability: fillable
+      - key: ch110
+        title: Temporary Restraining Order
+        form_number: CH-110
+        source_url: https://www.courts.ca.gov/documents/CH110.pdf
+        sha256: d6ba3ae73c0c1bb91d1460beea46ec9694a7be7f68c692d50979fe1def460960
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fillability: fillable
+      - key: ch120
+        title: Response to Request
+        form_number: CH-120
+        source_url: https://www.courts.ca.gov/documents/CH120.pdf
+        sha256: c7d20724e7aa96d8190ad5f9eb6931331bc4993ccb8eae459dc01e297e16d5e0
+        filing_office: Superior Court Clerk's Office or courthouse self-help center in the petitioner's county of residence
+        fillability: fillable
+      - key: sc100
+        title: Plaintiff's Claim and ORDER to Go to Small Claims Court
+        form_number: SC-100
+        source_url: https://www.courts.ca.gov/documents/SC100.pdf
+        sha256: ef3421b14ebf64dbf884566ff659b39776035ec5b6e6500be0af91e3cc15533c
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fee_note: "Filing fee is tiered by claim amount (Statewide Civil Fee Schedule eff. 1/1/2026): $30 up to $1,500; $50 for $1,501-$5,000; $75 for $5,001-$12,500; $100 for a 13th-or-later claim in 12 months; $75 notice of appeal. Jurisdiction: $12,500 individuals / $6,250 businesses."
+        fillability: fillable
+      - key: sc100a
+        title: Other Plaintiffs or Defendants (attachment)
+        form_number: SC-100A
+        source_url: https://www.courts.ca.gov/documents/SC100A.pdf
+        sha256: c7cd9667cfa0508f62a34d4bc5f18be32d1ed30ae3447b9130903968403e38b5
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc101
+        title: Attorney Fee Dispute (After Arbitration) (attachment)
+        form_number: SC-101
+        source_url: https://www.courts.ca.gov/documents/SC101.pdf
+        sha256: 1d667a9a430019667bbe9c2024af0ebf867c9a2e26abaa15fff7a057a8239a0f
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc103
+        title: Fictitious Business Name
+        form_number: SC-103
+        source_url: https://www.courts.ca.gov/documents/SC103.pdf
+        sha256: 27ffd342b5869754b9484cb87ff632e4245e3f24b0b0326fba8d592790ba0759
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc104
+        title: Proof of Service (small claims)
+        form_number: SC-104
+        source_url: https://www.courts.ca.gov/documents/SC104.pdf
+        sha256: d2e4b384f91948b71cc0d331f41133e2893bb552dadd761616844ffc41c1689e
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc105
+        title: Request for Court Order and Answer
+        form_number: SC-105
+        source_url: https://www.courts.ca.gov/documents/SC105.pdf
+        sha256: ddc0593778b4b5df4384b4e05c1210d86bbc8bf1c5764d21404e87b20ee1749c
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc107
+        title: Small Claims Subpoena for Personal Appearance and Production of Documents at Trial or Hearing and Declaration
+        form_number: SC-107
+        source_url: https://www.courts.ca.gov/documents/SC107.pdf
+        sha256: 76b960d72aa64a8745239c0ae4bd4ac4a80b17309ad738c3b3388b1887cbbcf7
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc109
+        title: Authorization to Appear on Behalf of Party
+        form_number: SC-109
+        source_url: https://www.courts.ca.gov/documents/SC109.pdf
+        sha256: 425c4d735c8446f37b8f8a43c3dd44f1b756e7d98fcbcd9b629eb555bdd866f5
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc112a
+        title: Proof of Service by Mail (small claims)
+        form_number: SC-112A
+        source_url: https://www.courts.ca.gov/documents/SC112A.pdf
+        sha256: c876c8350ec39496110a68ca605914648a537b765b45c7721b3c239f7d7f4b76
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc114
+        title: Request to Amend Party Name Before Hearing
+        form_number: SC-114
+        source_url: https://www.courts.ca.gov/documents/SC114.pdf
+        sha256: 7f35a9b5c57ed92b0c06c6fa9a6316938ce5392765bbd49b68b67bff09ca20a0
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc120
+        title: Defendant's Claim and ORDER to Go to Small Claims Court
+        form_number: SC-120
+        source_url: https://www.courts.ca.gov/documents/SC120.pdf
+        sha256: f79851b27e429e10e533ad3d8d797ce49e8d78968df4f4653da4decf60d473d6
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc133
+        title: Judgment Debtor's Statement of Assets
+        form_number: SC-133
+        source_url: https://www.courts.ca.gov/documents/SC133.pdf
+        sha256: 51e3ad148ff50ab79e5ed09778b99c14f78cebbe2dd2ab4d4dc60183c32148eb
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc134
+        title: Order to Produce Statement of Assets and to Appear for Examination
+        form_number: SC-134
+        source_url: https://www.courts.ca.gov/documents/SC134.pdf
+        sha256: 1a5b731c21cdf0e7d73e8b3c6cb200d95131a586e1dd64eee1e4469cf8b624e7
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc135
+        title: Notice of Motion to Vacate Judgment and Declaration
+        form_number: SC-135
+        source_url: https://www.courts.ca.gov/documents/SC135.pdf
+        sha256: d61295aeef4fd9c2581a23c888751ba17c95071b6520535a1b8b84e4d0d6df55
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc145
+        title: Request to Pay Judgment to Court
+        form_number: SC-145
+        source_url: https://www.courts.ca.gov/documents/SC145.pdf
+        sha256: 52c233bbd40cc649d33aede307a84fc3f3a933ee66c54c83e45c256cb89d9cbd
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc150
+        title: Request to Postpone Trial
+        form_number: SC-150
+        source_url: https://www.courts.ca.gov/documents/SC150.pdf
+        sha256: adf8cf64a21d1d0202d8d028782b0dd4d2b6940d8e0d5dfa1243e87374f2db0c
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc220
+        title: Request to Make Payments
+        form_number: SC-220
+        source_url: https://www.courts.ca.gov/documents/SC220.pdf
+        sha256: 1d028f02c0ae44da5c4515ea27b0643d6874f567da14ff6f2c3e4b1984a3ad83
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: sc290
+        title: Acknowledgment of Satisfaction of Judgment
+        form_number: SC-290
+        source_url: https://www.courts.ca.gov/documents/SC290.pdf
+        sha256: 643103daa8dbe826cf4f2cd2458d314d96ed3a06f4766761ebd87e80858a0093
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: civ110
+        title: Request for Dismissal
+        form_number: CIV-110
+        source_url: https://www.courts.ca.gov/documents/CIV110.pdf
+        sha256: 95f8d4a98e5bf4d5383b62886413f54b1e8b9e59e4be1daa9d2e26662e64e774
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: subp025
+        title: Notice to Consumer or Employee and Objection
+        form_number: SUBP-025
+        source_url: https://www.courts.ca.gov/documents/SUBP025.pdf
+        sha256: 6d3c10db414dccdbfd738340320d0795ae34aa37b7e4e066dbf244e75e19061d
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: ej130
+        title: Writ of Execution
+        form_number: EJ-130
+        source_url: https://www.courts.ca.gov/documents/EJ130.pdf
+        sha256: c90f4938097db8f56b602b8f8d3d21379beb56129f5dac2ad6b35b3029316859
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: ej001
+        title: Abstract of Judgment—Civil and Small Claims
+        form_number: EJ-001
+        source_url: https://www.courts.ca.gov/documents/EJ001.pdf
+        sha256: 375285721953da9883d2f7b6b4cefc19979d8dffafb035ce78a4e87b1a2d3c08
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: wg001
+        title: Application for Earnings Withholding Order (Wage Garnishment)
+        form_number: WG-001
+        source_url: https://www.courts.ca.gov/documents/WG001.pdf
+        sha256: bc7037b78f10718be3fae7aacbb64359ff9ff54ed8e6d1b526548908ef2dd4e9
+        filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
+        fillability: fillable
+      - key: de111
+        title: Petition for Probate
+        form_number: DE-111
+        source_url: https://www.courts.ca.gov/documents/DE111.pdf
+        sha256: 2a5759e5c7c0818003eaefc94dfade97625e7e3197675629fc00ae245fd59e14
+        filing_office: Superior Court Clerk's Office, probate division, in the decedent's county
+        filing_fee:
+          amount: "435.00"
+          currency: USD
+        fee_note: Probate first-paper fee of $435 under GC 70658(a) (county surcharges can push the total to $450); fee waiver FW-001 + FW-003 applies but has no template code on the forms shelf yet. The small-estate affidavit process (estates up to $184,500) uses no statewide court form.
+        fillability: fillable
+      - key: de121
+        title: Notice of Petition to Administer Estate
+        form_number: DE-121
+        source_url: https://www.courts.ca.gov/documents/DE121.pdf
+        sha256: e03ae6f25fefac8838af6977c2dd70c6a61c365a78c7055d73ea43b81d4741f5
+        filing_office: Superior Court Clerk's Office, probate division, in the decedent's county
+        fillability: fillable
+      - key: de140
+        title: Order for Probate
+        form_number: DE-140
+        source_url: https://www.courts.ca.gov/documents/DE140.pdf
+        sha256: 2f3faf014c87e7bc4dad4a9b7a6cbab90529519dbffdb9d0b2986024b87af3a3
+        filing_office: Superior Court Clerk's Office, probate division, in the decedent's county
+        fillability: fillable
+      - key: de147
+        title: Duties and Liabilities of Personal Representative
+        form_number: DE-147
+        source_url: https://www.courts.ca.gov/documents/DE147.pdf
+        sha256: 4b8e4707f2cd2e0ff4d4d11891e6468dfc061e9f4cbb8408507a2c49ba848762
+        filing_office: Superior Court Clerk's Office, probate division, in the decedent's county
+        fillability: fillable
+      - key: de160
+        title: Inventory and Appraisal
+        form_number: DE-160
+        source_url: https://www.courts.ca.gov/documents/DE160.pdf
+        sha256: da0b0bb690bbfe15a9bc241c52d6baa878ac37f4797367f978d858df51105d53
+        filing_office: Superior Court Clerk's Office, probate division, in the decedent's county
+        fillability: fillable
+      - key: de305
+        title: Affidavit re Real Property of Small Value
+        form_number: DE-305
+        source_url: https://www.courts.ca.gov/documents/DE305.pdf
+        sha256: be6eec2553b3ba6e020ff0956c897217979770b486cce391c67a5902be5ca59e
+        filing_office: Superior Court Clerk's Office, probate division, in the decedent's county
+        fillability: fillable
+      - key: mc030
+        title: Declaration
+        form_number: MC-030
+        source_url: https://www.courts.ca.gov/documents/MC030.pdf
+        sha256: ed3f3ff115c7b6c5cfc6aa63939615f5dc1d7e44c31e4b7b5e7316a45ea2ff9a
+        filing_office: Superior Court Clerk's Office, probate division, in the decedent's county
+        fillability: fillable
+      - key: fw001
+        title: Request to Waive Court Fees
+        form_number: FW-001
+        source_url: https://www.courts.ca.gov/documents/FW001.pdf
+        sha256: 8673409dc980bade5c3c534d0b6523e1abde4355f3fa72128dee85dc8ac3ce66
+        filing_office: Filed with the underlying case at the Superior Court Clerk's Office
+        fee_note: No filing fee; the request is confidential.
+        fillability: fillable
+      - key: fw001info
+        title: Information Sheet on Waiving Court Fees
+        form_number: FW-001-INFO
+        source_url: https://www.courts.ca.gov/documents/FW001INFO.pdf
+        sha256: ee8d0eba1d96536d5d5c8d0f2eb048e9a1831a301b269720d7d452bafbec6f92
+        filing_office: Filed with the underlying case at the Superior Court Clerk's Office
+        fillability: fillable
+      - key: fw002
+        title: Order on Court Fee Waiver (additional fees)
+        form_number: FW-002
+        source_url: https://www.courts.ca.gov/documents/FW002.pdf
+        sha256: c448bcb1c544eaa917dee6434472a553b4cbce70774daa72e374c6f4bd83686d
+        filing_office: Filed with the underlying case at the Superior Court Clerk's Office
+        fillability: fillable
+      - key: fw003
+        title: Order on Court Fee Waiver
+        form_number: FW-003
+        source_url: https://www.courts.ca.gov/documents/FW003.pdf
+        sha256: 1fead5e966ed70879852c081f57463a916bc2e2a76777c5959712d298e5a4928
+        filing_office: Filed with the underlying case at the Superior Court Clerk's Office
+        fillability: fillable
+  - key: los_angeles_superior_court
+    name: Los Angeles Superior Court
+    jurisdiction: CA
+    county: Los Angeles
+    level: superior
+    # No LA-specific fillable name-change blank exists; the statewide forms apply
+    # and the LACIV 264 packet is an instructions sheet.
+    forms: []
+    surveyed_forms:
+      - key: laciv264
+        title: Name Change Packet (instructions and filing locations)
+        form_number: LACIV 264
+        source_url: https://www.lacourt.org/division/civil/pdf/namechangelocationsandinstructions.pdf
+        sha256: 40a9aacda2157a3b2d6d8431aed400b5b4a92c01201e8ac4b5a2d0bca3fb6886
+        filing_office: Los Angeles Superior Court district courthouse civil filing window (13+ locations listed in the packet)
+        fee_note: Not a fillable blank — a 2-page instructions/locations sheet covering adult name, adult name+gender, gender recognition, and minor's gender-recognition petitions. The operative blanks are the statewide Judicial Council forms. Statewide fees apply.
+        fillability: unfillable_source
+  - key: san_diego_superior_court
+    name: San Diego Superior Court
+    jurisdiction: CA
+    county: San Diego
+    level: superior
+    # San Diego wraps the statewide forms in local packets; the statewide
+    # Judicial Council blanks remain the operative filing targets.
+    forms: []
+    surveyed_forms:
+      - key: sdpkt001
+        title: Change of Name Packet
+        form_number: PKT-001
+        source_url: https://www.sdcourt.ca.gov/sites/default/files/sdcourt/generalinformation/forms/civilforms/pkt001.pdf
+        sha256: 6314650140d92c1ae31dc406574aa0e3d2cff11414702b3bdf1e6ef90e1c159f
+        filing_office: North County Courthouse or Hall of Justice civil business office, depending on residence
+        fee_note: 15-page fillable packet wrapping the statewide Judicial Council forms. Publication of the OSC runs once a week for four consecutive weeks.
+        fillability: fillable
+      - key: sdpkt033
+        title: Adult's Change of Gender and Sex Identifier, Name Change, and Issuance of New Certificates Packet
+        form_number: PKT-033
+        source_url: https://www.sdcourt.ca.gov/sites/default/files/sdcourt/generalinformation/forms/civilforms/pkt033.pdf
+        sha256: a660610908922db73fc9c88e20af4db88d257587a0ec201305da39ef9fbd97e4
+        filing_office: North County Courthouse or Hall of Justice civil business office, depending on residence
+        fee_note: Packet cover is not fillable (0 AcroForm fields); its contents are the fillable JCC forms CM-010, NC-300-INFO, NC-300, NC-330. Statewide fees apply (ADM-001 fee schedule confirms $435 first paper).
+        fillability: unfillable_source
+  - key: san_francisco_superior_court
+    name: San Francisco Superior Court
+    jurisdiction: CA
+    county: San Francisco
+    level: superior
+    # The ACCESS Center (400 McAllister St, Room 509) helps fill RO forms (CH, DV,
+    # EA, GV, WV). SF adopts the Statewide Civil Fee Schedule eff. 1/1/2026 as its
+    # civil fee schedule, so the statewide $435/$450 figures and FW-001/FW-003
+    # waiver pairing apply unchanged; the court publishes A-Z guide PDFs (name and
+    # gender change, fee waiver) rather than local fillable blanks.
+    forms: []
+  - key: alameda_superior_court
+    name: Alameda Superior Court
+    jurisdiction: CA
+    county: Alameda
+    level: superior
+    # The Forms @ Home page routes self-represented litigants to Law Help
+    # Interactive guided interviews (DVRO, CHRO, EARO, name change, parentage,
+    # eviction, guardianship, guardianship fee waiver) — no local fillable
+    # blanks of its own; the statewide forms apply.
+    forms: []
   # Statewide form sets are registered under the court that approves them:
   # the Nevada Supreme Court's self-help forms are acceptable in any court
   # in Nevada, so the county-specific rows below carry only the forms and
@@ -109,6 +638,20 @@ records:
     name: Nevada Supreme Court
     jurisdiction: NV
     level: supreme
+    # One entry per form this court accepts, keyed to the template code:
+    #
+    # forms:
+    #   - code: nv__adult_name_change_petition
+    #     title: Petition for Adult Name Change
+    #     form_number: null            # official form number, when the office publishes one
+    #     source_url: https://selfhelp.nvcourts.gov/images/name-change/name-adult-petition-pdf-fillable.pdf
+    #     sha256: 0000000000000000000000000000000000000000000000000000000000000000
+    #     filing_office: Family Division Clerk's Office
+    #     filing_fee:                  # flat fee; omit when the office publishes none
+    #       amount: "270.00"
+    #       currency: USD
+    #     fee_note: null               # tiered or county-varying schedules go here as prose
+    #     fee_waiver_code: nv__fee_waiver_application
     forms:
       - code: nv__adult_name_change_petition
         title: Petition for Adult Name Change
@@ -128,39 +671,340 @@ records:
           amount: "0.00"
           currency: USD
         fee_waiver_code: null
+    surveyed_forms:
+      - key: FAMCOVER
+        title: Family Cover Sheet
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/misc/coversheet-family-pdf-fillable.pdf
+        sha256: 96228b006e955c32212eb98a439d294a72a41a6505d32ac4c564b86eb4f5535d
+        filing_office: District Court Clerk's Office in the petitioner's county of residence
+        fillability: fillable
+      - key: ADULTNOTICE
+        title: Notice of Petition for Adult Name Change
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/name-change/name-adult-notice-pdf-fillable.pdf
+        sha256: a339ac110fefc41d5a8aa6b44718178a0b4c739372657af2690a163aea7c0ced
+        filing_office: District Court Clerk's Office in the petitioner's county of residence
+        fee_note: Filing fee varies by district court; the statewide Application to Waive Filing Fee applies (registered below).
+        fillability: fillable
+      - key: ADULTDISPO
+        title: Request for Summary Disposition & Declaration in Support (Adult Name Change)
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/name-change/name-adult-summary-dispo-pdf-fillable.pdf
+        sha256: 324ed6314066676a827d0e20c8f1d56946a03de93bfbdb8965615f48e2938d2c
+        filing_office: District Court Clerk's Office in the petitioner's county of residence
+        fillability: fillable
+      - key: ADULTORDER
+        title: Order for Adult Name Change
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/name-change/name-adult-order-pdf-fillable.pdf
+        sha256: 1c8c8e6080b42914f6636e5f026cd567a66013e36250e9f6d445ca61e9c431bc
+        filing_office: District Court Clerk's Office in the petitioner's county of residence
+        fillability: fillable
+      - key: CHILDPET
+        title: Petition for Child's Name Change
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/name-change/name-child-petition-pdf-fillable.pdf
+        sha256: 6555a003d104f3efe5e4fd14ecb58020c913686cb556be1097df3a27c082b8c8
+        filing_office: District Court Clerk's Office in the petitioner's county of residence
+        fee_note: Filing fee varies by district court; the statewide Application to Waive Filing Fee applies (registered below).
+        fillability: fillable
+      - key: CHILDNOTICE
+        title: Notice of Petition for Child's Name Change
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/name-change/name-child-notice-pdf-fillable.pdf
+        sha256: 2f47ecb63e95ae60a94358c6fb0558c17c2b748196ca1bb6b0796eedccb1573b
+        filing_office: District Court Clerk's Office in the petitioner's county of residence
+        fillability: fillable
+      - key: CHILDCONSENT
+        title: Child's Consent to Child's Name Change
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/name-change/name-child-consent-child-pdf-fillable.pdf
+        sha256: a0c0b934b5799af0c95bdd612137e353af0c60b91cb6f5ccdc9a2b37d4541798
+        filing_office: District Court Clerk's Office in the petitioner's county of residence
+        fillability: fillable
+      - key: CHILDSERVICE
+        title: Proof of Service on the Other Parent
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/name-change/name-child-service-pdf-fillable.pdf
+        sha256: f5e5c83b0dde76a8882f57d9ffdfc774f66c5ea3ec58491a28eecf8c9967d0e4
+        filing_office: District Court Clerk's Office in the petitioner's county of residence
+        fillability: fillable
+      - key: CHILDDISPO
+        title: Request for Summary Disposition & Declaration (Child)
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/name-change/name-child-summary-dispo-pdf-fillable.pdf
+        sha256: d3a7b4633610f6f36d0817c3b829be8d1b5e186c32e4717ce3e51f3ed173d01f
+        filing_office: District Court Clerk's Office in the petitioner's county of residence
+        fillability: fillable
+      - key: CHILDORDER
+        title: Order for Child's Name Change
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/name-change/name-child-order-pdf-fillable.pdf
+        sha256: 41bb2256a47e751e7685255f5ce10a9649c74dd47361604894f55fa97d471807
+        filing_office: District Court Clerk's Office in the petitioner's county of residence
+        fillability: fillable
+      - key: DVCONF
+        title: Confidential Information Sheet (Domestic Violence)
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/protection-orders/confidential-info-dv-pdf-fillable.pdf
+        sha256: ee5983550d91d1a7efc2358f5b158d8e1c7c76ad488b873dbbb87495ee42275c
+        filing_office: District Court Clerk's Office or the county protection-order office, in any Nevada county
+        filing_fee:
+          amount: "0.00"
+          currency: USD
+        fillability: fillable
+      - key: DVUCCJEA
+        title: UCCJEA Declaration (Domestic Violence)
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/protection-orders/dv-uccjea-pdf-fillable.pdf
+        sha256: 6558e218370c27a6bbfdbfe5d5bbbadbd67a5e36f91d335d4a49fff320f9632a
+        filing_office: District Court Clerk's Office or the county protection-order office, in any Nevada county
+        filing_fee:
+          amount: "0.00"
+          currency: USD
+        fillability: fillable
+      - key: STALKAPP
+        title: Application for Protection (Stalking/Harassment/Sexual Assault/Harm to Minors)
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/protection-orders/stalking-harassment-sa-harm-app-pdf-fillable.pdf
+        sha256: 8e501ff0d38de8865d307609c4f5a0195f353e66f40bf0a32e493ec942c6c1ea
+        filing_office: District Court Clerk's Office or the county protection-order office, in any Nevada county
+        filing_fee:
+          amount: "0.00"
+          currency: USD
+        fee_note: There is no fee to file protection-order forms; certified copies are also free.
+        fillability: fillable
+      - key: STALKCONF
+        title: Confidential Information Sheet (Stalking/Harassment/Sexual Assault/Harm to Minors)
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/protection-orders/confidential-info-other-pdf-fillable.pdf
+        sha256: 76d8e990298807cc2614810d7ccef3ab677088e920132fe08e61f7f3c0512c07
+        filing_office: District Court Clerk's Office or the county protection-order office, in any Nevada county
+        filing_fee:
+          amount: "0.00"
+          currency: USD
+        fillability: fillable
+      - key: WORKTPO
+        title: Application for Temporary Protection from Workplace Harassment
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/protection-orders/workplace-app-temp-pdf-fillable.pdf
+        sha256: 5a6e6ee513751c2e6b012791a607b8b0252d1a5c79416ec7334ce2d278066d59
+        filing_office: District Court Clerk's Office or the county protection-order office, in any Nevada county
+        filing_fee:
+          amount: "0.00"
+          currency: USD
+        fillability: fillable
+      - key: WORKEXT
+        title: Application for Extended Protection from Workplace Harassment
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/protection-orders/workplace-app-extended-pdf-fillable.pdf
+        sha256: 88155bd9897b1efec9e4383b748cac118a5033a92d7a2b2ba5c742d7c9fbeafa
+        filing_office: District Court Clerk's Office or the county protection-order office, in any Nevada county
+        filing_fee:
+          amount: "0.00"
+          currency: USD
+        fillability: fillable
+      - key: HRREG
+        title: Application for High-Risk Protection Order (family/household members)
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/protection-orders/high-risk-app-reg-pdf-fillable.pdf
+        sha256: b1418b110fc7f59947656c078948a459185d3003b669a1e176058a049b558c4f
+        filing_office: District Court Clerk's Office or the county protection-order office, in any Nevada county
+        filing_fee:
+          amount: "0.00"
+          currency: USD
+        fillability: fillable
+      - key: HRLE
+        title: Application for High-Risk Protection Order (law enforcement)
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/protection-orders/high-risk-app-le-pdf-fillable.pdf
+        sha256: 24847dc0b188fc5e0a3ca6adc72fd5a0afd72e810aa541a6b23817db82d7c4a2
+        filing_office: District Court Clerk's Office or the county protection-order office, in any Nevada county
+        filing_fee:
+          amount: "0.00"
+          currency: USD
+        fillability: fillable
+      - key: FEEWAIVAPP
+        title: Application to Waive Filing Fee
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/misc/fee-waiver-application-pdf-fillable.pdf
+        sha256: 36a9847de58c8903814add2c75080e3fe8dba359531a7d004f3f417a83d4fd8b
+        filing_office: Filed with the underlying case at the clerk's office
+        fee_note: No filing fee; the waiver lasts one year and covers case-startup and filing fees plus sheriff service.
+        fillability: fillable
+      - key: FEEWAIVORD
+        title: Order to Waive Filing Fee
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/misc/fee-waiver-order-pdf-fillable.pdf
+        sha256: 0bed89fa93a8acb94ca12aef9202c8e2e7adda4891d11575af6f99375261fc9d
+        filing_office: Filed with the underlying case at the clerk's office
+        fillability: fillable
   - key: eighth_judicial_district_court
     name: Eighth Judicial District Court
     jurisdiction: NV
     county: Clark
     level: district
-    # One entry per form this court accepts, keyed to the template code:
-    #
-    # forms:
-    #   - code: nv__adult_name_change_petition
-    #     title: Petition for Adult Name Change
-    #     form_number: null            # official form number, when the office publishes one
-    #     source_url: https://selfhelp.nvcourts.gov/images/name-change/name-adult-petition-pdf-fillable.pdf
-    #     sha256: 0000000000000000000000000000000000000000000000000000000000000000
-    #     filing_office: Family Division Clerk's Office
-    #     filing_fee:                  # flat fee; omit when the office publishes none
-    #       amount: "270.00"
-    #       currency: USD
-    #     fee_note: null               # tiered or county-varying schedules go here as prose
-    #     fee_waiver_code: nv__fee_waiver_application
+    # Family Division (Family Law Self-Help Center) and Probate Division.
+    # The statewide Nevada Supreme Court forms (registered above) are accepted
+    # here; these rows carry only what is unique to Clark County. The adult
+    # name-change fee is $270.00 (+$3.50 per eFileNV upload), per the Family
+    # Law Self-Help Center. Clark's WordPress REST API is locked down (401),
+    # so form indexes are HTML only.
     forms: []
+    surveyed_forms:
+      - key: SETTINGSLIP
+        title: Setting Slip
+        form_number: null
+        source_url: https://www.familylawselfhelpcenter.org/images/forms/misc/setting-slip-pdf-fillable.pdf
+        sha256: 81a57f3513e0e70bcfdd3bc264a1c2f99fac87eed6d1367eedb11c3277e4f27a
+        filing_office: Family Division Clerk's Office, Eighth Judicial District Court
+        fillability: fillable
+      - key: TPONONCONF
+        title: TPO Packet, Non-Confidential (Domestic Violence)
+        form_number: null
+        source_url: https://www.familylawselfhelpcenter.org/images/forms/tpo/tpo-packet-nonconfidential-pdf-fillable.pdf
+        sha256: 93e1c7f88afc00f27d999ed379775bcaeadab51f3186b85ed3aa9bea72c6b273
+        filing_office: "Family Division Clerk's Office or the Protection Order Help Center, Family Division, 1 S. Sierra St equivalent — Las Vegas: 601 N. Pecos Rd"
+        fee_note: Clark-wrapped copy of the statewide DV TPO packet; no filing fee.
+        fillability: unverified
+      - key: TPOAPP
+        title: TPO Application (Domestic Violence)
+        form_number: null
+        source_url: https://www.familylawselfhelpcenter.org/images/forms/tpo/tpo-app-pdf-fillable.pdf
+        sha256: c65fa55fd6d8f993a2e07cc73dd4375a23cc5c1dbb9737257726b57c363f62f4
+        filing_office: Family Division Clerk's Office or the Protection Order Help Center
+        fee_note: No filing fee.
+        fillability: unverified
+      - key: TPOCONF
+        title: TPO Confidential Information (Domestic Violence)
+        form_number: null
+        source_url: https://www.familylawselfhelpcenter.org/images/forms/tpo/tpo-conf-info-pdf-fillable.pdf
+        sha256: 91d23516377bfd711a37c0b24b6c38273244ea961906d11852cc9bcc717e58d8
+        filing_office: Family Division Clerk's Office or the Protection Order Help Center
+        fee_note: No filing fee.
+        fillability: unverified
+      - key: TPOCOVER
+        title: Family Court Cover Sheet (TPO)
+        form_number: null
+        source_url: https://www.familylawselfhelpcenter.org/images/forms/tpo/family-court-cover-sheet-tpo-pdf-fillable.pdf
+        sha256: 4a0fbbed4b6123bdddddc6037678649ab3ee732131419aa06dc7ed5c394e48ea
+        filing_office: Family Division Clerk's Office
+        fee_note: Required cover sheet for new Family Division cases (EDCR 7.20 requires a civil/family cover sheet at filing).
+        fillability: unverified
+      - key: SETASIDEINT
+        title: Set-Aside Packet, Intestate (small-estate set-aside)
+        form_number: null
+        source_url: https://www.civillawselfhelpcenter.org/images/Probate/2026-Probate-Forms/Set-Aside-Intestate/packet---set-aside-intestate.pdf
+        sha256: acedfd6f10178658bd447b0f44f58509b2ae16d0e5aa4fd362b83a8635526015
+        filing_office: Probate Division Clerk's Office, Eighth Judicial District Court
+        fillability: fillable
+      - key: AFFENTITLE
+        title: Affidavit of Entitlement (small estate)
+        form_number: null
+        source_url: https://www.civillawselfhelpcenter.org/images/Probate/2026-Probate-Forms/Affidavit-of-Entitlement/Fillable-Affidavit-of-Entitlement.pdf
+        sha256: c8a2c24907792360369e678759055a2b426f66b5ec6bbb01ce705302ea4e28f1
+        filing_office: Probate Division Clerk's Office, Eighth Judicial District Court
+        fee_note: The filename says 'Fillable' but the published PDF has zero AcroForm fields — registered as an unfillable source. A true small-estate self-help flow needs the field overlay or a re-authored blank.
+        fillability: unfillable_source
+      - key: IFPPROBATE
+        title: Application to Proceed In Forma Pauperis and Order (Waiver of Costs and Fees under NRS 12.015)
+        form_number: null
+        source_url: https://www.clarkcountycourts.us/res/clerk/civil-criminal-library//Probate/PDF/feewaiver_int.pdf
+        sha256: bed38ce7698461baf7bac31f524afb6c1a16cf4c8a10c5af6ddd89b58c58091c
+        filing_office: Clerk's Office, Eighth Judicial District Court
+        fee_note: No filing fee for the application itself; statutory fees are waived only by the IFP order, not at the counter.
+        fillability: fillable
   - key: second_judicial_district_court
     name: Second Judicial District Court
     jurisdiction: NV
     county: Washoe
     level: district
+    # The Washoe NA adult name-change packet is Washoe-specific (not the
+    # statewide form). The NA-2 publication-waiver/seal motion and NM-1..NM-4
+    # minor packets live on the same forms tree with cache-busting URLs.
+    # The statewide Nevada Supreme Court forms (registered above) are accepted
+    # here; these rows carry only what is unique to Washoe County.
     forms: []
+    surveyed_forms:
+      - key: WASHOENA
+        title: Petition for Adult Name Change (Washoe NA packet)
+        form_number: null
+        source_url: https://www.washoecourts.com/Forms/Family/10.%20Name%20Changes/NA%20Adult%20Name%20Change/1.%20Petition%20for%20Adult%20Name%20Change.pdf
+        sha256: 896d561aa43aed677344e6fbbf751b34902bc2988501e6630b0b5dc392ae9af8
+        filing_office: Family Division Clerk's Office, Second Judicial District Court, 1 S. Sierra St, Reno
+        fee_note: The filing fee for a Washoe name change was NOT published on any page the survey fetched (2026-10-30) — treat the amount as unknown. The NA-2 Ex Parte Motion to Waive Publication and Seal File (safety valve) and NM-1..NM-4 minor packets are on the same forms tree; their direct PDF URLs carry cache-busting query strings.
+        fillability: fillable
+      - key: F6FAM
+        title: Application for Waiver of Fees and Costs (F-6, Family)
+        form_number: F-6
+        source_url: https://www.washoecourts.com/Forms/Family/1.%20All%20Other%20Family%20Related%20Packets/F-6%20Application%20to%20Waive%20Fees%20and%20Costs/1.%20Application%20for%20Waiver%20of%20Fees%20and%20Costs.pdf
+        sha256: e3e24ed4f4b7d6cb6e453e5dff8bc3340c2cc735ffab8f851dacbc3259e2c03e
+        filing_office: Family Division Clerk's Office, Second Judicial District Court
+        fee_note: No filing fee for the application; the F-6JP joint variant also exists.
+        fillability: fillable
+      - key: F6GJ
+        title: Application for Waiver of Fees and Costs (F-6, General Jurisdiction)
+        form_number: F-6
+        source_url: https://www.washoecourts.com/Forms/GJ/16.%20F-6%20Application%20to%20Waive%20Fees%20and%20Costs/1.%20Application%20for%20Waiver%20of%20Fees%20and%20Costs.pdf
+        sha256: e3e24ed4f4b7d6cb6e453e5dff8bc3340c2cc735ffab8f851dacbc3259e2c03e
+        filing_office: Clerk's Office, Second Judicial District Court
+        fillability: fillable
+      - key: WASHOEF14
+        title: Application for Protection Order Against Domestic Violence (F-14, no minor children)
+        form_number: F-14
+        source_url: https://www.washoecourts.com/Forms/Family/17.%20Temporary%20Protection%20Orders/F-14%20Temporary%20Protection%20Order%20%28No%20Minor%20Children%29/2.%20Application%20for%20Protection%20Order%20Against%20Domestic%20Violence.pdf
+        sha256: 73a099260a06197d32ffc07926beb5ac5bff1423c70f99052ac0d68000d7df86
+        filing_office: Protection Order Help Center, 3rd floor, Family Division, 1 S. Sierra St, Reno
+        fee_note: No filing fee.
+        fillability: fillable
+      - key: WASHOEAFFENT
+        title: Affidavit of Entitlement (Washoe)
+        form_number: null
+        source_url: https://www.washoecourts.com/Forms/GJCommon/Affidavit%20of%20Entitlement.pdf
+        sha256: 1cdd5ac6139b4427165ce077e41bbfafafcd50035ac4868950f2c0be438caa11
+        filing_office: Probate Division Clerk's Office, Second Judicial District Court
+        fillability: fillable
   - key: las_vegas_justice_court
     name: Las Vegas Justice Court
     jurisdiction: NV
     county: Clark
     city: Las Vegas
     level: justice
+    # Small claims forms are per-justice-court in Nevada; there is no
+    # statewide small-claims set.
     forms: []
+    surveyed_forms:
+      - key: LVCSCOMPLAINT
+        title: Complaint — Small Claims (Las Vegas Township)
+        form_number: null
+        source_url: https://www.civillawselfhelpcenter.org/images/small-claims/complaints/complaint---small-claims.pdf
+        sha256: 44f5e7196a6e6f2d1e227ec3d43162345d2d343d77b5a9abc1dad79cf65df730
+        filing_office: Las Vegas Justice Court clerk, small claims division
+        fee_note: "Filing fee tiered by claim (NRS 4.060 schedule, eff. 2/8/2024): $66 up to $1,000; $86 for $1,000.01-$2,500; $106 for $2,500.01-$5,000; $146 for $5,000.01-$7,500; $196 for $7,500.01-$10,000. No fee may be charged to a defendant appearing. Waiver: the justice-court fee-waiver form (below) or the statewide application."
+        fillability: fillable
+      - key: LVCSCOUNTER
+        title: Counterclaim — Small Claims (Las Vegas Township)
+        form_number: null
+        source_url: https://www.civillawselfhelpcenter.org/images/small-claims/counterclaims/counterclaim---small-claims---las-vegas.pdf
+        sha256: 53929d498f7bb2947fa5ab78fa28f629e5fb4d189bb42cad9d1b1841fbdd5ac4
+        filing_office: Las Vegas Justice Court clerk, small claims division
+        fillability: fillable
+      - key: LVCSAPPEAL
+        title: Appeal of Small Claims Judgment
+        form_number: null
+        source_url: https://www.civillawselfhelpcenter.org/images/small-claims/lasvegas/small-claims-appeal-fillable.pdf
+        sha256: 39a818322e8a7f30e72efff19d7a19792535a720eabeb8fe5c71ed8f47b0eaf4
+        filing_office: Las Vegas Justice Court clerk, small claims division
+        fillability: fillable
+      - key: JCFFEEWAIV
+        title: Fee Waiver — Justice Court
+        form_number: null
+        source_url: https://www.civillawselfhelpcenter.org/images/fee-waivers/fee-waiver---justice-court.pdf
+        sha256: af39d7cb3087b38845344f1ab21e4a5707174b2bc35b55de3bf35e189bc9f27b
+        filing_office: Las Vegas Justice Court clerk
+        fee_note: No filing fee for the application. Henderson and North Las Vegas variants exist on the same self-help page.
+        fillability: fillable
   - key: reno_justice_court
     name: Reno Justice Court
     jurisdiction: NV
@@ -168,3 +1012,677 @@ records:
     city: Reno
     level: justice
     forms: []
+    surveyed_forms:
+      - key: RJCSCDECL
+        title: Declaration of Small Claims Complaint
+        form_number: null
+        source_url: https://washoecounty.gov/rjc/files/forms/form_civil_sc-declaration_of_small_claims_complaint.pdf
+        sha256: 347301146ed85d8992db7b431df347d4ad5710821c6e69799e406ed65a631084
+        filing_office: Reno Justice Court clerk, civil division
+        fee_note: "Filing fee tiered by claim (NRS 4.060/73; 'Civil Fees as of 04-2026'): $66 up to $1,000; $86 to $2,500; $106 to $5,000; $146 to $7,500; $196 to $10,000; each includes the $21 NRS ch. 4 fee. Transfer to justice court $125; abstract of judgment $25."
+        fillability: fillable
+      - key: RJCSCANSWER
+        title: Small Claims Answer
+        form_number: null
+        source_url: https://washoecounty.gov/rjc/files/forms/form_civil_sc-small_claims_answer.pdf
+        sha256: 4086e444f319572120ac52bb3ac86b33583a2dd58f991ce2287f979eb381d51f
+        filing_office: Reno Justice Court clerk, civil division
+        fillability: fillable
+      - key: RJCSCCOUNTER
+        title: Small Claims Counterclaim
+        form_number: null
+        source_url: https://washoecounty.gov/rjc/files/forms/form_civil_sc-small_claims_counterclaim.pdf
+        sha256: 8f197f77ccc6d2bee4f95d6e2e1677dae61d0f2baba6830e672f20016b856f0c
+        filing_office: Reno Justice Court clerk, civil division
+        fillability: fillable
+      - key: RJCSCAPPEAL
+        title: Notice of Appeal (small claims)
+        form_number: null
+        source_url: https://washoecounty.gov/rjc/files/forms/form_civil_sc_notice-appeal.pdf
+        sha256: 319ec886af313f503a48f8aeb1c77380f92a6d97b9ea3f37efc0c8b6174e24a9
+        filing_office: Reno Justice Court clerk, civil division
+        fillability: fillable
+      - key: RJCIFP
+        title: Motion to Proceed In Forma Pauperis
+        form_number: null
+        source_url: https://washoecounty.gov/rjc/files/forms/form_civil_general_motion-proceed-in-forma-pauperis.pdf
+        sha256: 3f3328cd1343f6aac1f09ba89be7b89ce07fefc361c5c5e4a68af92a02b8dd76
+        filing_office: Reno Justice Court clerk, civil division
+        fee_note: No filing fee for the motion.
+        fillability: fillable
+  - key: washington_supreme_court
+    name: Washington Supreme Court (statewide pattern forms)
+    jurisdiction: WA
+    level: supreme
+    # Statewide pattern-form library (courts.wa.gov/forms). The sampled pattern
+    # PDFs are NOT AcroForm-fillable — a fill tool must overlay fields on the
+    # flat PDFs or route through Guide & File; every form page also links an
+    # official Word version. Name changes and wills/probate have NO statewide
+    # pattern forms (county/local forms only; name changes may be filed in any
+    # district court per RCW 4.24.130). Sex-designation changes run through
+    # agency forms (DOH/DOL), not the courts.
+    forms: []
+    surveyed_forms:
+      - key: PO001
+        title: Petition for Protection Order
+        form_number: PO 001
+        source_url: https://www.courts.wa.gov/forms/documents/PO%20001%20Petition%20for%20Protection%20Order_06_2026.pdf
+        sha256: ffcf053c303e3019cf76236929f256a14b32398dbb88bdc3bd3a747484026d12
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fee_note: "One unified petition covers all five RCW ch. 7.105 order types (DV, sexual assault, stalking, vulnerable adult, anti-harassment). The published PDF has zero AcroForm fields — overlay fields or route through the official Guide & File. Anti-harassment is the only type the petition flags '(fee may be required)' (Pierce: $53 Superior / $83 District); DV/SA/stalking petitions have no fee line in county schedules; vulnerable-adult filing is 'None (7.105)'. Fee waiver: PO 012/PO 014 (harassment) or GR 34."
+        fillability: unfillable_source
+      - key: POI001
+        title: Instructions for Petition for Protection Order
+        form_number: POi 001
+        source_url: https://www.courts.wa.gov/forms/documents/POi%20001%20Instructions%20Petition%20for%20Protection%20Order_2026_01.pdf
+        sha256: 4da46bc5c6e3489ff80bd7d77aa0769199babb05eb9db4f11d0d4d5cfa2d6d28
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fee_note: n/a (instructions).
+        fillability: unverified
+      - key: PO003
+        title: Law Enforcement and Confidential Information (LECIF)
+        form_number: PO 003
+        source_url: https://www.courts.wa.gov/forms/documents/PO%20003%20Law%20Enforcement%20and%20Confidential%20Info_2026_03.pdf
+        sha256: 0e97647445df9cff3c82ed79e4fad21f8faf3b44cab61c4918e36cc5bd97994f
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fillability: unverified
+      - key: PO003R
+        title: LECIF — Restrained Person
+        form_number: PO 003R
+        source_url: https://www.courts.wa.gov/forms/documents/PO%20003R%20Law%20Enforcement%20and%20Confidential%20Info%20Restrained%20Person_2026_01.pdf
+        sha256: b6d5d4e39833347d28146b21e0557d22821024d2405c69abf5b31a3cb83689fa
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fillability: unverified
+      - key: PO030
+        title: Temporary Protection Order and Hearing Notice
+        form_number: PO 030
+        source_url: https://www.courts.wa.gov/forms/documents/PO%20030%20Temporary%20Protection%20Order%20and%20Hearing%20Notice_07_2025.pdf
+        sha256: 504584d1ad3f108d2d15f35861b9c8a8e22f75a9a563096aed312f3056a12b50
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fee_note: No filing fee for the petition types other than anti-harassment.
+        fillability: unfillable_source
+      - key: PO040
+        title: Protection Order (final order)
+        form_number: PO 040
+        source_url: https://www.courts.wa.gov/forms/documents/PO%20040%20Protection%20Order_06_2026.pdf
+        sha256: 925fc132d9f90d3b91a420b89051a8ea67c9b3e50620e78b672288782bd07b50
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fillability: unverified
+      - key: PO018
+        title: Declaration
+        form_number: PO 018
+        source_url: https://www.courts.wa.gov/forms/documents/PO%20018%20Declaration_2022_07.pdf
+        sha256: 27a93dd4552aa4ac429fcb16f1660ce66f509102deefa92f2ecd23c307c37d49
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fillability: unverified
+      - key: PO010
+        title: Statement
+        form_number: PO 010
+        source_url: https://www.courts.wa.gov/forms/documents/PO%20010%20Statement_2022_07.pdf
+        sha256: b0fbcfccbb0eb7a93536f6ea7bc13fa22ab40f8cc901d2a6aed282d471ae76a8
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fillability: unverified
+      - key: PO012
+        title: Motion and Declaration for Waiver of Filing Fees and Surcharges — Harassment
+        form_number: PO 012
+        source_url: https://www.courts.wa.gov/forms/documents/PO%20012%20Motion%20Filing%20Fee%20Waiver%20-%20Harassment_%202023_01.pdf
+        sha256: 167a887eb729ff6817b9abb6a8299643d56fb8ab593ed2a765d7d400c38b06f0
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fillability: unfillable_source
+      - key: PO014
+        title: Order re Waiver of Filing Fees and Surcharges — Harassment
+        form_number: PO 014
+        source_url: https://www.courts.wa.gov/forms/documents/PO%20014%20Order%20re%20Filing%20Fee%20Waiver-Harassment_07_2025.pdf
+        sha256: b62058a005d98dee5321081dd3f9dff09e689b2107f448194464302c0c0dabed
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fillability: unverified
+      - key: PO004
+        title: Proof of Service (RTS)
+        form_number: PO 004
+        source_url: https://www.courts.wa.gov/forms/documents/PO%20004%20Proof%20of%20Service_2026_01.pdf
+        sha256: e33553f8997b4f4d7294a6120e4ac97b1a25c7c6a2a9fd722ef15c97cc232b6d
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fillability: unverified
+      - key: PO050
+        title: Motion to Renew Protection Order
+        form_number: PO 050
+        source_url: https://www.courts.wa.gov/forms/documents/PO%20050%20Motion%20for%20Renewal%20of%20Protection%20Order_07_2025.pdf
+        sha256: 67168e5fb726d788709c8300ea1686325916e63d000ea200dfd26bca6c5045f8
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fillability: unverified
+      - key: PO063
+        title: Motion to Modify or Terminate Protection Order
+        form_number: PO 063
+        source_url: https://www.courts.wa.gov/forms/documents/PO%20063%20Motion%20to%20Modify%20or%20Terminate_07_2025.pdf
+        sha256: 76590871290b9255284a0e6d391838aae712a8c96894b1385fe34ef647b3501e
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fillability: unverified
+      - key: WS001
+        title: Order to Surrender and Prohibit Weapons
+        form_number: WS 001
+        source_url: https://www.courts.wa.gov/forms/documents/WS%20001%20Order%20to%20Surrender%20and%20Prohibit%20Weapons_06_2026.pdf
+        sha256: 3c0dc72dc887689b7b441f54b71ccba9e37f6bf30c2e1716bf4117ab446c91cc
+        filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also operate a dedicated protection-order office
+        fillability: unverified
+      - key: MISC050100
+        title: Notice of Small Claim
+        form_number: MISC 05.0100
+        source_url: https://www.courts.wa.gov/forms/documents/MISC%2005%200100%20Notice%20of%20Small%20Claim%202025%2001.pdf
+        sha256: ed0d0baf7eb073c2f8aa342852611dfee05dced4aacf82fd372f2199d9bc6418
+        filing_office: District Court clerk, small claims division
+        fee_note: "Filed in district court (limits: $10,000 natural person / $5,000 entity). The statewide pattern PDF is not AcroForm-fillable; counties host local fillable copies (e.g. King County). Filing fee is set per county ($50 in King, Pierce, and Clark districts)."
+        fillability: unfillable_source
+      - key: MISC050200
+        title: Certificate of Service (small claims)
+        form_number: MISC 05.0200
+        source_url: https://www.courts.wa.gov/forms/documents/MISC%2005%200200%20SC%20-%20Proof%20of%20Service%202025%2001.pdf
+        sha256: 1f4d38eff43a6cf7aa4408213aececcf59afd844a943591bba15a47f6f995f71
+        filing_office: District Court clerk, small claims division
+        fee_note: District Court clerk, small claims division
+        fillability: unfillable_source
+      - key: MISC050300
+        title: Small Claims/Order of Dismissal/Continuance
+        form_number: MISC 05.0300
+        source_url: https://www.courts.wa.gov/forms/documents/MISC%2005%20300SC%20Order%20Dismiss%20Continue%202025%2001.pdf
+        sha256: 2093636e319be9cae96261113f0dbd792afb4ca489c373a7ff4df787dcdcff86
+        filing_office: District Court clerk, small claims division
+        fee_note: District Court clerk, small claims division
+        fillability: unverified
+      - key: MISC050500
+        title: Small Claims Judgment
+        form_number: MISC 05.0500
+        source_url: https://www.courts.wa.gov/forms/documents/MISC05_0500_SmallClaims%20Judgment%202025_01%2001.pdf
+        sha256: 64b3c1bfa93338f1f37ced3385634f65ece84b452a750b8ff65706625679e692
+        filing_office: District Court clerk, small claims division
+        fee_note: District Court clerk, small claims division
+        fillability: unverified
+      - key: GR340100
+        title: Motion and Declaration for Waiver of Civil Fees and Surcharges (MTMVF)
+        form_number: WPF GR 34.0100
+        source_url: https://www.courts.wa.gov/forms/documents/GR%2034_0100%20Party%20MTWVF%20Filing%20Fee%20Waiver_2019%2007(02).pdf
+        sha256: afc2bbc1c2751327b2d570e3d89f5acaa67298fa414ccfec8aea8477864bde03
+        filing_office: Filed with the underlying case at the clerk's office
+        fee_note: No filing fee for the waiver motion itself.
+        fillability: unfillable_source
+      - key: GR340200
+        title: Motion and Declaration for Waiver of Civil Fees and Surcharges (QLSP Filing)
+        form_number: WPF GR 34.0200
+        source_url: https://www.courts.wa.gov/forms/documents/GR%2034_0200%20QLSP%20MTWVF%20Filing%20Fee%20Waiver_2021%2004.pdf
+        sha256: 267fdcb9d92154e7988dffa504f068fd7fc3a96f7a26c4fc7f7988520ea6351e
+        filing_office: Filed with the underlying case at the clerk's office
+        fillability: unverified
+      - key: GR340300
+        title: Financial Statement (attachment)
+        form_number: WPF GR 34.0300
+        source_url: https://www.courts.wa.gov/forms/documents/GR%2034_0300%20Financial%20Statement(02).pdf
+        sha256: 712c44c1d8d92cc04ce5961b43904ed13f3ef155793f4837d430eb024fc93c49
+        filing_office: Filed with the underlying case at the clerk's office
+        fillability: unfillable_source
+      - key: GR340500
+        title: Order Re Waiver of Civil Fees and Surcharges
+        form_number: WPF GR 34.0500
+        source_url: https://www.courts.wa.gov/forms/documents/GR%2034_0500%20Order%20re%20Fee%20Waiver(02).pdf
+        sha256: 4cb4325b314b6c2fd3552940571d1125bb13b5b431860f8e5001781657b6c647
+        filing_office: Filed with the underlying case at the clerk's office
+        fillability: unfillable_source
+  - key: king_county_district_court
+    name: King County District Court
+    jurisdiction: WA
+    county: King
+    city: Seattle
+    level: district
+    # King County's own local forms ARE fillable AcroForms, unlike the
+    # statewide pattern PDFs. eFiling portal: dcfiling.kingcounty.gov.
+    forms: []
+    surveyed_forms:
+      - key: KCPETADULT
+        title: Petition for Name Change (Individual)
+        form_number: null
+        source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-individual-july_2026.pdf
+        sha256: 362c90497ebf8f978ea747a5ddb252b66e20211b74e109c3d0786943882680f4
+        filing_office: King County District Court clerk
+        fee_note: "Filing fee $98 per application (includes 1 certified copy; additional copies $5) plus a separate King County Recorder fee: $203.50 individual; $204.50 first family member + $203.50 each additional. Waiver: the local GR 34 motion (below) or the statewide GR 34 set. Sealed name changes (gender expression/identity, refugee/asylum, DV victim, emancipated minor) go to Superior Court instead."
+        fillability: fillable
+      - key: KCPETMINOR
+        title: Petition for Minor Child Name Change
+        form_number: null
+        source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-minor-october-2024.pdf
+        sha256: bab3b88de0aa8822f74584291d4f82bd6869c8b9da3c43c4cceb5ea760c18549
+        filing_office: King County District Court clerk
+        fee_note: Both parents' consent or service required; children 14-17 must attend the hearing. Fee as for the adult petition.
+        fillability: fillable
+      - key: KCGR34
+        title: Motion and Declaration for Waiver of Fees and Surcharges (King County local GR 34 version)
+        form_number: null
+        source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/motion_and_declaration_for_waiver_of_fees_and_surcharges_october-2025.pdf
+        sha256: 688e31b40aa167fd2bca33c7f90d0e496654b1169b2a5ec1705edb42defff1c1
+        filing_office: King County District Court clerk
+        fee_note: No filing fee for the motion.
+        fillability: fillable
+      - key: KCSCNOTICE
+        title: Notice of Small Claim (King County local form)
+        form_number: null
+        source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/forms_sc/notice-of-small-claim-september-2025.pdf
+        sha256: 5bc191bc445d6da232815580bff270a7e344b523c6bf51c5b3346425f73c80f9
+        filing_office: King County District Court clerk, small claims division
+        fee_note: "Filing fee $50; limits $10,000 natural person / $5,000 other. Appeal to Superior: $280 cashier's check to the Superior Court Clerk + $40 district appeal-processing fee. A guided e-file interview generates this notice."
+        fillability: fillable
+      - key: KCSCPACKET
+        title: Small Claims Packet — Plaintiff
+        form_number: null
+        source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/info_instruct_small_claims/small_claims_plaintiff_packet-july-2026.pdf
+        sha256: 041cda0ef94435f0e7a5a70cb69677bf68eeee51c2dc142541b422c29141f3a7
+        filing_office: King County District Court clerk, small claims division
+        fee_note: Instructions packet wrapping the claim process.
+        fillability: fillable
+  - key: king_county_superior_court
+    name: King County Superior Court
+    jurisdiction: WA
+    county: King
+    city: Seattle
+    level: superior
+    # Name changes auto-seal here under RCW 4.24.130(5) for gender identity,
+    # DV, refugee/asylum, and emancipated-minor filings. Superior filing fee
+    # $290.00 (civil action; fee schedule eff. 10/1/2026); statewide GR 34
+    # applies for waivers. Protection orders: Superior or District Court.
+    forms: []
+    surveyed_forms:
+      - key: KCWILLCOVER
+        title: Will Repository Cover Sheet
+        form_number: null
+        source_url: https://cdn.kingcounty.gov/-/media/king-county/depts/dja/forms/will-repository-coversheet-pdf.pdf
+        sha256: 0f1106e8d783508d0fd91ed11cb801e02e320779e63268eff7937a7ef9b72b9e
+        filing_office: King County Superior Court Clerk's Office
+        fee_note: "Will Repository $20.00; Will Filing only (no probate) $20.00; Probate Filing $290.00; Civil Action $290.00 (Superior Court and Clerk's fee schedule, eff. 10/1/2026). Fee waiver: statewide GR 34."
+        fillability: unverified
+      - key: KCWILLWITHDRAW
+        title: Motion and Declaration to Withdraw Will from Repository
+        form_number: null
+        source_url: https://cdn.kingcounty.gov/-/media/king-county/depts/dja/forms/motion-withdraw-will-pdf.pdf
+        sha256: 38b428ecc6379c8b0460edc93699aa2020fbde93002aa4f3db1662b4077eb5e7
+        filing_office: King County Superior Court Clerk's Office
+        fillability: unverified
+  - key: pierce_county_district_court
+    name: Pierce County District Court
+    jurisdiction: WA
+    county: Pierce
+    city: Tacoma
+    level: district
+    # Small claims: $50, initiated online or at kiosks; mandatory mediation
+    # through the Dispute Resolution Center. District fee schedule eff.
+    # 12/08/2025. Waiver request fillable online; statewide GR 34 elsewhere.
+    forms: []
+    surveyed_forms:
+      - key: PIERCENCINFO
+        title: Adult Name Change Information packet
+        form_number: null
+        source_url: https://www.piercecountywa.gov/DocumentCenter/View/134269/NC_Name-Change-Information-Adult
+        sha256: 8febe8c4d12333c83a9a28af450f03b9060e03614fc0aabe9cec6c3643815f20
+        filing_office: Pierce County District Court clerk, Room 239, County-City Building, 930 Tacoma Ave S
+        fee_note: "Name-change fee $308.50 (each additional family member $218.50) per the District Court fee schedule eff. 12/08/2025. Petition completed online (district court portal) or via the county Find-a-Form page — no stable static petition PDF was captured by the survey (the site sits behind a bot challenge). Sealed name changes must be heard in Superior Court. Waiver: Financial Declaration/Motion and Order to Waive Fees fillable online; statewide GR 34 for Superior filings."
+        fillability: unverified
+  - key: pierce_county_superior_court
+    name: Pierce County Superior Court
+    jurisdiction: WA
+    county: Pierce
+    city: Tacoma
+    level: superior
+    # Probate filing $290.00; small estate $20.00; will only $20.00; sealed
+    # will repository $20.00 (Clerk fee schedule eff. 6/11/2026). Sealed name
+    # changes must be heard here. Statewide GR 34 applies for waivers.
+    forms: []
+    surveyed_forms:
+      - key: PIERCEPOPACKET
+        title: Petition and LECIF packet (protection order, county republished)
+        form_number: null
+        source_url: https://www.piercecountywa.gov/DocumentCenter/View/115550/Petition-and-LECIF?bidId=
+        sha256: 3c92ff61aea03a79065e4420d079f1c819974e7e05334a4fb53be65fd29b0218
+        filing_office: Civil Orders for Protection desk, County-City Building Room 110, 930 Tacoma Ave S
+        fee_note: "County wrapper of the statewide PO 001 + PO 003/003A packet (RCW 7.105.115 Mandatory, 03/2026); deliver by 2:30 p.m. for same-day commissioner review; only one order type may be checked. Fees per the Clerk's fee schedule eff. 6/11/2026: anti-harassment petition $53.00; protection of vulnerable adults — no filing fee; DV/SA/stalking petitions have no fee line."
+        fillability: unverified
+  - key: clark_county_district_court
+    name: Clark County District Court (Washington)
+    jurisdiction: WA
+    county: Clark
+    level: district
+    # Name changes and small claims ($50; clerk provides the Notice of Small
+    # Claim — no static PDF on the page). GR 34 fee waiver on request.
+    forms: []
+    surveyed_forms:
+      - key: CLARKWAPETADULT
+        title: Petition for Individual Adult Name Change
+        form_number: null
+        source_url: https://clark.wa.gov/media/document/95066
+        sha256: e0c21d4ca3455ede2a4eeb4bc09d28906dc2382567fd8a14caddc0be07df4084
+        filing_office: Clark County District Court clerk, 1200 Franklin St, Vancouver
+        fee_note: "Filing fees due at filing, non-refundable: $296.50 individual adult; $298.50 family or minor. Petitions filed in person; hearings virtual by default; additional certified copies $5. GR 34 fee waiver available upon request. Sealed name changes go to the Superior Court Clerk's Office."
+        fillability: unverified
+      - key: CLARKWAPETMINOR
+        title: Petition for Minor Name Change
+        form_number: null
+        source_url: https://clark.wa.gov/media/document/95061
+        sha256: 310de65385cb2db2be8a094742d095d34c8e506c417fded0413ff2035a39ff94
+        filing_office: Clark County District Court clerk
+        fee_note: Fee $298.50 (family or minor).
+        fillability: unverified
+      - key: CLARKWAPETFAMILY
+        title: Petition for Family Name Change
+        form_number: null
+        source_url: https://clark.wa.gov/media/document/95056
+        sha256: d8c0e84c977df2becc4205aa0aae2d0ffd1baa46b437375b52be05057ba2491e
+        filing_office: Clark County District Court clerk
+        fee_note: Fee $298.50 (family or minor).
+        fillability: unverified
+      - key: CLARKWACONFID
+        title: Confidential Identification Information Form (required for ALL name changes)
+        form_number: null
+        source_url: https://clark.wa.gov/media/document/212476
+        sha256: eb9344b6eab13a5968e2d0391385c386006b7b56e617fa5869c8f66e6c18b7d5
+        filing_office: Clark County District Court clerk
+        fillability: unverified
+      - key: CLARKWACONSENT
+        title: Consent of Natural Parent for Minor Name Change (notarized)
+        form_number: null
+        source_url: https://clark.wa.gov/media/document/95076
+        sha256: f67a8574c15672f065f1a4200694868cd3f7c7ca96d63a1f3540759102d794c1
+        filing_office: Clark County District Court clerk
+        fillability: unverified
+  - key: clark_county_superior_court
+    name: Clark County Superior Court (Washington)
+    jurisdiction: WA
+    county: Clark
+    level: superior
+    # Sealed name changes and probate/wills/trusts live with the Clerk; civil
+    # filing $290.00 (Clerk fee schedule). Statewide GR 34 waiver forms apply.
+    forms: []
+    surveyed_forms:
+      - key: CLARKWADVSEALED
+        title: Instructions for a DV Sealed Name Change Petition in Clark County Superior Court
+        form_number: null
+        source_url: https://clark.wa.gov/sites/default/files/dept/files/law-library/brochures/DV-Sealed-Name-Change-Packet-Instructions_and_Forms.pdf
+        sha256: 350610a4e4bbf188a737ba25fcb5ab2b0641e1df07534fc7fc5ae69aa5f90161
+        filing_office: Clark County Superior Court Clerk's Office, 1200 Franklin St, Vancouver
+        fee_note: Public Law Library of King County packet hosted by Clark County. Superior civil filing $290.00; small-estate affidavit filing $20.00 (blank forms $4.00); will-only filing $20.00 (Clerk fee schedule). GR 34 fee waiver forms available through the court administrator.
+        fillability: unverified
+  - key: new_york_supreme_court
+    name: New York Supreme Court
+    jurisdiction: NY
+    level: superior
+    # The Unified Court System's name/sex-designation forms are the same
+    # statewide whether filed in Supreme/County Court or NYC Civil Court;
+    # this record carries the Supreme/County Court route (fees and RJI
+    # note included). County Court accepts the same forms at the same fee.
+    forms: []
+    surveyed_forms:
+      - key: NC1
+        title: Name Change and/or Sex Designation Change Petition for Individual Adult (18+)
+        form_number: UCS-NC1
+        source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/AdultName-SexDesignationChangePetition-fillable.pdf
+        sha256: fc46bfdaa74da7b0c52d3f464d6ccc486725bdd823c2ded423e0b8e4a9685471
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        filing_fee:
+          amount: "210.00"
+          currency: USD
+        fee_note: "Filed in Supreme Court or County Court of the county of residence (or any NYC Civil Court — see that court's record; Civil Court costs less). Supreme/County Court fee $210.00; a minor 14+ signs a notarized consent on the minor route. The same UCS-NC forms carry sex-designation changes (no separate petition form exists); the birth-certificate step runs through the NYC Health Attestation Form (born in NYC) or the NYS DOH Application for Correction of Certificate of Birth for Gender Designation (born in NYS outside NYC). Fee waiver: poor person relief by motion with a sworn financial affidavit — no official statewide form. sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge to plain clients)."
+        fillability: fillable
+      - key: NCO1
+        title: Order Granting Name Change and/or Sex Designation Change, Individual Adult
+        form_number: UCS-NCO1
+        source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/AdultName-SexDesignationChangeOrder-fillable.pdf
+        sha256: d769b61f6ed3fe567c66a041db1e623cdf22b4564403f18e023b96c88d2ec42b
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        fillability: fillable
+      - key: NC2
+        title: Name Change and/or Sex Designation Change Petition for Individual Minor (under 18)
+        form_number: UCS-NC2
+        source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/MinorName-SexDesignationChangePetition-fillable.pdf
+        sha256: 9279ee869c3d52b5eb74550de3ee8fae914c093d189b612eae269b1669144939
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        fee_note: Minor petition; a minor 14 or older must sign a notarized consent and the other parent/guardian must consent or be noticed. Same $210.00 Supreme Court fee. sha256 pins a Wayback-archived copy (Cloudflare).
+        fillability: fillable
+      - key: NCO2
+        title: Order Granting Name Change and/or Sex Designation Change, Individual Minor
+        form_number: UCS-NCO2
+        source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/MinorName-SexDesignationChangeOrder-fillable.pdf
+        sha256: 1f052a250dc379819ab05a6ce59651c2e49f552c9b13e50d48507095674bf470
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        fillability: fillable
+      - key: NC3
+        title: Name Change and/or Sex Designation Change Petition for a Legally Incapacitated Person
+        form_number: UCS-NC3
+        source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/LIPName-SexDesignationChangePetition-fillable.pdf
+        sha256: 27f3d73ef1a157430df7a33e653e366cb5af855f51b61721e561a03016ad7147
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        fillability: fillable
+      - key: NCO3
+        title: Order Granting Name Change and/or Sex Designation Change, Legally Incapacitated Person
+        form_number: UCS-NCO3
+        source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/LIPName-SexDesignationChangeOrder-fillable.pdf
+        sha256: bb6eac4de2c0f59b5dba874bcaa2e390a87d71e79cd96fec33eb0866871e4a46
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        fillability: fillable
+      - key: NC4
+        title: Family Name Change Petition
+        form_number: UCS-NC4
+        source_url: https://www.nycourts.gov/FORMS/Name-SexDesignationChange/FamilyNameChangePetition-fillable.pdf
+        sha256: 5f3e6b79d6d5e7f4b2314f1ac80b0f8e612eb0c0a8025ec77c04af69ca35373d
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        fillability: fillable
+      - key: NC5
+        title: Family Name Change Petition — Supplemental Form
+        form_number: UCS-NC5
+        source_url: https://www.nycourts.gov/FORMS/Name-SexDesignationChange/SupplementalFamilyNameChangePetition-fillable.pdf
+        sha256: 835d178a5887efeb5c8f279eed8cfbea434fca331496b09bdeb5616a5974a97f
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        fillability: fillable
+      - key: NCO4
+        title: Order Granting a Family Name Change
+        form_number: UCS-NCO4
+        source_url: https://www.nycourts.gov/FORMS/Name-SexDesignationChange/FamilyNameChangeOrder-fillable.pdf
+        sha256: a9f0f4412aba4ed128ec9207dae94a3e48af1e585321aa39f8cee7ed0429a472
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        fillability: fillable
+      - key: UCS840
+        title: Request for Judicial Intervention
+        form_number: UCS-840
+        source_url: https://www.nycourts.gov/LegacyPDFS/forms/rji/UCS-840-fillable.pdf
+        sha256: 6314bde92766f82d9851b6ffcddb7017aa004c8e33529c024d75887e1031d71b
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        fee_note: Supreme Court only. The name-change self-help page states there is no fee to file this form in a name-change proceeding; the general fee schedule lists the RJI at $95 (CPLR 8020(a)). sha256 pins a Wayback-archived copy (Cloudflare).
+        fillability: fillable
+  - key: nyc_civil_court
+    name: New York City Civil Court
+    jurisdiction: NY
+    city: New York
+    level: city
+    # A NYC resident may bring a name or sex-designation change proceeding in
+    # any county in the city here ($65.00 vs $210.00 in Supreme Court). The
+    # Small Claims Part limit is $10,000 (individuals only; no e-filing).
+    # Commercial claims sit in the same part; their filing fee is not stated
+    # on the surveyed pages. Small-estate DIY (SE-3A) belongs to Surrogate's
+    # Court, below.
+    forms: []
+    surveyed_forms:
+      - key: CIVNCADULT
+        title: Petition for Individual Adult for Leave to Change His/Her Name (NYC Civil Court format)
+        form_number: null
+        source_url: https://www.nycourts.gov/courts/nyc/civil/forms/namechangeadult.pdf
+        sha256: fd1878e75a41d73d0977f984a68e094546f0a95f3323e184964f8bf5304807b9
+        filing_office: NYC Civil Court clerk, any county in the city
+        filing_fee:
+          amount: "65.00"
+          currency: USD
+        fee_note: NYC Civil Court fee $65.00 vs $210.00 in Supreme Court; a NYC resident may file in any county in the city. sha256 pins a Wayback-archived copy (Cloudflare).
+        fillability: fillable
+      - key: CIVNCINSTR
+        title: Name Change Instructions (NYC Civil Court, non-fillable)
+        form_number: null
+        source_url: https://www.nycourts.gov/courts/nyc/civil/forms/NameChangeInstructions.pdf
+        sha256: 86e20e358b9635a44783ce7ffeb7f4d183dea1268552d0d44b99848c41ac1578
+        filing_office: NYC Civil Court clerk, any county in the city
+        fee_note: n/a (instructions). sha256 pins a Wayback-archived copy (Cloudflare).
+        fillability: unfillable_source
+      - key: CIVSC50
+        title: Statement of Claim (Small Claims)
+        form_number: CIV-SC-50
+        source_url: https://www.nycourts.gov/LegacyPDFS/courts/nyc/civil/forms/CIV-SC-50.pdf
+        sha256: 348e3117b09df5d583b3011331abed4628a38d2eab327edf8bbabb4cd1cfbe39
+        filing_office: NYC Civil Court, Small Claims Part clerk
+        filing_fee:
+          amount: "15.00"
+          currency: USD
+        fee_note: Filing fee $15.00 for claims up to $1,000; $20.00 above $1,000. Limit $10,000 in NYC; individuals only (corporations cannot sue). Cannot be filed electronically. sha256 pins a Wayback-archived copy (Cloudflare).
+        fillability: fillable
+      - key: CIVSC70
+        title: Statement of Claim (Commercial Claims)
+        form_number: CIV-SC-70
+        source_url: https://www.nycourts.gov/LegacyPDFS/courts/nyc/civil/forms/CIV-SC-70.pdf
+        sha256: e520362b579495e989717fbe3739c97701725b592aff2d9a6c32c1ce943f9ee1
+        filing_office: NYC Civil Court, Commercial Claims Part clerk
+        fee_note: The surveyed pages state no separate commercial-claims filing fee — amount unknown. sha256 pins a Wayback-archived copy (Cloudflare).
+        fillability: fillable
+      - key: CIVGP67A
+        title: Notice of Appeal (small claims; cannot be used after arbitration)
+        form_number: CIV-GP-67A
+        source_url: https://www.nycourts.gov/LegacyPDFS/courts/nyc/smallclaims/forms/noticeofappeal.pdf
+        sha256: a3c57081d61b976d366811fb5d3e12aa832c98f5227a0380835f66c6af3716db
+        filing_office: NYC Civil Court, Small Claims Part clerk
+        fee_note: sha256 pins a Wayback-archived copy (Cloudflare).
+        fillability: fillable
+      - key: SCFEEWAIV
+        title: Fee Waiver Form (small claims / commercial claims)
+        form_number: null
+        source_url: https://www.nycourts.gov/LegacyPDFS/courts/nyc/civil/forms/FeeWaiver.pdf
+        sha256: 837763d46b405fe0f153547338b9988229ff48fc9d0d0805ee77bb231ab26748
+        filing_office: NYC Civil Court, Small Claims Part clerk
+        fee_note: No filing fee for the application. sha256 pins a Wayback-archived copy (Cloudflare).
+        fillability: fillable
+      - key: POORPERSON
+        title: Proceed as a Poor Person and to Waive Court Fees
+        form_number: null
+        source_url: https://nycourts.gov/courts/nyc/civil/forms/PoorPersonsRelief.pdf
+        sha256: 5f2aadc58c58933e84ef57a846df52b0d8c1c01a278219e7570ea5ef8c8dff95
+        filing_office: NYC Civil Court clerk
+        fee_note: General civil fee-waiver application. sha256 pins a Wayback-archived copy (Cloudflare).
+        fillability: fillable
+      - key: UCS124
+        title: Demand Letter (consumer credit transaction cases)
+        form_number: UCS-124
+        source_url: https://www.nycourts.gov/LegacyPDFS/courts/nyc/civil/pdfs/UCS124_DmdLtr.pdf
+        sha256: f4b311d543a6c22820f71c0a6a1c1573ecdf13912d171e784c1b3fb428231dd0
+        filing_office: Sent by the claimant before filing; not a court filing
+        fee_note: n/a — evidence attachment, not a filing form. sha256 pins a Wayback-archived copy (Cloudflare).
+        fillability: unfillable_source
+  - key: new_york_surrogates_court
+    name: New York Surrogate's Court
+    jurisdiction: NY
+    level: surrogate
+    # The probate self-help path for small estates (personal property up to
+    # $50,000) is the official Small Estate Affidavit DIY program (LawHelp
+    # Interactive). The paper SE-3A blank (SEAFF09.pdf) is live and its text
+    # was extracted in the survey, but its fillability could NOT be verified
+    # (Cloudflare + no Wayback binary), so it carries no entry here rather
+    # than a guessed one. Probate fees vary by estate under SCPA 2402.
+    forms: []
+    surveyed_forms:
+      - key: PROBATE
+        title: Petition for Probate and Letters Testamentary / Trusteeship
+        form_number: null
+        source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Probate.pdf
+        sha256: 8b31d7d781309658a9522e6893a69985c07dc486a1f1ad3d5efab6d721bd0b97
+        filing_office: Surrogate's Court of the county where the decedent lived
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge). The flagship self-help packet: 22 pages, 776 AcroForm fields."
+        fillability: fillable
+      - key: ANCPROB
+        title: Petition for Ancillary Probate
+        form_number: null
+        source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/ancprob.pdf
+        sha256: 4da52253c839f5e417eaaf90446c4ddd56fe426c69336598bdb55352cd48f864
+        filing_office: Surrogate's Court of the county where the decedent lived
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
+        fillability: fillable
+      - key: PROBCTA
+        title: Petition for Letters of Administration c.t.a. (after Probate)
+        form_number: null
+        source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/probcta.pdf
+        sha256: 8d1c21f6213b700a2b5ff2b0e3b34bae8d6d3e29a4e9cb831a7662e0071b48c0
+        filing_office: Surrogate's Court of the county where the decedent lived
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
+        fillability: fillable
+      - key: SUCTEST
+        title: Petition for Successor Letters Testamentary
+        form_number: null
+        source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/PDF%20Fillable%20SuccessorTest.pdf
+        sha256: 994abda0aff238567d845910ee07ca5eb02f42046fa80c818444b616e0089144
+        filing_office: Surrogate's Court of the county where the decedent lived
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
+        fillability: fillable
+      - key: ADM
+        title: Administration Proceeding, Petition for Letters of Administration / Limited Administration
+        form_number: null
+        source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/ADM.pdf
+        sha256: 234f4b95a22c31c3c01de48600356541a224b4b954ac6580044a8770d7a1759e
+        filing_office: Surrogate's Court of the county where the decedent lived
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
+        fillability: fillable
+      - key: ADMDBN
+        title: Petition for Letters of Administration d.b.n. (SCPA 1007)
+        form_number: null
+        source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/ADMdbn.pdf
+        sha256: 61d53e62b012dc98058cae69a4a8e0840abc044d470c0a1483e439e2020c8acd
+        filing_office: Surrogate's Court of the county where the decedent lived
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
+        fillability: unfillable_source
+      - key: SURRP14
+        title: Petition for Successor Letters Testamentary (legacy version)
+        form_number: Surrogate-P14
+        source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Surrogate-P14.pdf
+        sha256: d774e5e614aa96c85a3f008d3dc9a34835684ed33a51c351242fe35f9f941136
+        filing_office: Surrogate's Court of the county where the decedent lived
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
+        fillability: unfillable_source
+      - key: SURRP15
+        title: Renunciation of Successor Letters Testamentary and Waiver of Process (Individual)
+        form_number: Surrogate-P15
+        source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Surrogate-P15.pdf
+        sha256: 04102d6e7c075f9782ff784cf54665acd981dd9be96e6db1375edfe2a73a1f79
+        filing_office: Surrogate's Court of the county where the decedent lived
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
+        fillability: unfillable_source
+      - key: SURRP16
+        title: Renunciation of Successor Letters Testamentary and Waiver of Process (Corporation)
+        form_number: Surrogate-P16
+        source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Surrogate-P16.pdf
+        sha256: 444f121b3a88ebb8059b9a7e750054b971a8d03bbb64a4d8b469ff25f2d75fa6
+        filing_office: Surrogate's Court of the county where the decedent lived
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
+        fillability: unfillable_source
+      - key: SURRP17
+        title: Notice of Petition for Appointment of Successor Executor
+        form_number: Surrogate-P17
+        source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Surrogate-P17.pdf
+        sha256: bbc8c2f09f0c94878ffbd138fc565a7b56d4dd541a1b0e5906f79bae0027a82d
+        filing_office: Surrogate's Court of the county where the decedent lived
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
+        fillability: unfillable_source
+  - key: new_york_family_court
+    name: New York Family Court
+    jurisdiction: NY
+    level: family
+    # No filing fees in Family Court. The family offense petition — the
+    # highest-volume DV self-help form in NY — is print-and-write, not an
+    # AcroForm; the order forms are court-issued. No DIY program exists for
+    # it (verified against the Family Court DIY page).
+    forms: []
+    surveyed_forms:
+      - key: FC82
+        title: Family Offense Petition (FCA §§812, 818, 821)
+        form_number: UCS-FC8-2
+        source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/familycourt/pdfs/8-2.pdf
+        sha256: 59aac9f005deecfdcc56e8c44a04f50b1a12c0d4599195f34fbeedfde1e6eb01
+        filing_office: Family Court clerk, any county
+        filing_fee:
+          amount: "0.00"
+          currency: USD
+        fee_note: It is free to file in Family Court. The published petition has zero AcroForm fields — print-and-write; filers can also complete it with help from court personnel, and no DIY program exists for family offense petitions. The order forms (8-3 through 8-7) are court-issued, not litigant-fillable. sha256 pins a Wayback-archived copy (Cloudflare).
+        fillability: unfillable_source

@@ -2349,6 +2349,96 @@ pub fn entity_types_router(
 /// authorize/deny mutations keep their own `POST` routes.
 pub const LAWYER_EXPUNGE_QUEUE_PATH: &str = "/app/lawyer/expunge-requests";
 
+/// The matter graph page path — `{code}` is the project code the matter
+/// surface is addressed by, resolved to the internal id the REST door reads.
+pub const PROJECT_GRAPH_PATH: &str = "/app/projects/{code}/graph";
+
+/// The lawyer graph page path. Not under `/app/admin`: the endpoint admits
+/// the person themself at any firm tier, so the page sits outside the admin
+/// cluster with its own lawyer-tier Rego rule.
+pub const LAWYER_GRAPH_PATH: &str = "/app/people/{id}/graph";
+
+/// The firm graph page path. The lawyer workbench, not `/app/admin`: the
+/// firm-administration pages are Owner/Admin by policy ("firms" is
+/// deliberately absent from `admin_lawyer_resources`), while the firm graph
+/// door admits a Lawyer holding `FirmCapability::ViewDirectory`. The
+/// `/app/lawyer` prefix rule already admits the lawyer tier, so this route
+/// needs no rule of its own; the directory-capability check stays with the
+/// endpoint the island fetches.
+pub const FIRM_GRAPH_PATH: &str = "/app/lawyer/firms/{id}/graph";
+
+/// The three relationship-graph pages (project, lawyer, firm), rendered
+/// through Dioxus with a first-party Sigma.js island. Read-only: the pages
+/// carry no forms, so no CSRF layer is needed. Every route rides the same
+/// authentication + embedded Rego policy gate; the project page additionally
+/// scopes by the participation ledger in its loader (matching the REST
+/// door), and the islands fetch only the already-gated `GET /app/api/graph/*`
+/// endpoints.
+pub fn graph_views_router(
+    surreal: store::surreal::SurrealDb,
+    sessions: crate::session::SessionStore,
+    policy: crate::policy::PolicyClient,
+    auth: crate::auth::AuthConfig,
+) -> Router {
+    // One context provider shared by all three: the project page's loader
+    // reads the store (matter code → internal id, participation scope); the
+    // lawyer and firm loaders run store-free.
+    let context = std::sync::Arc::new(vec![Box::new(move || {
+        Box::new(surreal.clone()) as Box<dyn std::any::Any>
+    })
+        as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]);
+    // Each page renders through its own `FullstackState` (one component per
+    // state), so the three are built separately and merged; the
+    // authentication + embedded Rego policy gates then wrap the merge.
+    let project: Router<()> = Router::<FullstackState>::new()
+        .route(
+            PROJECT_GRAPH_PATH,
+            get(render_handler)
+                .layer(from_fn(inject_person_id))
+                .layer(from_fn(inject_viewer_role))
+                .layer(from_fn(inject_app_brand_mark))
+                .layer(from_fn(dioxus_document_head)),
+        )
+        .with_state(FullstackState::new(
+            ServeConfig::new().context_providers(context.clone()),
+            webapp::graph_views::ProjectGraphPage,
+        ));
+    let lawyer: Router<()> = Router::<FullstackState>::new()
+        .route(
+            LAWYER_GRAPH_PATH,
+            get(render_handler)
+                .layer(from_fn(inject_person_id))
+                .layer(from_fn(inject_viewer_role))
+                .layer(from_fn(inject_app_brand_mark))
+                .layer(from_fn(dioxus_document_head)),
+        )
+        .with_state(FullstackState::new(
+            ServeConfig::new().context_providers(context.clone()),
+            webapp::graph_views::LawyerGraphPage,
+        ));
+    let firm: Router<()> = Router::<FullstackState>::new()
+        .route(
+            FIRM_GRAPH_PATH,
+            get(render_handler)
+                .layer(from_fn(inject_viewer_role))
+                .layer(from_fn(inject_app_brand_mark))
+                .layer(from_fn(dioxus_document_head)),
+        )
+        .with_state(FullstackState::new(
+            ServeConfig::new().context_providers(context),
+            webapp::graph_views::FirmGraphPage,
+        ));
+
+    project
+        .merge(lawyer)
+        .merge(firm)
+        .route_layer(from_fn_with_state(
+            (sessions, policy),
+            crate::policy::require_policy,
+        ))
+        .route_layer(from_fn_with_state(auth, crate::auth::require_auth))
+}
+
 /// The gated Dioxus lawyer expunge-request queue (#641 Phase 3) — the first
 /// row-action page. Its rows post to the existing authorize/deny handlers
 /// through native forms, so the render carries the session CSRF token via the
@@ -3515,6 +3605,7 @@ fn court_level_label(level: store::courts::CourtLevel) -> &'static str {
         Level::Municipal => "Municipal Court",
         Level::Surrogate => "Surrogate's Court",
         Level::City => "City Court",
+        Level::Family => "Family Court",
     }
 }
 
