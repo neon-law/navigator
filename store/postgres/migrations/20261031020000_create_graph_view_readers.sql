@@ -1,4 +1,3 @@
--- Migration: 20261031020000_create_graph_view_readers.sql
 -- Read-only reader functions for the graph views: bounded neighborhood
 -- expansion (project, lawyer) and the firm-to-firm aggregation. These are
 -- the Cypher entry points for the graph REST endpoints, the same pattern
