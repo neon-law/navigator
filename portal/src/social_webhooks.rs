@@ -451,13 +451,14 @@ mod tests {
 
     #[tokio::test]
     async fn receive_ingests_a_signed_instagram_comment_for_one_connected_account() {
-        let _env_guard = WEBHOOK_ENV.lock().await;
         use store::brands::NewBrand;
         use store::firms::NewFirm;
         use store::persons::{NewPerson, Role};
         use store::social_accounts::{ConnectSocialAccount, SocialProvider};
         use store::test_support::{self, mem_surreal};
         use uuid::Uuid;
+
+        let _env_guard = WEBHOOK_ENV.lock().await;
 
         let db = mem_surreal().await;
         let admin = store::persons::create(

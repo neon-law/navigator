@@ -391,7 +391,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(conversation.unread, true);
+        assert!(conversation.unread);
     }
 
     #[tokio::test]
