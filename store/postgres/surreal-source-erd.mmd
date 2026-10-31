@@ -1100,6 +1100,16 @@ erDiagram
         string title
         datetime updated_at
     }
+    sandbox_usage {
+        string id
+        number granted_cents
+        datetime inserted_at
+        boolean overage
+        string period
+        uuid person_id
+        number spent_cents
+        datetime updated_at
+    }
     schema_version {
         string id
         datetime applied_at
@@ -1456,6 +1466,7 @@ erDiagram
     person }o--|| relationship_log : actor_person_id
     project }o--|| relationship_log : project_id
     notation }o--|| review_document : notation_id
+    person }o--|| sandbox_usage : person_id
     project }o--|| sent_email : project_id
     notation }o--|| signature : notation_id
     person }o--|| signature : signer_person_id

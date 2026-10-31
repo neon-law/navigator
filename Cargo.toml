@@ -16,6 +16,7 @@ members = [
     "cloud",
     "mcp",
     "features",
+    "gateway",
     "forms",
     "lsp",
     "live-inquiry",
@@ -24,6 +25,7 @@ members = [
     "archives",
     "billing",
     "billing-workflows",
+    "sandbox-skills",
     "telemetry",
     "word",
 ]
@@ -190,6 +192,7 @@ pdf = { path = "pdf" }
 portal = { path = "portal" }
 neon = { path = "neon" }
 repos = { path = "repos" }
+sandbox-skills = { path = "sandbox-skills" }
 server = { path = "server" }
 rules = { path = "rules" }
 project-scaffold = { path = "project-scaffold" }
