@@ -60,10 +60,15 @@ impl RetryClock for TokioClock {
 /// sequence keeps the load pattern legible in the logs.
 #[must_use]
 pub(crate) fn backoff_delay(policy: &RetryPolicy, failed_attempt: u32) -> std::time::Duration {
-    // Saturate the shift well before u64 seconds overflow; a run will hit
-    // its attempt cap long before a delay gets large.
+    // Saturate the shift well before u64 seconds overflow, then clamp the
+    // delay itself: a run will hit its attempt cap long before a delay
+    // gets large.
+    const MAX_DELAY: std::time::Duration = std::time::Duration::from_secs(u32::MAX as u64);
     let doubling = failed_attempt.min(10);
-    policy.base_delay.saturating_mul(1u32 << doubling)
+    policy
+        .base_delay
+        .saturating_mul(1u32 << doubling)
+        .min(MAX_DELAY)
 }
 
 /// The outcome of exhausting a step's retry budget: how many attempts ran

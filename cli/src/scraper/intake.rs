@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn attachment_suffixes_survive_naming() {
         let document = document("29-1", "Exhibit A");
-        assert_eq!(document.filename, "DKT 0029-att - Exhibit A.pdf");
+        assert_eq!(document.filename, "DKT 0029-1 - Exhibit A.pdf");
     }
 
     #[test]

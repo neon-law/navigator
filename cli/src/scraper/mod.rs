@@ -265,10 +265,18 @@ async fn scrape_notices(
         adapter.login(session, login)
     })
     .await
-    .map_err(|failure| ScraperError::LoginFailed {
-        site: adapter.site().to_string(),
-        attempts: failure.attempts,
-        last: failure.last.to_string(),
+    .map_err(|failure| {
+        let attempts = failure.attempts;
+        match failure.last {
+            AdapterError::StructureDrift { step, detail } => {
+                ScraperError::SiteStructure { step, detail }
+            }
+            last => ScraperError::LoginFailed {
+                site: adapter.site().to_string(),
+                attempts,
+                last: last.to_string(),
+            },
+        }
     })?;
     // Capture the logged-in session immediately: a cookie file from a
     // successful login is worth having even if discovery then fails.
@@ -652,7 +660,7 @@ mod tests {
             .await
             .expect_err("the run dies before intake");
         assert!(
-            error.to_string().contains("intake of la-superior/0007/7"),
+            error.to_string().contains("intake of la-superior/0004/7"),
             "the error names the step: {error}"
         );
         assert!(fixture.intake.received().is_empty());
@@ -735,6 +743,7 @@ mod tests {
             "no finished document was staged"
         );
         // The next run resumes from the part file and completes.
+        adapter.notices_script(vec![Ok(vec![notice("4", "Notice of Hearing")])]);
         adapter.download_script(vec![vec![DownloadStep::Chunk(b"-rest".to_vec())]]);
         let report = run_scraper(&adapter, &query(), &deps(&fixture))
             .await
