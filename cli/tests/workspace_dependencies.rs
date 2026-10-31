@@ -113,7 +113,6 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "sha1",
     "sha2",
     "sqlx",
-    "solana-attestation-service-client",
     "store",
     "strum",
     "surrealdb",

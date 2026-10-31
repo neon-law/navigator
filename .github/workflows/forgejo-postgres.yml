@@ -14,7 +14,7 @@ jobs:
       KUBECONFIG: /tmp/forgejo-kind.config
       NAVIGATOR_KIND_CLUSTER: forgejo-smoke
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5
         with:
           version: v1.37.0
@@ -49,7 +49,7 @@ jobs:
         run: |
           kind create cluster --name forgejo-smoke --config k8s/kind-forgejo-config.yaml --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5 --kubeconfig "$KUBECONFIG" --wait 120s
           kubectl --context kind-forgejo-smoke create namespace navigator
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.98.0
       - name: cache the Rust dependencies
