@@ -38,8 +38,11 @@ pub enum ProjectTaskError {
 }
 
 /// The workflow state of a Task. The only legal moves are one step forward;
-/// `done` closes the row and is a transition, never a delete.
+/// `done` closes the row and is a transition, never a delete. The stored
+/// word — `as_str` — is also the wire word: the serde form round-trips
+/// through the same vocabulary the transition command speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TaskState {
     Todo,
     InProgress,
@@ -412,6 +415,12 @@ mod tests {
     fn state_round_trips_through_its_stored_word() {
         for state in [TaskState::Todo, TaskState::InProgress, TaskState::Done] {
             assert!(matches!(parse_state(state.as_str()), Ok(parsed) if parsed == state));
+            // The stored word is the wire word: serde speaks the same
+            // vocabulary the transition command does.
+            assert_eq!(
+                serde_json::to_value(state).unwrap(),
+                serde_json::Value::String(state.as_str().into())
+            );
         }
         assert!(matches!(
             parse_state("archived"),

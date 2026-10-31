@@ -1846,6 +1846,39 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/projects/{id}/costs/{cost_id}/events": {
           "get": { "summary": "Read a Project cost's audit history", "description": "Lawyer-only immutable before/after history.", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "cost_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Audit events, oldest first", "content": { "application/json": { "schema": { "type": "object" } } } }, "404": { "description": "No such cost or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } } }
         },
+        "/app/api/projects/{id}/tasks": {
+          "get": {
+            "summary": "List a matter's tasks",
+            "description": "Returns the Project's tasks with their workflow state and assignee, for the dashboard's Tasks tab. Authorization: lawyer tier and a participation row; otherwise 404.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": { "200": { "description": "The stored tasks, newest first", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          },
+          "post": {
+            "summary": "Create a task",
+            "description": "Creates one Project task in `todo` and appends an immutable creation audit event. The assignee, when given, must participate in the same Project; due_on is a calendar date. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["title"], "properties": { "title": { "type": "string" }, "body": { "type": "string" }, "assignee_id": { "type": "string", "format": "uuid" }, "due_on": { "type": "string", "format": "date" } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "201": { "description": "The stored task", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "Invalid task or assignee is not a participant", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/projects/{id}/tasks/{task_id}/assign": {
+          "post": {
+            "summary": "Assign or clear a task's assignee",
+            "description": "Sets the assignee to a participant of the same Project, or clears it with null. Repeating the current assignee is a no-op. Every change appends an audit event. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["assignee_id"], "properties": { "assignee_id": { "type": "string", "format": "uuid", "nullable": true } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such task on this Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The updated task; audit event appended", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The assignee is not a participant", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
+        "/app/api/projects/{id}/tasks/{task_id}/transition": {
+          "post": {
+            "summary": "Transition a task's state",
+            "description": "Moves a task one step through `todo` → `in_progress` → `done` and appends an audit event; Done is a transition, never a delete. An invalid transition is refused and nothing changes. Authorization: lawyer tier and a participation row.",
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["state"], "properties": { "state": { "type": "string", "enum": ["todo", "in_progress", "done"] } } } } } },
+            "responses": { "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such task on this Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "200": { "description": "The updated task; audit event appended", "content": { "application/json": { "schema": { "type": "object" } } } }, "422": { "description": "The transition is not valid from the current state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } } }
+          }
+        },
         "/app/api/projects/{id}/deadlines": {
           "get": {
             "summary": "List a Project's deadlines",
