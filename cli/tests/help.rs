@@ -80,6 +80,7 @@ fn top_level_help_keeps_orchestration_nested_under_groups() {
             "dev",
             "forms",
             "glossary",
+            "inbox",
             "journal",
             "lsp",
             "mail",

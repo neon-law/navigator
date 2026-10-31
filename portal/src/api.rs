@@ -776,14 +776,9 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             get(crate::inbox_api::unprocessed),
         ),
         (
-            "GET",
-            "/app/api/inbox/{id}/process",
-            get(crate::inbox_api::process_status),
-        ),
-        (
             "POST",
-            "/app/api/inbox/{id}/process",
-            post(crate::inbox_api::process_apply),
+            "/app/api/inbox/process",
+            post(crate::inbox_api::process),
         ),
         (
             "POST",

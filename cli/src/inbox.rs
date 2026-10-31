@@ -71,10 +71,16 @@ fn list_request(base: &str) -> (Method, String) {
     (Method::GET, format!("{base}/app/api/inbox/unprocessed"))
 }
 
-/// The process door: a plan reads, an apply posts.
-fn process_request(base: &str, message: Uuid, apply: bool) -> (Method, String) {
-    let method = if apply { Method::POST } else { Method::GET };
-    (method, format!("{base}/app/api/inbox/{message}/process"))
+/// The process door: one constant-path POST. The plan (apply: false) and
+/// the apply (apply: true) differ only in the request body — the parsed
+/// message id is body data, never URL material.
+fn process_request(base: &str) -> (Method, String) {
+    (Method::POST, format!("{base}/app/api/inbox/process"))
+}
+
+/// The body the process door reads: which message, and whether to record.
+fn process_body(message: Uuid, apply: bool) -> serde_json::Value {
+    serde_json::json!({ "message": message, "apply": apply })
 }
 
 /// One message's plan, as the doors serve it. The body never travels.
@@ -195,10 +201,11 @@ async fn process(
     host: Option<&str>,
 ) -> Result<()> {
     let (base, token) = crate::remote::resolve(host)?;
-    let (method, url) = process_request(&base, message, apply);
+    let (method, url) = process_request(&base);
     let response = reqwest::Client::new()
         .request(method, url)
         .bearer_auth(token)
+        .json(&process_body(message, apply))
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
@@ -234,7 +241,7 @@ async fn process(
 
 #[cfg(test)]
 mod tests {
-    use super::{list_request, process_request, ProcessApplyView};
+    use super::{list_request, process_body, process_request, ProcessApplyView};
     use reqwest::Method;
     use uuid::Uuid;
 
@@ -246,14 +253,19 @@ mod tests {
         assert_eq!(method, Method::GET);
         assert_eq!(url, format!("{base}/app/api/inbox/unprocessed"));
 
-        // The plan is a GET: it cannot record anything.
-        let (method, url) = process_request(base, message, false);
-        assert_eq!(method, Method::GET);
-        assert_eq!(url, format!("{base}/app/api/inbox/{message}/process"));
-
-        let (method, url) = process_request(base, message, true);
+        // One constant-path door serves both the plan and the apply: the
+        // parsed message id is body data, never URL material.
+        let (method, url) = process_request(base);
         assert_eq!(method, Method::POST);
-        assert_eq!(url, format!("{base}/app/api/inbox/{message}/process"));
+        assert_eq!(url, format!("{base}/app/api/inbox/process"));
+
+        let body = process_body(message, false);
+        assert_eq!(body["message"], serde_json::json!(message));
+        assert_eq!(body["apply"], serde_json::json!(false));
+
+        let body = process_body(message, true);
+        assert_eq!(body["message"], serde_json::json!(message));
+        assert_eq!(body["apply"], serde_json::json!(true));
     }
 
     #[test]
