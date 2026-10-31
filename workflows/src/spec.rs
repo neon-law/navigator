@@ -388,13 +388,12 @@ impl QuestionnaireSpec {
             let Some(transitions) = self.0.transitions_from(&here) else {
                 continue;
             };
-            match taken
+            if let Some(next) = taken
                 .get(here.as_str())
                 .and_then(|value| transitions.lookup(value))
                 .or_else(|| transitions.lookup("_"))
             {
-                Some(next) => queue.push_back(next.clone()),
-                None => continue,
+                queue.push_back(next.clone());
             }
         }
         order
