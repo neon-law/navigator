@@ -147,7 +147,7 @@ Witness's signature: ______________________________
 
 Witness's signature: ______________________________
 
-{{#if custom_yes_no__self_proving=Yes}}
+{{#if custom_yes_no__self_proving=true}}
 
 ## Self-proving affidavit
 

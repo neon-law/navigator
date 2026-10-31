@@ -2851,8 +2851,16 @@ async fn render_assembled_document(
         .await
         .map_err(|error| WorkflowDriveError::Db(error.to_string()))?;
     let template_body = store::notation_clauses::splice(&raw_template_body, &clauses);
-    let ctx = render_context_from_answers(deps.surreal, notation_id).await?;
-    Ok(views::notation::render_filled_in(&template_body, &ctx))
+    // Conditions read stored choice keys (`=NV`); placeholders print labels
+    // (`Nevada`). The public preview already splits those maps. Using labels
+    // for both dropped every `{{#if state=KEY}}` branch on review and PDF.
+    let keys = render_form_context_from_answers(deps.surreal, notation_id).await?;
+    let labels = render_context_from_answers(deps.surreal, notation_id).await?;
+    Ok(views::notation::render_filled_in_with_display(
+        &template_body,
+        &keys,
+        &labels,
+    ))
 }
 
 /// Storage-key convention for the offboarding letter PDF of a notation.
