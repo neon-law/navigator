@@ -1,6 +1,6 @@
 custom_datetime__date_of_birth
 custom_text__best_interest_reasons
-custom_text__prior_name_change_details
+custom_text__prior_petition_details
 custom_yes_no__prior_name_change
 custom_yes_no__sex_offender_registration
 people__parents.0.name

@@ -38,16 +38,16 @@ questionnaire:
   custom_single_choice__sealing_requested:
     _: custom_text__sealing_details
   custom_text__sealing_details:
-    _: custom_text__parent_1_name
-  custom_text__parent_1_name:
+    _: person__parent_1
+  person__parent_1:
     _: custom_text__parent_1_address
   custom_text__parent_1_address:
     _: custom_text__parent_1_consent_children
   custom_text__parent_1_consent_children:
     _: custom_text__parent_1_consent_new_names
   custom_text__parent_1_consent_new_names:
-    _: custom_text__parent_2_name
-  custom_text__parent_2_name:
+    _: person__parent_2
+  person__parent_2:
     _: custom_text__parent_2_address
   custom_text__parent_2_address:
     _: custom_text__parent_2_consent_children
@@ -207,7 +207,7 @@ prompts:
   sealing_details: >-
     If you asked for sealing: why, in your own words. (Leave blank if you
     did not.)
-  parent_1_name: >-
+  parent_1: >-
     If a parent or legal guardian is NOT included as a petitioner above:
     that person's full name, as the consent page swears it. (Leave the
     parent-consent questions blank when every parent or guardian is already
@@ -217,7 +217,7 @@ prompts:
     The children's present name(s) as that parent's consent page reads them.
   parent_1_consent_new_names: The children's proposed name(s) for that consent
     page.
-  parent_2_name: >-
+  parent_2: >-
     A second non-petitioning parent or guardian, if there is one. (Leave
     blank when there is none.)
   parent_2_address: The second non-petitioning parent's or guardian's

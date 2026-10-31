@@ -3,7 +3,7 @@ kind: filing
 title: Application for Waiver of Fees and Costs (Washoe)
 respondent_type: person
 jurisdiction: NV
-origin_url: https://www.washoecourts.com/Forms/Family/1.%20All%20Other%20Family%20Related%20Packets/F-6%20Application%20to%20Waive%20Fees%20and%20Costs/1.%20Application%20for%20Waiver%20of%20Fees%20and%20Costs.pdf
+origin_url: https://www.washoecourts.com/Main/FormsAndPackets
 confidential: true
 output: form
 form: nv__washoe_fee_waiver_application
@@ -186,51 +186,48 @@ questionnaire:
     _: END
   END: {}
 prompts:
+  benefit_ssi: Do you receive Supplemental Security Income (SSI)?
+  benefit_food_stamps: Do you receive SNAP (food stamps) benefits?
+  benefit_tanf: Do you receive TANF (Temporary Assistance for Needy Families) cash assistance?
+  benefit_medicaid: Do you receive Medicaid?
+  benefit_subsidized_housing: Do you receive subsidized (government-assisted) housing?
+  benefit_legal_services: Are you receiving services from a legal-services program?
+  benefit_other: Do you receive any other need-based public assistance not listed above?
   client_name: >-
-    What is your current full legal name, as it appears on your
-    identification?
+    What is your current full legal name, as it appears on your identification?
   person__opposing_party: >-
-    Who is the other party in your case — the defendant or respondent named
-    against you? (Leave blank if you are filing jointly or no party is named.)
+    Who is the other party in your case — the defendant or respondent named against you? (Leave blank if you are filing
+    jointly or no party is named.)
   income_employment: Are you working?
   hourly_wage: >-
-    What is your hourly wage? (A dollar amount — leave blank if you are not
-    paid by the hour.)
+    What is your hourly wage? (A dollar amount — leave blank if you are not paid by the hour.)
   hours_per_week: >-
-    About how many hours do you work per week? (Leave blank if you are not
-    paid by the hour.)
+    About how many hours do you work per week? (Leave blank if you are not paid by the hour.)
   income_salary: Are you paid a salary rather than by the hour?
   salary_per_year: What is your yearly salary? (Leave blank if you are paid monthly.)
   salary_per_month: What is your monthly salary? (Leave blank if you are paid yearly.)
   income_commissions: Do you receive commissions or tips?
   commissions_monthly: >-
-    About how much do you receive in commissions or tips each month? (Leave
-    blank if none.)
+    About how much do you receive in commissions or tips each month? (Leave blank if none.)
   income_unemployment: Do you receive unemployment benefits?
   unemployment_weekly: >-
-    How much do you receive in unemployment benefits each week? (Leave blank
-    if none.)
+    How much do you receive in unemployment benefits each week? (Leave blank if none.)
   income_benefits: Do you receive veterans or Social Security benefits?
   veterans_or_ss_monthly: >-
-    How much do you receive in veterans or Social Security benefits each
-    month? (Leave blank if none.)
+    How much do you receive in veterans or Social Security benefits each month? (Leave blank if none.)
   income_support: Do you receive child support, spousal support, or alimony?
   support_monthly: >-
-    How much do you receive in child support, spousal support, or alimony each
-    month? (Leave blank if none.)
+    How much do you receive in child support, spousal support, or alimony each month? (Leave blank if none.)
   income_pension: Do you receive pension or annuity payments?
   pension_monthly: >-
-    How much do you receive in pension or annuity payments each month? (Leave
-    blank if none.)
+    How much do you receive in pension or annuity payments each month? (Leave blank if none.)
   income_other: Do you receive income from any other source?
   other_income_monthly: >-
-    How much do you receive from that other source each month? (Leave blank if
-    none.)
+    How much do you receive from that other source each month? (Leave blank if none.)
   no_income: Are you unemployed and receiving no income or benefits at all?
   no_income_explanation: >-
-    How are you meeting your basic living needs? (For example, are you living
-    with others who help support you, in a shelter, or meeting your needs in
-    other ways? Leave blank if this does not apply.)
+    How are you meeting your basic living needs? (For example, are you living with others who help support you, in a
+    shelter, or meeting your needs in other ways? Leave blank if this does not apply.)
   expense_rent: How much is your rent or mortgage each month? (Enter 0 if none.)
   expense_utilities: How much are your phone and utilities each month?
   expense_food: How much is your food each month?
@@ -239,107 +236,86 @@ prompts:
   expense_medical: How much are medical costs each month?
   expense_transportation: How much is transportation each month?
   expense_other_label: >-
-    What is the other monthly expense? (Its name — leave blank if there is
-    none.)
+    What is the other monthly expense? (Its name — leave blank if there is none.)
   expense_other: How much is that other expense each month? (Leave blank if there is none.)
   expenses_total: >-
-    What are your total monthly expenses? (The form asks for the total; check
-    it against the items above.)
+    What are your total monthly expenses? (The form asks for the total; check it against the items above.)
   vehicle_one: >-
-    Describe your first vehicle — make, model, and year. (Leave blank if you
-    have none.)
+    Describe your first vehicle — make, model, and year. (Leave blank if you have none.)
   vehicle_one_worth: About how much is that vehicle worth? (Leave blank if none.)
   vehicle_one_owed: How much do you still owe on that vehicle? (Leave blank if none.)
   vehicle_two: >-
-    Describe your second vehicle — make, model, and year. (Leave blank if you
-    have none.)
+    Describe your second vehicle — make, model, and year. (Leave blank if you have none.)
   vehicle_two_worth: About how much is that vehicle worth? (Leave blank if none.)
   vehicle_two_owed: How much do you still owe on that vehicle? (Leave blank if none.)
   no_vehicle: Is it true that you do not own any motor vehicle?
   real_estate_address: >-
-    What is the address of the real estate you own other than the home you
-    live in? (Leave blank if none.)
+    What is the address of the real estate you own other than the home you live in? (Leave blank if none.)
   real_estate_worth: About how much is that real estate worth? (Leave blank if none.)
   real_estate_owed: How much do you still owe on it? (Leave blank if none.)
   no_real_estate: Is it true that you do not own any home or real estate?
   account_one: >-
-    Describe the first bank account or personal property you hold (for
-    example, "Checking account at Wells Fargo"). (Leave blank if none.)
+    Describe the first bank account or personal property you hold (for example, "Checking account at Wells Fargo").
+    (Leave blank if none.)
   account_one_worth: About how much is it worth? (Leave blank if none.)
   account_one_owed: How much is owed against it? (Leave blank if none.)
   account_two: >-
-    Describe the second bank account or personal property you hold. (Leave
-    blank if none.)
+    Describe the second bank account or personal property you hold. (Leave blank if none.)
   account_two_worth: About how much is it worth? (Leave blank if none.)
   account_two_owed: How much is owed against it? (Leave blank if none.)
   cash: About how much cash do you have on hand?
-  custom_text__household_person_1: >-
-    Who is the first person in your household you support? (Their full name —
-    leave this and the rest of the household blank if you support no one
-    else.)
+  household_person_1: >-
+    Who is the first person in your household you support? (Their full name — leave this and the rest of the household
+    blank if you support no one else.)
   household_age_1: How old is the first person? (Leave blank if none.)
   household_relationship_1: What is your relationship to the first person? (Leave blank if none.)
   household_contribution_1: >-
-    About how much does the first person contribute to your support each
-    month? (Leave blank if none.)
-  custom_text__household_person_2: >-
-    Who is the second person in your household you support? (Their full name —
-    leave this and the rest of the household blank if you support no one
-    else.)
+    About how much does the first person contribute to your support each month? (Leave blank if none.)
+  household_person_2: >-
+    Who is the second person in your household you support? (Their full name — leave this and the rest of the household
+    blank if you support no one else.)
   household_age_2: How old is the second person? (Leave blank if none.)
   household_relationship_2: What is your relationship to the second person? (Leave blank if none.)
   household_contribution_2: >-
-    About how much does the second person contribute to your support each
-    month? (Leave blank if none.)
-  custom_text__household_person_3: >-
-    Who is the third person in your household you support? (Their full name —
-    leave this and the rest of the household blank if you support no one
-    else.)
+    About how much does the second person contribute to your support each month? (Leave blank if none.)
+  household_person_3: >-
+    Who is the third person in your household you support? (Their full name — leave this and the rest of the household
+    blank if you support no one else.)
   household_age_3: How old is the third person? (Leave blank if none.)
   household_relationship_3: What is your relationship to the third person? (Leave blank if none.)
   household_contribution_3: >-
-    About how much does the third person contribute to your support each
-    month? (Leave blank if none.)
-  custom_text__household_person_4: >-
-    Who is the fourth person in your household you support? (Their full name —
-    leave this and the rest of the household blank if you support no one
-    else.)
+    About how much does the third person contribute to your support each month? (Leave blank if none.)
+  household_person_4: >-
+    Who is the fourth person in your household you support? (Their full name — leave this and the rest of the household
+    blank if you support no one else.)
   household_age_4: How old is the fourth person? (Leave blank if none.)
   household_relationship_4: What is your relationship to the fourth person? (Leave blank if none.)
   household_contribution_4: >-
-    About how much does the fourth person contribute to your support each
-    month? (Leave blank if none.)
-  custom_text__household_person_5: >-
-    Who is the fifth person in your household you support? (Their full name —
-    leave this and the rest of the household blank if you support no one
-    else.)
+    About how much does the fourth person contribute to your support each month? (Leave blank if none.)
+  household_person_5: >-
+    Who is the fifth person in your household you support? (Their full name — leave this and the rest of the household
+    blank if you support no one else.)
   household_age_5: How old is the fifth person? (Leave blank if none.)
   household_relationship_5: What is your relationship to the fifth person? (Leave blank if none.)
   household_contribution_5: >-
-    About how much does the fifth person contribute to your support each
-    month? (Leave blank if none.)
-  custom_text__household_person_6: >-
-    Who is the sixth person in your household you support? (Their full name —
-    leave this and the rest of the household blank if you support no one
-    else.)
+    About how much does the fifth person contribute to your support each month? (Leave blank if none.)
+  household_person_6: >-
+    Who is the sixth person in your household you support? (Their full name — leave this and the rest of the household
+    blank if you support no one else.)
   household_age_6: How old is the sixth person? (Leave blank if none.)
   household_relationship_6: What is your relationship to the sixth person? (Leave blank if none.)
   household_contribution_6: >-
-    About how much does the sixth person contribute to your support each
-    month? (Leave blank if none.)
-  custom_text__household_person_7: >-
-    Who is the seventh person in your household you support? (Their full name
-    — leave this and the rest of the household blank if you support no one
-    else.)
+    About how much does the sixth person contribute to your support each month? (Leave blank if none.)
+  household_person_7: >-
+    Who is the seventh person in your household you support? (Their full name — leave this and the rest of the household
+    blank if you support no one else.)
   household_age_7: How old is the seventh person? (Leave blank if none.)
   household_relationship_7: What is your relationship to the seventh person? (Leave blank if none.)
   household_contribution_7: >-
-    About how much does the seventh person contribute to your support each
-    month? (Leave blank if none.)
+    About how much does the seventh person contribute to your support each month? (Leave blank if none.)
   other_benefits_program: Which other program? (Its name — leave blank if none.)
   additional_information: >-
-    Is there anything else the court should know about your financial
-    situation? (Leave blank if nothing.)
+    Is there anything else the court should know about your financial situation? (Leave blank if nothing.)
 workflow:
   BEGIN:
     intake_submitted: intake_persisted__client
@@ -355,22 +331,19 @@ workflow:
   END: {}
 ---
 
-This Nevada engagement applies, on the Second Judicial District Court's own F-6 form, for an order
-waiving the filing fees and costs in the case of `{{person__client.name}}` against or with
-`{{person__opposing_party}}`.
+This Nevada engagement applies, on the Second Judicial District Court's own F-6 form, for an order waiving the filing
+fees and costs in the case of `{{person__client.name}}` against or with `{{person__opposing_party}}`.
 
-The F-6 is a full financial disclosure: the benefits the applicant receives (Supplemental Security
-Income, food stamps, TANF, Medicaid, subsidized housing, legal services, or any other state or
-federal program), the applicant's monthly income from every source, monthly expenses, vehicles, real
-estate, accounts, cash, and the household the applicant supports. The form asks more questions than
-most petitions; this questionnaire documents that it exceeds the usual interview length, and every
-answer lands on the official blank.
+The F-6 is a full financial disclosure: the benefits the applicant receives (Supplemental Security Income, food stamps,
+TANF, Medicaid, subsidized housing, legal services, or any other state or federal program), the applicant's monthly
+income from every source, monthly expenses, vehicles, real estate, accounts, cash, and the household the applicant
+supports. The form asks more questions than most petitions; this questionnaire documents that it exceeds the usual
+interview length, and every answer lands on the official blank.
 
-There is no filing fee for the F-6 application itself. A party who receives any of the listed
-benefits, or who swears to the financial disclosure, asks the court to waive the fees in the
-underlying case; the court may grant or deny the waiver, and a denied waiver leaves the fees due.
+There is no filing fee for the F-6 application itself. A party who receives any of the listed benefits, or who swears to
+the financial disclosure, asks the court to waive the fees in the underlying case; the court may grant or deny the
+waiver, and a denied waiver leaves the fees due.
 
-Your answers above are placed onto the court's own official blank and a licensed Neon Law attorney
-reviews the **filled application** before anything is filed. Nothing reaches the courthouse
-unreviewed. The applicant signs the application at the review appointment, and the firm files it
-with the clerk of the court where the case is pending.
+Your answers above are placed onto the court's own official blank and a licensed Neon Law attorney reviews the **filled
+application** before anything is filed. Nothing reaches the courthouse unreviewed. The applicant signs the application
+at the review appointment, and the firm files it with the clerk of the court where the case is pending.

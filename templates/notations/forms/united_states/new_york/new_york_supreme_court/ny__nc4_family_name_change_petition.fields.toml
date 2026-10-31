@@ -212,11 +212,11 @@ question = "custom_text__sealing_details"
 
 [[field]]
 name = "ParentName.0"
-question = "custom_text__parent_1_name"
+question = "person__parent_1.name"
 
 [[field]]
 name = "ParentName.1"
-question = "custom_text__parent_2_name"
+question = "person__parent_2.name"
 
 [[field]]
 name = "ParentCurrentAddress.0"

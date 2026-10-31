@@ -224,7 +224,7 @@ question = "custom_single_choice__letters_requested"
 
 [[field]]
 name = "Letters Testamentary to 1"
-question = "custom_text__letters_to_name"
+question = "custom_text__letters_wording"
 
 [[field]]
 name = "Dated"

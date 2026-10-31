@@ -212,110 +212,88 @@ choices:
     "No": "1"
 prompts:
   client_name: >-
-    What is your full legal name as it appears now? (It opens the petition
-    caption and identifies you to the court.)
+    What is your full legal name as it appears now? (It opens the petition caption and identifies you to the court.)
   new_name_given: >-
-    What first name do you want the court to order? (Leave the parts that do
-    not change blank.)
+    What first name do you want the court to order? (Leave the parts that do not change blank.)
   new_name_middle: Your new middle name, if you are changing it.
   new_name_family: Your new last (family) name.
   date_of_birth: Your date of birth, as month, day, and year.
   filing_court: >-
-    Which court will the petition be filed in? (In New York City the Civil
-    Court route costs $65.00 and the Supreme Court route costs $210.00;
-    outside the city the Supreme or County Court of your county hears it.
-    The attorney confirms your venue before filing.)
+    Which court will the petition be filed in? (In New York City the Civil Court route costs $65.00 and the Supreme
+    Court route costs $210.00; outside the city the Supreme or County Court of your county hears it. The attorney
+    confirms your venue before filing.)
   filing_county: The county where you will file. (For NYC residents, your
     borough's county.)
   name_change: >-
-    Are you asking the court to change your name? (You may ask for a name
-    change, a sex designation change, or both.)
+    Are you asking the court to change your name? (You may ask for a name change, a sex designation change, or both.)
   reason_for_change: >-
-    In your own words, why do you want your name changed? (The petition
-    tells the judge this under oath.)
+    In your own words, why do you want your name changed? (The petition tells the judge this under oath.)
   prior_name_change: Have you ever filed a name change petition before?
   prior_petition_details: >-
-    If you answered yes: where you filed it, when, the case number if you
-    know it, and how it came out. (Leave blank if you answered no.)
+    If you answered yes: where you filed it, when, the case number if you know it, and how it came out. (Leave blank if
+    you answered no.)
   place_of_birth: >-
-    Your place of birth as the form prints it — street address if known,
-    city or town, state, and country. (Proof of birth is attached to the
-    petition.)
+    Your place of birth as the form prints it — street address if known, city or town, state, and country. (Proof of
+    birth is attached to the petition.)
   current_address: >-
-    Your current address as the form prints it — street address, city or
-    town, state, zip, and country. (The court may ask for proof of address
-    when you file.)
+    Your current address as the form prints it — street address, city or town, state, zip, and country. (The court may
+    ask for proof of address when you file.)
   convicted: Have you ever been convicted of a crime?
   felony_details: >-
-    If you answered yes: the court where you were convicted and the crime.
-    (Leave blank if you answered no.)
+    If you answered yes: the court where you were convicted and the crime. (Leave blank if you answered no.)
   bankruptcy: Have you ever filed for bankruptcy?
   judgments_liens: Are there any judgments or liens against you?
   party_to_action: Are you a party in a lawsuit or other court case?
   financial_matters_details: >-
-    If you answered yes to any of the three questions above: the court
-    where it was filed, the date, and the case number if you know it.
-    (Leave blank if you answered no to all three.)
+    If you answered yes to any of the three questions above: the court where it was filed, the date, and the case number
+    if you know it. (Leave blank if you answered no to all three.)
   currently_married: Are you currently married?
   previously_married: Were you previously married?
   children_under_21: Do you have any children under 21?
   child_support: Do you have to pay child support?
   child_support_current: >-
-    Are your child support payments up to date? (Answer only if you pay
-    child support.)
+    Are your child support payments up to date? (Answer only if you pay child support.)
   child_support_arrears: >-
-    If your child support payments are not up to date, how much do you owe?
-    (A dollar amount — leave blank if you owe nothing.)
+    If your child support payments are not up to date, how much do you owe? (A dollar amount — leave blank if you owe
+    nothing.)
   child_support_court: >-
-    The court that issued your child support order. (Only if you pay child
-    support.)
+    The court that issued your child support order. (Only if you pay child support.)
   support_collections_unit: >-
-    The Child Support Collections Unit handling your order, if there is
-    one. (Leave blank if not.)
+    The Child Support Collections Unit handling your order, if there is one. (Leave blank if not.)
   spousal_support: Do you have to pay spousal support?
   spousal_support_current: >-
-    Are your spousal support payments up to date? (Answer only if you pay
-    spousal support.)
+    Are your spousal support payments up to date? (Answer only if you pay spousal support.)
   spousal_support_arrears: >-
-    If your spousal support payments are not up to date, how much do you
-    owe? (A dollar amount — leave blank if you owe nothing.)
+    If your spousal support payments are not up to date, how much do you owe? (A dollar amount — leave blank if you owe
+    nothing.)
   spousal_support_court: >-
-    The court that issued your spousal support order. (Only if you pay
-    spousal support.)
+    The court that issued your spousal support order. (Only if you pay spousal support.)
   sex_designation_change: >-
-    Are you also asking the court to change your sex designation? (This
-    section is optional — New York law does not require a court order to
-    change the sex designation on New York-issued identity documents.)
+    Are you also asking the court to change your sex designation? (This section is optional — New York law does not
+    require a court order to change the sex designation on New York-issued identity documents.)
   new_sex_designation: >-
-    Your new sex designation, if you are asking for one. (The court
-    recognizes Male, Female, or X.)
+    Your new sex designation, if you are asking for one. (The court recognizes Male, Female, or X.)
   prior_sex_designation_change: Have you ever filed a sex designation change
     petition before?
   prior_sex_designation_details: >-
-    If you answered yes: where you filed it, when, the case number if you
-    know it, and how it came out. (Leave blank if you answered no.)
+    If you answered yes: where you filed it, when, the case number if you know it, and how it came out. (Leave blank if
+    you answered no.)
   sex_designation_reasons_given: >-
-    Do you want to give your reasons for changing your sex designation?
-    (The form asks this explicitly; the reasons themselves are optional
-    and are not required for the court order.)
+    Do you want to give your reasons for changing your sex designation? (The form asks this explicitly; the reasons
+    themselves are optional and are not required for the court order.)
   sex_designation_reasons: >-
-    Optional: your reasons for changing your sex designation. (The form
-    says this information is not required for the court order — leave
-    blank if you prefer.)
+    Optional: your reasons for changing your sex designation. (The form says this information is not required for the
+    court order — leave blank if you prefer.)
   sealing_requested: >-
-    Should this court record be sealed for your personal safety? (The clerk
-    already keeps the case private until the judge decides; sealing makes
-    it inaccessible after that.)
+    Should this court record be sealed for your personal safety? (The clerk already keeps the case private until the
+    judge decides; sealing makes it inaccessible after that.)
   sealing_details: >-
-    If you asked for sealing: why, in your own words. (Leave blank if you
-    did not.)
+    If you asked for sealing: why, in your own words. (Leave blank if you did not.)
   documents_attached: >-
-    Have you attached any supporting documents or additional pages?
-    (Proof of birth is required; the attorney reviews the attachments with
-    you.)
+    Have you attached any supporting documents or additional pages? (Proof of birth is required; the attorney reviews
+    the attachments with you.)
   supporting_documents_list: >-
-    If you attached documents: the name or a description of each. (Leave
-    blank if none.)
+    If you attached documents: the name or a description of each. (Leave blank if none.)
 workflow:
   BEGIN:
     intake_submitted: intake_persisted__client
@@ -331,30 +309,25 @@ workflow:
   END: {}
 ---
 
-This New York engagement files the Unified Court System's own UCS-NC1 petition for
-`{{person__client.name}}` — an adult asking the court to order a name change, a sex
-designation change, or both, in the court chosen from the intake (any New York City
-Civil Court at $65.00, or the Supreme or County Court of the county of residence at
-$210.00). The petition carries the new name `{{person__new_name.name}}`.
+This New York engagement files the Unified Court System's own UCS-NC1 petition for `{{person__client.name}}` — an adult
+asking the court to order a name change, a sex designation change, or both, in the court chosen from the intake (any New
+York City Civil Court at $65.00, or the Supreme or County Court of the county of residence at $210.00). The petition
+carries the new name `{{person__new_name.name}}`.
 
-The same statewide form set serves both routes, so this one template covers the
-$65.00 NYC Civil Court petition and the $210.00 Supreme Court petition alike; the
-filing workflow's court is the one the lawyer confirms at review. The form asks for
-the petitioner's birth data, criminal and financial disclosure, marriage and support
-history, any prior petitions, the reasons for the request, and — optionally — the new
-sex designation, and it carries the petitioner's verification signature page. The
-clerk's index number and the affirmation date are completed when the petition is
-filed and signed.
+The same statewide form set serves both routes, so this one template covers the $65.00 NYC Civil Court petition and the
+$210.00 Supreme Court petition alike; the filing workflow's court is the one the lawyer confirms at review. The form
+asks for the petitioner's birth data, criminal and financial disclosure, marriage and support history, any prior
+petitions, the reasons for the request, and — optionally — the new sex designation, and it carries the petitioner's
+verification signature page. The clerk's index number and the affirmation date are completed when the petition is filed
+and signed.
 
-The petition asks roughly two dozen substantive questions because the UCS form does;
-the questionnaire mirrors them with skip-when-empty chains for the criminal, financial,
-support, and sex-designation sections, so a petitioner with none of those histories
-answers only the identity, relief, and reason questions.
+The petition asks roughly two dozen substantive questions because the UCS form does; the questionnaire mirrors them with
+skip-when-empty chains for the criminal, financial, support, and sex-designation sections, so a petitioner with none of
+those histories answers only the identity, relief, and reason questions.
 
-A fee waiver is available: poor person relief is requested by motion with a sworn
-financial affidavit (CPLR 1101) — the UCS publishes no official waiver form.
+A fee waiver is available: poor person relief is requested by motion with a sworn financial affidavit (CPLR 1101) — the
+UCS publishes no official waiver form.
 
-Your answers above are placed onto the court's own official blank and a licensed Neon
-Law attorney reviews the **filled petition** before anything is filed. Nothing reaches
-the courthouse unreviewed. You sign the verification at the review appointment, and
-the firm files the petition in the court you chose.
+Your answers above are placed onto the court's own official blank and a licensed Neon Law attorney reviews the **filled
+petition** before anything is filed. Nothing reaches the courthouse unreviewed. You sign the verification at the review
+appointment, and the firm files the petition in the court you chose.

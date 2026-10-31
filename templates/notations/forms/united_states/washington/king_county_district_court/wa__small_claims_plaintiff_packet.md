@@ -3,7 +3,7 @@ kind: filing
 title: Small Claims Packet — Plaintiff
 respondent_type: person
 jurisdiction: WA
-origin_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/info_instruct_small_claims/small_claims_plaintiff_packet-july-2026.pdf
+origin_url: https://kingcounty.gov/en/court/district-court/courts-jails-legal-system/small-claims
 confidential: true
 output: form
 form: wa__small_claims_plaintiff_packet
@@ -48,33 +48,29 @@ questionnaire:
 prompts:
   client_name: What is your full legal name?
   plaintiffs: >-
-    Who is filing this claim with you? Add yourself first, then anyone filing
-    with you — the court mails the hearing date to the address you give, so use
-    an address where you actually receive mail. Skip anyone filing alone.
+    Who is filing this claim with you? Add yourself first, then anyone filing with you — the court mails the hearing
+    date to the address you give, so use an address where you actually receive mail. Skip anyone filing alone.
   defendants: >-
-    Who are you claiming against? Give each defendant's name and the address
-    where they can be served — up to two. The court needs a street address, not
-    a post-office box, for service.
+    Who are you claiming against? Give each defendant's name and the address where they can be served — up to two. The
+    court needs a street address, not a post-office box, for service.
   claim_amount: How much money does the defendant owe you?
   amount_due_date: When did the amount first become due and owing?
   claim_faulty_workmanship: >-
-    Is your claim about faulty workmanship — work you paid for that was done
-    badly or not finished?
+    Is your claim about faulty workmanship — work you paid for that was done badly or not finished?
   claim_merchandise: Is your claim about merchandise you bought or sold?
   claim_auto_damages: Is your claim about damage to a car?
   auto_accident_date: What date did the accident happen?
   claim_wages: Is your claim about wages you are owed?
   claim_loan: Is your claim about a loan you made that has not been repaid?
   claim_return_of_deposit: >-
-    Is your claim about a deposit the defendant has not returned — a security
-    deposit, for example?
+    Is your claim about a deposit the defendant has not returned — a security deposit, for example?
   claim_rent: Is your claim about rent the defendant owes you?
   claim_property_damage: Is your claim about damage to your property?
   claim_other: Is your claim about something other than the types listed?
   claim_other_description: Briefly describe the other type of claim.
   claim_facts: >-
-    In your own words, what happened? Tell the story briefly — what the
-    agreement was, what went wrong, and what you are asking the court to order.
+    In your own words, what happened? Tell the story briefly — what the agreement was, what went wrong, and what you are
+    asking the court to order.
 workflow:
   BEGIN:
     intake_submitted: intake_persisted__client
@@ -90,30 +86,22 @@ workflow:
   END: {}
 ---
 
-This King County engagement prepares the county's whole Small Claims
-Plaintiff's Packet — the court's own 14-page kit — for the small-claims case
-`{{person__client.name}}` (the "Plaintiff") is starting. The kit wraps the
-Notice of Small Claim (the pleading, which your answers above complete) with
-the case's other instruments: the service instructions and the Declaration of
-Service for serving each defendant, the Declaration re Service Member's Civil
-Relief Act, a Notice of Pre-Trial Hearing, and a Satisfaction of Judgment for
-the end of the case.
+This King County engagement prepares the county's whole Small Claims Plaintiff's Packet — the court's own 14-page kit —
+for the small-claims case `{{person__client.name}}` (the "Plaintiff") is starting. The kit wraps the Notice of Small
+Claim (the pleading, which your answers above complete) with the case's other instruments: the service instructions and
+the Declaration of Service for serving each defendant, the Declaration re Service Member's Civil Relief Act, a Notice of
+Pre-Trial Hearing, and a Satisfaction of Judgment for the end of the case.
 
-The claim must sit inside the small-claims limits — $10,000 against a natural
-person, $5,000 against any other defendant. The filing fee is $50. A party who
-cannot afford the fee moves to waive it on the statewide GR 34 set before
-filing. Either party may appeal to the Superior Court (a $280 cashier's check
-to the Superior Court clerk plus a $40 district-court appeal-processing fee).
+The claim must sit inside the small-claims limits — $10,000 against a natural person, $5,000 against any other
+defendant. The filing fee is $50. A party who cannot afford the fee moves to waive it on the statewide GR 34 set before
+filing. Either party may appeal to the Superior Court (a $280 cashier's check to the Superior Court clerk plus a $40
+district-court appeal-processing fee).
 
-Your answers above fill the Notice of Small Claim inside the kit; the rest of
-the kit is completed as the case moves. A licensed Neon Law attorney reviews
-the **filled packet** before anything is filed and completes the two
-instruments that require a lawyer: the Servicemember Civil Relief Act
-declaration (a legal conclusion this questionnaire deliberately does not ask)
-and the advice on how each defendant will be served. The process server
-completes the Declaration of Service after service; the clerk issues the
-Notice of Pre-Trial Hearing when the hearing is set; and the Satisfaction of
-Judgment is held until the case is resolved and paid. The Plaintiff signs the
-notice at the review appointment and the firm files the packet with the
-district court clerk, which schedules the hearing and mails the date to the
-address you provided.
+Your answers above fill the Notice of Small Claim inside the kit; the rest of the kit is completed as the case moves. A
+licensed Neon Law attorney reviews the **filled packet** before anything is filed and completes the two instruments that
+require a lawyer: the Servicemember Civil Relief Act declaration (a legal conclusion this questionnaire deliberately
+does not ask) and the advice on how each defendant will be served. The process server completes the Declaration of
+Service after service; the clerk issues the Notice of Pre-Trial Hearing when the hearing is set; and the Satisfaction of
+Judgment is held until the case is resolved and paid. The Plaintiff signs the notice at the review appointment and the
+firm files the packet with the district court clerk, which schedules the hearing and mails the date to the address you
+provided.

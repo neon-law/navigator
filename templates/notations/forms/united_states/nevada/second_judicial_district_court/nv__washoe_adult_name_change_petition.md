@@ -3,7 +3,7 @@ kind: filing
 title: Petition for Adult Name Change (Washoe)
 respondent_type: person
 jurisdiction: NV
-origin_url: https://www.washoecourts.com/Forms/Family/10.%20Name%20Changes/NA%20Adult%20Name%20Change/1.%20Petition%20for%20Adult%20Name%20Change.pdf
+origin_url: https://www.washoecourts.com/Main/FormsAndPackets
 confidential: true
 output: form
 form: nv__washoe_adult_name_change_petition

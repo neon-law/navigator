@@ -99,7 +99,7 @@ on_state = "On"
 
 [[field]]
 name = "Text7"
-question = "custom_text__prior_name_change_details"
+question = "custom_text__prior_petition_details"
 
 [[field]]
 name = "Text6"

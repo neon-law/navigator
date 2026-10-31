@@ -166,19 +166,17 @@ choices:
     "No": "1"
 prompts:
   client_name: >-
-    What is the petitioner's full legal name as it appears on the family
-    petition's caption? (The supplement repeats that caption.)
+    What is the petitioner's full legal name as it appears on the family petition's caption? (The supplement repeats
+    that caption.)
   filing_court: >-
-    Which court will the supplement ride with — the same court as the
-    petition? (Supreme Court, County Court, or New York City Civil Court.)
+    Which court will the supplement ride with — the same court as the petition? (Supreme Court, County Court, or New
+    York City Civil Court.)
   filing_county: The county where the petition is filed.
   person__member: >-
-    Whose answers are these? Type that family member's full present name —
-    each member who answered yes to a petition question files their own
-    supplement.
+    Whose answers are these? Type that family member's full present name — each member who answered yes to a petition
+    question files their own supplement.
   member_role: >-
-    What is that member's role in the petition — the petitioner, a
-    co-petitioner, or a minor under 18?
+    What is that member's role in the petition — the petitioner, a co-petitioner, or a minor under 18?
   member_convicted: >-
     Has that member ever been convicted of a crime (misdemeanor or felony)?
   court_of_conviction: Which court convicted them? (Leave blank if the
@@ -191,18 +189,16 @@ prompts:
   member_party_to_action: Is that member a party to any actions or
     proceedings?
   member_disclosure_details: >-
-    Details the court should know about the bankruptcy, judgments or liens,
-    or pending actions — case names, courts, and dates. (Leave blank when
-    all three answers were no.)
+    Details the court should know about the bankruptcy, judgments or liens, or pending actions — case names, courts, and
+    dates. (Leave blank when all three answers were no.)
   currently_married: Is that member currently married?
   previously_married: Has that member been previously married?
   children_under_21: Does that member have any children under 21?
   member_child_support: Does that member have to pay child support?
   child_support_current: >-
     Are those child support payments satisfied and up to date?
-  custom_usd__child_support_arrears: >-
-    If payments are not up to date, how much does that member owe? (A
-    number; leave blank when payments are current.)
+  child_support_arrears: >-
+    If payments are not up to date, how much does that member owe? (A number; leave blank when payments are current.)
   child_support_order_court: Which court issued the child support order?
     (Leave blank when there is none.)
   child_support_collection_unit: The Child Support Collections Unit handling
@@ -210,9 +206,8 @@ prompts:
   member_spousal_support: Is that member responsible for spousal support?
   spousal_support_current: >-
     Are those spousal support payments satisfied and up to date?
-  custom_usd__spousal_support_arrears: >-
-    If payments are not up to date, how much does that member owe? (A
-    number; leave blank when payments are current.)
+  spousal_support_arrears: >-
+    If payments are not up to date, how much does that member owe? (A number; leave blank when payments are current.)
   spousal_support_order_court: Which court issued the spousal support order?
     (Leave blank when there is none.)
 workflow:
@@ -232,28 +227,21 @@ workflow:
 
 # Family Name Change Supplement (UCS-NC5, New York)
 
-This workflow fills the New York Unified Court System's UCS-NC5 (05/2022)
-Family Name Change Petition – Supplemental Form (Page 1a) — the per-member
-supplement that rides along with a UCS-NC4 family petition. When a member's
-answers to the petition's household disclosures are yes (a conviction, a
-bankruptcy, a judgment or lien, a pending case, child or spousal support),
-that member answers the same questions here, in detail, on their own
-supplement. One supplement per member; a member with no yes answers files
-none. The workflow runs every supplement through lawyer review before the
-PDF is generated and filed.
+This workflow fills the New York Unified Court System's UCS-NC5 (05/2022) Family Name Change Petition – Supplemental
+Form (Page 1a) — the per-member supplement that rides along with a UCS-NC4 family petition. When a member's answers to
+the petition's household disclosures are yes (a conviction, a bankruptcy, a judgment or lien, a pending case, child or
+spousal support), that member answers the same questions here, in detail, on their own supplement. One supplement per
+member; a member with no yes answers files none. The workflow runs every supplement through lawyer review before the PDF
+is generated and filed.
 
 ## Who this supplement serves
 
-The supplement repeats the petition's caption (the petitioners' present
-names, the court, the county, and the index number) and then asks one
-member about their own record: their role in the petition, the conviction
-and its court and crime, the bankruptcy, judgments or liens, and pending
-actions, the marriages, the children under 21, and the support obligations
-with their payment status, arrears, and issuing courts. The intake gathers
-exactly the form's items — a supplement cannot be shortened below what the
-court asks — and the tails collapse when the triggering answer is no
-(conviction details only after a yes, arrears only when payments are not
-current, and so on).
+The supplement repeats the petition's caption (the petitioners' present names, the court, the county, and the index
+number) and then asks one member about their own record: their role in the petition, the conviction and its court and
+crime, the bankruptcy, judgments or liens, and pending actions, the marriages, the children under 21, and the support
+obligations with their payment status, arrears, and issuing courts. The intake gathers exactly the form's items — a
+supplement cannot be shortened below what the court asks — and the tails collapse when the triggering answer is no
+(conviction details only after a yes, arrears only when payments are not current, and so on).
 
 ## What the lawyer or clerk completes at review
 

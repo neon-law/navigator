@@ -72,8 +72,8 @@ questionnaire:
   custom_text__other_petition_details:
     _: custom_single_choice__letters_requested
   custom_single_choice__letters_requested:
-    _: custom_text__letters_to_name
-  custom_text__letters_to_name:
+    _: custom_text__letters_wording
+  custom_text__letters_wording:
     _: custom_datetime__petition_date
   custom_datetime__petition_date:
     _: END
@@ -256,7 +256,7 @@ prompts:
   letters_requested: >-
     Which letters should issue? (The prayer asks for the letters that match
     the proceeding; the attorney confirms the relief requested.)
-  letters_to_name: >-
+  letters_wording: >-
     To whom should the letters issue? (The nominated executor's name, as the
     prayer's "Letters Testamentary to" line reads it.)
   petition_date: >-

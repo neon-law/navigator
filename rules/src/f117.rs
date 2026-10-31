@@ -116,6 +116,10 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "reason_for_change", // NC-110 item: the petitioner's own words for the requested name change
     "prior_petition_details", // the prior decree's date, place, court, and case number in the petitioner's words
     "best_interest_reasons", // the minor petition's best-interest statement, in the parents' own words
+    "parent_1_consent_children", // NC-4 box: parent 1's narrative of the children affected by the name change
+    "parent_1_consent_new_names", // NC-4 box: parent 1's account of each child's requested new name
+    "parent_2_consent_children", // NC-4 box: parent 2's narrative of the children affected by the name change
+    "parent_2_consent_new_names", // NC-4 box: parent 2's account of each child's requested new name
     "claim_facts", // the small-claims notice's statement of claim, in the plaintiff's own words
     "claim_other_description", // the small-claims notice's Other-claim-type explanation, in the plaintiff's own words
     "birthplace_city", // the NV name petition's separate city-of-birth field; no city lookup exists
@@ -177,6 +181,27 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "no_income_explanation", // F-6: why the household shows no income
     "other_benefits_program", // F-6: the Other-benefits program's name
     "additional_information", // F-6's Anything-else box, in the applicant's words
+    // New York Surrogate's Court probate intake and NYC Civil Court small
+    // claims: geographic and identity facts the lookups do not seed (the
+    // jurisdiction lookup carries states, not counties), and narrative
+    // detail boxes the lawyer verifies against the underlying instruments
+    // (the will, the codicils, the accident the claim arises from).
+    "decedent_county", // the decedent's domicile county; no county lookup exists
+    "filing_county",   // the filing county, as the petitioner states it
+    "decedent_aka",    // the decedent's also-known-as names, verbatim
+    "decedent_place_of_death", // where the decedent died, as the petitioner states it
+    "decedent_citizenship", // the decedent's citizenship, as the petitioner states it
+    "petitioner_citizenship", // the petitioner's citizenship, as the petitioner states it
+    "petitioner_mailing_address", // the probate petition's composed mailing-address box; the durable address stays a typed state
+    "will_witnesses", // the will's witness name lines, as the petitioner reads them; the lawyer verifies against the instrument
+    "codicil_witnesses", // the first codicil's witness lines
+    "codicil_witnesses_2", // the second codicil's witness lines
+    "no_later_instruments", // narrative about instruments later than the last codicil, if any
+    "other_testamentary_assets", // the Other testamentary-assets line, in the petitioner's words
+    "other_petition_details", // the petition's Other-details box, in the petitioner's words
+    "letters_wording", // the exact letters designation requested (e.g. "Letters Testamentary")
+    "auto_accident_place", // CIV-SC-50: where the auto accident happened, as the claimant states it
+    "identifying_numbers", // CIV-SC-50: contract or account numbers identifying the claim
     "household_age_1", // F-6 flat row: the household member's age (no numeric state exists)
     "household_age_2",
     "household_age_3",

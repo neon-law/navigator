@@ -10,8 +10,8 @@ questionnaire:
   custom_yes_no__sex_offender_registration:
     _: custom_yes_no__prior_name_change
   custom_yes_no__prior_name_change:
-    _: custom_text__prior_name_change_details
-  custom_text__prior_name_change_details:
+    _: custom_text__prior_petition_details
+  custom_text__prior_petition_details:
     _: custom_text__best_interest_reasons
   custom_text__best_interest_reasons:
     _: END
@@ -26,7 +26,7 @@ prompts:
   date_of_birth: What is the child's date of birth?
   sex_offender_registration: Is the child required to register as a sex offender?
   prior_name_change: Has the child had a name change before this petition?
-  prior_name_change_details: >-
+  prior_petition_details: >-
     If yes, briefly describe the earlier change — the date, place, court, and case
     number if you know them. Leave blank if there was none.
   best_interest_reasons: >-
