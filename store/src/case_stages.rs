@@ -396,8 +396,9 @@ mod tests {
         }
 
         async fn firm(pg: &PostgresDb) -> Uuid {
-            let id: Uuid = sqlx::query("INSERT INTO firm (id,name,status) VALUES ($1,'Synthetic Stage Firm','active') RETURNING id")
+            let id: Uuid = sqlx::query("INSERT INTO firm (id,name,slug,status) VALUES ($1,'Synthetic Stage Firm',$2,'active') RETURNING id")
                 .bind(Uuid::new_v4())
+                .bind(format!("sf-{}", Uuid::new_v4().simple()))
                 .fetch_one(pg.pool())
                 .await
                 .unwrap()
