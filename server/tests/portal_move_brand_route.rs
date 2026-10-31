@@ -12,7 +12,7 @@
 //!   handler denies the tier — defense in depth), a request with no session
 //!   at all never reaches the handler: the policy layer bounces it with a
 //!   `303` to `/auth/login?return_to=…` ("click protected link → land at the
-//!   IdP"), and the brand is untouched either way.
+//!   `IdP`"), and the brand is untouched either way.
 //! - **A refusal redirects back with the rule and both pickers echoed**, so
 //!   nothing is retyped, and the brand is untouched.
 
