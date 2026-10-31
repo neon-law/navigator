@@ -1,0 +1,274 @@
+form_code = "ny__surrogates_probate_petition"
+# New York Surrogate's Court — Petition for Probate and Letters Testamentary
+# / Trusteeship. The parser reports 775 named widgets (752 text, 7 choice,
+# 16 signature) across 22 pages; the survey counted 776 in the AcroForm tree
+# (one unnamed widget). The blank's own field names are largely machine-
+# generated junk ("undefined_5", "is_25667 sdffsdfs"), so roles come from the
+# printed labels and the /TU tooltips, identified page by page from the
+# official blank (sha256 8b31d7d7…, the registry's Wayback-pinned copy).
+#
+# The intake maps the client-answerable petition core (pages 1 through 4)
+# in grouped sections that follow the petition's own paragraphs: the
+# petitioner's identity and interest (1a), the three executor disclosures
+# (1b-1d), the decedent's identity and death (2), the will and its codicils
+# (3), the "no later instruments" sworn line (4), the seven distributee-class
+# dropdowns (5, the form's own No/X/count vocabulary), the asset estimates
+# (9), the paragraph 10 exceptions line, and the prayer's letters request,
+# nominee, and date.
+#
+# Deliberately left unmapped (decision recorded, lawyer or clerk completes):
+# - the clerk's stamp block (`Filling Fee Paid`, `Certs`, `Certs_2`,
+#   `undefined_2`-`undefined_5`, `Bond Fee`, `Receipt No`, `No`, `X`, `X_2`,
+#   `File No`) — the court's own entries;
+# - the caption continuations (`PROBATE PROCEEDING 1`/`2`, the `[1]`/`[2]`
+#   a/k/a lines, `undefined`) — skip-when-empty duplicates of the caption
+#   the lawyer trims at review;
+# - the paragraph 6 distributee tables (three-column name / address /
+#   interest rows, 8 rows plus the disability rows) and the paragraph 7
+#   beneficiary tables (8 rows plus their disability rows, with the infant
+#   note) — who must receive notice is the legally sensitive core of a
+#   probate petition, and the row cells cannot carry the structured
+#   people-row parts (one combined address cell, a custom interest
+#   column); the tables are completed from the lawyer's distributee
+#   workpaper at review;
+# - the paragraph 8 confidential-relationship lines — a lawyer determination
+#   under SCPA 2307-a;
+# - `1_9`-`8_3` and the second-table continuations (`1_6`/`2_6`) — the same
+#   tables' remaining rows;
+# - the prayer's secondary lines (`Letters Testamentary to 2`, `Letters of
+#   Trusteeship to 1`-`3` with their `f/b/o` cells, `Letters of
+#   Administration cta to`) — the letters actually requested are the
+#   lawyer's call once the distributee work is done;
+# - `2_13`/`4_9` — the paragraph 10 exceptions line's continuations;
+# - the signature blocks on the petition page (`Print Name`,
+#   `Print Name_2`, `3_10`, the officer's signature and title) and every
+#   widget on the verification page (`STATE OF NEW YORK`, `COUNTY OF_2`,
+#   `ss`, the oath-type marks, `Surrogates Court of`, `My domicile is`,
+#   `Street Address`, `Print Name_3`, the verification dates, the notary
+#   lines, and the attorney block `Signature of Attorney` through `Address
+#   of Attorney`) — sworn before the notary and signed at review;
+# - the 16 `/Sig` widgets throughout — wet signatures.
+
+[[field]]
+name = "WILL OF"
+question = "person__decedent.name"
+
+[[field]]
+name = "aka"
+question = "custom_text__decedent_aka"
+
+[[field]]
+name = "To the Surrogates Court County of"
+question = "custom_text__filing_county"
+
+[[field]]
+name = "Name"
+question = "person__client.name"
+
+[[field]]
+name = "Domicile or Principal Office"
+question = "person__client.street"
+
+[[field]]
+name = "City Village or Town"
+question = "person__client.city"
+
+[[field]]
+name = "State"
+question = "person__client.state"
+
+[[field]]
+name = "Zip Code"
+question = "person__client.zip"
+
+[[field]]
+name = "Mailing Address"
+question = "custom_text__petitioner_mailing_address"
+
+[[field]]
+name = "Citizen of"
+question = "custom_text__petitioner_citizenship"
+
+[[field]]
+name = "Executor s named in decedents Will"
+question = "custom_yes_no__petitioner_is_named_executor"
+checked_when = "yes"
+on_state = "X"
+
+[[field]]
+name = "is"
+question = "custom_yes_no__executor_is_attorney"
+checked_when = "yes"
+on_state = "X"
+
+[[field]]
+name = "is not an attorney"
+question = "custom_yes_no__executor_is_attorney"
+checked_when = "no"
+on_state = "X"
+
+[[field]]
+name = "is_2"
+question = "custom_yes_no__executor_is_draftsperson"
+checked_when = "yes"
+on_state = "X"
+
+[[field]]
+name = "is not the attorneydraftsperson a thenaffiliated attorney"
+question = "custom_yes_no__executor_is_draftsperson"
+checked_when = "no"
+on_state = "X"
+
+[[field]]
+name = "is_25667"
+question = "custom_yes_no__executor_is_convicted_felon"
+checked_when = "yes"
+on_state = "X"
+
+[[field]]
+name = "is_25667 sdffsdfs"
+question = "custom_yes_no__executor_is_convicted_felon"
+checked_when = "no"
+on_state = "X"
+
+[[field]]
+name = "a Name"
+question = "person__decedent.name"
+
+[[field]]
+name = "b Date of death"
+question = "custom_datetime__decedent_date_of_death"
+
+[[field]]
+name = "c Place of death"
+question = "custom_text__decedent_place_of_death"
+
+[[field]]
+name = "d Domicile Street"
+question = "person__decedent.street"
+
+[[field]]
+name = "City Town Village"
+question = "person__decedent.city"
+
+[[field]]
+name = "County"
+question = "custom_text__decedent_county"
+
+[[field]]
+name = "State_2"
+question = "person__decedent.state"
+
+[[field]]
+name = "e Citizen of"
+question = "custom_text__decedent_citizenship"
+
+[[field]]
+name = "Date of Will"
+question = "custom_datetime__will_date"
+
+[[field]]
+name = "Names of All Witnesses to Will"
+question = "custom_text__will_witnesses"
+
+[[field]]
+name = "Date of Codicil"
+question = "custom_datetime__codicil_date"
+
+[[field]]
+name = "Names of All Witnesses to Codicil"
+question = "custom_text__codicil_witnesses"
+
+[[field]]
+name = "Date of Codicil_2"
+question = "custom_datetime__codicil_date_2"
+
+[[field]]
+name = "Names of All Witnesses to Codicil_2"
+question = "custom_text__codicil_witnesses_2"
+
+[[field]]
+name = "follows Enter NONE or specify 1"
+question = "custom_text__no_later_instruments"
+
+[[field]]
+name = "Dropdown 5a"
+question = "custom_single_choice__distributee_class_spouse"
+
+[[field]]
+name = "Dropdown 5b"
+question = "custom_single_choice__distributee_class_children"
+
+[[field]]
+name = "Dropdown 5c"
+question = "custom_single_choice__distributee_class_parents"
+
+[[field]]
+name = "Dropdown 5d"
+question = "custom_single_choice__distributee_class_siblings"
+
+[[field]]
+name = "Dropdown 5e"
+question = "custom_single_choice__distributee_class_grandparents"
+
+[[field]]
+name = "Dropdown 5f"
+question = "custom_single_choice__distributee_class_aunts_uncles"
+
+[[field]]
+name = "Dropdown 5g"
+question = "custom_single_choice__distributee_class_cousins_once_removed"
+
+[[field]]
+name = "Improved real property in New York State"
+question = "custom_usd__improved_real_property_value"
+
+[[field]]
+name = "but less than"
+question = "custom_usd__improved_real_property_less_than"
+
+[[field]]
+name = "Unimproved real property in New York State"
+question = "custom_usd__unimproved_real_property_value"
+
+[[field]]
+name = "undefined_6"
+question = "custom_usd__unimproved_real_property_less_than"
+
+[[field]]
+name = "Estimated gross rents for a period of 18 months"
+question = "custom_usd__gross_rents_18_months"
+
+[[field]]
+name = "the estate except as follows Enter NONE or specify"
+question = "custom_text__other_testamentary_assets"
+
+[[field]]
+name = "1_13"
+question = "custom_text__other_petition_details"
+
+[[field]]
+name = "requested"
+question = "custom_single_choice__letters_requested"
+checked_when = "testamentary"
+on_state = "X"
+
+[[field]]
+name = "undefined_7"
+question = "custom_single_choice__letters_requested"
+checked_when = "trusteeship"
+on_state = "X"
+
+[[field]]
+name = "undefined_8"
+question = "custom_single_choice__letters_requested"
+checked_when = "administration_cta"
+on_state = "X"
+
+[[field]]
+name = "Letters Testamentary to 1"
+question = "custom_text__letters_to_name"
+
+[[field]]
+name = "Dated"
+question = "custom_datetime__petition_date"
