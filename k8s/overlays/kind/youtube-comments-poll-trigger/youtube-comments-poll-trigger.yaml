@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: youtube-comments-poll-trigger
+  namespace: navigator
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: youtube-comments-poll-trigger
+              image: navigator-youtube-comments-poll-trigger:dev
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: RESTATE_INGRESS_URL
+                  value: http://restate.restate.svc.cluster.local:8080
+                - name: RUST_LOG
+                  value: info

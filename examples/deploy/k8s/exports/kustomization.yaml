@@ -45,4 +45,5 @@ resources:
   - cron-nightly-project-update-trigger.yaml
   - cron-notation-reset-trigger.yaml
   - cron-social-publish-reconciler-trigger.yaml
+  - cron-youtube-comments-poll-trigger.yaml
   - cron-general-nag.yaml
