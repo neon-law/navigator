@@ -447,6 +447,34 @@ const BUNDLED: &[FormMeta] = &[
         filing_fee: None,
         fee_waiver_code: None,
     },
+
+    FormMeta {
+        code: "las_vegas__small_claims_complaint",
+        jurisdiction: "NV",
+        title: "Complaint, Small Claims (Las Vegas)",
+        origin_url: "https://www.civillawselfhelpcenter.org/images/small-claims/complaints/complaint---small-claims.pdf",
+        object_path: "forms/united_states/nevada/las_vegas_justice_court/las_vegas__small_claims_complaint.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/nevada/las_vegas_justice_court/las_vegas__small_claims_complaint.sha256"
+        ),
+        // The complaint's fee is tiered by claim amount ($66-$196); no
+        // single honest figure fits FormMeta, so the registry fee_note
+        // carries the schedule.
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "las_vegas__small_claims_counterclaim",
+        jurisdiction: "NV",
+        title: "Counterclaim, Small Claims (Las Vegas)",
+        origin_url: "https://www.civillawselfhelpcenter.org/images/small-claims/counterclaims/counterclaim---small-claims---las-vegas.pdf",
+        object_path: "forms/united_states/nevada/las_vegas_justice_court/las_vegas__small_claims_counterclaim.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/nevada/las_vegas_justice_court/las_vegas__small_claims_counterclaim.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
 ];
 
 /// Return the bundled form registry.

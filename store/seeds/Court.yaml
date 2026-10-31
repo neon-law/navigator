@@ -988,7 +988,22 @@ records:
     level: justice
     # Small claims forms are per-justice-court in Nevada; there is no
     # statewide small-claims set.
-    forms: []
+    forms:
+      - code: las_vegas__small_claims_complaint
+        title: Complaint, Small Claims (Las Vegas)
+        source_url: https://www.civillawselfhelpcenter.org/images/small-claims/complaints/complaint---small-claims.pdf
+        sha256: 9f0c6f7ffe6cca9744f3fad4d6865117ac40abf8b63449942ec035386e6f4907
+        filing_office: Las Vegas Justice Court clerk, small claims division
+        fee_note: "Filing fee tiered by claim (NRS 4.060 schedule, eff. 2/8/2024): $66 up to $1,000; $86 for $1,000.01-$2,500; $106 for $2,500.01-$5,000; $146 for $5,000.01-$7,500; $196 for $7,500.01-$10,000. No fee may be charged to a defendant appearing. Waiver: the justice-court fee-waiver form or the statewide application."
+        fee_waiver_code: null
+      - code: las_vegas__small_claims_counterclaim
+        title: Counterclaim, Small Claims (Las Vegas)
+        source_url: https://www.civillawselfhelpcenter.org/images/small-claims/counterclaims/counterclaim---small-claims---las-vegas.pdf
+        sha256: 1e52f29cdcc642d58c2d61fa47f16d1339dad88488c68b61732e565faba1d053
+        filing_office: Las Vegas Justice Court clerk, small claims division
+        fee_note: No separate filing fee for the counterclaim; it is filed in the same case.
+        fee_waiver_code: null
+
     surveyed_forms:
       - key: LVCSCOMPLAINT
         title: Complaint — Small Claims (Las Vegas Township)
