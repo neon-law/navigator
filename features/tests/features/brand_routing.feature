@@ -101,3 +101,40 @@ Feature: Public routing on the firm's own host
       | /transparency            |
       | /education               |
       | /does-not-exist          |
+
+  # The footer is the three-line legal strip: the firm-resolved copyright,
+  # the compiled trademark notice when the brand carries one, and the
+  # brand's own disclaimer. Everything else the old footer rendered —
+  # offices, bar licenses, associations, the "Our Family" row, social
+  # profiles, the contact band — is gone from every public page. With no
+  # Firm rows in the store, the copyright resolves the compiled fallback
+  # entity.
+  Scenario Outline: A public page's footer is the three-line legal strip
+    When a visitor opens / on host "<host>"
+    Then the response status is 200
+    And the footer copyright names "<entity>"
+    And the footer renders the trademark notice: <trademark>
+    And the footer renders the attorney-advertising disclaimer
+    And the footer carries no firm detail beyond the legal strip
+
+    Examples:
+      | host                             | entity           | trademark |
+      | staging.neonlaw.com              | Guieb & Shook PC | yes       |
+      | staging.deleteyourdata.com       | Guieb & Shook PC | no        |
+      | staging.vestaestateplanning.com  | Guieb & Shook PC | no        |
+
+  # The live-resolution story, end to end: an Owner moves a brand to a
+  # firm whose entity no compiled fallback names, and the brand's public
+  # pages resolve the new firm's entity on the next request. The compiled
+  # trademark notice stays — the registration belongs to the mark, not to
+  # whichever firm wears the brand. This scenario runs last: the move
+  # persists in the shared store, so the Neon host's footer names the new
+  # entity from here on.
+  Scenario: A moved brand's footer follows its new firm
+    Given the brand "neon" is moved to a firm whose entity is "Mobility Test Holdings PC"
+    When a visitor opens / on host "staging.neonlaw.com"
+    Then the response status is 200
+    And the footer copyright names "Mobility Test Holdings PC"
+    And the footer renders the trademark notice: yes
+    And the footer renders the attorney-advertising disclaimer
+    And the footer carries no firm detail beyond the legal strip

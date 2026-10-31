@@ -1979,9 +1979,9 @@ async fn owner_lists_the_seeded_practice_and_its_brands() {
 /// ENG-589: the `/app` footer and the public footer both name the seeded
 /// practice's Entity — resolved live from `store::firms`/`store::brands`,
 /// not the compiled `FIRM_BRAND` constant every deployment used to render
-/// regardless of which Firm actually owns the request's brand. The `/app`
-/// footer itself renders only that one copyright line; the family/membership
-/// rows are the public footer's alone.
+/// regardless of which Firm actually owns the request's brand. Both footers
+/// render the same one copyright line; the public footer adds only the
+/// trademark notice and the disclaimer.
 #[tokio::test]
 async fn the_app_and_public_footers_name_the_seeded_firm() {
     let (state, surreal) = state_with_engines().await;
@@ -11027,17 +11027,18 @@ async fn assert_unregistered_host_redirects(
 /// chrome to check) — this matrix asserts the status/redirect shape that
 /// holds on every host regardless of session.
 /// The holding host's chrome: no header and no public shell — but the one
-/// shared footer, with the firm's office
-/// and association affiliation, is under the notice.
+/// shared footer, now the three-line legal strip: copyright, trademark
+/// notice, disclaimer. No office address and no association affiliation
+/// render anywhere on the page.
 fn assert_holding_host_chrome(body: &str) {
     let standing_line = views::brand::JTA_STANDING.to_string();
     for (marker, present) in [
         (r#"class="site-header""#, false),
         ("nav-theme public-shell", false),
         (r#"class="site-footer""#, true),
-        ("Ste 405-9002", true),
+        ("Ste 405-9002", false),
         (r#"aria-label="Our family""#, false),
-        (standing_line.as_str(), true),
+        (standing_line.as_str(), false),
     ] {
         assert_eq!(
             body.contains(marker),
