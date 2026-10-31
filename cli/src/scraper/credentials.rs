@@ -299,7 +299,10 @@ mod tests {
             "pacer": {"username": "firm@example.com", "password": ""}
         });
         let logins = parse_portal_logins(&payload).expect("a valid payload");
-        assert_eq!(logins.presence("la-superior"), super::LoginPresence::Complete);
+        assert_eq!(
+            logins.presence("la-superior"),
+            super::LoginPresence::Complete
+        );
         assert_eq!(logins.presence("pacer"), super::LoginPresence::Incomplete);
         assert_eq!(logins.presence("nysaf"), super::LoginPresence::Absent);
     }

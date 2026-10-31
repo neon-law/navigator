@@ -641,7 +641,12 @@ fn lint_scrapers(path: &Path, mapping: &serde_yaml::Mapping) -> Vec<ManifestFind
     };
     match crate::scraper::config::parse_value(section) {
         Ok(_) => Vec::new(),
-        Err(error) => vec![ManifestFinding::at(path, 1, SCRAPERS_CODE, error.to_string())],
+        Err(error) => vec![ManifestFinding::at(
+            path,
+            1,
+            SCRAPERS_CODE,
+            error.to_string(),
+        )],
     }
 }
 
@@ -1342,7 +1347,10 @@ mod tests {
     fn a_malformed_scrapers_section_is_a_y024_finding() {
         let yaml = "scrapers:\n  sites:\n  - not-a-map\n";
         let codes_found = codes(yaml);
-        assert!(codes_found.contains(&SCRAPERS_CODE), "Y024 fires: {codes_found:?}");
+        assert!(
+            codes_found.contains(&SCRAPERS_CODE),
+            "Y024 fires: {codes_found:?}"
+        );
         let findings = lint_contents(Path::new("navigator.yaml"), yaml);
         assert!(findings[0]
             .message

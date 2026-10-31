@@ -136,9 +136,9 @@ fn credential_status(logins: Option<&PortalLogins>, key: &str) -> SiteStatus {
         LoginPresence::Incomplete => {
             SiteStatus::Disabled("the provisioned portal login is incomplete")
         }
-        LoginPresence::Absent => SiteStatus::Disabled(
-            "no court_portal portal_login entry provisioned for this site",
-        ),
+        LoginPresence::Absent => {
+            SiteStatus::Disabled("no court_portal portal_login entry provisioned for this site")
+        }
     }
 }
 
@@ -189,8 +189,7 @@ async fn sites_listing(firm_id: Uuid) -> ExitCode {
     // A store the run cannot use at all is an environment failure, not a
     // status; a Firm with no credential row is a status: all disabled.
     if let Err(
-        error @ (CredentialsError::StoreUnavailable
-        | CredentialsError::InvalidPayload { .. }),
+        error @ (CredentialsError::StoreUnavailable | CredentialsError::InvalidPayload { .. }),
     ) = &resolved
     {
         return exit_failure("resolving the Firm's portal login secret", error);
@@ -481,10 +480,7 @@ mod tests {
 
     fn allowed(canvas: &str) -> BTreeMap<String, String> {
         let mut map = BTreeMap::new();
-        map.insert(
-            canvas.to_owned(),
-            "the configured court portal".to_owned(),
-        );
+        map.insert(canvas.to_owned(), "the configured court portal".to_owned());
         map
     }
 
@@ -544,8 +540,14 @@ mod tests {
         .await
         .expect_err("nothing is provisioned");
         let message = error.to_string();
-        assert!(message.contains("court_portal"), "names the provider: {message}");
-        assert!(message.contains("portal_login"), "names the kind: {message}");
+        assert!(
+            message.contains("court_portal"),
+            "names the provider: {message}"
+        );
+        assert!(
+            message.contains("portal_login"),
+            "names the kind: {message}"
+        );
     }
 
     #[tokio::test]
@@ -668,16 +670,18 @@ mod tests {
         let config = config_with_la_superior();
         let rendered = render_sites(&config, None);
         assert!(rendered.contains("disabled"), "greyed out: {rendered}");
-        assert!(!rendered.contains(" available"), "nothing available: {rendered}");
+        assert!(
+            !rendered.contains(" available"),
+            "nothing available: {rendered}"
+        );
     }
 
     #[test]
     fn the_listing_renders_one_status_line_per_configured_site() {
         let yaml = "sites:\n  la-superior:\n    adapter: la-superior\n    portal_url: https://canvas.lasuperiorcourt.org\n  pacer:\n    adapter: pacer\n    portal_url: https://pacer.example\noptions:\n  schedule_hint: daily 06:00 UTC\n";
-        let config = crate::scraper::config::parse_value(
-            &serde_yaml::from_str(yaml).expect("valid yaml"),
-        )
-        .expect("a valid section");
+        let config =
+            crate::scraper::config::parse_value(&serde_yaml::from_str(yaml).expect("valid yaml"))
+                .expect("a valid section");
         let logins = logins_with_la_superior();
         let rendered = render_sites(&config, Some(&logins));
         let lines: Vec<&str> = rendered.lines().collect();
@@ -689,7 +693,10 @@ mod tests {
         assert!(lines[0].ends_with(" available"), "provisioned: {rendered}");
         assert!(lines[1].starts_with("pacer  adapter pacer"));
         assert!(lines[1].contains("disabled"), "greyed out: {rendered}");
-        assert!(rendered.contains("daily 06:00 UTC"), "the schedule hint shows");
+        assert!(
+            rendered.contains("daily 06:00 UTC"),
+            "the schedule hint shows"
+        );
     }
 
     #[test]
@@ -707,13 +714,16 @@ mod tests {
         let surreal = store::test_support::mem_surreal().await;
         let (firm_id, _admin_id) = crate::scraper::testing::seeded_firm_with_admin(&surreal).await;
         let kms = cloud::FakeKms::new("scraper-cmd-sites");
-        let resolved = crate::scraper::credentials::resolve_portal_logins(&surreal, firm_id, &kms)
-            .await;
+        let resolved =
+            crate::scraper::credentials::resolve_portal_logins(&surreal, firm_id, &kms).await;
         assert!(resolved.is_err(), "nothing provisioned");
         let config = config_with_la_superior();
         let rendered = render_sites(&config, resolved.ok().as_ref());
         assert!(rendered.contains("disabled"), "greyed out: {rendered}");
-        assert!(!rendered.contains(" available"), "nothing available: {rendered}");
+        assert!(
+            !rendered.contains(" available"),
+            "nothing available: {rendered}"
+        );
     }
 
     #[tokio::test]
@@ -803,10 +813,9 @@ mod tests {
     #[test]
     fn the_plan_honours_the_configured_download_root() {
         let yaml = "sites:\n  la-superior:\n    adapter: la-superior\n    portal_url: https://canvas.lasuperiorcourt.org\noptions:\n  download_root: .state/scraper\n";
-        let config = crate::scraper::config::parse_value(
-            &serde_yaml::from_str(yaml).expect("valid yaml"),
-        )
-        .expect("a valid section");
+        let config =
+            crate::scraper::config::parse_value(&serde_yaml::from_str(yaml).expect("valid yaml"))
+                .expect("a valid section");
         let adapters: Vec<Box<dyn SiteAdapter>> = vec![Box::new(MockAdapter::simple(site()))];
         let (_, state_root) = plan_run(
             &config,
