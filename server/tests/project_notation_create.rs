@@ -9,18 +9,16 @@
 //! Creation is matter-scoped, so the acting lawyer must participate in the
 //! project (admin bypasses); the tests authenticate with a minted session.
 
-use std::sync::Arc;
+#[path = "common/notation_fixture.rs"]
+mod notation_fixture;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use portal::session::SessionData;
-use portal::{AppState, SessionStore};
+use portal::SessionStore;
 use store::persons::Role;
-use store::seed;
-use store::test_support::mem_surreal;
 use tower::ServiceExt;
-use workflows::{InMemoryRuntime, StateMachineRuntime};
 
 /// A corpus template body — guaranteed to validate clean (CI checks it).
 const VALID_TEMPLATE: &str =
@@ -51,25 +49,11 @@ fn repo_root() -> std::path::PathBuf {
 
 async fn build_app() -> (axum::Router, store::surreal::SurrealDb) {
     repo_root();
-    let surreal = mem_surreal().await;
-    let storage: Arc<dyn cloud::StorageService> = Arc::new(
-        cloud::FsStorage::new(std::env::temp_dir().join("navigator-project-notation-storage"))
-            .await
-            .unwrap(),
-    );
-    seed::seed_canonical(&surreal, &storage).await.unwrap();
-    let runtime: Arc<dyn StateMachineRuntime> = Arc::new(InMemoryRuntime::new());
-    let state = AppState {
-        sessions: SessionStore::new(KEY),
-        storage: storage.clone(),
-        workflow_runtime: runtime.clone(),
-        questionnaire_runtime: runtime,
-        ..portal::test_support::app_state(surreal.clone()).await
-    };
-    (
-        server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
-        surreal,
+    notation_fixture::build_app(
+        KEY,
+        std::env::temp_dir().join("navigator-project-notation-storage"),
     )
+    .await
 }
 
 async fn open_project(surreal: &store::surreal::SurrealDb) -> store::projects::Project {

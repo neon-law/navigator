@@ -29,6 +29,7 @@ dbos.workspace = true
 dotenvy.workspace = true
 flate2.workspace = true
 forms.workspace = true
+gateway.workspace = true
 futures.workspace = true
 hmac.workspace = true
 include_dir.workspace = true
