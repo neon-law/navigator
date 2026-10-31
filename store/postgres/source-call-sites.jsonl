@@ -256,7 +256,7 @@
 {"file":"cli/src/lsp_source_export.rs","line":181,"function":"generate_root_manifest","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/lsp_source_export.rs","line":187,"function":"generate_root_manifest","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail.rs","line":248,"function":"call","operation":"query","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/main.rs","line":7634,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/main.rs","line":7684,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/notices.rs","line":500,"function":"identical_texts_collapse_into_one_entry","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/pii_audit.rs","line":401,"function":"audit_tree","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/postgres_backfill.rs","line":75,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
@@ -305,6 +305,9 @@
 {"file":"cli/src/projects/document_check.rs","line":515,"function":"reconcile_slug","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/document_check.rs","line":881,"function":"check_documents_root","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/efiling.rs","line":424,"function":"insert_some","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/forge_github.rs","line":43,"function":"new","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/forge_github.rs","line":49,"function":"new","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/forge_github.rs","line":55,"function":"new","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/gate.rs","line":210,"function":"section_data_findings","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/manifest.rs","line":1219,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/manifest.rs","line":1229,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":["jurisdiction"],"transaction":false}
