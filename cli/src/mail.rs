@@ -903,114 +903,6 @@ fn communication_request(
     })
 }
 
-/// One filed .eml message's Communication request body. The mailbox decides
-/// direction; the Message-ID header (or, absent one, the content digest)
-/// scopes the source reference so re-filing the same message dedupes.
-///
-/// # Errors
-///
-/// [`anyhow::Error`] when the bytes are not a MIME message, carry no text
-/// body, carry attachments, or have no Date header.
-fn eml_communication(mailbox: &str, bytes: &[u8]) -> Result<serde_json::Value> {
-    let message = mail_parser::MessageParser::default()
-        .parse(bytes)
-        .ok_or_else(|| anyhow!("not a MIME email message"))?;
-    let at = eml_sent_at(message.date())?;
-    let body = message
-        .body_text(0)
-        .map(|body| body.trim().to_string())
-        .filter(|body| !body.is_empty())
-        .ok_or_else(|| anyhow!("the .eml has no supported text body"))?;
-    let names: Vec<&str> = {
-        use mail_parser::MimeHeaders as _;
-        message
-            .attachments()
-            .filter_map(|part| part.attachment_name())
-            .collect()
-    };
-    if !names.is_empty() {
-        return Err(anyhow!(
-            "the .eml carries attachments ({}); file them as documents instead — nothing was filed",
-            names.join(", ")
-        ));
-    }
-    Ok(communication_request(
-        mailbox,
-        &address_text(message.from()),
-        &address_text(message.to()),
-        message.subject(),
-        &at,
-        &body,
-        &eml_message_ref(message.message_id(), bytes),
-    ))
-}
-
-/// The Date header as an RFC 3339 instant, read as UTC: the timestamp the
-/// Communication log shows alongside the message.
-///
-/// # Errors
-///
-/// [`anyhow::Error`] when there is no Date header or it is out of range.
-fn eml_sent_at(date: Option<&mail_parser::DateTime>) -> Result<String> {
-    let date = date.ok_or_else(|| anyhow!("the .eml has no Date header"))?;
-    chrono::NaiveDate::from_ymd_opt(
-        i32::from(date.year),
-        u32::from(date.month),
-        u32::from(date.day),
-    )
-    .and_then(|sent| {
-        sent.and_hms_opt(
-            u32::from(date.hour),
-            u32::from(date.minute),
-            u32::from(date.second),
-        )
-    })
-    .map(|sent| sent.and_utc().to_rfc3339())
-    .ok_or_else(|| anyhow!("the .eml Date header is out of range"))
-}
-
-/// The source reference for a filed .eml: its Message-ID without the angle
-/// brackets, else a content digest for messages that never carried one.
-fn eml_message_ref(message_id: Option<&str>, bytes: &[u8]) -> String {
-    use sha2::Digest as _;
-    if let Some(id) = message_id.map(str::trim).filter(|id| !id.is_empty()) {
-        return id.trim_matches(['<', '>']).to_string();
-    }
-    let digest = sha2::Sha256::digest(bytes);
-    format!(
-        "sha256:{:02x}",
-        digest
-            .iter()
-            .take(8)
-            .fold(0u128, |acc, b| (acc << 8) | u128::from(*b))
-    )
-}
-
-/// `From`/`To` as the filed Communication shows them: `Name <a@b>` when the
-/// message carries a display name, the bare address otherwise.
-fn address_text(address: Option<&mail_parser::Address<'_>>) -> String {
-    match address {
-        None => String::new(),
-        Some(mail_parser::Address::List(addrs)) => {
-            addrs.iter().map(addr_text).collect::<Vec<_>>().join(", ")
-        }
-        Some(mail_parser::Address::Group(groups)) => groups
-            .iter()
-            .flat_map(|group| group.addresses.iter().map(addr_text))
-            .collect::<Vec<_>>()
-            .join(", "),
-    }
-}
-
-fn addr_text(addr: &mail_parser::Addr<'_>) -> String {
-    match (addr.name(), addr.address()) {
-        (Some(name), Some(address)) => format!("{name} <{address}>"),
-        (Some(name), None) => name.to_string(),
-        (None, Some(address)) => address.to_string(),
-        (None, None) => String::new(),
-    }
-}
-
 /// Gmail returns `format=raw` messages URL-safe base64 encoded.
 ///
 /// # Errors
@@ -1777,18 +1669,55 @@ async fn parse_eml_file(path: &Path, project_code: &str, host: Option<&str>) -> 
         crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
             .await?;
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let gmail = client().await?;
-    let profile = gmail.profile().await?;
-    let request = eml_communication(&profile.email_address, &bytes)?;
-    let target = FileTarget {
-        base: &base,
-        navigator_token: &navigator_token,
-        project_id,
-        mailbox: &profile.email_address,
-    };
-    post_communication(&target, &request).await?;
+    // The door parses and files the message server-side, so a local .eml
+    // files without any per-machine Gmail OAuth setup.
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let response = reqwest::Client::new()
+        .post(format!("{base}/app/api/projects/{project_id}/mail/eml"))
+        .bearer_auth(&navigator_token)
+        .json(&json!({ "raw_base64": encoded }))
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .context("file the .eml through the mail/eml door")?;
+    if !response.status().is_success() {
+        return Err(anyhow!("file the .eml refused: {}", response.status()));
+    }
+    let filed: serde_json::Value = response.json().await.context("read the door's response")?;
+    let summary = eml_filing_summary(&filed);
     println!("Filed {} as a Communication", path.display());
+    if summary.deduped {
+        println!("Already filed (deduped on {})", summary.source_ref);
+    }
+    if summary.attachments_filed > 0 {
+        println!(
+            "Filed {} attachment(s) as documents",
+            summary.attachments_filed
+        );
+    }
     Ok(())
+}
+
+/// What the .eml door's response means for the operator. Pure, so the
+/// response's shape is read in exactly one place.
+fn eml_filing_summary(response: &serde_json::Value) -> EmlFiled {
+    EmlFiled {
+        source_ref: response["source_ref"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        deduped: response["deduped"].as_bool().unwrap_or(false),
+        attachments_filed: response["filed"]
+            .as_array()
+            .map(|filed| filed.len())
+            .unwrap_or(0),
+    }
+}
+
+struct EmlFiled {
+    source_ref: String,
+    deduped: bool,
+    attachments_filed: usize,
 }
 
 /// `mail save`: fetch the message's RFC 822 copy through the read-only Gmail
@@ -1976,76 +1905,33 @@ mod tests {
     }
 
     #[test]
-    fn an_eml_files_with_its_headers_and_rejects_non_mime_bytes() {
-        const PLAIN: &str = "Message-ID: <abc-123@example.test>\r\n\
-From: Client <client@example.test>\r\n\
-To: lawyer@neonlaw.test\r\n\
-Subject: Retainer questions\r\n\
-Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
-Content-Type: text/plain; charset=utf-8\r\n\
-\r\n\
-Can I sign electronically?\r\n";
-        let request = eml_communication("lawyer@neonlaw.test", PLAIN.as_bytes()).unwrap();
-        assert_eq!(request["channel"], "email_inbound");
-        assert_eq!(request["counterparty"], "Client <client@example.test>");
-        assert_eq!(request["at"], "2026-10-30T14:03:00+00:00");
-        assert_eq!(request["body"], "Can I sign electronically?");
-        assert_eq!(request["subject"], "Retainer questions");
-        assert_eq!(
-            request["source_ref"],
-            "gmail:lawyer@neonlaw.test:abc-123@example.test"
-        );
-        assert!(eml_communication("lawyer@neonlaw.test", b"not a MIME message").is_err());
-    }
+    fn an_eml_door_response_summarizes_dedup_and_attachments() {
+        let summary = eml_filing_summary(&serde_json::json!({
+            "source_ref": "eml:abc-123@example.test",
+            "direction": "inbound",
+            "deduped": true,
+            "communication_id": "0195c9e1-7c2f-7000-8000-000000000000",
+            "attachments": [],
+            "filed": [
+                { "current_version": { "version": 1 } },
+                { "current_version": { "version": 1 } }
+            ]
+        }));
+        assert_eq!(summary.source_ref, "eml:abc-123@example.test");
+        assert!(summary.deduped);
+        assert_eq!(summary.attachments_filed, 2);
 
-    #[test]
-    fn an_eml_with_attachments_is_refused_before_filing() {
-        const WITH_ATTACHMENT: &str = "From: client@example.test\r\n\
-To: lawyer@neonlaw.test\r\n\
-Subject: The signed order\r\n\
-Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
-MIME-Version: 1.0\r\n\
-Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n\
-\r\n\
---BOUND\r\n\
-Content-Type: text/plain\r\n\
-\r\n\
-See the attached order.\r\n\
---BOUND\r\n\
-Content-Type: application/pdf\r\n\
-Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
-\r\n\
-%PDF-1.4\r\n\
---BOUND--\r\n";
-        let error = eml_communication("lawyer@neonlaw.test", WITH_ATTACHMENT.as_bytes())
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("order.pdf"), "{error}");
-        assert!(error.contains("nothing was filed"), "{error}");
-    }
-
-    #[test]
-    fn an_eml_without_a_text_body_or_date_is_refused() {
-        const NO_BODY: &str = "From: client@example.test\r\n\
-To: lawyer@neonlaw.test\r\n\
-Subject: Empty\r\n\
-Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
-Content-Type: text/plain\r\n\
-\r\n\
-   \r\n";
-        const NO_DATE: &str = "From: client@example.test\r\n\
-To: lawyer@neonlaw.test\r\n\
-Content-Type: text/plain\r\n\
-\r\n\
-Hello\r\n";
-        let error = eml_communication("lawyer@neonlaw.test", NO_BODY.as_bytes())
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("no supported text body"), "{error}");
-        let error = eml_communication("lawyer@neonlaw.test", NO_DATE.as_bytes())
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("no Date header"), "{error}");
+        // A dry-run response: no communication row, no attachments filed.
+        let summary = eml_filing_summary(&serde_json::json!({
+            "source_ref": "eml:sha256:9f2b",
+            "direction": "inbound",
+            "deduped": false,
+            "attachments": [],
+            "filed": []
+        }));
+        assert_eq!(summary.source_ref, "eml:sha256:9f2b");
+        assert!(!summary.deduped);
+        assert_eq!(summary.attachments_filed, 0);
     }
 
     #[test]
