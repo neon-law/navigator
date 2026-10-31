@@ -137,7 +137,10 @@ mod tests {
             canonical_url("https://www.cyberinjurylaw.com", "/services"),
             "https://www.cyberinjurylaw.com/services"
         );
-        assert_eq!(canonical_url("https://www.cyberinjurylaw.com", "/"), "https://www.cyberinjurylaw.com/");
+        assert_eq!(
+            canonical_url("https://www.cyberinjurylaw.com", "/"),
+            "https://www.cyberinjurylaw.com/"
+        );
         // No resolved origin (wasm client, bare chrome): no URL to advertise.
         assert_eq!(canonical_url("", "/services"), "");
         assert_eq!(canonical_url("https://www.cyberinjurylaw.com", ""), "");
@@ -160,9 +163,7 @@ mod tests {
         dom.rebuild_in_place();
         let out = dioxus_ssr::render(&dom);
         assert!(
-            out.contains(
-                r#"content="https://www.cyberinjurylaw.com/" property="og:url""#
-            ),
+            out.contains(r#"content="https://www.cyberinjurylaw.com/" property="og:url""#),
             "og:url must carry the absolute page URL: {out}"
         );
         assert!(

@@ -438,10 +438,7 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         home_href: brand.home_href.to_string(),
         logo_href: brand.logo_href.to_string(),
         social_image: social_image_url(brand),
-        canonical_origin: format!(
-            "https://{}",
-            views::brand::brand_key().canonical_host()
-        ),
+        canonical_origin: format!("https://{}", views::brand::brand_key().canonical_host()),
         destinations,
         utility,
         footer_links: views::brand::firm_footer_nav()
