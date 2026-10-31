@@ -43,10 +43,11 @@ use crate::components::{
     NavigatorFooter, NavigatorFooterLink, NavigatorNavbar, NavigatorShell, NotationDocument,
     NotationDocumentData, OpenTermLink, Pagination, Panel, PeopleListInputs, PersonChoice,
     PersonPicker, PricingCard, PricingSection, Progress, PublicShell, QuestionStage, RowActions,
-    RunParagraph, SampleMattersBanner, Separator, SeparatorOrientation, SiteFooterLegal,
-    SiteHeader, SiteNavLink, SocialMeta, SortState, Stage, StageWidth, StatusCell, StatusStrip,
-    StepMeta, Stepper, StepperPanel, Tab, Tabs, TestimonialCards, TestimonialSection, Toast,
-    ToastTone, ToggleGroup, ToggleOption, THEME_STYLESHEET_HREF,
+    RunParagraph, SampleMattersBanner, Separator, SeparatorOrientation, SignatureSeal,
+    SignatureSealData, SiteFooterLegal, SiteHeader, SiteNavLink, SocialMeta, SortState, Stage,
+    StageWidth, StatusCell, StatusStrip, StepMeta, Stepper, StepperPanel, Tab, Tabs,
+    TestimonialCards, TestimonialSection, Toast, ToastTone, ToggleGroup, ToggleOption,
+    THEME_STYLESHEET_HREF,
 };
 // The vendor marks come from their own module rather than the theme root: they
 // are the one component whose colours are a third party's rather than the
@@ -765,6 +766,7 @@ pub fn DesignGallery() -> Element {
             ProgressShowcase {}
             MatterPrimitivesShowcase {}
             NotationDocumentShowcase {}
+            SignatureSealShowcase {}
             QuestionStageShowcase {}
             FormShowcase {}
             PeopleListShowcase {}
@@ -2061,6 +2063,36 @@ fn NotationDocumentShowcase() -> Element {
                 },
                 id: "design-notation-empty".to_string(),
                 open: true,
+            }
+        }
+    }
+}
+
+/// The navigator-signature seal, beside the notation document it seals: the
+/// executed element, provider, signing date, and the archived documents a
+/// completed envelope leaves behind. The gallery shows the completed state —
+/// the only state that renders a seal; an outstanding envelope renders
+/// nothing, which no screenshot can show.
+#[component]
+fn SignatureSealShowcase() -> Element {
+    rsx! {
+        section { id: "signature-seal",
+            h2 { "Signature seal" }
+            p {
+                "The post-execution mark a matter page shows on a Notation "
+                "whose e-signature envelope has completed: the webhook-stamped "
+                "signing date, the provider, and the signed copy and "
+                "Certificate of Completion the webhook archived. Renders only "
+                "from provider-confirmed execution — never from storage "
+                "presence or workflow state alone."
+            }
+            SignatureSeal {
+                seal: SignatureSealData {
+                    signed_at: "2026-06-30T00:00:00Z".to_string(),
+                    provider: "docusign".to_string(),
+                    signed_href: Some("/design/signature-seal/signed".to_string()),
+                    certificate_href: Some("/design/signature-seal/certificate".to_string()),
+                }
             }
         }
     }

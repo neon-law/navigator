@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use super::checklist::ChecklistStep;
 use crate::components::{
     Badge, BadgeTone, Callout, CalloutTone, Empty, NotationDocument, NotationDocumentData, Panel,
+    SignatureSeal, SignatureSealData,
 };
 
 /// What `notation_document` has to show.
@@ -50,13 +51,21 @@ pub struct NotationDocumentView {
     /// The outline to render; empty unless `state` is `Notation` or
     /// `DraftPreview`.
     pub document: NotationDocumentData,
+    /// The executed document's signature seal, when the envelope the
+    /// completion webhook classified has completed and its evidence is on
+    /// file. A draft preview and a refused body carry none.
+    pub seal: Option<SignatureSealData>,
 }
 
 impl NotationDocumentView {
     /// A view that shows `document` in `state`.
     #[must_use]
     pub fn showing(state: DocumentState, document: NotationDocumentData) -> Self {
-        Self { state, document }
+        Self {
+            state,
+            document,
+            seal: None,
+        }
     }
 
     /// The fail-closed view: a body that did not verify shows no text.
@@ -65,6 +74,7 @@ impl NotationDocumentView {
         Self {
             state: DocumentState::Unverified,
             document: NotationDocumentData::default(),
+            seal: None,
         }
     }
 }
@@ -119,6 +129,9 @@ pub fn NotationDocumentSection(view: NotationDocumentView) -> Element {
                             document: view.document.clone(),
                             id: NOTATION_DOCUMENT_ID.to_string(),
                             open: true,
+                        }
+                        if let Some(seal) = view.seal.as_ref() {
+                            SignatureSeal { seal: seal.clone() }
                         }
                     },
                 }
@@ -287,6 +300,54 @@ enum BodyFailure {
     Missing,
     /// The body failed to read or to verify; fail closed.
     Unverified,
+}
+
+/// The executed document's signature seal, when its envelope has completed.
+///
+/// Execution reads only from the webhook's classification evidence — a
+/// completed `store::signatures` row whose `signed_at` the completion
+/// webhook stamped — never from storage presence or workflow state (the
+/// ENG-421 rule: an object at the signed key with no signature record is
+/// not an execution). The two links read only from the CompletedDocuments
+/// archive that same webhook wrote, so a link only renders when its
+/// document is actually on file. `None` while the envelope is live,
+/// declined, or never sent: the seal renders after the envelope completes,
+/// and not before.
+#[cfg(feature = "server")]
+async fn seal_view(
+    surreal: &store::surreal::SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
+    lens: super::PageLens,
+    notation: &store::notations::Notation,
+) -> Option<SignatureSealData> {
+    let signature = store::signatures::completed_for_notation(surreal, notation.id)
+        .await
+        .ok()
+        .flatten()?;
+    let signed_at = signature.signed_at.clone()?;
+    // The download route is lensed: the lawyer twin sits under /app/lawyer.
+    let base = if lens == super::PageLens::Lawyer {
+        "/app/lawyer/notations"
+    } else {
+        "/app/notations"
+    };
+    let signed_archived = storage
+        .exists(&store::notations::signed_document_storage_key(notation.id))
+        .await
+        .unwrap_or(false);
+    let certificate_archived = storage
+        .exists(&store::notations::certificate_of_completion_storage_key(
+            notation.id,
+        ))
+        .await
+        .unwrap_or(false);
+    Some(SignatureSealData {
+        signed_at,
+        provider: signature.provider,
+        signed_href: signed_archived.then(|| format!("{base}/{}/documents/signed", notation.id)),
+        certificate_href: certificate_archived
+            .then(|| format!("{base}/{}/documents/certificate", notation.id)),
+    })
 }
 
 /// The view for a body read, in `state` when it succeeds.
@@ -466,7 +527,7 @@ pub async fn load_notations(
         .map_or_else(super::ArgumentExchangeView::default, |(body, _)| {
             trial_prep_exchanges(stage_kind, lens, body)
         });
-    let (document, checklist) = read.map_or_else(
+    let (mut document, checklist) = read.map_or_else(
         || (NotationDocumentView::default(), ChecklistView::default()),
         |(body, state)| {
             (
@@ -475,6 +536,9 @@ pub async fn load_notations(
             )
         },
     );
+    if let Some(notation) = activated {
+        document.seal = seal_view(surreal, storage, lens, notation).await;
+    }
     Ok(NotationsData {
         document,
         checklist,
@@ -1074,6 +1138,229 @@ Later prose is outside the table.",
         let css = include_str!("../../../server/public/css/theme.css");
         let block = &css[css.find("Notation sections").expect("notation css block")..];
         assert!(!block.contains("min-width"), "no fixed minimum width");
+    }
+
+    /// The payload the completion webhook classifies as executed, and the
+    /// evidence its classification leaves behind: a completed `signature`
+    /// row stamped with `signed_at`, plus the CompletedDocuments — the
+    /// signed PDF and the Certificate of Completion — archived to object
+    /// storage. This is the payload shape `portal/src/esignature_webhook.rs`
+    /// parses on `/webhook/esignature/:secret`; the test applies exactly
+    /// what that handler records after classification, because portal is
+    /// upstream of webapp and the seal must read only recorded evidence.
+    #[cfg(feature = "server")]
+    const FIXTURE_COMPLETED_WEBHOOK: &str = r#"{
+        "event": "envelope-completed",
+        "data": {
+            "envelopeId": "env-seal-test",
+            "envelopeSummary": { "status": "completed" }
+        }
+    }"#;
+
+    #[cfg(feature = "server")]
+    async fn seal_fixture_db() -> (
+        store::surreal::SurrealDb,
+        std::sync::Arc<dyn cloud::StorageService>,
+        store::notations::Notation,
+        std::path::PathBuf,
+    ) {
+        // A Notation whose pinned body verifies, so the section renders in
+        // its `Notation` state and the seal shows beside the document.
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "seal-synthetic").await;
+        let person = store::persons::create(
+            &db,
+            &store::persons::NewPerson::new("Synthetic Signer", "seal@example.com"),
+        )
+        .await
+        .unwrap();
+        let path = std::env::temp_dir().join(format!("navigator-seal-{}", uuid::Uuid::now_v7()));
+        let storage: std::sync::Arc<dyn cloud::StorageService> =
+            std::sync::Arc::new(cloud::FsStorage::new(path.clone()).await.unwrap());
+        let body =
+            "---\ntitle: Synthetic Engagement Letter\n---\n\nThe firm will draft one sample agreement.\n";
+        let asset_id =
+            store::assets::ingest_content(&db, &storage, body.as_bytes(), "text/markdown")
+                .await
+                .unwrap();
+        let template = store::templates::save_version(
+            &db,
+            Some(project_id),
+            "seal",
+            store::templates::Version {
+                title: "Synthetic engagement letter".into(),
+                respondent_type: "person".into(),
+                asset_id: Some(asset_id),
+                form_code: None,
+                kind: None,
+                source_commit_sha: Some(store::test_support::SYNTHETIC_COMMIT_SHA.into()),
+            },
+        )
+        .await
+        .unwrap()
+        .into_model();
+        let notation = store::notations::create(
+            &db,
+            &store::notations::NewNotation::new(template.id, person.id, project_id, "BEGIN"),
+        )
+        .await
+        .unwrap();
+        (db, storage, notation, path)
+    }
+
+    #[cfg(feature = "server")]
+    fn seal_source(
+        notation: &store::notations::Notation,
+        lens: crate::sections::PageLens,
+    ) -> super::NotationsSource<'static> {
+        super::NotationsSource {
+            project_id: notation.project_id,
+            code: "seal-synthetic",
+            draft: None,
+            lens,
+            document_on_page: false,
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn a_completed_webhook_payload_renders_the_signature_seal() {
+        let (db, storage, notation, path) = seal_fixture_db().await;
+        let source = seal_source(&notation, crate::sections::PageLens::Client);
+
+        // Before the envelope completes there is nothing to seal.
+        let before = super::load_notations(&db, &storage, &source).await.unwrap();
+        assert!(before.document.seal.is_none());
+        let html = render(SectionView::NotationDocument(before.document.clone()));
+        assert!(!html.contains("navigator-signature"), "{html}");
+
+        // What the webhook records after classifying the fixture payload:
+        // the provider request, the signed_at stamp, and both archived
+        // CompletedDocuments.
+        let payload: serde_json::Value = serde_json::from_str(FIXTURE_COMPLETED_WEBHOOK).unwrap();
+        let envelope_id = payload["data"]["envelopeId"].as_str().unwrap();
+        store::signatures::record_request(
+            &db,
+            notation.id,
+            store::signatures::SignatureProvider::DocuSign,
+            envelope_id,
+        )
+        .await
+        .unwrap();
+        store::signatures::stamp_signed(
+            &db,
+            store::signatures::SignatureProvider::DocuSign,
+            envelope_id,
+            "2026-06-30T00:00:00Z",
+        )
+        .await
+        .unwrap();
+        storage
+            .put(
+                &store::notations::signed_document_storage_key(notation.id),
+                b"%PDF-signed",
+                "application/pdf",
+            )
+            .await
+            .unwrap();
+        storage
+            .put(
+                &store::notations::certificate_of_completion_storage_key(notation.id),
+                b"%PDF-certificate",
+                "application/pdf",
+            )
+            .await
+            .unwrap();
+
+        let loaded = super::load_notations(&db, &storage, &source).await.unwrap();
+        let seal = loaded
+            .document
+            .seal
+            .as_ref()
+            .expect("a completed envelope carries its seal");
+        assert_eq!(seal.signed_at, "2026-06-30T00:00:00Z");
+        assert_eq!(seal.provider, "docusign");
+        assert_eq!(
+            seal.signed_href.as_deref(),
+            Some(format!("/app/notations/{}/documents/signed", notation.id).as_str())
+        );
+        assert_eq!(
+            seal.certificate_href.as_deref(),
+            Some(format!("/app/notations/{}/documents/certificate", notation.id).as_str())
+        );
+        let html = render(SectionView::NotationDocument(loaded.document.clone()));
+        assert!(html.contains(r#"class="navigator-signature""#), "{html}");
+        assert!(html.contains(r#"data-state="executed""#), "{html}");
+        assert!(
+            html.contains("Signed through DocuSign on 2026-06-30."),
+            "{html}"
+        );
+
+        // The lawyer lens reads the same evidence through its own download
+        // twin, so the firm's copy of the seal never points at the client
+        // route.
+        let lawyer = seal_source(&notation, crate::sections::PageLens::Lawyer);
+        let firm_seal = super::load_notations(&db, &storage, &lawyer)
+            .await
+            .unwrap()
+            .document
+            .seal
+            .expect("the lawyer lens reads the same execution");
+        assert_eq!(
+            firm_seal.signed_href.as_deref(),
+            Some(format!("/app/lawyer/notations/{}/documents/signed", notation.id).as_str())
+        );
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    /// Not shipped yet: an envelope that is outstanding, declined, or never
+    /// sent renders no seal — the provider has confirmed no execution.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn an_envelope_that_has_not_completed_renders_no_seal() {
+        let (db, storage, notation, path) = seal_fixture_db().await;
+        let source = seal_source(&notation, crate::sections::PageLens::Client);
+
+        // Never sent.
+        let bare = super::load_notations(&db, &storage, &source).await.unwrap();
+        assert!(bare.document.seal.is_none());
+
+        // Shipped but outstanding: the envelope is live, the client has
+        // not finished signing.
+        store::signatures::record_request(
+            &db,
+            notation.id,
+            store::signatures::SignatureProvider::DocuSign,
+            "env-seal-live",
+        )
+        .await
+        .unwrap();
+        let live = super::load_notations(&db, &storage, &source).await.unwrap();
+        assert!(live.document.seal.is_none());
+        let html = render(SectionView::NotationDocument(live.document.clone()));
+        assert!(!html.contains("navigator-signature"), "{html}");
+
+        // Declined: the envelope will never be executed. An object at the
+        // signed key would not make it so either (ENG-421), but the
+        // declined stamp alone must suffice.
+        store::signatures::stamp_declined(
+            &db,
+            store::signatures::SignatureProvider::DocuSign,
+            "env-seal-live",
+        )
+        .await
+        .unwrap();
+        storage
+            .put(
+                &store::notations::signed_document_storage_key(notation.id),
+                b"%PDF-looks-signed",
+                "application/pdf",
+            )
+            .await
+            .unwrap();
+        let declined = super::load_notations(&db, &storage, &source).await.unwrap();
+        assert!(declined.document.seal.is_none());
+        std::fs::remove_dir_all(path).unwrap();
     }
 }
 
