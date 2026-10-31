@@ -1,7 +1,12 @@
-//! Chromium-driven portal sessions, built on the pins the browser e2e
-//! harness already uses: the Chrome for Testing resolver
-//! (`crate::devx::chrome`) picks the browser, a spawned matching
-//! chromedriver serves `WebDriver`, and a fantoccini client drives it.
+//! Chromium-driven portal sessions for the scraper. The layer splits in
+//! two: this file holds the counted, tested decisions — the session config
+//! and its redacted `Debug`, the cookie and state serialization, the
+//! driver command, the capability shape, port polling — and
+//! [`super::browser`] holds the live-Chromium mechanics (spawning the
+//! pinned chromedriver from the Chrome for Testing resolver
+//! `crate::devx::chrome`, connecting the `WebDriver` client, importing
+//! cookies into the running browser), which the coverage job excludes the
+//! same way it excludes `features/src/webdriver.rs`.
 //!
 //! The session owns two things for its site: the driver process (killed on
 //! teardown, however the run ends) and the cookie file under the site's
@@ -13,7 +18,7 @@
 use std::path::{Path, PathBuf};
 
 use fantoccini::cookies::Cookie;
-use fantoccini::{Client, ClientBuilder};
+use fantoccini::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::devx::chrome::ChromeForTesting;
@@ -22,7 +27,7 @@ use crate::scraper::adapter::SiteKey;
 /// How long `connect` waits for a freshly spawned chromedriver to open its
 /// port before giving up. Driver startup is sub-second in practice; the
 /// budget absorbs a cold, loaded CI runner.
-const DRIVER_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+pub(super) const DRIVER_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Why a session could not be opened, persisted, or torn down.
 #[derive(Debug, thiserror::Error)]
@@ -95,30 +100,9 @@ impl std::fmt::Debug for SessionConfig {
     }
 }
 
-/// The production session factory: every `open` spawns the pinned
-/// chromedriver, connects a client, and restores the site's cookies.
-#[derive(Debug)]
-pub(crate) struct ChromiumSessions {
-    config: SessionConfig,
-}
-
-impl ChromiumSessions {
-    #[must_use]
-    pub(crate) fn new(config: SessionConfig) -> Self {
-        Self { config }
-    }
-}
-
-#[async_trait::async_trait]
-impl SessionFactory for ChromiumSessions {
-    async fn open(&self, site: &SiteKey) -> Result<BrowserSession, SessionError> {
-        BrowserSession::connect(&self.config, site).await
-    }
-}
-
 /// Opens the portal session for one site. Production runs use
-/// [`ChromiumSessions`]; orchestration tests inject a stub factory so no
-/// test ever launches a browser.
+/// [`ChromiumSessions`] (in [`super::browser`]); orchestration tests inject
+/// a stub factory so no test ever launches a browser.
 #[async_trait::async_trait]
 pub(crate) trait SessionFactory: Send + Sync {
     async fn open(&self, site: &SiteKey) -> Result<BrowserSession, SessionError>;
@@ -133,6 +117,30 @@ pub(crate) struct BrowserSession {
 }
 
 impl BrowserSession {
+    /// Assemble a session from its live parts; [`super::browser`] connects
+    /// them and tests construct no-op sessions without any.
+    pub(super) fn assemble(
+        client: Client,
+        driver: std::process::Child,
+        state_path: PathBuf,
+    ) -> Self {
+        Self {
+            client: Some(client),
+            driver: Some(driver),
+            state_path,
+        }
+    }
+
+    /// The live `WebDriver` client behind this session, if any.
+    pub(super) fn client_ref(&self) -> Option<&Client> {
+        self.client.as_ref()
+    }
+
+    /// Where this site's cookie state file lives.
+    pub(super) fn state_path(&self) -> &Path {
+        &self.state_path
+    }
+
     /// A session with no live `WebDriver` behind it — the stub session
     /// factory hands these out so orchestration tests never launch a
     /// browser. Cookie persistence and shutdown degrade to no-ops.
@@ -144,58 +152,6 @@ impl BrowserSession {
             driver: None,
             state_path,
         }
-    }
-
-    /// Spawn the pinned chromedriver, connect to it, and restore the site's
-    /// persisted cookies.
-    ///
-    /// # Errors
-    ///
-    /// Driver launch, port timeout, connection, or cookie restore failures
-    /// all abort before any adapter runs; the spawned driver process is
-    /// killed on every error path.
-    pub(crate) async fn connect(
-        config: &SessionConfig,
-        site: &SiteKey,
-    ) -> Result<Self, SessionError> {
-        let mut driver = chromedriver_command(&config.chrome.chromedriver, config.webdriver_port)
-            .spawn()
-            .map_err(|source| SessionError::DriverLaunch {
-                path: config.chrome.chromedriver.clone(),
-                source,
-            })?;
-        if let Err(error) = poll_port_until(config.webdriver_port, DRIVER_START_TIMEOUT).await {
-            let _ = driver.kill();
-            return Err(error);
-        }
-
-        let chrome_binary = config.chrome.chrome.to_str().ok_or_else(|| {
-            let _ = driver.kill();
-            SessionError::NonUtf8Path {
-                path: config.chrome.chrome.clone(),
-            }
-        })?;
-        let caps = webdriver_capabilities(Some(chrome_binary), config.headless);
-        let url = format!("http://127.0.0.1:{}", config.webdriver_port);
-        let client = match ClientBuilder::native()
-            .capabilities(caps)
-            .connect(&url)
-            .await
-        {
-            Ok(client) => client,
-            Err(error) => {
-                let _ = driver.kill();
-                return Err(SessionError::Connect(error));
-            }
-        };
-
-        let session = Self {
-            client: Some(client),
-            driver: Some(driver),
-            state_path: session_state_path(&config.state_dir, site),
-        };
-        session.import_cookies().await?;
-        Ok(session)
     }
 
     /// Write the session's current cookies to its state file. A session
@@ -238,31 +194,6 @@ impl BrowserSession {
         }
         Ok(())
     }
-
-    /// Restore the site's persisted cookies into the fresh session. An empty
-    /// or absent state file is the first-run shape and restores nothing.
-    async fn import_cookies(&self) -> Result<(), SessionError> {
-        let Some(client) = self.client.as_ref() else {
-            return Ok(());
-        };
-        for persisted in &load_state(&self.state_path)?.cookies {
-            let mut cookie = Cookie::new(persisted.name.clone(), persisted.value.clone());
-            if let Some(path) = &persisted.path {
-                cookie.set_path(path.clone());
-            }
-            if let Some(domain) = &persisted.domain {
-                cookie.set_domain(domain.clone());
-            }
-            if let Some(secure) = persisted.secure {
-                cookie.set_secure(secure);
-            }
-            client
-                .add_cookie(cookie)
-                .await
-                .map_err(SessionError::Cookie)?;
-        }
-        Ok(())
-    }
 }
 
 impl Drop for BrowserSession {
@@ -302,9 +233,28 @@ pub(crate) fn session_state_path(state_dir: &Path, site: &SiteKey) -> PathBuf {
     state_dir.join(site.as_str()).join("session.json")
 }
 
+/// A persisted cookie as the live browser should receive it: identity plus
+/// the optional attributes worth restoring. Pure so the restore shape is
+/// pinned by test; [`super::browser`] hands the result to the `WebDriver`
+/// client.
+#[must_use]
+pub(super) fn restorable_cookie(persisted: &PersistedCookie) -> Cookie<'static> {
+    let mut cookie = Cookie::new(persisted.name.clone(), persisted.value.clone());
+    if let Some(path) = &persisted.path {
+        cookie.set_path(path.clone());
+    }
+    if let Some(domain) = &persisted.domain {
+        cookie.set_domain(domain.clone());
+    }
+    if let Some(secure) = persisted.secure {
+        cookie.set_secure(secure);
+    }
+    cookie
+}
+
 /// Persist `state` atomically: write beside the target, then rename into
 /// place, so an interrupted write never leaves a half-read cookie file.
-fn save_state(path: &Path, state: &SessionState) -> Result<(), SessionError> {
+pub(super) fn save_state(path: &Path, state: &SessionState) -> Result<(), SessionError> {
     let bytes = serde_json::to_vec_pretty(state)?;
     crate::scraper::fs::atomic_write(path, &bytes).map_err(|source| SessionError::Io {
         path: path.to_path_buf(),
@@ -314,7 +264,7 @@ fn save_state(path: &Path, state: &SessionState) -> Result<(), SessionError> {
 
 /// Read a site's persisted session state. An absent file is the first-run
 /// shape and reads as empty, not as an error.
-fn load_state(path: &Path) -> Result<SessionState, SessionError> {
+pub(super) fn load_state(path: &Path) -> Result<SessionState, SessionError> {
     match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(SessionError::Serialize),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(SessionState::default()),
@@ -327,7 +277,7 @@ fn load_state(path: &Path) -> Result<SessionState, SessionError> {
 
 /// The chromedriver launch command: the pinned driver binary listening on
 /// its port. Pure so the exact invocation is pinned by test.
-fn chromedriver_command(driver: &Path, port: u16) -> std::process::Command {
+pub(super) fn chromedriver_command(driver: &Path, port: u16) -> std::process::Command {
     let mut command = std::process::Command::new(driver);
     command.arg(format!("--port={port}"));
     command
@@ -336,7 +286,7 @@ fn chromedriver_command(driver: &Path, port: u16) -> std::process::Command {
 /// The `WebDriver` capabilities for a pinned Chrome: the binary to drive, the
 /// sandbox flags the e2e harness uses, and headless mode unless the operator
 /// asked to watch. Pure so the capability shape is pinned by test.
-fn webdriver_capabilities(
+pub(super) fn webdriver_capabilities(
     chrome_binary: Option<&str>,
     headless: bool,
 ) -> serde_json::Map<String, serde_json::Value> {
@@ -374,7 +324,10 @@ fn webdriver_capabilities(
 /// Wait until something is accepting TCP connections on `port`, or the
 /// deadline passes. Loopback only — it is how `connect` knows the freshly
 /// spawned chromedriver is ready.
-async fn poll_port_until(port: u16, deadline: std::time::Duration) -> Result<(), SessionError> {
+pub(super) async fn poll_port_until(
+    port: u16,
+    deadline: std::time::Duration,
+) -> Result<(), SessionError> {
     let started = std::time::Instant::now();
     loop {
         if tokio::net::TcpStream::connect(("127.0.0.1", port))
@@ -393,9 +346,11 @@ async fn poll_port_until(port: u16, deadline: std::time::Duration) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::{
-        chromedriver_command, load_state, poll_port_until, save_state, session_state_path,
-        webdriver_capabilities, PersistedCookie, SessionState,
+        chromedriver_command, load_state, persisted_cookie, poll_port_until, restorable_cookie,
+        save_state, session_state_path, webdriver_capabilities, PersistedCookie, SessionConfig,
+        SessionState,
     };
+    use crate::devx::chrome::ChromeForTesting;
     use std::net::TcpListener;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
@@ -526,5 +481,67 @@ mod tests {
         drop(listener);
         let result = poll_port_until(port, Duration::from_millis(300)).await;
         assert!(result.is_err(), "a closed port must time out");
+    }
+
+    #[test]
+    fn a_persisted_cookie_round_trips_through_the_restore_shape() {
+        let mut live =
+            fantoccini::cookies::Cookie::new("sid".to_owned(), "portal-value".to_owned());
+        live.set_domain("portal.example.com".to_owned());
+        live.set_path("/docket".to_owned());
+        live.set_secure(true);
+
+        let persisted = persisted_cookie(&live);
+        assert_eq!(persisted.name, "sid");
+        assert_eq!(persisted.value, "portal-value");
+        assert_eq!(persisted.domain.as_deref(), Some("portal.example.com"));
+        assert_eq!(persisted.path.as_deref(), Some("/docket"));
+        assert_eq!(persisted.secure, Some(true));
+
+        let restored = restorable_cookie(&persisted);
+        assert_eq!(restored.name(), "sid");
+        assert_eq!(restored.value(), "portal-value");
+        assert_eq!(restored.domain(), Some("portal.example.com"));
+        assert_eq!(restored.path(), Some("/docket"));
+        assert_eq!(restored.secure(), Some(true));
+    }
+
+    #[test]
+    fn a_minimal_cookie_restores_with_defaults() {
+        let live = fantoccini::cookies::Cookie::new("a".to_owned(), "b".to_owned());
+        let persisted = persisted_cookie(&live);
+        assert_eq!(persisted.domain, None);
+        assert_eq!(persisted.path, None);
+        assert_eq!(persisted.secure, None);
+
+        let restored = restorable_cookie(&persisted);
+        assert_eq!(restored.name(), "a");
+        assert_eq!(restored.value(), "b");
+        assert_eq!(restored.domain(), None);
+        assert_eq!(restored.path(), None);
+        assert_eq!(restored.secure(), None);
+    }
+
+    #[test]
+    fn the_session_config_debug_output_redacts_the_chrome_pin() {
+        let config = SessionConfig {
+            chrome: ChromeForTesting {
+                chrome: PathBuf::from("/opt/chrome/chrome"),
+                chromedriver: PathBuf::from("/opt/chrome/chromedriver"),
+            },
+            webdriver_port: 4444,
+            headless: true,
+            state_dir: PathBuf::from("/checkout/.navigator/scraper"),
+        };
+        let rendered = format!("{config:?}");
+        assert!(rendered.contains("webdriver_port: 4444"), "{rendered}");
+        assert!(rendered.contains("headless: true"), "{rendered}");
+        assert!(
+            rendered.contains("state_dir: \"/checkout/.navigator/scraper\""),
+            "{rendered}"
+        );
+        // The browser pin's absolute paths are machine-local detail; the
+        // custom `Debug` deliberately reports the session shape, not them.
+        assert!(!rendered.contains("/opt/chrome"), "{rendered}");
     }
 }

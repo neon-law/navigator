@@ -279,4 +279,18 @@ mod tests {
         // await surfaces here rather than only in live runs.
         TokioClock.sleep(std::time::Duration::from_millis(1)).await;
     }
+
+    #[test]
+    fn login_budgets_three_attempts_with_a_slow_backoff() {
+        let policy = RetryPolicy::login_default();
+        assert_eq!(policy.max_attempts, 3, "a bad password must surface fast");
+        assert_eq!(policy.base_delay, std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn fetch_budgets_four_attempts_with_a_patient_backoff() {
+        let policy = RetryPolicy::fetch_default();
+        assert_eq!(policy.max_attempts, 4);
+        assert_eq!(policy.base_delay, std::time::Duration::from_secs(1));
+    }
 }

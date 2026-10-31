@@ -10,11 +10,12 @@ use std::process::ExitCode;
 use clap::Subcommand;
 use uuid::Uuid;
 
-use crate::scraper::adapter::{find_adapter, NoticeQuery, SiteKey};
+use crate::scraper::adapter::{find_adapter, NoticeQuery, SiteAdapter, SiteKey};
+use crate::scraper::browser::ChromiumSessions;
 use crate::scraper::fetcher::HttpFetcherOverReqwest;
 use crate::scraper::intake::UnwiredIntake;
 use crate::scraper::retry::{RetryPolicy, TokioClock};
-use crate::scraper::session::{ChromiumSessions, SessionConfig};
+use crate::scraper::session::SessionConfig;
 use crate::scraper::{registered_adapters, run_scraper, ScraperDeps};
 
 #[derive(Subcommand)]
@@ -150,6 +151,19 @@ async fn run_site(
         run_state_path: site_dir.join("run-state.json"),
     };
 
+    run_site_with(adapter, docket, since, &deps).await
+}
+
+/// The command decision the wiring feeds: build the notice query, run the
+/// scraper, and map the outcome to the process exit code. Kept apart from
+/// the environment-dependent assembly above so tests drive it through the
+/// same injection seams the orchestration tests use.
+async fn run_site_with(
+    adapter: &dyn SiteAdapter,
+    docket: &str,
+    since: Option<chrono::NaiveDate>,
+    deps: &ScraperDeps<'_>,
+) -> ExitCode {
     let query = NoticeQuery {
         docket: docket.to_owned(),
         since: since.map(|date| {
@@ -157,7 +171,7 @@ async fn run_site(
             chrono::Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).expect("midnight exists"))
         }),
     };
-    match run_scraper(adapter, &query, &deps).await {
+    match run_scraper(adapter, &query, deps).await {
         Ok(report) => {
             println!("{report}");
             ExitCode::SUCCESS
@@ -168,7 +182,168 @@ async fn run_site(
 
 #[cfg(test)]
 mod tests {
-    use super::unregistered_site_message;
+    use super::{run, run_site_with, unregistered_site_message, ScraperCmd};
+    use crate::scraper::adapter::{find_adapter, SiteAdapter, SiteKey};
+    use crate::scraper::intake::RecordingIntake;
+    use crate::scraper::retry::RetryPolicy;
+    use crate::scraper::testing::{MockAdapter, MockFetcher, StubClock, StubSessions};
+    use crate::scraper::{NoticeQuery, ScraperDeps};
+    use std::path::PathBuf;
+    use std::time::Duration;
+    use uuid::Uuid;
+
+    fn site() -> SiteKey {
+        SiteKey::new("la-superior").expect("valid key")
+    }
+
+    fn instant_policy(max_attempts: u32) -> RetryPolicy {
+        RetryPolicy {
+            max_attempts,
+            base_delay: Duration::from_millis(1),
+        }
+    }
+
+    struct Fixture {
+        surreal: store::surreal::SurrealDb,
+        admin_id: Uuid,
+        firm_id: Uuid,
+        kms: cloud::FakeKms,
+        factory: StubSessions,
+        fetcher: MockFetcher,
+        intake: RecordingIntake,
+        clock: StubClock,
+        root: PathBuf,
+    }
+
+    async fn fixture() -> Fixture {
+        let surreal = store::test_support::mem_surreal().await;
+        let (firm_id, admin_id) = crate::scraper::testing::seeded_firm_with_admin(&surreal).await;
+        Fixture {
+            surreal,
+            admin_id,
+            firm_id,
+            kms: cloud::FakeKms::new("scraper-cmd-test"),
+            factory: StubSessions::default(),
+            fetcher: MockFetcher::never(),
+            intake: RecordingIntake::default(),
+            clock: StubClock,
+            root: std::env::temp_dir()
+                .join(format!("navigator-scraper-cmd-{}", uuid::Uuid::now_v7())),
+        }
+    }
+
+    async fn provisioned() -> Fixture {
+        let fixture = fixture().await;
+        fixture
+            .put_portal_secret(&serde_json::json!({
+                "la-superior": {"username": "firm@example.com", "password": "staple"}
+            }))
+            .await;
+        fixture
+    }
+
+    impl Fixture {
+        fn site_dir(&self) -> PathBuf {
+            self.root.join("la-superior")
+        }
+
+        fn staged_dir(&self) -> PathBuf {
+            self.site_dir().join("staging")
+        }
+
+        async fn put_portal_secret(&self, value: &serde_json::Value) {
+            crate::scraper::testing::put_portal_secret(
+                &self.surreal,
+                self.admin_id,
+                self.firm_id,
+                value,
+                &self.kms,
+            )
+            .await;
+        }
+    }
+
+    fn deps(fixture: &Fixture) -> ScraperDeps<'_> {
+        ScraperDeps {
+            sessions: &fixture.factory,
+            surreal: &fixture.surreal,
+            firm_id: fixture.firm_id,
+            kms: &fixture.kms,
+            fetcher: &fixture.fetcher,
+            intake: &fixture.intake,
+            clock: &fixture.clock,
+            login_policy: instant_policy(3),
+            fetch_policy: instant_policy(3),
+            staging_dir: fixture.staged_dir(),
+            ledger_path: fixture.staged_dir().join("ledger.json"),
+            downloads_dir: fixture.site_dir().join("documents"),
+            run_state_path: fixture.site_dir().join("run-state.json"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_wired_adapter_runs_to_a_success_exit() {
+        let mut fixture = provisioned().await;
+        // No notices script: the mock lists through the fetcher, which
+        // answers with a comment-only listing — an empty but well-formed
+        // discovery round trip.
+        let handler = |_: &crate::scraper::fetcher::FetchRequest| {
+            Ok(crate::scraper::fetcher::FetchResponse {
+                status: 200,
+                body: b"# no notices posted\n".to_vec(),
+            })
+        };
+        fixture.fetcher = MockFetcher::with_handler(std::sync::Arc::new(handler));
+        let adapters: Vec<Box<dyn SiteAdapter>> = vec![Box::new(MockAdapter::simple(site()))];
+        let adapter = find_adapter(&adapters, &site()).expect("the mock is registered");
+
+        let code = run_site_with(adapter, "0004", None, &deps(&fixture)).await;
+        assert_eq!(code, std::process::ExitCode::SUCCESS);
+    }
+
+    #[tokio::test]
+    async fn a_failed_run_maps_to_the_failure_exit_code() {
+        let fixture = fixture().await;
+        let adapters: Vec<Box<dyn SiteAdapter>> = vec![Box::new(MockAdapter::simple(site()))];
+        let adapter = find_adapter(&adapters, &site()).expect("the mock is registered");
+
+        // No credential row is provisioned: the run hard-stops on the
+        // credential step before any session opens.
+        let code = run_site_with(adapter, "0004", None, &deps(&fixture)).await;
+        assert_eq!(code, std::process::ExitCode::from(2));
+    }
+
+    #[tokio::test]
+    async fn an_unregistered_site_dispatch_exits_two() {
+        let code = run(ScraperCmd::Run {
+            site: "nowhere".to_owned(),
+            docket: "0004".to_owned(),
+            since: None,
+            firm: Uuid::now_v7(),
+            headed: true,
+        })
+        .await;
+        assert_eq!(code, std::process::ExitCode::from(2));
+    }
+
+    #[tokio::test]
+    async fn a_malformed_site_name_dispatch_exits_two() {
+        let code = run(ScraperCmd::Run {
+            site: "NOWHERE".to_owned(),
+            docket: "0004".to_owned(),
+            since: None,
+            firm: Uuid::now_v7(),
+            headed: true,
+        })
+        .await;
+        assert_eq!(code, std::process::ExitCode::from(2));
+    }
+
+    #[tokio::test]
+    async fn the_sites_dispatch_succeeds() {
+        let code = run(ScraperCmd::Sites).await;
+        assert_eq!(code, std::process::ExitCode::SUCCESS);
+    }
 
     #[test]
     fn an_unregistered_site_names_the_registry_without_echoing_the_argument() {
@@ -181,6 +356,25 @@ mod tests {
             message,
             "navigator scraper: no adapter registered for the requested site; \
              registered sites: la-superior"
+        );
+    }
+
+    // The query construction stays pinned: a `--since` date becomes a UTC
+    // midnight, and the docket string passes through verbatim.
+    #[test]
+    fn the_notice_query_maps_since_to_utc_midnight() {
+        use chrono::TimeZone as _;
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 1).expect("valid date");
+        let query = NoticeQuery {
+            docket: "0004".to_owned(),
+            since: Some(
+                chrono::Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).expect("midnight exists")),
+            ),
+        };
+        assert_eq!(query.docket, "0004");
+        assert_eq!(
+            query.since.map(|at| at.to_string()),
+            Some("2026-10-01 00:00:00 UTC".to_owned())
         );
     }
 }

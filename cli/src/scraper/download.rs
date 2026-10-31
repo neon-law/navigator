@@ -327,3 +327,303 @@ fn read_chunks(file: &mut std::fs::File) -> Result<Vec<Vec<u8>>, DownloadError> 
         chunks.push(buffer[..read].to_vec());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        fetch_into, hex_digest, staging_name, CompletedDownload, DownloadError, DownloadLedger,
+        DownloadSink,
+    };
+    use crate::scraper::adapter::{NoticeKey, SiteKey};
+    use crate::scraper::fetcher::{FetchRequest, FetchResponse};
+    use crate::scraper::testing::MockFetcher;
+    use sha2::{Digest, Sha256};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn site() -> SiteKey {
+        SiteKey::new("la-superior").expect("valid key")
+    }
+
+    fn key() -> NoticeKey {
+        NoticeKey::new(&site(), "0004", "7")
+    }
+
+    /// A private staging area per test: ledger path, staging dir, and the
+    /// final staged file path, all under one throwaway root.
+    struct Scratch {
+        root: PathBuf,
+    }
+
+    impl Scratch {
+        fn new(label: &str) -> Self {
+            Self {
+                root: std::env::temp_dir().join(format!(
+                    "navigator-scraper-dl-{label}-{}",
+                    uuid::Uuid::now_v7()
+                )),
+            }
+        }
+
+        fn staging(&self) -> PathBuf {
+            self.root.join("staging")
+        }
+
+        fn final_path(&self) -> PathBuf {
+            self.staging().join("DKT 0004 - Notice of Hearing.pdf")
+        }
+
+        fn ledger(&self) -> PathBuf {
+            self.root.join("ledger.json")
+        }
+
+        fn on_disk(path: &std::path::Path) -> Vec<u8> {
+            std::fs::read(path).expect("the staged file exists")
+        }
+    }
+
+    /// A handler that answers every fetch with `status` and `body`.
+    fn static_handler(status: u16, body: Vec<u8>) -> MockFetcher {
+        MockFetcher::with_handler(Arc::new(move |_: &FetchRequest| {
+            Ok(FetchResponse {
+                status,
+                body: body.clone(),
+            })
+        }))
+    }
+
+    #[tokio::test]
+    async fn the_first_fetch_has_no_range_header_and_lands_the_whole_document() {
+        let scratch = Scratch::new("first-fetch");
+        let body: Vec<u8> = (0u8..=255).cycle().take(10_000).collect();
+
+        let mut ledger = DownloadLedger::load(scratch.ledger()).expect("fresh ledger");
+        let mut sink = DownloadSink::open(&scratch.staging(), scratch.final_path(), key())
+            .expect("fresh sink");
+        assert_eq!(sink.resume_offset(), 0, "nothing staged yet");
+
+        fetch_into(
+            &mut sink,
+            &static_handler(200, body.clone()),
+            "https://portal.example.com/doc",
+        )
+        .await
+        .expect("the fetch completes");
+        let completed = sink.finish().expect("the download finalizes");
+
+        assert_eq!(completed.bytes, body.len() as u64);
+        assert_eq!(
+            completed.sha256,
+            hex_digest(&Sha256::digest(&body)),
+            "the recorded hash covers exactly the staged bytes"
+        );
+        assert_eq!(Scratch::on_disk(&completed.path), body);
+        ledger.record(completed).expect("the ledger persists");
+        assert!(ledger.completed(&key()).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_resumed_fetch_carries_the_staged_offset_and_completes_the_document() {
+        let scratch = Scratch::new("resume");
+        let body: Vec<u8> = (0u8..=255).cycle().take(10_000).collect();
+        // Owned copies: the mock handler is `'static` and must not borrow
+        // the local `body`.
+        let staged = body[..4_021].to_vec();
+        let remainder = body[4_021..].to_vec();
+        let staged_len = staged.len() as u64;
+
+        // First attempt stages a prefix, then "crashes" (the sink drops).
+        {
+            let mut sink =
+                DownloadSink::open(&scratch.staging(), scratch.final_path(), key()).expect("sink");
+            sink.extend(&staged).expect("the prefix stages");
+        }
+
+        // The next run reopens the sink over the surviving bytes and asks
+        // the server for the rest.
+        let mut sink = DownloadSink::open(&scratch.staging(), scratch.final_path(), key())
+            .expect("the sink reopens");
+        assert_eq!(
+            sink.resume_offset(),
+            staged.len() as u64,
+            "the resume offset is rebuilt from the part file"
+        );
+
+        let fetcher = MockFetcher::with_handler(Arc::new(move |request: &FetchRequest| {
+            assert_eq!(
+                request.range_start,
+                Some(staged_len),
+                "the resumed request carries the staged offset"
+            );
+            Ok(FetchResponse {
+                status: 206,
+                body: remainder.clone(),
+            })
+        }));
+        fetch_into(&mut sink, &fetcher, "https://portal.example.com/doc")
+            .await
+            .expect("the resumed fetch completes");
+        let completed = sink.finish().expect("the download finalizes");
+
+        assert_eq!(completed.bytes, body.len() as u64);
+        assert_eq!(completed.sha256, hex_digest(&Sha256::digest(&body)));
+        assert_eq!(Scratch::on_disk(&completed.path), body);
+        assert_eq!(
+            fetcher.request_count("portal.example.com"),
+            1,
+            "resuming never re-fetches the staged prefix"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_full_200_answer_to_a_range_request_restarts_the_sink() {
+        let scratch = Scratch::new("stale-part");
+        let body = b"the current document, in full".to_vec();
+
+        // Stage bytes from a stale attempt, then reopen for resume.
+        {
+            let mut sink =
+                DownloadSink::open(&scratch.staging(), scratch.final_path(), key()).expect("sink");
+            sink.extend(b"stale bytes from a superseded document")
+                .expect("stage");
+        }
+        let mut sink = DownloadSink::open(&scratch.staging(), scratch.final_path(), key())
+            .expect("the sink reopens");
+        assert!(sink.resume_offset() > 0);
+
+        // The server does not honor the range: a 200 means the whole
+        // document is in the body and the staged bytes are stale.
+        fetch_into(
+            &mut sink,
+            &static_handler(200, body.clone()),
+            "https://portal.example.com/doc",
+        )
+        .await
+        .expect("the fetch completes");
+        let completed = sink.finish().expect("the download finalizes");
+
+        assert_eq!(
+            completed.bytes,
+            body.len() as u64,
+            "the stale bytes are gone"
+        );
+        assert_eq!(Scratch::on_disk(&completed.path), body);
+        assert_eq!(completed.sha256, hex_digest(&Sha256::digest(&body)));
+    }
+
+    #[tokio::test]
+    async fn restart_discards_the_staged_bytes_and_rebuilds_the_hash() {
+        let scratch = Scratch::new("restart");
+        let body = b"a fresh copy after a checksum mismatch".to_vec();
+
+        let mut sink =
+            DownloadSink::open(&scratch.staging(), scratch.final_path(), key()).expect("sink");
+        sink.extend(b"corrupt staging").expect("stage");
+        sink.restart().expect("the sink restarts");
+        assert_eq!(sink.resume_offset(), 0, "restart discards the staged bytes");
+
+        fetch_into(
+            &mut sink,
+            &static_handler(200, body.clone()),
+            "https://portal.example.com/doc",
+        )
+        .await
+        .expect("the fetch completes");
+        let completed = sink.finish().expect("the download finalizes");
+        assert_eq!(Scratch::on_disk(&completed.path), body);
+        assert_eq!(completed.sha256, hex_digest(&Sha256::digest(&body)));
+    }
+
+    #[test]
+    fn a_completed_download_survives_a_ledger_reload() {
+        let scratch = Scratch::new("ledger-reload");
+        let completed = CompletedDownload {
+            key: key(),
+            path: scratch.final_path(),
+            sha256: "abc123".to_owned(),
+            bytes: 5_000,
+        };
+
+        let mut ledger = DownloadLedger::load(scratch.ledger()).expect("fresh ledger");
+        ledger
+            .record(completed.clone())
+            .expect("the ledger persists");
+        drop(ledger);
+
+        let reloaded = DownloadLedger::load(scratch.ledger()).expect("the ledger reloads");
+        let entry = reloaded.completed(&key()).expect("the row survives");
+        assert_eq!(entry.sha256, "abc123");
+        assert_eq!(entry.bytes, 5_000);
+        assert_eq!(entry.path, scratch.final_path());
+    }
+
+    #[test]
+    fn forget_drops_a_row_whose_staged_file_is_gone() {
+        let scratch = Scratch::new("forget");
+        let mut ledger = DownloadLedger::load(scratch.ledger()).expect("fresh ledger");
+        ledger
+            .record(CompletedDownload {
+                key: key(),
+                path: scratch.final_path(),
+                sha256: "abc123".to_owned(),
+                bytes: 10,
+            })
+            .expect("the ledger persists");
+
+        ledger.forget(&key()).expect("the forget persists");
+        assert!(
+            ledger.completed(&key()).is_none(),
+            "the forgotten row is gone from the live ledger"
+        );
+        assert!(
+            DownloadLedger::load(scratch.ledger())
+                .expect("the ledger reloads")
+                .completed(&key())
+                .is_none(),
+            "the forget survives the reload"
+        );
+
+        // Forgetting a key that was never recorded is a harmless no-op.
+        let other = NoticeKey::new(&site(), "0004", "8");
+        ledger
+            .forget(&other)
+            .expect("an unknown key forgets cleanly");
+    }
+
+    #[test]
+    fn a_corrupt_ledger_is_a_named_error_not_a_panic() {
+        let scratch = Scratch::new("corrupt");
+        std::fs::create_dir_all(&scratch.root).expect("scratch dir");
+        std::fs::write(scratch.ledger(), b"this is not a ledger").expect("write corrupt bytes");
+
+        let outcome = DownloadLedger::load(scratch.ledger());
+        assert!(
+            matches!(outcome, Err(DownloadError::Ledger { .. })),
+            "the corrupt ledger fails with the typed error"
+        );
+    }
+
+    #[test]
+    fn the_staging_name_is_a_stable_hex_digest_of_the_key() {
+        let first = staging_name(&key());
+        let second = staging_name(&NoticeKey::new(&site(), "0004", "7"));
+        assert_eq!(first, second, "the same key always maps to the same name");
+        assert_eq!(first.len(), 64, "a SHA-256 digest renders as 64 hex chars");
+        assert!(
+            first.chars().all(|c| c.is_ascii_hexdigit()),
+            "the name is filesystem-safe hex"
+        );
+        let other = staging_name(&NoticeKey::new(&site(), "0004", "8"));
+        assert_ne!(first, other, "a different notice maps to a different name");
+    }
+
+    #[test]
+    fn hex_digest_renders_lowercase_hex() {
+        // Known SHA-256 vector: the empty string.
+        let empty = Sha256::digest(b"");
+        assert_eq!(
+            hex_digest(&empty),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+}

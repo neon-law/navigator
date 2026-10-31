@@ -285,7 +285,11 @@ mod tests {
 
     /// Seed a Firm and store the portal-login payload through the shared
     /// test helpers — the real `store::firm_secrets` lane, admin-authored.
-    async fn seeded_firm(surreal: &store::surreal::SurrealDb, payload: Option<&str>) -> uuid::Uuid {
+    async fn seeded_firm(
+        surreal: &store::surreal::SurrealDb,
+        payload: Option<&str>,
+        kms: &cloud::FakeKms,
+    ) -> uuid::Uuid {
         let (firm_id, admin_id) = crate::scraper::testing::seeded_firm_with_admin(surreal).await;
         if let Some(payload) = payload {
             crate::scraper::testing::put_portal_secret(
@@ -293,6 +297,7 @@ mod tests {
                 admin_id,
                 firm_id,
                 &serde_json::from_str(payload).expect("valid json"),
+                kms,
             )
             .await;
         }
@@ -302,22 +307,22 @@ mod tests {
     #[tokio::test]
     async fn the_store_lane_resolves_and_parses_end_to_end() {
         let surreal = store::test_support::mem_surreal().await;
-        let firm_id = seeded_firm(&surreal, Some(LA_SUPERIOR)).await;
-        let logins =
-            super::resolve_portal_logins(&surreal, firm_id, &cloud::FakeKms::new("scraper-test"))
-                .await
-                .expect("resolved through the Firm secrets lane");
+        let kms = cloud::FakeKms::new("scraper-test");
+        let firm_id = seeded_firm(&surreal, Some(LA_SUPERIOR), &kms).await;
+        let logins = super::resolve_portal_logins(&surreal, firm_id, &kms)
+            .await
+            .expect("resolved through the Firm secrets lane");
         assert!(logins.login_for("la-superior").is_ok());
     }
 
     #[tokio::test]
     async fn a_missing_store_row_hard_stops_with_provisioning_guidance() {
         let surreal = store::test_support::mem_surreal().await;
-        let firm_id = seeded_firm(&surreal, None).await;
-        let error =
-            super::resolve_portal_logins(&surreal, firm_id, &cloud::FakeKms::new("scraper-test"))
-                .await
-                .expect_err("nothing provisioned");
+        let kms = cloud::FakeKms::new("scraper-test");
+        let firm_id = seeded_firm(&surreal, None, &kms).await;
+        let error = super::resolve_portal_logins(&surreal, firm_id, &kms)
+            .await
+            .expect_err("nothing provisioned");
         assert!(matches!(error, CredentialsError::NotConfigured { .. }));
         // The message names the capability and credential kind so whoever
         // provisions the row can act on it without the store's raw error.

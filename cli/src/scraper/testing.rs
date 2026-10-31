@@ -387,6 +387,7 @@ pub(crate) async fn put_portal_secret(
     admin_id: uuid::Uuid,
     firm_id: uuid::Uuid,
     value: &serde_json::Value,
+    kms: &cloud::FakeKms,
 ) {
     store::firm_secrets::put(
         surreal,
@@ -398,7 +399,7 @@ pub(crate) async fn put_portal_secret(
             kind: store::firm_secrets::IntegrationSecretKind::PortalLogin,
             value: &serde_json::to_string(value).expect("the payload serializes"),
         },
-        &cloud::FakeKms::new("scraper-test"),
+        kms,
     )
     .await
     .expect("provision the portal login secret");

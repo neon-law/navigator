@@ -17,6 +17,7 @@
 //! document.
 
 pub(crate) mod adapter;
+pub(crate) mod browser;
 pub(crate) mod cmd;
 pub(crate) mod credentials;
 pub(crate) mod download;
@@ -539,6 +540,7 @@ mod tests {
                 self.admin_id,
                 self.firm_id,
                 value,
+                &self.kms,
             )
             .await;
         }

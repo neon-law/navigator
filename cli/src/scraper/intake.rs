@@ -188,7 +188,7 @@ impl InboxIntake for UnwiredIntake {
 
 #[cfg(test)]
 mod tests {
-    use super::{InboxIntake, IntakeError, RecordingIntake, ScrapedDocument};
+    use super::{InboxIntake, IntakeError, RecordingIntake, ScrapedDocument, UnwiredIntake};
     use crate::scraper::adapter::{NoticeRef, SiteKey};
 
     fn site() -> SiteKey {
@@ -265,5 +265,30 @@ mod tests {
         assert!(second.is_ok());
         assert_eq!(intake.received().len(), 1);
         assert_eq!(intake.calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_unwired_intake_rejects_and_names_the_staged_document() {
+        // The production placeholder must say honestly that bytes were
+        // staged but not delivered — never drop them silently.
+        let outcome = UnwiredIntake
+            .enqueue(&document("4", "Notice of Hearing"))
+            .await;
+        let error = outcome.expect_err("the placeholder is not wired");
+        match error {
+            IntakeError::Rejected { detail } => {
+                assert!(
+                    detail.contains("DKT 0004 - Notice of Hearing.pdf"),
+                    "the error names the staged document: {detail}"
+                );
+                assert!(
+                    detail.contains("not wired"),
+                    "the error says the intake is not wired: {detail}"
+                );
+            }
+            IntakeError::Transient { .. } => {
+                panic!("expected a Rejected intake error, got a Transient one")
+            }
+        }
     }
 }
