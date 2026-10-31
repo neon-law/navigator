@@ -3,11 +3,11 @@
 //! constant (ENG-589).
 //!
 //! [`FirmFooterModel`] is also the shape `crate::public_chrome::inject_public_utility`
-//! (in `portal`) reads to override the public chrome's "Our Family" row with
-//! the live Firm data once one exists — see [`compiled_family_brands`], which
-//! that chrome calls directly for its own compiled-time fallback. `brands`
-//! stays on this model for that reason even though [`FirmFooter`] itself no
-//! longer renders it.
+//! (in `portal`) reads to overlay the public chrome's live firm identity — the
+//! legal entity the copyright names and the firm home it links — onto the
+//! compiled fallback once a Firm exists. `brands` stays on this model because
+//! the resolved family is part of that overlay seam; the public footer no
+//! longer renders it (nor the /app footer, which never did).
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -37,9 +37,18 @@ pub struct FirmFooterModel {
     pub legal_entity: String,
     /// Every brand the Firm wears, in registry order with the current one
     /// flagged. Not rendered by [`FirmFooter`]; kept for
-    /// `inject_public_utility`'s public-chrome override. See the module docs.
+    /// `inject_public_utility`'s public-chrome overlay seam. See the module docs.
     pub brands: Vec<FirmFooterBrand>,
     pub copyright_year: i32,
+    /// The resolved Firm's own home — the production home of the firm's own
+    /// brand when the Firm wears it. The public footer links the copyright's
+    /// legal-entity name here. Empty when the Firm wears no compiled firm
+    /// brand (a firm with no site of its own yet): its name then renders
+    /// unlinked rather than linking another firm's site. The compiled
+    /// fallback resolves to the compiled firm brand's production home, which
+    /// is also what a fresh deployment (no `firm` rows) renders.
+    #[serde(default)]
+    pub firm_home_href: String,
 }
 
 /// The `/app` footer: one centered copyright line naming the resolved Firm's
@@ -173,6 +182,10 @@ pub fn compiled_firm_footer_model(
         legal_entity: branding.firm.legal_entity.to_string(),
         brands,
         copyright_year,
+        // The compiled firm brand's production home: the same door the
+        // practice footer's copyright has always linked, now single-sourced
+        // from the brand registry instead of a literal in the mapping.
+        firm_home_href: views::brand::BrandKey::GuiebShook.public_home_href(),
     }
 }
 
@@ -266,10 +279,25 @@ pub async fn resolve_firm_footer_model(
         return fallback();
     }
 
+    // The resolved Firm's home: the production home of the firm's own brand
+    // when the Firm wears it. A Firm with no compiled firm brand (Lex, wearing
+    // only the held-out IEP practice) publishes no home yet — its entity name
+    // then renders unlinked on the public pages rather than linked to some
+    // other firm's site.
+    let firm_home_href = if keys
+        .iter()
+        .any(|key| key == views::brand::BrandKey::GuiebShook.as_str())
+    {
+        views::brand::BrandKey::GuiebShook.public_home_href()
+    } else {
+        String::new()
+    };
+
     FirmFooterModel {
         legal_entity: entity.name,
         brands,
         copyright_year,
+        firm_home_href,
     }
 }
 
@@ -288,6 +316,7 @@ mod tests {
             legal_entity: "Guieb & Shook PC".to_string(),
             brands,
             copyright_year: 2026,
+            firm_home_href: "https://www.guiebandshook.com".to_string(),
         }
     }
 
@@ -420,6 +449,11 @@ mod tests {
         assert_eq!(model.brands[9].href, "https://www.deathanddivorcelaw.com");
         assert_eq!(model.brands[10].href, "https://www.cyberinjurylaw.com");
         assert_eq!(model.legal_entity, "Guieb & Shook PC");
+        assert_eq!(
+            model.firm_home_href,
+            views::brand::BrandKey::GuiebShook.public_home_href(),
+            "the compiled fallback resolves the compiled firm brand's production home"
+        );
     }
 
     #[cfg(feature = "server")]
@@ -495,6 +529,73 @@ mod tests {
         assert_eq!(model.brands.len(), 2);
         assert!(model.brands[0].current);
         assert_eq!(model.brands[0].label, "Neon Law");
+        // The firm wears `neon` but not its own compiled firm brand
+        // (`guieb-shook`): it publishes no home, so the public footer's
+        // copyright renders unlinked rather than linked to some other
+        // firm's site.
+        assert_eq!(model.firm_home_href, "");
+    }
+
+    /// ENG-589, continued: a Firm wearing the compiled firm brand resolves
+    /// that brand's production home as the Firm's own — the live answer to
+    /// "whose site is this" that the public footer's copyright links.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn the_firm_wearing_its_own_brand_resolves_a_home() {
+        let surreal = store::surreal::test_support::mem().await;
+        let entity = store::entities::create(
+            &surreal,
+            &store::entities::NewEntity {
+                name: "Guieb & Shook PC".to_string(),
+                entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
+                jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
+                phone: None,
+                url: None,
+                xero_id: None,
+                firm_anchor_key: None,
+            },
+        )
+        .await
+        .unwrap();
+        let firm = store::firms::create(
+            &surreal,
+            &store::firms::NewFirm {
+                name: "Guieb & Shook".to_string(),
+                status: "active".to_string(),
+                entity_id: entity.id,
+                admin_dri_person_id: store::test_support::ensure_person(
+                    &surreal,
+                    &store::persons::NewPerson::with_role(
+                        "Firm Admin",
+                        "firm-home-admin@example.com",
+                        store::persons::Role::Admin,
+                    ),
+                )
+                .await
+                .id,
+            },
+        )
+        .await
+        .unwrap();
+        store::firms::attach_brand(&surreal, store::persons::Role::Owner, None, firm.id, "neon")
+            .await
+            .unwrap();
+        store::firms::attach_brand(
+            &surreal,
+            store::persons::Role::Owner,
+            None,
+            firm.id,
+            "guieb-shook",
+        )
+        .await
+        .unwrap();
+
+        let model = resolve_firm_footer_model(&surreal, views::brand::BrandKey::Neon, 2026).await;
+
+        assert_eq!(
+            model.firm_home_href,
+            views::brand::BrandKey::GuiebShook.public_home_href()
+        );
     }
 
     /// A second Firm wearing a runtime-created brand (never one of the compiled

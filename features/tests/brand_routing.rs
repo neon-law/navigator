@@ -189,6 +189,188 @@ async fn body_does_not_contain(world: &mut BrandWorld, needle: String) {
     );
 }
 
+// --- Footer: the three-line legal strip ---------------------------------
+
+#[then(regex = r#"^the footer copyright names "(.+)"$"#)]
+async fn footer_copyright_names(world: &mut BrandWorld, entity: String) {
+    let body = &world.last_body;
+    let start = body
+        .find("site-footer__copyright")
+        .expect("the page renders the footer's copyright line");
+    let paragraph = &body[start..];
+    let end = paragraph
+        .find("</p>")
+        .expect("the copyright paragraph closes");
+    let paragraph = &paragraph[..end];
+    assert!(
+        html_forms(&entity)
+            .iter()
+            .any(|form| paragraph.contains(form.as_str())),
+        "the footer copyright names {entity:?}: {paragraph}",
+    );
+}
+
+#[then("the footer renders the attorney-advertising disclaimer")]
+async fn footer_renders_disclaimer(world: &mut BrandWorld) {
+    assert!(
+        world.last_body.contains("site-footer__disclaimer"),
+        "the footer renders the disclaimer line: {}",
+        world.last_body,
+    );
+}
+
+#[then(regex = r"^the footer renders the trademark notice: (yes|no)$")]
+async fn footer_renders_trademark(world: &mut BrandWorld, renders: String) {
+    let present = world.last_body.contains("site-footer__trademark");
+    assert_eq!(
+        present,
+        renders == "yes",
+        "trademark notice presence mismatch (expected {renders})",
+    );
+}
+
+/// The surfaces the simplified footer no longer renders, as the compiled
+/// branding used to spell them: an office address, an association name,
+/// the family-row label, a social handle, and the contact band's email.
+const REMOVED_FOOTER_DETAIL: &[&str] = &[
+    "site-footer__offices",
+    "site-footer__contact",
+    "site-footer__memberships",
+    "site-footer__family",
+    "site-footer__social",
+    "site-footer__nav",
+    "site-footer__attribution",
+    "site-footer__provider",
+    "1515 20th Street, Bakersfield",
+    "Justice Technology Association",
+    "Our Family",
+    "x.com/NeonLawUSA",
+    "contact@neonlaw.com",
+];
+
+#[then("the footer carries no firm detail beyond the legal strip")]
+async fn footer_is_the_legal_strip_only(world: &mut BrandWorld) {
+    for needle in REMOVED_FOOTER_DETAIL {
+        assert!(
+            !world.last_body.contains(needle),
+            "the footer still renders {needle:?}",
+        );
+    }
+}
+
+/// The live-resolution story, end to end: an Owner moves a brand to a firm
+/// whose entity no compiled fallback names, and the brand's public pages
+/// resolve the new firm's entity on the next request. Seeds the same shared
+/// store the router reads — a first firm wearing the brand, a second firm
+/// with a fresh entity — then performs the Owner's `move_brand`. Brand
+/// creation is the Admin-DRI-only act (`brands::authorize`); the move is
+/// the Owner-only one (`firms::move_brand`), so the two roles both appear.
+#[given(regex = r#"^the brand "([^"]+)" is moved to a firm whose entity is "([^"]+)"$"#)]
+async fn move_brand_to_firm(_world: &mut BrandWorld, brand_key: String, entity_name: String) {
+    let surreal = features::shared_surreal().await;
+
+    // Two firms and one brand: the brand starts wearing the first firm
+    // and the Owner moves it to the second, whose entity no compiled
+    // fallback names.
+    let admin = store::test_support::ensure_person(
+        &surreal,
+        &store::persons::NewPerson::with_role(
+            "Mobility Firm Admin",
+            "mobility-firm-admin@example.com",
+            store::persons::Role::Admin,
+        ),
+    )
+    .await;
+    let new_entity = store::entities::create(
+        &surreal,
+        &store::entities::NewEntity {
+            name: entity_name.clone(),
+            entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
+            jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
+            phone: None,
+            url: None,
+            xero_id: None,
+            firm_anchor_key: None,
+        },
+    )
+    .await
+    .expect("the moved-to firm's entity creates");
+    let prior_entity = store::entities::create(
+        &surreal,
+        &store::entities::NewEntity {
+            name: "Prior Holder PC".to_string(),
+            entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
+            jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
+            phone: None,
+            url: None,
+            xero_id: None,
+            firm_anchor_key: None,
+        },
+    )
+    .await
+    .expect("the prior firm's entity creates");
+    let prior = store::firms::create(
+        &surreal,
+        &store::firms::NewFirm {
+            name: "Prior Holder (firm)".to_string(),
+            status: "active".to_string(),
+            entity_id: prior_entity.id,
+            admin_dri_person_id: admin.id,
+        },
+    )
+    .await
+    .expect("the prior firm creates");
+    let target = store::firms::create(
+        &surreal,
+        &store::firms::NewFirm {
+            name: format!("{entity_name} (firm)"),
+            status: "active".to_string(),
+            entity_id: new_entity.id,
+            admin_dri_person_id: admin.id,
+        },
+    )
+    .await
+    .expect("the moved-to firm creates");
+
+    // The brand row must exist before it can wear a firm. The shared store
+    // may already hold the key — the site seed upserts every house brand —
+    // so the create runs only for a brand it has never seen, wearing the
+    // prior firm. That create needs the firm's own Admin DRI, which `admin`
+    // is. Either way the Owner's move below re-points the brand to the
+    // target firm, which is the part the footer must follow.
+    if store::brands::find_by_key(&surreal, &brand_key)
+        .await
+        .expect("the brand row is readable")
+        .is_none()
+    {
+        store::brands::create(
+            &surreal,
+            store::persons::Role::Admin,
+            Some(admin.id),
+            &store::brands::NewBrand {
+                name: "Mobility Test Brand".to_string(),
+                key: brand_key.clone(),
+                firm_id: Some(prior.id),
+                primary_color: None,
+                accent_color: None,
+                typeface: None,
+            },
+        )
+        .await
+        .expect("the brand row creates wearing the prior firm");
+    }
+
+    store::firms::move_brand(
+        &surreal,
+        store::persons::Role::Owner,
+        None,
+        &brand_key,
+        target.id,
+    )
+    .await
+    .expect("the Owner's move succeeds");
+}
+
 #[tokio::main]
 async fn main() {
     BrandWorld::cucumber()

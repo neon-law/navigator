@@ -782,7 +782,10 @@ impl BrandKey {
             Self::DeleteYourDebt => {
                 palette_by_id("delete-your-debt").expect("delete-your-debt is catalogued")
             }
-            Self::Summons => palette_by_id("oath").expect("oath is catalogued"),
+            // Summons wears the OATH charcoal, and IEP borrows it as a
+            // placeholder palette; its own identity waits for its launch
+            // decisions.
+            Self::Summons | Self::Iep => palette_by_id("oath").expect("oath is catalogued"),
             Self::Aegis => palette_by_id("aegis").expect("invariant: aegis is catalogued above"),
             Self::Groundwork => {
                 palette_by_id("groundwork").expect("invariant: groundwork is catalogued above")
@@ -791,9 +794,6 @@ impl BrandKey {
             Self::DeathAndDivorce => {
                 palette_by_id("death-and-divorce").expect("death-and-divorce is catalogued")
             }
-            // IEP borrows the OATH charcoal as a placeholder palette; its
-            // own identity waits for its launch decisions.
-            Self::Iep => palette_by_id("oath").expect("oath is catalogued"),
         }
     }
 }

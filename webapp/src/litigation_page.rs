@@ -25,10 +25,9 @@
 //! copy here.
 //!
 //! **The one call to action lives in the body card, not as a section of its
-//! own.** It offers consultation booking and the phone channel [`PublicFooter`]
-//! closes every page with. The number uses the footer's `tel_href` helper.
-//! Both actions sit in `.zeal-cta`, a centered row the page's own
-//! stylesheet places rather than the footer's three-column office grid.
+//! own.** It offers consultation booking and the phone channel, using the
+//! shared `tel_href` helper. Both actions sit in `.zeal-cta`, a centered row
+//! the page's own stylesheet places rather than a stacked list.
 //! `renders_the_contact_channels_side_by_side` is the guard.
 //!
 //! The body once named fee *arrangements* — contingency, monthly, "no cost due
@@ -192,17 +191,17 @@ pub fn LitigationPage(chrome: PublicChrome, content: LitigationContent) -> Eleme
                         }
                     }
                 }
-                // The same two channels the footer closes every page with, not
-                // a second copy of them: `tel_href` is the footer's own helper,
-                // so the dialled digits stay consistent across both places.
-                // What differs here is layout, not content: side by side and
-                // centered, because this is the page's own ask rather than the
-                // sign-off every page carries.
+                // The page's own ask, rendered in the two channels it can
+                // actually open: the booking link and the firm's voice line.
+                // `tel_href` is the shared helper, so the dialled digits stay
+                // consistent everywhere the number renders. What differs from
+                // a plain list is layout: side by side and centered, because
+                // this is the page's own ask rather than a sign-off.
                 //
                 // Each channel is conditional on the chrome actually carrying
-                // one, the same guard `PublicFooter` applies, so a chrome with
-                // no phone number does not render a dead `tel:` link with
-                // nothing to dial.
+                // one, the same guard a footer channel would apply, so a
+                // chrome with no phone number does not render a dead `tel:`
+                // link with nothing to dial.
                 ul { class: "zeal-cta",
                     if !content.cta_href.is_empty() {
                         li { class: "site-footer__office site-footer__office--channel",
@@ -350,11 +349,10 @@ mod tests {
         dioxus_ssr::render(&dom)
     }
 
-    /// A chrome carrying real contact channels, for the one test that needs to
-    /// see them render as more than an empty `mailto:`/`tel:` href.
+    /// A chrome carrying the firm's real voice line, for the one test that
+    /// needs to see it render as more than an empty `tel:` href.
     fn chrome_with_contact() -> PublicChrome {
         PublicChrome {
-            firm_email: "counsel@neonlaw.com".to_string(),
             firm_phone: "+1 555 010 0100".to_string(),
             ..Default::default()
         }
@@ -442,28 +440,25 @@ mod tests {
         );
     }
 
-    /// The page's call to action is the same two channels the footer closes
-    /// every page with, rendered a second time in its own centered row rather
-    /// than the footer's three-column grid.
+    /// The page's call to action is its own centered two-channel row — the
+    /// booking link and the firm's voice line — reusing the footer's channel
+    /// tile classes for the card, hover lift, and swell.
     ///
-    /// This asserts the reuse rather than the layout: both links carry the
-    /// same `mailto_href`/`tel_href` a real chrome resolves, which is what
-    /// keeps this row from drifting out of sync with the footer's own. The
-    /// `.zeal-cta` wrapper (not `.site-footer__offices`) is what keeps the
-    /// footer's grid-column rules from pulling these two tiles into its
-    /// vertical stack; the centering itself is a CSS concern this test does
-    /// not reach into.
+    /// This asserts the channels render from a real chrome's values, which is
+    /// what keeps this row from drifting out of sync with `tel_href`. The
+    /// `.zeal-cta` wrapper is what keeps these two tiles centered in a row
+    /// rather than laid out as footer-band tiles.
     #[test]
     fn renders_the_contact_channels_side_by_side() {
         let out = html_with(chrome_with_contact());
         assert!(
             out.contains(r#"class="zeal-cta""#),
-            "the CTA row wraps in its own class, not the footer's office grid: {out}"
+            "the CTA row wraps in its own class: {out}"
         );
         assert_eq!(
             out.matches(r#"class="site-footer__channel-link""#).count(),
-            4,
-            "two in the page's own CTA, two in the footer: {out}"
+            2,
+            "both of the page's own CTA channels: {out}"
         );
         assert!(
             out.contains("Book Consultation"),
