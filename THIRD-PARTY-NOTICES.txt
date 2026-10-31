@@ -14550,7 +14550,6 @@ heapless 0.8.0
 heck 0.4.1
 heck 0.5.0
 hermit-abi 0.5.2
-html5ever 0.39.0
 html5ever 0.40.1
 httparse 1.10.1
 hyper-rustls 0.27.9
@@ -14575,7 +14574,6 @@ lock_api 0.4.14
 log 0.4.33
 longest-increasing-subsequence 0.1.0
 maplit 1.0.2
-markup5ever 0.39.0
 markup5ever 0.40.0
 matrixmultiply 0.3.11
 mime 0.3.17
@@ -14637,7 +14635,7 @@ security-framework-sys 2.17.0
 send_wrapper 0.6.0
 serde_with 3.21.0
 serde_with_macros 3.21.0
-servo_arc 0.4.3
+servo_arc 0.5.0
 signal-hook-registry 1.4.8
 simd_cesu8 1.2.0
 simplecss 0.2.2
@@ -14646,9 +14644,7 @@ socket2 0.6.5
 stable_deref_trait 1.2.1
 stacker 0.1.24
 string_cache 0.11.0
-string_cache 0.9.0
 string_cache_codegen 0.11.2
-string_cache_codegen 0.6.1
 svgtypes 0.16.1
 syn 1.0.109
 system-configuration 0.7.0
@@ -14694,7 +14690,6 @@ wasm-bindgen-macro 0.2.126
 wasm-bindgen-macro-support 0.2.126
 wasm-bindgen-shared 0.2.126
 web-sys 0.3.103
-web_atoms 0.2.5
 web_atoms 0.3.0
 weezl 0.1.12
 weezl 0.2.1
@@ -19379,9 +19374,7 @@ core-foundation-sys 0.8.7
 euclid 0.20.14
 euclid 0.22.14
 string_cache 0.11.0
-string_cache 0.9.0
 string_cache_codegen 0.11.2
-string_cache_codegen 0.6.1
 
 Copyright (c) 2012-2013 Mozilla Foundation
 
@@ -19813,11 +19806,8 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-html5ever 0.39.0
 html5ever 0.40.1
-markup5ever 0.39.0
 markup5ever 0.40.0
-web_atoms 0.2.5
 web_atoms 0.3.0
 
 Copyright (c) 2014 The html5ever Project Developers
@@ -26483,7 +26473,7 @@ NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE US
 THIS SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-scraper 0.27.0
+scraper 0.29.0
 
 Copyright © 2016, June McEnroe <june@causal.agency>
 Copyright © 2017, Vivek Kushwaha <yoursvivek@gmail.com>
@@ -31669,7 +31659,6 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   defined by the Mozilla Public License, v. 2.0.
 
 ----------------------------------------------------------------------------------------
-cssparser 0.37.0
 cssparser 0.38.0
 cssparser-macros 0.7.0
 symphonia 0.6.1
@@ -32523,7 +32512,7 @@ serde_json 1.0.154
 serde_path_to_error 0.1.20
 serde_repr 0.1.20
 serde_yaml 0.9.34+deprecated
-servo_arc 0.4.3
+servo_arc 0.5.0
 simd_cesu8 1.2.0
 syn 1.0.109
 syn 2.0.119
@@ -33414,11 +33403,11 @@ SOFTWARE.
 ----------------------------------------------------------------------------------------
 phf 0.13.1
 phf 0.14.0
-phf_codegen 0.13.1
 phf_codegen 0.14.0
 phf_generator 0.13.1
 phf_generator 0.14.0
 phf_macros 0.13.1
+phf_macros 0.14.0
 phf_shared 0.13.1
 phf_shared 0.14.0
 
@@ -35665,7 +35654,7 @@ rstar 0.8.4  —  MIT/Apache-2.0
 rstar 0.9.3  —  MIT/Apache-2.0
 rustls-platform-verifier-android 0.1.1  —  MIT OR Apache-2.0
 seahash 4.1.0  —  MIT
-selectors 0.38.0  —  MPL-2.0
+selectors 0.41.0  —  MPL-2.0
 simd_helpers 0.1.0  —  MIT
 sledgehammer_bindgen 0.6.0  —  MIT
 sledgehammer_bindgen_macro 0.6.5  —  MIT
