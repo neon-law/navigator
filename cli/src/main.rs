@@ -1532,6 +1532,31 @@ enum ProjectRepositoryCmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Land this checkout's change and follow it through the merge loop:
+    /// preflight, branch, signed commit, push, the review request ready for
+    /// review, merge-when-green armed and read back, the required check
+    /// watched to a verdict, the merge commit captured, and the deployment
+    /// run for the merge commit watched to a verdict.
+    Push {
+        /// Project repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// The base branch the review request merges into.
+        #[arg(long, default_value = "main")]
+        base: String,
+        /// The branch to land. Derived from the title when omitted.
+        #[arg(long)]
+        branch: Option<String>,
+        /// The commit and review-request title.
+        #[arg(long)]
+        title: String,
+        /// The review-request body (Markdown).
+        #[arg(long)]
+        body: Option<String>,
+        /// Run the preflight and print the plan without pushing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -5833,6 +5858,31 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             }
             ProjectRepositoryCmd::MigrateDocuments { dir, dry_run } => {
                 match document_layout::migrate_checkout(&dir, dry_run) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => {
+                        eprintln!("navigator: {error:#}");
+                        ExitCode::from(2)
+                    }
+                }
+            }
+            ProjectRepositoryCmd::Push {
+                dir,
+                base,
+                branch,
+                title,
+                body,
+                dry_run,
+            } => {
+                match projects::push::dispatch(
+                    &dir,
+                    &base,
+                    branch.as_deref(),
+                    &title,
+                    body.as_deref(),
+                    dry_run,
+                )
+                .await
+                {
                     Ok(()) => ExitCode::SUCCESS,
                     Err(error) => {
                         eprintln!("navigator: {error:#}");
