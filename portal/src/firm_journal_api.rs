@@ -1451,7 +1451,7 @@ mod tests {
                 surreal,
                 &store::persons::NewPerson::new(
                     "Mercury import actor",
-                    &format!("mercury-import-{}@example.test", Uuid::new_v4()),
+                    format!("mercury-import-{}@example.test", Uuid::new_v4()),
                 ),
             )
             .await
