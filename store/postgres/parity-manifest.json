@@ -191,6 +191,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "inbox_message_asset",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "journal_entry_source",
       "missing_column": null,
       "missing_table": null,
@@ -1648,7 +1655,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 129,
+    "table_count": 130,
     "tables": {
       "address": {
         "columns": {
@@ -2829,6 +2836,38 @@
         ],
         "name": "inbox_ingress",
         "references": [
+          "firm",
+          "message"
+        ]
+      },
+      "inbox_message_asset": {
+        "columns": {
+          "asset_id": "UUID",
+          "filename": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "message_id": "UUID",
+          "position": "INTEGER",
+          "sha256": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "asset_id",
+            "asset"
+          ],
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "message_id",
+            "message"
+          ]
+        ],
+        "name": "inbox_message_asset",
+        "references": [
+          "asset",
           "firm",
           "message"
         ]
