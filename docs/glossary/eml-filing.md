@@ -19,4 +19,5 @@ reference shape the stored-inbound `mail/file` door uses for provider message id
 message outbound when it matches the `From` header; without it the message files as inbound. Filing is Lawyer-tier,
 matter-scoped, and draft-only in spirit: nothing is ever sent.
 
-The table is `communication` — .eml filing adds no new table.
+No new table is introduced: .eml filing files through the existing `communication` table, so nothing new appears in the
+schema or the Postgres mirror.
