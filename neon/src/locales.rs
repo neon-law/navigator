@@ -2609,14 +2609,15 @@ mod tests {
         assert!(text.contains("attorney-client privilege"));
     }
 
-    /// Vesta Estate Planning and Cyber Injury Law each link back to
-    /// DeleteYourData.com, resolved for the rendering deployment, so the
-    /// referral runs both ways.
+    /// Vesta Estate Planning links back to DeleteYourData.com and Cyber
+    /// Injury Law links to the Nautilus plan (the same privacy product under
+    /// its current name), each resolved for the rendering deployment, so the
+    /// referrals run both ways.
     #[test]
-    fn vesta_and_cyber_injury_link_back_to_delete_your_data_per_deployment() {
-        for (host, expected) in [
-            ("www.example.test", "https://www.deleteyourdata.com"),
-            ("staging.example.test", "https://staging.deleteyourdata.com"),
+    fn vesta_links_to_delete_your_data_and_cyber_injury_to_nautilus_per_deployment() {
+        for (host, prefix) in [
+            ("www.example.test", "https://www"),
+            ("staging.example.test", "https://staging"),
         ] {
             let vesta = home_for_host(&views::brand::VESTA_BRANDING, Some(host))
                 .estate
@@ -2626,15 +2627,28 @@ mod tests {
                 .cyber_injury
                 .expect("cyber injury campaign")
                 .sibling_practices;
-            for (brand, cards) in [("vesta", &vesta), ("cyber-injury-law", &cyber)] {
-                assert_eq!(cards.len(), 1, "{brand} on {host}");
-                assert_eq!(cards[0].href, expected, "{brand} on {host}");
-                assert_eq!(cards[0].cta_label, "Visit DeleteYourData.com", "{brand}");
-                assert!(cards[0].body.contains("$29/mo"), "{brand}");
-                assert!(cards[0].body.contains("$290/year"), "{brand}");
-                assert!(!cards[0].body.contains("additional member"), "{brand}");
-            }
+            assert_eq!(vesta.len(), 1, "vesta on {host}");
+            assert_eq!(
+                vesta[0].href,
+                format!("{prefix}.deleteyourdata.com"),
+                "{host}"
+            );
+            assert_eq!(vesta[0].cta_label, "Visit DeleteYourData.com", "{host}");
+            assert!(vesta[0].body.contains("$29/mo"), "{host}");
+            assert!(vesta[0].body.contains("$290/year"), "{host}");
+            assert!(!vesta[0].body.contains("additional member"), "{host}");
             assert!(vesta[0].body.contains("death check"), "{host}");
+
+            assert_eq!(cyber.len(), 1, "cyber-injury-law on {host}");
+            assert_eq!(
+                cyber[0].href,
+                format!("{prefix}.neonlaw.com/nautilus"),
+                "{host}"
+            );
+            assert_eq!(cyber[0].cta_label, "Visit the Nautilus plan", "{host}");
+            assert!(cyber[0].body.contains("$29/mo"), "{host}");
+            assert!(cyber[0].body.contains("$290/year"), "{host}");
+            assert!(!cyber[0].body.contains("additional member"), "{host}");
         }
     }
 
