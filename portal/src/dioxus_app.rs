@@ -4803,6 +4803,30 @@ pub fn team_profile_router(path: &str, content: webapp::team_page::TeamProfileCo
         ))
 }
 
+/// The Vesta `/world` calculated astrocartography page. Content-backed like
+/// `/contact`: the caller resolves [`WorldContent`] from the mounted branding
+/// and injects it through `ServeConfig::context_providers`, and
+/// `webapp::world_page::world_page_view` reads it back. The birth-data form
+/// submits through its own server function — this route only SSRs the page —
+/// so the route is a plain GET and birth details never touch a URL. Public
+/// and firm-scoped; `reject_unpublished_firm_path` 404s it off Vesta.
+pub fn world_router(path: &str, content: webapp::world_page::WorldContent) -> Router {
+    let injected = webapp::world_page::InjectedWorld(content);
+    let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(move || {
+        Box::new(injected.clone()) as Box<dyn std::any::Any>
+    })
+        as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]));
+
+    Router::<FullstackState>::new()
+        .route(
+            path,
+            get(render_handler)
+                .layer(from_fn(dioxus_document_head))
+                .layer(from_fn(inject_public_utility)),
+        )
+        .with_state(FullstackState::new(cfg, webapp::world_page::WorldPageEntry))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
