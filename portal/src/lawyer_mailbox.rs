@@ -287,7 +287,7 @@ mod tests {
         let firm_id = seed_firm_with_brand(&db, "neon").await;
         let config = config(&["nick@neonlaw.com"], firm_id);
         let email = email("Client <client@example.com>", "Nick <other@example.com>");
-        let ingested = ingest_for_config(&db, &storage, &email, config)
+        let ingested = ingest_for_config(&db, &storage, &email, Some(config))
             .await
             .unwrap();
         assert!(ingested.is_none());
@@ -316,7 +316,7 @@ mod tests {
         .await;
         let config = config(&["nick@neonlaw.com"], firm_id);
         let own_mail = email("Nick <nick@neonlaw.com>", "Nick <nick@neonlaw.com>");
-        let ingested = ingest_for_config(&db, &storage, &own_mail, config.clone())
+        let ingested = ingest_for_config(&db, &storage, &own_mail, Some(config.clone()))
             .await
             .unwrap();
         assert!(ingested.is_none());
@@ -326,7 +326,7 @@ mod tests {
             &NewPerson::with_role("Assistant", "clerk@neonlaw.com", Role::Clerk),
         )
         .await;
-        let ingested = ingest_for_config(&db, &storage, &clerk_mail, config)
+        let ingested = ingest_for_config(&db, &storage, &clerk_mail, Some(config))
             .await
             .unwrap();
         assert!(ingested.is_none());
@@ -345,11 +345,11 @@ mod tests {
             "Nick <nick+intake@neonlaw.com>",
         );
         second.message_id = Some("second@example.com".into());
-        let first_ingested = ingest_for_config(&db, &storage, &first, config.clone())
+        let first_ingested = ingest_for_config(&db, &storage, &first, Some(config.clone()))
             .await
             .unwrap()
             .expect("first delivery ingests");
-        let second_ingested = ingest_for_config(&db, &storage, &second, config)
+        let second_ingested = ingest_for_config(&db, &storage, &second, Some(config))
             .await
             .unwrap()
             .expect("second delivery ingests");
@@ -376,11 +376,11 @@ mod tests {
         let config = config(&["nick@neonlaw.com"], firm_id);
         let mut email = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
         email.message_id = Some("repeat@example.com".into());
-        let first = ingest_for_config(&db, &storage, &email, config.clone())
+        let first = ingest_for_config(&db, &storage, &email, Some(config.clone()))
             .await
             .unwrap()
             .unwrap();
-        let second = ingest_for_config(&db, &storage, &email, config)
+        let second = ingest_for_config(&db, &storage, &email, Some(config))
             .await
             .unwrap()
             .unwrap();
@@ -406,11 +406,11 @@ mod tests {
             content_type: "application/pdf".into(),
             bytes: b"%PDF-1.7 attachment bytes".to_vec(),
         });
-        let first = ingest_for_config(&db, &storage, &email, config.clone())
+        let first = ingest_for_config(&db, &storage, &email, Some(config.clone()))
             .await
             .unwrap()
             .unwrap();
-        let second = ingest_for_config(&db, &storage, &email, config)
+        let second = ingest_for_config(&db, &storage, &email, Some(config))
             .await
             .unwrap()
             .unwrap();
