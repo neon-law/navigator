@@ -6,7 +6,7 @@
 //! re-authored working copy and `.fields` manifest, prints the pin, and
 //! fills a QA sample.
 //!
-//! Usage: cargo run -p forms --example vendor_local -- <code>
+//! Usage: `cargo run -p forms --example vendor_local -- <code>`
 
 use std::path::PathBuf;
 
@@ -150,11 +150,9 @@ fn choice_first_exports(
             // the same indent shapes with different meanings.
             in_choices = trimmed == "choices:";
             current = None;
-        } else if !in_choices {
-            continue;
-        } else if indent == 2 && trimmed.ends_with(':') && !trimmed.contains(": ") {
+        } else if in_choices && indent == 2 && trimmed.ends_with(':') && !trimmed.contains(": ") {
             current = Some(trimmed.trim().trim_end_matches(':').to_string());
-        } else if indent >= 4 {
+        } else if in_choices && indent >= 4 {
             if let (Some(state), Some((key, export))) =
                 (current.as_deref(), trimmed.trim_start().split_once(": "))
             {
@@ -190,8 +188,7 @@ fn fill_sample(
                 Some("custom_single_choice") => tail
                     .as_deref()
                     .and_then(|tail| choices.get(tail))
-                    .map(|(key, _)| key.clone())
-                    .unwrap_or_else(|| format!("SAMPLE {name}")),
+                    .map_or_else(|| format!("SAMPLE {name}"), |(key, _)| key.clone()),
                 Some("person" | "people") => {
                     let tail = name.rsplit('.').next().unwrap_or("name");
                     match tail {

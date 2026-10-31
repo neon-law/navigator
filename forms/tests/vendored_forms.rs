@@ -63,7 +63,7 @@ fn vendored_forms_pin_their_bucket_objects() {
         );
 
         assert!(
-            official_origin(&form.origin_url),
+            official_origin(form.origin_url),
             "{}: origin_url must be an HTTPS government URL (or an allowlisted \
              official court domain), got `{}`",
             form.code,

@@ -408,6 +408,7 @@ async fn every_packet_round_trips_from_the_storage_seam() {
 /// Wave-two court-form packets: King County (WA), Washoe and Las Vegas
 /// (NV), and the New York UCS routes. Each form fills from its own
 /// questionnaire, so the arms are per form rather than per family.
+#[allow(clippy::too_many_lines)] // one arm per form; the forms are large
 fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
     match form_code {
         "nv__las_vegas_small_claims_complaint" => vec![
@@ -429,7 +430,7 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ),
             ("custom_usd__amount_owed", "2500".to_string()),
             ("person__client.email", "jordan@example.com".to_string()),
-            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
             ("person__client.phone", "702-555-0100".to_string()),
         ],
         "nv__las_vegas_small_claims_counterclaim" => vec![
@@ -467,7 +468,7 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ),
             ("custom_usd__amount_owed", "2500".to_string()),
             ("person__client.email", "jordan@example.com".to_string()),
-            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
             ("person__client.phone", "702-555-0100".to_string()),
         ],
         "nv__washoe_adult_name_change_petition" => vec![
@@ -490,11 +491,11 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ("jurisdiction__birthplace.name", "Nevada".to_string()),
             ("person__client.family", "Blake".to_string()),
             ("person__client.given", "Jordan".to_string()),
-            ("person__client.middle", "Avery".to_string()),
-            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("person__client.middle", "Kim".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
             ("person__new_name.family", "Blake".to_string()),
             ("person__new_name.given", "Jordan".to_string()),
-            ("person__new_name.middle", "Avery".to_string()),
+            ("person__new_name.middle", "Kim".to_string()),
         ],
         "nv__washoe_fee_waiver_application" => vec![
             (
@@ -678,10 +679,10 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ("custom_yes_no__no_income", "yes".to_string()),
             ("custom_yes_no__no_real_estate", "yes".to_string()),
             ("custom_yes_no__no_vehicle", "yes".to_string()),
-            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
             (
                 "person__opposing_party.name",
-                "Jordan Avery Blake".to_string(),
+                "Jordan Kim Blake".to_string(),
             ),
         ],
         "ny__nc1_adult_name_change_petition" => vec![
@@ -692,9 +693,9 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
                 "custom_single_choice__child_support_current",
                 "No".to_string(),
             ),
-            ("custom_single_choice__children_under_21", "".to_string()),
+            ("custom_single_choice__children_under_21", String::new()),
             ("custom_single_choice__convicted", "No".to_string()),
-            ("custom_single_choice__currently_married", "".to_string()),
+            ("custom_single_choice__currently_married", String::new()),
             ("custom_single_choice__documents_attached", "No".to_string()),
             (
                 "custom_single_choice__filing_county",
@@ -709,7 +710,7 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ("custom_single_choice__new_sex_designation", "X".to_string()),
             ("custom_single_choice__party_to_action", "No".to_string()),
             ("custom_single_choice__previously_married", "No".to_string()),
-            ("custom_single_choice__prior_name_change", "".to_string()),
+            ("custom_single_choice__prior_name_change", String::new()),
             (
                 "custom_single_choice__prior_sex_designation_change",
                 "No".to_string(),
@@ -778,8 +779,8 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ),
             ("custom_usd__child_support_arrears", "2500".to_string()),
             ("custom_usd__spousal_support_arrears", "2500".to_string()),
-            ("person__client.name", "Jordan Avery Blake".to_string()),
-            ("person__new_name.name", "Jordan Avery Blake".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__new_name.name", "Jordan Kim Blake".to_string()),
         ],
         "ny__nc2_minor_name_change_petition" => vec![
             ("custom_datetime__date_of_birth", "1990-04-12".to_string()),
@@ -981,13 +982,13 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
                 "custom_usd__petitioner_spousal_support_arrears",
                 "2500".to_string(),
             ),
-            ("people__consenting_parents", two_people().to_string()),
-            ("person__minor.name", "Jordan Avery Blake".to_string()),
+            ("people__consenting_parents", two_people().clone()),
+            ("person__minor.name", "Jordan Kim Blake".to_string()),
             (
                 "person__minor_new_name.name",
-                "Jordan Avery Blake".to_string(),
+                "Jordan Kim Blake".to_string(),
             ),
-            ("person__petitioner.name", "Jordan Avery Blake".to_string()),
+            ("person__petitioner.name", "Jordan Kim Blake".to_string()),
         ],
         "ny__nc3_lip_name_change_petition" => vec![
             ("custom_datetime__date_of_birth", "1990-04-12".to_string()),
@@ -1073,9 +1074,9 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ),
             ("custom_usd__child_support_arrears", "2500".to_string()),
             ("custom_usd__spousal_support_arrears", "2500".to_string()),
-            ("person__client.name", "Jordan Avery Blake".to_string()),
-            ("person__new_name.name", "Jordan Avery Blake".to_string()),
-            ("person__petitioner.name", "Jordan Avery Blake".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__new_name.name", "Jordan Kim Blake".to_string()),
+            ("person__petitioner.name", "Jordan Kim Blake".to_string()),
         ],
         "ny__nc4_family_name_change_petition" => vec![
             ("custom_datetime__address_since", "1990-04-12".to_string()),
@@ -1092,7 +1093,7 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ),
             ("custom_single_choice__judgments_liens", "No".to_string()),
             ("custom_single_choice__party_to_action", "No".to_string()),
-            ("custom_single_choice__prior_name_change", "".to_string()),
+            ("custom_single_choice__prior_name_change", String::new()),
             ("custom_single_choice__sealing_requested", "No".to_string()),
             ("custom_single_choice__spousal_support", "No".to_string()),
             (
@@ -1143,12 +1144,12 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
                 "custom_text__sealing_details",
                 "Sample entry for sealing_details".to_string(),
             ),
-            ("people__co_petitioners", two_people().to_string()),
-            ("people__family_members", two_people().to_string()),
-            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("people__co_petitioners", two_people().clone()),
+            ("people__family_members", two_people().clone()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
             (
                 "person__new_family_name.name",
-                "Jordan Avery Blake".to_string(),
+                "Jordan Kim Blake".to_string(),
             ),
         ],
         "ny__nc5_family_name_change_supplement" => vec![
@@ -1219,8 +1220,8 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ),
             ("custom_usd__child_support_arrears", "2500".to_string()),
             ("custom_usd__spousal_support_arrears", "2500".to_string()),
-            ("person__client.name", "Jordan Avery Blake".to_string()),
-            ("person__member.name", "Jordan Avery Blake".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
+            ("person__member.name", "Jordan Kim Blake".to_string()),
         ],
         "ny__civ_sc50_statement_of_claim" => vec![
             (
@@ -1248,16 +1249,16 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
                 "Sample entry for identifying_numbers".to_string(),
             ),
             ("custom_usd__claim_amount", "2500".to_string()),
-            ("people__claimants", two_people().to_string()),
-            ("people__defendants", two_people().to_string()),
+            ("people__claimants", two_people().clone()),
+            ("people__defendants", two_people().clone()),
             ("person__client.email", "jordan@example.com".to_string()),
             ("person__client.family", "Blake".to_string()),
             ("person__client.given", "Jordan".to_string()),
-            ("person__client.middle", "Avery".to_string()),
+            ("person__client.middle", "Kim".to_string()),
             ("person__client.phone", "702-555-0100".to_string()),
             ("person__defendant.family", "Blake".to_string()),
             ("person__defendant.given", "Jordan".to_string()),
-            ("person__defendant.middle", "Avery".to_string()),
+            ("person__defendant.middle", "Kim".to_string()),
         ],
         "wa__adult_name_change_petition" => vec![
             (
@@ -1274,11 +1275,11 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ),
             ("person__client.family", "Blake".to_string()),
             ("person__client.given", "Jordan".to_string()),
-            ("person__client.middle", "Avery".to_string()),
-            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("person__client.middle", "Kim".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
             ("person__new_name.family", "Blake".to_string()),
             ("person__new_name.given", "Jordan".to_string()),
-            ("person__new_name.middle", "Avery".to_string()),
+            ("person__new_name.middle", "Kim".to_string()),
         ],
         "wa__minor_name_change_petition" => vec![
             ("custom_datetime__date_of_birth", "1990-04-12".to_string()),
@@ -1295,8 +1296,8 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
                 "custom_yes_no__sex_offender_registration",
                 "yes".to_string(),
             ),
-            ("people__parents", two_people().to_string()),
-            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("people__parents", two_people().clone()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
         ],
         "wa__small_claims_notice" => vec![
             ("custom_datetime__amount_due_date", "1990-04-12".to_string()),
@@ -1322,10 +1323,10 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ("custom_yes_no__claim_rent", "yes".to_string()),
             ("custom_yes_no__claim_return_of_deposit", "yes".to_string()),
             ("custom_yes_no__claim_wages", "yes".to_string()),
-            ("people__defendants", two_people().to_string()),
-            ("people__plaintiffs", two_people().to_string()),
+            ("people__defendants", two_people().clone()),
+            ("people__plaintiffs", two_people().clone()),
             ("person__client.email", "jordan@example.com".to_string()),
-            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
             ("person__client.phone", "702-555-0100".to_string()),
         ],
         "wa__small_claims_plaintiff_packet" => vec![
@@ -1337,10 +1338,10 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ("custom_yes_no__claim_other", "yes".to_string()),
             ("custom_yes_no__claim_return_of_deposit", "yes".to_string()),
             ("custom_yes_no__claim_wages", "yes".to_string()),
-            ("people__defendants", two_people().to_string()),
-            ("people__plaintiffs", two_people().to_string()),
+            ("people__defendants", two_people().clone()),
+            ("people__plaintiffs", two_people().clone()),
             ("person__client.email", "jordan@example.com".to_string()),
-            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
             ("person__client.phone", "702-555-0100".to_string()),
         ],
         "ny__probate_petition" => vec![
@@ -1405,16 +1406,16 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ("custom_text__filing_county", "Queens".to_string()),
             (
                 "custom_text__letters_to_name",
-                "Jordan Avery Blake".to_string(),
+                "Jordan Kim Blake".to_string(),
             ),
             ("custom_text__no_later_instruments", "NONE".to_string()),
-            ("custom_text__other_petition_details", "".to_string()),
+            ("custom_text__other_petition_details", String::new()),
             ("custom_text__other_testamentary_assets", "NONE".to_string()),
             (
                 "custom_text__petitioner_citizenship",
                 "United States".to_string(),
             ),
-            ("custom_text__petitioner_mailing_address", "".to_string()),
+            ("custom_text__petitioner_mailing_address", String::new()),
             (
                 "custom_text__will_witnesses",
                 "Casey Devon Ellis, Morgan Riley Reese".to_string(),
@@ -1447,12 +1448,12 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
                 "yes".to_string(),
             ),
             ("person__client.city", "Queens".to_string()),
-            ("person__client.name", "Jordan Avery Blake".to_string()),
+            ("person__client.name", "Jordan Kim Blake".to_string()),
             ("person__client.state", "NY".to_string()),
             ("person__client.street", "1 Main St".to_string()),
             ("person__client.zip", "11101".to_string()),
             ("person__decedent.city", "Queens".to_string()),
-            ("person__decedent.name", "Jordan Avery Blake".to_string()),
+            ("person__decedent.name", "Jordan Kim Blake".to_string()),
             ("person__decedent.state", "NY".to_string()),
             ("person__decedent.street", "2 Side St".to_string()),
         ],
@@ -1497,16 +1498,17 @@ fn flattened_text_smoke_values(form_code: &str) -> &'static [&'static str] {
         "nv__las_vegas_small_claims_counterclaim" => &["Sample entry for counterdefendant_caption"],
         "nv__washoe_adult_name_change_petition" => &["Reno"],
         "nv__washoe_fee_waiver_application" => &["Sample entry for account_one"],
-        "ny__nc1_adult_name_change_petition" => &["Sample entry for child_support_court"],
+        "ny__nc1_adult_name_change_petition" | "ny__nc3_lip_name_change_petition" => {
+            &["Sample entry for child_support_court"]
+        }
         "ny__nc2_minor_name_change_petition" => &["Sample entry for minor_child_support_court"],
-        "ny__nc3_lip_name_change_petition" => &["Sample entry for child_support_court"],
         "ny__nc4_family_name_change_petition" => &["Sample entry for current_address"],
         "ny__nc5_family_name_change_supplement" => {
             &["Sample entry for child_support_collection_unit"]
         }
         "ny__civ_sc50_statement_of_claim" => &["Sample entry for auto_accident_place"],
         "ny__probate_petition" => &[
-            "Jordan Avery Blake",
+            "Jordan Kim Blake",
             "Jordan A. Blake",
             "Casey Devon Ellis, Morgan Riley Reese",
             "NONE",
