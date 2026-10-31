@@ -106,6 +106,15 @@ access, never source-forge access. `store::project_surfaces` creates or adopts t
 Update](nightly-project-update.md) defines the planned nightly parent DAG and its membership, Slack, repository, and
 calendar children. Today's single workflow performs membership repair and repository create-or-adopt.
 
+**`onboarding_jurisdiction` is the state whose law and arbitration seat an onboarding letter names.** A
+[Clause](clause.md) input normally binds a questionnaire state, which forced every onboarding template to ask its own
+single-choice "which jurisdiction governs" question to restate a fact the matter already knows. A Clause input typed
+`jurisdiction` may instead bind `project.onboarding_jurisdiction` directly (`rules::clauses`); the render reads the live
+value at fill time, so no template carries a question that restates it. Set with `navigator project set --jurisdiction
+<state>`; the field stays editable because it can change. Distinct from `jurisdiction_id`: that record governs whose law
+the *matter* answers to and derives the pooled IOLTA account; this one is the Firm's chosen drafting default for
+onboarding prose. Absent means not yet chosen — nothing infers one.
+
 - Schema and commands: [`store::projects`](../../store/src/projects.rs) ·
   [`store/src/schema/navigator.surql`](../../store/src/schema/navigator.surql)
 

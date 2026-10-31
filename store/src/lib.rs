@@ -89,6 +89,7 @@ pub mod communications;
 pub mod config;
 pub mod conflicts;
 pub mod contract_reviews;
+pub mod courts;
 pub mod credentials;
 pub mod delegations;
 pub mod deployment;
@@ -154,6 +155,9 @@ pub mod playbooks;
 pub mod postgres;
 /// Resumable batches that copy rows the PostgreSQL mirror never saw.
 pub mod postgres_backfill;
+/// The AGE relationship graph, projected from the mirrors and parity-checked
+/// against the Surreal conflict traversal.
+pub mod postgres_graph;
 /// Best-effort PostgreSQL mirror of Surreal writes, with parity and reconcile.
 pub mod postgres_mirror;
 /// PostgreSQL schema history and deterministic parity artifacts.
@@ -200,6 +204,7 @@ pub mod summary_sender_approvals;
 /// The store connection, over the `NAVIGATOR_SURREAL_*` contract.
 pub mod surreal;
 pub mod synthetic_portfolio;
+pub mod tasks;
 pub mod template_source;
 pub mod templates;
 pub mod testimonials;

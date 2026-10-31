@@ -44,6 +44,7 @@ p256.workspace = true
 pdf.workspace = true
 pdf-extract.workspace = true
 portal.workspace = true
+project-scaffold.workspace = true
 rand.workspace = true
 ravif.workspace = true
 reqwest.workspace = true

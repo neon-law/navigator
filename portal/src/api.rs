@@ -4462,6 +4462,10 @@ struct UploadDocumentRequest {
     /// entry is validated before any byte is stored.
     #[serde(default)]
     notarization: Vec<store::documents::Notarization>,
+    /// The exhibit metadata the matter's evidence index reads (LAW-185).
+    /// Optional on every kind; validated before any byte is stored.
+    #[serde(default)]
+    evidence: Option<store::documents::Evidence>,
 }
 
 fn invalid_document_slug_response(filename: &str, slug: &str) -> Option<Response> {
@@ -4531,6 +4535,9 @@ async fn upload_document_door(
         .find_map(|notarization| notarization.validate().err())
     {
         return Ok(bad_request("invalid_notarization", &error.to_string()));
+    }
+    if let Some(error) = input.evidence.as_ref().and_then(|e| e.validate().err()) {
+        return Ok(bad_request("invalid_evidence", &error.to_string()));
     }
     if input.derived_from.is_some() && kind != "transcript" {
         return Ok(bad_request(
@@ -4684,6 +4691,7 @@ async fn upload_document_door(
             },
             signing: input.signing,
             notarization: input.notarization.clone(),
+            evidence: input.evidence.clone(),
         },
         &bytes,
     )
@@ -4737,6 +4745,9 @@ async fn document_pointer(
         xero_invoice_id: None,
         signing: current.signing,
         notarization: current.notarization.clone(),
+        // The evidence block rides with the current revision, so a pointer
+        // filed here carries the same provenance `project sync` records.
+        evidence: current.evidence.clone(),
         service: Vec::new(),
     })
 }
@@ -4929,6 +4940,7 @@ async fn file_mail_attachments(
             transcript_quality: None,
             signing: None,
             notarization: Vec::new(),
+            evidence: None,
         };
         let provenance = store::documents::MailProvenance {
             message_id: &message_id_str,
@@ -7071,6 +7083,67 @@ impl IntoResponse for ApiError {
                 })),
             )
                 .into_response(),
+            // The template's declared workflow/questionnaire failed the
+            // engine's parse — a template fault, not a server one (LAW-200:
+            // these answered `500 internal`).
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::Spec(e),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "template_spec",
+                    "message": format!("Template spec: {e}")
+                })),
+            )
+                .into_response(),
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::TemplateSource(
+                    store::template_source::TemplateSourceError::AmbiguousBlueprintDirectories,
+                ),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "ambiguous_blueprint_directories",
+                    "message": "The matter repo contains both `templates/` and `drafts/` blueprint directories; remove one so the template is unambiguous."
+                })),
+            )
+                .into_response(),
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::TemplateSource(
+                    store::template_source::TemplateSourceError::InvalidLayout(details),
+                ),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "invalid_layout",
+                    "message": format!("Invalid matter blueprint layout: {details}")
+                })),
+            )
+                .into_response(),
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::TemplateSource(
+                    store::template_source::TemplateSourceError::NotUtf8(path),
+                ),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "template_not_utf8",
+                    "message": format!("Template `{path}` body is not valid UTF-8.")
+                })),
+            )
+                .into_response(),
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::TemplateSource(
+                    store::template_source::TemplateSourceError::Composition(details),
+                ),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "composition",
+                    "message": format!("Clause composition: {details}")
+                })),
+            )
+                .into_response(),
             Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
                 e,
             )) => {
@@ -8200,6 +8273,7 @@ mod tests {
             transcript_quality: None,
             signing: None,
             notarization: Vec::new(),
+            evidence: None,
         };
         store::documents::ingest_bytes_as(
             surreal,

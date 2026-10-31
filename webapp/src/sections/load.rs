@@ -11,9 +11,9 @@ use rules::dashboard::Section;
 
 use super::notations::NotationsData;
 use super::{
-    AuthorityView, CaptionView, DeadlineCard, DiscoveryView, FactStripView, GraphView, NoteView,
-    PageLens, ProjectCostsView, ProvenanceView, ReceiptRow, RosterView, SectionRow, SectionView,
-    TimelineView,
+    AuthorityView, CaptionView, DeadlineCard, DiscoveryView, EvidenceIndexView, FactStripView,
+    GraphView, NoteView, PageLens, ProjectCostsView, ProvenanceView, ReceiptRow, RosterView,
+    SectionRow, SectionView, TimelineView,
 };
 
 /// What a page's sections are built from, already scoped to `lens`.
@@ -53,6 +53,9 @@ pub struct LoadContext {
     /// The Authorities this matter uses: every use with links on the lawyer
     /// lens, the client-visible uses as text on the client lens.
     pub authorities: AuthorityView,
+    /// The exhibits grouped by the claim each bears on (LAW-185); filled on
+    /// the lawyer lens only — firm working state a client page never carries.
+    pub evidence: EvidenceIndexView,
     /// The matter's parties and the conflict-check graph's edges among
     /// them; filled on the lawyer lens only.
     pub graph: GraphView,
@@ -115,6 +118,7 @@ impl LoadContext {
                 lens: Some(lens),
                 cards: Vec::new(),
             },
+            evidence: EvidenceIndexView::default(),
             graph: GraphView::default(),
             estate: super::estate::EstateViews::default(),
             closing: super::transactional::ClosingViews::default(),
@@ -218,6 +222,9 @@ pub fn load(section: Section, cx: &LoadContext) -> SectionView {
         Section::DocumentBody => SectionView::DocumentBody(cx.page_draft.clone()),
         Section::CommentRail => SectionView::CommentRail(Vec::new()),
         Section::AuthorityTable => SectionView::AuthorityTable(cx.authorities.clone()),
+        Section::EvidenceIndex => {
+            SectionView::EvidenceIndex(lawyer_only(cx, |cx| cx.evidence.clone()))
+        }
         Section::DiscoveryPairs => SectionView::DiscoveryPairs(cx.discovery.clone()),
         Section::ArgumentExchange => {
             SectionView::ArgumentExchange(lawyer_only(cx, |cx| cx.notations.exchanges.clone()))
@@ -263,6 +270,13 @@ pub fn load(section: Section, cx: &LoadContext) -> SectionView {
             SectionView::RequirementTracker(cx.closing.requirements.clone())
         }
         Section::RedlineView => SectionView::RedlineView(cx.closing.redlines.clone()),
+        Section::ActivityLog => SectionView::ActivityLog(Vec::new()),
+        Section::PitchHeadline => SectionView::PitchHeadline(Vec::new()),
+        Section::ClaimCards => SectionView::ClaimCards(Vec::new()),
+        Section::FeeSummary => SectionView::FeeSummary(Vec::new()),
+        Section::RuleClocks => SectionView::RuleClocks(Vec::new()),
+        Section::PathChooser => SectionView::PathChooser(Vec::new()),
+        Section::EligibilityChecklist => SectionView::EligibilityChecklist(Vec::new()),
     }
 }
 
@@ -271,14 +285,21 @@ mod tests {
     /// The sections [`load`](super::load) still maps to an empty view, so
     /// their pages always show the empty state. Loading data into one means
     /// removing it from this list in the same change.
-    const UNLOADED: [&str; 10] = [
+    const UNLOADED: [&str; 17] = [
+        "ActivityLog",
         "AssertionPanel",
+        "ClaimCards",
         "CommentRail",
+        "EligibilityChecklist",
+        "FeeSummary",
         "ItemDetail",
         "MetricStrip",
         "PackageManifest",
+        "PathChooser",
+        "PitchHeadline",
         "PrebillReview",
         "QueueRail",
+        "RuleClocks",
         "SourcePagePanel",
         "Stepper",
         "WorkstreamCards",
@@ -307,5 +328,58 @@ mod tests {
             UNLOADED,
             "a section now loads data (or a new one loads none): update UNLOADED"
         );
+    }
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::{load, LoadContext};
+    use crate::sections::{
+        EvidenceClaim, EvidenceExhibit, EvidenceIndexView, PageLens, SectionView,
+    };
+    use rules::dashboard::Section;
+
+    fn populated() -> EvidenceIndexView {
+        EvidenceIndexView {
+            lens: Some(PageLens::Lawyer),
+            claims: vec![EvidenceClaim {
+                claim: "¶ 12".to_string(),
+                exhibits: vec![EvidenceExhibit {
+                    document_id: "01j-exhibit".to_string(),
+                    href: "/app/projects/c/documents/01j-exhibit".to_string(),
+                    label: "letter.pdf".to_string(),
+                    dated_at: Some("2026-01-05".to_string()),
+                    source: Some("demand letter".to_string()),
+                    confidence: Some("exact".to_string()),
+                }],
+            }],
+            unclaimed: Vec::new(),
+            unrecorded: 0,
+        }
+    }
+
+    #[test]
+    fn the_lawyer_lens_reads_the_populated_index() {
+        let mut cx = LoadContext::empty(PageLens::Lawyer);
+        cx.evidence = populated();
+        match load(Section::EvidenceIndex, &cx) {
+            SectionView::EvidenceIndex(view) => {
+                assert_eq!(view, populated());
+            }
+            other => panic!("wrong view: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_client_lens_never_carries_the_index() {
+        let mut cx = LoadContext::empty(PageLens::Client);
+        cx.evidence = populated();
+        match load(Section::EvidenceIndex, &cx) {
+            SectionView::EvidenceIndex(view) => {
+                assert_eq!(view.claims, Vec::new());
+                assert_eq!(view.unclaimed, Vec::new());
+            }
+            other => panic!("wrong view: {other:?}"),
+        }
     }
 }

@@ -25,10 +25,14 @@ forms.workspace = true
 # only `webapp --features web` is — so this carries no wasm32 cost.
 rules.workspace = true
 
+# `record_citation` parses drafted record citations out of a draft body; its
+# patterns are static, so this is a normal dependency (the accessibility gate's
+# dev-dependency regex use is separate).
+regex.workspace = true
+
 [dev-dependencies]
 # Layer-1 accessibility gate (`tests/accessibility.rs`) uses these
 # assertion helpers for structural invariants.
-regex = "1"
 tempfile.workspace = true
 
 [dependencies.tokio]

@@ -8,8 +8,10 @@ use chrono::{DateTime, Utc};
 
 use crate::{projects::manifest, remote};
 
-pub(crate) const ONBOARDING: &str = "onboarding";
-const OFFBOARDING: &str = "offboarding";
+/// The lifecycle kinds live in `project-scaffold` beside the Draft stubs
+/// they name, so the CLI's lifecycle commands and the shared scaffold
+/// cannot disagree on what an unedited stub is.
+pub(crate) use project_scaffold::{OFFBOARDING, ONBOARDING};
 
 /// Open the onboarding notation, deriving the matter and client from
 /// `navigator.yaml` in `root`.
@@ -220,26 +222,16 @@ fn template_path(root: &Path, kind: &str) -> Result<PathBuf> {
     Ok(root.join(template_relative(root, kind)?))
 }
 
+/// Only tests compare a checkout's letter Draft against the unedited stub
+/// the shared scaffold wrote; production commands write through
+/// [`write_template_stub`] and never re-derive the path.
+#[cfg(test)]
+pub(crate) use project_scaffold::scaffold_draft;
 /// The repository-relative path and stub bytes of `kind`'s letter Draft, as
-/// `repository scaffold` writes it into a new Project repository.
-pub(crate) fn scaffold_draft(kind: &str) -> (String, String) {
-    (
-        format!(
-            "{}/{}.md",
-            rules::project_blueprints::BlueprintDirectory::Drafts.as_str(),
-            template_code(kind)
-        ),
-        template_stub(kind),
-    )
-}
-
-fn template_code(kind: &str) -> &str {
-    match kind {
-        ONBOARDING => "onboarding__letter",
-        OFFBOARDING => "offboarding__letter",
-        _ => kind,
-    }
-}
+/// `repository scaffold` writes it into a new Project repository. The
+/// canonical bytes live in `project-scaffold` so the CLI's scaffold and the
+/// server-side repository seeding write the same placeholder.
+pub(crate) use project_scaffold::{template_code, template_placeholder, template_stub};
 
 fn write_template_stub(path: &Path, kind: &str) -> Result<()> {
     std::fs::create_dir_all(path.parent().unwrap_or(Path::new("."))).with_context(|| {
@@ -249,39 +241,6 @@ fn write_template_stub(path: &Path, kind: &str) -> Result<()> {
         )
     })?;
     std::fs::write(path, template_stub(kind)).with_context(|| format!("write {}", path.display()))
-}
-
-/// The placeholder letter a lifecycle command writes before the lawyer
-/// drafts it. Opening a notation from these bytes is refused.
-fn template_stub(kind: &str) -> String {
-    let title = if kind == ONBOARDING {
-        "Onboarding letter"
-    } else {
-        "Offboarding letter"
-    };
-    let placeholder = template_placeholder(kind);
-    // An onboarding letter always carries the engagement-arbitration Clause and
-    // the two questions it binds; an offboarding letter has none.
-    let (clauses, placement) = if kind == ONBOARDING {
-        (
-            "questionnaire:\n  BEGIN:\n    _: jurisdiction__governing_law\n  jurisdiction__governing_law:\n    _: jurisdiction__arbitration_seat\n  jurisdiction__arbitration_seat:\n    _: END\nclauses:\n  arbitration:\n    source: engagement_arbitration@1\n    inputs:\n      law: jurisdiction__governing_law\n      seat: jurisdiction__arbitration_seat\nworkflow:\n  BEGIN:\n    created: lawyer_review\n  lawyer_review:\n    approved: END\n",
-            "{{> arbitration}}\n\n",
-        )
-    } else {
-        ("", "")
-    };
-    format!(
-        "---\nkind: {kind}\ntitle: {title}\nrespondent_type: person_and_entity\nconfidential: true\n{clauses}---\n\n{placement}{placeholder}\n"
-    )
-}
-
-fn template_placeholder(kind: &str) -> String {
-    let command = if kind == ONBOARDING {
-        "onboard"
-    } else {
-        "offboard"
-    };
-    format!("Draft this letter before running `navigator project {command}` again.")
 }
 
 /// Whether `contents` is a lifecycle letter stub nobody has drafted yet.

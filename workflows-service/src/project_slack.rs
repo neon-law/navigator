@@ -6,6 +6,11 @@
 //! Both the channel-creation and message-post calls are journaled Restate
 //! steps, so a transient Slack outage is retried without holding an HTTP page
 //! request open.
+//!
+//! The store, Slack, and validation helpers below are shared with the DBOS
+//! adapter ([`crate::dbos_project_slack`]): one [`LaneError`] classification
+//! feeds both engines, so a failure means the same thing wherever the lane
+//! runs.
 
 use std::sync::Arc;
 
@@ -13,6 +18,79 @@ use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use workflows::{project_channel_name, SlackBot, SlackBotError, SlackChannel};
+
+/// Why a lane step failed, shared by the Restate and DBOS paths.
+///
+/// The variant is the classification: [`LaneError::terminal`] answers whether
+/// retrying the same work can ever succeed, and each engine renders the
+/// outcome from that answer — Restate stops retrying the invocation, the DBOS
+/// step declines its remaining attempts. The classification follows the rules
+/// this module has always used: a database that is merely unavailable is
+/// retriable; every refusal (`CodeTaken`, an invalid update, a vanished
+/// Project) is terminal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+pub enum LaneError {
+    /// The Project row is gone; the notice has nowhere to go.
+    #[error("{0}")]
+    ProjectGone(String),
+    /// The store refused in a way no retry can fix (the code is taken, the
+    /// update was invalid). Carries the typed store error's own message.
+    #[error("{0}")]
+    Refused(String),
+    /// The expected channel name is held by a channel this bot cannot see.
+    #[error(
+        "Slack channel name is taken by a channel this bot cannot see; \
+         invite the bot to that private channel or archive it"
+    )]
+    ChannelNameInvisible,
+    /// The lane's workflow identity is not a valid lane key.
+    #[error("the Project Slack lane identity is not valid: {0}")]
+    InvalidIdentity(String),
+    /// The main-push event failed validation.
+    #[error("{0}")]
+    InvalidEvent(String),
+    /// The store could not complete this attempt (database unavailable).
+    #[error("{0}")]
+    Store(String),
+    /// The Project update could not complete this attempt (database
+    /// unavailable).
+    #[error("{0}")]
+    Command(String),
+    /// Slack did not complete the call this attempt.
+    #[error("{0}")]
+    Slack(String),
+}
+
+impl LaneError {
+    /// Whether retrying the same work can ever succeed.
+    #[must_use]
+    pub const fn terminal(&self) -> bool {
+        match self {
+            Self::Store(_) | Self::Command(_) | Self::Slack(_) => false,
+            Self::ProjectGone(_)
+            | Self::Refused(_)
+            | Self::ChannelNameInvisible
+            | Self::InvalidIdentity(_)
+            | Self::InvalidEvent(_) => true,
+        }
+    }
+}
+
+impl LaneError {
+    /// The Restate handler surface: a terminal failure becomes a fatal
+    /// [`TerminalError`] so the invocation stops, while a retriable one
+    /// stays an ordinary error the engine may retry. A `From` impl cannot
+    /// carry this distinction: the SDK's blanket `From<E: Error>` would
+    /// make a terminal failure retriable.
+    #[must_use]
+    pub fn into_handler_error(self) -> HandlerError {
+        if self.terminal() {
+            TerminalError::new(self.to_string()).into()
+        } else {
+            HandlerError::from(Box::new(self) as Box<dyn std::error::Error + Send + Sync>)
+        }
+    }
+}
 
 /// The outcome of one half of a Project repository's CD run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -56,6 +134,44 @@ impl MainPushRequest {
     #[must_use]
     pub fn event_key(&self) -> String {
         format!("{}:{}", self.short_sha, self.run_attempt)
+    }
+
+    /// The worker's own refusal of an event the portal door would have
+    /// refused. The portal relay validates first (`MainPushEvent::validate`);
+    /// these are the same rules, so a caller that skips the door cannot
+    /// smuggle a malformed event into the lane.
+    pub fn validate(&self) -> Result<(), LaneError> {
+        let sha_wellformed = (7..=40).contains(&self.short_sha.len())
+            && self
+                .short_sha
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase());
+        if !sha_wellformed {
+            return Err(LaneError::InvalidEvent(
+                "short_sha must be 7 to 40 lowercase hex characters".to_string(),
+            ));
+        }
+        if !self.run_url.starts_with("https://") || self.run_url.len() > 2048 {
+            return Err(LaneError::InvalidEvent(
+                "run_url must be an https URL of at most 2048 characters".to_string(),
+            ));
+        }
+        let login_wellformed = (1..=39).contains(&self.author_login.len())
+            && self
+                .author_login
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+        if !login_wellformed {
+            return Err(LaneError::InvalidEvent(
+                "author_login must be a GitHub login".to_string(),
+            ));
+        }
+        if self.run_attempt == 0 {
+            return Err(LaneError::InvalidEvent(
+                "run_attempt must be at least 1".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -110,27 +226,27 @@ impl ProjectSlackService {
     }
 }
 
-fn project_id(key: &str) -> Result<uuid::Uuid, HandlerError> {
+fn project_id(key: &str) -> Result<uuid::Uuid, LaneError> {
     key.parse::<uuid::Uuid>().map_err(|error| {
-        HandlerError::from(TerminalError::new(format!(
+        LaneError::InvalidIdentity(format!(
             "Project Slack object key `{key}` is not a valid project id: {error}"
-        )))
+        ))
     })
 }
 
-fn project_store_error(error: store::projects::ProjectStoreError) -> HandlerError {
+fn project_store_error(error: &store::projects::ProjectStoreError) -> LaneError {
     if matches!(error, store::projects::ProjectStoreError::Db(_)) {
-        HandlerError::from(error)
+        LaneError::Store(error.to_string())
     } else {
-        HandlerError::from(TerminalError::new(error.to_string()))
+        LaneError::Refused(error.to_string())
     }
 }
 
-fn project_command_error(error: store::projects::ProjectCommandError) -> HandlerError {
+fn project_command_error(error: &store::projects::ProjectCommandError) -> LaneError {
     if matches!(error, store::projects::ProjectCommandError::Db(_)) {
-        HandlerError::from(error)
+        LaneError::Command(error.to_string())
     } else {
-        HandlerError::from(TerminalError::new(error.to_string()))
+        LaneError::Refused(error.to_string())
     }
 }
 
@@ -156,19 +272,17 @@ impl ChannelOutcome {
 
 /// Find or create the Project's private Slack channel. Extracted from the
 /// Restate handler so the store/Slack work is unit-testable without a broker.
-async fn ensure_internal_channel(
+pub(crate) async fn ensure_internal_channel(
     surreal: &store::surreal::SurrealDb,
     slack: &Arc<dyn SlackBot>,
     project_id: uuid::Uuid,
     simulated: bool,
-) -> Result<String, HandlerError> {
+) -> Result<String, LaneError> {
     let project = store::projects::find_by_id(surreal, project_id)
         .await
-        .map_err(project_store_error)?
+        .map_err(|error| project_store_error(&error))?
         .ok_or_else(|| {
-            HandlerError::from(TerminalError::new(
-                "Project no longer exists for Slack notice",
-            ))
+            LaneError::ProjectGone("Project no longer exists for Slack notice".to_string())
         })?;
     ensure_channel(surreal, slack, &project, simulated)
         .await
@@ -183,7 +297,7 @@ pub(crate) async fn ensure_channel(
     slack: &Arc<dyn SlackBot>,
     project: &store::projects::Project,
     simulated: bool,
-) -> Result<ChannelOutcome, HandlerError> {
+) -> Result<ChannelOutcome, LaneError> {
     if let Some(channel_id) = &project.internal_slack_channel_id {
         return Ok(ChannelOutcome::Existing(channel_id.clone()));
     }
@@ -191,7 +305,7 @@ pub(crate) async fn ensure_channel(
     let (channel, adopted): (SlackChannel, bool) = if let Some(found) = slack
         .find_private_channel_by_name(&name)
         .await
-        .map_err(HandlerError::from)?
+        .map_err(|error| LaneError::Slack(error.to_string()))?
     {
         (found, true)
     } else {
@@ -201,24 +315,18 @@ pub(crate) async fn ensure_channel(
                 let found = slack
                     .find_private_channel_by_name(&name)
                     .await
-                    .map_err(HandlerError::from)?
-                    .ok_or_else(|| {
-                        HandlerError::from(TerminalError::new(
-                            "Slack channel name is taken by a channel this bot cannot see; invite the bot to that private channel or archive it",
-                        ))
-                    })?;
+                    .map_err(|error| LaneError::Slack(error.to_string()))?
+                    .ok_or(LaneError::ChannelNameInvisible)?;
                 (found, true)
             }
-            Err(error) => return Err(HandlerError::from(error)),
+            Err(error) => return Err(LaneError::Slack(error.to_string())),
         }
     };
     store::projects::set_internal_slack_channel_id(surreal, project.id, &channel.id)
         .await
-        .map_err(project_command_error)?
+        .map_err(|error| project_command_error(&error))?
         .ok_or_else(|| {
-            HandlerError::from(TerminalError::new(
-                "Project disappeared while saving Slack channel",
-            ))
+            LaneError::ProjectGone("Project disappeared while saving Slack channel".to_string())
         })?;
     Ok(if adopted {
         ChannelOutcome::Adopted(channel.id)
@@ -230,11 +338,11 @@ pub(crate) async fn ensure_channel(
 async fn post_client_view_notice(
     slack: &Arc<dyn SlackBot>,
     channel_id: &str,
-) -> Result<(), HandlerError> {
+) -> Result<(), LaneError> {
     slack
         .post_message(channel_id, CLIENT_PROJECT_VIEW_MESSAGE)
         .await
-        .map_err(HandlerError::from)
+        .map_err(|error| LaneError::Slack(error.to_string()))
 }
 
 /// The root span of a `client_project_view` invocation. Identifiers only.
@@ -265,19 +373,17 @@ pub struct MainPushDestination {
     pub repository_url: Option<String>,
 }
 
-async fn main_push_destination(
+pub(crate) async fn main_push_destination(
     surreal: &store::surreal::SurrealDb,
     slack: &Arc<dyn SlackBot>,
     project_id: uuid::Uuid,
     simulated: bool,
-) -> Result<MainPushDestination, HandlerError> {
+) -> Result<MainPushDestination, LaneError> {
     let project = store::projects::find_by_id(surreal, project_id)
         .await
-        .map_err(project_store_error)?
+        .map_err(|error| project_store_error(&error))?
         .ok_or_else(|| {
-            HandlerError::from(TerminalError::new(
-                "Project no longer exists for Slack notice",
-            ))
+            LaneError::ProjectGone("Project no longer exists for Slack notice".to_string())
         })?;
     let channel = ensure_channel(surreal, slack, &project, simulated).await?;
     Ok(MainPushDestination {
@@ -353,15 +459,20 @@ impl ProjectSlackService {
                     ensure_internal_channel(&surreal, &slack, project_id, simulated)
                         .await
                         .map(Json)
+                        .map_err(LaneError::into_handler_error)
                 })
                 .name("ensure-channel")
                 .await?
                 .into_inner();
 
             let slack = Arc::clone(&self.slack);
-            ctx.run(move || async move { post_client_view_notice(&slack, &channel_id).await })
-                .name("post-client-view")
-                .await?;
+            ctx.run(move || async move {
+                post_client_view_notice(&slack, &channel_id)
+                    .await
+                    .map_err(HandlerError::from)
+            })
+            .name("post-client-view")
+            .await?;
             Ok(())
         }
         .instrument(span)
@@ -399,6 +510,7 @@ impl ProjectSlackService {
                     main_push_destination(&surreal, &slack, project_id, simulated)
                         .await
                         .map(Json)
+                        .map_err(LaneError::into_handler_error)
                 })
                 .name("resolve-destination")
                 .await?
@@ -430,8 +542,8 @@ mod tests {
     use super::{
         admit_main_push, client_project_view_span, ensure_internal_channel, main_push_span,
         post_client_view_notice, project_command_error, project_id, project_store_error,
-        render_main_push, CiOutcome, MainPushOutcome, MainPushRequest, ProjectSlackService,
-        CLIENT_PROJECT_VIEW_MESSAGE,
+        render_main_push, CiOutcome, LaneError, MainPushOutcome, MainPushRequest,
+        ProjectSlackService, CLIENT_PROJECT_VIEW_MESSAGE,
     };
     use std::sync::Arc;
     use store::projects::{create, set_internal_slack_channel_id, NewProject, ProjectCommandError};
@@ -457,21 +569,65 @@ mod tests {
 
     #[test]
     fn store_and_command_errors_other_than_db_are_terminal() {
-        let store_err = project_store_error(store::projects::ProjectStoreError::CodeTaken);
+        let store_err = project_store_error(&store::projects::ProjectStoreError::CodeTaken);
+        assert!(store_err.terminal(), "{store_err:?}");
         assert!(
-            format!("{store_err:?}").contains("already in use"),
+            store_err.to_string().contains("already in use"),
             "{store_err:?}"
         );
-        let command_err = project_command_error(ProjectCommandError::NotFound);
+        let command_err = project_command_error(&ProjectCommandError::NotFound);
+        assert!(command_err.terminal(), "{command_err:?}");
         assert!(
-            format!("{command_err:?}").contains("no matter"),
+            command_err.to_string().contains("no matter"),
             "{command_err:?}"
         );
-        let invalid = project_command_error(ProjectCommandError::Invalid("bad channel"));
+        let invalid = project_command_error(&ProjectCommandError::Invalid("bad channel"));
+        assert!(invalid.terminal(), "{invalid:?}");
+        assert!(invalid.to_string().contains("bad channel"), "{invalid:?}");
+    }
+
+    #[test]
+    fn database_unavailability_stays_retriable_and_rerenders_through_restate() {
+        let store_err = project_store_error(&store::projects::ProjectStoreError::Db(
+            surrealdb::Error::validation("the store is down".to_string(), None),
+        ));
+        assert!(!store_err.terminal(), "{store_err:?}");
+        let command_err = project_command_error(&store::projects::ProjectCommandError::Db(
+            "the store is down".to_string(),
+        ));
+        assert!(!command_err.terminal(), "{command_err:?}");
+        // The Restate path renders the same LaneError the DBOS path
+        // classifies: a retriable failure surfaces as an ordinary error the
+        // engine may retry; a terminal one renders its verdict as text.
+        let retriable = store_err.into_handler_error();
+        assert!(!format!("{retriable:?}").contains("stop"), "{retriable:?}");
+        let terminal =
+            LaneError::ProjectGone("Project no longer exists for Slack notice".to_string())
+                .into_handler_error();
         assert!(
-            format!("{invalid:?}").contains("bad channel"),
-            "{invalid:?}"
+            format!("{terminal:?}").contains("no longer exists"),
+            "{terminal:?}"
         );
+    }
+
+    #[test]
+    fn lane_errors_classify_their_retry_fate() {
+        for terminal in [
+            LaneError::ProjectGone("gone".to_string()),
+            LaneError::Refused("refused".to_string()),
+            LaneError::ChannelNameInvisible,
+            LaneError::InvalidIdentity("identity".to_string()),
+            LaneError::InvalidEvent("event".to_string()),
+        ] {
+            assert!(terminal.terminal(), "{terminal:?}");
+        }
+        for retriable in [
+            LaneError::Store("database down".to_string()),
+            LaneError::Command("database down".to_string()),
+            LaneError::Slack("Slack is down".to_string()),
+        ] {
+            assert!(!retriable.terminal(), "{retriable:?}");
+        }
     }
 
     fn push(short_sha: &str, run_attempt: u32) -> MainPushRequest {
@@ -723,7 +879,7 @@ mod tests {
         let err = ensure_internal_channel(&surreal, &slack, Uuid::now_v7(), false)
             .await
             .expect_err("missing project");
-        assert!(format!("{err:?}").contains("no longer exists"), "{err:?}");
+        assert!(err.to_string().contains("no longer exists"), "{err:?}");
     }
 
     #[tokio::test]
@@ -867,6 +1023,39 @@ mod tests {
         let error = super::ensure_channel(&surreal, &bot, &project, false)
             .await
             .expect_err("name taken");
-        assert!(format!("{error:?}").contains("cannot see"), "{error:?}");
+        assert!(error.to_string().contains("cannot see"), "{error:?}");
+    }
+
+    #[test]
+    fn a_main_push_event_refuses_what_the_portal_door_refuses() {
+        let valid = push("abc1234", 1);
+        valid.validate().expect("the portal's own shape");
+
+        let mut short_sha = push("ab", 1);
+        assert!(short_sha.validate().is_err(), "a sha shorter than 7");
+        short_sha = push("ABC1234", 1);
+        assert!(short_sha.validate().is_err(), "a sha with capitals");
+        short_sha = push("abc1234xyz", 1);
+        assert!(short_sha.validate().is_err(), "a sha with non-hex");
+
+        let mut run_url = push("abc1234", 1);
+        run_url.run_url = "http://github.com/an-organization/sample-push/actions/runs/1".into();
+        assert!(run_url.validate().is_err(), "a non-https run URL");
+        run_url.run_url = format!("https://github.com/runs/{}", "a".repeat(2024));
+        assert!(run_url.validate().is_ok(), "2048 characters still fit");
+        run_url.run_url.push('a');
+        assert!(run_url.validate().is_err(), "over 2048 characters");
+
+        let mut author_login = push("abc1234", 1);
+        author_login.author_login = "octo cat".into();
+        assert!(author_login.validate().is_err(), "a login with a space");
+        author_login.author_login = "a".repeat(40);
+        assert!(
+            author_login.validate().is_err(),
+            "a login over 39 characters"
+        );
+
+        let run_attempt = push("abc1234", 0);
+        assert!(run_attempt.validate().is_err(), "attempt zero");
     }
 }

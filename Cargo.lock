@@ -2241,6 +2241,7 @@ dependencies = [
  "pdf-extract",
  "portal",
  "predicates",
+ "project-scaffold",
  "rand 0.10.3",
  "ravif",
  "regex",
@@ -9287,6 +9288,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "project-scaffold"
+version = "26.10.30"
+dependencies = [
+ "rules",
+ "serde_yaml",
+]
+
+[[package]]
 name = "prost"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15933,6 +15942,7 @@ dependencies = [
  "sha2 0.11.1",
  "sqlx",
  "store",
+ "surrealdb",
  "telemetry",
  "tempfile",
  "thiserror 2.0.21",

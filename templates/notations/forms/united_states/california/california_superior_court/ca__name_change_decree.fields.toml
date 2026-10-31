@@ -1,0 +1,38 @@
+form_code = "ca__name_change_decree"
+
+# NC-130 (Rev. 7/1/2018) — Decree Changing Name.
+#
+# Mapped: the petitioner's caption name, the filing county, and the item-3a
+# slot (legal name when the petition was filed, and the new legal name).
+# Slots b–d stay for additional petitioners.
+#
+# Deliberately left unmapped (court completes at or after the hearing):
+# - `List1[0].LI1[0].lia[0].DateField1[0]`, `HearingCrtroom[0]`, and the
+#   `li1b[0].hearing[0]` without-hearing checkbox — hearing specifics.
+# - `List2[0].LI1[0].lib[0].SexOffender[0]/[1]` and
+#   `DeterminationClerk[0]/[1]` — the CLETS/CJIS sex-offender determination
+#   the court makes under Penal Code section 290.
+# - `List2[0].LI1[0].lic[0]/lid[0].Objections[0]` and `FillText52[0]` —
+#   objection findings.
+# - `List2[0].LI1[0].lif[0].OtherFindings_cb[0]`/`OtherFindings[0]` — any
+#   other findings the judge states.
+# - `AddlNames_OF[0]` — attachment continuation flag.
+# - `SigBlock[0].Date_dt[0]`/`T242[0]` — the judge's signature block.
+# - `Caption[0].AttyPartyInfo[0].*`, `CourtInfo[0].*` beyond the county —
+#   firm identity and court branch details.
+
+[[field]]
+name = "NC-130[0].Page1[0].Caption[0].TitlePartyName[0].Petitioner[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-130[0].Page1[0].List3[0].LI1[0].lia[0].PresentName1[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-130[0].Page1[0].List3[0].LI1[0].lia[0].NewName1[0]"
+question = "person__new_name.name"
+
+[[field]]
+name = "NC-130[0].Page1[0].Caption[0].CourtInfo[0].CrtCounty[0]"
+question = "custom_text__county_of_residence"

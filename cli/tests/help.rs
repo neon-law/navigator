@@ -125,12 +125,12 @@ fn top_level_help_keeps_orchestration_nested_under_groups() {
 }
 
 #[test]
-fn mail_help_exposes_only_read_draft_file_and_setup_actions() {
+fn mail_help_exposes_only_read_draft_file_setup_parse_and_save_actions() {
     let output = help(&["mail", "--help"]);
 
     assert_eq!(
         command_names(&output),
-        vec!["draft", "file", "read", "search", "setup", "help"]
+        vec!["draft", "file", "parse", "read", "save", "search", "setup", "help"]
     );
     assert!(!command_names(&output).contains(&"send"));
     assert!(!command_names(&output).contains(&"forward"));
@@ -156,7 +156,7 @@ fn notation_help_lists_the_notation_authoring_workbench() {
 
     assert_eq!(
         command_names(&output),
-        vec!["kinds", "pdf", "preview", "word", "help"]
+        vec!["import", "kinds", "pdf", "preview", "word", "help"]
     );
 }
 
@@ -243,7 +243,9 @@ fn projects_help_lists_the_project_workspace_verbs() {
             "deadline",
             "docket",
             "doctor",
+            "documents",
             "drift",
+            "drive-ingest",
             "efiling",
             "feedback-check",
             "finance",

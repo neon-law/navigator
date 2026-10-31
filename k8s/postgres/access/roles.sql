@@ -16,8 +16,11 @@
 -- the database because the SDK's own migration runs
 -- `CREATE SCHEMA IF NOT EXISTS dbos`, and PostgreSQL checks that right before it
 -- checks whether the schema exists.
--- No role is granted Apache AGE's `ag_catalog`; graph access is denied until a
--- change grants it deliberately. Forgejo's database and role are separate and
+-- Apache AGE is provisioned here, in this superuser init path: creating the
+-- extension needs superuser, and the `navigator-migrate` Job (and every graph
+-- query path) runs as a non-superuser login. Cypher() parses only in sessions
+-- with AGE's library loaded, so each application login preloads it for its
+-- own sessions. Forgejo's database and role are separate and
 -- untouched.
 
 \set ON_ERROR_STOP on
@@ -53,6 +56,25 @@ REVOKE ALL ON DATABASE navigator FROM PUBLIC;
 GRANT CONNECT ON DATABASE navigator TO navigator_app;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO navigator_app;
+
+-- The AGE relationship graph: the extension's `ag_catalog` is readable by the
+-- migration and runtime logins; graph DDL and the loader helpers stay with the
+-- migration login (the graph migration owns them, and execute on the loaders
+-- is revoked from PUBLIC). AGE's parser hook must be in the library preload of
+-- any session that parses Cypher, so both logins preload it per session.
+CREATE EXTENSION IF NOT EXISTS age;
+GRANT USAGE ON SCHEMA ag_catalog TO navigator_owner, navigator_app;
+-- The graph migration's idempotence guard reads ag_graph as the migration
+-- login; AGE's own runtime catalog access is in-process and needs no SQL
+-- grants, so the runtime login never reads the catalog tables (the
+-- least-privilege proof refuses them to it).
+GRANT SELECT ON ALL TABLES IN SCHEMA ag_catalog TO navigator_owner;
+-- Converge drift: an ag_catalog table read left over from an earlier
+-- iteration of this file is revoked, so the runtime login holds schema USAGE
+-- only (the least-privilege proof refuses catalog reads to it).
+REVOKE ALL ON ALL TABLES IN SCHEMA ag_catalog FROM navigator_app;
+ALTER ROLE navigator_owner IN DATABASE navigator SET session_preload_libraries = 'age';
+ALTER ROLE navigator_app IN DATABASE navigator SET session_preload_libraries = 'age';
 
 -- Objects created before these roles existed (by the bootstrap superuser)
 -- move to the migration login. Extension members stay with their extension,

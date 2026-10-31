@@ -7,7 +7,8 @@
 //! (`project_id`, `slug`, newest id first) reads the same in both stores.
 //!
 //! The row is read raw rather than through [`crate::assets::Asset`]: the
-//! JSON columns (`metadata`, `derived_from`, `signing`, `notarization`) are
+//! JSON columns (`metadata`, `derived_from`, `signing`, `notarization`,
+//! `evidence`) are
 //! copied exactly as SurrealDB stores them, never re-parsed into a shape
 //! this build understands. Checksums, storage keys, visibility, mail
 //! provenance, and the soft-deletion, Legal Hold, and purge stamps are
@@ -59,6 +60,7 @@ const ASSET_COLUMNS: &[&str] = &[
     "transcript_quality",
     "signing",
     "notarization",
+    "evidence",
     "deleted_at",
     "purge_after",
     "deleted_by_person_id",
@@ -76,7 +78,7 @@ static ASSET_SELECT: LazyLock<String> = LazyLock::new(|| select_sql("asset", ASS
 const ASSET_SOURCE_FIELDS: &str = "id, storage_key, secondary_storage_key, content_type, \
     byte_size, sha256_hex, project_id, filename, kind, source, received_at, description, \
     visibility, slug, published_at, source_message_id, source_sender, source_received_at, \
-    source_subject, metadata, derived_from, transcript_quality, signing, notarization, \
+    source_subject, metadata, derived_from, transcript_quality, signing, notarization, evidence, \
     deleted_at, purge_after, deleted_by_person_id, deleted_commit_sha, legal_hold_at, purged_at, \
     inserted_at, updated_at";
 
@@ -107,6 +109,7 @@ struct AssetSource {
     transcript_quality: Option<String>,
     signing: Option<Json>,
     notarization: Option<Json>,
+    evidence: Option<Json>,
     deleted_at: Option<surrealdb::types::Datetime>,
     purge_after: Option<surrealdb::types::Datetime>,
     deleted_by_person_id: Option<surrealdb::types::RecordId>,
@@ -143,6 +146,7 @@ struct AssetImage {
     transcript_quality: Option<String>,
     signing: Option<Json>,
     notarization: Option<Json>,
+    evidence: Option<Json>,
     deleted_at: Option<DateTime<Utc>>,
     purge_after: Option<DateTime<Utc>>,
     deleted_by_person_id: Option<Uuid>,
@@ -197,6 +201,7 @@ impl AssetImage {
             transcript_quality: row.transcript_quality,
             signing: json(row.signing),
             notarization: json(row.notarization),
+            evidence: json(row.evidence),
             deleted_at: instant(row.deleted_at),
             purge_after: instant(row.purge_after),
             deleted_by_person_id: link(row.deleted_by_person_id.as_ref())?,
@@ -238,6 +243,7 @@ impl AssetImage {
             transcript_quality: row.try_get("transcript_quality")?,
             signing: jsonb("signing")?,
             notarization: jsonb("notarization")?,
+            evidence: jsonb("evidence")?,
             deleted_at: row.try_get("deleted_at")?,
             purge_after: row.try_get("purge_after")?,
             deleted_by_person_id: row.try_get("deleted_by_person_id")?,
@@ -335,6 +341,7 @@ async fn upsert_asset(pg: &PostgresDb, asset: &AssetImage) -> Result<Mirrored, M
         .bind(&asset.transcript_quality)
         .bind(asset.signing.as_ref().map(Jsonb))
         .bind(asset.notarization.as_ref().map(Jsonb))
+        .bind(asset.evidence.as_ref().map(Jsonb))
         .bind(asset.deleted_at)
         .bind(asset.purge_after)
         .bind(asset.deleted_by_person_id)

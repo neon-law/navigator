@@ -96,7 +96,10 @@ const MAIL_DIRECTORY: &str = "mail";
 /// `Y024` reports a present root `.gitignore` that lacks any of these lines
 /// and never rewrites it; `navigator project repository sync-skills` restores
 /// them ([`repair_root_gitignore`]).
-pub(crate) const ROOT_GITIGNORE: &str = "# Document bytes staged for or pulled down by `navigator project sync`.\n# Each document's pointer is committed under blobs/; its bytes never are.\n/documents/\n\n# Legal files and handoff notes never enter a Project repository.\n*.pdf\n*.docx\n*.local\n\n# Call notes and memos for `navigator project communication create --body-file`.\n# The Communication's body lives in Navigator's store, never in Git.\nnotes/\n\n# Email bodies, drafts, and saved copies of sent mail. Matter facts, never Git.\nmail/\n\n# Per-machine agent and operating-system state.\n.claude/settings.local.json\n.claude/worktrees/\n.agents/settings.local.json\n.agents/worktrees/\n.DS_Store\n";
+///
+/// The canonical bytes live in `project-scaffold` so this CLI's scaffold and
+/// the server-side repository seeding write the same bytes.
+pub(crate) use project_scaffold::ROOT_GITIGNORE;
 /// The [`ROOT_GITIGNORE`] lines whose absence is an error rather than drift:
 /// without them a document's bytes, a rendered pleading, a downloaded
 /// exhibit, or a handoff note can be committed (LAW-181).
@@ -147,7 +150,9 @@ const FINAL_RETIRED_WORKFLOW_RELEASE: &str = "26.9.23";
 /// `store::sample_project::MANIFEST_FILE` names, a Project repository's
 /// manifest and a staged sample bundle's manifest are the same file, read by
 /// different tools, not two schemas that happen to overlap.
-pub(crate) const PROJECT_MANIFEST: &str = "navigator.yaml";
+/// The Project manifest's canonical bytes live in `project-scaffold` so this
+/// CLI's scaffold and the server-side repository seeding agree on the file.
+pub(crate) use project_scaffold::PROJECT_MANIFEST;
 const CODEOWNERS: &str = "# CODEOWNERS\n\n* @shicholas\n";
 /// Seed-shaped YAML documents for `navigator site import`, one file per model.
 const SEED_DIRECTORY: &str = "seeds";
@@ -307,80 +312,9 @@ const FORBIDDEN_DOCUMENT_EXTENSIONS: &[&str] = &["doc", "docx", "odt", "pdf"];
 /// the notation template, with the template kept the source of truth.
 /// `analyze-memo` (LAW-237) reviews a finished memo or letter and reports
 /// findings before any correction is applied.
-pub(crate) const SYNCED_SKILLS: &[(&str, &str)] = &[
-    (
-        "council",
-        include_str!("../../../.agents/skills/council/SKILL.md"),
-    ),
-    (
-        "legal-council",
-        include_str!("../../../.agents/skills/legal-council/SKILL.md"),
-    ),
-    (
-        "analyze-memo",
-        include_str!("../../../.agents/skills/analyze-memo/SKILL.md"),
-    ),
-    (
-        "client-council",
-        include_str!("../../../.agents/skills/client-council/SKILL.md"),
-    ),
-    (
-        "human-readable",
-        include_str!("../../../.agents/skills/human-readable/SKILL.md"),
-    ),
-    (
-        "stay-in-repo",
-        include_str!("../../../.agents/skills/stay-in-repo/SKILL.md"),
-    ),
-    (
-        "legal-writing",
-        include_str!("../../../.agents/skills/legal-writing/SKILL.md"),
-    ),
-    (
-        "case-downloader",
-        include_str!("../../../.agents/skills/case-downloader/SKILL.md"),
-    ),
-    (
-        "project-setup",
-        include_str!("../../../.agents/skills/project-setup/SKILL.md"),
-    ),
-    (
-        "deadline",
-        include_str!("../../../.agents/skills/deadline/SKILL.md"),
-    ),
-    (
-        "browser-handoff",
-        include_str!("../../../.agents/skills/browser-handoff/SKILL.md"),
-    ),
-    (
-        "case-timeline",
-        include_str!("../../../.agents/skills/case-timeline/SKILL.md"),
-    ),
-    (
-        "opposing-communication-review",
-        include_str!("../../../.agents/skills/opposing-communication-review/SKILL.md"),
-    ),
-    (
-        "record-search",
-        include_str!("../../../.agents/skills/record-search/SKILL.md"),
-    ),
-    (
-        "working-notes",
-        include_str!("../../../.agents/skills/working-notes/SKILL.md"),
-    ),
-    (
-        "pull-changes",
-        include_str!("../../../.agents/skills/pull-changes/SKILL.md"),
-    ),
-    (
-        "push-changes",
-        include_str!("../../../.agents/skills/push-changes/SKILL.md"),
-    ),
-    (
-        "word-editing",
-        include_str!("../../../.agents/skills/word-editing/SKILL.md"),
-    ),
-];
+/// The canonical bytes live in `project-scaffold` so this CLI's scaffold and
+/// the server-side repository seeding write the same copies.
+pub(crate) use project_scaffold::SYNCED_SKILLS;
 
 #[derive(Debug)]
 struct Finding {
@@ -485,6 +419,7 @@ pub(crate) fn validate_gate(
     validate_codeowners(root, &mut errors);
     validate_automerge_workflow(root, write_fixes, &mut errors);
     validate_tracked_files(root, write_fixes, &mut errors, &mut warnings);
+    validate_client_visibility(root, &mut warnings);
     validate_skills(root, &mut errors);
     validate_documented_cli(root, &mut errors);
     let blueprints = blueprint_selection(root, &mut errors, &mut warnings);
@@ -2359,6 +2294,69 @@ pub(crate) fn validate_tracked_files_only(root: &Path) -> usize {
     errors.len()
 }
 
+/// `Y025` — a pointer a checkout proposes carries `visibility: client`.
+///
+/// Ask #3 of LAW-144: the reviewer sees exactly what newly reaches the
+/// client. The gate runs inside one repository's CI with no live row, so it
+/// cannot know whether the matter has onboarded — it reports every
+/// client-visible pointer the tracked tree proposes, which is precisely what
+/// a pull request's merge would add or change. A warning, never an error:
+/// client visibility is a deliberate choice to make, not a thing to forbid.
+pub(crate) const CLIENT_VISIBILITY_CODE: &str = "Y025";
+
+/// Whether a tracked relative path is a committed document pointer.
+fn is_pointer_path(relative: &str) -> bool {
+    let mut components = relative.split('/');
+    components.next() == Some("blobs")
+        && std::path::Path::new(relative)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("yaml"))
+}
+
+/// The [`CLIENT_VISIBILITY_CODE`] check: one warning per `visibility: client`
+/// pointer under `blobs/`. Unparseable pointers stay silent here — the
+/// layout pass already judges pointer validity, and a warning built from a
+/// pointer this one cannot read would invent its fields.
+fn validate_client_visibility(root: &Path, warnings: &mut Vec<Finding>) {
+    let Ok(files) = git_tracked_and_stageable_files(root) else {
+        // The enumeration failure is already an error in the tracked-file
+        // pass; reporting it twice adds noise, not information.
+        return;
+    };
+    for path in files {
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        let relative = relative
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        if !is_pointer_path(&relative) {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(pointer) = store::document_pointers::DocumentPointer::from_yaml(&contents) else {
+            continue;
+        };
+        if pointer.visibility != "client" {
+            continue;
+        }
+        warnings.push(Finding::at(
+            path,
+            format!(
+                "{CLIENT_VISIBILITY_CODE}: `{relative}` carries `visibility: client`: this \
+                 revision reaches the client the moment it lands. Confirm the \
+                 client-visibility review is a deliberate choice (LAW-144) — especially \
+                 while the matter is still a pitch, when substantive client-visible work \
+                 has no engagement behind it yet"
+            ),
+        ));
+    }
+}
+
 /// `Y010` — a Project template names `Neon Law` with a corporate suffix that is
 /// not the firm entity of record.
 ///
@@ -2657,37 +2655,53 @@ pub(crate) fn emit_scaffold_for(
         anyhow::bail!("invalid immutable Project code `{code}`");
     }
     fs::create_dir_all(root)?;
+    // The forge-agnostic files — README, .gitignore, navigator.yaml, the
+    // onboarding Draft placeholder — are the shared module's bytes, the same
+    // set the server commits when it seeds a Project repository.
+    let source = project_scaffold::ScaffoldSource {
+        code,
+        host,
+        lawyer_dri,
+        client_dri,
+        version: crate::cli_version(),
+    };
     let files = [
-        ("README.md", format!("# Project repository\n\nNavigator Project `{code}`.\n")),
-        ("AGENTS.md", AGENT_CONTRACT_BASE.to_string()),
-        (CLAUDE_SETTINGS, CLAUDE_SETTINGS_CONTENTS.to_string()),
-        (".github/workflows/ci.yml", workflow_for(DEFAULT_WORKFLOW_HOME, crate::cli_version())),
-        (".github/workflows/cd.yml", cd_workflow_for(DEFAULT_WORKFLOW_HOME, crate::cli_version())),
-        (".github/CODEOWNERS", CODEOWNERS.to_string()),
-        ("LICENSE", include_str!("../../../LICENSE").to_string()),
+        ("AGENTS.md".to_string(), AGENT_CONTRACT_BASE.to_string()),
         (
-            "LICENSE-MIT",
+            CLAUDE_SETTINGS.to_string(),
+            CLAUDE_SETTINGS_CONTENTS.to_string(),
+        ),
+        (
+            ".github/workflows/ci.yml".to_string(),
+            workflow_for(DEFAULT_WORKFLOW_HOME, crate::cli_version()),
+        ),
+        (
+            ".github/workflows/cd.yml".to_string(),
+            cd_workflow_for(DEFAULT_WORKFLOW_HOME, crate::cli_version()),
+        ),
+        (".github/CODEOWNERS".to_string(), CODEOWNERS.to_string()),
+        (
+            "LICENSE".to_string(),
+            include_str!("../../../LICENSE").to_string(),
+        ),
+        (
+            "LICENSE-MIT".to_string(),
             include_str!("../../../LICENSE-MIT").to_string(),
         ),
         (
-            "LICENSE-APACHE-2",
+            "LICENSE-APACHE-2".to_string(),
             include_str!("../../../LICENSE-APACHE-2").to_string(),
         ),
-        (".gitignore", ROOT_GITIGNORE.to_string()),
-        (
-            PROJECT_MANIFEST,
-            format!(
-                "version: {}\nproject:\n  host: {}\n  name: {}\n  lawyer_dri: {}\n  client_dri: {}\n  private_slack_channel: not provisioned\n  private_notion_page: not provisioned\n",
-                crate::cli_version(), host, code, lawyer_dri, client_dri
-            ),
-        ),
     ];
-    let (draft, stub) = super::lifecycle::scaffold_draft(super::lifecycle::ONBOARDING);
-    let forgejo_gate = (forge == cloud::ForgeBackend::Forgejo)
-        .then(|| (FORGEJO_GATE_WORKFLOW, forgejo_gate_workflow()));
-    for (relative, contents) in files
+    let forgejo_gate = (forge == cloud::ForgeBackend::Forgejo).then(|| {
+        (
+            project_scaffold::FORGEJO_GATE_WORKFLOW.to_string(),
+            project_scaffold::forgejo_gate_workflow(),
+        )
+    });
+    for (relative, contents) in project_scaffold::canonical_files(&source)
         .into_iter()
-        .chain([(draft.as_str(), stub)])
+        .chain(files)
         .chain(forgejo_gate)
     {
         let path = root.join(relative);
@@ -2722,8 +2736,8 @@ pub(crate) fn emit_scaffold_for(
 /// Write Navigator's canonical Agent Skills. The scaffold always writes them;
 /// [`repair_skills`] restores a drifted copy and reports what changed.
 pub(crate) fn emit_synced_skills(root: &Path) -> anyhow::Result<()> {
-    for (name, contents) in SYNCED_SKILLS {
-        let path = root.join(".agents/skills").join(name).join("SKILL.md");
+    for (relative, contents) in project_scaffold::synced_skill_files() {
+        let path = root.join(relative);
         let parent = path
             .parent()
             .ok_or_else(|| anyhow::anyhow!("skill output path has no parent"))?;
@@ -2933,92 +2947,15 @@ jobs:
     )
 }
 
-/// The gate workflow a Forgejo-backed Project repository carries. Forgejo
-/// Actions reads `.forgejo/workflows/` and ignores `.github/workflows/` when
-/// it exists, so `ci.yml` and `cd.yml` stay for GitHub and this file is the
-/// whole Forgejo gate. The deployment's `NAVIGATOR_FORGEJO_ACTIONS_OIDC_WORKFLOW`
-/// names this exact path: the Forgejo document-token door trusts no other.
-pub(crate) const FORGEJO_GATE_WORKFLOW: &str = ".forgejo/workflows/gate.yml";
-
-/// The commit-status context [`forgejo_gate_workflow`] posts, which `main`'s
-/// branch protection requires: `<workflow name> / <job> (<event>)`.
-pub(crate) const FORGEJO_REQUIRED_CHECK: &str = "gate / gate (pull_request)";
-
-/// The Forgejo Actions gate: on every pull request, check out its head,
-/// install the `navigator` release `navigator.yaml` pins, and run
-/// `navigator project gate --ci`. `enable-openid-connect` makes the runner
-/// export `ACTIONS_ID_TOKEN_REQUEST_*`; the CLI requests a token audienced to
-/// the manifest's host and exchanges it at `/auth/ci/forgejo/document-token`.
-///
-/// Every step is plain shell, so the workflow needs no action repository the
-/// Forgejo installation would have to mirror. The binary installs outside the
-/// checkout, where the gate's closed root list would refuse it.
-pub(crate) fn forgejo_gate_workflow() -> String {
-    use crate::lsp_download::RELEASE_DOWNLOAD_BASE;
-    format!(
-        r#"# Generated by `navigator project scaffold`; `navigator project repository
-# sync-skills` restores it. Posts the required check `{FORGEJO_REQUIRED_CHECK}`.
-name: gate
-
-on:
-  pull_request:
-
-jobs:
-  gate:
-    runs-on: self-hosted
-    enable-openid-connect: true
-    steps:
-      - name: check out the pull request
-        env:
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: http.extraHeader
-          GIT_CONFIG_VALUE_0: "Authorization: token ${{{{ forgejo.token }}}}"
-          SERVER_URL: ${{{{ forgejo.server_url }}}}
-          REPOSITORY: ${{{{ forgejo.repository }}}}
-          REF: ${{{{ forgejo.ref }}}}
-        run: |
-          set -eu
-          git init --quiet .
-          git fetch --quiet --depth 1 "${{SERVER_URL%/}}/${{REPOSITORY}}.git" "${{REF}}"
-          git checkout --quiet --force --detach FETCH_HEAD
-          git clean --quiet -ffdx
-      - name: install the pinned navigator release
-        run: |
-          set -eu
-          version="$(sed -n 's/^version:[[:space:]]*//p' navigator.yaml | head -n 1 | tr -d "\"' \r")"
-          if ! printf '%s\n' "${{version}}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
-            echo "::error::navigator.yaml version must be an exact release tag, not '${{version}}'."
-            exit 1
-          fi
-          case "$(uname -s)" in
-            Linux) platform=linux ;;
-            Darwin) platform=macos ;;
-            *) echo "::error::unsupported runner OS $(uname -s)"; exit 1 ;;
-          esac
-          asset="navigator-${{version}}-${{platform}}.tar.gz"
-          release="{RELEASE_DOWNLOAD_BASE}/${{version}}"
-          bin="$(mktemp -d)"
-          cd "${{bin}}"
-          for file in "${{asset}}" "${{asset}}.sha256"; do
-            if command -v curl >/dev/null 2>&1; then
-              curl -fsSL -o "${{file}}" "${{release}}/${{file}}"
-            else
-              wget -q -O "${{file}}" "${{release}}/${{file}}"
-            fi
-          done
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum -c "${{asset}}.sha256"
-          else
-            shasum -a 256 -c "${{asset}}.sha256"
-          fi
-          tar -xzf "${{asset}}" navigator
-          chmod 0755 navigator
-          echo "${{bin}}" >> "${{GITHUB_PATH}}"
-      - name: navigator project gate
-        run: navigator project gate --ci
-"#
-    )
-}
+/// The required check is named by the gate tests and by Forgejo deployment
+/// fixtures; no production path re-derives it.
+#[cfg(test)]
+pub(crate) use project_scaffold::FORGEJO_REQUIRED_CHECK;
+/// The gate workflow a Forgejo-backed Project repository carries, and the
+/// commit-status context it posts. The canonical bytes live in
+/// `project-scaffold` so this CLI's scaffold and the server-side repository
+/// seeding write the same workflow.
+pub(crate) use project_scaffold::{forgejo_gate_workflow, FORGEJO_GATE_WORKFLOW};
 
 /// The forge this process scaffolds for, from `NAVIGATOR_FORGE_BACKEND`
 /// (unset is GitHub).
@@ -3053,13 +2990,13 @@ mod tests {
         lint_project_template, misnamed_firm_entities, missing_root_gitignore_lines,
         publish_workflow_prefix, repair_root_gitignore, repair_skills, repository_name,
         retired_workflow_refused, validate_agent_contract, validate_cd_workflow,
-        validate_documents_gitignore, validate_gate, validate_github_path, validate_layout,
-        validate_skills, validate_workflow, workflow, workflow_for, Finding, LayoutOutcome,
-        AGENT_CONTRACT_BASE, ALLOWED_ROOTS, AUTOMERGE_WORKFLOW_CONTENTS, CD_WORKFLOW,
-        CLAUDE_SETTINGS, CLAUDE_SETTINGS_CONTENTS, DEFAULT_WORKFLOW_HOME, DRAFT_DIRECTORY,
-        ENTITY_CODE, FINAL_RETIRED_WORKFLOW_RELEASE, FIRM_TRADE_NAME_CODE, PROJECT_MANIFEST,
-        RETIRED_CD_WORKFLOW, RETIRED_SYNCED_SKILLS, RETIRED_WORKFLOW, ROOT_GITIGNORE,
-        SYNCED_SKILLS, TEMPLATE_DIRECTORY, WORKFLOW,
+        validate_client_visibility, validate_documents_gitignore, validate_gate,
+        validate_github_path, validate_layout, validate_skills, validate_workflow, workflow,
+        workflow_for, Finding, LayoutOutcome, AGENT_CONTRACT_BASE, ALLOWED_ROOTS,
+        AUTOMERGE_WORKFLOW_CONTENTS, CD_WORKFLOW, CLAUDE_SETTINGS, CLAUDE_SETTINGS_CONTENTS,
+        DEFAULT_WORKFLOW_HOME, DRAFT_DIRECTORY, ENTITY_CODE, FINAL_RETIRED_WORKFLOW_RELEASE,
+        FIRM_TRADE_NAME_CODE, PROJECT_MANIFEST, RETIRED_CD_WORKFLOW, RETIRED_SYNCED_SKILLS,
+        RETIRED_WORKFLOW, ROOT_GITIGNORE, SYNCED_SKILLS, TEMPLATE_DIRECTORY, WORKFLOW,
     };
     use super::{
         tracked_file_admitted, validate_tracked_files, CANONICAL_GITATTRIBUTES, CODEOWNERS,
@@ -4917,6 +4854,104 @@ jobs:
         );
     }
 
+    /// One `visibility: client` pointer under `blobs/`, as YAML text.
+    fn pointer_yaml(visibility: &str) -> String {
+        format!(
+            "kind: agreement\nvisibility: {visibility}\ncurrent_version:\n  version: 1\n  \
+             asset_id: 018f1a2b-3c4d-7e5f-8a9b-0c1d2e3f4a5b\n  \
+             created_at: \"2026-10-30T00:00:00Z\"\n  \
+             sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n  \
+             size_bytes: 42\n"
+        )
+    }
+
+    fn client_visibility_warnings(root: &Path) -> Vec<String> {
+        let mut warnings: Vec<Finding> = Vec::new();
+        validate_client_visibility(root, &mut warnings);
+        warnings
+            .into_iter()
+            .map(|finding| finding.message)
+            .collect()
+    }
+
+    /// LAW-144 ask #3: the gate names every `visibility: client` pointer the
+    /// checkout proposes, so the reviewer sees exactly what newly reaches the
+    /// client.
+    #[test]
+    fn a_client_visible_pointer_warns() {
+        let root = tempfile::tempdir().unwrap();
+        scaffold_minimal(root.path());
+        write_files(root.path(), &["blobs/complaint.pdf.yaml"]);
+        fs::write(
+            root.path().join("blobs/complaint.pdf.yaml"),
+            pointer_yaml("client"),
+        )
+        .unwrap();
+
+        let warnings = client_visibility_warnings(root.path());
+        assert_eq!(warnings.len(), 1, "{warnings:#?}");
+        assert!(
+            warnings[0].starts_with("Y025: `blobs/complaint.pdf.yaml`"),
+            "{warnings:#?}"
+        );
+        assert!(warnings[0].contains("visibility: client"), "{warnings:#?}");
+    }
+
+    /// The default posture is internal: an all-internal checkout — a matter
+    /// still a pitch included — collects no Y025 warning at all.
+    #[test]
+    fn internal_pointers_and_non_pointer_yaml_stay_silent() {
+        let root = tempfile::tempdir().unwrap();
+        scaffold_minimal(root.path());
+        write_files(
+            root.path(),
+            &[
+                "blobs/retainer.pdf.yaml",
+                "blobs/memos/notes.md.yaml",
+                "seeds/people.yaml",
+            ],
+        );
+        fs::write(
+            root.path().join("blobs/retainer.pdf.yaml"),
+            pointer_yaml("internal"),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("blobs/memos/notes.md.yaml"),
+            pointer_yaml("internal"),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("seeds/people.yaml"),
+            "kind: not a pointer\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            client_visibility_warnings(root.path()),
+            Vec::<String>::new()
+        );
+    }
+
+    /// A pointer this check cannot parse is the layout pass's finding, not
+    /// this one: Y025 never invents a visibility for a file it cannot read.
+    #[test]
+    fn an_unparseable_pointer_is_not_reported_as_client_visible() {
+        let root = tempfile::tempdir().unwrap();
+        scaffold_minimal(root.path());
+        write_files(root.path(), &["blobs/broken.pdf.yaml"]);
+        fs::write(
+            root.path().join("blobs/broken.pdf.yaml"),
+            "kind: agreement\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            client_visibility_warnings(root.path()),
+            Vec::<String>::new()
+        );
+    }
+
     /// One fixture per refused class: Node package files and lockfiles,
     /// TypeScript and JavaScript, Python, shell, `tests/` code, and a binary.
     /// Each is its own `Y024` error naming the path, wherever it sits —
@@ -6247,5 +6282,37 @@ mod forgejo_gate_tests {
         let root = scaffold(ForgeBackend::Forgejo);
         let tree = crate::projects::source_import::tree_from_checkout(root.path()).unwrap();
         assert!(tree.files.contains_key(FORGEJO_GATE_WORKFLOW));
+    }
+
+    /// The blueprint's locked decision: the scaffold bytes are shared with
+    /// the CLI scaffold generator — one source of truth, asserted equal by
+    /// test. `project_scaffold::forgejo_seed_files` is exactly what the
+    /// server commits through `ForgeService::initialize_source`, and what
+    /// this CLI writes through `emit_scaffold_for` for the same inputs.
+    #[test]
+    fn the_shared_seed_set_is_byte_identical_to_the_cli_scaffold() {
+        let root = scaffold(ForgeBackend::Forgejo);
+        let source = project_scaffold::ScaffoldSource {
+            code: "matter-one",
+            host: "staging.neonlaw.com",
+            lawyer_dri: "lawyer@example.com",
+            client_dri: "client@example.com",
+            version: crate::cli_version(),
+        };
+        let seeded = project_scaffold::forgejo_seed_files(&source);
+        assert!(
+            seeded.iter().any(|(path, _)| path == FORGEJO_GATE_WORKFLOW),
+            "the Forgejo seed set carries the gate"
+        );
+        for (relative, contents) in seeded {
+            assert_eq!(
+                fs::read_to_string(root.path().join(&relative)).unwrap(),
+                contents,
+                "{relative} forked from the CLI scaffold"
+            );
+        }
+        // A GitHub-backed scaffold never carries the gate.
+        let github = scaffold(ForgeBackend::GitHub);
+        assert!(!github.path().join(FORGEJO_GATE_WORKFLOW).exists());
     }
 }

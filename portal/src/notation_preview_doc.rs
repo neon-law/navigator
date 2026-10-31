@@ -18,6 +18,7 @@
 //! store, no runtime, no Notation — which is what lets a template be
 //! previewed before it has ever been imported, let alone bound to a matter.
 
+use views::questionnaire_preview::ParseFailure;
 use webapp::notation_demo::DemoQuestion;
 use webapp::notation_preview::PreviewDoc;
 use webapp::notation_workflow::WorkflowStateView;
@@ -26,9 +27,15 @@ use webapp::notation_workflow::WorkflowStateView;
 /// answering this" demo — parsed with no live Notation and no domain-crate
 /// dependency (see `views::questionnaire_preview`'s own doc comment for why
 /// that reader exists separately from `workflows::notation_session`).
-#[must_use]
-pub fn demo_questions(frontmatter: &str) -> Vec<DemoQuestion> {
-    views::questionnaire_preview::parse(frontmatter)
+///
+/// # Errors
+///
+/// Returns the parse failure when the template declares a questionnaire
+/// that cannot be read — the caller logs it and renders the visible panel,
+/// never a silently empty demo.
+pub fn demo_questions(frontmatter: &str) -> Result<Vec<DemoQuestion>, ParseFailure> {
+    let questions = views::questionnaire_preview::parse(frontmatter)?;
+    Ok(questions
         .into_iter()
         .map(|q| {
             let interactive = q.is_interactive();
@@ -52,7 +59,7 @@ pub fn demo_questions(frontmatter: &str) -> Vec<DemoQuestion> {
                     .collect(),
             }
         })
-        .collect()
+        .collect())
 }
 
 /// The template's declared `workflow:` state machine, ready for the sample
@@ -78,26 +85,98 @@ pub fn demo_workflow(frontmatter: &str) -> Vec<WorkflowStateView> {
 /// blank and a letter, which declares none, links nowhere.
 #[must_use]
 pub fn from_markdown(slug: &str, source_href: &str, src: &str) -> PreviewDoc {
-    let composed = rules::clauses::compile(src)
-        .unwrap_or_else(|error| format!("---\ntitle: Invalid Clause reference\n---\n\n{error}"));
+    let (composed, composition_error) = match rules::clauses::compile(src) {
+        Ok(composed) => (composed, None),
+        Err(error) => {
+            // Loud, not silent: the degraded page still renders (the
+            // composition error becomes the document), and the structured
+            // warning carries the slug so logs name the template.
+            tracing::warn!(
+                template_slug = %slug,
+                error = %error,
+                "clause compilation degraded; the preview renders the composition error"
+            );
+            (
+                format!("---\ntitle: Invalid Clause reference\n---\n\n{error}"),
+                Some(error),
+            )
+        }
+    };
     let doc = views::harvard_outline::parse(&composed);
     let frontmatter = doc.frontmatter.clone().unwrap_or_default();
     let origin_url = views::harvard_outline::frontmatter_field(&frontmatter, "origin_url");
+    let (demo_questions, questionnaire_error) = match demo_questions(&frontmatter) {
+        Ok(questions) => (questions, None),
+        Err(failure) => {
+            tracing::warn!(
+                template_slug = %slug,
+                error = %failure,
+                "questionnaire preview degraded; the page renders the failure panel"
+            );
+            (Vec::new(), Some(failure.to_string()))
+        }
+    };
+    let questionnaire_error = composition_error
+        .map(|error| format!("Clause composition failed: {error}"))
+        .or(questionnaire_error);
     PreviewDoc {
         slug: slug.to_string(),
         title: doc.title.clone(),
         source_href: source_href.to_string(),
-        demo_questions: demo_questions(&frontmatter),
+        demo_questions,
         demo_workflow: demo_workflow(&frontmatter),
         frontmatter,
         stage_html: views::harvard_outline::stage_html(&doc),
         origin_url,
+        questionnaire_error,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::from_markdown;
+
+    /// A cloneable in-memory writer that captures the structured warnings
+    /// `from_markdown` emits, so a test can assert the trace a
+    /// stalled-preview investigation starts from.
+    #[derive(Clone, Default)]
+    struct LogBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBuf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log buffer lock").extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuf {
+        type Writer = LogBuf;
+        fn make_writer(&'a self) -> LogBuf {
+            self.clone()
+        }
+    }
+
+    /// Install a JSON subscriber writing into `buf` as this thread's
+    /// default. Same pattern as `a2a`'s audit-capture tests.
+    fn capture_into(
+        buf: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    ) -> tracing::subscriber::DefaultGuard {
+        crate::test_tracing::ensure_callsite_interest();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(LogBuf(buf.clone()))
+            .finish();
+        tracing::subscriber::set_default(subscriber)
+    }
+
+    fn logged(buf: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> String {
+        String::from_utf8(buf.lock().expect("log buffer lock").clone())
+            .expect("captured log is UTF-8")
+    }
 
     #[test]
     fn clause_references_reach_the_preview_as_prose_and_questions() {
@@ -123,6 +202,11 @@ mod tests {
         assert!(doc.demo_questions.is_empty());
         assert!(doc.stage_html.contains("retired"));
         assert!(!doc.stage_html.contains("Governing law:"));
+        let error = doc
+            .questionnaire_error
+            .expect("the retired reference degrades loudly, not silently");
+        assert!(error.contains("Clause composition failed"), "{error}");
+        assert!(error.contains("retired"), "{error}");
     }
 
     #[test]
@@ -132,6 +216,69 @@ mod tests {
         assert_eq!(doc.title, "Invalid Clause reference");
         assert!(doc.demo_questions.is_empty());
         assert!(doc.stage_html.contains("unknown Clause version"));
+        assert!(doc.questionnaire_error.is_some());
+    }
+
+    /// The brief's malformed-template contract: a template whose declared
+    /// questionnaire cannot be read emits the structured warning — carrying
+    /// the template slug and the parse error — and the doc surfaces the
+    /// panel error, where HEAD's parse used to return a silently empty
+    /// demo.
+    #[test]
+    fn a_malformed_questionnaire_warns_with_the_slug_and_the_error() {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let _guard = capture_into(&buf);
+        let source =
+            "---\ntitle: Broken\nquestionnaire:\n  BEGIN:\n    _: END\n  END: {}\n---\n\nBody.\n";
+        let doc = from_markdown("sample-will", "", source);
+
+        let log = logged(&buf);
+        assert!(
+            log.contains("questionnaire preview degraded"),
+            "warning event: {log}"
+        );
+        assert!(
+            log.contains("sample-will"),
+            "warning carries the slug: {log}"
+        );
+        assert!(
+            log.contains("no steps resolve"),
+            "warning carries the parse error: {log}"
+        );
+
+        let error = doc
+            .questionnaire_error
+            .expect("a declared-but-unreadable questionnaire fails loud");
+        assert!(error.contains("no steps resolve"), "{error}");
+        assert!(doc.demo_questions.is_empty());
+    }
+
+    /// The clause-compile path warns with the same shape: slug + error.
+    #[test]
+    fn a_degraded_clause_composition_warns_with_the_slug_and_the_error() {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let _guard = capture_into(&buf);
+        let source = "---\nkind: agreement\nclauses:\n  law:\n    source: absent@1\n---\n{{> law}}";
+        let doc = from_markdown("sample-form", "", source);
+
+        let log = logged(&buf);
+        assert!(
+            log.contains("clause compilation degraded"),
+            "warning event: {log}"
+        );
+        assert!(
+            log.contains("sample-form"),
+            "warning carries the slug: {log}"
+        );
+        assert!(
+            log.contains("unknown Clause version"),
+            "warning carries the compile error: {log}"
+        );
+
+        let error = doc
+            .questionnaire_error
+            .expect("a composition failure degrades loudly");
+        assert!(error.contains("Clause composition failed"), "{error}");
     }
 
     /// A template with both blocks projects onto a page carrying both

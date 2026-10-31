@@ -47,6 +47,81 @@ const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
         "us__naturalization",
         include_str!("../../templates/notations/forms/united_states/federal/uscis/us__naturalization.fields"),
     ),
+    // First-wave court forms: statewide Judicial Council blanks (California)
+    // and Nevada Supreme Court self-help blanks, re-authored so every /T
+    // name carries its canonical questionnaire state path.
+    (
+        "ca__name_change_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_petition.fields"
+        ),
+    ),
+    (
+        "ca__name_change_attachment",
+        include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_attachment.fields"
+        ),
+    ),
+    (
+        "ca__name_change_order_to_show_cause",
+        include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_order_to_show_cause.fields"
+        ),
+    ),
+    (
+        "ca__name_change_decree",
+        include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_decree.fields"
+        ),
+    ),
+    (
+        "ca__civil_case_cover_sheet",
+        include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__civil_case_cover_sheet.fields"
+        ),
+    ),
+    (
+        "ca__gender_identity_name_change_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_petition.fields"
+        ),
+    ),
+    (
+        "ca__gender_identity_name_change_order_to_show_cause",
+        include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_order_to_show_cause.fields"
+        ),
+    ),
+    (
+        "ca__gender_identity_name_change_decree",
+        include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_decree.fields"
+        ),
+    ),
+    (
+        "ca__gender_recognition_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_recognition_petition.fields"
+        ),
+    ),
+    (
+        "ca__gender_recognition_order",
+        include_str!(
+            "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_recognition_order.fields"
+        ),
+    ),
+    (
+        "nv__adult_name_change_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/nevada/nevada_supreme_court/nv__adult_name_change_petition.fields"
+        ),
+    ),
+    (
+        "nv__dv_protection_order_application",
+        include_str!(
+            "../../templates/notations/forms/united_states/nevada/nevada_supreme_court/nv__dv_protection_order_application.fields"
+        ),
+    ),
 ];
 
 /// The re-authored field manifest for one form, or `None` when the form

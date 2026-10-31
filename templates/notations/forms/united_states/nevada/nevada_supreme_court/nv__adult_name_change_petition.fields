@@ -1,0 +1,28 @@
+custom_datetime__date_of_birth
+custom_text__birthplace_city
+custom_text__county_of_residence
+custom_text__felony_details
+custom_text__reason_for_change
+custom_yes_no__felony_conviction
+jurisdiction__birthplace.name
+person__client.family
+person__client.given
+person__client.middle
+person__client.name
+person__new_name.family
+person__new_name.given
+person__new_name.middle
+unmapped__CASE NO DEPT
+unmapped__County
+unmapped__Date.CurrentDate.DayProper
+unmapped__Date.CurrentDate.MonthName
+unmapped__Date.CurrentDate.YearTwoDigit
+unmapped__Petitioner Email Address
+unmapped__Petitioner Home Address
+unmapped__Petitioner Home Address CityStateZip
+unmapped__Petitioner Phone
+unmapped__Petitioner.SEQ001.Name.Full
+unmapped__Reason.Gender
+unmapped__Reason.Other
+unmapped__Submitted By your signature
+unmapped__Submitted By your signature_2

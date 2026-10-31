@@ -20,6 +20,7 @@ pub mod docket;
 pub mod doctor;
 pub mod document_check;
 pub mod drift;
+pub mod drive_ingest;
 pub mod efiling;
 pub mod finance;
 pub mod gate;

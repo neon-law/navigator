@@ -2253,3 +2253,380 @@ CREATE INDEX communication_acknowledges ON communication (project_id, acknowledg
 -- A Firm Library version: the Firm whose library repository the Template was synced from.
 ALTER TABLE template ADD COLUMN firm_id UUID REFERENCES firm(id);
 ALTER TABLE template ADD CONSTRAINT template_one_scope CHECK (project_id IS NULL OR firm_id IS NULL);
+
+-- Migration: 20261030020000_add_asset_evidence.sql
+-- The exhibit metadata the matter page's evidence index reads (LAW-185):
+-- `{ dated_at, source, confidence, supports }` as a JSON object. NULL for
+-- rows written before exhibits carried provenance; the shape is
+-- `store::documents::Evidence`, validated before the write.
+ALTER TABLE asset ADD COLUMN evidence JSONB;
+
+-- Migration: 20261030120000_create_project_task.sql
+-- Net-new matter work tracking: assignable Project tasks with audited state
+-- transitions. A Task is work someone does, with a workflow state; it is not a
+-- Deadline (a docket obligation the date binds). See docs/glossary/task.md.
+-- PostgreSQL-native, following the project_costs pattern: retained rows,
+-- trigger-enforced audit events, immutable event log.
+--
+-- The composite foreign key below pins an assignee to a Person who already
+-- holds a participation row on the same Project. A UNIQUE (project_id,
+-- person_id) index is required for it, in the FK's column order.
+CREATE UNIQUE INDEX person_project_role_project_person
+    ON person_project_role (project_id, person_id);
+
+CREATE TABLE project_task (
+    id UUID PRIMARY KEY,
+    project_id UUID NOT NULL REFERENCES project(id),
+    title TEXT NOT NULL CHECK (length(btrim(title)) BETWEEN 1 AND 300),
+    body TEXT CHECK (body IS NULL OR length(btrim(body)) BETWEEN 1 AND 2000),
+    assignee_id UUID,
+    due_on DATE,
+    state TEXT NOT NULL CHECK (state IN ('todo', 'in_progress', 'done')),
+    inserted_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    FOREIGN KEY (project_id, assignee_id)
+        REFERENCES person_project_role (project_id, person_id)
+);
+CREATE INDEX project_task_project ON project_task (project_id, state, due_on, id);
+CREATE INDEX project_task_assignee ON project_task (assignee_id);
+
+CREATE TABLE project_task_events (
+    id UUID PRIMARY KEY,
+    project_task_id UUID NOT NULL REFERENCES project_task(id),
+    actor_person_id UUID NOT NULL REFERENCES person(id),
+    event_kind TEXT NOT NULL CHECK (event_kind IN ('created', 'assignee_changed', 'state_changed')),
+    before_state JSONB,
+    after_state JSONB NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX project_task_events_task_time ON project_task_events (project_task_id, occurred_at, id);
+
+CREATE FUNCTION enforce_project_task_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE actor_id UUID;
+        event_kind_value TEXT;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'Project tasks are retained; a state transition, never a delete';
+    END IF;
+    actor_id := nullif(current_setting('navigator.project_task_actor', true), '')::UUID;
+    event_kind_value := current_setting('navigator.project_task_event_kind', true);
+    IF actor_id IS NULL OR event_kind_value NOT IN ('assignee_changed', 'state_changed') THEN
+        RAISE EXCEPTION 'Project task updates require an actor and audit event';
+    END IF;
+    INSERT INTO project_task_events(id,project_task_id,actor_person_id,event_kind,before_state,after_state,occurred_at)
+    VALUES(gen_random_uuid(),NEW.id,actor_id,event_kind_value,to_jsonb(OLD),to_jsonb(NEW),now());
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER project_task_audit_update
+    BEFORE UPDATE OR DELETE ON project_task
+    FOR EACH ROW EXECUTE FUNCTION enforce_project_task_audit();
+
+CREATE FUNCTION record_project_task_creation() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE actor_id UUID;
+BEGIN
+    actor_id := nullif(current_setting('navigator.project_task_actor', true), '')::UUID;
+    IF actor_id IS NULL OR current_setting('navigator.project_task_event_kind', true) IS DISTINCT FROM 'created' THEN
+        RAISE EXCEPTION 'Project task creation requires an actor and audit event';
+    END IF;
+    INSERT INTO project_task_events(id,project_task_id,actor_person_id,event_kind,before_state,after_state,occurred_at)
+    VALUES(gen_random_uuid(),NEW.id,actor_id,'created',NULL,to_jsonb(NEW),now());
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER project_task_audit_create
+    AFTER INSERT ON project_task
+    FOR EACH ROW EXECUTE FUNCTION record_project_task_creation();
+
+CREATE FUNCTION reject_project_task_event_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'Project task audit events are immutable';
+END;
+$$;
+CREATE TRIGGER project_task_events_immutable
+    BEFORE UPDATE OR DELETE ON project_task_events
+    FOR EACH ROW EXECUTE FUNCTION reject_project_task_event_mutation();
+
+-- Migration: 20261031010000_create_navigator_graph.sql
+-- Migration: 20261031010000_create_navigator_graph.sql
+-- The Apache AGE relationship graph, projected from the relational mirrors.
+--
+-- `CREATE EXTENSION age` normally runs earlier, in the superuser init path
+-- (k8s/postgres/access/roles.sql); this migration owns the graph itself so the
+-- migration login owns every graph object. Environments that apply the
+-- canonical schema directly with no privileged init step (CI fixtures, scratch
+-- databases) bootstrap the extension in the block below under IF-NOT-EXISTS
+-- semantics: a no-op when the init path already created it, and a loud
+-- permission error for a non-superuser login when the init path never ran.
+-- The loader helpers are the only
+-- Cypher entry points for backfill batches: AGE's three-argument cypher()
+-- accepts a bound parameter only as a bare Param node, so each helper takes
+-- one JSON text payload, parses it into an agtype once, and passes it as a
+-- PL/pgSQL variable — which the engine substitutes as exactly that Param.
+-- The Cypher in each branch is a fixed dollar-quoted constant: no value ever
+-- becomes query text.
+
+-- The extension bootstrap lives in a DO block because the canonical-SQL
+-- parser tracks procedural blocks as opaque and every bare statement it does
+-- not know is rejected; the guard follows for the same reason.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'age') THEN
+        CREATE EXTENSION age;
+    END IF;
+END
+$$;
+
+-- The guard lives in a DO block because the canonical-SQL parser tracks
+-- procedural blocks as opaque and every bare statement it does not know
+-- is rejected; the migration login owns the graph either way.
+DO $$
+DECLARE
+    graph_id oid;
+    label text;
+BEGIN
+    SELECT graphid INTO graph_id
+    FROM ag_catalog.ag_graph WHERE ag_catalog.ag_graph.name = 'navigator_graph';
+    IF graph_id IS NULL THEN
+        PERFORM ag_catalog.create_graph('navigator_graph');
+        graph_id := (
+            SELECT graphid FROM ag_catalog.ag_graph
+            WHERE ag_catalog.ag_graph.name = 'navigator_graph'
+        );
+    END IF;
+    -- Every label exists before any load: validation and the property
+    -- indexes read the label tables even when a family has no rows yet,
+    -- and a label created lazily by the first batch would not exist on an
+    -- empty projection.
+    FOREACH label IN ARRAY ARRAY['Person', 'Entity', 'Project', 'Firm'] LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM ag_catalog.ag_label
+            WHERE ag_catalog.ag_label.graph = graph_id AND ag_catalog.ag_label.name = label
+        ) THEN
+            PERFORM ag_catalog.create_vlabel('navigator_graph', label::cstring);
+        END IF;
+    END LOOP;
+    FOREACH label IN ARRAY ARRAY[
+        'HAS_ROLE', 'RELATIONSHIP', 'WORKS_ON', 'MEMBER_OF', 'HANDLES'
+    ] LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM ag_catalog.ag_label
+            WHERE ag_catalog.ag_label.graph = graph_id AND ag_catalog.ag_label.name = label
+        ) THEN
+            PERFORM ag_catalog.create_elabel('navigator_graph', label::cstring);
+        END IF;
+    END LOOP;
+END
+$$;
+
+-- Runtime read access: cypher() executes as the calling login, so the app
+-- needs USAGE on the graph's schema and SELECT on its label tables; writes
+-- stay with the migration login through the loader helpers. The grant is
+-- guarded because environments that apply the canonical schema directly
+-- (CI fixtures) have no navigator_app role to grant to, and skipped when the
+-- role is absent rather than failing the schema application.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'navigator_app') THEN
+        GRANT USAGE ON SCHEMA navigator_graph TO navigator_app;
+        GRANT SELECT ON ALL TABLES IN SCHEMA navigator_graph TO navigator_app;
+        ALTER DEFAULT PRIVILEGES FOR ROLE navigator_owner IN SCHEMA navigator_graph
+            GRANT SELECT ON TABLES TO navigator_app;
+    END IF;
+END
+$$;
+
+-- Vertex batches. `kind` selects the fixed label; ids are the Surreal record
+-- UUIDs, so relationship source_id chains and mirror parity stay traceable.
+CREATE OR REPLACE FUNCTION graph_load_vertices(kind text, rows text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    payload agtype := rows::agtype;
+BEGIN
+    IF kind = 'person' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            CREATE (:Person {id: row.id, name: row.name})
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'entity' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            CREATE (:Entity {id: row.id, name: row.name})
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'project' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            CREATE (:Project {id: row.id, name: row.name})
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'firm' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            CREATE (:Firm {id: row.id, name: row.name})
+        $Q$, payload) AS (v agtype);
+    ELSE
+        RAISE EXCEPTION 'unknown graph vertex kind %', kind;
+    END IF;
+END
+$fn$;
+
+-- Edge batches. Endpoints match by vertex id, so a batch may reference
+-- vertices loaded in an earlier batch of the same transaction.
+CREATE OR REPLACE FUNCTION graph_load_edges(kind text, rows text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    payload agtype := rows::agtype;
+BEGIN
+    IF kind = 'has_role' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            MATCH (a), (b) WHERE a.id = row.from_id AND b.id = row.to_id
+            CREATE (a)-[:HAS_ROLE {role: row.role}]->(b)
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'relationship' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            MATCH (a), (b) WHERE a.id = row.from_id AND b.id = row.to_id
+            CREATE (a)-[:RELATIONSHIP {kind: row.kind, confidence_pct: row.confidence_pct,
+                                       source_kind: row.source_kind, source_id: row.source_id,
+                                       detail: row.detail}]->(b)
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'works_on' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            MATCH (a), (b) WHERE a.id = row.from_id AND b.id = row.to_id
+            CREATE (a)-[:WORKS_ON {role: row.role}]->(b)
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'member_of' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            MATCH (a), (b) WHERE a.id = row.from_id AND b.id = row.to_id
+            CREATE (a)-[:MEMBER_OF]->(b)
+        $Q$, payload) AS (v agtype);
+    ELSIF kind = 'handles' THEN
+        RETURN QUERY
+        SELECT * FROM cypher('navigator_graph', $Q$
+            UNWIND $rows AS row
+            MATCH (a), (b) WHERE a.id = row.from_id AND b.id = row.to_id
+            CREATE (a)-[:HANDLES]->(b)
+        $Q$, payload) AS (v agtype);
+    ELSE
+        RAISE EXCEPTION 'unknown graph edge kind %', kind;
+    END IF;
+END
+$fn$;
+
+-- Full projection rebuild: the graph arm clears and reloads inside one
+-- transaction, so a run leaves either the old graph or the new one.
+CREATE OR REPLACE FUNCTION graph_clear_navigator()
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+BEGIN
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$ MATCH (n) DETACH DELETE n $Q$)
+        AS (v agtype);
+END
+$fn$;
+
+-- One frontier hop of the conflict walk, both conflict edge types. AGE 1.6.0
+-- rejects multi-type edge patterns (`[:RELATIONSHIP|HAS_ROLE]`), so each type
+-- is its own fixed query and the results union in PL/pgSQL; the frontier
+-- arrives as a bound parameter (an agtype object with a `frontier` id array),
+-- never as query text.
+CREATE OR REPLACE FUNCTION graph_conflict_frontier(frontier text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    payload agtype := frontier::agtype;
+BEGIN
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (a)-[r:RELATIONSHIP]-(x)
+        WHERE a.id IN $frontier
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'RELATIONSHIP', kind: r.kind, role: null,
+                         confidence_pct: r.confidence_pct, from_id: startNode(r).id,
+                         from_label: label(startNode(r)), to_id: endNode(r).id,
+                         to_label: label(endNode(r))}
+    $Q$, payload) AS (edge agtype);
+    RETURN QUERY
+    SELECT * FROM cypher('navigator_graph', $Q$
+        MATCH (a)-[r:HAS_ROLE]-(x)
+        WHERE a.id IN $frontier
+        RETURN DISTINCT {edge_id: id(r), edge_type: 'HAS_ROLE', kind: null, role: r.role,
+                         confidence_pct: null, from_id: startNode(r).id,
+                         from_label: label(startNode(r)), to_id: endNode(r).id,
+                         to_label: label(endNode(r))}
+    $Q$, payload) AS (edge agtype);
+END
+$fn$;
+
+-- The bounded conflict walk: every conflict edge within 3 hops of the anchors,
+-- expanded one frontier at a time exactly as the Surreal conflict traversal is
+-- (store/src/conflicts.rs `MAX_HOPS` = 3; keep the two bounds in step). The
+-- unrestricted variable-length walk is not used here: it would cross
+-- participation edges (WORKS_ON, MEMBER_OF, HANDLES) that Surreal's walk never
+-- follows, so the graph arm's parity check would disagree with the source
+-- engine. Cross-hop duplicates are deduplicated by the caller.
+CREATE OR REPLACE FUNCTION graph_conflict_edges(anchors text)
+RETURNS SETOF ag_catalog.agtype
+LANGUAGE plpgsql
+SET search_path = public, ag_catalog
+AS $fn$
+DECLARE
+    frontier jsonb := anchors::jsonb;
+    round_edges jsonb;
+    all_edges jsonb := '[]'::jsonb;
+BEGIN
+    FOR hop IN 1..3 LOOP
+        EXIT WHEN jsonb_array_length(frontier) = 0;
+        SELECT coalesce(jsonb_agg(edge_obj), '[]'::jsonb)
+        INTO round_edges
+        FROM (
+            SELECT (edge::text)::jsonb AS edge_obj
+            FROM graph_conflict_frontier('{"frontier": ' || frontier::text || '}') AS edge
+        ) rounds;
+        all_edges := all_edges || round_edges;
+        SELECT jsonb_agg(DISTINCT endpoint)
+        INTO frontier
+        FROM (
+            SELECT edge->>'from_id' AS endpoint
+            FROM jsonb_array_elements(round_edges) AS edge
+            UNION
+            SELECT edge->>'to_id'
+            FROM jsonb_array_elements(round_edges) AS edge
+        ) endpoints;
+    END LOOP;
+    RETURN QUERY
+    SELECT (edge::text)::agtype
+    FROM jsonb_array_elements(all_edges) AS edge;
+END
+$fn$;
+
+-- Loaders are the migration login's write path; the runtime login runs
+-- read-only Cypher of its own and never executes these.
+REVOKE EXECUTE ON FUNCTION graph_load_vertices(text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION graph_load_edges(text, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION graph_clear_navigator() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION graph_conflict_frontier(text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION graph_conflict_edges(text) FROM PUBLIC;
+
+-- Migration: 20261031120000_add_project_onboarding_jurisdiction.sql
+-- The jurisdiction an onboarding Notation's Clauses bind to. NULL until recorded.
+ALTER TABLE project ADD COLUMN onboarding_jurisdiction TEXT;

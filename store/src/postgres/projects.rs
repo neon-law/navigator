@@ -62,6 +62,7 @@ fn row(row: &sqlx::postgres::PgRow) -> Result<Project, ProjectError> {
         entity_id: row.try_get("entity_id")?,
         firm_id: row.try_get("firm_id")?,
         jurisdiction_id: row.try_get("jurisdiction_id")?,
+        onboarding_jurisdiction: row.try_get("onboarding_jurisdiction")?,
         description: row.try_get("description")?,
         drive_folder_id: row.try_get("drive_folder_id")?,
         repository_url: row.try_get("repository_url")?,

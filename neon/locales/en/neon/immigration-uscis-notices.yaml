@@ -1,0 +1,206 @@
+head_title: "{site_name} | USCIS notices"
+meta_description: >-
+  Abhaya Immigration, a Shook Law PC practice, responds to requests for
+  evidence, notices of intent to deny, and other USCIS notices: what each
+  notice type means, the deadline, what a response needs, and what it
+  costs. Government filing fees are separate, and no approval or timeline
+  is promised.
+title: USCIS notices
+tagline: Got a notice from USCIS? Read it, then act on the clock.
+skin: practice
+bands:
+  - kind: statement
+    heading: What the notice is telling you
+    lead: A request for evidence is not a denial — but it is a deadline.
+    body:
+      - - text: >-
+            When United States Citizenship and Immigration Services reviews
+            an application, it can send a notice instead of deciding. A
+            request for evidence (RFE) asks for documents or explanations
+            the file is missing. A notice of intent to deny (NOID) says the
+            agency is leaning toward denial unless the response changes its
+            mind. Other notices move an interview, request biometrics, or
+            pass the case to another office.
+      - - text: >-
+            Every one of these notices carries a response deadline, and the
+            deadline is short — often weeks, not months. A missed deadline
+            usually ends the case on the agency's own decision, without a
+            person ever reading your documents. Reading the notice carefully
+            and answering it completely is the whole job; the notice tells
+            you exactly what the officer is missing. That is the work
+            Abhaya Immigration does with a notice: read it whole, answer it
+            completely, and get it filed on time.
+  - kind: cards
+    anchor: notice-types
+    overline: Notice types
+    heading: What the envelope might hold.
+    description: >-
+      General explanations, not advice about your case. The notice in your
+      hand governs: its own words, its own deadline, its own address.
+    items:
+      - title: Request for evidence (RFE)
+        body:
+          - - text: >-
+                    The officer reviewed the file and something is missing or
+                    unclear — a document, an explanation of eligibility, a
+                    translation. The notice lists what was requested and the
+                    response deadline. An RFE leaves the case open; it is an
+                    invitation to complete the record, not a decision.
+      - title: Notice of intent to deny (NOID)
+        body:
+          - - text: >-
+                    A more serious notice: the agency states the reasons it is
+                    leaning toward denial and gives a deadline to respond. The
+                    response has to meet each stated reason head-on, with
+                    evidence or argument, because the case is being decided
+                    unless the response succeeds.
+      - title: Interview and biometrics notices
+        body:
+          - - text: >-
+                    Not a request for documents — an appointment. Interview
+                    notices name the office, the date, and what to bring;
+                    biometrics notices schedule fingerprints and a photo.
+                    Missing either without rescheduling first can close the
+                    case, so the date gets calendared the day the notice
+                    arrives.
+      - title: Transfer and update notices
+        body:
+          - - text: >-
+                    A case can move between service centers, or to an office
+                    closer to where you live. The notice announces the move.
+                    It changes where you file a response or appear — not the
+                    underlying case — but any pending response address should
+                    follow the case.
+      - title: Notice of intent to revoke
+        body:
+          - - text: >-
+                    After an approval, the agency can move to take it back if
+                    new information or a mistake in the record surfaces. The
+                    response window is defined and the burden sits with the
+                    person defending the approval, which makes early, complete
+                    answers more important here than anywhere else.
+  - kind: steps
+    anchor: notice-process
+    overline: How a response comes together
+    heading: Answer what was asked, with proof.
+    description: >-
+      The response is built from the notice itself. The general order is
+      below.
+    items:
+      - title: Read the notice and mark the date
+        body:
+          - - text: >-
+                    Find the deadline, the form number it names, and the office
+                    that sent it. Everything else follows from those facts. We
+                    cannot promise how an agency responds; the agency decides.
+      - title: List what was requested
+        body:
+          - - text: >-
+                    A request for evidence asks for specific things. A response
+                    that answers every item, in the order asked, is easier for
+                    the officer to grant — and easier to check for gaps before
+                    it is filed.
+      - title: Gather the proof and the explanations
+        body:
+          - - text: >-
+                    Documents answer document requests; sworn statements and
+                    legal argument answer questions about eligibility. Gaps get
+                    explained, not ignored — an officer who finds an unexplained
+                    hole reads the rest of the response with more doubt.
+      - title: File the response before the deadline
+        body:
+          - - text: >-
+                    The response goes to the address the notice names, with the
+                    notice page on top, before the stated deadline. Filing
+                    early leaves room for mail problems, and the proof of
+                    delivery is kept with the case file.
+  - kind: statement
+    heading: What a response costs and what it cannot promise
+    lead: Fees and outcomes, stated plainly.
+    body:
+      - - text: >-
+            Responding to a notice usually costs nothing in government fees
+            unless the response includes a new form. Costs are documents,
+            time, and care. Government fees, where they apply, are separate
+            from any attorney fee, and the current amounts are published on
+            the agencies' sites.
+      - - text: >-
+            Attorney fees for this work are flat fees, published in
+      - - text: Abhaya Immigration's fee catalog
+          href: "https://www.abhayaimmigration.com/services"
+      - - text: >-
+            . We cannot promise that a response changes the outcome; the
+            agency decides. We can promise the response is built to answer
+            the notice completely and on time. For free tools while the case
+            is open — the case-status checker above all — the
+      - - text: free-support hub
+          href: "/immigration/free-support"
+      - - text: >-
+            links to them with a short guide on when each one helps.
+  - kind: cards
+    anchor: notice-faq
+    overline: Common questions
+    heading: What people ask when the envelope arrives.
+    items:
+      - title: Is an RFE a bad sign?
+        body:
+          - - text: >-
+                It means the officer found the record incomplete, not that the
+                case is doomed. Plenty of approved cases passed through an RFE
+                first. What matters is what the notice actually asked for and
+                whether the response answers it — not how alarming the
+                envelope felt.
+      - title: What happens if I miss the deadline?
+        body:
+          - - text: >-
+                Usually the agency decides the case on what it has, which
+                means a denial for missing evidence — on the agency's own
+                decision, without your documents ever being read. If a
+                deadline has already passed, the next step depends on the
+                notice type and the case's history; bring the notice to a
+                lawyer immediately either way.
+      - title: Can I get more time?
+        body:
+          - - text: >-
+                Sometimes. The notice names a deadline, and extensions are
+                possible in defined situations but are discretionary — the
+                agency can say no. Planning as if the extension will be
+                refused is the safer posture: work to the printed date, and
+                treat any granted extension as a buffer.
+      - title: Should I send everything I have?
+        body:
+          - - text: >-
+                No — send what was asked, organized in the order it was
+                asked, with a cover page indexing it. A response that buries
+                the answer in volume reads worse than one that meets each
+                request cleanly. Irrelevant material also invites questions
+                about everything else in the file.
+      - title: What if I disagree with the officer's conclusion?
+        body:
+          - - text: >-
+                The notice tells you what the officer is thinking, and the
+                response is where the disagreement happens — with evidence
+                and, where the notice allows it, legal argument. If the case
+                is denied after that, several case types have appeal or
+                motion paths with their own deadlines. The options depend on
+                the form and the decision type.
+      - title: Does an RFE reset my processing time?
+        body:
+          - - text: >-
+                Usually, yes — a case goes back in the queue when a response
+                arrives, and the agency's published processing times apply
+                again from there. We cannot promise how long any case takes;
+                the agencies decide. The case-status checker linked from our
+                free-support hub is the honest source for where a case
+                stands.
+  - kind: cta
+    heading: Show us the notice
+    body: >-
+      A first conversation covers what the notice asks, the real deadline,
+      and what a complete response looks like for your case. Abhaya
+      Immigration, a Shook Law PC practice, responds to requests for
+      evidence, notices of intent to deny, and other USCIS notices.
+    email: "{firm_email}"
+    action:
+      href: "https://www.abhayaimmigration.com/"
+      label: Talk to Abhaya Immigration

@@ -300,6 +300,9 @@ pub struct DocumentIdentity<'a> {
     pub signing: Option<Signing>,
     /// The notarial acknowledgments on an executed document, if any.
     pub notarization: Vec<Notarization>,
+    /// The exhibit metadata the evidence index reads (LAW-185). Optional on
+    /// every kind; validated by the caller before any byte is stored.
+    pub evidence: Option<Evidence>,
 }
 
 /// How an executed document was signed: in wet ink on paper, or through
@@ -416,6 +419,101 @@ impl Notarization {
         }
         if self.commission_expires < self.acknowledged_on {
             return Err(NotarizationError::CommissionExpired);
+        }
+        Ok(())
+    }
+}
+
+/// How confidently an exhibit is tied to the claim it bears on, in the
+/// evidence index's closed vocabulary (LAW-185). `exact` is a link a lawyer
+/// verified; `inferred` is a link filed by routing with a human expected to
+/// confirm it; `unknown` is everything else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceConfidence {
+    Exact,
+    Inferred,
+    Unknown,
+}
+
+impl EvidenceConfidence {
+    /// Every confidence, in the order help and errors name them.
+    pub const ALL: [Self; 3] = [Self::Exact, Self::Inferred, Self::Unknown];
+
+    /// The stored and committed spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Inferred => "inferred",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Parse the stored and committed spelling.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|confidence| confidence.as_str() == value)
+    }
+}
+
+/// The exhibit metadata the matter page's evidence index reads (LAW-185):
+/// the date the exhibit itself bears, where it came from, how confidently it
+/// is tied to what it supports, and the claim references it bears on. Stored
+/// on the `asset` row and carried on its committed pointer. Every field is
+/// optional — an exhibit with none recorded still indexes, showing its gaps.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Evidence {
+    /// The date the exhibit bears, when it has one — distinct from
+    /// `published_at` (a court's file stamp) and `received_at` (when the
+    /// bytes arrived).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dated_at: Option<chrono::NaiveDate>,
+    /// Where the exhibit came from, as the lawyer knows it — an email, a
+    /// message thread, a download. Never a `source` channel: the asset's own
+    /// `source` column already records the upload lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// How confidently the exhibit is tied to what it supports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<EvidenceConfidence>,
+    /// The claim references the exhibit bears on, such as `¶ 12` or
+    /// `Count II — Conversion`. An exhibit bearing on nothing reads back as
+    /// an empty list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supports: Vec<String>,
+}
+
+/// Why an [`Evidence`] block cannot be recorded.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum EvidenceError {
+    #[error("evidence source must not be blank")]
+    Source,
+    #[error("evidence claim reference {0} must not be blank")]
+    Claim(usize),
+}
+
+impl Evidence {
+    /// Enforce what the field types cannot: a non-blank source, and
+    /// non-blank claim references.
+    ///
+    /// # Errors
+    /// The first [`EvidenceError`].
+    pub fn validate(&self) -> Result<(), EvidenceError> {
+        if self
+            .source
+            .as_deref()
+            .is_some_and(|source| source.trim().is_empty())
+        {
+            return Err(EvidenceError::Source);
+        }
+        for (index, claim) in self.supports.iter().enumerate() {
+            if claim.trim().is_empty() {
+                return Err(EvidenceError::Claim(index));
+            }
         }
         Ok(())
     }
@@ -838,6 +936,13 @@ async fn insert_asset_row(
             (!identity.notarization.is_empty())
                 .then(|| serde_json::to_value(&identity.notarization).ok())
                 .flatten(),
+        ))
+        .bind((
+            "evidence",
+            identity
+                .evidence
+                .as_ref()
+                .and_then(|evidence| serde_json::to_value(evidence).ok()),
         ))
     })
     .await?;

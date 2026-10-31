@@ -1,0 +1,170 @@
+lookup_fields:
+  - key
+# The court-form registry: the courts whose self-help forms Navigator
+# carries, and the per-form entries keyed to forms-shelf template codes.
+#
+# Each record is a court; each entry in its `forms:` list registers one
+# template under `templates/notations/forms/` with the provenance a filer
+# needs: what the filing office calls the form, where the official blank is
+# published, the sha-256 pin of that blank, where in the courthouse the
+# filing goes, what it costs, and which fee-waiver form the office accepts.
+#
+# The blank itself is never checked in — `sha256` pins it where the court
+# publishes it, exactly like the vendored forms' `.sha256` files. A form
+# entry may only reference a template that exists on the forms shelf, and a
+# template under a court directory must have an entry here;
+# `cli/tests/court_registry.rs` fails CI on either drift.
+#
+# This file is canonical reference data consumed at compile time
+# (`store::courts`), not a database table — the seed boundary test classifies
+# it in the canonical layer.
+records:
+  # California's Judicial Council statewide name-change and gender-recognition
+  # blanks are accepted in every county's superior court; the first-paper
+  # filing fee varies by county, so those rows carry a fee note rather than a
+  # single amount.
+  - key: california_superior_court
+    name: Superior Court of California
+    jurisdiction: CA
+    level: superior
+    forms:
+      - code: ca__name_change_petition
+        title: Petition for Change of Name
+        form_number: NC-100
+        source_url: https://www.courts.ca.gov/documents/NC100.pdf
+        sha256: cab3f83b70ac2181342fcea77659d5eeeecaac57346f5e6f5d64267777e530cf
+        filing_office: Superior Court Clerk's Office in the petitioner's county of residence
+        fee_note: First-paper filing fee varies by county (the published statewide range is $435–$450); fee-waiver paperwork is out of scope for this wave.
+        fee_waiver_code: null
+      - code: ca__name_change_attachment
+        title: Name and Information About the Person Whose Name is to be Changed
+        form_number: NC-110
+        source_url: https://www.courts.ca.gov/documents/NC110.pdf
+        sha256: caee87d9bc922e5353b05ee91f39261c61f8b22781770d9e778d0d06e1fddd6b
+        filing_office: Filed with the NC-100 petition at the Superior Court Clerk's Office
+        fee_waiver_code: null
+      - code: ca__name_change_order_to_show_cause
+        title: Order to Show Cause—Change of Name
+        form_number: NC-120
+        source_url: https://www.courts.ca.gov/documents/NC120.pdf
+        sha256: aaf64476c94c5a1c1bf20eaea8303c889fbd0f2977f0fdcd840506db013c1339
+        filing_office: Filed with the NC-100 petition at the Superior Court Clerk's Office
+        fee_waiver_code: null
+      - code: ca__name_change_decree
+        title: Decree Changing Name
+        form_number: NC-130
+        source_url: https://www.courts.ca.gov/documents/NC130.pdf
+        sha256: 0fea5cd809e737607c829cb03ba1d38d93405d729ee4eff808edeaf9187a1fce
+        filing_office: Entered by the Superior Court after the hearing
+        fee_waiver_code: null
+      - code: ca__civil_case_cover_sheet
+        title: Civil Case Cover Sheet
+        form_number: CM-010
+        source_url: https://www.courts.ca.gov/documents/CM010.pdf
+        sha256: 2e97e4010e077b4d2da33847802806e33b7bee0a39f020fb7b3b6be644f37c55
+        filing_office: Filed with the NC-100 petition at the Superior Court Clerk's Office
+        fee_waiver_code: null
+      - code: ca__gender_identity_name_change_petition
+        title: Petition for Change of Name to Conform to Gender Identity
+        form_number: NC-200
+        source_url: https://www.courts.ca.gov/documents/NC200.pdf
+        sha256: 75430d1d5cc37e45b9627376c75dbd2b0d47ed1285cb590ff29dbd93aef325bf
+        filing_office: Superior Court Clerk's Office in the petitioner's county of residence
+        fee_note: First-paper filing fee varies by county (the published statewide range is $435–$450); fee-waiver paperwork is out of scope for this wave.
+        fee_waiver_code: null
+      - code: ca__gender_identity_name_change_order_to_show_cause
+        title: Order to Show Cause—Change of Name to Conform to Gender Identity
+        form_number: NC-225
+        source_url: https://www.courts.ca.gov/documents/NC225.pdf
+        sha256: 359fa6c36dc2290fc12325c2c20b939e51a2409c9b65786d2ecc91da80f726ff
+        filing_office: Filed with the NC-200 petition at the Superior Court Clerk's Office
+        fee_waiver_code: null
+      - code: ca__gender_identity_name_change_decree
+        title: Decree Changing Name to Conform to Gender Identity
+        form_number: NC-230
+        source_url: https://www.courts.ca.gov/documents/NC230.pdf
+        sha256: b9c31d8983721bd05fb1dd81a47b5e38ec490e6b1050b2d6c0f862ce5b64a135
+        filing_office: Entered by the Superior Court after the hearing
+        fee_waiver_code: null
+      - code: ca__gender_recognition_petition
+        title: Petition for Recognition of Adult's Change of Gender and Sex Identifier, Name Change, and Issuance of New Certificates
+        form_number: NC-300
+        source_url: https://www.courts.ca.gov/documents/NC300.pdf
+        sha256: 2a1daab42173637b2a89ad704c1cff9345f34e578f47f115de09872efefd1da9
+        filing_office: Superior Court Clerk's Office in the petitioner's county of residence
+        fee_note: First-paper filing fee varies by county (the published statewide range is $435–$450); the petition is confidential and fee-waiver paperwork is out of scope for this wave.
+        fee_waiver_code: null
+      - code: ca__gender_recognition_order
+        title: Order Recognizing Adult's Change of Gender and Sex Identifier, for Name Change and for Issuance of New Certificates
+        form_number: NC-330
+        source_url: https://www.courts.ca.gov/documents/NC330.pdf
+        sha256: fd1d3e765ae0c77199453020e53b825ea311ab9423a4021b21f44c5d3a67f634
+        filing_office: Entered by the Superior Court after the hearing
+        fee_waiver_code: null
+  # Statewide form sets are registered under the court that approves them:
+  # the Nevada Supreme Court's self-help forms are acceptable in any court
+  # in Nevada, so the county-specific rows below carry only the forms and
+  # fees unique to that county.
+  - key: nevada_supreme_court
+    name: Nevada Supreme Court
+    jurisdiction: NV
+    level: supreme
+    forms:
+      - code: nv__adult_name_change_petition
+        title: Petition for Adult Name Change
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/name-change/name-adult-petition-pdf-fillable.pdf
+        sha256: 1d949c984bc9a6779d8ea9b6a336da7ddfbf5051ee19d0ec90f7c202e467192f
+        filing_office: District Court Clerk's Office in the petitioner's county of residence
+        fee_note: The filing fee varies by district court (for example, the Eighth Judicial District Court publishes $270.00); fee-waiver paperwork is out of scope for this wave.
+        fee_waiver_code: null
+      - code: nv__dv_protection_order_application
+        title: Application for Protection Order Against Domestic Violence
+        form_number: null
+        source_url: https://selfhelp.nvcourts.gov/images/protection-orders/dv-app-pdf-fillable.pdf
+        sha256: 0be2cdb927d377eda5e0f1e159239564973ef1b1a6a3f12b10e9dc4faa7cc2eb
+        filing_office: District Court Clerk's Office or the county protection-order office, in any Nevada county
+        filing_fee:
+          amount: "0.00"
+          currency: USD
+        fee_waiver_code: null
+  - key: eighth_judicial_district_court
+    name: Eighth Judicial District Court
+    jurisdiction: NV
+    county: Clark
+    level: district
+    # One entry per form this court accepts, keyed to the template code:
+    #
+    # forms:
+    #   - code: nv__adult_name_change_petition
+    #     title: Petition for Adult Name Change
+    #     form_number: null            # official form number, when the office publishes one
+    #     source_url: https://selfhelp.nvcourts.gov/images/name-change/name-adult-petition-pdf-fillable.pdf
+    #     sha256: 0000000000000000000000000000000000000000000000000000000000000000
+    #     filing_office: Family Division Clerk's Office
+    #     filing_fee:                  # flat fee; omit when the office publishes none
+    #       amount: "270.00"
+    #       currency: USD
+    #     fee_note: null               # tiered or county-varying schedules go here as prose
+    #     fee_waiver_code: nv__fee_waiver_application
+    forms: []
+  - key: second_judicial_district_court
+    name: Second Judicial District Court
+    jurisdiction: NV
+    county: Washoe
+    level: district
+    forms: []
+  - key: las_vegas_justice_court
+    name: Las Vegas Justice Court
+    jurisdiction: NV
+    county: Clark
+    city: Las Vegas
+    level: justice
+    forms: []
+  - key: reno_justice_court
+    name: Reno Justice Court
+    jurisdiction: NV
+    county: Washoe
+    city: Reno
+    level: justice
+    forms: []

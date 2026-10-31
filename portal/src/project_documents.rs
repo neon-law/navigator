@@ -236,6 +236,10 @@ pub struct DriveImportForm {
     visibility: String,
     #[serde(default)]
     description: Option<String>,
+    /// Plan and never write: the report is exactly what a real pass would
+    /// file, leave unchanged, and refuse (LAW-216).
+    #[serde(default)]
+    dry_run: bool,
 }
 
 fn unclassified() -> String {
@@ -263,7 +267,9 @@ impl store::drive_import::IngestScreen for ScannerScreen<'_> {
 ///
 /// Lawyer tier on the matter, else 404. A deployment without Drive ingest
 /// answers 409; a partially configured one 503. The JSON report lists what
-/// was filed, what was unchanged, and what was refused and why.
+/// was filed, what was unchanged, and what was refused and why. With
+/// `dry_run` set the pass writes nothing and reports what a real pass would
+/// do.
 pub async fn drive_import(
     State(state): State<AdminState>,
     AxumPath(project_code): AxumPath<String>,
@@ -368,6 +374,7 @@ async fn drive_import_with(
                 .description
                 .as_deref()
                 .filter(|value| !value.trim().is_empty()),
+            dry_run: form.dry_run,
         },
     )
     .await
@@ -490,6 +497,7 @@ async fn file_one(
         transcript_quality: None,
         signing: None,
         notarization: Vec::new(),
+        evidence: None,
     };
     let result = store::assets::file_revision(
         &state.surreal,
@@ -1138,6 +1146,7 @@ mod tests {
             kind: "unclassified".into(),
             visibility: visibility::INTERNAL.into(),
             description: None,
+            dry_run: false,
         };
         let refused = drive_import_with(&state, project_id, &session(&client), &drive, &form).await;
         assert_eq!(refused.status(), axum::http::StatusCode::NOT_FOUND);
@@ -1195,6 +1204,7 @@ mod tests {
             kind: "unclassified".into(),
             visibility: visibility.into(),
             description: Some("  ".into()),
+            dry_run: false,
         };
         let drive = cloud::FakeDrive::default();
         let code = store::projects::find_by_id(&state.surreal, project_id)
@@ -1594,7 +1604,29 @@ mod tests {
             kind: "unclassified".into(),
             visibility: visibility::INTERNAL.into(),
             description: None,
+            dry_run: false,
         }
+    }
+
+    #[tokio::test]
+    async fn drive_import_dry_run_answers_the_plan_without_filing() {
+        let fixture = drive_fixture("drive-import-dry-run").await;
+        fixture.link_folder().await;
+        fixture.add("intake.pdf", b"intake");
+        let form = DriveImportForm {
+            dry_run: true,
+            ..internal_form()
+        };
+        let (status, body) = fixture.import(&form).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        let report: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(report["imported"][0]["filename"], "intake.pdf");
+        assert_eq!(report["imported"][0]["matter_folder"], "Work Product");
+        assert_eq!(fixture.drive.download_calls(), 1, "the plan downloads");
+        let assets = store::assets::for_project(&fixture.state.surreal, fixture.project_id)
+            .await
+            .unwrap();
+        assert!(assets.is_empty(), "a dry run files nothing");
     }
 
     #[tokio::test]

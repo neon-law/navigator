@@ -137,7 +137,7 @@ pub async fn check_sender(
     })
 }
 
-async fn check_sender_step(
+pub(crate) async fn check_sender_step(
     storage: Arc<dyn StorageService>,
     surreal: &store::surreal::SurrealDb,
     receipt: &EmailReceipt,
@@ -428,19 +428,21 @@ async fn delivery_error(
 }
 
 /// Everything the `deliver-slack` step needs, so the handler stays short.
-struct DeliveryTarget {
-    surreal: store::surreal::SurrealDb,
-    slack: Arc<dyn SlackBot>,
-    storage: Arc<dyn StorageService>,
-    receipt: EmailReceipt,
-    config: EmailSummaryRunConfig,
-    channel_id: String,
+/// Shared by the Restate handler and the DBOS twin (`dbos_email_summary`).
+#[derive(Clone)]
+pub(crate) struct DeliveryTarget {
+    pub(crate) surreal: store::surreal::SurrealDb,
+    pub(crate) slack: Arc<dyn SlackBot>,
+    pub(crate) storage: Arc<dyn StorageService>,
+    pub(crate) receipt: EmailReceipt,
+    pub(crate) config: EmailSummaryRunConfig,
+    pub(crate) channel_id: String,
 }
 
 impl DeliveryTarget {
     /// Post the summary and thread the full body under it. The body is shown
     /// only when the archive still matches the receipt's digest.
-    async fn deliver(self, gemini: ProviderDelivery) -> Result<String, HandlerError> {
+    pub(crate) async fn deliver(self, gemini: ProviderDelivery) -> Result<String, HandlerError> {
         let receipt = &self.receipt;
         let object = self
             .storage
