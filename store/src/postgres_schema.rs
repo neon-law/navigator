@@ -1197,6 +1197,10 @@ mod tests {
                 "20261031120000_add_project_onboarding_jurisdiction.sql",
                 include_str!("../postgres/migrations/20261031120000_add_project_onboarding_jurisdiction.sql"),
             ),
+            (
+                "20261031130000_add_project_cost_source_reference.sql",
+                include_str!("../postgres/migrations/20261031130000_add_project_cost_source_reference.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
