@@ -5876,3 +5876,101 @@ a.nav-steps__step:focus-visible {
 @media (max-width: 760px) {
   .design-dashboard-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Relationship-graph views (project, lawyer, firm). The Sigma.js island
+ * draws into `.graph-view` on a canvas it sizes to the container, so the
+ * container — not the canvas — carries the height. The page CSS ships on
+ * every route (the stylesheet is one shared bundle); the island script and
+ * the vendor bundles are what stay lazy. */
+.graph-page {
+  margin: 1.25rem 0 2rem;
+}
+
+.graph-view {
+  position: relative;
+  height: 32rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface-raised);
+  overflow: hidden;
+  margin: 0.75rem 0;
+}
+
+/* The focus card and the tooltip are appended by the island into the mount,
+ * so they position against it. */
+.graph-card {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  max-width: 16rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.graph-card span {
+  color: var(--nav-color-text-muted);
+  font-size: 0.85rem;
+}
+
+.graph-tooltip {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  background: var(--nav-color-surface);
+  font-size: 0.85rem;
+  max-width: 20rem;
+}
+
+.graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0.5rem 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.graph-legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.graph-legend__chip {
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 50%;
+  display: inline-block;
+  /* The four kind colors restated from the island's NODE_COLORS — the island
+   * owns the real palette; these chips only have to match it. */
+}
+
+.graph-legend__chip--person { background: #3b6ea5; }
+.graph-legend__chip--entity { background: #7d5ba6; }
+.graph-legend__chip--project { background: #3a7d44; }
+.graph-legend__chip--firm { background: #b5651d; }
+
+.graph-depth {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.graph-depth__option--active {
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.graph-view__status--error {
+  color: var(--nav-color-danger, #c1121f);
+}
+
