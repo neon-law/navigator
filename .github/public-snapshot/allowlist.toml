@@ -65,6 +65,21 @@ match = '''person@(?:notexample\.com|example\.co)'''
 paths = ["store/src/brand_domains.rs", ".github/pii/allowlist.toml"]
 reason = "Near-miss domains the reserved-domain matcher must refuse; the test needs them unreserved."
 
+[[allow]]
+class = "email"
+match = '''[^@]+@(?:[a-z0-9-]+\.)*(?:stretto\.com|kroll\.com|epiq11\.com|epiq\.com|notkroll\.com)'''
+paths = [
+  "cli/src/projects/docket/claims_agent.rs",
+  "cli/tests/fixtures/nef/claims-agent-notice.eml",
+]
+reason = "Claims-agent vendors' public notice-sender domains are the behaviour under test in the docket ingest sender matcher; the mailboxes are invented. notkroll.com is the near-miss negative."
+
+[[allow]]
+class = "email"
+match = '''clerk@ecf\.nvb\.uscourts\.gov'''
+paths = ["cli/src/projects/docket/claims_agent.rs"]
+reason = "A district court's public CM/ECF clerk address in the sender matcher's negative test."
+
 # --- Synthetic cloud names --------------------------------------------------
 
 [[allow]]
