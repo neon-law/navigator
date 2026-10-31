@@ -4043,13 +4043,7 @@ mod tests {
     async fn an_unlisted_channel_is_still_denied() {
         let db = mem_surreal().await;
         let world = world(&db).await;
-        let mut fax = inbound(
-            world.firm,
-            "fax",
-            "+15550100000",
-            "fax-1",
-            "+15555550100",
-        );
+        let mut fax = inbound(world.firm, "fax", "+15550100000", "fax-1", "+15555550100");
         fax.brand_key = Some("neon");
         assert!(matches!(
             ingest_inbound(&db, &fax).await,
