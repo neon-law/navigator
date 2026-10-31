@@ -396,3 +396,457 @@ impl InboxIntake for DktFilingIntake<'_> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    use sha2::{Digest, Sha256};
+
+    use super::{
+        normalized_entry, pointer_for, resolve_filing, DktFilingIntake, FilingError,
+        FilingOutcome, FilingRequest, FiledPaths, FilingStore, ProjectFilingStore, StorageError,
+    };
+    use crate::scraper::adapter::SiteKey;
+    use crate::scraper::download::hex_digest;
+    use crate::scraper::intake::{IntakeError, ScrapedDocument};
+
+    const DOCUMENT_BYTES: &[u8] = b"%PDF-1.7 docket notice bytes";
+    const OTHER_BYTES: &[u8] = b"%PDF-1.7 a different document";
+
+    fn sha_of(bytes: &[u8]) -> String {
+        hex_digest(&Sha256::digest(bytes))
+    }
+
+    fn request(entry: &str, title: &str) -> FilingRequest {
+        FilingRequest::new(entry, false, title, "pdf", DOCUMENT_BYTES.to_vec())
+            .expect("the document has bytes")
+    }
+
+    fn scraped(entry: &str, title: &str) -> ScrapedDocument {
+        let site = SiteKey::new("la-superior").expect("valid key");
+        let notice = crate::scraper::adapter::NoticeRef {
+            entry_number: entry.to_owned(),
+            title: title.to_owned(),
+            url: "https://portal.example.com/doc".to_owned(),
+            extension: "pdf".to_owned(),
+        };
+        ScrapedDocument::from_download(
+            site,
+            "0004",
+            &notice,
+            sha_of(DOCUMENT_BYTES),
+            DOCUMENT_BYTES.to_vec(),
+        )
+        .expect("the entry number is normalizable")
+    }
+
+    /// An in-memory [`FilingStore`] double: files by name, so collision,
+    /// escalation, and idempotence run with no filesystem at all.
+    #[derive(Default)]
+    struct MemoryStore {
+        files: Mutex<BTreeMap<String, Vec<u8>>>,
+        pointers: Mutex<BTreeMap<String, String>>,
+        calls: std::sync::atomic::AtomicU32,
+    }
+
+    impl FilingStore for MemoryStore {
+        fn sha256_of(&self, name: &str) -> Result<Option<String>, StorageError> {
+            Ok(self
+                .files
+                .lock()
+                .expect("uncontended")
+                .get(name)
+                .map(|bytes| hex_digest(&Sha256::digest(bytes))))
+        }
+
+        fn file(&self, name: &str, request: &FilingRequest) -> Result<FiledPaths, StorageError> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let pointer = pointer_for(
+                request,
+                uuid::Uuid::nil(),
+                "1970-01-01T00:00:00+00:00".to_owned(),
+            );
+            self.files
+                .lock()
+                .expect("uncontended")
+                .insert(name.to_owned(), request.bytes.clone());
+            self.pointers
+                .lock()
+                .expect("uncontended")
+                .insert(
+                    name.to_owned(),
+                    pointer.to_yaml().expect("the pointer serializes"),
+                );
+            Ok(FiledPaths {
+                bytes: PathBuf::from(name),
+                pointer: PathBuf::from(format!("{name}.yaml")),
+            })
+        }
+    }
+
+    // ---- Name derivation ------------------------------------------------
+
+    #[test]
+    fn entry_variants_normalize_to_one_dkt_name() {
+        for entry in ["4", "0004", "DKT 4", "dkt 4", "  4  "] {
+            let request = request(entry, "Notice of Hearing");
+            assert_eq!(
+                request.primary_name().expect("normalizable"),
+                "DKT 0004 - Notice of Hearing.pdf",
+                "entry `{entry}` normalizes to the prescribed form"
+            );
+        }
+    }
+
+    #[test]
+    fn the_pure_normalizer_strips_the_listing_prefix() {
+        assert_eq!(normalized_entry("4"), "4");
+        assert_eq!(normalized_entry("DKT 4"), "4");
+        assert_eq!(normalized_entry("dkt 4"), "4");
+        assert_eq!(normalized_entry("  0004 "), "0004");
+    }
+
+    #[test]
+    fn court_attachment_suffixes_keep_their_number() {
+        let request = request("29-1", "Exhibit A");
+        assert_eq!(
+            request.primary_name().expect("normalizable"),
+            "DKT 0029-1 - Exhibit A.pdf"
+        );
+    }
+
+    #[test]
+    fn unnumbered_attachments_file_under_att() {
+        let request = FilingRequest::new("4", true, "Exhibit A", "pdf", DOCUMENT_BYTES.to_vec())
+            .expect("the document has bytes");
+        assert_eq!(
+            request.primary_name().expect("normalizable"),
+            "DKT 0004-att - Exhibit A.pdf"
+        );
+    }
+
+    #[test]
+    fn titles_are_sanitized_and_escalations_compose() {
+        let request = request("4", "Motion re: A/B");
+        assert_eq!(
+            request.primary_name().expect("normalizable"),
+            "DKT 0004 - Motion re- A-B.pdf"
+        );
+        let request = request("4", "Order");
+        assert_eq!(
+            request.name_at_escalation(2).expect("normalizable"),
+            "DKT 0004-att2 - Order.pdf"
+        );
+    }
+
+    #[test]
+    fn a_nonnumeric_entry_number_is_rejected_with_the_store_error() {
+        let request = request("x", "Order");
+        assert!(matches!(
+            request.primary_name(),
+            Err(store::cases::FilingNameError(_))
+        ));
+    }
+
+    #[test]
+    fn an_empty_document_is_never_filed() {
+        let outcome = FilingRequest::new("4", false, "Order", "pdf", Vec::new());
+        assert!(matches!(outcome, Err(FilingError::Empty)));
+    }
+
+    // ---- Collision escalation and idempotence (in-memory) ---------------
+
+    #[test]
+    fn a_fresh_name_files_at_the_primary_escalation() {
+        let store = MemoryStore::default();
+        let outcome = resolve_filing(&store, &request("4", "Notice of Hearing")).expect("filed");
+        assert_eq!(
+            outcome,
+            FilingOutcome::Filed {
+                name: "DKT 0004 - Notice of Hearing.pdf".to_owned(),
+                paths: FiledPaths {
+                    bytes: PathBuf::from("DKT 0004 - Notice of Hearing.pdf"),
+                    pointer: PathBuf::from("DKT 0004 - Notice of Hearing.pdf.yaml"),
+                },
+            }
+        );
+        assert_eq!(store.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn re_filing_the_same_document_is_idempotent() {
+        let store = MemoryStore::default();
+        resolve_filing(&store, &request("4", "Notice of Hearing")).expect("filed");
+        let outcome =
+            resolve_filing(&store, &request("4", "Notice of Hearing")).expect("already filed");
+        assert_eq!(
+            outcome,
+            FilingOutcome::AlreadyFiled {
+                name: "DKT 0004 - Notice of Hearing.pdf".to_owned(),
+            }
+        );
+        assert_eq!(store.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_collision_escalates_to_att_then_att2() {
+        let store = MemoryStore::default();
+        resolve_filing(&store, &request("4", "Notice of Hearing")).expect("filed");
+        let second = resolve_filing(&store, &request("4", "Amended Notice")).expect("filed");
+        assert_eq!(
+            second,
+            FilingOutcome::Filed {
+                name: "DKT 0004-att - Amended Notice.pdf".to_owned(),
+                paths: FiledPaths {
+                    bytes: PathBuf::from("DKT 0004-att - Amended Notice.pdf"),
+                    pointer: PathBuf::from("DKT 0004-att - Amended Notice.pdf.yaml"),
+                },
+            }
+        );
+        let third = resolve_filing(&store, &request("4", "Second Amendment")).expect("filed");
+        assert_eq!(
+            third,
+            FilingOutcome::Filed {
+                name: "DKT 0004-att2 - Second Amendment.pdf".to_owned(),
+                paths: FiledPaths {
+                    bytes: PathBuf::from("DKT 0004-att2 - Second Amendment.pdf"),
+                    pointer: PathBuf::from("DKT 0004-att2 - Second Amendment.pdf.yaml"),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn an_unnumbered_attachment_colliding_escalates_beyond_att() {
+        let store = MemoryStore::default();
+        let attachment = |title: &str| {
+            FilingRequest::new("4", true, title, "pdf", DOCUMENT_BYTES.to_vec())
+                .expect("the document has bytes")
+        };
+        resolve_filing(&store, &attachment("Exhibit A")).expect("filed");
+        let second = resolve_filing(&store, &attachment("Exhibit B")).expect("filed");
+        assert_eq!(
+            second,
+            FilingOutcome::Filed {
+                name: "DKT 0004-att2 - Exhibit B.pdf".to_owned(),
+                paths: FiledPaths {
+                    bytes: PathBuf::from("DKT 0004-att2 - Exhibit B.pdf"),
+                    pointer: PathBuf::from("DKT 0004-att2 - Exhibit B.pdf.yaml"),
+                },
+            }
+        );
+    }
+
+    // ---- The real store: layout and pointer conventions (tempdir) -------
+
+    #[test]
+    fn the_project_store_files_bytes_and_pointer_in_the_prescribed_layout() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().to_path_buf();
+        let store = ProjectFilingStore::new(root.clone());
+        let outcome = resolve_filing(&store, &request("4", "Notice of Hearing")).expect("filed");
+        let FilingOutcome::Filed { name, paths } = outcome else {
+            panic!("a fresh name files, it does not dedupe");
+        };
+        assert_eq!(name, "DKT 0004 - Notice of Hearing.pdf");
+        // The bytes sit flat under documents/Docket Filings/.
+        assert_eq!(
+            paths.bytes,
+            root.join("documents/Docket Filings/DKT 0004 - Notice of Hearing.pdf")
+        );
+        assert_eq!(
+            std::fs::read(&paths.bytes).expect("bytes on disk"),
+            DOCUMENT_BYTES
+        );
+        // The pointer sits at blobs/<name>.yaml, flat beside every other blob.
+        assert_eq!(
+            paths.pointer,
+            root.join("blobs/DKT 0004 - Notice of Hearing.pdf.yaml")
+        );
+    }
+
+    #[test]
+    fn the_pointer_yaml_matches_the_blob_conventions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = ProjectFilingStore::new(dir.path().to_path_buf());
+        let FilingOutcome::Filed { name, paths } =
+            resolve_filing(&store, &request("4", "Notice of Hearing")).expect("filed")
+        else {
+            panic!("a fresh name files, it does not dedupe");
+        };
+        let raw = std::fs::read_to_string(&paths.pointer).expect("pointer on disk");
+        // The same parser and contract every blob pointer answers to.
+        let pointer = store::document_pointers::DocumentPointer::from_yaml(&raw)
+            .expect("the pointer parses and validates");
+        assert_eq!(pointer.kind, "pleading", "the Docket Filings default kind");
+        assert_eq!(pointer.visibility, "internal");
+        assert_eq!(
+            pointer.matter_folder(),
+            store::document_pointers::MatterFolder::DocketFilings
+        );
+        // The kind already maps here, so no `folder:` key is recorded —
+        // the same shape `project sync` writes for these documents.
+        assert!(pointer.folder.is_none());
+        assert!(!raw.contains("folder:"));
+        let version = &pointer.current_version;
+        assert_eq!(version.version, 1);
+        assert!(pointer.previous_version.is_none());
+        assert_eq!(version.sha256, sha_of(DOCUMENT_BYTES));
+        assert_eq!(version.size_bytes, i64::try_from(DOCUMENT_BYTES.len()).expect("small"));
+        let parsed_at = chrono::DateTime::parse_from_rfc3339(&version.created_at)
+            .expect("an RFC 3339 timestamp");
+        assert_eq!(parsed_at.offset().local_minus_utc(), 0, "stamped in UTC");
+        let _ = uuid::Uuid::parse_str(version.asset_id.to_string().as_str())
+            .expect("a well-formed asset id");
+        assert_eq!(name, "DKT 0004 - Notice of Hearing.pdf");
+    }
+
+    #[test]
+    fn the_project_store_re_files_the_same_document_without_writing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = ProjectFilingStore::new(dir.path().to_path_buf());
+        let first = resolve_filing(&store, &request("4", "Notice of Hearing")).expect("filed");
+        let FilingOutcome::Filed { paths, .. } = first else {
+            panic!("a fresh name files, it does not dedupe");
+        };
+        let bytes_mtime = std::fs::metadata(&paths.bytes)
+            .expect("bytes on disk")
+            .modified()
+            .expect("a mtime");
+        let second =
+            resolve_filing(&store, &request("4", "Notice of Hearing")).expect("already filed");
+        assert_eq!(
+            second,
+            FilingOutcome::AlreadyFiled {
+                name: "DKT 0004 - Notice of Hearing.pdf".to_owned(),
+            }
+        );
+        let still = std::fs::metadata(&paths.bytes)
+            .expect("bytes still on disk")
+            .modified()
+            .expect("a mtime");
+        assert_eq!(bytes_mtime, still, "nothing was rewritten");
+    }
+
+    #[test]
+    fn the_project_store_escalates_a_real_collision_on_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = ProjectFilingStore::new(dir.path().to_path_buf());
+        resolve_filing(&store, &request("4", "Notice of Hearing")).expect("filed");
+        let other =
+            FilingRequest::new("4", false, "Amended Notice", "pdf", OTHER_BYTES.to_vec())
+                .expect("the document has bytes");
+        let second = resolve_filing(&store, &other).expect("filed beside the first");
+        assert_eq!(
+            second,
+            FilingOutcome::Filed {
+                name: "DKT 0004-att - Amended Notice.pdf".to_owned(),
+                paths: FiledPaths {
+                    bytes: dir
+                        .path()
+                        .join("documents/Docket Filings/DKT 0004-att - Amended Notice.pdf"),
+                    pointer: dir
+                        .path()
+                        .join("blobs/DKT 0004-att - Amended Notice.pdf.yaml"),
+                },
+            }
+        );
+    }
+
+    // ---- Intake integration ---------------------------------------------
+
+    #[tokio::test]
+    async fn the_dkt_filing_intake_files_through_the_intake_seam() {
+        let store = MemoryStore::default();
+        let intake = DktFilingIntake::new(&store);
+        let receipt = intake
+            .enqueue(&scraped("4", "Notice of Hearing"))
+            .await
+            .expect("filed");
+        assert!(!receipt.deduped);
+        assert_eq!(
+            store
+                .files
+                .lock()
+                .expect("uncontended")
+                .get("DKT 0004 - Notice of Hearing.pdf")
+                .expect("the bytes were filed"),
+            &DOCUMENT_BYTES.to_vec()
+        );
+        assert!(store
+            .pointers
+            .lock()
+            .expect("uncontended")
+            .contains_key("DKT 0004 - Notice of Hearing.pdf"));
+    }
+
+    #[tokio::test]
+    async fn the_dkt_filing_intake_reports_a_refile_as_deduped() {
+        let store = MemoryStore::default();
+        let intake = DktFilingIntake::new(&store);
+        intake
+            .enqueue(&scraped("4", "Notice of Hearing"))
+            .await
+            .expect("filed");
+        let receipt = intake
+            .enqueue(&scraped("4", "Notice of Hearing"))
+            .await
+            .expect("already filed");
+        assert!(receipt.deduped, "the same document re-enqueues as deduped");
+    }
+
+    #[tokio::test]
+    async fn the_dkt_filing_intake_rejects_an_unnameable_document() {
+        let store = MemoryStore::default();
+        let intake = DktFilingIntake::new(&store);
+        let outcome = intake.enqueue(&scraped("not-an-entry", "Notice")).await;
+        let error = outcome.expect_err("the entry number cannot be normalized");
+        match error {
+            IntakeError::Rejected { detail } => {
+                assert!(
+                    detail.contains("entry_number"),
+                    "the error names the naming failure: {detail}"
+                );
+            }
+            IntakeError::Transient { .. } => {
+                panic!("a naming failure is terminal, not transient")
+            }
+        }
+        assert!(
+            store.files.lock().expect("uncontended").is_empty(),
+            "a rejected document files nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_storage_failure_surfaces_as_transient_so_the_run_retries() {
+        struct FailingStore;
+        impl FilingStore for FailingStore {
+            fn sha256_of(&self, _name: &str) -> Result<Option<String>, StorageError> {
+                Err(StorageError::Io {
+                    path: PathBuf::from("/nowhere"),
+                    source: std::io::Error::other("disk offline"),
+                })
+            }
+
+            fn file(
+                &self,
+                _name: &str,
+                _request: &FilingRequest,
+            ) -> Result<FiledPaths, StorageError> {
+                panic!("never reached: the hash probe fails first");
+            }
+        }
+        let store = FailingStore;
+        let intake = DktFilingIntake::new(&store);
+        let outcome = intake.enqueue(&scraped("4", "Notice of Hearing")).await;
+        assert!(
+            matches!(outcome, Err(IntakeError::Transient { .. })),
+            "a storage failure is retryable, not terminal"
+        );
+    }
+}
+
