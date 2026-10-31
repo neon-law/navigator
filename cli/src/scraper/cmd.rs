@@ -13,7 +13,8 @@ use uuid::Uuid;
 use crate::scraper::adapter::{find_adapter, NoticeQuery, SiteAdapter, SiteKey};
 use crate::scraper::browser::ChromiumSessions;
 use crate::scraper::fetcher::HttpFetcherOverReqwest;
-use crate::scraper::intake::UnwiredIntake;
+use crate::scraper::file::{DktFilingIntake, ProjectFilingStore};
+use crate::scraper::intake::{InboxIntake, UnwiredIntake};
 use crate::scraper::retry::{RetryPolicy, TokioClock};
 use crate::scraper::session::SessionConfig;
 use crate::scraper::{registered_adapters, run_scraper, ScraperDeps};
@@ -41,6 +42,12 @@ pub(crate) enum ScraperCmd {
         /// Run the browser headed (watch the session live).
         #[arg(long)]
         headed: bool,
+        /// File every fetched document straight into the Project checkout
+        /// at the working directory, under its DKT name. Without this flag
+        /// the documents stage and the run reports them undelivered: the
+        /// omnichannel inbox intake is its own integration.
+        #[arg(long)]
+        file_dkt: bool,
     },
 }
 
@@ -62,7 +69,8 @@ pub(crate) async fn run(action: ScraperCmd) -> ExitCode {
             since,
             firm,
             headed,
-        } => run_site(&site, &docket, since, firm, headed).await,
+            file_dkt,
+        } => run_site(&site, &docket, since, firm, headed, file_dkt).await,
     }
 }
 
@@ -92,6 +100,7 @@ async fn run_site(
     since: Option<chrono::NaiveDate>,
     firm_id: Uuid,
     headed: bool,
+    file_dkt: bool,
 ) -> ExitCode {
     let site_key = match SiteKey::new(site) {
         Ok(key) => key,
@@ -119,10 +128,11 @@ async fn run_site(
         Ok(chrome) => chrome,
         Err(error) => return exit_failure("resolving Chrome for Testing", error),
     };
-    let state_root = match std::env::current_dir() {
-        Ok(dir) => dir.join(".navigator").join("scraper"),
+    let project_root = match std::env::current_dir() {
+        Ok(dir) => dir,
         Err(error) => return exit_failure("locating the checkout", error),
     };
+    let state_root = project_root.join(".navigator").join("scraper");
     let site_dir = state_root.join(site_key.as_str());
     let staging_dir = site_dir.join("staging");
     let fetcher = match HttpFetcherOverReqwest::new() {
@@ -135,13 +145,20 @@ async fn run_site(
         headless: !headed,
         state_dir: state_root,
     });
+    // The intake seam's two pluggable implementations: straight DKT filing
+    // into this Project checkout, or (default, until its integration
+    // lands) the placeholder that reports documents staged but undelivered.
+    let filing_store = ProjectFilingStore::new(project_root);
+    let dkt_intake = DktFilingIntake::new(&filing_store);
+    let unwired = UnwiredIntake;
+    let intake: &dyn InboxIntake = if file_dkt { &dkt_intake } else { &unwired };
     let deps = ScraperDeps {
         sessions: &sessions,
         surreal: &surreal,
         firm_id,
         kms: kms.as_ref(),
         fetcher: &fetcher,
-        intake: &UnwiredIntake,
+        intake,
         clock: &TokioClock,
         login_policy: RetryPolicy::login_default(),
         fetch_policy: RetryPolicy::fetch_default(),
@@ -321,6 +338,7 @@ mod tests {
             since: None,
             firm: Uuid::now_v7(),
             headed: true,
+            file_dkt: false,
         })
         .await;
         assert_eq!(code, std::process::ExitCode::from(2));
@@ -334,6 +352,7 @@ mod tests {
             since: None,
             firm: Uuid::now_v7(),
             headed: true,
+            file_dkt: false,
         })
         .await;
         assert_eq!(code, std::process::ExitCode::from(2));

@@ -16,7 +16,7 @@
 //! litigation slice.
 
 mod filing_name;
-pub use filing_name::{filing_name, FilingNameError};
+pub use filing_name::{escalated_filing_name, filing_name, FilingNameError};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;

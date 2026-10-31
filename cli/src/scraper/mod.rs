@@ -22,6 +22,7 @@ pub(crate) mod cmd;
 pub(crate) mod credentials;
 pub(crate) mod download;
 pub(crate) mod fetcher;
+pub(crate) mod file;
 pub(crate) mod fs;
 pub(crate) mod intake;
 pub(crate) mod retry;
