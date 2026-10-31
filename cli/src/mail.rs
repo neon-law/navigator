@@ -1707,10 +1707,7 @@ fn eml_filing_summary(response: &serde_json::Value) -> EmlFiled {
             .unwrap_or_default()
             .to_string(),
         deduped: response["deduped"].as_bool().unwrap_or(false),
-        attachments_filed: response["filed"]
-            .as_array()
-            .map(|filed| filed.len())
-            .unwrap_or(0),
+        attachments_filed: response["filed"].as_array().map_or(0, std::vec::Vec::len),
     }
 }
 
