@@ -490,10 +490,7 @@ mod tests {
     use store::posts::{AccountAlias, SourceCaptions, SourcePost};
     use store::social_accounts::ConnectSocialAccount;
     use store::test_support::mem_surreal;
-    use store::{
-        brands::NewBrand, firms::NewFirm, persons::NewPerson, persons::Role, posts,
-        social_publications,
-    };
+    use store::{persons::Role, posts, social_publications};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -508,13 +505,13 @@ mod tests {
                     "textDisplay": "A question", "textOriginal": "A question",
                     "authorDisplayName": "Synthetic Viewer",
                     "authorChannelId": {"value": "UC-viewer"},
-                    "publishedAt": "2026-10-30T12:00:00Z"},
+                    "publishedAt": "2026-10-30T12:00:00Z"}},
                  "replies": {"comments": [
                     {"id": "r1", "snippet": {
                         "textDisplay": "From another viewer",
                         "authorDisplayName": "Other Viewer",
                         "authorChannelId": {"value": "UC-other"},
-                        "publishedAt": "2026-10-30T13:00:00Z"}}]}}}},
+                        "publishedAt": "2026-10-30T13:00:00Z"}}]}}},
                 {"id": "t2", "snippet": {"topLevelComment": {"id": "c2", "snippet": {
                     "textDisplay": "Our own comment",
                     "authorChannelId": {"value": "synthetic-channel"},
@@ -560,38 +557,11 @@ mod tests {
     }
 
     async fn seed_target(db: &SurrealDb) {
-        let admin = store::persons::create(
-            db,
-            &NewPerson::with_role("Synthetic Admin", "youtube-test@example.com", Role::Admin),
-        )
-        .await
-        .unwrap();
-        let firm = store::firms::create(
-            db,
-            &NewFirm {
-                name: "Synthetic Firm".into(),
-                status: "active".into(),
-                entity_id: store::test_support::seed_entity(db).await,
-                admin_dri_person_id: admin.id,
-            },
-        )
-        .await
-        .unwrap();
-        store::brands::create(
-            db,
-            Role::Admin,
-            Some(admin.id),
-            &NewBrand {
-                name: "Neon Law".into(),
-                key: "synthetic-brand".into(),
-                firm_id: Some(firm.id),
-                primary_color: None,
-                accent_color: None,
-                typeface: None,
-            },
-        )
-        .await
-        .unwrap();
+        // mem_surreal pre-seeds every compiled Brand row, `neon` included;
+        // seed_firm_with_brand attaches a synthetic Firm to it the way
+        // production matter-open does.
+        let firm = store::test_support::seed_firm_with_brand(db, "neon").await;
+        let firm = store::firms::find_by_id(db, firm).await.unwrap().unwrap();
         let scopes = SocialProvider::Youtube
             .required_scopes()
             .iter()
@@ -601,8 +571,8 @@ mod tests {
             db,
             ConnectSocialAccount {
                 actor_role: Role::Admin,
-                actor_person_id: admin.id,
-                brand_key: "synthetic-brand",
+                actor_person_id: firm.admin_dri_person_id,
+                brand_key: "neon",
                 provider: SocialProvider::Youtube,
                 provider_account_id: ACCOUNT_ID,
                 display_name: None,
@@ -618,7 +588,7 @@ mod tests {
         posts::seed_post(
             db,
             &SourcePost {
-                brand_key: "synthetic-brand",
+                brand_key: "neon",
                 slug: "youtube-comments-test",
                 title: "A published Post",
                 description: "A test Post.",
@@ -640,7 +610,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let post = posts::find_by_brand_slug(db, "synthetic-brand", "youtube-comments-test")
+        let post = posts::find_by_brand_slug(db, "neon", "youtube-comments-test")
             .await
             .unwrap()
             .unwrap();
@@ -705,7 +675,7 @@ mod tests {
             "threading keeps a video's comments together"
         );
         assert_eq!(conversations[0]["channel"], "youtube");
-        assert_eq!(conversations[0]["brand_key"], "synthetic-brand");
+        assert_eq!(conversations[0]["brand_key"], "neon");
         assert_eq!(conversations[0]["provider_account"], ACCOUNT_ID);
         assert_eq!(conversations[0]["provider_post_id"], VIDEO_ID);
         assert_eq!(conversations[0]["external_address"], "UC-viewer");
