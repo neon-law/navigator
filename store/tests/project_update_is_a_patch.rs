@@ -326,3 +326,130 @@ async fn a_firm_that_does_not_wear_the_selected_brand_is_refused_by_name() {
         "That Firm does not wear the selected brand."
     );
 }
+
+/// LAW-213: the Drive ingest folder id joins the sparse patch — one field
+/// sent, applied, and clearable by the blank string like every other column.
+#[tokio::test]
+async fn a_drive_folder_patch_applies_and_a_blank_one_clears() {
+    let surreal = mem_surreal().await;
+    let before = matter(&surreal).await;
+
+    let after = update_project(
+        &surreal,
+        before.id,
+        &UpdateProjectCommand {
+            drive_folder_id: Some("1QaBcD_2-efG".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("a drive-folder patch applies");
+    assert_eq!(after.drive_folder_id.as_deref(), Some("1QaBcD_2-efG"));
+    assert_eq!(
+        after.calendar_id, before.calendar_id,
+        "an absent calendar_id must not be cleared by a folder patch"
+    );
+
+    let cleared = update_project(
+        &surreal,
+        before.id,
+        &UpdateProjectCommand {
+            drive_folder_id: Some(String::new()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("a blank folder clears");
+    assert_eq!(cleared.drive_folder_id, None);
+}
+
+/// A Drive ingest folder belongs to exactly one matter — the importer scopes
+/// every fetch by the folder link — so a patch recording a folder another
+/// matter already owns is refused rather than silently shared.
+#[tokio::test]
+async fn a_drive_folder_recorded_on_another_matter_is_refused() {
+    let surreal = mem_surreal().await;
+    let first = matter(&surreal).await;
+    let second_code = format!("patch-{}", Uuid::now_v7().simple());
+    let second = create(
+        &surreal,
+        &NewProject {
+            code: second_code,
+            name: "Second matter".to_string(),
+            status: "open".to_string(),
+            entity_id: seed_entity(&surreal).await,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("create the second matter");
+
+    update_project(
+        &surreal,
+        first.id,
+        &UpdateProjectCommand {
+            drive_folder_id: Some("1QaBcD_2-efG".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("the first matter records the folder");
+
+    let error = update_project(
+        &surreal,
+        second.id,
+        &UpdateProjectCommand {
+            drive_folder_id: Some("1QaBcD_2-efG".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("the second matter must be refused the same folder");
+    assert!(
+        error.to_string().contains("another matter"),
+        "the error names the conflict: {error}"
+    );
+
+    // Re-recording the folder the matter already has is idempotent, not a
+    // self-conflict.
+    update_project(
+        &surreal,
+        first.id,
+        &UpdateProjectCommand {
+            drive_folder_id: Some("1QaBcD_2-efG".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("the owning matter may re-record its own folder");
+}
+
+/// The folder id is placed in a Drive API path, so anything that could
+/// change that path — a link, a query, a comma-separated list — is refused
+/// at the command boundary, not escaped at the provider.
+#[tokio::test]
+async fn a_malformed_drive_folder_id_is_refused() {
+    let surreal = mem_surreal().await;
+    let before = matter(&surreal).await;
+
+    for bad in [
+        "https://drive.google.com/drive/folders/1QaBcD",
+        "1QaBcD?resourcekey=x",
+        "1QaBcD_2-efG,1AbCdE",
+    ] {
+        let error = update_project(
+            &surreal,
+            before.id,
+            &UpdateProjectCommand {
+                drive_folder_id: Some(bad.to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("a malformed folder id must be refused");
+        assert!(
+            error.to_string().contains("Drive folder id"),
+            "the error says what shape is wanted: {error}"
+        );
+    }
+}

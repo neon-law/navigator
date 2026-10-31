@@ -4271,6 +4271,8 @@ fn canonical_document(base: &str) -> Value {
                                "description": "The Notion page shared with the client. Omit to leave unchanged; a blank string clears it." },
               "calendar_id": { "type": "string",
                                "description": "The Project's shared Google Calendar id. Omit to leave unchanged; a blank string clears it." },
+              "drive_folder_id": { "type": "string",
+                               "description": "The Project's Drive ingest folder id, in the Firm's Projects shared drive. Omit to leave unchanged; a blank string clears it. Refused when another matter already records the folder." },
               "booking_url": { "type": "string",
                                "description": "The client's booking page, an http(s) URL. Omit to leave unchanged; a blank string clears it." },
               "onboarding_jurisdiction": { "type": "string",
