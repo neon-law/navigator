@@ -596,8 +596,8 @@
 {"file":"portal/src/expunge.rs","line":183,"function":"expunge","operation":"delete","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/expunge/purge.rs","line":96,"function":"by_firm_from","operation":"insert","sql_operations":[],"tables":["firm","person"],"transaction":false}
 {"file":"portal/src/firm_journal_api.rs","line":1322,"function":"mercury_tx","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/firm_journal_api.rs","line":1363,"function":"import_pg","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/firm_journal_api.rs","line":1363,"function":"import_pg","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
+{"file":"portal/src/firm_journal_api.rs","line":1362,"function":"import_pg","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/firm_journal_api.rs","line":1362,"function":"import_pg","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
 {"file":"portal/src/forgejo_oidc.rs","line":153,"function":"build","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/forgejo_oidc.rs","line":329,"function":"spend_token","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/forgejo_oidc.rs","line":402,"function":"load_jwks","operation":"query","sql_operations":[],"tables":[],"transaction":false}
@@ -611,7 +611,7 @@
 {"file":"portal/src/google_oauth.rs","line":448,"function":"a_resolved_first_party_session_skips_tokeninfo","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/idp_admin.rs","line":262,"function":"set_password","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/idp_admin.rs","line":274,"function":"set_email_verified","operation":"update","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/inbound_email.rs","line":87,"function":"summary_envelope_recipients_from_lookup","operation":"insert","sql_operations":[],"tables":["address"],"transaction":false}
+{"file":"portal/src/inbound_email.rs","line":86,"function":"summary_envelope_recipients_from_lookup","operation":"insert","sql_operations":[],"tables":["address"],"transaction":false}
 {"file":"portal/src/inbox.rs","line":225,"function":"provider_message_id","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/inbox.rs","line":226,"function":"provider_message_id","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/inbox.rs","line":227,"function":"provider_message_id","operation":"update","sql_operations":[],"tables":[],"transaction":false}
