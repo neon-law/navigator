@@ -32,7 +32,7 @@ pub fn via_tagged(href: &str, tag: &str) -> String {
     };
     match base.split_once('?') {
         Some((_path, query)) if query.split('&').any(is_via_param) => href.to_string(),
-        Some((path, query)) if query.is_empty() => finish(&format!("{path}?via={tag}"), fragment),
+        Some((path, "")) => finish(&format!("{path}?via={tag}"), fragment),
         Some((path, query)) => finish(&format!("{path}?{query}&via={tag}"), fragment),
         None => finish(&format!("{base}?via={tag}"), fragment),
     }
