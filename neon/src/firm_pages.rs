@@ -194,6 +194,43 @@ const NV_DISSOLUTION: &str =
 const NV_MODIFIED_BUSINESS_TAX: &str = include_str!(
     "../../templates/notations/forms/united_states/nevada/state/nv__modified_business_tax.md"
 );
+const CA_NAME_CHANGE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_petition.md"
+);
+const CA_NAME_CHANGE_ATTACHMENT: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_attachment.md"
+);
+const CA_NAME_CHANGE_ORDER_TO_SHOW_CAUSE: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_order_to_show_cause.md"
+);
+const CA_NAME_CHANGE_DECREE: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_decree.md"
+);
+const CA_CIVIL_CASE_COVER_SHEET: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__civil_case_cover_sheet.md"
+);
+const CA_GENDER_IDENTITY_NAME_CHANGE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_petition.md"
+);
+const CA_GENDER_IDENTITY_NAME_CHANGE_ORDER_TO_SHOW_CAUSE: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_order_to_show_cause.md"
+);
+const CA_GENDER_IDENTITY_NAME_CHANGE_DECREE: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_decree.md"
+);
+const CA_GENDER_RECOGNITION_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_recognition_petition.md"
+);
+const CA_GENDER_RECOGNITION_ORDER: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_recognition_order.md"
+);
+const NV_ADULT_NAME_CHANGE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/nevada/nevada_supreme_court/nv__adult_name_change_petition.md"
+);
+const NV_DV_PROTECTION_ORDER_APPLICATION: &str = include_str!(
+    "../../templates/notations/forms/united_states/nevada/nevada_supreme_court/nv__dv_protection_order_application.md"
+);
+
 const NV_CHARITABLE: &str = include_str!(
     "../../templates/notations/forms/united_states/nevada/state/nv__charitable_solicitation_registration.md"
 );
@@ -378,6 +415,66 @@ fn notation_preview_docs() -> Vec<webapp::notation_preview::PreviewDoc> {
             "notations/forms/united_states/nevada/state/nv__charitable_solicitation_registration.md",
             NV_CHARITABLE,
         ),
+        preview_doc(
+            "california-name-change-petition",
+            "notations/forms/united_states/california/california_superior_court/ca__name_change_petition.md",
+            CA_NAME_CHANGE_PETITION,
+        ),
+        preview_doc(
+            "california-name-change-attachment",
+            "notations/forms/united_states/california/california_superior_court/ca__name_change_attachment.md",
+            CA_NAME_CHANGE_ATTACHMENT,
+        ),
+        preview_doc(
+            "california-name-change-order-to-show-cause",
+            "notations/forms/united_states/california/california_superior_court/ca__name_change_order_to_show_cause.md",
+            CA_NAME_CHANGE_ORDER_TO_SHOW_CAUSE,
+        ),
+        preview_doc(
+            "california-name-change-decree",
+            "notations/forms/united_states/california/california_superior_court/ca__name_change_decree.md",
+            CA_NAME_CHANGE_DECREE,
+        ),
+        preview_doc(
+            "california-civil-case-cover-sheet",
+            "notations/forms/united_states/california/california_superior_court/ca__civil_case_cover_sheet.md",
+            CA_CIVIL_CASE_COVER_SHEET,
+        ),
+        preview_doc(
+            "california-gender-identity-name-change-petition",
+            "notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_petition.md",
+            CA_GENDER_IDENTITY_NAME_CHANGE_PETITION,
+        ),
+        preview_doc(
+            "california-gender-identity-name-change-order-to-show-cause",
+            "notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_order_to_show_cause.md",
+            CA_GENDER_IDENTITY_NAME_CHANGE_ORDER_TO_SHOW_CAUSE,
+        ),
+        preview_doc(
+            "california-gender-identity-name-change-decree",
+            "notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_decree.md",
+            CA_GENDER_IDENTITY_NAME_CHANGE_DECREE,
+        ),
+        preview_doc(
+            "california-gender-recognition-petition",
+            "notations/forms/united_states/california/california_superior_court/ca__gender_recognition_petition.md",
+            CA_GENDER_RECOGNITION_PETITION,
+        ),
+        preview_doc(
+            "california-gender-recognition-order",
+            "notations/forms/united_states/california/california_superior_court/ca__gender_recognition_order.md",
+            CA_GENDER_RECOGNITION_ORDER,
+        ),
+        preview_doc(
+            "nevada-adult-name-change-petition",
+            "notations/forms/united_states/nevada/nevada_supreme_court/nv__adult_name_change_petition.md",
+            NV_ADULT_NAME_CHANGE_PETITION,
+        ),
+        preview_doc(
+            "nevada-dv-protection-order-application",
+            "notations/forms/united_states/nevada/nevada_supreme_court/nv__dv_protection_order_application.md",
+            NV_DV_PROTECTION_ORDER_APPLICATION,
+        ),
     ]);
     docs
 }
@@ -517,6 +614,90 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
                 "nevada-charitable-solicitation-registration",
                 "Registration before soliciting donations in Nevada.",
                 NV_CHARITABLE,
+            ),
+            notation_card(
+                "California",
+                "Petition for Change of Name (NC-100)",
+                "california-name-change-petition",
+                "The petition that opens a California name-change case.",
+                CA_NAME_CHANGE_PETITION,
+            ),
+            notation_card(
+                "California",
+                "Name and Information About the Person Whose Name is to be Changed (NC-110)",
+                "california-name-change-attachment",
+                "The NC-110 attachment carrying birthplace, reason, and other petition detail.",
+                CA_NAME_CHANGE_ATTACHMENT,
+            ),
+            notation_card(
+                "California",
+                "Order to Show Cause—Change of Name (NC-120)",
+                "california-name-change-order-to-show-cause",
+                "The order setting the hearing on a California name change.",
+                CA_NAME_CHANGE_ORDER_TO_SHOW_CAUSE,
+            ),
+            notation_card(
+                "California",
+                "Decree Changing Name (NC-130)",
+                "california-name-change-decree",
+                "The court order that finalizes a California name change.",
+                CA_NAME_CHANGE_DECREE,
+            ),
+            notation_card(
+                "California",
+                "Civil Case Cover Sheet (CM-010)",
+                "california-civil-case-cover-sheet",
+                "The cover sheet that opens a California civil case.",
+                CA_CIVIL_CASE_COVER_SHEET,
+            ),
+            notation_card(
+                "California",
+                "Petition for Change of Name to Conform to Gender Identity (NC-200)",
+                "california-gender-identity-name-change-petition",
+                "Asks a California court for a name change that conforms to gender identity.",
+                CA_GENDER_IDENTITY_NAME_CHANGE_PETITION,
+            ),
+            notation_card(
+                "California",
+                "Order to Show Cause—Change of Name to Conform to Gender Identity (NC-225)",
+                "california-gender-identity-name-change-order-to-show-cause",
+                "The order setting the hearing on a gender-identity name change.",
+                CA_GENDER_IDENTITY_NAME_CHANGE_ORDER_TO_SHOW_CAUSE,
+            ),
+            notation_card(
+                "California",
+                "Decree Changing Name to Conform to Gender Identity (NC-230)",
+                "california-gender-identity-name-change-decree",
+                "The court order finalizing a gender-identity name change.",
+                CA_GENDER_IDENTITY_NAME_CHANGE_DECREE,
+            ),
+            notation_card(
+                "California",
+                "Petition for Recognition of Gender Change (NC-300)",
+                "california-gender-recognition-petition",
+                "Asks a California court to recognize a gender change and order new certificates.",
+                CA_GENDER_RECOGNITION_PETITION,
+            ),
+            notation_card(
+                "California",
+                "Order Recognizing Gender Change (NC-330)",
+                "california-gender-recognition-order",
+                "The court order recognizing a gender change and directing new certificates.",
+                CA_GENDER_RECOGNITION_ORDER,
+            ),
+            notation_card(
+                "Nevada",
+                "Petition for Adult Name Change",
+                "nevada-adult-name-change-petition",
+                "The statewide petition for an adult to change their name in Nevada.",
+                NV_ADULT_NAME_CHANGE_PETITION,
+            ),
+            notation_card(
+                "Nevada",
+                "Application for Protection Order Against Domestic Violence",
+                "nevada-dv-protection-order-application",
+                "The statewide application for a Nevada domestic-violence protection order.",
+                NV_DV_PROTECTION_ORDER_APPLICATION,
             ),
         ],
         contact_email: views::brand::firm_email().to_string(),
