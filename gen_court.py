@@ -91,7 +91,7 @@ sc_forms = [
     ("sc112a", "Proof of Service by Mail (small claims)", "SC-112A", "SC112A"),
     ("sc114", "Request to Amend Party Name Before Hearing", "SC-114", "SC114"),
     ("sc120", "Defendant's Claim and ORDER to Go to Small Claims Court", "SC-120", "SC120"),
-    ("sc133", "Judgment Debtor's Statement of Assets", "SC-133", "SC133"),  # pii-scan: allow -- official published form title, not a person
+    ("sc133", "Judgment Debtor's Statement of Assets", "SC-133", "SC133"),
     ("sc134", "Order to Produce Statement of Assets and to Appear for Examination", "SC-134", "SC134"),
     ("sc135", "Notice of Motion to Vacate Judgment and Declaration", "SC-135", "SC135"),
     ("sc145", "Request to Pay Judgment to Court", "SC-145", "SC145"),
