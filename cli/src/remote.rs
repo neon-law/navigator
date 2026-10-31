@@ -12,7 +12,7 @@
 //! | `projects close` | `POST /app/api/projects/{id}/lifecycle`, then a repository archive upload |
 //! | `project setup` | `GET /app/api/projects` plus the authenticated surface, Slack, and Notion setup doors |
 //! | `project sync` | `GET /app/api/projects/{id}/documents` plus each current revision's download door |
-//! | `document upload` | `POST /app/api/projects/{id}/documents` |
+//! | `document upload` | `POST /app/api/projects/{id}/documents`, or above the buffered cap the streaming session doors — `POST .../documents/upload-session`, `.../upload-session/{id}/chunk`, `.../upload-session/{id}/complete` (LAW-172) |
 //! | `document slug` | `PATCH /app/api/projects/{id}/documents/{asset_id}` |
 //! | `document reclassify` | `POST /app/api/projects/{id}/documents/{asset_id}/reclassify` |
 //! | `document repair` | `POST /app/api/projects/{id}/documents/{asset_id}/storage` |
@@ -907,6 +907,35 @@ impl DocumentExecution {
     }
 }
 
+/// Which upload door carries a document: the buffered door for everything
+/// that fits its per-kind cap, the streaming lane above it (LAW-172).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UploadLane {
+    Buffered,
+    Streaming,
+}
+
+/// The lane for a document of `size` bytes and `kind`. Inclusive at the
+/// per-kind cap, so every upload that works today stays on the buffered
+/// door and only the previously rejected sizes take the streaming lane.
+pub(crate) fn upload_lane_for(size: usize, kind: &str) -> UploadLane {
+    if size <= store::documents::max_document_upload_bytes(kind) {
+        UploadLane::Buffered
+    } else {
+        UploadLane::Streaming
+    }
+}
+
+/// The wire shape of a streaming upload session: where the upload stands
+/// and what the next chunk must carry. The id is parsed from the same
+/// response.
+#[derive(Debug, Clone, Deserialize)]
+struct StreamingSessionStatus {
+    id: Uuid,
+    chunk_size: u64,
+    received_bytes: u64,
+}
+
 /// Authenticated client for the one Project's document-sync operations.
 pub(crate) struct DocumentClient {
     base: String,
@@ -1340,9 +1369,71 @@ impl DocumentClient {
         .await
     }
 
-    /// Upload a revision with the structured OCR provenance fields.
+    /// Upload a revision with the structured OCR provenance fields. Routes
+    /// by size: the buffered door for everything that fits its per-kind cap,
+    /// the streaming lane above it (LAW-172) — one lane choice, made here,
+    /// so no upload command needs to know the difference.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn upload_bytes_with_details(
+        &self,
+        filename: &str,
+        bytes: &[u8],
+        kind: &str,
+        visibility: Option<&str>,
+        description: Option<&str>,
+        content_type: Option<&str>,
+        slug: Option<&str>,
+        metadata: Option<serde_json::Value>,
+        derived_from: Option<serde_json::Value>,
+        transcript_quality: Option<&str>,
+        execution: &DocumentExecution,
+    ) -> Result<store::document_pointers::DocumentPointer> {
+        match upload_lane_for(bytes.len(), kind) {
+            UploadLane::Buffered => {
+                self.upload_bytes_buffered(
+                    filename,
+                    bytes,
+                    kind,
+                    visibility,
+                    description,
+                    content_type,
+                    slug,
+                    metadata,
+                    derived_from,
+                    transcript_quality,
+                    execution,
+                )
+                .await
+            }
+            UploadLane::Streaming => {
+                if bytes.len() > store::documents::MAX_STREAMING_UPLOAD_BYTES {
+                    return Err(anyhow!(
+                        "{}",
+                        store::documents::streaming_upload_size_message(bytes.len())
+                    ));
+                }
+                self.upload_bytes_streaming(
+                    filename,
+                    bytes,
+                    kind,
+                    visibility,
+                    description,
+                    content_type,
+                    slug,
+                    metadata,
+                    derived_from,
+                    transcript_quality,
+                    execution,
+                )
+                .await
+            }
+        }
+    }
+
+    /// The buffered upload: one base64 JSON request — the lane every upload
+    /// fit until the streaming lane existed, unchanged.
+    #[allow(clippy::too_many_arguments)]
+    async fn upload_bytes_buffered(
         &self,
         filename: &str,
         bytes: &[u8],
@@ -1410,6 +1501,221 @@ impl DocumentClient {
             ));
         }
         serde_json::from_str(&text).context("parse document pointer response: upload may be filed; reconcile with `navigator project gate --check` before retrying")
+    }
+
+    /// Upload one revision through the streaming lane (LAW-172): open (or
+    /// resume) a session, send the bytes one server-sized chunk per call at
+    /// exactly the offset the server acknowledges, and complete. Resumable
+    /// by construction — re-running the command re-opens the same session
+    /// (same filename, size, and digest), re-syncs from the acknowledged
+    /// offset, and never re-sends a byte the server already counted. Files
+    /// through the same ingest as the buffered door, so the pointer and its
+    /// revisions are identical.
+    #[allow(clippy::too_many_arguments)]
+    async fn upload_bytes_streaming(
+        &self,
+        filename: &str,
+        bytes: &[u8],
+        kind: &str,
+        visibility: Option<&str>,
+        description: Option<&str>,
+        content_type: Option<&str>,
+        slug: Option<&str>,
+        metadata: Option<serde_json::Value>,
+        derived_from: Option<serde_json::Value>,
+        transcript_quality: Option<&str>,
+        execution: &DocumentExecution,
+    ) -> Result<store::document_pointers::DocumentPointer> {
+        let mut body = serde_json::json!({
+            "filename": filename,
+            "content_type": content_type.unwrap_or("application/octet-stream"),
+            "kind": kind,
+            "visibility": visibility.unwrap_or("internal"),
+            "declared_size": bytes.len(),
+            "declared_sha256": store::documents::sha256_hex(bytes),
+        });
+        if let Some(description) = description.map(str::trim).filter(|value| !value.is_empty()) {
+            body["description"] = serde_json::Value::String(description.to_string());
+        }
+        if let Some(slug) = slug.map(str::trim).filter(|value| !value.is_empty()) {
+            body["slug"] = serde_json::Value::String(slug.to_string());
+        }
+        if let Some(metadata) = metadata {
+            body["metadata"] = metadata;
+        }
+        if let Some(derived_from) = derived_from {
+            body["derived_from"] = derived_from;
+        }
+        if let Some(transcript_quality) = transcript_quality {
+            body["transcript_quality"] = serde_json::Value::String(transcript_quality.to_string());
+        }
+        execution.add_to(&mut body)?;
+        let session_url = format!(
+            "{}/app/api/projects/{}/documents/upload-session",
+            self.base, self.project_id
+        );
+        let response = self
+            .client
+            .post(&session_url)
+            .bearer_auth(&self.token)
+            .json(&body)
+            .send()
+            .await
+            .with_context(|| format!("POST {session_url}: session open outcome unknown"))?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(UploadSessionExpired(self.base.clone()).into());
+        }
+        if !matches!(status.as_u16(), 200 | 201) {
+            return Err(anyhow!(
+                "streaming upload failed to open a session: {status}: {}",
+                first_line(&text)
+            ));
+        }
+        let mut session: StreamingSessionStatus =
+            serde_json::from_str(&text).context("parse upload session response")?;
+        let session_id = session.id;
+        let mut offset = session.received_bytes as usize;
+
+        // A 409 means the server stands at a different offset than this run
+        // assumed — a lost acknowledgement, or a chunk sized for a stale
+        // session view. Re-sync from the status door and continue; after a
+        // few consecutive refusals the mismatch is real, so fail with the
+        // offset named instead of looping.
+        let mut resyncs = 0_u32;
+        while offset < bytes.len() {
+            let chunk_len = session.chunk_size.max(1) as usize;
+            let end = (offset + chunk_len).min(bytes.len());
+            let chunk = &bytes[offset..end];
+            let chunk_url = format!(
+                "{}/app/api/projects/{}/documents/upload-session/{session_id}/chunk",
+                self.base, self.project_id
+            );
+            let response = self
+                .client
+                .post(&chunk_url)
+                .bearer_auth(&self.token)
+                .json(&serde_json::json!({
+                    "content_base64":
+                        base64::engine::general_purpose::STANDARD.encode(chunk),
+                }))
+                .send()
+                .await
+                .with_context(|| {
+                    format!(
+                        "POST {chunk_url}: chunk {offset} outcome unknown; \
+                         re-running the command resumes from the acknowledged offset"
+                    )
+                })?;
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(UploadSessionExpired(self.base.clone()).into());
+            }
+            if status == reqwest::StatusCode::CONFLICT {
+                resyncs += 1;
+                if resyncs > 4 {
+                    return Err(anyhow!(
+                        "the server refused the chunk at offset {offset} repeatedly; \
+                         re-run the command to resume from the acknowledged offset"
+                    ));
+                }
+                session = self.upload_session_status(session_id).await?;
+                offset = session.received_bytes as usize;
+                continue;
+            }
+            if status == reqwest::StatusCode::GONE {
+                return Err(anyhow!(
+                    "the upload session expired mid-upload; re-run the command \
+                     to open a new one (progress is not recoverable)"
+                ));
+            }
+            if !status.is_success() {
+                return Err(anyhow!(
+                    "chunk at offset {offset} failed: {status}: {} — re-run the \
+                     command to resume from the acknowledged offset",
+                    first_line(&text)
+                ));
+            }
+            let ack: StreamingSessionStatus =
+                serde_json::from_str(&text).context("parse upload session acknowledgement")?;
+            if ack.received_bytes as usize <= offset && end < bytes.len() {
+                return Err(anyhow!(
+                    "the server acknowledged {} bytes after the chunk at offset \
+                     {offset}; re-run the command to resume",
+                    ack.received_bytes
+                ));
+            }
+            offset = ack.received_bytes as usize;
+        }
+
+        let complete_url = format!(
+            "{}/app/api/projects/{}/documents/upload-session/{session_id}/complete",
+            self.base, self.project_id
+        );
+        let response = self
+            .client
+            .post(&complete_url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "POST {complete_url}: completion outcome unknown; re-running \
+                     the command resumes from the acknowledged offset"
+                )
+            })?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(UploadSessionExpired(self.base.clone()).into());
+        }
+        if !matches!(status.as_u16(), 200 | 201) {
+            return Err(anyhow!(
+                "streaming upload completion failed: {status}: {} — the session \
+                 kept its progress; re-run the command to retry",
+                first_line(&text)
+            ));
+        }
+        serde_json::from_str(&text).context(
+            "parse document pointer response: upload may be filed; reconcile with \
+             `navigator project gate --check` before retrying",
+        )
+    }
+
+    /// Read one streaming upload session's status — the resume point and the
+    /// chunk size the server is enforcing.
+    async fn upload_session_status(&self, session_id: Uuid) -> Result<StreamingSessionStatus> {
+        let url = format!(
+            "{}/app/api/projects/{}/documents/upload-session/{session_id}",
+            self.base, self.project_id
+        );
+        let response = self
+            .client
+            .get(&url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .with_context(|| format!("GET {url}"))?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(anyhow!(
+                "the streaming upload session is gone (completed or expired); \
+                 re-run the command to open a new one"
+            ));
+        }
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(UploadSessionExpired(self.base.clone()).into());
+        }
+        if !status.is_success() {
+            return Err(anyhow!(
+                "upload session status failed: {status}: {}",
+                first_line(&text)
+            ));
+        }
+        serde_json::from_str(&text).context("parse upload session status")
     }
 
     /// Reconcile the desired pointer visibility through Navigator's API.
@@ -7075,7 +7381,10 @@ mod tests {
         let client = DocumentClient::connect(Some(server_uri.as_str()), "acme")
             .await
             .expect("connect to the mock door");
-        let oversized = vec![0u8; store::documents::MAX_DOCUMENT_UPLOAD_BYTES + 1];
+        // The per-kind caps route sizes to a lane; the streaming ceiling is
+        // the one size no lane accepts, and it is refused before anything
+        // hits the wire.
+        let oversized = vec![0u8; store::documents::MAX_STREAMING_UPLOAD_BYTES + 1];
         let error = client
             .upload_bytes(
                 "synthetic-repository.zip",
@@ -7088,18 +7397,21 @@ mod tests {
                 None,
             )
             .await
-            .expect_err("an oversized document is refused before the request");
+            .expect_err("an upload above the streaming ceiling is refused before the request");
 
         assert!(error
             .to_string()
-            .contains(&store::documents::MAX_DOCUMENT_UPLOAD_BYTES.to_string()));
+            .contains(&store::documents::MAX_STREAMING_UPLOAD_BYTES.to_string()));
         assert!(error.to_string().contains(&oversized.len().to_string()));
         assert!(server
             .received_requests()
             .await
             .unwrap()
             .iter()
-            .all(|request| !request.url.path().ends_with("/documents")));
+            .all(|request| {
+                !request.url.path().ends_with("/documents")
+                    && !request.url.path().contains("/upload-session")
+            }));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -9571,5 +9883,202 @@ mod tests {
                 "merge output must not echo parsed arguments: {line}"
             );
         }
+    }
+
+    /// Lane routing is inclusive at the per-kind cap: everything that fits
+    /// the buffered door today stays there, and only the sizes the buffered
+    /// door rejects move to the streaming lane.
+    #[test]
+    fn upload_lane_routes_at_the_per_kind_cap() {
+        for kind in ["unclassified", "transcript"] {
+            let cap = store::documents::max_document_upload_bytes(kind);
+            assert_eq!(
+                super::upload_lane_for(cap, kind),
+                super::UploadLane::Buffered,
+                "{kind} at its cap rides the buffered door"
+            );
+            assert_eq!(
+                super::upload_lane_for(cap + 1, kind),
+                super::UploadLane::Streaming,
+                "{kind} one byte over its cap moves to the streaming lane"
+            );
+            assert_eq!(
+                super::upload_lane_for(store::documents::MAX_STREAMING_UPLOAD_BYTES, kind),
+                super::UploadLane::Streaming,
+                "{kind} at the asset ceiling still has a lane"
+            );
+        }
+    }
+
+    /// The streaming client end to end against a mock deployment: open, two
+    /// chunks, a 409 from a replayed chunk after a lost acknowledgement, the
+    /// status-door re-sync, completion, and the same pointer the buffered
+    /// door files. Four bytes per chunk makes the choreography explicit.
+    #[tokio::test(flavor = "current_thread")]
+    async fn document_upload_streams_in_chunks_and_resumes_after_a_conflict() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let session_id = Uuid::now_v7();
+        // `with_credential` resolves the project code before anything else,
+        // so the mock deployment must answer the projects list first.
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": project_id, "code": "acme"}
+            ])))
+            .mount(&server)
+            .await;
+        let client =
+            DocumentClient::with_credential(server.uri(), "test-token".to_string(), "acme")
+                .await
+                .expect("a client against the mock deployment");
+
+        let session_body = serde_json::json!({
+            "id": session_id,
+            "chunk_size": 4,
+            "received_bytes": 0
+        });
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/upload-session"
+            )))
+            .respond_with(ResponseTemplate::new(201).set_body_json(session_body))
+            .mount(&server)
+            .await;
+
+        let bytes = b"eight bytes here".to_vec();
+        let encode = |chunk: &[u8]| -> String {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(chunk)
+        };
+        let chunk_url =
+            format!("/app/api/projects/{project_id}/documents/upload-session/{session_id}/chunk");
+        // 16 bytes at a 4-byte chunk size stream as four chunks. The first
+        // append of chunk one is refused with a conflict — the lost
+        // acknowledgement case — so the client re-syncs from the status door
+        // and re-sends chunk one at the server's offset. wiremock matches
+        // equal-priority mocks in registration order, so the one-shot 409 is
+        // registered before the acknowledging 200.
+        Mock::given(method("POST"))
+            .and(path(&chunk_url))
+            .and(body_json(serde_json::json!({
+                "content_base64": encode(&bytes[..4])
+            })))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "error": "chunk_offset_mismatch",
+                "expected_offset": 0
+            })))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(&chunk_url))
+            .and(body_json(serde_json::json!({
+                "content_base64": encode(&bytes[..4])
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": session_id,
+                "chunk_size": 4,
+                "received_bytes": 4
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // The re-sync reads the acknowledged offset from the status door; the
+        // server stands at zero because the refused chunk was never applied.
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/upload-session/{session_id}"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": session_id,
+                "chunk_size": 4,
+                "received_bytes": 0
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // The remaining three chunks each land exactly once, in order.
+        Mock::given(method("POST"))
+            .and(path(&chunk_url))
+            .and(body_json(serde_json::json!({
+                "content_base64": encode(&bytes[4..8])
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": session_id,
+                "chunk_size": 4,
+                "received_bytes": 8
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(&chunk_url))
+            .and(body_json(serde_json::json!({
+                "content_base64": encode(&bytes[8..12])
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": session_id,
+                "chunk_size": 4,
+                "received_bytes": 12
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(&chunk_url))
+            .and(body_json(serde_json::json!({
+                "content_base64": encode(&bytes[12..])
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": session_id,
+                "chunk_size": 4,
+                "received_bytes": 16
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/documents/upload-session/{session_id}/complete"
+            )))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "kind": "transcript",
+                "visibility": "internal",
+                "current_version": {
+                    "version": 1,
+                    "asset_id": Uuid::now_v7(),
+                    "created_at": "2026-10-30T12:00:00Z",
+                    "sha256": store::documents::sha256_hex(&bytes),
+                    "size_bytes": 16
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let pointer = client
+            .upload_bytes_streaming(
+                "hearing.mp3",
+                &bytes,
+                "transcript",
+                None,
+                None,
+                Some("audio/mpeg"),
+                None,
+                None,
+                None,
+                Some("machine"),
+                &DocumentExecution::default(),
+            )
+            .await
+            .expect("the streaming upload completes");
+        assert_eq!(pointer.current_version.size_bytes, 16);
+        assert_eq!(
+            pointer.current_version.sha256,
+            store::documents::sha256_hex(&bytes)
+        );
     }
 }
