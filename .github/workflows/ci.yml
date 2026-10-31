@@ -949,9 +949,16 @@ jobs:
           # `forgejo/cluster.rs`, `oidc.rs`, and `smoke.rs` drive kubectl, git,
           # and HTTP against a KIND Forgejo; `forgejo-postgres.yml` runs them,
           # and `forgejo/mod.rs` keeps their decisions and their tests here.
+          # `scraper/browser.rs` is the same class one seam over: every
+          # function in it spawns the pinned chromedriver, connects the
+          # WebDriver client, or drives cookies into the running browser, so
+          # none of it can execute here. Its decisions — session config and
+          # redacted `Debug`, cookie/state serialization, the driver command,
+          # capability shape, port polling — stay counted in
+          # `scraper/session.rs` with their tests.
           cargo llvm-cov report \
               --fail-under-lines 91.0 \
-              --ignore-filename-regex '(cli/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|cli/src/devx/forgejo/(cluster|oidc|smoke)|cli/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver)\.rs$'
+              --ignore-filename-regex '(cli/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|cli/src/devx/forgejo/(cluster|oidc|smoke)|cli/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|cli/src/scraper/browser)\.rs$'
       - name: stop covered PostgreSQL fixture
         if: always()
         run: docker rm -f test-postgres

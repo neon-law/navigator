@@ -53,6 +53,7 @@ mod release_version;
 #[allow(dead_code)]
 mod remote;
 mod sas;
+mod scraper;
 mod sendgrid_openapi;
 mod site_asset;
 mod surreal_archive;
@@ -890,6 +891,13 @@ enum Command {
     Projects {
         #[command(subcommand)]
         action: ProjectsCmd,
+    },
+    /// Scrape court and program portals into the omnichannel inbox. Site
+    /// adapters run on the shared framework base: pinned-Chrome sessions,
+    /// Firm-store portal logins, resumable downloads, inbox intake.
+    Scraper {
+        #[command(subcommand)]
+        action: scraper::ScraperCmd,
     },
     /// The notation author's workbench: a Project repository's
     /// `templates/<stem>.md` (the fleet layout), or Navigator's own bundled
@@ -4695,6 +4703,7 @@ fn run() -> ExitCode {
         }
         Command::Mail { action } => runtime().block_on(mail::run(action)),
         Command::Projects { action } => runtime().block_on(run_projects(action)),
+        Command::Scraper { action } => runtime().block_on(scraper::run(action)),
         // The docs reference helpers need no cluster, so they are handled
         // here rather than routed into the KIND dispatcher with the rest
         // of `dev`.
