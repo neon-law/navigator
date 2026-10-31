@@ -20,6 +20,10 @@ use uuid::Uuid;
 
 use crate::postgres::PostgresDb;
 
+/// One day of work, in whole minutes — the single-entry ceiling. A Timer
+/// left running past it is refused at stop; discard it or log by hand.
+pub const MAX_MINUTES_PER_DAY: i32 = 1_440;
+
 #[derive(Debug, thiserror::Error)]
 pub enum TimeEntryError {
     #[error("invalid Time Entry: {0}")]
@@ -171,7 +175,7 @@ fn from_row(row: &sqlx::postgres::PgRow) -> Result<TimeEntry, TimeEntryError> {
 }
 
 fn validate(input: &NewTimeEntry) -> Result<(), TimeEntryError> {
-    if !(1..=1440).contains(&input.minutes) {
+    if !(1..=MAX_MINUTES_PER_DAY).contains(&input.minutes) {
         return Err(TimeEntryError::Invalid("minutes"));
     }
     if input.description.trim().is_empty() || input.description.trim().len() > 2000 {
@@ -308,11 +312,10 @@ pub async fn mark_invoiced(
         .collect::<Result<Vec<_>, _>>()?;
     for entry in &rows {
         match &entry.billing_status {
-            BillingStatus::Unbilled => continue,
+            // Unbilled: nothing to check yet.
+            BillingStatus::Unbilled => {}
             // Already invoiced under the same invoice id: the replay no-op.
-            BillingStatus::Invoiced { xero_invoice_id: id } if id.as_str() == xero_invoice_id => {
-                continue;
-            }
+            BillingStatus::Invoiced { xero_invoice_id: id } if id.as_str() == xero_invoice_id => {}
             // Invoiced under a different invoice, or written off: the caller
             // is composing a different batch than the one that marked these.
             BillingStatus::Invoiced { .. } => return Err(TimeEntryError::Conflict),
