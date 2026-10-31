@@ -313,7 +313,7 @@ pages:
 | `slug` | yes | lowercase letters, digits, and single hyphens; unique; not a route the matter page owns | Y021 |
 | `kind` | yes | one of the matter page kinds below | Y021 |
 | `title` | yes | any non-empty text | Y021 |
-| `draft` | no | a repository-relative path to the page's source draft | Y021 |
+| `draft` | no | a tracked regular source file beneath `drafts/` or `templates/` | Y021, Y026 |
 | `lenses` | yes | a mapping of `client`, `lawyer`, or `clerk` to a list of section names | D001–D005 |
 
 The kinds are `review_queue_workbench`, `verifier_split_view`, `matter_status_console`, `docket_deadline_board`,
@@ -421,6 +421,7 @@ literally and the columns disappear.
 | `Y021` | Error | A Project manifest `pages:` must be a list of entries with unique, URL-safe slugs. | No |
 | `Y023` | Warning | A section in `pages:` reads a data source the live matter has no rows of. | No |
 | `Y024` | Error | A Project repository tracks only Markdown, YAML, and canonical files at release bytes. | Locally |
+| `Y026` | Error | Each `pages[].draft` resolves to a tracked regular file under `drafts/` or `templates/`. | No |
 
 `Y024` runs inside the Project-repository check over every file `git ls-files` tracks or would stage. A file is admitted
 when its name ends in `.md`, `.yml`, or `.yaml`, and is not a package-manager file that happens to be YAML
