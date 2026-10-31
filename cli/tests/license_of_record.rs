@@ -495,25 +495,27 @@ fn the_firm_entity_of_record_is_one_string_across_brand_seed_and_entity_row() {
 
     for key in views::brand::BrandKey::ALL {
         let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
-        assert_eq!(
-            branding.firm.legal_entity,
-            firm,
-            "brand `{}` names a legal entity other than `store::seed::FIRM_ENTITY_NAME`; \
-             the footer, the retainer, and the delete-guarded Entity row must name one \
-             legal person",
-            key.as_str()
+        assert!(
+            store::seed::FIRM_ENTITY_NAMES.contains(&branding.firm.legal_entity),
+            "brand `{}` names legal entity `{}`, which no firm-anchor Entity ships; \
+             the footer, the retainer, and the delete-guarded Entity rows must name a \
+             legal person the seed actually creates",
+            key.as_str(),
+            branding.firm.legal_entity
         );
     }
 
     let seed: Seed = serde_yaml::from_str(store::seed::ENTITY_SEED_YAML)
         .expect("Entity.yaml parses as lookup_fields plus records");
     let names: Vec<&str> = seed.records.iter().map(|r| r.name.as_str()).collect();
-    assert!(
-        names.contains(&firm),
-        "store/seeds/Entity.yaml has no record named `{firm}`; the seed looks the firm \
-         row up by this exact name on every boot, so the row the delete guard protects \
-         would never exist. Records: {names:?}"
-    );
+    for firm in store::seed::FIRM_ENTITY_NAMES {
+        assert!(
+            names.contains(firm),
+            "store/seeds/Entity.yaml has no record named `{firm}`; the seed looks the firm \
+             row up by this exact name on every boot, so the row the delete guard protects \
+             would never exist. Records: {names:?}"
+        );
+    }
 }
 
 #[test]

@@ -61,6 +61,9 @@ pub const fn script_id(key: BrandKey) -> Option<&'static str> {
         BrandKey::Daybridge => Some("pa-j2JWmqoBTNJPRb64xIZ2o"),
         BrandKey::Summons => Some("pa-WUB2cKHxULoouY7ALHjwH"),
         BrandKey::DeathAndDivorce => Some(UNCONFIGURED_DEATH_AND_DIVORCE_ID),
+        // IEP is held out of `BrandKey::LIVE`: it serves no public pages, so
+        // no analytics snippet is configured for it yet.
+        BrandKey::Iep => None,
     }
 }
 

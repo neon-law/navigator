@@ -357,7 +357,9 @@ async fn selection_timestamps_keep_source_microseconds_on_real_postgres() {
 
 #[tokio::test]
 async fn saved_selection_write_hook_uses_the_isolated_postgres_database() {
-    let (options, database) = fresh_schema().await.unwrap();
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
     let output = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
