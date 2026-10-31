@@ -698,7 +698,7 @@ mod tests {
         assert_eq!(received[0].bytes, b"first-half-second-half".to_vec());
         let mut hasher = Sha256::new();
         hasher.update(b"first-half-second-half");
-        let expected = download::hex_digest(hasher.finalize().as_slice());
+        let expected = crate::scraper::download::hex_digest(hasher.finalize().as_slice());
         assert_eq!(received[0].sha256, expected);
         assert_eq!(
             report.enqueued[0].key, "la-superior/0004/4",

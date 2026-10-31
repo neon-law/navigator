@@ -186,7 +186,7 @@ impl SiteAdapter for MockAdapter {
             core.login_script.pop_front()
         };
         match step {
-            Some(LoginStep::Transient) | Some(LoginStep::Succeed) | None => Ok(()),
+            Some(LoginStep::Transient | LoginStep::Succeed) | None => Ok(()),
             Some(LoginStep::Structure) => Err(AdapterError::StructureDrift {
                 step: "login form".to_owned(),
                 detail: "the sign-in button moved".to_owned(),
