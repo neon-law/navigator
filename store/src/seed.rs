@@ -133,6 +133,8 @@ pub const FIRM_ENTITY_NAME: &str = "Guieb & Shook PC";
 /// Its row joins [`FIRM_ENTITY_NAME`]'s anchor-key discipline, so the
 /// delete guard protects it identically.
 pub const LEX_FIRM_ENTITY_NAME: &str = "Lex Tecnica LLP";
+/// The firm row's wordmark, distinct from the legal entity it wears.
+pub const LEX_FIRM_NAME: &str = "Lex";
 
 /// Every firm-anchor Entity the canonical seed ships, in seed order.
 /// `seed_entities` and `is_firm_anchor` read this list, so a second firm
@@ -3438,7 +3440,7 @@ async fn ensure_lex_firm(surreal: &SurrealDb) -> anyhow::Result<crate::firms::Fi
         None => match crate::firms::create(
             surreal,
             &crate::firms::NewFirm {
-                name: "Lex".to_string(),
+                name: LEX_FIRM_NAME.to_string(),
                 status: "active".to_string(),
                 entity_id: entity.id,
                 admin_dri_person_id: admin_dri,
