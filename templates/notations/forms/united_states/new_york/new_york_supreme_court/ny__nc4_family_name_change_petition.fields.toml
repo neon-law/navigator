@@ -1,0 +1,257 @@
+form_code = "ny__nc4_family_name_change_petition"
+# UCS-NC4 (06/2025) — Family Name Change Petition. The parser reports 126
+# AcroForm fields.
+#
+# One petition for a whole household: the caption names the petitioner and
+# any co-petitioners, the roster lists every member (petitioner included)
+# with their proposed name, and the consent pages repeat the venue county.
+# The roster's present-name boxes resolve through the `people__family_members`
+# aggregate (row/part), the proposed-name boxes all take the one new family
+# name, and the six household disclosure groups are plain renames to
+# `custom_single_choice` states whose choice sets carry the widgets' own
+# opaque exports (the same UCS widget family as NC1's blank).
+#
+# Mapped: the caption, the roster names, the family-wide new name, the court
+# and county dropdowns (petition, parent-consent, and minor-consent pages
+# share the venue), the co-petitioner line, the six disclosures, the reasons,
+# prior-petition and sealing boxes with their detail areas, the household
+# address and move-in date, and the non-petitioning parents' sworn details.
+#
+# Deliberately left unmapped (decision recorded, lawyer or clerk completes):
+# - `Reset_Form` — the blank's own push button.
+# - `IndexNumber` — the clerk's caption number (five header boxes).
+# - `PetitionerPlaceOfBirth` / `PetitionerDOB` / `PetitionerAge` and the
+#   `FamilyMemberPlaceOfBirth` / `FamilyMemberDOB` / `FamilyMemberAge` rows —
+#   proof of birth is attached for every member and the clerk transcribes
+#   the birth data from that proof at filing; the age is derivable at
+#   review. The transform has no people row-part for birth data.
+# - `PreviousNameChangePetition0` — the "No" half of the prior-petition
+#   radio pair; as on NC1, a No answer leaves the box for the lawyer at
+#   review rather than paint both columns.
+# - `PreviousNameChangeRequest-attachments` /
+#   `ReasonsForNameChangeRequest-attachments` /
+#   `SealNameChangeRequest-attachments` — the lawyer decides at review
+#   which sections ride with attachments.
+# - `ParentRelationshipToMinor` / `ParentRelationshipToMinor1` — the
+#   "[select one] parent legal guardian" boxes; their exports are not
+#   machine-readable, so the lawyer checks the right box at review.
+# - `ParentConsentCounty` / `MinorConsentCounty` — the consent pages repeat
+#   the venue county as dropdowns, and a second choice widget cannot merge
+#   into an already-mapped question; the lawyer confirms each at review.
+# - `ParentConsentNotaryDay` / `ParentConsentNotaryMonth` /
+#   `ParentConsentNotaryYear`, `MinorConsentNotaryDay` /
+#   `MinorConsentNotaryMonth` / `MinorConsentNotaryYear`, and
+#   `AffirmDay` / `AffirmMonth` / `AffirmYear` — sworn before the notary or
+#   signed at the review appointment (dropdown widgets, not literals).
+# - `PetitionerSignatureDate` / `CoPetitionerSignatureDate` — the wet
+#   signature dates on the petition page.
+# - `CoPetitionerName` (the verification page's three print-name lines) and
+#   `MinorName` (the four minor-consent name boxes) — which minors consent
+#   (and in which consent block) is a lawyer determination: consent applies
+#   only to minors 14 or older, and the roster order is not guaranteed to
+#   match the consent-page order. The roster itself includes the petitioner
+#   as its first row, per the form's own note.
+
+[[field]]
+name = "Petitioner(s)Name"
+question = "person__client.name"
+
+[[field]]
+name = "CourtType"
+question = "custom_single_choice__filing_court"
+
+[[field]]
+name = "County"
+question = "custom_single_choice__filing_county"
+
+[[field]]
+name = "CurrentFamilyName"
+question = "custom_text__new_family_name"
+
+[[field]]
+name = "NewFamilyName"
+question = "custom_text__new_family_name"
+
+[[field]]
+name = "PetitionerNewName"
+question = "custom_text__new_family_name"
+
+[[field]]
+name = "FamilyMemberNewName.0"
+question = "custom_text__new_family_name"
+
+[[field]]
+name = "FamilyMemberNewName.1"
+question = "custom_text__new_family_name"
+
+[[field]]
+name = "FamilyMemberNewName.2"
+question = "custom_text__new_family_name"
+
+[[field]]
+name = "FamilyMemberNewName.3"
+question = "custom_text__new_family_name"
+
+[[field]]
+name = "FamilyMemberNewName.4"
+question = "custom_text__new_family_name"
+
+[[field]]
+name = "FamilyMemberNewName.5"
+question = "custom_text__new_family_name"
+
+[[field]]
+name = "FamilyMemberNewName.6"
+question = "custom_text__new_family_name"
+
+[[field]]
+name = "PetitionerName"
+question = "people__family_members"
+row = 0
+part = "name"
+
+[[field]]
+name = "FamilyMemberName.0"
+question = "people__family_members"
+row = 1
+part = "name"
+
+[[field]]
+name = "FamilyMemberName.1"
+question = "people__family_members"
+row = 2
+part = "name"
+
+[[field]]
+name = "FamilyMemberName.2"
+question = "people__family_members"
+row = 3
+part = "name"
+
+[[field]]
+name = "FamilyMemberName.3"
+question = "people__family_members"
+row = 4
+part = "name"
+
+[[field]]
+name = "FamilyMemberName.4"
+question = "people__family_members"
+row = 5
+part = "name"
+
+[[field]]
+name = "FamilyMemberName.5"
+question = "people__family_members"
+row = 6
+part = "name"
+
+[[field]]
+name = "FamilyMemberName.6"
+question = "people__family_members"
+row = 7
+part = "name"
+
+[[field]]
+name = "CoPetitioner(s)Name"
+question = "custom_text__co_petitioners"
+
+[[field]]
+name = "ConvictedOfCrime"
+question = "custom_single_choice__convicted"
+
+[[field]]
+name = "Bankruptcy"
+question = "custom_single_choice__bankruptcy"
+
+[[field]]
+name = "JudgmentsOrLiens"
+question = "custom_single_choice__judgments_liens"
+
+[[field]]
+name = "PartyToAction"
+question = "custom_single_choice__party_to_action"
+
+[[field]]
+name = "ChildSupport"
+question = "custom_single_choice__child_support"
+
+[[field]]
+name = "SpousalSupport"
+question = "custom_single_choice__spousal_support"
+
+[[field]]
+name = "ReasonsForNameChangeRequest-specify"
+question = "custom_text__reason_for_change"
+
+[[field]]
+name = "PreviousNameChangePetition"
+question = "custom_single_choice__prior_name_change"
+
+[[field]]
+name = "PreviousNameChagePetition-specify"
+question = "custom_text__prior_name_change_details"
+
+[[field]]
+name = "CurrentAddress"
+question = "custom_text__current_address"
+
+[[field]]
+name = "CurrentAddressDate"
+question = "custom_datetime__address_since"
+
+[[field]]
+name = "SealingRequest"
+question = "custom_single_choice__sealing_requested"
+
+[[field]]
+name = "SealNameChangeRequest-specify"
+question = "custom_text__sealing_details"
+
+[[field]]
+name = "ParentName.0"
+question = "custom_text__parent_1_name"
+
+[[field]]
+name = "ParentName.1"
+question = "custom_text__parent_2_name"
+
+[[field]]
+name = "ParentCurrentAddress.0"
+question = "custom_text__parent_1_address"
+
+[[field]]
+name = "ParentCurrentAddress.1"
+question = "custom_text__parent_2_address"
+
+[[field]]
+name = "MinorNames.0"
+question = "custom_text__parent_1_present_names"
+
+[[field]]
+name = "MinorNames.1"
+question = "custom_text__parent_2_present_names"
+
+[[field]]
+name = "MinorNewNames.0"
+question = "custom_text__parent_1_proposed_names"
+
+[[field]]
+name = "MinorNewNames.1"
+question = "custom_text__parent_2_proposed_names"
+
+[[field]]
+name = "MinorNewName.0"
+question = "custom_text__new_family_name"
+
+[[field]]
+name = "MinorNewName.1"
+question = "custom_text__new_family_name"
+
+[[field]]
+name = "MinorNewName.2"
+question = "custom_text__new_family_name"
+
+[[field]]
+name = "MinorNewName.3"
+question = "custom_text__new_family_name"
