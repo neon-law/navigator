@@ -4018,8 +4018,8 @@
 {"file":"store/src/templates.rs","line":760,"function":"attempt_save","operation":"bind","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/templates.rs","line":760,"function":"attempt_save","operation":"bind","sql_operations":[],"tables":["template"],"transaction":false}
 {"file":"store/src/templates.rs","line":760,"function":"attempt_save","operation":"query","sql_operations":["SELECT","CREATE"],"tables":[],"transaction":false}
-{"file":"store/src/templates.rs","line":1453,"function":"a_sync_over_an_unpinned_legacy_row_appends_a_pinned_version","operation":"bind","sql_operations":[],"tables":["template"],"transaction":false}
-{"file":"store/src/templates.rs","line":1453,"function":"a_sync_over_an_unpinned_legacy_row_appends_a_pinned_version","operation":"query","sql_operations":["UPDATE"],"tables":[],"transaction":false}
+{"file":"store/src/templates.rs","line":1480,"function":"a_sync_over_an_unpinned_legacy_row_appends_a_pinned_version","operation":"bind","sql_operations":[],"tables":["template"],"transaction":false}
+{"file":"store/src/templates.rs","line":1480,"function":"a_sync_over_an_unpinned_legacy_row_appends_a_pinned_version","operation":"query","sql_operations":["UPDATE"],"tables":[],"transaction":false}
 {"file":"store/src/test_support.rs","line":36,"function":"seed_body_asset","operation":"bind","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/test_support.rs","line":36,"function":"seed_body_asset","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
 {"file":"store/src/test_support.rs","line":64,"function":"seed_unpinned_project_template","operation":"bind","sql_operations":[],"tables":[],"transaction":false}
@@ -4121,10 +4121,10 @@
 {"file":"webapp/src/document_link.rs","line":93,"function":"from_secret","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/document_link.rs","line":145,"function":"verify","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/document_link.rs","line":161,"function":"sign","operation":"update","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/lawyer_project_detail.rs","line":201,"function":"project_notation_board","operation":"insert","sql_operations":[],"tables":["template"],"transaction":false}
-{"file":"webapp/src/lawyer_project_detail.rs","line":220,"function":"project_notation_board","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/lawyer_project_detail.rs","line":237,"function":"project_notation_board","operation":"insert","sql_operations":[],"tables":["notation"],"transaction":false}
-{"file":"webapp/src/lawyer_project_detail.rs","line":360,"function":"repository_templates_from_tree","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/lawyer_project_detail.rs","line":205,"function":"project_notation_board","operation":"insert","sql_operations":[],"tables":["template"],"transaction":false}
+{"file":"webapp/src/lawyer_project_detail.rs","line":224,"function":"project_notation_board","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/lawyer_project_detail.rs","line":242,"function":"project_notation_board","operation":"insert","sql_operations":[],"tables":["notation"],"transaction":false}
+{"file":"webapp/src/lawyer_project_detail.rs","line":388,"function":"repository_templates_from_tree","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/notation_demo.rs","line":322,"function":"preview_context","operation":"insert","sql_operations":[],"tables":["question"],"transaction":false}
 {"file":"webapp/src/schedules.rs","line":471,"function":"unrendered_cron_job_names","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/sections/derive.rs","line":311,"function":"roster_parties","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
