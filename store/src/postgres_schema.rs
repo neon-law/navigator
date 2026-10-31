@@ -271,9 +271,8 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
                 }
                 continue;
             }
-            if let Some((name, constraint)) = rest
-                .trim_end_matches(';')
-                .split_once(" DROP CONSTRAINT ")
+            if let Some((name, constraint)) =
+                rest.trim_end_matches(';').split_once(" DROP CONSTRAINT ")
             {
                 // Dropping a named constraint changes no table, column, or
                 // foreign key the parity model records; validate the shape
