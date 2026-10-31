@@ -741,6 +741,37 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
             ));
         }
     }
+    // Cyber Injury Law's own practice-area pages. Brand-specific like the
+    // explainers above: the fallback copy bakes the router-build branding,
+    // and `with_branded` injects the copy of the brand whose
+    // `practice_pages` names the route, so only Cyber Injury Law's host
+    // renders its catalog while `reject_unpublished_firm_path` 404s it on
+    // every other host without any further gating here.
+    for (path, stem) in BrandKey::CyberInjuryLaw.practice_pages() {
+        let copies = BrandKey::ALL
+            .iter()
+            .copied()
+            .filter(|key| key.practice_pages().contains(&(*path, *stem)))
+            .map(|key| {
+                (
+                    key,
+                    webapp::marketing_page::InjectedMarketingPage {
+                        path: path.to_string(),
+                        content: firm_copy::practice_page(key.resolve_branding(branding), stem),
+                    },
+                )
+            })
+            .collect();
+        routers.push(with_branded(
+            dioxus_app::marketing_page_router(
+                path,
+                firm_copy::practice_page(BrandKey::CyberInjuryLaw.resolve_branding(branding), stem),
+                state.sessions.clone(),
+                portal::secure_cookies(state),
+            ),
+            copies,
+        ));
+    }
     routers.push(with_branded(
         dioxus_app::marketing_page_router(
             dioxus_app::FIRM_SERVICES_PATH,

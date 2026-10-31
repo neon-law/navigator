@@ -31,6 +31,13 @@ pub fn explainer(branding: &views::brand::Branding, stem: &str) -> PageContent {
     locales::explainer(branding, stem)
 }
 
+/// A brand's own practice-area page (`/car-accidents` on Cyber Injury Law).
+/// See `locales/en/cyber-injury-law/` and
+/// `views::brand::BrandKey::practice_pages`.
+pub fn practice_page(branding: &views::brand::Branding, stem: &str) -> PageContent {
+    locales::practice_page(branding, stem)
+}
+
 /// `/delete-your-debt` — Neon's own gateway to the DeleteYourDebt.com
 /// practice. See `locales/en/neon/gateway-delete-your-debt.yaml`.
 pub fn delete_your_debt_gateway(

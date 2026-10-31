@@ -2466,3 +2466,22 @@ async fn vesta_header_links_to_its_probate_page_and_other_brands_do_not_publish_
         StatusCode::NOT_FOUND
     );
 }
+
+/// The Cyber Injury Law practice pages are declared public paths — the
+/// allow-list the router composes with admits them — but they answer only
+/// on their own brand's host, never on this one.
+#[tokio::test]
+async fn cyber_injury_practice_pages_are_public_but_not_on_this_host() {
+    let app = site_app().await;
+    for path in ["/car-accidents", "/cybercrime", "/theft", "/data-theft"] {
+        assert!(
+            neon::PUBLIC_PATHS.contains(&path),
+            "{path} must be declared in PUBLIC_PATHS"
+        );
+        assert_eq!(
+            anon_get(&app, path).await.status(),
+            StatusCode::NOT_FOUND,
+            "{path} must not answer on the Neon Law host"
+        );
+    }
+}

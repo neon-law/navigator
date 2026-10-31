@@ -80,6 +80,13 @@ const SUMMONS_SERVICES_YAML: &str = include_str!("../locales/en/summons/services
 const CYBER_INJURY_SERVICES_YAML: &str =
     include_str!("../locales/en/cyber-injury-law/services.yaml");
 const CYBER_INJURY_HOME_YAML: &str = include_str!("../locales/en/cyber-injury-law/home.yaml");
+const CYBER_INJURY_CAR_ACCIDENTS_YAML: &str =
+    include_str!("../locales/en/cyber-injury-law/car-accidents.yaml");
+const CYBER_INJURY_CYBERCRIME_YAML: &str =
+    include_str!("../locales/en/cyber-injury-law/cybercrime.yaml");
+const CYBER_INJURY_THEFT_YAML: &str = include_str!("../locales/en/cyber-injury-law/theft.yaml");
+const CYBER_INJURY_DATA_THEFT_YAML: &str =
+    include_str!("../locales/en/cyber-injury-law/data-theft.yaml");
 const AEGIS_HOME_YAML: &str = include_str!("../locales/en/aegis/home.yaml");
 const AEGIS_SERVICES_YAML: &str = include_str!("../locales/en/aegis/services.yaml");
 const GUIEB_SHOOK_HOME_YAML: &str = include_str!("../locales/en/guieb-shook/home.yaml");
@@ -155,6 +162,10 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Summons, "services") => Some(SUMMONS_SERVICES_YAML),
         (BrandKey::CyberInjuryLaw, "services") => Some(CYBER_INJURY_SERVICES_YAML),
         (BrandKey::CyberInjuryLaw, "home") => Some(CYBER_INJURY_HOME_YAML),
+        (BrandKey::CyberInjuryLaw, "car-accidents") => Some(CYBER_INJURY_CAR_ACCIDENTS_YAML),
+        (BrandKey::CyberInjuryLaw, "cybercrime") => Some(CYBER_INJURY_CYBERCRIME_YAML),
+        (BrandKey::CyberInjuryLaw, "theft") => Some(CYBER_INJURY_THEFT_YAML),
+        (BrandKey::CyberInjuryLaw, "data-theft") => Some(CYBER_INJURY_DATA_THEFT_YAML),
         (BrandKey::Aegis, "home") => Some(AEGIS_HOME_YAML),
         (BrandKey::Aegis, "services") => Some(AEGIS_SERVICES_YAML),
         (BrandKey::Groundwork, "home") => Some(GROUNDWORK_HOME_YAML),
@@ -1373,6 +1384,18 @@ pub fn legal_services(branding: &views::brand::Branding) -> PageContent {
 
 /// A catalogued explainer; callers choose stems from `BrandKey::explainer_pages`.
 pub fn explainer(branding: &views::brand::Branding, stem: &str) -> PageContent {
+    let mut content = marketing_page(load_page(branding, stem), None, branding);
+    if let Some(cta) = content.hero_cta.as_mut() {
+        cta.href = branding.consultation_url.to_string();
+    }
+    content
+}
+
+/// A brand's own practice-area page (`/car-accidents` on Cyber Injury Law),
+/// loaded from the brand's English catalog. The hero CTA resolves to the
+/// brand's consultation door exactly as the explainers do, so the page's
+/// intake path follows the deployment it renders on.
+pub fn practice_page(branding: &views::brand::Branding, stem: &str) -> PageContent {
     let mut content = marketing_page(load_page(branding, stem), None, branding);
     if let Some(cta) = content.hero_cta.as_mut() {
         cta.href = branding.consultation_url.to_string();
