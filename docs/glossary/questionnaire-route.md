@@ -1,7 +1,7 @@
 ---
 title: "Questionnaire route"
 description: >-
-  The edge a questionnaire walk follows after an answer: the choice's own named route, or the `_` fallback.
+  The edge a questionnaire walk follows after an answer: the choice's own named route, or the underscore fallback.
 ---
 
 The edge a questionnaire walk follows out of a state once an answer is recorded. A linear state has one `_` edge — the
