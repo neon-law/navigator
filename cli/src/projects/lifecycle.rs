@@ -648,7 +648,7 @@ mod tests {
     fn the_onboarding_stub_starts_compliant_with_the_engagement_arbitration_clause() {
         use rules::Rule;
         let (_, stub) = scaffold_draft(ONBOARDING);
-        let violations = rules::clauses::ClauseReferences.lint(&rules::SourceFile {
+        let violations = rules::clauses::ClauseReferences::default().lint(&rules::SourceFile {
             path: "drafts/onboarding__letter.md".into(),
             contents: stub.clone(),
         });
