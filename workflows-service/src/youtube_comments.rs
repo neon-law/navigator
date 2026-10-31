@@ -702,17 +702,27 @@ mod tests {
             .unwrap()
             .check()
             .unwrap();
-        let conversations: Vec<serde_json::Value> = response.take(0).unwrap();
+        let mut conversations: Vec<serde_json::Value> = response.take(0).unwrap();
+        conversations.sort_by(|a, b| {
+            a["external_address"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["external_address"].as_str().unwrap_or(""))
+        });
         assert_eq!(
             conversations.len(),
-            1,
-            "threading keeps a video's comments together"
+            2,
+            "one conversation per commenter, Meta-style: external_address keys the thread"
         );
-        assert_eq!(conversations[0]["channel"], "youtube");
-        assert_eq!(conversations[0]["brand_key"], "neon");
-        assert_eq!(conversations[0]["provider_account"], ACCOUNT_ID);
-        assert_eq!(conversations[0]["provider_post_id"], VIDEO_ID);
-        assert_eq!(conversations[0]["external_address"], "UC-viewer");
+        for conversation in &conversations {
+            assert_eq!(conversation["channel"], "youtube");
+            assert_eq!(conversation["brand_key"], "synthetic-brand");
+            assert_eq!(conversation["provider_account"], ACCOUNT_ID);
+            assert_eq!(conversation["provider_post_id"], VIDEO_ID);
+            assert_eq!(conversation["provider_thread_ref"], VIDEO_ID);
+        }
+        assert_eq!(conversations[0]["external_address"], "UC-other");
+        assert_eq!(conversations[1]["external_address"], "UC-viewer");
 
         let mut response = db
             .query("SELECT * FROM message ORDER BY occurred_at")
