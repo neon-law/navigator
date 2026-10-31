@@ -288,23 +288,22 @@ separate. Gift cards are available, and privacy and credit monitoring requires o
 Vesta Estate Planning, which sets the triggers written into a client's Vesta estate plan in motion while their
 subscription is active, and cyber-crime claims through Cyber Injury Law. Vesta's `estate` block carries a
 `sibling_practices` card pointing back at DeleteYourData.com; Cyber Injury Law's `cyber_injury` block points to the
-Nautilus plan (the same subscription under its current name) hosted on Neon. Each card names its
-destination by brand key; the address is resolved per deployment, and a card for a brand that is not live is dropped.
-Signup and gift-card links use the same Notion booking calendar as Neon and Vesta. Plus Jakarta Sans is used throughout
-the page and footer. Pricing uses the shared `PricingSection` with the brand palette and typeface. The cloak crossing an
-internet grid is decorative; reduced-motion preferences disable animation. The Solana section carries the approved
-request-record and litigation copy. The page uses the same footer treatment as Neon and Vesta. The subscription is also
-called [Neon Law Nautilus](glossary/neon-law-nautilus.md). Neon publishes `/nautilus`
-(`neon/locales/en/neon/nautilus.yaml`) under the one name Nautilus, with no themed card names. An `app_preview` band
-draws the coming iPhone and Android apps in each platform's idiom, listing every check as an equal peer: data removal,
-privacy protection, credit monitoring, dark web monitoring, identity theft insurance, unclaimed property, estate
-planning, and basic form filings. Its listing price, like the $29/mo and $290/year pricing cards, resolves from
-DeleteYourData's home catalog. The store badges read "Coming soon" and link nowhere until the apps are published. A
-lawyer review starts at $20 and is prepaid; the private legal sandbox includes $5 of model usage a month, then is priced
-à la carte by Lex Tecnica. Monitoring and insurance coverage are confirmed before activation. Its CTA opens a three-step
-public contact intake before sign-in; the signed-in page exposes the configured enrollment booking link. DocuSign
-paperwork follows the enrollment review. The page expressly distinguishes privacy from attorney-client privilege. Every
-other brand host answers `/nautilus` with a 404.
+Nautilus plan (the same subscription under its current name) hosted on Neon. Each card names its destination by brand
+key; the address is resolved per deployment, and a card for a brand that is not live is dropped. Signup and gift-card
+links use the same Notion booking calendar as Neon and Vesta. Plus Jakarta Sans is used throughout the page and footer.
+Pricing uses the shared `PricingSection` with the brand palette and typeface. The cloak crossing an internet grid is
+decorative; reduced-motion preferences disable animation. The Solana section carries the approved request-record and
+litigation copy. The page uses the same footer treatment as Neon and Vesta. The subscription is also called [Neon Law
+Nautilus](glossary/neon-law-nautilus.md). Neon publishes `/nautilus` (`neon/locales/en/neon/nautilus.yaml`) under the
+one name Nautilus, with no themed card names. An `app_preview` band draws the coming iPhone and Android apps in each
+platform's idiom, listing every check as an equal peer: data removal, privacy protection, credit monitoring, dark web
+monitoring, identity theft insurance, unclaimed property, estate planning, and basic form filings. Its listing price,
+like the $29/mo and $290/year pricing cards, resolves from DeleteYourData's home catalog. The store badges read "Coming
+soon" and link nowhere until the apps are published. A lawyer review starts at $20 and is prepaid; the private legal
+sandbox includes $5 of model usage a month, then is priced à la carte by Lex Tecnica. Monitoring and insurance coverage
+are confirmed before activation. Its CTA opens a three-step public contact intake before sign-in; the signed-in page
+exposes the configured enrollment booking link. DocuSign paperwork follows the enrollment review. The page expressly
+distinguishes privacy from attorney-client privilege. Every other brand host answers `/nautilus` with a 404.
 
 The Neon home page presents common employment, NDA, sales, and privacy agreements under a $5,000 one-time contract fee;
 financings are scoped separately. It also presents ongoing counsel from $100 a day, with questions over Slack and
