@@ -55,15 +55,7 @@ fn safe_title(title: &str) -> String {
 /// The character limit for a filing title; the filesystem byte limit also applies.
 const TITLE_MAX_CHARS: usize = 120;
 
-/// `DKT NNNN[-att] - <title>.<ext>`: the name of a Docket Filings document.
-/// Unsupported filename characters become `-`; titles fit both 120 characters
-/// and the filesystem's 255-byte filename limit.
-///
-/// # Errors
-/// Rejects a nonnumeric entry number or attachment suffix, or a number and
-/// extension that exceed the filename byte limit.
-pub fn filing_name(entry_number: &str, title: &str, ext: &str) -> Result<String, FilingNameError> {
-    let number = dkt_number(entry_number.trim())?;
+fn composed_name(number: &str, title: &str, ext: &str) -> Result<String, FilingNameError> {
     let safe = safe_title(title);
     let overhead = format!("DKT {number} - .{ext}").len();
     let budget = 255_usize.checked_sub(overhead).ok_or_else(|| {
@@ -80,9 +72,66 @@ pub fn filing_name(entry_number: &str, title: &str, ext: &str) -> Result<String,
     Ok(format!("DKT {number} - {cut}.{ext}"))
 }
 
+/// `DKT NNNN[-att] - <title>.<ext>`: the name of a Docket Filings document.
+/// Unsupported filename characters become `-`; titles fit both 120 characters
+/// and the filesystem's 255-byte filename limit.
+///
+/// # Errors
+/// Rejects a nonnumeric entry number or attachment suffix, or a number and
+/// extension that exceed the filename byte limit.
+pub fn filing_name(entry_number: &str, title: &str, ext: &str) -> Result<String, FilingNameError> {
+    composed_name(&dkt_number(entry_number.trim())?, title, ext)
+}
+
+/// The `escalation`-th filing that maps to one entry's DKT number: `0` is
+/// the plain `DKT NNNN - <title>.<ext>` form; `1` is the unnumbered-
+/// attachment form `DKT NNNN-att - <title>.<ext>`; `2` and beyond escalate
+/// to `DKT NNNN-att2`, `DKT NNNN-att3`, .... Two distinct documents that
+/// would share one DKT name file under successive escalations, so nothing
+/// ever overwrites a document the court already delivered.
+///
+/// # Errors
+/// Rejects a nonnumeric entry number or attachment suffix, or a number and
+/// extension that exceed the filename byte limit.
+pub fn escalated_filing_name(
+    entry_number: &str,
+    escalation: u32,
+    title: &str,
+    ext: &str,
+) -> Result<String, FilingNameError> {
+    let number = dkt_number(entry_number.trim())?;
+    match escalation {
+        0 => composed_name(&number, title, ext),
+        1 => composed_name(&format!("{number}-att"), title, ext),
+        n => composed_name(&format!("{number}-att{n}"), title, ext),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escalated_names_walk_att_att2_and_beyond() {
+        assert_eq!(
+            escalated_filing_name("4", 0, "Order", "pdf").unwrap(),
+            "DKT 0004 - Order.pdf"
+        );
+        assert_eq!(
+            escalated_filing_name("4", 1, "Order", "pdf").unwrap(),
+            "DKT 0004-att - Order.pdf"
+        );
+        assert_eq!(
+            escalated_filing_name("4", 2, "Order", "pdf").unwrap(),
+            "DKT 0004-att2 - Order.pdf"
+        );
+        assert_eq!(
+            escalated_filing_name("29-1", 1, "Order", "pdf").unwrap(),
+            "DKT 0029-1-att - Order.pdf"
+        );
+        assert!(escalated_filing_name("x", 1, "Order", "pdf").is_err());
+        assert!(escalated_filing_name("4", 1, "Order", "pdf").unwrap().len() <= 255);
+    }
 
     #[test]
     fn filing_names_preserve_court_numbers_and_safe_titles() {
