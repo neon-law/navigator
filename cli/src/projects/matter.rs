@@ -6,6 +6,13 @@
 //! [`caption_for`] joins them; `notation pdf`, `notation word`, and
 //! `project gate` all call it, so a pleading that renders is a pleading
 //! that gates, and the reverse.
+//!
+//! A pleading in a multi-case Project says *which* case it serves with a
+//! `docket:` key naming one of the Project's declared `dockets:` (LAW-204).
+//! The value is matched case-insensitively against the declarations and the
+//! caption carries the declared spelling; a value the Project has not
+//! declared refuses, and a pleading with no `docket:` falls back to the
+//! `matter:` block's own case number, which a single-case Project needs.
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +22,12 @@ use super::manifest;
 
 /// The manifest key that carries the shared matter.
 pub const KEY: &str = "matter";
+
+/// The manifest key listing every case number the Project may file under.
+const DOCKETS_KEY: &str = "dockets";
+
+/// The frontmatter key that binds a pleading to a declared docket.
+const DOCKET_KEY: &str = "docket";
 
 /// `Y019` — a pleading's matter is missing or malformed.
 pub const CODE: &str = "Y019";
@@ -64,6 +77,71 @@ pub fn read(path: &Path) -> Result<Matter, String> {
     }
 }
 
+/// The pleading's declared `docket:` value, exactly as written (blank or
+/// not — callers decide what a blank means).
+fn docket_of(contents: &str) -> Option<String> {
+    rules::frontmatter::extract(contents).and_then(|fm| rules::frontmatter::field(fm, DOCKET_KEY))
+}
+
+/// Every case number a pleading in this Project may caption itself with:
+/// the manifest's `dockets:` list, plus the matter's own case number.
+fn declarable_dockets(path: &Path, matter: &Matter) -> Vec<String> {
+    let mut dockets = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| {
+            serde_yaml::from_str::<serde_yaml::Value>(&contents)
+                .ok()
+                .and_then(|document| document.get(DOCKETS_KEY).cloned())
+                .and_then(|value| serde_yaml::from_value::<Vec<String>>(value).ok())
+        })
+        .unwrap_or_default();
+    if !dockets.iter().any(|d| d == &matter.case_number) {
+        dockets.push(matter.case_number.clone());
+    }
+    dockets
+}
+
+/// The case number the caption carries: the pleading's `docket:` value
+/// matched (case-insensitively) against the declared spellings, else the
+/// matter's own case number.
+///
+/// # Errors
+///
+/// A `docket:` value the Project has not declared, naming the value and the
+/// declarations it missed.
+fn resolve_case_number(
+    docket: Option<&str>,
+    matter: &Matter,
+    declarable: &[String],
+) -> Result<String, String> {
+    let Some(docket) = docket.map(str::trim).filter(|d| !d.is_empty()) else {
+        return Ok(matter.case_number.clone());
+    };
+    declarable
+        .iter()
+        .find(|d| d.eq_ignore_ascii_case(docket))
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "case number {docket} is not declared in the Project's dockets: {}",
+                declarable.join(", ")
+            )
+        })
+}
+
+/// [`read`] with the pleading's `docket:` resolved into the case number the
+/// caption carries.
+///
+/// # Errors
+///
+/// [`read`]'s message, or an undeclared docket value.
+fn read_resolved(path: &Path, contents: &str) -> Result<Matter, String> {
+    let mut matter = read(path)?;
+    let declarable = declarable_dockets(path, &matter);
+    matter.case_number = resolve_case_number(docket_of(contents).as_deref(), &matter, &declarable)?;
+    Ok(matter)
+}
+
 /// A notation's own caption fields, from its frontmatter.
 #[must_use]
 pub fn filing_from(contents: &str) -> Filing {
@@ -99,7 +177,7 @@ fn caption_for_export(file: &Path, contents: &str, final_export: bool) -> Result
             manifest::FILE
         )
     }) {
-        Ok(path) => read(&path),
+        Ok(path) => read_resolved(&path, contents),
         Err(message) => Err(message),
     };
     let matter = match matter {
@@ -178,7 +256,14 @@ pub fn caption_for_preview(file: &Path, contents: &str) -> Result<String, String
                 manifest::FILE
             )
         })
-        .and_then(|path| read_assigning(&path));
+        .and_then(|path| {
+            read_assigning(&path).and_then(|mut matter| {
+                let declarable = declarable_dockets(&path, &matter);
+                matter.case_number =
+                    resolve_case_number(docket_of(contents).as_deref(), &matter, &declarable)?;
+                Ok(matter)
+            })
+        });
     let matter = match matter {
         Ok(matter) => Some(matter),
         Err(message) => {
@@ -222,5 +307,65 @@ fn read_assigning(path: &Path) -> Result<Matter, String> {
             manifest::FILE,
             missing.join(", ")
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{docket_of, resolve_case_number};
+
+    fn matter() -> word::matter::Matter {
+        word::matter::Matter {
+            case_number: "00CV000000".into(),
+            ..word::matter::Matter::default()
+        }
+    }
+
+    fn declarable(case_numbers: &[&str]) -> Vec<String> {
+        case_numbers.iter().map(|d| (*d).to_string()).collect()
+    }
+
+    #[test]
+    fn a_docket_key_parses_from_frontmatter() {
+        let contents = "---\nkind: pleading\ndocket: 00CV000000\n---\n\n# Body\n";
+        assert_eq!(docket_of(contents).as_deref(), Some("00CV000000"));
+        assert_eq!(docket_of("---\nkind: pleading\n---\n\n# Body\n"), None);
+    }
+
+    #[test]
+    fn a_blank_or_absent_docket_falls_back_to_the_matter_case_number() {
+        let matter = matter();
+        let declared = declarable(&["00CV000000"]);
+        assert_eq!(
+            resolve_case_number(None, &matter, &declared).unwrap(),
+            "00CV000000"
+        );
+        assert_eq!(
+            resolve_case_number(Some("   "), &matter, &declared).unwrap(),
+            "00CV000000"
+        );
+    }
+
+    #[test]
+    fn docket_matching_is_case_insensitive_and_prints_the_declared_spelling() {
+        let matter = matter();
+        let declared = declarable(&["00CV000000", "B327654"]);
+        assert_eq!(
+            resolve_case_number(Some("b327654"), &matter, &declared).unwrap(),
+            "B327654"
+        );
+        assert_eq!(
+            resolve_case_number(Some("00cv000000"), &matter, &declared).unwrap(),
+            "00CV000000"
+        );
+    }
+
+    #[test]
+    fn an_undeclared_docket_refuses_by_name() {
+        let matter = matter();
+        let declared = declarable(&["00CV000000", "B327654"]);
+        let error = resolve_case_number(Some("99CV999999"), &matter, &declared).unwrap_err();
+        assert!(error.contains("99CV999999"), "{error}");
+        assert!(error.contains("dockets: 00CV000000, B327654"), "{error}");
     }
 }
