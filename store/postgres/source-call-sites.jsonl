@@ -306,11 +306,11 @@
 {"file":"cli/src/projects/document_check.rs","line":881,"function":"check_documents_root","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/efiling.rs","line":424,"function":"insert_some","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/gate.rs","line":210,"function":"section_data_findings","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/manifest.rs","line":1180,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/manifest.rs","line":1190,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":["jurisdiction"],"transaction":false}
-{"file":"cli/src/projects/manifest.rs","line":1194,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/manifest.rs","line":1198,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/manifest.rs","line":1209,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/manifest.rs","line":1219,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/manifest.rs","line":1229,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":["jurisdiction"],"transaction":false}
+{"file":"cli/src/projects/manifest.rs","line":1233,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/manifest.rs","line":1237,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/manifest.rs","line":1248,"function":"pin_skill","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/matter.rs","line":108,"function":"caption_for_export","operation":"insert","sql_operations":[],"tables":["message"],"transaction":false}
 {"file":"cli/src/projects/matter.rs","line":185,"function":"caption_for_preview","operation":"insert","sql_operations":[],"tables":["message"],"transaction":false}
 {"file":"cli/src/projects/preview.rs","line":851,"function":"respond","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
@@ -611,7 +611,7 @@
 {"file":"portal/src/google_oauth.rs","line":448,"function":"a_resolved_first_party_session_skips_tokeninfo","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/idp_admin.rs","line":262,"function":"set_password","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/idp_admin.rs","line":274,"function":"set_email_verified","operation":"update","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/inbound_email.rs","line":87,"function":"summary_envelope_recipients_from_lookup","operation":"insert","sql_operations":[],"tables":["address"],"transaction":false}
+{"file":"portal/src/inbound_email.rs","line":86,"function":"summary_envelope_recipients_from_lookup","operation":"insert","sql_operations":[],"tables":["address"],"transaction":false}
 {"file":"portal/src/inbox.rs","line":225,"function":"provider_message_id","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/inbox.rs","line":226,"function":"provider_message_id","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/inbox.rs","line":227,"function":"provider_message_id","operation":"update","sql_operations":[],"tables":[],"transaction":false}
