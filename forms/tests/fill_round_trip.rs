@@ -1418,7 +1418,7 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ("custom_text__petitioner_mailing_address", String::new()),
             (
                 "custom_text__will_witnesses",
-                "Casey Devon Ellis, Cora Blair Stubbs".to_string(),
+                "Casey Devon Harper, Cora Blair Stubbs".to_string(),
             ),
             ("custom_usd__gross_rents_18_months", "2500".to_string()),
             (
@@ -1510,7 +1510,7 @@ fn flattened_text_smoke_values(form_code: &str) -> &'static [&'static str] {
         "ny__probate_petition" => &[
             "Jordan Kim Blake",
             "Jordan A. Blake",
-            "Casey Devon Ellis, Cora Blair Stubbs",
+            "Casey Devon Harper, Cora Blair Stubbs",
             "NONE",
         ],
         "wa__adult_name_change_petition" => {
