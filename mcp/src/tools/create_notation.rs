@@ -241,6 +241,11 @@ fn map_notation_err(err: NotationSessionError) -> ToolError {
         NotationSessionError::AlreadyComplete => {
             ToolError::InvalidArguments("questionnaire is already complete".into())
         }
+        // Defensive: the parse gate refuses route dead ends at assembly
+        // time, so a session can only land here on store drift.
+        NotationSessionError::RouteDeadEnd { state } => ToolError::Internal(format!(
+            "questionnaire route dead end at `{state}` — the walk stops before END"
+        )),
         NotationSessionError::Db(e) => ToolError::Database(e),
         // The questionnaire's questions, answers, and the notation itself
         // live in SurrealDB (ENG-121), so a session can now fail in either

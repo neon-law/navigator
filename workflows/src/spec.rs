@@ -24,7 +24,7 @@
 //! selects the [`crate::StepKind`] (system / lawyer_review /
 //! notarization / mailroom_send / mailroom_receive).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -152,20 +152,37 @@ pub enum WorkflowSpecError {
         to: String,
     },
     #[error(
-        "questionnaire state `{state}` has condition `{condition}` — `_` (\"the respondent \
-         answered\") is the only questionnaire condition"
+        "questionnaire state `{state}` has condition `{condition}`, which cannot route — only a \
+         single-choice question state can branch on its answer, and BEGIN and END hold no \
+         answer at all"
     )]
     QuestionnaireCondition { state: String, condition: String },
     #[error(
-        "questionnaire state `{state}` is not on the `_` chain from BEGIN — the walker would \
-         never ask it and the rendered step total would lie"
+        "questionnaire state `{state}` is unreachable from BEGIN — no route reaches it, so the \
+         walker would never ask it and the rendered step total would lie"
     )]
-    QuestionnaireOffChain { state: String },
+    QuestionnaireUnreachable { state: String },
     #[error(
-        "questionnaire `_` chain from BEGIN stops or cycles at `{state}` before reaching END — \
+        "questionnaire walk from BEGIN stops or cycles at `{state}` before reaching END — \
          the walker would strand the respondent there"
     )]
     QuestionnaireChainBroken { state: String },
+    #[error(
+        "questionnaire state `{state}` declares choice `{choice}` but routes it nowhere — give \
+         `{choice}` its own route or the state a `_` fallback, or the walker strands a \
+         respondent who picks it"
+    )]
+    QuestionnaireRouteUncovered { state: String, choice: String },
+    #[error(
+        "questionnaire state `{state}` routes on `{condition}`, which is not one of the state's \
+         declared `choices:` values — the walker could never take that route"
+    )]
+    QuestionnaireRouteUnknown { state: String, condition: String },
+    #[error(
+        "questionnaire answer at `{state}` routes nowhere — no choice edge matches and no `_` \
+         fallback exists"
+    )]
+    RouteDeadEnd { state: String },
     #[error("yaml parse error: {0}")]
     Yaml(String),
 }
@@ -234,14 +251,25 @@ impl WorkflowSpec {
 ///   END: {}
 /// ```
 ///
-/// State names are bare question codes (no `__discriminator`
-/// suffix in practice — questionnaires only ever ask one
-/// respondent), and `_` is the **only** transition condition since
-/// the only signal that advances a questionnaire is "the respondent
-/// answered." [`QuestionnaireSpec::validate`] enforces that shape at
-/// parse time: a questionnaire is one linear `_` chain from `BEGIN`
-/// to `END` covering every declared state, so the walker's
-/// "step N of M" total and END-reachability hold by construction.
+/// State names use `<question-code>__<discriminator>` form (bare
+/// question codes where the questionnaire asks one respondent), and
+/// transitions route the walk that follows an answer:
+///
+/// - a linear state has one `_` edge — the single next question
+///   whoever answers;
+/// - a **branch state** (a single-choice question: `custom_single_choice`
+///   or `custom_yes_no`) may additionally name one edge per declared
+///   `choices:` value, taking the walk down that answer's route, with
+///   an optional `_` fallback for values that declare no route;
+///
+/// so a questionnaire is a directed walk from `BEGIN` to `END` in
+/// which every declared state is reachable and every answer either
+/// names a route or has a fallback. [`QuestionnaireSpec::validate`]
+/// enforces that shape at parse time, and
+/// [`QuestionnaireSpec::validate_routes`] adds the choice-coverage
+/// half where the template's `choices:` map is at hand, so
+/// unreachable questions, cycles, and answer dead-ends are
+/// compile-time gate errors, never runtime surprises.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct QuestionnaireSpec(pub WorkflowSpec);
@@ -249,8 +277,13 @@ pub struct QuestionnaireSpec(pub WorkflowSpec);
 impl QuestionnaireSpec {
     /// Parse from a YAML document. Applies [`WorkflowSpec`]'s
     /// validation (`BEGIN`/`END` required, every transition target
-    /// resolves) plus questionnaire linearity — see
+    /// resolves) plus questionnaire shape — see
     /// [`QuestionnaireSpec::validate`].
+    ///
+    /// Choice-coverage checks need the `choices:` map, which this
+    /// shape alone doesn't carry; assemble the walk definition with
+    /// [`crate::notation_session::QuestionnaireDefinition`] and call
+    /// [`QuestionnaireSpec::validate_routes`] there.
     pub fn from_yaml(yaml: &str) -> Result<Self, WorkflowSpecError> {
         let spec = Self(WorkflowSpec::from_yaml(yaml)?);
         spec.validate()?;
@@ -260,11 +293,12 @@ impl QuestionnaireSpec {
     /// Validate the questionnaire shape on top of the base
     /// [`WorkflowSpec::validate`] checks:
     ///
-    /// 1. `_` is the only transition condition anywhere;
-    /// 2. the `_` chain out of `BEGIN` terminates at `END` (no dead
+    /// 1. a named condition may sit only on a single-choice question
+    ///    state — every other state routes by `_` alone;
+    /// 2. every route out of `BEGIN` terminates at `END` (no dead
     ///    end, no cycle);
-    /// 3. every declared state except `BEGIN`/`END` sits on that
-    ///    chain.
+    /// 3. every declared state except `BEGIN`/`END` sits on some
+    ///    route from `BEGIN`.
     ///
     /// Deserializing the transparent serde shape bypasses this, so
     /// every constructor that accepts authored YAML must call it.
@@ -275,8 +309,9 @@ impl QuestionnaireSpec {
     pub fn validate(&self) -> Result<(), WorkflowSpecError> {
         self.0.validate()?;
         for (state, transitions) in &self.0.states {
+            let routable = routes_by_answer(state.as_str());
             for condition in transitions.conditions() {
-                if condition != "_" {
+                if condition != "_" && !routable {
                     return Err(WorkflowSpecError::QuestionnaireCondition {
                         state: state.as_str().to_string(),
                         condition: condition.to_string(),
@@ -285,47 +320,148 @@ impl QuestionnaireSpec {
             }
         }
 
-        // Walk the `_` chain from BEGIN. Condition-uniqueness above
-        // means at most one `_` per state, so the walk is
-        // deterministic; collect the question states it visits.
-        let mut on_chain: std::collections::BTreeSet<StateName> = std::collections::BTreeSet::new();
-        let mut here = StateName::begin();
-        loop {
-            let Some(next) = self
-                .0
-                .transitions_from(&here)
-                .and_then(|t| t.lookup("_"))
-                .cloned()
-            else {
-                // Dead end before END — BEGIN itself when empty, or a
-                // question with no outgoing `_`.
-                return Err(WorkflowSpecError::QuestionnaireChainBroken {
-                    state: here.as_str().to_string(),
-                });
-            };
-            if next == StateName::end() {
-                break;
-            }
-            if !on_chain.insert(next.clone()) {
-                // Revisiting a state = a cycle that never reaches END.
-                return Err(WorkflowSpecError::QuestionnaireChainBroken {
-                    state: next.as_str().to_string(),
-                });
-            }
-            here = next;
-        }
+        // Walk every route out of BEGIN (below): a cycle or a dead
+        // end on any route strands the respondent; converging diamonds
+        // are ordinary questionnaires.
+        let mut visited: BTreeSet<StateName> = BTreeSet::new();
+        let mut on_path: BTreeSet<StateName> = BTreeSet::new();
+        walk_routes(self, StateName::begin(), &mut on_path, &mut visited)?;
 
         for state in self.0.states.keys() {
             if *state == StateName::begin() || *state == StateName::end() {
                 continue;
             }
-            if !on_chain.contains(state) {
-                return Err(WorkflowSpecError::QuestionnaireOffChain {
+            if !visited.contains(state) {
+                return Err(WorkflowSpecError::QuestionnaireUnreachable {
                     state: state.as_str().to_string(),
                 });
             }
         }
         Ok(())
+    }
+
+    /// The question state the walk lands on after `value` is
+    /// recorded at `state`, following the branch semantics: the edge
+    /// named by the answer's choice value, else the `_` fallback.
+    /// Returns `None` when `state` has no outgoing transitions
+    /// (already at `END`) or the answer matches no route and no
+    /// fallback — the caller reports the dead end rather than
+    /// guessing a next step.
+    #[must_use]
+    pub fn route_from(&self, state: &StateName, value: Option<&str>) -> Option<StateName> {
+        let transitions = self.0.transitions_from(state)?;
+        if let Some(value) = value {
+            if let Some(next) = transitions.lookup(value) {
+                return Some(next.clone());
+            }
+        }
+        transitions.lookup("_").cloned()
+    }
+
+    /// The questions the walk will actually ask, in walk order, for a
+    /// set of already-recorded answers (`taken`: state name → recorded
+    /// value). Deterministic: ties between branches broken by BTree
+    /// order so the rendered "step N of M" is stable for a given set
+    /// of answers. `taken` empty walks the full fan-out from `BEGIN`,
+    /// which for a linear questionnaire is exactly the old chain.
+    ///
+    /// Skips states whose recorded value routes to nothing a fallback
+    /// can answer (a dead end the gate refuses to compile) by treating
+    /// them as route-complete — the walk stops fanning at that state.
+    #[must_use]
+    pub fn question_order(&self, taken: &BTreeMap<String, String>) -> Vec<StateName> {
+        let mut order = Vec::new();
+        let mut queue: VecDeque<StateName> = VecDeque::from([StateName::begin()]);
+        while let Some(here) = queue.pop_front() {
+            if here == StateName::begin() || here == StateName::end() {
+                if let Some(transitions) = self.0.transitions_from(&here) {
+                    for next in transitions.0.values() {
+                        queue.push_back(next.clone());
+                    }
+                }
+                continue;
+            }
+            if order.contains(&here) {
+                continue;
+            }
+            order.push(here.clone());
+            let Some(transitions) = self.0.transitions_from(&here) else {
+                continue;
+            };
+            match taken
+                .get(here.as_str())
+                .and_then(|value| transitions.lookup(value))
+                .or_else(|| transitions.lookup("_"))
+            {
+                Some(next) => queue.push_back(next.clone()),
+                None => continue,
+            }
+        }
+        order
+    }
+
+    /// The choice-coverage half of the questionnaire gate, run where
+    /// the template's `choices:` map is at hand: every named route on
+    /// a branch state must be a declared choice value, and every
+    /// declared value must have its own route or share the `_`
+    /// fallback. Together with [`QuestionnaireSpec::validate`] this
+    /// makes unreachable questions and answer dead-ends compile-time
+    /// gate errors.
+    ///
+    /// # Errors
+    /// [`WorkflowSpecError::QuestionnaireRouteUnknown`] for a route no
+    /// answer can take; [`WorkflowSpecError::QuestionnaireRouteUncovered`]
+    /// for a choice the walker strands.
+    pub fn validate_routes(
+        &self,
+        choices: &BTreeMap<String, BTreeMap<String, String>>,
+    ) -> Result<(), WorkflowSpecError> {
+        for (state, transitions) in &self.0.states {
+            let named: Vec<&str> = transitions
+                .conditions()
+                .into_iter()
+                .filter(|c| *c != "_")
+                .collect();
+            if named.is_empty() {
+                continue;
+            }
+            let declared = declared_choice_values(choices, state.as_str());
+            for condition in &named {
+                if !declared.iter().any(|value| value == condition) {
+                    return Err(WorkflowSpecError::QuestionnaireRouteUnknown {
+                        state: state.as_str().to_string(),
+                        condition: (*condition).to_string(),
+                    });
+                }
+            }
+            if transitions.lookup("_").is_some() {
+                continue;
+            }
+            for choice in &declared {
+                if transitions.lookup(choice).is_none() {
+                    return Err(WorkflowSpecError::QuestionnaireRouteUncovered {
+                        state: state.as_str().to_string(),
+                        choice: choice.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The condition name the walk out of `state` follows for `value` —
+    /// the answer's own choice edge when one matches, else `_`.
+    /// Mirrors [`QuestionnaireSpec::route_from`]; the runtime signal
+    /// carries the condition while the caller carries the destination.
+    #[must_use]
+    pub fn route_condition(&self, state: &StateName, value: Option<&str>) -> Option<String> {
+        let transitions = self.0.transitions_from(state)?;
+        if let Some(value) = value {
+            if transitions.lookup(value).is_some() {
+                return Some(value.to_string());
+            }
+        }
+        transitions.lookup("_").map(|_| "_".to_string())
     }
 
     /// Borrow the underlying [`WorkflowSpec`] — useful when a
@@ -354,8 +490,101 @@ impl QuestionnaireSpec {
     }
 }
 
+/// The state-name grammar helpers — the shared resolution of a question
+/// state's code, role, and metadata keys, used by both the runtime answer
+/// gate (`notation_session`) and the questionnaire route gate
+/// (`validate_routes`) so neither can drift from the other. Mirrored in
+/// `rules/src/f118.rs` only where the crate boundary forces it (rules
+/// carries workflows as a dev-dependency); the N118 drift corpus pins
+/// the two together.
+pub(crate) fn question_code_for_state(state: &str) -> &str {
+    state.split_once("__").map_or(state, |(code, _)| code)
+}
+
+pub(crate) fn role_key_for_state(state: &str) -> &str {
+    state.split_once("__").map_or(state, |(_, role)| role)
+}
+
+pub(crate) fn metadata_keys_for_state(state: &str) -> Vec<&str> {
+    let role = role_key_for_state(state);
+    let ty = question_code_for_state(state);
+    match (ty, role) {
+        ("person", "client") => vec!["client", "client_name"],
+        ("project", "engagement") => vec!["engagement", "project_name"],
+        ("entity", "company") => vec!["company", "entity_name"],
+        ("entity", "nonprofit") => vec!["nonprofit", "nonprofit_legal_name"],
+        ("person", "worker") => vec!["worker", "worker_legal_name"],
+        _ => vec![role],
+    }
+}
+
+/// The declared choice VALUES for a question `state` — the keys the
+/// walker renders and the only values a named route may match. Resolves
+/// through the same metadata keys the runtime answer gate checks, so the
+/// route gate and the answer gate close over one choice set.
+fn declared_choice_values(
+    choices: &BTreeMap<String, BTreeMap<String, String>>,
+    state: &str,
+) -> Vec<String> {
+    metadata_keys_for_state(state)
+        .into_iter()
+        .find_map(|key| choices.get(key))
+        .map(|entries| entries.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Depth-first route walk out of `state`: the first cycle (a route
+/// back into a state still on the current path) or dead end (a
+/// reachable state with no outgoing route other than END), or the set
+/// of states the walk reached. A route into a state that was fully
+/// explored on an earlier route is a converging diamond — END is the
+/// common join — and is not a cycle.
+fn walk_routes(
+    questionnaire: &QuestionnaireSpec,
+    state: StateName,
+    on_path: &mut BTreeSet<StateName>,
+    visited: &mut BTreeSet<StateName>,
+) -> Result<(), WorkflowSpecError> {
+    if visited.contains(&state) {
+        return Ok(());
+    }
+    if !on_path.insert(state.clone()) {
+        return Err(WorkflowSpecError::QuestionnaireChainBroken {
+            state: state.as_str().to_string(),
+        });
+    }
+    if let Some(transitions) = questionnaire.0.transitions_from(&state) {
+        if transitions.is_empty() && state != StateName::end() {
+            return Err(WorkflowSpecError::QuestionnaireChainBroken {
+                state: state.as_str().to_string(),
+            });
+        }
+        for next in transitions.0.values() {
+            walk_routes(questionnaire, next.clone(), on_path, visited)?;
+        }
+    }
+    on_path.remove(&state);
+    visited.insert(state);
+    Ok(())
+}
+
+/// Whether a question state's answer is one declared choice value a
+/// route can match: the single-choice primitives. A multiple-choice
+/// answer selects a *set*, a free-text answer carries no declared set,
+/// and a record/reference answer is keyed to the store — none of them
+/// name an edge, so `validate` refuses named routes on them.
+fn routes_by_answer(state: &str) -> bool {
+    use store::question_registry::QuestionType;
+    matches!(
+        QuestionType::from_state_name(state),
+        Some(QuestionType::CustomSingleChoice | QuestionType::CustomYesNo)
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{
         ActorClass, MachineKind, QuestionnaireSpec, StateName, WorkflowSpec, WorkflowSpecError,
     };
@@ -467,7 +696,10 @@ END: {}
     }
 
     #[test]
-    fn questionnaire_rejects_any_condition_other_than_underscore() {
+    fn questionnaire_rejects_a_named_condition_on_a_state_that_cannot_route() {
+        // LAW-209: a named condition is a branch route — only a
+        // single-choice state's answer can take one. `client_name` is a
+        // free-answer person question, so `skip` can never match.
         let err = QuestionnaireSpec::from_yaml(
             "
 BEGIN:
@@ -490,7 +722,7 @@ END: {}
     }
 
     #[test]
-    fn questionnaire_rejects_a_state_off_the_underscore_chain() {
+    fn questionnaire_rejects_a_question_no_route_reaches() {
         // `orphan` is declared and dangling-free (it points at END) but
         // the walker would never ask it — the step total would lie.
         let err = QuestionnaireSpec::from_yaml(
@@ -508,7 +740,7 @@ END: {}
         assert!(
             matches!(
                 &err,
-                WorkflowSpecError::QuestionnaireOffChain { state } if state == "orphan"
+                WorkflowSpecError::QuestionnaireUnreachable { state } if state == "orphan"
             ),
             "{err:?}"
         );
@@ -552,6 +784,136 @@ END: {}
             matches!(&err, WorkflowSpecError::QuestionnaireChainBroken { .. }),
             "{err:?}"
         );
+    }
+
+    /// LAW-209: the branched shape the issue asks for — a single-choice
+    /// state names one edge per declared choice, both branches reach
+    /// END, and the walk follows the answered route.
+    const BRANCHED: &str = "\
+BEGIN:\n  _: custom_single_choice__path\ncustom_single_choice__path:\n  litigation: \
+             jurisdiction__venue\n  transactional: custom_datetime__closing_date\n\
+             jurisdiction__venue:\n  _: END\ncustom_datetime__closing_date:\n  _: END\n\
+             END: {}\n";
+
+    #[test]
+    fn a_branched_questionnaire_parses_and_walks_the_answered_route() {
+        let q = QuestionnaireSpec::from_yaml(BRANCHED).expect("branched questionnaire is valid");
+        let path = StateName::from("custom_single_choice__path");
+
+        // The answer picks the edge; with no `_` fallback, an answer
+        // that names no route is a dead end the caller reports.
+        assert_eq!(
+            q.route_from(&path, Some("transactional")),
+            Some(StateName::from("custom_datetime__closing_date"))
+        );
+        assert_eq!(
+            q.route_from(&path, Some("litigation")),
+            Some(StateName::from("jurisdiction__venue"))
+        );
+        assert_eq!(q.route_from(&path, Some("mediation")), None);
+
+        // With no answers the walk fans only what the route policy can
+        // reach: the branch state itself — neither branch is taken yet.
+        assert_eq!(q.question_order(&BTreeMap::new()), vec![path.clone()]);
+
+        // The recorded answer prunes the not-taken branch, so the
+        // rendered step total tracks the questions actually asked.
+        let mut taken = BTreeMap::new();
+        taken.insert(path.as_str().to_string(), "transactional".to_string());
+        assert_eq!(
+            q.question_order(&taken),
+            vec![
+                path.clone(),
+                StateName::from("custom_datetime__closing_date")
+            ]
+        );
+        taken.insert(path.as_str().to_string(), "litigation".to_string());
+        assert_eq!(
+            q.question_order(&taken),
+            vec![path.clone(), StateName::from("jurisdiction__venue")]
+        );
+    }
+
+    /// The choice-coverage half of the gate — the compile-time answer
+    /// dead-end: every declared choice must reach a route (its own or
+    /// the `_` fallback), and every named route must be an answer a
+    /// respondent can give.
+    #[test]
+    fn a_choice_without_a_route_or_fallback_is_a_gate_error() {
+        let spec = QuestionnaireSpec::from_yaml(BRANCHED).expect("shape is valid");
+        let mut choices = BTreeMap::new();
+        let mut options = BTreeMap::new();
+        options.insert("litigation".to_string(), "Litigation".to_string());
+        options.insert("transactional".to_string(), "Transactional".to_string());
+        options.insert("mediation".to_string(), "Mediation".to_string());
+        choices.insert("path".to_string(), options);
+        let err = spec.validate_routes(&choices).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                WorkflowSpecError::QuestionnaireRouteUncovered { state, choice }
+                    if state == "custom_single_choice__path" && choice == "mediation"
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_named_route_no_answer_can_take_is_a_gate_error() {
+        let spec = QuestionnaireSpec::from_yaml(
+            "
+BEGIN:\n  _: custom_single_choice__path\ncustom_single_choice__path:\n  litigation: \
+             jurisdiction__venue\n  transactional: custom_datetime__closing_date\n  \
+             mediation: jurisdiction__venue\njurisdiction__venue:\n  _: END\n\
+             custom_datetime__closing_date:\n  _: END\nEND: {}\n",
+        )
+        .expect("the shape is valid — route coverage needs the choices map");
+        let mut choices = BTreeMap::new();
+        let mut options = BTreeMap::new();
+        options.insert("litigation".to_string(), "Litigation".to_string());
+        options.insert("transactional".to_string(), "Transactional".to_string());
+        choices.insert("path".to_string(), options);
+        let err = spec.validate_routes(&choices).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                WorkflowSpecError::QuestionnaireRouteUnknown { state, condition }
+                    if state == "custom_single_choice__path" && condition == "mediation"
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_diamond_that_rejoins_a_shared_state_is_valid() {
+        // LAW-209: converging routes are ordinary branched shape — both
+        // branches rejoin one follow-up question, then END. Not a cycle.
+        let spec = QuestionnaireSpec::from_yaml(
+            "BEGIN:\n  _: custom_single_choice__p\ncustom_single_choice__p:\n  litigation: \
+             custom_datetime__close\n  transactional: custom_datetime__close\n\
+             custom_datetime__close:\n  _: END\nEND: {}\n",
+        )
+        .expect("diamond is valid");
+        assert!(spec.validate().is_ok());
+    }
+
+    #[test]
+    fn a_fallback_covers_the_choices_that_name_no_route() {
+        let spec = QuestionnaireSpec::from_yaml(
+            "
+BEGIN:\n  _: custom_single_choice__path\ncustom_single_choice__path:\n  litigation: \
+             jurisdiction__venue\n  _: custom_datetime__closing_date\n\
+             jurisdiction__venue:\n  _: END\ncustom_datetime__closing_date:\n  _: END\n\
+             END: {}\n",
+        )
+        .expect("the fallback covers every choice without its own route");
+        let mut choices = BTreeMap::new();
+        let mut options = BTreeMap::new();
+        options.insert("litigation".to_string(), "Litigation".to_string());
+        options.insert("transactional".to_string(), "Transactional".to_string());
+        choices.insert("path".to_string(), options);
+        spec.validate_routes(&choices)
+            .expect("both choices covered");
     }
 
     #[test]

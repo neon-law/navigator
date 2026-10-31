@@ -3455,12 +3455,12 @@ async fn sync_notation_state(
     Ok(())
 }
 
-/// The linear question order the walker presents: follow the `_`
-/// transition from BEGIN until END. This chain is the source of the
-/// rendered "step N of M", so it must cover every question state the
-/// spec declares — the corpus test
-/// `every_shipped_questionnaire_renders_an_honest_step_count` holds
-/// the two shapes equal for every shipped template.
+/// The linear fallback question order when the notation's frozen
+/// snapshot cannot be read: the bundled retainer spec, which is linear
+/// (`_` edge from BEGIN to END). The route-aware order lives in
+/// `workflows::notation_session::questionnaire_chain_for_notation` —
+/// `walker_progress` prefers it, so a branched questionnaire's progress
+/// tracks the answers recorded so far; this helper never sees a branch.
 fn questionnaire_chain(spec: &workflows::QuestionnaireSpec) -> Vec<StateName> {
     let mut order: Vec<StateName> = Vec::new();
     let mut here = StateName::begin();
@@ -3637,6 +3637,217 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(saved.state, "lawyer_review");
+    }
+
+    /// LAW-209: the portal walker routes on the answered branch. The
+    /// step the pre-layer resolves and the progress rail's question
+    /// count both come from the route-aware order, so the not-taken
+    /// branch's questions never render and the walk ends on the taken
+    /// branch's last question — never a runtime dead end.
+    #[tokio::test]
+    async fn branched_onboarding_walk_follows_the_answered_route() {
+        const TEMPLATE: &str =
+            include_str!("../../workflows/tests/fixtures/onboarding_branched.txt");
+        let surreal = store::test_support::mem_surreal().await;
+        let dir = tempfile::tempdir().unwrap();
+        let storage: std::sync::Arc<dyn cloud::StorageService> =
+            std::sync::Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
+        let project = store::test_support::seed_project(&surreal, "Synthetic project").await;
+        let person = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::new("Client", "client@example.com"),
+        )
+        .await
+        .unwrap();
+        store::template_source::persist_contents(
+            &surreal,
+            &storage,
+            project.id,
+            "onboarding",
+            TEMPLATE.into(),
+            "synthetic-commit".into(),
+        )
+        .await
+        .unwrap();
+        let runtime = workflows::InMemoryRuntime::new();
+        let branch_code = "custom_single_choice__path";
+
+        // Before any answer the walk fans only what the route policy
+        // can reach: the branch question itself — its choices each
+        // carry their own route and none shares a fallback.
+        let started = workflows::start_notation(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            "onboarding",
+            person.id,
+            project.id,
+            None,
+        )
+        .await
+        .unwrap();
+        let step = workflows::notation_session::current_step(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            started.notation_id,
+        )
+        .await
+        .unwrap();
+        let workflows::NextStep::NeedsAnswer { question } = step else {
+            panic!("the branch question is the first ask");
+        };
+        assert_eq!(question.code, branch_code);
+        assert_eq!(
+            workflows::notation_session::questionnaire_chain_for_notation(
+                &surreal,
+                Some(&storage),
+                started.notation_id,
+            )
+            .await
+            .unwrap(),
+            vec![branch_code.to_string()],
+        );
+
+        // Answering "transactional" takes that route: the closing date
+        // is the next ask, the governing-law question never appears,
+        // and the rail fans through the rejoin — the seat question
+        // both branches share stays on the taken route.
+        workflows::answer_step(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            started.notation_id,
+            branch_code,
+            "transactional",
+            workflows::AnswerAuthor::lawyer(None),
+        )
+        .await
+        .unwrap();
+        let step = workflows::notation_session::current_step(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            started.notation_id,
+        )
+        .await
+        .unwrap();
+        let workflows::NextStep::NeedsAnswer { question } = step else {
+            panic!("the transactional branch's next question is the ask");
+        };
+        assert_eq!(question.code, "custom_datetime__closing_date");
+        assert_eq!(
+            workflows::notation_session::questionnaire_chain_for_notation(
+                &surreal,
+                Some(&storage),
+                started.notation_id,
+            )
+            .await
+            .unwrap(),
+            vec![
+                branch_code.to_string(),
+                "custom_datetime__closing_date".to_string(),
+                "jurisdiction__arbitration_seat".to_string(),
+            ],
+        );
+        workflows::answer_step(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            started.notation_id,
+            "custom_datetime__closing_date",
+            "2026-12-01",
+            workflows::AnswerAuthor::lawyer(None),
+        )
+        .await
+        .unwrap();
+        // The rejoin: the seat question both branches share is next —
+        // convergence, not completion.
+        let step = workflows::notation_session::current_step(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            started.notation_id,
+        )
+        .await
+        .unwrap();
+        let workflows::NextStep::NeedsAnswer { question } = step else {
+            panic!("the rejoining seat question is the ask");
+        };
+        assert_eq!(question.code, "jurisdiction__arbitration_seat");
+        workflows::answer_step(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            started.notation_id,
+            "jurisdiction__arbitration_seat",
+            "NV",
+            workflows::AnswerAuthor::lawyer(None),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            workflows::notation_session::current_step(
+                &surreal,
+                &runtime,
+                Some(&storage),
+                started.notation_id,
+            )
+            .await
+            .unwrap(),
+            workflows::NextStep::QuestionnaireComplete
+        ));
+
+        // The other notation answers "litigation": the venue question
+        // is the ask, and the closing date never appears.
+        let other = workflows::start_notation(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            "onboarding",
+            person.id,
+            project.id,
+            None,
+        )
+        .await
+        .unwrap();
+        workflows::answer_step(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            other.notation_id,
+            branch_code,
+            "litigation",
+            workflows::AnswerAuthor::lawyer(None),
+        )
+        .await
+        .unwrap();
+        let step = workflows::notation_session::current_step(
+            &surreal,
+            &runtime,
+            Some(&storage),
+            other.notation_id,
+        )
+        .await
+        .unwrap();
+        let workflows::NextStep::NeedsAnswer { question } = step else {
+            panic!("the litigation branch's next question is the ask");
+        };
+        assert_eq!(question.code, "jurisdiction__governing_law");
+        assert_eq!(
+            workflows::notation_session::questionnaire_chain_for_notation(
+                &surreal,
+                Some(&storage),
+                other.notation_id,
+            )
+            .await
+            .unwrap(),
+            vec![
+                branch_code.to_string(),
+                "jurisdiction__governing_law".to_string(),
+                "jurisdiction__arbitration_seat".to_string(),
+            ],
+        );
     }
 
     #[tokio::test]
