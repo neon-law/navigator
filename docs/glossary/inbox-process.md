@@ -13,8 +13,8 @@ computation. It is advisory: it names the desk a message belongs to, and it file
 `other` is the explicit fallback, not a silence: applying it still records the route and the processing time, so the
 backlog stays honest about what was reviewed. The route and processing time ride on the message row as `route` and
 `processed_at`, and a re-run overwrites them with the same truth. A Slack notice to the assigned matter's channel is
-best-effort and metadata-only. Archiving the Gmail copy — removing the `INBOX` label, never trashing — is a separate
-CLI action taken after an apply.
+best-effort and metadata-only. Archiving the Gmail copy — removing the `INBOX` label, never trashing — is a separate CLI
+action taken after an apply.
 
 - Route vocabulary: [`store::inbox::route`](../../store/src/inbox.rs)
 - Classifier: [`portal::inbound_email`](../../portal/src/inbound_email.rs)
