@@ -608,6 +608,7 @@
       "cli/src/import.rs",
       "cli/src/journal.rs",
       "cli/src/lsp_download.rs",
+      "cli/src/mail.rs",
       "cli/src/main.rs",
       "cli/src/notations_preview.rs",
       "cli/src/postgres_backfill.rs",
@@ -1633,10 +1634,10 @@
       3676,
       3704,
       3932,
-      4026,
-      4053,
-      4122,
-      4124
+      4057,
+      4084,
+      4153,
+      4155
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -1864,6 +1865,7 @@
       "store/src/courts.rs",
       "store/src/delegations.rs",
       "store/src/document_pointers.rs",
+      "store/src/drive_import.rs",
       "store/src/email_tokens.rs",
       "store/src/entities.rs",
       "store/src/entity_commands.rs",
@@ -2118,9 +2120,9 @@
     ],
     "query_call_ids": [
       891,
-      4000,
-      4008,
-      4010
+      4031,
+      4039,
+      4041
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -3653,6 +3655,7 @@
       "store/src/surreal/record.rs",
       "store/src/surreal/test_support.rs",
       "store/src/synthetic_portfolio.rs",
+      "store/src/tasks.rs",
       "store/src/template_source.rs",
       "store/src/templates.rs",
       "store/src/test_support.rs",
@@ -3783,9 +3786,10 @@
       3923,
       3925,
       3926,
-      3966,
-      3976,
-      4078
+      3961,
+      3997,
+      4007,
+      4109
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -3940,6 +3944,7 @@
       "store/src/seed/sample_records.rs",
       "store/src/surreal/record.rs",
       "store/src/synthetic_portfolio.rs",
+      "store/src/tasks.rs",
       "store/src/test_support.rs",
       "webapp/src/entity_list.rs"
     ],
@@ -3963,7 +3968,8 @@
       2914,
       2937,
       3176,
-      3977
+      3960,
+      4008
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -4255,6 +4261,7 @@
       "archives/src/postgres.rs",
       "cli/src/document_sync.rs",
       "cli/src/document_sync_interactive_tests.rs",
+      "cli/src/mail.rs",
       "cli/src/main.rs",
       "cli/src/notation_kinds.rs",
       "cli/src/projects/docket/ingest.rs",
@@ -4974,10 +4981,10 @@
       3890,
       3895,
       3933,
-      3948,
-      3974,
-      4054,
-      4123
+      3979,
+      4005,
+      4085,
+      4154
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -5037,7 +5044,7 @@
       2442,
       3010,
       3013,
-      3967
+      3998
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -6013,6 +6020,7 @@
       "store/src/seed/sample_records.rs",
       "store/src/surreal/record.rs",
       "store/src/synthetic_portfolio.rs",
+      "store/src/tasks.rs",
       "store/src/template_source.rs",
       "store/src/test_support.rs",
       "views/src/brand.rs",
@@ -6061,7 +6069,8 @@
       2912,
       2935,
       3178,
-      3978
+      3959,
+      4009
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -6446,6 +6455,7 @@
       "views/src/harvard_outline.rs",
       "views/src/kind_catalog.rs",
       "views/src/notation.rs",
+      "views/src/questionnaire_preview.rs",
       "webapp/src/admin_listing.rs",
       "webapp/src/admin_listings.rs",
       "webapp/src/blog_post.rs",
@@ -6458,6 +6468,7 @@
       "webapp/src/glossary_page.rs",
       "webapp/src/lawyer_project_detail.rs",
       "webapp/src/letter_detail.rs",
+      "webapp/src/notation_draft.rs",
       "webapp/src/notation_outline.rs",
       "webapp/src/notation_preview.rs",
       "webapp/src/notation_preview_storage.rs",
@@ -6920,6 +6931,7 @@
       "mcp/src/tools/project_skill_show.rs",
       "mcp/src/tools/send_welcome_email.rs",
       "mcp/src/tools/validate_notation.rs",
+      "neon/src/firm_pages.rs",
       "neon/src/lib.rs",
       "pdf/src/pleading.rs",
       "portal/src/a2a.rs",
@@ -7120,6 +7132,7 @@
       "telemetry/src/lib.rs",
       "views/src/assets.rs",
       "views/src/locales.rs",
+      "views/src/questionnaire_preview.rs",
       "webapp/src/admin_listings.rs",
       "webapp/src/auth_pages.rs",
       "webapp/src/brand_blog_posts.rs",
@@ -7222,10 +7235,10 @@
       3722,
       3723,
       3725,
-      4092,
-      4094,
-      4096,
-      4098
+      4123,
+      4125,
+      4127,
+      4129
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -7653,7 +7666,7 @@
       3801,
       3803,
       3805,
-      4064
+      4095
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -8567,6 +8580,7 @@
       "portal/src/test_support.rs",
       "portal/src/workshops/loader.rs",
       "repos/src/lib.rs",
+      "rules/src/dashboard.rs",
       "rules/src/engine.rs",
       "rules/src/f104.rs",
       "rules/src/f107.rs",
@@ -8686,6 +8700,7 @@
       "store/src/surreal/record.rs",
       "store/src/surreal/test_support.rs",
       "store/src/synthetic_portfolio.rs",
+      "store/src/tasks.rs",
       "store/src/templates.rs",
       "store/src/test_support.rs",
       "store/src/testimonials.rs",
@@ -9002,13 +9017,14 @@
       3935,
       3936,
       3937,
-      3969,
-      3980,
-      3983,
-      3991,
-      3997,
-      4001,
-      4077
+      3958,
+      4000,
+      4011,
+      4014,
+      4022,
+      4028,
+      4032,
+      4108
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -9405,6 +9421,7 @@
       "store/src/projects.rs",
       "store/src/schema/mod.rs",
       "store/src/seed.rs",
+      "store/src/tasks.rs",
       "store/src/test_support.rs",
       "webapp/src/people.rs"
     ],
@@ -9440,7 +9457,9 @@
       3765,
       3769,
       3773,
-      3970
+      3940,
+      3964,
+      4001
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -9638,6 +9657,7 @@
       "cli/src/projects/deadline.rs",
       "cli/src/projects/deadline_proposal.rs",
       "cli/src/projects/docket/entries.rs",
+      "cli/src/projects/drive_ingest.rs",
       "cli/src/projects/efiling.rs",
       "cli/src/projects/finance.rs",
       "cli/src/projects/reference.rs",
@@ -9884,12 +9904,12 @@
       3858,
       3863,
       3865,
-      4102,
-      4114,
-      4116,
-      4118,
-      4120,
-      4155
+      4133,
+      4145,
+      4147,
+      4149,
+      4151,
+      4186
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -10040,6 +10060,7 @@
       "cli/src/projects/doctor.rs",
       "cli/src/projects/document_check.rs",
       "cli/src/projects/drift.rs",
+      "cli/src/projects/drive_ingest.rs",
       "cli/src/projects/efiling.rs",
       "cli/src/projects/finance.rs",
       "cli/src/projects/gate.rs",
@@ -10267,6 +10288,7 @@
       "store/src/statutory_deadlines.rs",
       "store/src/summary_sender_approvals.rs",
       "store/src/synthetic_portfolio.rs",
+      "store/src/tasks.rs",
       "store/src/template_source.rs",
       "store/src/templates.rs",
       "store/src/test_support.rs",
@@ -10563,18 +10585,20 @@
       3888,
       3897,
       3942,
-      3943,
-      3945,
-      3950,
-      3952,
-      3964,
-      3971,
+      3962,
+      3973,
+      3974,
+      3976,
       3981,
-      3984,
-      3992,
-      3998,
-      4028,
-      4030
+      3983,
+      3995,
+      4002,
+      4012,
+      4015,
+      4023,
+      4029,
+      4059,
+      4061
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -11106,7 +11130,7 @@
       3263,
       3622,
       3628,
-      4066
+      4097
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -11774,7 +11798,7 @@
       3190,
       3192,
       3316,
-      4125
+      4156
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -12577,12 +12601,12 @@
       3283,
       3683,
       3738,
-      3939,
-      3948,
-      3954,
-      3957,
-      3959,
-      4062
+      3970,
+      3979,
+      3985,
+      3988,
+      3990,
+      4093
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -12661,11 +12685,11 @@
     ],
     "query_call_ids": [
       2986,
-      3982,
-      3985,
-      3987,
-      3989,
-      3993
+      4013,
+      4016,
+      4018,
+      4020,
+      4024
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -12788,9 +12812,9 @@
     ],
     "query_call_ids": [
       896,
-      4002,
-      4004,
-      4006
+      4033,
+      4035,
+      4037
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -12856,7 +12880,7 @@
       3708,
       3709,
       3710,
-      4013
+      4044
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -12919,8 +12943,8 @@
       "store/src/xero_invoices.rs"
     ],
     "query_call_ids": [
-      4029,
-      4031
+      4060,
+      4062
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {

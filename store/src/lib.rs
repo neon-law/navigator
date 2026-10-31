@@ -204,6 +204,7 @@ pub mod summary_sender_approvals;
 /// The store connection, over the `NAVIGATOR_SURREAL_*` contract.
 pub mod surreal;
 pub mod synthetic_portfolio;
+pub mod tasks;
 pub mod template_source;
 pub mod templates;
 pub mod testimonials;
