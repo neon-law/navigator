@@ -61,7 +61,7 @@ async fn cyber_injury_home_serves_its_copy_assets_and_fonts() {
             "tel:+15108002090",
             "1.510.800.2090",
             "support@cyberinjurylaw.com",
-            "href=\"https://www.cyberinjurylaw.com/testimonials\"",
+            "href=\"https://www.cyberinjurylaw.com/testimonials?via=home-nav-testimonials\"",
             "cyber-incident",
             "cyber-timing",
             "Guieb &#38; Shook PC",
@@ -96,7 +96,7 @@ async fn public_pages_emit_complete_open_graph_and_canonical_metadata() {
             (
                 "/services",
                 "CyberInjuryLaw | Injury and cybercrime claims",
-                "Car accidents, negligence, medical malpractice, data theft, cybercrime, and online abuse. Tell us what happened; a lawyer reviews the facts before any engagement. Attorney advertisement.",
+                "Car accidents, negligence, medical malpractice, data theft, cybercrime. We go after insurers that lowball you, companies that leak your data, and platforms that blame you. We investigate, preserve evidence, and file when necessary. A lawyer reviews the facts before any engagement. Attorney advertisement.",
             ),
         ] {
             let (status, html) = page(host, path).await;
