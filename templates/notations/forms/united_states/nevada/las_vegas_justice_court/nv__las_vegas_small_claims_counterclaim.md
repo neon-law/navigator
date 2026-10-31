@@ -6,7 +6,7 @@ jurisdiction: NV
 origin_url: https://www.civillawselfhelpcenter.org/images/small-claims/counterclaims/counterclaim---small-claims---las-vegas.pdf
 confidential: true
 output: form
-form: las_vegas__small_claims_counterclaim
+form: nv__las_vegas_small_claims_counterclaim
 questionnaire:
   BEGIN:
     _: person__client

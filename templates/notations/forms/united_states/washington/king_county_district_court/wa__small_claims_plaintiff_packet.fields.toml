@@ -1,4 +1,4 @@
-form_code = "kc__small_claims_plaintiff_packet"
+form_code = "wa__small_claims_plaintiff_packet"
 
 # King County District Court — Small Claims Plaintiff's Packet (KCDC July
 # 2026, 14 pages): a whole-case kit wrapping the Notice of Small Claim
@@ -19,7 +19,7 @@ form_code = "kc__small_claims_plaintiff_packet"
 # - `Text1` spans four instruments (hearing notice, notice copy, service
 #   declaration, SCRA declaration) — the claim-facts paragraph would paint
 #   into the SCRA and service declarations. Unmapped; the claim-facts
-#   answer still drives the standalone kc__small_claims_notice template,
+#   answer still drives the standalone wa__small_claims_notice template,
 #   and the paragraph is written on the packet copy at review.
 # - `Other` and `Auto DamagesDate of Accident` ship as /Btn widgets in this
 #   kit (the standalone's explanation text box and accident-date box were
@@ -94,7 +94,7 @@ form_code = "kc__small_claims_plaintiff_packet"
 # combine), not one radio group: `custom_multiple_choice` needs the
 # checkbox-group fill shape tracked under ENG-454, so the questionnaire asks
 # them as adjacent toggles instead of one multi-select question. Keep this
-# map in lockstep with kc__small_claims_notice.fields.toml.
+# map in lockstep with wa__small_claims_notice.fields.toml.
 
 [[field]]
 name = "1"

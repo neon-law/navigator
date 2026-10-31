@@ -43,7 +43,7 @@ question = "custom_single_choice__filing_county"
 
 [[field]]
 name = "FamilyMemberName"
-question = "custom_text__member_present_name"
+question = "person__member.name"
 
 [[field]]
 name = "ParentRelationshipToMinor"
@@ -99,7 +99,7 @@ question = "custom_single_choice__child_support_current"
 
 [[field]]
 name = "ChildSupportArrears"
-question = "custom_text__child_support_arrears"
+question = "custom_usd__child_support_arrears"
 
 [[field]]
 name = "CourtIssuingChildSupportOrder"
@@ -119,7 +119,7 @@ question = "custom_single_choice__spousal_support_current"
 
 [[field]]
 name = "SpousalSupportArrears"
-question = "custom_text__spousal_support_arrears"
+question = "custom_usd__spousal_support_arrears"
 
 [[field]]
 name = "CourtIssuingSpousalSupportOrder"

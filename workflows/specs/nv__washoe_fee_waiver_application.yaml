@@ -1,18 +1,9 @@
----
-kind: filing
-title: Application for Waiver of Fees and Costs (Washoe)
-respondent_type: person
-jurisdiction: NV
-origin_url: https://www.washoecourts.com/Forms/Family/1.%20All%20Other%20Family%20Related%20Packets/F-6%20Application%20to%20Waive%20Fees%20and%20Costs/1.%20Application%20for%20Waiver%20of%20Fees%20and%20Costs.pdf
-confidential: true
-output: form
-form: washoe__fee_waiver_application
 questionnaire:
   BEGIN:
     _: person__client
   person__client:
-    _: custom_text__opposing_party
-  custom_text__opposing_party:
+    _: person__opposing_party
+  person__opposing_party:
     _: custom_yes_no__benefit_ssi
   custom_yes_no__benefit_ssi:
     _: custom_yes_no__benefit_food_stamps
@@ -125,56 +116,56 @@ questionnaire:
   custom_usd__account_two_owed:
     _: custom_usd__cash
   custom_usd__cash:
-    _: custom_text__household_name_1
-  custom_text__household_name_1:
+    _: custom_text__household_person_1
+  custom_text__household_person_1:
     _: custom_text__household_age_1
   custom_text__household_age_1:
     _: custom_text__household_relationship_1
   custom_text__household_relationship_1:
     _: custom_usd__household_contribution_1
   custom_usd__household_contribution_1:
-    _: custom_text__household_name_2
-  custom_text__household_name_2:
+    _: custom_text__household_person_2
+  custom_text__household_person_2:
     _: custom_text__household_age_2
   custom_text__household_age_2:
     _: custom_text__household_relationship_2
   custom_text__household_relationship_2:
     _: custom_usd__household_contribution_2
   custom_usd__household_contribution_2:
-    _: custom_text__household_name_3
-  custom_text__household_name_3:
+    _: custom_text__household_person_3
+  custom_text__household_person_3:
     _: custom_text__household_age_3
   custom_text__household_age_3:
     _: custom_text__household_relationship_3
   custom_text__household_relationship_3:
     _: custom_usd__household_contribution_3
   custom_usd__household_contribution_3:
-    _: custom_text__household_name_4
-  custom_text__household_name_4:
+    _: custom_text__household_person_4
+  custom_text__household_person_4:
     _: custom_text__household_age_4
   custom_text__household_age_4:
     _: custom_text__household_relationship_4
   custom_text__household_relationship_4:
     _: custom_usd__household_contribution_4
   custom_usd__household_contribution_4:
-    _: custom_text__household_name_5
-  custom_text__household_name_5:
+    _: custom_text__household_person_5
+  custom_text__household_person_5:
     _: custom_text__household_age_5
   custom_text__household_age_5:
     _: custom_text__household_relationship_5
   custom_text__household_relationship_5:
     _: custom_usd__household_contribution_5
   custom_usd__household_contribution_5:
-    _: custom_text__household_name_6
-  custom_text__household_name_6:
+    _: custom_text__household_person_6
+  custom_text__household_person_6:
     _: custom_text__household_age_6
   custom_text__household_age_6:
     _: custom_text__household_relationship_6
   custom_text__household_relationship_6:
     _: custom_usd__household_contribution_6
   custom_usd__household_contribution_6:
-    _: custom_text__household_name_7
-  custom_text__household_name_7:
+    _: custom_text__household_person_7
+  custom_text__household_person_7:
     _: custom_text__household_age_7
   custom_text__household_age_7:
     _: custom_text__household_relationship_7
@@ -189,7 +180,7 @@ prompts:
   client_name: >-
     What is your current full legal name, as it appears on your
     identification?
-  opposing_party: >-
+  person__opposing_party: >-
     Who is the other party in your case — the defendant or respondent named
     against you? (Leave blank if you are filing jointly or no party is named.)
   income_employment: Are you working?
@@ -273,7 +264,7 @@ prompts:
   account_two_worth: About how much is it worth? (Leave blank if none.)
   account_two_owed: How much is owed against it? (Leave blank if none.)
   cash: About how much cash do you have on hand?
-  household_name_1: >-
+  custom_text__household_person_1: >-
     Who is the first person in your household you support? (Their full name —
     leave this and the rest of the household blank if you support no one
     else.)
@@ -282,7 +273,7 @@ prompts:
   household_contribution_1: >-
     About how much does the first person contribute to your support each
     month? (Leave blank if none.)
-  household_name_2: >-
+  custom_text__household_person_2: >-
     Who is the second person in your household you support? (Their full name —
     leave this and the rest of the household blank if you support no one
     else.)
@@ -291,7 +282,7 @@ prompts:
   household_contribution_2: >-
     About how much does the second person contribute to your support each
     month? (Leave blank if none.)
-  household_name_3: >-
+  custom_text__household_person_3: >-
     Who is the third person in your household you support? (Their full name —
     leave this and the rest of the household blank if you support no one
     else.)
@@ -300,7 +291,7 @@ prompts:
   household_contribution_3: >-
     About how much does the third person contribute to your support each
     month? (Leave blank if none.)
-  household_name_4: >-
+  custom_text__household_person_4: >-
     Who is the fourth person in your household you support? (Their full name —
     leave this and the rest of the household blank if you support no one
     else.)
@@ -309,7 +300,7 @@ prompts:
   household_contribution_4: >-
     About how much does the fourth person contribute to your support each
     month? (Leave blank if none.)
-  household_name_5: >-
+  custom_text__household_person_5: >-
     Who is the fifth person in your household you support? (Their full name —
     leave this and the rest of the household blank if you support no one
     else.)
@@ -318,7 +309,7 @@ prompts:
   household_contribution_5: >-
     About how much does the fifth person contribute to your support each
     month? (Leave blank if none.)
-  household_name_6: >-
+  custom_text__household_person_6: >-
     Who is the sixth person in your household you support? (Their full name —
     leave this and the rest of the household blank if you support no one
     else.)
@@ -327,7 +318,7 @@ prompts:
   household_contribution_6: >-
     About how much does the sixth person contribute to your support each
     month? (Leave blank if none.)
-  household_name_7: >-
+  custom_text__household_person_7: >-
     Who is the seventh person in your household you support? (Their full name
     — leave this and the rest of the household blank if you support no one
     else.)
@@ -353,24 +344,3 @@ workflow:
   filing__second_judicial_district_court:
     filed: END
   END: {}
----
-
-This Nevada engagement applies, on the Second Judicial District Court's own F-6 form, for an order
-waiving the filing fees and costs in the case of `{{person__client.name}}` against or with
-`{{custom_text__opposing_party}}`.
-
-The F-6 is a full financial disclosure: the benefits the applicant receives (Supplemental Security
-Income, food stamps, TANF, Medicaid, subsidized housing, legal services, or any other state or
-federal program), the applicant's monthly income from every source, monthly expenses, vehicles, real
-estate, accounts, cash, and the household the applicant supports. The form asks more questions than
-most petitions; this questionnaire documents that it exceeds the usual interview length, and every
-answer lands on the official blank.
-
-There is no filing fee for the F-6 application itself. A party who receives any of the listed
-benefits, or who swears to the financial disclosure, asks the court to waive the fees in the
-underlying case; the court may grant or deny the waiver, and a denied waiver leaves the fees due.
-
-Your answers above are placed onto the court's own official blank and a licensed Neon Law attorney
-reviews the **filled application** before anything is filed. Nothing reaches the courthouse
-unreviewed. The applicant signs the application at the review appointment, and the firm files it
-with the clerk of the court where the case is pending.

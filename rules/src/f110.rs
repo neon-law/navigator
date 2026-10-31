@@ -207,7 +207,7 @@ impl Rule for F110JurisdictionPath {
 
         if !project_repository && matched_shelf == Some("forms") {
             if !frontmatter::field(fm, "origin_url")
-                .is_some_and(|url| url.starts_with("https://") && url.contains(".gov"))
+                .is_some_and(|url| origin_url_is_official(&url))
             {
                 violations.push(Self::violation(
                     file,
@@ -230,6 +230,41 @@ impl Rule for F110JurisdictionPath {
         violations
     }
 }
+
+/// True when the `origin_url` points at an official source: any `https://`
+/// `.gov` host, or an exact domain from [`OFFICIAL_COURT_DOMAINS`]. Nevada's
+/// county courts run their official sites on `.com` (and staff a court
+/// forms service through a county-contracted nonprofit), so a bare TLD
+/// test would refuse the very pages those courts publish the forms on.
+fn origin_url_is_official(url: &str) -> bool {
+    if !url.starts_with("https://") {
+        return false;
+    }
+    if url.contains(".gov") {
+        return true;
+    }
+    let host = url
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("")
+        .to_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    OFFICIAL_COURT_DOMAINS.contains(&host)
+}
+
+/// Official form sources that live outside `.gov`, exact-host pinned. Each
+/// entry carries its provenance: a reader should be able to trust the
+/// domain the way they trust a `.gov` host.
+const OFFICIAL_COURT_DOMAINS: &[&str] = &[
+    // The Second Judicial District Court (Washoe County, Reno) publishes its
+    // own forms on this host — the court's official website.
+    "washoecourts.com",
+    // The Civil Law Self-Help Center sits on the Regional Justice Center's
+    // first floor and is operated under contract with Clark County by the
+    // Legal Aid Center of Southern Nevada; the Clark County Justice and
+    // District Courts approve the forms it publishes.
+    "civillawselfhelpcenter.org",
+];
 
 #[cfg(test)]
 mod tests {
@@ -362,6 +397,29 @@ mod tests {
         assert!(v
             .iter()
             .any(|v| v.message.contains("jurisdiction prefix `nv__`")));
+    }
+
+    #[test]
+    fn accepts_an_official_court_domain_outside_gov() {
+        // Washoe publishes its own forms on the court's `.com` site.
+        let v = F110JurisdictionPath.lint(&at(
+            "templates/notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_fee_waiver_application.md",
+            "title: T\ncode: nv__washoe_fee_waiver_application\njurisdiction: NV\norigin_url: https://www.washoecourts.com/Forms/F-6.pdf",
+        ));
+        assert!(!v
+            .iter()
+            .any(|v| v.message.contains("origin_url")));
+    }
+
+    #[test]
+    fn still_flags_an_unrelated_origin_host() {
+        let v = F110JurisdictionPath.lint(&at(
+            "templates/notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_fee_waiver_application.md",
+            "title: T\ncode: nv__washoe_fee_waiver_application\njurisdiction: NV\norigin_url: https://forms.example.com/F-6.pdf",
+        ));
+        assert!(v
+            .iter()
+            .any(|v| v.message.contains("origin_url")));
     }
 
     #[test]

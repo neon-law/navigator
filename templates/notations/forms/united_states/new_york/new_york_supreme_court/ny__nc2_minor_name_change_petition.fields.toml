@@ -165,7 +165,7 @@ question = "custom_single_choice__prior_name_change"
 
 [[field]]
 name = "PreviousNameChagePetition"
-question = "custom_text__prior_name_change_details"
+question = "custom_text__prior_petition_details"
 
 [[field]]
 name = "ReasonsForNameChangeRequest"
@@ -293,13 +293,13 @@ part = "name"
 name = "Parent/Gaurdian1"
 question = "people__consenting_parents"
 row = 0
-part = "relationship"
+part = "title"
 
 [[field]]
 name = "ParentCurrentAddress1"
 question = "people__consenting_parents"
 row = 0
-part = "address"
+part = "street"
 
 [[field]]
 name = "ParentName2"
@@ -311,10 +311,10 @@ part = "name"
 name = "Parent/Gaurdian2"
 question = "people__consenting_parents"
 row = 1
-part = "relationship"
+part = "title"
 
 [[field]]
 name = "ParentCurrentAddress2"
 question = "people__consenting_parents"
 row = 1
-part = "address"
+part = "street"

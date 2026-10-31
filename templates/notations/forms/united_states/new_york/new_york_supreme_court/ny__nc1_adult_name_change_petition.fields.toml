@@ -142,7 +142,7 @@ question = "custom_single_choice__prior_name_change"
 
 [[field]]
 name = "PreviousNameChagePetition-specify"
-question = "custom_text__prior_name_change_details"
+question = "custom_text__prior_petition_details"
 
 [[field]]
 name = "ReasonsForNameChangeRequest-specify"

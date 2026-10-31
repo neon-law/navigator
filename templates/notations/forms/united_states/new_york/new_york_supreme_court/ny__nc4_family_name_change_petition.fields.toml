@@ -66,43 +66,43 @@ question = "custom_single_choice__filing_county"
 
 [[field]]
 name = "CurrentFamilyName"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
 
 [[field]]
 name = "NewFamilyName"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
 
 [[field]]
 name = "PetitionerNewName"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
 
 [[field]]
 name = "FamilyMemberNewName.0"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
 
 [[field]]
 name = "FamilyMemberNewName.1"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
 
 [[field]]
 name = "FamilyMemberNewName.2"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
 
 [[field]]
 name = "FamilyMemberNewName.3"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
 
 [[field]]
 name = "FamilyMemberNewName.4"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
 
 [[field]]
 name = "FamilyMemberNewName.5"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
 
 [[field]]
 name = "FamilyMemberNewName.6"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
 
 [[field]]
 name = "PetitionerName"
@@ -154,7 +154,9 @@ part = "name"
 
 [[field]]
 name = "CoPetitioner(s)Name"
-question = "custom_text__co_petitioners"
+question = "people__co_petitioners"
+row = 0
+part = "name"
 
 [[field]]
 name = "ConvictedOfCrime"
@@ -190,7 +192,7 @@ question = "custom_single_choice__prior_name_change"
 
 [[field]]
 name = "PreviousNameChagePetition-specify"
-question = "custom_text__prior_name_change_details"
+question = "custom_text__prior_petition_details"
 
 [[field]]
 name = "CurrentAddress"
@@ -226,32 +228,32 @@ question = "custom_text__parent_2_address"
 
 [[field]]
 name = "MinorNames.0"
-question = "custom_text__parent_1_present_names"
+question = "custom_text__parent_1_consent_children"
 
 [[field]]
 name = "MinorNames.1"
-question = "custom_text__parent_2_present_names"
+question = "custom_text__parent_2_consent_children"
 
 [[field]]
 name = "MinorNewNames.0"
-question = "custom_text__parent_1_proposed_names"
+question = "custom_text__parent_1_consent_new_names"
 
 [[field]]
 name = "MinorNewNames.1"
-question = "custom_text__parent_2_proposed_names"
+question = "custom_text__parent_2_consent_new_names"
 
 [[field]]
 name = "MinorNewName.0"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
 
 [[field]]
 name = "MinorNewName.1"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
 
 [[field]]
 name = "MinorNewName.2"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
 
 [[field]]
 name = "MinorNewName.3"
-question = "custom_text__new_family_name"
+question = "person__new_family_name.name"
