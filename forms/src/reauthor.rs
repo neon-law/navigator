@@ -146,6 +146,72 @@ const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
             "../../templates/notations/forms/united_states/washington/king_county_district_court/wa__small_claims_plaintiff_packet.fields"
         ),
     ),
+    (
+        "nv__washoe_adult_name_change_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_adult_name_change_petition.fields"
+        ),
+    ),
+    (
+        "nv__washoe_fee_waiver_application",
+        include_str!(
+            "../../templates/notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_fee_waiver_application.fields"
+        ),
+    ),
+    (
+        "nv__las_vegas_small_claims_complaint",
+        include_str!(
+            "../../templates/notations/forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_complaint.fields"
+        ),
+    ),
+    (
+        "nv__las_vegas_small_claims_counterclaim",
+        include_str!(
+            "../../templates/notations/forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_counterclaim.fields"
+        ),
+    ),
+    (
+        "ny__nc1_adult_name_change_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc1_adult_name_change_petition.fields"
+        ),
+    ),
+    (
+        "ny__nc3_lip_name_change_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc3_lip_name_change_petition.fields"
+        ),
+    ),
+    (
+        "ny__civ_sc50_statement_of_claim",
+        include_str!(
+            "../../templates/notations/forms/united_states/new_york/nyc_civil_court/ny__civ_sc50_statement_of_claim.fields"
+        ),
+    ),
+    (
+        "ny__nc2_minor_name_change_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc2_minor_name_change_petition.fields"
+        ),
+    ),
+    (
+        "ny__nc4_family_name_change_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc4_family_name_change_petition.fields"
+        ),
+    ),
+    (
+        "ny__nc5_family_name_change_supplement",
+        include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc5_family_name_change_supplement.fields"
+        ),
+    ),
+    (
+        "ny__probate_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_surrogates_court/ny__probate_petition.fields"
+        ),
+    ),
 ];
 
 /// The re-authored field manifest for one form, or `None` when the form
@@ -750,73 +816,7 @@ mod tests {
             question = "entity__company.2.name"
             "#,
         );
-        let names = vec!["sneaky".to_string()    (
-        "nv__washoe_adult_name_change_petition",
-        include_str!(
-            "../../templates/notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_adult_name_change_petition.fields"
-        ),
-    ),
-    (
-        "nv__washoe_fee_waiver_application",
-        include_str!(
-            "../../templates/notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_fee_waiver_application.fields"
-        ),
-    ),
-    (
-        "nv__las_vegas_small_claims_complaint",
-        include_str!(
-            "../../templates/notations/forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_complaint.fields"
-        ),
-    ),
-    (
-        "nv__las_vegas_small_claims_counterclaim",
-        include_str!(
-            "../../templates/notations/forms/united_states/nevada/las_vegas_justice_court/nv__las_vegas_small_claims_counterclaim.fields"
-        ),
-    ),
-    (
-        "ny__nc1_adult_name_change_petition",
-        include_str!(
-            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc1_adult_name_change_petition.fields"
-        ),
-    ),
-    (
-        "ny__nc3_lip_name_change_petition",
-        include_str!(
-            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc3_lip_name_change_petition.fields"
-        ),
-    ),
-    (
-        "ny__civ_sc50_statement_of_claim",
-        include_str!(
-            "../../templates/notations/forms/united_states/new_york/nyc_civil_court/ny__civ_sc50_statement_of_claim.fields"
-        ),
-    ),
-    (
-        "ny__nc2_minor_name_change_petition",
-        include_str!(
-            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc2_minor_name_change_petition.fields"
-        ),
-    ),
-    (
-        "ny__nc4_family_name_change_petition",
-        include_str!(
-            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc4_family_name_change_petition.fields"
-        ),
-    ),
-    (
-        "ny__nc5_family_name_change_supplement",
-        include_str!(
-            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc5_family_name_change_supplement.fields"
-        ),
-    ),
-    (
-        "ny__probate_petition",
-        include_str!(
-            "../../templates/notations/forms/united_states/new_york/new_york_surrogates_court/ny__probate_petition.fields"
-        ),
-    ),
-];
+        let names = vec!["sneaky".to_string()];
         let err = plan(&map, &names, &llc_states()).expect_err("must refuse");
         assert!(
             matches!(
