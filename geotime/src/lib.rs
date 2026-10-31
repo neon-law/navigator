@@ -132,9 +132,26 @@ pub fn resolve(
 
 const SUGGESTION_COUNT: usize = 3;
 
+/// Every country in the bundled index, in its bundled order — the page layer
+/// uses these as the birth-form country options. The list is static, so it
+/// carries no visitor data and can ride the wire or render into a select.
+pub fn countries() -> Vec<Country> {
+    index::global().countries.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lists_every_bundled_country() {
+        let countries = countries();
+        assert!(countries.len() > 200, "index bundles {countries} countries");
+        assert!(countries
+            .iter()
+            .any(|country| country.iso2 == "US" && country.name == "United States"));
+        assert!(countries.iter().all(|country| !country.name.is_empty()));
+    }
 
     #[test]
     fn resolves_a_present_day_birth() {
