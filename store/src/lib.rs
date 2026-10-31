@@ -215,6 +215,7 @@ pub mod tasks;
 pub mod template_source;
 pub mod templates;
 pub mod testimonials;
+pub mod time_entries;
 pub mod trust;
 pub mod visitor_analytics;
 pub mod xero_invoices;
