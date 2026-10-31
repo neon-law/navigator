@@ -570,7 +570,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         webapp::notation_preview::NotationPreviewMode::Published,
         Some(state.surreal.clone()),
     ));
-    let contact_copy = branded_map(branding, |resolved| {
+    let contact_copy = branded_map(branding, "/contact", |resolved| {
         webapp::contact_page::InjectedContact(resolve_firm_contact_content(resolved))
     });
     routers.push(with_branded(
@@ -584,7 +584,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     ));
     routers.push(with_branded(
         dioxus_app::contact_sent_router("/contact/sent", resolve_firm_contact_content(branding)),
-        branded_map(branding, |resolved| {
+        branded_map(branding, "/contact/sent", |resolved| {
             webapp::contact_page::InjectedContact(resolve_firm_contact_content(resolved))
         }),
     ));
@@ -628,7 +628,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     let practice_catalog = locales::home(&views::brand::DEFAULT_BRANDING)
         .practices
         .clone();
-    let home_copy = branded_map(branding, |resolved| webapp::home::InjectedHome {
+    let home_copy = branded_map(branding, "/", |resolved| webapp::home::InjectedHome {
         content: resolve_firm_home_content(resolved, deployment_host),
         lead_capture: Some(home_lead_capture(resolved)),
         brand_key: resolved.brand_key.as_str().to_string(),
@@ -644,7 +644,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         ),
         home_copy,
     ));
-    let testimonials_copy = branded_map(branding, |resolved| {
+    let testimonials_copy = branded_map(branding, "/testimonials", |resolved| {
         webapp::testimonials_page::InjectedTestimonials {
             brand_key: resolved.brand_key.as_str().to_string(),
         }
@@ -701,7 +701,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         state.sessions.clone(),
         portal::secure_cookies(state),
     ));
-    let services_copy = branded_map(branding, |resolved| {
+    let services_copy = branded_map(branding, "/services", |resolved| {
         webapp::marketing_page::InjectedMarketingPage(firm_copy::legal_services(resolved))
     });
     for source_key in [BrandKey::Aegis, BrandKey::Vesta] {
@@ -851,13 +851,24 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         .collect()
 }
 
+/// Pre-bake one piece of content per brand, for `inject_branded` to hand the
+/// SSR router at request time.
+///
+/// `path` is the route's own firm path: a brand that does not publish it
+/// (`BrandKey::publishes_firm_path` — the same gate the request middleware
+/// enforces) gets no entry, so its content is never baked. Loading a brand's
+/// catalog that it does not publish would panic — the held-out IEP ships no
+/// catalogs at all — and no request could ever serve the entry: the same gate
+/// refuses the path first.
 fn branded_map<T>(
     default: &'static views::brand::Branding,
+    path: &str,
     build: impl Fn(&views::brand::Branding) -> T,
 ) -> HashMap<BrandKey, T> {
     BrandKey::ALL
         .iter()
         .copied()
+        .filter(|key| key.publishes_firm_path(path))
         .map(|key| (key, build(key.resolve_branding(default))))
         .collect()
 }

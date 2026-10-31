@@ -3050,11 +3050,9 @@ async fn seed_entities(
             // outgoing firm and never mint it on the incoming one — and
             // that column, not the name, is what `delete_unless_firm_anchor`
             // reads. Reconcile the row to the name it should carry now.
-            let expected = FIRM_ENTITY_NAMES
-                .iter()
-                .find_map(|configured| {
-                    crate::entity_commands::firm_anchor_key(configured, &rec.name)
-                });
+            let expected = FIRM_ENTITY_NAMES.iter().find_map(|configured| {
+                crate::entity_commands::firm_anchor_key(configured, &rec.name)
+            });
             if row.firm_anchor_key != expected {
                 match expected {
                     Some(key) => claim_anchor.push((row.id, key)),
@@ -3449,14 +3447,13 @@ async fn ensure_lex_firm(surreal: &SurrealDb) -> anyhow::Result<crate::firms::Fi
         .await
         {
             Ok(firm) => Ok(firm),
-            Err(crate::firms::FirmError::DuplicateEntity) => crate::firms::find_by_entity_id(
-                surreal,
-                entity.id,
-            )
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("firm for {LEX_FIRM_ENTITY_NAME} exists but did not read")
-            }),
+            Err(crate::firms::FirmError::DuplicateEntity) => {
+                crate::firms::find_by_entity_id(surreal, entity.id)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("firm for {LEX_FIRM_ENTITY_NAME} exists but did not read")
+                    })
+            }
             Err(error) => Err(error.into()),
         },
     }
@@ -6958,7 +6955,9 @@ records:
 
         // The held-out key resolves to the Lex firm and to nothing else.
         assert_eq!(
-            crate::firms::firm_id_for_brand_key(&surreal, "iep").await.unwrap(),
+            crate::firms::firm_id_for_brand_key(&surreal, "iep")
+                .await
+                .unwrap(),
             Some(lex.id)
         );
         let iep = crate::brands::find_by_key(&surreal, "iep")
@@ -6980,7 +6979,9 @@ records:
         let firms_after = crate::firms::all(&surreal).await.unwrap();
         assert_eq!(firms_after.len(), 2);
         assert_eq!(
-            crate::firms::firm_id_for_brand_key(&surreal, "iep").await.unwrap(),
+            crate::firms::firm_id_for_brand_key(&surreal, "iep")
+                .await
+                .unwrap(),
             Some(lex.id)
         );
     }
