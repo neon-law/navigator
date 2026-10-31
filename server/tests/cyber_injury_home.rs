@@ -85,16 +85,16 @@ async fn cyber_injury_home_serves_its_copy_assets_and_fonts() {
 async fn public_pages_emit_complete_open_graph_and_canonical_metadata() {
     for host in HOSTS {
         let origin = format!("https://{host}");
-        for (path, title, description_marker) in [
+        for (path, title, description) in [
             (
                 "/",
                 "CyberInjuryLaw | We use AI to put more money in your pocket",
-                "We investigate, preserve evidence",
+                "Car accidents, negligence, medical malpractice, data theft, cybercrime. We investigate, preserve evidence, and go after whoever cut the corner. Tell us what happened. Attorney advertisement.",
             ),
             (
                 "/services",
                 "CyberInjuryLaw | Injury and cybercrime claims",
-                "a lawyer reviews the facts before any engagement",
+                "Car accidents, negligence, medical malpractice, data theft, cybercrime, and online abuse. Tell us what happened; a lawyer reviews the facts before any engagement. Attorney advertisement.",
             ),
         ] {
             let (status, html) = page(host, path).await;
@@ -103,7 +103,7 @@ async fn public_pages_emit_complete_open_graph_and_canonical_metadata() {
             for tag in [
                 format!(r#"content="{title}" property="og:title""#),
                 format!(r#"content="CyberInjuryLaw" property="og:site_name""#),
-                format!(r#"content="{description_marker}" property="og:description""#),
+                format!(r#"content="{description}" property="og:description""#),
                 format!(r#"content="{url}" property="og:url""#),
                 r#"property="og:image" content="https://"#.to_string(),
                 r#"property="og:image:alt""#.to_string(),
