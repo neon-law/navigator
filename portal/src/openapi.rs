@@ -4893,6 +4893,12 @@ fn add_journal_operations(document: &mut Value) {
             "readMercuryEvidence",
             "Read one Mercury transaction and file private evidence",
         ),
+        (
+            "/mercury/import",
+            "post",
+            "importMercuryWindow",
+            "Bulk-import a bounded Mercury posted-date window into Project costs with Project allocation by code token",
+        ),
     ] {
         let path = format!("/app/api/firms/{{id}}/journal{suffix}");
         document["paths"][&path][method] = json!({

@@ -209,6 +209,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "/app/api/firms/{id}/journal/mercury",
             post(firm_journal_api::mercury),
         ),
+        (
+            "POST",
+            "/app/api/firms/{id}/journal/mercury/import",
+            post(firm_journal_api::mercury_import),
+        ),
         ("POST", "/app/api/entities", post(create_entity)),
         ("POST", "/app/api/seed", post(reconcile_seed)),
         ("POST", "/app/api/blog", post(crate::blog_api::publish)),

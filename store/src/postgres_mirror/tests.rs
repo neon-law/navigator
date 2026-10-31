@@ -1922,6 +1922,7 @@ async fn receipt_backed_cost_accepts_normal_project_document_and_replays_idempot
         amount_status: "estimated".into(),
         receipt_document_id: document.asset_id,
         idempotency_key: "receipt:synthetic-1".into(),
+        source_reference: crate::project_costs::mercury_source_reference(Uuid::now_v7()),
     };
     let other_project = project(&surreal, "Other Costs Synthetic Matter").await;
     let mut foreign_receipt = input.clone();
