@@ -2940,3 +2940,9 @@ $$;
 -- The jurisdiction an onboarding Notation's Clauses bind to. NULL until recorded.
 ALTER TABLE project ADD COLUMN onboarding_jurisdiction TEXT;
 
+-- Migration: 20261031130000_add_deadline_category.sql
+-- Deadline categories: what kind of date the deadline is, rendered by the
+-- matter calendar's fixed category-to-color map. Nullable: rows written
+-- before categories existed read back without one.
+ALTER TABLE project_deadlines ADD COLUMN category TEXT CHECK (category IN ('court', 'hearing', 'discovery', 'internal'));
+

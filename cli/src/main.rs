@@ -1947,6 +1947,10 @@ enum DeadlineCmd {
         /// `firm`, `opponent`, or `hearing`.
         #[arg(long)]
         calendar_role: String,
+        /// `court`, `hearing`, `discovery`, or `internal`. Defaults from the
+        /// calendar role and authority kind when either settles it.
+        #[arg(long)]
+        category: Option<String>,
         /// Whole days. Never shorter than the client lead.
         #[arg(long)]
         internal_lead_days: Option<i64>,
@@ -1995,6 +1999,9 @@ enum DeadlineCmd {
         owner: Option<uuid::Uuid>,
         #[arg(long)]
         calendar_role: Option<String>,
+        /// `court`, `hearing`, `discovery`, or `internal`. An empty value clears it.
+        #[arg(long)]
+        category: Option<String>,
         #[arg(long)]
         internal_lead_days: Option<i64>,
         #[arg(long)]
@@ -5445,6 +5452,7 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 source_document,
                 owner,
                 calendar_role,
+                category,
                 internal_lead_days,
                 client_lead_days,
                 replay_key,
@@ -5462,6 +5470,7 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     source_document,
                     owner,
                     calendar_role,
+                    category,
                     internal_lead_days,
                     client_lead_days,
                     replay_key,
@@ -5486,6 +5495,7 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 source_document,
                 owner,
                 calendar_role,
+                category,
                 internal_lead_days,
                 client_lead_days,
             } => {
@@ -5503,6 +5513,7 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     source_document,
                     owner,
                     calendar_role,
+                    category,
                     internal_lead_days,
                     client_lead_days,
                     ics.as_deref(),
