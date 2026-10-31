@@ -125,6 +125,19 @@ impl Mercury {
         }
         bounded(response, 16 * 1024 * 1024).await
     }
+    /// Resolve an API path against the configured origin. The account id
+    /// travels in the URL path, so the origin must be HTTPS outside the
+    /// loopback test tier — the same rule the Forgejo adapter enforces.
+    fn endpoint(&self, path: &str) -> Result<url::Url, MercuryError> {
+        let url = url::Url::parse(&format!("{}{}", self.base, path))
+            .map_err(|_| MercuryError::Invalid)?;
+        let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+        if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+            return Err(MercuryError::Invalid);
+        }
+        Ok(url)
+    }
+
     /// List a closed posted-date window for one account with a fixed page
     /// size, stopping at a short page, an empty page, or the caller's cap.
     /// Every listed transaction must name the requested account.
@@ -139,12 +152,10 @@ impl Mercury {
         let mut offset = 0usize;
         // The cap bounds the loop; a page cannot return more than PAGE_SIZE.
         while offset <= max_transactions {
+            let page_url = self.endpoint(&format!("/api/v1/account/{account}/transactions"))?;
             let response = self
                 .client
-                .get(format!(
-                    "{}/api/v1/account/{account}/transactions",
-                    self.base
-                ))
+                .get(page_url)
                 .query(&[
                     ("limit", PAGE_SIZE.to_string().as_str()),
                     ("offset", offset.to_string().as_str()),
@@ -373,7 +384,7 @@ mod tests {
         let account = Uuid::now_v7();
         for (index, body) in [
             // One transaction past the fixed page cap.
-            serde_json::json!({ "transactions": (0..=PAGE_SIZE).map(|index| listed_transaction(account, Uuid::now_v7())).collect::<Vec<_>>() }).to_string(),
+            serde_json::json!({ "transactions": (0..=PAGE_SIZE).map(|_index| listed_transaction(account, Uuid::now_v7())).collect::<Vec<_>>() }).to_string(),
             "{\"transactions\":".to_string(),
         ]
         .into_iter()
