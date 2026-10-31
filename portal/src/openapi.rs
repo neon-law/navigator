@@ -3455,6 +3455,48 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/inbox/unprocessed": {
+          "get": {
+            "summary": "List the unprocessed inbox backlog",
+            "description": "The unprocessed lawyer-mailbox messages the caller's firms can see, oldest first, each with the route the classifier assigns right now (`nef`, `claims_agent`, `chambers`, or `other`), the label a lawyer reads, and the exact marker the classifier matched. The message body never leaves the server. Authorization: the Owner sees every firm; lawyers, clerks, and admins their firms.",
+            "responses": {
+              "200": { "description": "The unprocessed backlog", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Authenticated caller is not lawyer tier", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "A database fault, never a rejected field", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
+        "/app/api/inbox/{id}/process": {
+          "get": {
+            "summary": "Show one message's process plan",
+            "description": "One message's classification — the route a fresh run assigns now, its label, the marker it matched — plus what a previous process run recorded (`recorded_route`, `recorded_at`). Reads record nothing. A missing message and a firm outside the caller's membership are both 404 so the door never discloses a conversation. The message body never leaves the server.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "responses": {
+              "200": { "description": "The message's plan", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Authenticated caller is not lawyer tier", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such message, or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "A database fault, never a rejected field", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          },
+          "post": {
+            "summary": "Record the classified route for one message",
+            "description": "Classifies the message server-side from the same transport facts the SendGrid webhook sees — a client never posts a route — records the route and the processing time, and reports the best-effort Slack notice outcome (`notified`, `no_project`, `no_channel`, `provider_unavailable`); a notice failure never fails the recording. Idempotent: a re-run overwrites with the same truth and sets `already_recorded`. Nothing is sent and no Gmail label is changed here; the CLI archives the Gmail copy itself after applying. Authorization as for the plan read.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "responses": {
+              "200": { "description": "The recorded verdict", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Authenticated caller is not lawyer tier", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such message, or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "A database fault, never a rejected field", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
         "/app/api/projects/{id}/inbox-ingest": {
           "post": {
             "summary": "File a provider email message into the Firm Inbox",

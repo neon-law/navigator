@@ -51,6 +51,9 @@ const TENANCY_AUTHORITY_MIGRATION: &str =
 const SOURCE_DOMAIN_RECORDS_MIGRATION: &str =
     include_str!("../postgres/migrations/20261022120000_create_source_domain_records.sql");
 const SURREAL_SCHEMA: &str = include_str!("schema/navigator.surql");
+#[cfg(test)]
+const MESSAGE_PROCESS_STATE_MIGRATION: &str =
+    include_str!("../postgres/migrations/20261031130000_add_message_process_state.sql");
 
 /// Nested source values that live in one PostgreSQL JSONB column each.
 const JSONB_SOURCE_FIELDS: &[(&str, &str)] = &[
@@ -1204,8 +1207,8 @@ mod tests {
                 include_str!("../postgres/migrations/20261031120000_add_project_onboarding_jurisdiction.sql"),
             ),
             (
-                "20261031130000_create_case_stage.sql",
-                include_str!("../postgres/migrations/20261031130000_create_case_stage.sql"),
+                "20261031130000_add_message_process_state.sql",
+                MESSAGE_PROCESS_STATE_MIGRATION,
             ),
             (
                 "20261101000000_create_time_entry.sql",
