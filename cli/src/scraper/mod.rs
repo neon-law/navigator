@@ -19,6 +19,7 @@
 pub(crate) mod adapter;
 pub(crate) mod browser;
 pub(crate) mod cmd;
+pub(crate) mod config;
 pub(crate) mod credentials;
 pub(crate) mod download;
 pub(crate) mod fetcher;

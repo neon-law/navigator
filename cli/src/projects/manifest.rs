@@ -43,6 +43,9 @@ pub const PAGES_CODE: &str = "Y021";
 /// The live half of `navigator project gate` reports it
 /// (`projects::gate::section_data_findings`).
 pub const SECTION_DATA_CODE: &str = "Y023";
+/// `Y024` — the `scrapers:` section is not shaped as the scraper commands
+/// parse it.
+pub const SCRAPERS_CODE: &str = "Y024";
 
 /// Every top-level key `navigator.yaml` may carry.
 ///
@@ -59,6 +62,7 @@ pub const ACCEPTED_KEYS: &[&str] = &[
     "no_live_row",
     "pages",
     "project",
+    "scrapers",
     "skills",
     "version",
 ];
@@ -172,6 +176,10 @@ pub struct Manifest {
     /// The matter pages this Project declares, in order. `navigator project
     /// sync` stores them with the Project, and the matter page renders them.
     pub pages: Vec<rules::pages::PageEntry>,
+    /// The raw `scrapers:` section, carried untyped: its shape is owned by
+    /// `crate::scraper::config`, the one reader the lint (`Y024`) and the
+    /// `navigator scraper` commands share.
+    pub scrapers: Option<serde_yaml::Value>,
 }
 
 /// One manifest finding, with a Y-family rule code.
@@ -591,6 +599,7 @@ pub fn lint_contents(path: &Path, contents: &str) -> Vec<ManifestFinding> {
     findings.extend(lint_pages(path, contents));
     findings.extend(lint_matter(path, mapping));
     findings.extend(lint_allowlist_shapes(path, mapping));
+    findings.extend(lint_scrapers(path, mapping));
     if let Ok(manifest) = parse(contents) {
         findings.extend(lint_allowlists(path, &manifest));
     }
@@ -660,6 +669,24 @@ fn lint_skills(path: &Path, mapping: &serde_yaml::Mapping) -> Vec<ManifestFindin
         }
     }
     findings
+}
+
+/// `Y024` — the `scrapers:` section must be shaped as the scraper
+/// commands parse it. The shape is owned by `crate::scraper::config`, so a
+/// manifest the lint passes is a manifest `scraper sites` can read.
+fn lint_scrapers(path: &Path, mapping: &serde_yaml::Mapping) -> Vec<ManifestFinding> {
+    let Some(section) = mapping.get("scrapers") else {
+        return Vec::new();
+    };
+    match crate::scraper::config::parse_value(section) {
+        Ok(_) => Vec::new(),
+        Err(error) => vec![ManifestFinding::at(
+            path,
+            1,
+            SCRAPERS_CODE,
+            error.to_string(),
+        )],
+    }
 }
 
 /// `Y020` — `dockets:` is a list of non-empty case numbers.
@@ -1093,6 +1120,7 @@ pub fn parse(contents: &str) -> Result<Manifest, String> {
         skills: parse_skills(mapping)?,
         dockets: parse_dockets(mapping)?,
         pages: rules::pages::entries(mapping)?,
+        scrapers: mapping.get("scrapers").cloned(),
     })
 }
 
@@ -1331,6 +1359,60 @@ mod tests {
             .collect()
     }
 
+    const SCRAPERS_SECTION: &str = concat!(
+        "version: 26.10.31\n",
+        "project:\n",
+        "  host: staging.neonlaw.com\n",
+        "  name: acme\n",
+        "scrapers:\n",
+        "  sites:\n",
+        "    la-superior:\n",
+        "      adapter: la-superior\n",
+        "      portal_url: https://canvas.lasuperiorcourt.org\n",
+    );
+
+    #[test]
+    fn a_well_shaped_scrapers_section_parses_into_the_manifest() {
+        let manifest = parse(SCRAPERS_SECTION).expect("the section deserializes");
+        let parsed = crate::scraper::config::parse_value(
+            manifest.scrapers.as_ref().expect("the section is carried"),
+        )
+        .expect("the section parses");
+        assert_eq!(parsed.sites.len(), 1);
+        let entry = parsed
+            .find_site(&crate::scraper::adapter::SiteKey::new("la-superior").expect("valid key"))
+            .expect("configured");
+        assert_eq!(entry.adapter, "la-superior");
+        let findings = codes(SCRAPERS_SECTION);
+        assert!(
+            !findings.contains(&SCRAPERS_CODE),
+            "no Y024 findings, found: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_malformed_scrapers_section_is_a_y024_finding() {
+        let yaml = "scrapers:\n  sites:\n  - not-a-map\n";
+        let codes_found = codes(yaml);
+        assert!(
+            codes_found.contains(&SCRAPERS_CODE),
+            "Y024 fires: {codes_found:?}"
+        );
+        let findings = lint_contents(Path::new("navigator.yaml"), yaml);
+        let finding = findings
+            .iter()
+            .find(|finding| finding.code == SCRAPERS_CODE)
+            .expect("Y024 present");
+        assert!(finding
+            .message
+            .contains("`scrapers.sites:` must be a mapping"));
+    }
+
+    #[test]
+    fn a_manifest_without_scrapers_lints_clean() {
+        assert!(!codes("host: staging.neonlaw.com\nproject: acme\n").contains(&SCRAPERS_CODE));
+    }
+
     #[test]
     fn accepted_keys_and_drift_reader_agree() {
         // Drift deserializes these named fields on `drift::Manifest`. Keep the
@@ -1345,6 +1427,7 @@ mod tests {
             "no_live_row",
             "pages",
             "project",
+            "scrapers",
             "skills",
             "version",
         ];
