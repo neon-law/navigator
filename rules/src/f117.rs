@@ -114,6 +114,8 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "county_of_residence", // county name for the filing court; the jurisdiction lookup seeds states, not counties
     "place_of_birth", // birthplace as the form prints it (city/county and state); the country lookup covers country-level birthplaces
     "reason_for_change", // NC-110 item: the petitioner's own words for the requested name change
+    "prior_name_change_details", // the prior decree's date, place, court, and case number in the petitioner's words
+    "best_interest_reasons", // the minor petition's best-interest statement, in the parents' own words
     "birthplace_city", // the NV name petition's separate city-of-birth field; no city lookup exists
     "felony_details", // NC-110/NV petition: narrative about a past felony conviction, if any
     "incident_date", // the DV application's most-recent-incident date, which intake may answer "ongoing" — the lawyer confirms the field
