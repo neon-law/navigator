@@ -2726,3 +2726,30 @@ DEFINE FIELD OVERWRITE overage ON sandbox_usage TYPE bool DEFAULT false;
 DEFINE FIELD OVERWRITE inserted_at ON sandbox_usage TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON sandbox_usage TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE sandbox_usage_period ON sandbox_usage FIELDS period, overage;
+
+-- `assistant_turn`: one ordered entry in a subscriber's Assistant Chat —
+-- the glossary's Assistant Turn. A prompt the subscriber asked, a reply
+-- the assistant gave, or a tool call and its result from the session
+-- loop's read-only search detours. Every row belongs to exactly one
+-- Person and no other surface reads the table; the transcript is the
+-- subscriber's own workspace content.
+--
+-- The record id is a minted UUIDv7: time-ordered, so `history`'s
+-- `ORDER BY id` is the chronological order with no `max(seq) + 1` race
+-- between the parallel tool turns of one exchange.
+--
+-- Retention is a policy question the spec leaves open, and the schema
+-- assumes nothing: `store::assistant_turns::purge` removes one
+-- subscriber's whole chat in one statement, and the retention answer —
+-- whatever it becomes — is a caller of that seam, not a migration here.
+DEFINE TABLE IF NOT EXISTS assistant_turn SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD OVERWRITE person_id ON assistant_turn TYPE record<person>;
+DEFINE FIELD OVERWRITE kind ON assistant_turn TYPE string
+    ASSERT $value IN ["prompt", "reply", "tool_call", "tool_result"];
+DEFINE FIELD OVERWRITE content ON assistant_turn TYPE string;
+DEFINE FIELD OVERWRITE tool_name ON assistant_turn TYPE option<string>;
+DEFINE FIELD OVERWRITE input_tokens ON assistant_turn TYPE option<int>;
+DEFINE FIELD OVERWRITE output_tokens ON assistant_turn TYPE option<int>;
+DEFINE FIELD OVERWRITE inserted_at ON assistant_turn TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON assistant_turn TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE assistant_turn_owner ON assistant_turn FIELDS person_id;
