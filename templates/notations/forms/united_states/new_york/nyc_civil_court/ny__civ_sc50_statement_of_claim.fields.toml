@@ -1,0 +1,308 @@
+form_code = "ny__civ_sc_50_small_claims_complaint"
+
+# New York City Civil Court, Small Claims Part — Statement of Claim
+# (CIV-SC-50, one page). The parser reports 54 AcroForm fields on the
+# official blank; this map records how each becomes a canonical path.
+#
+# The claimant block (Section I) prints split name boxes and composed
+# address rows: the name boxes map to the client's typed person states
+# (given/middle/family), the address rows to the claimants people row
+# (the intake's one-row claimant address list), and the phone/email to
+# the client's contact states.
+#
+# The defendant block (Section II) holds ONE defendant (the MULTI DFT
+# box at the bottom is the clerk's mark for multi-defendant filings,
+# each filed on its own blank). The name boxes map to a typed
+# person__defendant aggregate — the same shape the DV application uses
+# for its adverse party; the address rows map to the defendants people
+# row (the intake's defendant list), and the phone to the typed phone
+# contact role the Las Vegas complaint already carries.
+#
+# The PRIMARY REASON FOR CLAIM grid ("Check One") is 28 checkboxes in
+# four columns. Each maps to the one choice question with its
+# `checked_when` value, so the grid merges into a single radio in the
+# re-authored blank; the choice set covers every printed row label
+# (verified against the page-text coordinates).
+#
+# Deliberately left unmapped (decision recorded, lawyer or clerk
+# completes):
+# - `TODAYS_DATE` — the signature date; set when the client signs at
+#   the review appointment (a literal would freeze the date at vendor
+#   time, the same rationale as the Las Vegas complaint's `Dated`).
+# - `Signature_0` — the client signs at the review appointment.
+# - `FillText9` (`OTHER INFO` in the claimant block) — the DBA /
+#   in-care-of line; the lawyer composes it when the caption needs it.
+# - `DEFENDANTS_OTHER_INFO` — the defendant's DBA / apartment line;
+#   composed at review when service needs it.
+# - `Defendants_Email` — no typed email role exists for a defendant;
+#   the contact line is confirmed at review.
+
+[[field]]
+name = "FillText2"
+question = "person__client.family"
+
+[[field]]
+name = "FillText3"
+question = "person__client.given"
+
+[[field]]
+name = "FillText4"
+question = "person__client.middle"
+
+[[field]]
+name = "FillText5"
+question = "people__claimants"
+row = 0
+part = "street"
+
+[[field]]
+name = "FillText6"
+question = "people__claimants"
+row = 0
+part = "city"
+
+[[field]]
+name = "FillText7"
+question = "people__claimants"
+row = 0
+part = "state"
+
+[[field]]
+name = "FillText8"
+question = "people__claimants"
+row = 0
+part = "zip"
+
+[[field]]
+name = "Claimant_Phone_No"
+question = "person__client.phone"
+
+[[field]]
+name = "Claimant_EMAIL"
+question = "person__client.email"
+
+[[field]]
+name = "DEFENDANTS_FIRST_NAME"
+question = "person__defendant.given"
+
+[[field]]
+name = "DEFENDANTS_MIDDLE_INITIAL"
+question = "person__defendant.middle"
+
+[[field]]
+name = "DEFENDANTS_LAST_NAME"
+question = "person__defendant.family"
+
+[[field]]
+name = "DEFENDANTS_ADDRESS"
+question = "people__defendants"
+row = 0
+part = "street"
+
+[[field]]
+name = "DEFENDANTS_BOROUGH_CITY"
+question = "people__defendants"
+row = 0
+part = "city"
+
+[[field]]
+name = "DEFENDANTS_ZIP"
+question = "people__defendants"
+row = 0
+part = "zip"
+
+[[field]]
+name = "Defendants_Phone_No"
+question = "custom_phone__defendant_contact"
+
+[[field]]
+name = "Amount_Claimed"
+question = "custom_usd__claim_amount"
+
+# The PRIMARY REASON FOR CLAIM grid ("Check One"). Column/page order:
+# col 1 CheckBox3..10, col 2 CheckBox11..14,16..19, col 3 the named
+# boxes, col 4 the named boxes.
+
+[[field]]
+name = "CheckBox3"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "automobile"
+
+[[field]]
+name = "CheckBox11"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "other_personal_property"
+
+[[field]]
+name = "person"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "person"
+
+[[field]]
+name = "real_property"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "real_property"
+
+[[field]]
+name = "CheckBox4"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "proper_repairs"
+
+[[field]]
+name = "CheckBox12"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "proper_services"
+
+[[field]]
+name = "proper_merchandise"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "proper_merchandise"
+
+[[field]]
+name = "goods_paid_for"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "goods_paid_for"
+
+[[field]]
+name = "CheckBox5"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "security_not_returned"
+
+[[field]]
+name = "CheckBox13"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "property_not_returned"
+
+[[field]]
+name = "deposit"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "deposit_not_returned"
+
+[[field]]
+name = "moneyloaned2"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "money_loaned"
+
+[[field]]
+name = "CheckBox6"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "unpaid_salary"
+
+[[field]]
+name = "CheckBox14"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "unpaid_services_rendered"
+
+[[field]]
+name = "insurance_claim"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "insurance_claim"
+
+[[field]]
+name = "CheckBox16"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "unpaid_commissions"
+
+[[field]]
+name = "CheckBox7"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "unpaid_rent"
+
+[[field]]
+name = "for_goods_sold_and_delivered"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "goods_sold_delivered"
+
+[[field]]
+name = "warranty"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "warranty_breach"
+
+[[field]]
+name = "agreement"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "agreement_breach"
+
+[[field]]
+name = "CheckBox8"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "contract_breach"
+
+[[field]]
+name = "CheckBox17"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "lease_breach"
+
+[[field]]
+name = "use_of_property"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "use_of_property"
+
+[[field]]
+name = "CheckBox9"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "luggage_loss"
+
+[[field]]
+name = "CheckBox18"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "property_loss"
+
+[[field]]
+name = "time_from_work"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "time_from_work"
+
+[[field]]
+name = "CheckBox10"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "bounced_check"
+
+[[field]]
+name = "CheckBox19"
+question = "custom_single_choice__primary_claim_reason"
+on_state = "1"
+checked_when = "stopped_check"
+
+[[field]]
+name = "Date_of_Occurrence_or_Transaction"
+question = "custom_datetime__claim_occurrence_date"
+
+[[field]]
+name = "Place_of_occurrence_if_Auto_Accident"
+question = "custom_text__auto_accident_place"
+
+[[field]]
+name = "FillText10"
+question = "custom_text__claim_other_description"
+
+[[field]]
+name = "IDENTIFYING_NUMBERS"
+question = "custom_text__identifying_numbers"

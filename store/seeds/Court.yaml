@@ -1618,7 +1618,14 @@ records:
     # Commercial claims sit in the same part; their filing fee is not stated
     # on the surveyed pages. Small-estate DIY (SE-3A) belongs to Surrogate's
     # Court, below.
-    forms: []
+    forms:
+      - code: ny__civ_sc50_statement_of_claim
+        title: Statement of Claim (Small Claims)
+        source_url: https://www.nycourts.gov/LegacyPDFS/courts/nyc/civil/forms/CIV-SC-50.pdf
+        sha256: 2f1808d206ec948fb2f9b4ce8f5471eee1ca2762ea58089fa4bfec52e84ba070
+        filing_office: NYC Civil Court, Small Claims Part clerk
+        fee_note: "Filing fee tiered by claim amount: $15.00 on claims up to $1,000.00, $20.00 above $1,000.00 (individuals only; the Small Claims Part limit is $10,000.00 and there is no e-filing). Waiver: poor person relief by motion with a sworn financial affidavit — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the CIVSC50 surveyed_forms entry."
+        fee_waiver_code: null
     surveyed_forms:
       - key: CIVNCADULT
         title: Petition for Individual Adult for Leave to Change His/Her Name (NYC Civil Court format)
