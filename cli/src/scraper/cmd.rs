@@ -147,9 +147,14 @@ fn credential_status(logins: Option<&PortalLogins>, key: &str) -> SiteStatus {
 /// key, so the listing is deterministic. Pure: tests drive it with
 /// fixtures on both sides of the credential line.
 fn render_sites(config: &ScraperConfig, logins: Option<&PortalLogins>) -> String {
+    use std::fmt::Write as _;
     let mut rendered = String::new();
     if config.sites.is_empty() {
-        rendered.push_str("no sites configured under `scrapers.sites:` in navigator.yaml\n");
+        // Writing to a String cannot fail.
+        let _ = writeln!(
+            rendered,
+            "no sites configured under `scrapers.sites:` in navigator.yaml"
+        );
         return rendered;
     }
     for (key, entry) in &config.sites {
@@ -159,14 +164,15 @@ fn render_sites(config: &ScraperConfig, logins: Option<&PortalLogins>) -> String
             .schedule_hint
             .as_deref()
             .unwrap_or("schedule unset");
-        rendered.push_str(&format!(
-            "{}  adapter {}  {}  {}  {}\n",
+        let _ = writeln!(
+            rendered,
+            "{}  adapter {}  {}  {}  {}",
             key.as_str(),
             entry.adapter,
             entry.portal_url,
             schedule,
             status.render()
-        ));
+        );
     }
     rendered
 }
@@ -280,7 +286,9 @@ async fn run_site(
                 // lists the configured sites.
                 eprintln!(
                     "{}",
-                    unregistered_site_message(config.sites.keys().map(|key| key.to_string()))
+                    unregistered_site_message(
+                        config.sites.keys().map(std::string::ToString::to_string)
+                    )
                 );
                 return ExitCode::from(2);
             }
