@@ -41,6 +41,7 @@ pub mod channel {
     pub const THREADS: &str = "threads";
     pub const YOUTUBE: &str = "youtube";
     pub const TIKTOK: &str = "tiktok";
+    pub const X: &str = "x";
 }
 
 pub mod direction {
