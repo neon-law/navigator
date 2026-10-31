@@ -240,6 +240,7 @@ opentelemetry-appender-tracing = "0.33"
 tracing-opentelemetry = "0.34"
 telemetry = { path = "telemetry" }
 views = { path = "views" }
+ephemeris = { path = "ephemeris" }
 walkdir = "2.5"
 webapp = { path = "webapp" }
 wiremock = "0.6"
