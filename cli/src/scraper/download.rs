@@ -299,7 +299,7 @@ pub(crate) fn staging_name(key: &NoticeKey) -> String {
     hex_digest(&digest)
 }
 
-fn hex_digest(digest: &[u8]) -> String {
+pub(crate) fn hex_digest(digest: &[u8]) -> String {
     use std::fmt::Write as _;
 
     let mut hex = String::with_capacity(digest.len() * 2);

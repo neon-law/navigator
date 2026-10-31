@@ -133,7 +133,7 @@ pub(crate) struct BrowserSession {
 }
 
 impl BrowserSession {
-    /// A session with no live WebDriver behind it — the stub session
+    /// A session with no live `WebDriver` behind it — the stub session
     /// factory hands these out so orchestration tests never launch a
     /// browser. Cookie persistence and shutdown degrade to no-ops.
     #[cfg(test)]
@@ -262,19 +262,6 @@ impl BrowserSession {
                 .map_err(SessionError::Cookie)?;
         }
         Ok(())
-    }
-
-    /// A disconnected session for orchestration tests: `persist_cookies` and
-    /// `shutdown` succeed without touching a browser, and no driver process
-    /// exists to leak.
-    #[cfg(test)]
-    pub(crate) fn stub() -> Self {
-        Self {
-            client: None,
-            driver: None,
-            state_path: std::env::temp_dir()
-                .join(format!("navigator-scraper-stub-{}", uuid::Uuid::now_v7())),
-        }
     }
 }
 

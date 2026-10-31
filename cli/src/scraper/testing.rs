@@ -136,16 +136,13 @@ impl MockAdapter {
     /// How many times `login` ran.
     #[must_use]
     pub(crate) fn login_calls(&self) -> u32 {
-        self.core.lock().map(|core| core.login_calls).unwrap_or(0)
+        self.core.lock().map_or(0, |core| core.login_calls)
     }
 
     /// How many times `download` ran.
     #[must_use]
     pub(crate) fn download_calls(&self) -> u32 {
-        self.core
-            .lock()
-            .map(|core| core.download_calls)
-            .unwrap_or(0)
+        self.core.lock().map_or(0, |core| core.download_calls)
     }
 
     /// The `(username, password)` every login attempt saw, in order —
@@ -189,8 +186,7 @@ impl SiteAdapter for MockAdapter {
             core.login_script.pop_front()
         };
         match step {
-            Some(LoginStep::Transient) | None => Ok(()),
-            Some(LoginStep::Succeed) => Ok(()),
+            Some(LoginStep::Transient) | Some(LoginStep::Succeed) | None => Ok(()),
             Some(LoginStep::Structure) => Err(AdapterError::StructureDrift {
                 step: "login form".to_owned(),
                 detail: "the sign-in button moved".to_owned(),
@@ -208,24 +204,23 @@ impl SiteAdapter for MockAdapter {
             core.notices_calls += 1;
             core.notices_script.pop_front()
         };
-        match scripted {
-            Some(result) => result,
-            None => {
-                let url = format!(
-                    "https://portal.example.com/{}/notices?docket={}",
-                    self.site.as_str(),
-                    query.docket
-                );
-                let request = FetchRequest {
-                    url,
-                    range_start: None,
-                };
-                let response = fetcher
-                    .fetch(&request)
-                    .await
-                    .map_err(|error| transient("fetch notice list", error.to_string()))?;
-                parse_listing(&response.body)
-            }
+        if let Some(result) = scripted {
+            result
+        } else {
+            let url = format!(
+                "https://portal.example.com/{}/notices?docket={}",
+                self.site.as_str(),
+                query.docket
+            );
+            let request = FetchRequest {
+                url,
+                range_start: None,
+            };
+            let response = fetcher
+                .fetch(&request)
+                .await
+                .map_err(|error| transient("fetch notice list", error.to_string()))?;
+            parse_listing(&response.body)
         }
     }
 
@@ -280,24 +275,6 @@ impl MockFetcher {
         }))
     }
 
-    /// A fetcher that always answers `status` with `body`.
-    #[must_use]
-    pub(crate) fn always(status: u16, body: &[u8]) -> Self {
-        let body = body.to_vec();
-        Self::with_handler(Arc::new(move |_| {
-            Ok(FetchResponse {
-                status,
-                body: body.clone(),
-            })
-        }))
-    }
-
-    /// A fetcher that always fails with `error`.
-    #[must_use]
-    pub(crate) fn always_failing(error: FetchError) -> Self {
-        Self::with_handler(Arc::new(move |_| Err(clone_fetch_error(&error))))
-    }
-
     /// A fetcher backed by an arbitrary handler.
     #[must_use]
     pub(crate) fn with_handler(handler: MockHandler) -> Self {
@@ -307,27 +284,15 @@ impl MockFetcher {
         }
     }
 
-    /// Every request the fetcher saw, in order.
-    #[must_use]
-    pub(crate) fn requests(&self) -> Vec<FetchRequest> {
-        self.requests
-            .lock()
-            .map(|requests| requests.clone())
-            .unwrap_or_default()
-    }
-
     /// How many requests named a URL containing `needle`.
     #[must_use]
     pub(crate) fn request_count(&self, needle: &str) -> usize {
-        self.requests
-            .lock()
-            .map(|requests| {
-                requests
-                    .iter()
-                    .filter(|request| request.url.contains(needle))
-                    .count()
-            })
-            .unwrap_or(0)
+        self.requests.lock().map_or(0, |requests| {
+            requests
+                .iter()
+                .filter(|request| request.url.contains(needle))
+                .count()
+        })
     }
 }
 
@@ -338,23 +303,6 @@ impl HttpFetcher for MockFetcher {
             requests.push(request.clone());
         }
         (self.handler)(request)
-    }
-}
-
-/// `FetchError` is not `Clone` (it wraps `reqwest::Error`); the double
-/// rebuilds its own variants. A handler carrying a `Request` variant
-/// cannot be replayed, so the clone substitutes a too-large failure with
-/// the original URL named.
-fn clone_fetch_error(error: &FetchError) -> FetchError {
-    match error {
-        FetchError::TooLarge { url, limit } => FetchError::TooLarge {
-            url: url.clone(),
-            limit: *limit,
-        },
-        FetchError::Request(_) => FetchError::TooLarge {
-            url: "mock://replayed-request-error".to_owned(),
-            limit: 0,
-        },
     }
 }
 

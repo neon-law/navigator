@@ -698,11 +698,7 @@ mod tests {
         assert_eq!(received[0].bytes, b"first-half-second-half".to_vec());
         let mut hasher = Sha256::new();
         hasher.update(b"first-half-second-half");
-        let expected: String = hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let expected = download::hex_digest(hasher.finalize().as_slice());
         assert_eq!(received[0].sha256, expected);
         assert_eq!(
             report.enqueued[0].key, "la-superior/0004/4",
@@ -734,9 +730,7 @@ mod tests {
             "no partial document enqueued"
         );
         assert_eq!(
-            std::fs::read_dir(fixture.downloads_dir())
-                .map(|entries| entries.count())
-                .unwrap_or(0),
+            std::fs::read_dir(fixture.downloads_dir()).map_or(0, |entries| entries.count()),
             0,
             "no finished document was staged"
         );

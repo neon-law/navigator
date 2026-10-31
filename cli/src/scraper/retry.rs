@@ -181,7 +181,7 @@ mod tests {
         let outcome = with_retries(
             &instant_policy(3),
             &clock,
-            |_: &()| true,
+            |_unit: &()| true,
             || async { Ok::<_, ()>(7) },
         )
         .await;
