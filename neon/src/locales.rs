@@ -237,21 +237,22 @@ pub fn team(branding: &views::brand::Branding) -> views::locales::TeamCopy {
     serde_yaml::from_str(&interpolated)
         .expect("invariant: navigator project gate validates the team catalog")
 }
-
-/// The free court-form catalog's copy — the brand's free-of-charge and
-/// no-outcome promises included, the page-kind gate (`Y002`) the same one
-/// every other page's YAML passes.
+/// The free court-form catalog's copy, when the brand publishes one —
+/// the brand's free-of-charge and no-outcome promises included, the
+/// page-kind gate (`Y002`) the same one every other page's YAML passes.
 ///
-/// # Panics
-///
-/// Never for a shipped brand: both Neon and Vesta publish the
-/// `free-resources` catalog, and the project gate validates its shape.
-pub fn free_resources(branding: &views::brand::Branding) -> views::locales::FreeResourcesCopy {
-    let raw = catalog_yaml(branding.brand_key, "free-resources")
-        .expect("invariant: the mounted brand publishes the free-resources catalog");
+/// `None` for a brand with no `free-resources` catalog; the router
+/// mounts the pages only for brands with a catalog.
+#[must_use]
+pub fn free_resources(
+    branding: &views::brand::Branding,
+) -> Option<views::locales::FreeResourcesCopy> {
+    let raw = catalog_yaml(branding.brand_key, "free-resources")?;
     let interpolated = interpolate(raw, branding.firm.site_name, branding.firm_email);
-    serde_yaml::from_str(&interpolated)
-        .expect("invariant: navigator project gate validates the free-resources catalog")
+    Some(
+        serde_yaml::from_str(&interpolated)
+            .expect("invariant: navigator project gate validates the free-resources catalog"),
+    )
 }
 
 /// Load one catalog file as `T`, after resolving shared copy and the mounted
