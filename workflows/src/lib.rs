@@ -32,6 +32,7 @@ pub mod email_summary_config;
 pub mod email_summary_delivery;
 pub mod guardrail;
 pub mod heartbeat;
+pub mod inbox_triage;
 pub mod intake;
 pub mod integrations;
 pub mod message_alert;
@@ -76,6 +77,12 @@ pub use email_summary_delivery::{
     ProviderDelivery, SummaryDeliveryError, SummaryDeliveryMessage,
 };
 pub use guardrail::{lawyer_review_gates_filing, lawyer_review_precedes_submission, GateViolation};
+pub use inbox_triage::{
+    assemble_triage, build_triage_prompt, parse_triage, triage_input_digest,
+    triage_response_schema, ClassifierLane, InboundTriageReport, InboundTriageRequest,
+    ProjectOption, TriageClassifierOutput, TriageError, TriageRunConfig,
+    DEFAULT_TRIAGE_MAX_OUTPUT_TOKENS, TRIAGE_PROMPT_VERSION,
+};
 pub use intake::{
     dispatch_document_intake, is_document_intake, IntakeArtifact, IntakeError, IntakePayload,
 };

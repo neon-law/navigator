@@ -27,6 +27,7 @@ pub mod finance_aggregate;
 pub mod general_nag;
 pub mod health;
 pub mod inbound_message_alert;
+pub mod inbound_triage;
 pub mod journal;
 pub mod nightly_project_update;
 pub mod notation_reset;

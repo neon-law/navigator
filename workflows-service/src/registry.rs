@@ -35,6 +35,7 @@ pub const WORKFLOW_SERVICES: &[&str] = &[
     "FinanceAggregate",
     "GeneralNag",
     "InboundMessageAlert",
+    "InboundTriage",
     "NightlyProjectUpdate",
     "NightlyProjectUpdateMembership",
     "NightlyProjectUpdateSlack",
