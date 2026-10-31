@@ -598,6 +598,7 @@ mod tests {
             messages: vec![],
             input_tokens: 1_000_000,
             output_tokens: 500_000,
+            tool_calls: Vec::new(),
         };
         assert_eq!(provider.price_cents(&usage), 700);
         // A realistic short turn: 12k in / 2k out = 2.4M + 2M micro-cents
@@ -606,6 +607,7 @@ mod tests {
             messages: vec![],
             input_tokens: 12_000,
             output_tokens: 2_000,
+            tool_calls: Vec::new(),
         };
         assert_eq!(provider.price_cents(&turn), 5);
     }

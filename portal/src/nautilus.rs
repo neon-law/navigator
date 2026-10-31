@@ -397,8 +397,8 @@ async fn credit_view(
         }
     };
     Some(webapp::sandbox::SandboxCredit {
-        granted_cents: usage.granted_cents.max(0) as u64,
-        remaining_cents: usage.remaining_cents().max(0) as u64,
+        granted_cents: u64::try_from(usage.granted_cents.max(0)).unwrap_or(0),
+        remaining_cents: u64::try_from(usage.remaining_cents().max(0)).unwrap_or(0),
         model_backend: webapp::sandbox::VERTEX_BACKEND.to_string(),
         backends: vec![
             webapp::sandbox::VERTEX_BACKEND.to_string(),
@@ -411,7 +411,7 @@ async fn credit_view(
 #[must_use]
 fn current_period() -> String {
     let now = chrono::Utc::now().date_naive();
-    billing_period(now.year(), now.month() as u32)
+    billing_period(now.year(), now.month())
 }
 
 /// The composer's POST: one prompt, one exchange.
@@ -508,8 +508,7 @@ async fn run_exchange(
         let session =
             MeteredSession::new(provider.clone(), ledger.clone(), person_id, period.clone());
         match session.complete(request).await {
-            Ok(MeteredOutcome::Completed { result, .. })
-            | Ok(MeteredOutcome::Unbilled { result }) => {
+            Ok(MeteredOutcome::Completed { result, .. } | MeteredOutcome::Unbilled { result }) => {
                 if result.tool_calls.is_empty() {
                     let reply = result
                         .messages
@@ -599,11 +598,11 @@ async fn append_turn(
 async fn model_backend(
     state: &NautilusGateState,
 ) -> Result<Arc<dyn ModelProvider>, SandboxExchangeError> {
+    static VERTEX: tokio::sync::OnceCell<Option<Arc<dyn ModelProvider>>> =
+        tokio::sync::OnceCell::const_new();
     if let Some(model) = &state.model {
         return Ok(model.clone());
     }
-    static VERTEX: tokio::sync::OnceCell<Option<Arc<dyn ModelProvider>>> =
-        tokio::sync::OnceCell::const_new();
     let provider = VERTEX
         .get_or_try_init(|| async {
             let project = std::env::var("GOOGLE_CLOUD_PROJECT")
@@ -711,7 +710,7 @@ async fn execute_tool(search: &SearchBackends, call: &gateway::ToolCall) -> Stri
     tracing::info!(
         tool = %call.name,
         outcome = if outcome.is_ok() { "ok" } else { "error" },
-        duration_ms = started.elapsed().as_millis() as u64,
+        duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         "sandbox tool executed"
     );
     match outcome {

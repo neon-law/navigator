@@ -198,7 +198,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_scripted_tool_call_round_is_emitted_once() {
-        let mut provider = StubModelProvider::new();
+        let provider = StubModelProvider::new();
         provider.queue_tool_calls(vec![crate::ToolCall {
             id: "toolu_1".into(),
             name: "search_case_law".into(),
@@ -244,6 +244,7 @@ mod tests {
             messages: vec![],
             input_tokens: 1_000_000,
             output_tokens: 500_000,
+            tool_calls: Vec::new(),
         };
         // 1M input tokens at 125 ¢/MTok = 125¢; the output leg is free at
         // rate 0. The usage ledger's 125¢ debit in the spec's example

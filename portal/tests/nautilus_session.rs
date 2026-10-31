@@ -107,7 +107,7 @@ fn portal_search_backends() -> mcp::SearchBackends {
 async fn seed_subscriber(surreal: &SurrealDb, email: &str) -> (Uuid, String) {
     let person = store::persons::create(
         surreal,
-        &NewPerson::with_role("Pat Subscriber", email, Role::Client),
+        &NewPerson::with_role("Pat Sample", email, Role::Client),
     )
     .await
     .unwrap();
@@ -172,7 +172,7 @@ async fn seed_spent(surreal: &SurrealDb, person_id: Uuid, spent_cents: i64) {
 /// The billing month the router serves, spelled the way the ledger keys it.
 fn period() -> String {
     let now = Utc::now().date_naive();
-    store::sandbox_usage::billing_period(now.year(), now.month() as u32)
+    store::sandbox_usage::billing_period(now.year(), now.month())
 }
 
 /// The ledger row after a test's traffic.

@@ -203,6 +203,7 @@ mod tests {
             }],
             input_tokens: 12,
             output_tokens: 34,
+            tool_calls: Vec::new(),
         };
         let back: CompletionResult =
             serde_json::from_value(serde_json::to_value(&result).unwrap()).unwrap();

@@ -437,7 +437,7 @@ mod tests {
     async fn a_failed_completion_debits_nothing() {
         let who = subscriber();
         let ledger = FakeLedger::ledger();
-        let mut provider = priced_provider(125);
+        let provider = priced_provider(125);
         provider.set_failure(Some("vertex 503".into()));
         let session = session(provider, Arc::clone(&ledger), who);
 
