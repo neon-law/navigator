@@ -52,14 +52,14 @@ async fn get(app: &axum::Router, path: &str, bearer: &str) -> (StatusCode, serde
 }
 
 async fn lawyer(db: &store::surreal::SurrealDb, name: &str) -> store::persons::Person {
-    let email = format!("{}@example.graph", name.to_lowercase().replace(' ', "."));
+    let email = format!("{}@example.com", name.to_lowercase().replace(' ', "."));
     store::persons::create(db, &NewPerson::with_role(name, &email, Role::Lawyer))
         .await
         .unwrap()
 }
 
 async fn admin(db: &store::surreal::SurrealDb, name: &str) -> store::persons::Person {
-    let email = format!("{}@example.graph", name.to_lowercase().replace(' ', "."));
+    let email = format!("{}@example.com", name.to_lowercase().replace(' ', "."));
     store::persons::create(db, &NewPerson::with_role(name, &email, Role::Admin))
         .await
         .unwrap()
@@ -248,7 +248,7 @@ async fn an_unauthenticated_or_client_caller_is_refused_before_scope() {
     let matter = seed_matter(&db, "nograph").await;
     let client = store::persons::create(
         &db,
-        &NewPerson::with_role("Graph Client", "graph-client@example.graph", Role::Client),
+        &NewPerson::with_role("Graph Client", "graph-client@example.com", Role::Client),
     )
     .await
     .unwrap();
