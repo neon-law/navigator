@@ -136,7 +136,10 @@ PostgreSQL mirror in [`store::postgres_mirror`](../store/src/postgres_mirror.rs)
 - **Identity detail:** what a Person or Entity holds beside its own row: `address`, `credential`, `email_token`,
   `entity_role`, `person_delegate`, `person_external_identity`, and `person_mailbox`. Their writers in
   `store::addresses`, `store::credentials`, `store::email_tokens`, `store::entity_roles`, `store::delegations`,
-  `store::external_identities`, and `store::persons` (mailbox claims) call the mirror.
+  `store::external_identities`, and `store::persons` (mailbox claims) call the mirror. The `entity_role` writer is the
+  cutover exception: when `NAVIGATOR_GRAPH_AUTHORITY` selects `age`, the tie lands in PostgreSQL first (row, then its
+  `HAS_ROLE` graph edge) and the Surreal graph table receives nothing, so there is no Surreal write to mirror; the
+  `surreal` engine keeps the original write-then-mirror pair.
 - **Communications:** `summary_sender_approval` and its append-only
   `summary_sender_approval_event`. The approval and audit writers call the mirror after their SurrealDB writes.
 - **Inbox:** `inbox_conversation`, `message`, `inbox_ingress`, `inbox_assignment`, and

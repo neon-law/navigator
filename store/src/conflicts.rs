@@ -13,16 +13,18 @@
 //!
 //! # Where the graph lives
 //!
-//! In the store. `entity_role` and `relationship` are Surreal-resident
-//! tables, and this module traverses them on the deployment's own
-//! connection — one source of truth, one schema file. A small firm's
-//! whole relationship graph is a few thousand edges, so a dedicated graph
-//! database beside the store would only be a second copy to keep in sync.
-//!
-//! Both are gone. What survives is the part that was always the point:
-//! the traversal below is the same SurrealQL it was when it ran against
-//! the projection, because the projection was deliberately written in
-//! the shape the persistent store would hold.
+//! In the store — but which store walks the graph is a staged decision,
+//! read from `NAVIGATOR_GRAPH_AUTHORITY`. `surreal` (the default while
+//! the AGE projection and its parity tests mature) runs the original
+//! SurrealQL walk over `<->entity_role` and `<->relationship`. `age`
+//! walks the `navigator_graph` projection in Apache AGE through
+//! [`crate::postgres_graph`], hop by hop in openCypher (one fixed
+//! single-type edge pattern per hop — see
+//! `docs/age-cypher-parity-probe.md`). Once PostgreSQL writes the graph
+//! tables, the `surreal` engine reads a frozen snapshot: a rollback for
+//! reads, not a source of truth. The endpoint names arrive inside the
+//! traversal rows either way, so a finding explains itself identically
+//! whichever engine served it.
 //!
 //! # This module only reads
 //!
@@ -70,6 +72,8 @@ use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 use String;
 
+use crate::postgres::PostgresDb;
+use crate::postgres_graph;
 use crate::relationships::{Endpoint, KIND_ADVERSE_TO};
 use crate::surreal::SurrealDb;
 
@@ -91,6 +95,12 @@ const BLOCK_FLOOR_PCT: i32 = 80;
 /// A `Block` requires the adverse counterparty to be this close — a
 /// direct or one-removed adversity. Distant adversity is a review item.
 const BLOCK_MAX_HOPS: usize = 2;
+
+/// Which engine walks the relationship graph lives beside the graph
+/// machinery it selects: [`crate::postgres_graph`] owns the engines, the
+/// flag, and the PostgreSQL-authoritative write path. Re-exported here so
+/// the conflict check's own seams keep one import path.
+pub(crate) use crate::postgres_graph::{graph_engine, GraphEngine};
 
 /// A node in the conflict graph: a typed reference to one `person` or
 /// `entity` row.
@@ -149,7 +159,7 @@ pub enum Reason {
 
 /// One conflict the check surfaced, with enough context for a lawyer to
 /// adjudicate it rather than trust it blindly.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConflictFinding {
     pub severity: Severity,
     pub reason: Reason,
@@ -162,7 +172,7 @@ pub struct ConflictFinding {
 }
 
 /// The result of a pre-matter conflict check.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConflictReport {
     pub findings: Vec<ConflictFinding>,
 }
@@ -246,8 +256,17 @@ type Labels = HashMap<NodeRef, String>;
 /// serve" side of the question, which is a matter of participations and
 /// disclosures rather than of edges.
 pub struct ConflictGraph {
-    /// The store the traversal runs against.
+    /// The Surreal store: every lookup here is a matter/participation/
+    /// disclosure read, and the `surreal` engine's traversal runs on it
+    /// too.
     graph: SurrealDb,
+    /// Which engine walks the relationship graph for this check.
+    engine: GraphEngine,
+    /// The PostgreSQL handle the `age` engine walks. `None` for `surreal`,
+    /// and an error to reach for when the flag names `age` but no
+    /// PostgreSQL is configured — a conflict check cannot silently
+    /// degrade to an empty graph.
+    postgres: Option<PostgresDb>,
     /// Entity → the distinct client DRIs of its non-archived projects.
     entity_clients: HashMap<Uuid, HashSet<Uuid>>,
     /// Persons who are the client DRI of some non-archived project.
@@ -312,11 +331,37 @@ pub async fn is_screened_client(surreal: &SurrealDb, person_id: Uuid) -> Result<
 /// first. What this loads is `projects` (who the firm currently acts for)
 /// and `disclosures`, both on the same Surreal handle the traversal uses.
 ///
+/// The graph engine comes from `NAVIGATOR_GRAPH_AUTHORITY`.
+///
 /// # Errors
 ///
 /// Returns a [`String::Custom`] if any of the matter, participation, or
-/// disclosure lookups fail.
+/// disclosure lookups fail, or the engine selection is unusable.
 pub async fn build_graph(surreal: &SurrealDb) -> Result<ConflictGraph, String> {
+    let engine = graph_engine().await?;
+    // The resolver has already settled PostgreSQL's part in this boot:
+    // under the AGE engine the pool exists (it is process-cached), under
+    // the Surreal engine — including a deployment that never configured
+    // PostgreSQL — the traversal reads Surreal only.
+    let postgres = match engine {
+        GraphEngine::Surreal => None,
+        GraphEngine::Age => Some(
+            PostgresDb::from_env()
+                .await
+                .map_err(|error| format!("connect the AGE conflict graph: {error}"))?,
+        ),
+    };
+    build_graph_with_engines(surreal, engine, postgres).await
+}
+
+/// [`build_graph`]'s body with the engine and PostgreSQL handle explicit —
+/// the seam the findings-parity tests use to run one set of lookups
+/// through each engine and compare the reports.
+pub(crate) async fn build_graph_with_engines(
+    surreal: &SurrealDb,
+    engine: GraphEngine,
+    postgres: Option<PostgresDb>,
+) -> Result<ConflictGraph, String> {
     // Who the firm currently acts for, keyed by entity. An under-inclusive
     // set here is a missed conflict, so this stays one bulk join over the
     // client-DRI markers rather than a per-project lookup.
@@ -351,6 +396,8 @@ pub async fn build_graph(surreal: &SurrealDb) -> Result<ConflictGraph, String> {
 
     Ok(ConflictGraph {
         graph: surreal.clone(),
+        engine,
+        postgres,
         entity_clients,
         client_persons,
         entity_disclosures,
@@ -464,6 +511,49 @@ fn traversal_query() -> (String, usize) {
     (statements.join("\n"), last)
 }
 
+/// The bounded traversal's SurrealQL round trip: every edge within
+/// [`MAX_HOPS`] of `anchors`, projected through [`TRAVERSAL_FIELDS`].
+async fn surreal_traversal_edges(
+    graph: &SurrealDb,
+    anchors: &[NodeRef],
+) -> Result<Vec<TraversedEdge>, String> {
+    let (query, last) = traversal_query();
+    let anchor_rows: Vec<AnchorRow> = anchors
+        .iter()
+        .map(|anchor| AnchorRow {
+            table: anchor.kind.table(),
+            id: anchor.id.to_string(),
+        })
+        .collect();
+    graph
+        .query(query)
+        .bind(("anchors", anchor_rows))
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(|err| graph_engine_error("traverse the conflict-check graph", &err))?
+        .take(last)
+        .map_err(|err| graph_engine_error("read the conflict-check traversal", &err))
+}
+
+/// An AGE traversal row read back in the traversal's own shape. The
+/// names travel with the edge in both engines' rows, so the adjacency
+/// build below is engine-blind.
+impl From<postgres_graph::TraversalEdge> for TraversedEdge {
+    fn from(row: postgres_graph::TraversalEdge) -> Self {
+        Self {
+            edge_table: row.edge_table,
+            from_table: row.from_table,
+            from_id: row.from_id,
+            from_name: row.from_name,
+            to_table: row.to_table,
+            to_id: row.to_id,
+            to_name: row.to_name,
+            kind: row.kind,
+            confidence_pct: row.confidence_pct,
+        }
+    }
+}
+
 impl ConflictGraph {
     /// Ask the engine for every edge within [`MAX_HOPS`] of `anchors`,
     /// as an undirected step list per node, plus what each reached node
@@ -477,24 +567,20 @@ impl ConflictGraph {
         &self,
         anchors: &[NodeRef],
     ) -> Result<(HashMap<NodeRef, Vec<Adjacent>>, Labels), String> {
-        let (query, last) = traversal_query();
-        let anchor_rows: Vec<AnchorRow> = anchors
-            .iter()
-            .map(|anchor| AnchorRow {
-                table: anchor.kind.table(),
-                id: anchor.id.to_string(),
-            })
-            .collect();
-
-        let mut edges: Vec<TraversedEdge> = self
-            .graph
-            .query(query)
-            .bind(("anchors", anchor_rows))
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .map_err(|err| graph_engine_error("traverse the conflict-check graph", &err))?
-            .take(last)
-            .map_err(|err| graph_engine_error("read the conflict-check traversal", &err))?;
+        let mut edges: Vec<TraversedEdge> = match self.engine {
+            GraphEngine::Surreal => surreal_traversal_edges(&self.graph, anchors).await?,
+            GraphEngine::Age => {
+                let postgres = self.postgres.as_ref().ok_or_else(|| {
+                    "the age conflict graph needs a PostgreSQL connection".to_string()
+                })?;
+                postgres_graph::conflict_traversal(postgres, anchors)
+                    .await
+                    .map_err(|err| graph_engine_error("traverse the conflict-check graph", &err))?
+                    .into_iter()
+                    .map(TraversedEdge::from)
+                    .collect()
+            }
+        };
 
         edges.sort_by(|a, b| {
             (
@@ -941,26 +1027,52 @@ pub async fn edges_among(surreal: &SurrealDb, nodes: &[NodeRef]) -> Result<Vec<E
     if nodes.is_empty() {
         return Ok(Vec::new());
     }
-    let anchor_rows: Vec<AnchorRow> = nodes
-        .iter()
-        .map(|node| AnchorRow {
-            table: node.kind.table(),
-            id: node.id.to_string(),
-        })
-        .collect();
-    let query = format!(
-        "LET $nodes = (SELECT VALUE type::record(table, <uuid> id) FROM $anchors);\n\
-         RETURN (SELECT {TRAVERSAL_FIELDS} FROM array::distinct(array::flatten((SELECT VALUE \
-         array::flatten([<->entity_role, <->relationship]) FROM $nodes))));"
-    );
-    let mut rows: Vec<TraversedEdge> = surreal
-        .query(query)
-        .bind(("anchors", anchor_rows))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|err| graph_engine_error("read the relationship graph", &err))?
-        .take(1)
-        .map_err(|err| graph_engine_error("read the relationship graph edges", &err))?;
+    // The engine is a per-process decision and this read has no
+    // `ConflictGraph` to carry it, so it is resolved here, per call —
+    // with the deployment's PostgreSQL shape, like every other dispatch.
+    let rows: Vec<TraversedEdge> = match graph_engine().await? {
+        GraphEngine::Surreal => {
+            let anchor_rows: Vec<AnchorRow> = nodes
+                .iter()
+                .map(|node| AnchorRow {
+                    table: node.kind.table(),
+                    id: node.id.to_string(),
+                })
+                .collect();
+            let query = format!(
+                "LET $nodes = (SELECT VALUE type::record(table, <uuid> id) FROM $anchors);\n\
+                 RETURN (SELECT {TRAVERSAL_FIELDS} FROM array::distinct(array::flatten((SELECT VALUE \
+                 array::flatten([<->entity_role, <->relationship]) FROM $nodes))));"
+            );
+            surreal
+                .query(query)
+                .bind(("anchors", anchor_rows))
+                .await
+                .and_then(surrealdb::IndexedResults::check)
+                .map_err(|err| graph_engine_error("read the relationship graph", &err))?
+                .take(1)
+                .map_err(|err| graph_engine_error("read the relationship graph edges", &err))?
+        }
+        GraphEngine::Age => {
+            let postgres = PostgresDb::from_env()
+                .await
+                .map_err(|error| format!("connect the AGE relationship graph: {error}"))?;
+            postgres_graph::conflict_frontier_edges(&postgres, nodes)
+                .await
+                .map_err(|err| graph_engine_error("read the relationship graph", &err))?
+                .into_iter()
+                .map(TraversedEdge::from)
+                .collect()
+        }
+    };
+    Ok(edges_among_rows(rows, nodes))
+}
+
+/// Restrict a traversal's edges to those whose both endpoints sit in
+/// `nodes`, in the stable order the matter-page graph draws — the one
+/// tail both engines share.
+fn edges_among_rows(rows: Vec<TraversedEdge>, nodes: &[NodeRef]) -> Vec<Edge> {
+    let mut rows = rows;
     rows.sort_by(|a, b| {
         (&a.edge_table, &a.from_id, &a.to_id, &a.kind).cmp(&(
             &b.edge_table,
@@ -970,8 +1082,7 @@ pub async fn edges_among(surreal: &SurrealDb, nodes: &[NodeRef]) -> Result<Vec<E
         ))
     });
     let wanted: HashSet<NodeRef> = nodes.iter().copied().collect();
-    Ok(rows
-        .into_iter()
+    rows.into_iter()
         .filter_map(|row| {
             let from = node_ref(&row.from_table, &row.from_id)?;
             let to = node_ref(&row.to_table, &row.to_id)?;
@@ -982,7 +1093,7 @@ pub async fn edges_among(surreal: &SurrealDb, nodes: &[NodeRef]) -> Result<Vec<E
                 confidence_pct: row.confidence_pct,
             })
         })
-        .collect())
+        .collect()
 }
 
 /// One edge of the conflict walk, normalized for graph-parity comparison
@@ -1044,6 +1155,10 @@ pub(crate) async fn parity_edges(
         })
         .collect())
 }
+
+#[cfg(test)]
+#[path = "conflicts_age_tests.rs"]
+mod conflicts_age_tests;
 
 #[cfg(test)]
 mod tests {

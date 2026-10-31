@@ -2858,9 +2858,15 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
         .await
         .expect("disclose logged-in lawyer to project");
 
-    c.goto(&format!("{}/app/projects/{}", base_url(), project.code))
-        .await
-        .unwrap();
+    // The ledger and its "Add person" button live on the Participants tab;
+    // the workbench opens on Overview (#176).
+    c.goto(&format!(
+        "{}/app/projects/{}?tab=participants",
+        base_url(),
+        project.code
+    ))
+    .await
+    .unwrap();
     store::projects::designate_dri_in_surreal(
         &surreal,
         project.id,
@@ -3052,9 +3058,14 @@ async fn lawyer_uploads_several_documents_at_once_from_the_project_page() {
     }
 
     login_as_lawyer(&c).await;
-    c.goto(&format!("{}/app/projects/{project_code}", base_url()))
-        .await
-        .unwrap();
+    // The upload form and the documents table live on the Documents tab; the
+    // workbench opens on Overview (#176).
+    c.goto(&format!(
+        "{}/app/projects/{project_code}?tab=documents",
+        base_url()
+    ))
+    .await
+    .unwrap();
 
     let picker = c
         .wait()
@@ -3083,8 +3094,8 @@ async fn lawyer_uploads_several_documents_at_once_from_the_project_page() {
     )
     .await;
 
-    // The handler redirects back to the project page; every file in the
-    // batch should now be its own row in the documents table.
+    // The handler redirects back to the project's Documents tab; every file
+    // in the batch should now be its own row in the documents table.
     for name in names {
         wait_for_text(&c, name, Duration::from_secs(20)).await;
     }

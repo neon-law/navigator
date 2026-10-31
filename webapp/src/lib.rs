@@ -127,6 +127,7 @@ pub mod project_new;
 pub mod project_notation;
 pub mod project_participation;
 pub mod project_resources;
+pub mod project_tasks;
 pub mod project_timeline;
 pub mod public_chrome;
 pub mod purchases;

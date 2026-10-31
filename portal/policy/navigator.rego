@@ -376,6 +376,33 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# Matter tasks: the Tasks tab's write surface. GET (list) and POST (create)
+# at /app/api/projects/{id}/tasks, and POST .../tasks/{task_id}/{assign,
+# transition}. Lawyer tier, the same gate the `LawyerSession` extractor
+# applies; the handler resolves `store::access::matter_viewer` and answers
+# 404 for a caller with no firm-side participation row, Owner and Admin
+# included.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "tasks"
+    count(input.path) == 5
+    input.method in {"GET", "POST"}
+    is_lawyer(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "tasks"
+    input.path[6] in {"assign", "transition"}
+    count(input.path) == 7
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
 # /app/api/projects/{id}/deadlines, PATCH .../deadlines/{deadline_id}, and POST
 # .../deadlines/{deadline_id}/{complete,cancel,reopen}. Lawyer tier, the same gate the
 # `LawyerSession` extractor applies; the handler repeats the matter-scope check
