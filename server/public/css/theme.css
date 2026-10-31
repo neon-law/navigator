@@ -5656,6 +5656,20 @@ a.nav-steps__step:focus-visible {
 .astro-map-line-1 { stroke: var(--nav-color-success); stroke-dasharray: 8 3; }
 .astro-map-line-2 { stroke: var(--nav-color-danger); stroke-dasharray: 3 3; }
 .astro-map-line-3 { stroke: var(--nav-color-text); stroke-dasharray: 10 3 2 3; }
+
+/* The MapLibre island. Ships empty: `:empty` hides it entirely without
+   JavaScript so the SVG frame below is the whole experience. The boot script
+   populates it, flags it data-live after a successful boot, and the frame
+   retires — the "Read the map" text alternative stays. */
+.astro-map-island { position: relative; height: min(70vh, 32rem); border: 1px solid var(--nav-color-border); border-radius: var(--nav-radius-md); margin-block: 1.5rem; overflow: hidden; }
+.astro-map-island:empty { display: none; }
+.astro-map-island__status { position: absolute; inset: auto 1rem 1rem; margin: 0; z-index: 2; background: var(--nav-color-surface); border: 1px solid var(--nav-color-border); border-radius: var(--nav-radius-sm); padding: .35rem .75rem; }
+.astro-map-island__status:empty { display: none; }
+.astro-map-island__angles, .astro-map-island__persons { position: absolute; top: .75rem; right: .75rem; z-index: 2; display: flex; flex-wrap: wrap; gap: .25rem 1rem; padding: .5rem .75rem; background: var(--nav-color-surface); border: 1px solid var(--nav-color-border); border-radius: var(--nav-radius-sm); font-size: .875rem; }
+.astro-map-island__angles label, .astro-map-island__persons label { display: inline-flex; align-items: center; gap: .4rem; min-height: 2rem; }
+.astro-map-island__angles input, .astro-map-island__persons input { accent-color: var(--nav-color-primary); }
+.astro-map-island .maplibregl-canvas:focus-visible { outline: 2px solid var(--nav-color-primary); outline-offset: -2px; }
+.astro-map-design:has(.astro-map-island[data-live="true"]) .astro-map-frame { display: none; }
 .astro-map-detail { border-left: 3px solid var(--nav-color-primary); padding: .5rem 1.25rem; background: var(--nav-color-surface-subtle); }
 .astro-map-detail h3 { margin-top: .5rem; }
 .astro-map-attribution { font-size: .85rem; color: var(--nav-color-text-muted); }

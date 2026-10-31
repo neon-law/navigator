@@ -147,6 +147,7 @@ const FIRST_PARTY_JS: &[&str] = &[
     "js/upload-progress.js",
     "js/avatar-upload.js",
     "js/project-code-live-validate.js",
+    "js/astrocartography-island.js",
     "swagger-ui/init.js",
 ];
 

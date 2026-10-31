@@ -95,3 +95,38 @@ version = "5.17.14"
 upstream_url = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14/favicon-32x32.png"
 served_path = "swagger-ui/favicon-32x32.png"
 sha256 = "3ed612f41e050ca5e7000cad6f1cbe7e7da39f65fca99c02e99e6591056e5837"
+
+# MapLibre GL JS renders the interactive astrocartography map island on the
+# design surface. The 6.x dist is ESM: the main bundle spawns
+# `maplibre-gl-worker.mjs` as a same-origin module worker resolved relative to
+# the bundle's own URL, so the site's `script-src 'self'` policy admits it with
+# no blob-worker exception. `vesta-style.json` alongside these files is
+# first-party (the map's parchment/gold style) and is waived in
+# `vendor_assets.rs`, not pinned here.
+[[asset]]
+name = "MapLibre GL JS main bundle"
+version = "6.16.0"
+upstream_url = "https://cdn.jsdelivr.net/npm/maplibre-gl@6.16.0/dist/maplibre-gl.mjs"
+served_path = "vendor/maplibre/maplibre-gl.mjs"
+sha256 = "fbbdf8ddd9a48e49059a4be6795a4f214a711314bb5809f72d3730b48e7897e3"
+
+[[asset]]
+name = "MapLibre GL JS worker"
+version = "6.16.0"
+upstream_url = "https://cdn.jsdelivr.net/npm/maplibre-gl@6.16.0/dist/maplibre-gl-worker.mjs"
+served_path = "vendor/maplibre/maplibre-gl-worker.mjs"
+sha256 = "0bf06492bdb7ba3d4132b78e435621bfba60d5250967991c02b1a73affea8cd5"
+
+[[asset]]
+name = "MapLibre GL JS CSS"
+version = "6.16.0"
+upstream_url = "https://cdn.jsdelivr.net/npm/maplibre-gl@6.16.0/dist/maplibre-gl.css"
+served_path = "vendor/maplibre/maplibre-gl.css"
+sha256 = "a90798a1953017790e590f7e1bd35ff103a8a4263972cb47290b78adf86f8c20"
+
+[[asset]]
+name = "MapLibre BSD-3-Clause license"
+version = "6.16.0"
+upstream_url = "https://cdn.jsdelivr.net/npm/maplibre-gl@6.16.0/LICENSE.txt"
+served_path = "vendor/maplibre/LICENSE.txt"
+sha256 = "ee5fc05a0677eaf69601d2c7db0d9ecd6cc27c3abc1d0733bc9ed34707cf8ef2"
