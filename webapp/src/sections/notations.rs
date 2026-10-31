@@ -308,7 +308,7 @@ enum BodyFailure {
 /// completed `store::signatures` row whose `signed_at` the completion
 /// webhook stamped — never from storage presence or workflow state (the
 /// ENG-421 rule: an object at the signed key with no signature record is
-/// not an execution). The two links read only from the CompletedDocuments
+/// not an execution). The two links read only from the `CompletedDocuments`
 /// archive that same webhook wrote, so a link only renders when its
 /// document is actually on file. `None` while the envelope is live,
 /// declined, or never sent: the seal renders after the envelope completes,
@@ -1142,7 +1142,7 @@ Later prose is outside the table.",
 
     /// The payload the completion webhook classifies as executed, and the
     /// evidence its classification leaves behind: a completed `signature`
-    /// row stamped with `signed_at`, plus the CompletedDocuments — the
+    /// row stamped with `signed_at`, plus the `CompletedDocuments` — the
     /// signed PDF and the Certificate of Completion — archived to object
     /// storage. This is the payload shape `portal/src/esignature_webhook.rs`
     /// parses on `/webhook/esignature/:secret`; the test applies exactly

@@ -3,7 +3,7 @@
 //!
 //! The completion webhook (`portal/src/esignature_webhook.rs`) classifies
 //! the provider's callback, stamps `signed_at` on the Notation's
-//! `signature` row, and archives the CompletedDocuments — the signed PDF
+//! `signature` row, and archives the `CompletedDocuments` — the signed PDF
 //! and the Certificate of Completion, the ESIGN record — into object
 //! storage. This component renders exactly those facts and nothing else:
 //! it is never built from storage presence or workflow state alone, so it
@@ -96,7 +96,7 @@ mod tests {
     /// The fixture webhook payload the completion webhook classifies, and
     /// the seal facts its classification leaves behind: the completed
     /// `signature` row (stamped `signed_at`) and the two archived
-    /// CompletedDocuments. This is the payload shape
+    /// `CompletedDocuments`. This is the payload shape
     /// `portal/src/esignature_webhook.rs` parses on
     /// `/webhook/esignature/:secret`.
     const FIXTURE_COMPLETED_WEBHOOK: &str = r#"{
