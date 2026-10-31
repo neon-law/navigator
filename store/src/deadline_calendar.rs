@@ -336,6 +336,20 @@ pub fn report_line(report: &MirrorReport) -> String {
     line
 }
 
+/// The fixed category-to-Google-Calendar-color map. Every matter calendar
+/// renders the same category in the same color; a row without a category
+/// (or with an unknown one) leaves the calendar's default color.
+#[must_use]
+pub fn category_color(category: Option<&str>) -> Option<&'static str> {
+    match category {
+        Some("court") => Some("11"),    // Tomato.
+        Some("hearing") => Some("3"),   // Grape.
+        Some("discovery") => Some("5"), // Banana.
+        Some("internal") => Some("8"),  // Graphite.
+        _ => None,
+    }
+}
+
 /// The event a Deadline renders to, on the ICS feed's field basis.
 ///
 /// # Errors
@@ -352,6 +366,7 @@ pub fn deadline_event(
         summary: event_summary(deadline, project_code),
         description: Some(event_description(deadline, project_code, base_url)),
         location: None,
+        color_id: category_color(deadline.category.as_deref()).map(str::to_string),
         start,
         sequence: event_sequence(deadline)?,
         cancelled: deadline.status == project_deadlines::STATUS_CANCELLED,
@@ -480,6 +495,7 @@ pub fn body_sha(deadline: &Deadline, project_code: &str, base_url: Option<&str>)
         "authority_kind": deadline.authority_kind,
         "authority": deadline.authority,
         "calendar_role": deadline.calendar_role,
+        "category": deadline.category,
         "status": deadline.status,
         "source_document_id": deadline.source_document_id.map(|id| id.to_string()),
         "internal_lead_days": deadline.internal_lead_days,
@@ -497,8 +513,8 @@ pub fn body_sha(deadline: &Deadline, project_code: &str, base_url: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::{
-        body_sha, deadline_event, event_sequence, event_summary, reconcile, report_line,
-        BODY_SHA_KEY, DEADLINE_ID_KEY, MARKER_KEY, MARKER_VALUE,
+        body_sha, category_color, deadline_event, event_sequence, event_summary, reconcile,
+        report_line, BODY_SHA_KEY, DEADLINE_ID_KEY, MARKER_KEY, MARKER_VALUE,
     };
     use crate::project_deadlines::{self, NewDeadline};
     use crate::projects::{create as create_project, NewProject};
@@ -520,6 +536,7 @@ mod tests {
             source_document_id: None,
             owner_person_id: None,
             calendar_role: "firm".into(),
+            category: Some("court".into()),
             internal_lead_days: Some(7),
             client_lead_days: None,
             replay_key: None,
@@ -556,6 +573,43 @@ mod tests {
         .await
         .unwrap()
         .id
+    }
+
+    #[test]
+    fn each_category_has_its_fixed_color_and_nothing_else_does() {
+        assert_eq!(category_color(Some("court")), Some("11"));
+        assert_eq!(category_color(Some("hearing")), Some("3"));
+        assert_eq!(category_color(Some("discovery")), Some("5"));
+        assert_eq!(category_color(Some("internal")), Some("8"));
+        assert_eq!(category_color(None), None);
+        assert_eq!(category_color(Some("filing")), None);
+    }
+
+    #[tokio::test]
+    async fn a_mirrored_event_carries_its_category_color() {
+        let surreal = mem_surreal().await;
+        let project_id = project(&surreal).await;
+        let created = project_deadlines::create(&surreal, &sample(project_id))
+            .await
+            .unwrap();
+        let event = deadline_event(&created, "mirror-code", None).unwrap();
+        assert_eq!(event.color_id.as_deref(), Some("11"));
+
+        // A row whose category is cleared mirrors without a color, leaving
+        // the calendar's default.
+        let cleared = project_deadlines::update(
+            &surreal,
+            project_id,
+            created.id,
+            &project_deadlines::DeadlinePatch {
+                category: Some(None),
+                ..project_deadlines::DeadlinePatch::default()
+            },
+        )
+        .await
+        .unwrap();
+        let event = deadline_event(&cleared, "mirror-code", None).unwrap();
+        assert_eq!(event.color_id, None);
     }
 
     #[tokio::test]
@@ -945,6 +999,7 @@ mod tests {
             owner_person_id: deadline.owner_person_id,
             status: project_deadlines::STATUS_OPEN.into(),
             calendar_role: deadline.calendar_role.clone(),
+            category: deadline.category.clone(),
             internal_lead_days: deadline.internal_lead_days,
             client_lead_days: deadline.client_lead_days,
             replay_key: deadline.replay_key,
