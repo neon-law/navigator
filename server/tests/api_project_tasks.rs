@@ -104,13 +104,47 @@ struct Fixture {
 }
 
 async fn seed_matter(surreal: &store::surreal::SurrealDb, code: &str) -> Uuid {
+    // `seed_entity` deliberately points its `entity_type_id` and
+    // `jurisdiction_id` at rows that exist nowhere: SurrealDB does not
+    // validate a link. PostgreSQL does, so the pre-command mirror would
+    // refuse the matter's entity — finding no source row for either
+    // reference — and every task door would answer 503. The fixture
+    // therefore resolves real identity rows, exactly as a production
+    // matter carries.
+    let jurisdiction = store::jurisdictions::create(
+        surreal,
+        &store::jurisdictions::NewJurisdiction::new(
+            format!("Test Jurisdiction {code}"),
+            format!("tj-{}", Uuid::now_v7().simple()),
+            "state",
+        ),
+    )
+    .await
+    .unwrap();
+    let entity_type = store::entity_types::create(surreal, &format!("Test Entity Type {code}"))
+        .await
+        .unwrap();
+    let entity = store::entities::create(
+        surreal,
+        &store::entities::NewEntity {
+            name: format!("Matter Entity {code}"),
+            entity_type_id: entity_type.id,
+            jurisdiction_id: jurisdiction.id,
+            phone: None,
+            url: None,
+            xero_id: None,
+            firm_anchor_key: None,
+        },
+    )
+    .await
+    .unwrap();
     let project = store::projects::create(
         surreal,
         &store::projects::NewProject {
             code: code.to_string(),
             name: "Matter".into(),
             status: "open".into(),
-            entity_id: store::test_support::seed_entity(surreal).await,
+            entity_id: entity.id,
             ..Default::default()
         },
     )
@@ -130,9 +164,14 @@ async fn build_fixture() -> Fixture {
     );
     let project_id = seed_matter(&surreal, &format!("matter-{}", Uuid::now_v7())).await;
     let other_project_id = seed_matter(&surreal, &format!("other-{}", Uuid::now_v7())).await;
+    let run = Uuid::now_v7().simple();
     let lawyer = store::persons::create(
         &surreal,
-        &store::persons::NewPerson::with_role("Lawyer", "lawyer@example.com", Role::Lawyer),
+        &store::persons::NewPerson::with_role(
+            "Lawyer",
+            &format!("lawyer-{run}@example.com"),
+            Role::Lawyer,
+        ),
     )
     .await
     .unwrap();
@@ -144,7 +183,11 @@ async fn build_fixture() -> Fixture {
         .unwrap();
     let client = store::persons::create(
         &surreal,
-        &store::persons::NewPerson::with_role("Client", "client@example.com", Role::Client),
+        &store::persons::NewPerson::with_role(
+            "Client",
+            &format!("client-{run}@example.com"),
+            Role::Client,
+        ),
     )
     .await
     .unwrap();
@@ -153,13 +196,21 @@ async fn build_fixture() -> Fixture {
         .unwrap();
     let outsider = store::persons::create(
         &surreal,
-        &store::persons::NewPerson::with_role("Outsider", "outsider@example.com", Role::Lawyer),
+        &store::persons::NewPerson::with_role(
+            "Outsider",
+            &format!("outsider-{run}@example.com"),
+            Role::Lawyer,
+        ),
     )
     .await
     .unwrap();
     let clerk = store::persons::create(
         &surreal,
-        &store::persons::NewPerson::with_role("Clerk", "clerk@example.com", Role::Clerk),
+        &store::persons::NewPerson::with_role(
+            "Clerk",
+            &format!("clerk-{run}@example.com"),
+            Role::Clerk,
+        ),
     )
     .await
     .unwrap();
