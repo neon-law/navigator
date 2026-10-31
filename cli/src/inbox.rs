@@ -241,7 +241,10 @@ async fn process(
 
 #[cfg(test)]
 mod tests {
-    use super::{list_request, process_body, process_request, ProcessApplyView};
+    use super::{
+        finish, list_request, process_body, process_request, run, InboxAction, ProcessApplyView,
+    };
+    use crate::credentials::{Credentials, HostCredential};
     use reqwest::Method;
     use uuid::Uuid;
 
@@ -300,5 +303,203 @@ mod tests {
         assert!(!apply.already_recorded);
         assert_eq!(apply.slack_notice, "notified");
         assert_eq!(apply.result.computed_route, "nef");
+    }
+
+    /// Env mutation for the credentials file is process-global; serialize the
+    /// mocked-door tests so parallel runs cannot race the override. A tokio
+    /// mutex guards across the awaits the verbs perform.
+    static CREDENTIALS_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    fn credentials_previous() -> String {
+        std::env::var("NAVIGATOR_CREDENTIALS_FILE")
+            .ok()
+            .unwrap_or_default()
+    }
+
+    /// Serve one canned HTTP response on a loopback port and return the base
+    /// URL the verb should be pointed at. The verb opens exactly one request
+    /// against it, so a single accept is the whole server.
+    async fn serve_once(status_line: &str, body: String) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let status_line = status_line.to_owned();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf).await;
+            let http = format!(
+                "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: \
+                 {}\r\nconnection: close\r\n\r\n{body}",
+                body.len(),
+            );
+            socket.write_all(http.as_bytes()).await.unwrap();
+            socket.shutdown().await.unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    /// Store a current login for the base and point the credentials path at
+    /// the file, restoring whatever the environment carried before.
+    fn stored_login(base: &str) {
+        // The directory must outlive the test's reads; leak it deliberately
+        // (a handful of synthetic-credential files in /tmp per test run).
+        let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+        let path = dir.path().join("navigator.json");
+        let mut creds = Credentials::default();
+        creds.set(
+            base,
+            HostCredential {
+                token: "synthetic-token".into(),
+                person_email: Some("lawyer@neonlaw.com".into()),
+                role: Some("lawyer".into()),
+                expires_at: 1_900_000_000,
+            },
+        );
+        crate::credentials::save(&path, &creds).unwrap();
+        std::env::set_var("NAVIGATOR_CREDENTIALS_FILE", path);
+    }
+
+    fn restore_credentials(previous: String) {
+        if previous.is_empty() {
+            std::env::remove_var("NAVIGATOR_CREDENTIALS_FILE");
+        } else {
+            std::env::set_var("NAVIGATOR_CREDENTIALS_FILE", previous);
+        }
+    }
+
+    const BACKLOG_JSON: &str = r#"[{
+        "id": "00000000-0000-0000-0000-000000000007",
+        "conversation_id": "00000000-0000-0000-0000-000000000001",
+        "channel": "email",
+        "provider_message_id": "<caf@example.test>",
+        "external_address": "ecf@example.test",
+        "subject": "Notice of Electronic Filing",
+        "computed_route": "nef",
+        "computed_label": "NEF",
+        "reason": "the subject says NOTICE of ELECTRONIC FILING",
+        "recorded_route": null,
+        "recorded_at": null,
+        "project_id": null,
+        "occurred_at": "2026-10-31T12:00:00Z",
+        "inserted_at": "2026-10-31T12:00:00Z"
+    }]"#;
+
+    /// The process door's plan response: one message's view, never an array.
+    const PLAN_JSON: &str = r#"{
+        "id": "00000000-0000-0000-0000-000000000007",
+        "conversation_id": "00000000-0000-0000-0000-000000000001",
+        "channel": "email",
+        "provider_message_id": "<caf@example.test>",
+        "external_address": "ecf@example.test",
+        "subject": "Notice of Electronic Filing",
+        "computed_route": "nef",
+        "computed_label": "NEF",
+        "reason": "the subject says NOTICE of ELECTRONIC FILING",
+        "recorded_route": null,
+        "recorded_at": null,
+        "project_id": null,
+        "occurred_at": "2026-10-31T12:00:00Z",
+        "inserted_at": "2026-10-31T12:00:00Z"
+    }"#;
+
+    #[tokio::test]
+    async fn list_prints_the_backlog_from_a_mocked_door() {
+        let _lock = CREDENTIALS_LOCK.lock().await;
+        let previous = credentials_previous();
+        let base = serve_once("200 OK", BACKLOG_JSON.to_owned()).await;
+        stored_login(&base);
+
+        let exit = run(InboxAction::List { host: Some(base) }).await;
+
+        assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        restore_credentials(previous);
+    }
+
+    #[tokio::test]
+    async fn a_plan_against_a_mocked_door_stops_dry() {
+        let _lock = CREDENTIALS_LOCK.lock().await;
+        let previous = credentials_previous();
+        let base = serve_once("200 OK", PLAN_JSON.to_owned()).await;
+        stored_login(&base);
+
+        let exit = run(InboxAction::Process {
+            message: Uuid::from_u128(7),
+            apply: false,
+            gmail: None,
+            host: Some(base),
+        })
+        .await;
+
+        assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        restore_credentials(previous);
+    }
+
+    #[tokio::test]
+    async fn an_apply_against_a_mocked_door_records_and_leaves_gmail_alone() {
+        let _lock = CREDENTIALS_LOCK.lock().await;
+        let previous = credentials_previous();
+        let apply_json = r#"{
+            "result": {
+                "id": "00000000-0000-0000-0000-000000000007",
+                "conversation_id": "00000000-0000-0000-0000-000000000001",
+                "channel": "email",
+                "provider_message_id": "<caf@example.test>",
+                "external_address": "ecf@example.test",
+                "subject": "Notice of Electronic Filing",
+                "computed_route": "nef",
+                "computed_label": "NEF",
+                "reason": "the subject says NOTICE of ELECTRONIC FILING",
+                "recorded_route": "nef",
+                "recorded_at": "2026-10-31T12:00:00Z",
+                "project_id": null,
+                "occurred_at": "2026-10-31T12:00:00Z",
+                "inserted_at": "2026-10-31T12:00:00Z"
+            },
+            "route": "nef",
+            "route_label": "NEF",
+            "reason": "the subject says NOTICE of ELECTRONIC FILING",
+            "recorded_at": "2026-10-31T12:00:00Z",
+            "already_recorded": false,
+            "slack_notice": "no_project"
+        }"#;
+        let base = serve_once("200 OK", apply_json.to_owned()).await;
+        stored_login(&base);
+
+        let exit = run(InboxAction::Process {
+            message: Uuid::from_u128(7),
+            apply: true,
+            gmail: None,
+            host: Some(base),
+        })
+        .await;
+
+        assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        restore_credentials(previous);
+    }
+
+    #[tokio::test]
+    async fn a_refusing_door_fails_the_verb() {
+        let _lock = CREDENTIALS_LOCK.lock().await;
+        let previous = credentials_previous();
+        let base = serve_once("403 Forbidden", r#"{"error":"denied"}"#.to_owned()).await;
+        stored_login(&base);
+
+        let exit = run(InboxAction::Process {
+            message: Uuid::from_u128(7),
+            apply: false,
+            gmail: None,
+            host: Some(base),
+        })
+        .await;
+
+        assert_eq!(exit, std::process::ExitCode::FAILURE);
+        restore_credentials(previous);
+    }
+
+    #[test]
+    fn finish_reports_a_failed_run() {
+        let exit = finish(Err(anyhow::anyhow!("synthetic failure")));
+        assert_eq!(exit, std::process::ExitCode::FAILURE);
     }
 }
