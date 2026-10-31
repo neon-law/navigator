@@ -82,6 +82,7 @@ pub mod harvard_outline;
 pub mod home;
 pub mod html_escape;
 pub mod inbox;
+pub mod inbox_triage;
 pub mod intake_review;
 pub mod keyboard;
 pub mod lawyer_dashboard;

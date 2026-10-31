@@ -267,6 +267,22 @@ pub fn routes(
             post(crate::inbox::assign_post),
         )
         .route(
+            "/app/inbox/{conversation_id}/triage/{triage_id}/confirm/{project_id}",
+            post(crate::inbox::triage_confirm_post),
+        )
+        .route(
+            "/app/inbox/{conversation_id}/triage/{triage_id}/override",
+            post(crate::inbox::triage_override_post),
+        )
+        .route(
+            "/app/inbox/{conversation_id}/triage/{triage_id}/resolve",
+            post(crate::inbox::triage_resolve_post),
+        )
+        .route(
+            "/app/inbox/{conversation_id}/triage/{triage_id}/rerun",
+            post(crate::inbox::triage_rerun_post),
+        )
+        .route(
             "/app/owner/inbox/{conversation_id}/assign",
             post(crate::inbox::assign_post),
         )

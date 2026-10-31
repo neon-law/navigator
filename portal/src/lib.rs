@@ -1041,6 +1041,12 @@ pub fn bootstrap_with_forgejo_oidc(
         state.auth.clone(),
         state.surreal.clone(),
     );
+    let dioxus_triage_queue = dioxus_app::triage_queue_router(
+        state.sessions.clone(),
+        state.policy.clone(),
+        state.auth.clone(),
+        state.surreal.clone(),
+    );
     let dioxus_owner_inbox_thread = dioxus_app::owner_inbox_thread_router(
         state.sessions.clone(),
         state.policy.clone(),
@@ -2006,6 +2012,7 @@ pub fn bootstrap_with_forgejo_oidc(
         dioxus_app_owner,
         dioxus_deployment_keys,
         dioxus_owner_inbox,
+        dioxus_triage_queue,
         dioxus_owner_inbox_thread,
         dioxus_project_inbox,
         dioxus_project_inbox_thread,

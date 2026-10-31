@@ -4410,6 +4410,25 @@ pub fn owner_inbox_router(
     ))
 }
 
+/// `/app/inbox/triage` — the human-review queue over `NeedsHuman` and
+/// `Suggested` triage rows. Same admission as the rest of `/app/inbox`:
+/// Owner, Admin, Lawyer, and Clerk; the store re-checks the actor.
+pub fn triage_queue_router(
+    sessions: crate::session::SessionStore,
+    policy: crate::policy::PolicyClient,
+    auth: crate::auth::AuthConfig,
+    surreal: store::surreal::SurrealDb,
+) -> Router {
+    csrf_page_router(
+        webapp::inbox_triage::TRIAGE_QUEUE_PATH,
+        webapp::inbox_triage::TriageQueue,
+        surreal,
+        sessions,
+        policy,
+        auth,
+    )
+}
+
 /// `/app/inbox/{conversation_id}`.
 pub fn owner_inbox_thread_router(
     sessions: crate::session::SessionStore,
