@@ -291,6 +291,10 @@ impl Drop for BrowserSession {
 
 /// A `WebDriver` cookie as the fantoccini client reports it, reduced to the
 /// persisted subset.
+// The method path (`cookie::expiration::Expiration::datetime`) would name the
+// `cookie` crate, which is fantoccini's implementation detail, not a direct
+// dependency — so the closure form stays.
+#[allow(clippy::redundant_closure_for_method_calls)]
 fn persisted_cookie(cookie: &Cookie<'_>) -> PersistedCookie {
     PersistedCookie {
         name: cookie.name().to_owned(),
@@ -300,7 +304,7 @@ fn persisted_cookie(cookie: &Cookie<'_>) -> PersistedCookie {
         secure: cookie.secure(),
         expiry: cookie
             .expires()
-            .and_then(cookie::expiration::Expiration::datetime)
+            .and_then(|expires| expires.datetime())
             .and_then(|at| u64::try_from(at.unix_timestamp()).ok()),
     }
 }

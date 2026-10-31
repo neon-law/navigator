@@ -188,7 +188,7 @@ impl InboxIntake for UnwiredIntake {
 
 #[cfg(test)]
 mod tests {
-    use super::{IntakeError, RecordingIntake, ScrapedDocument};
+    use super::{InboxIntake, IntakeError, RecordingIntake, ScrapedDocument};
     use crate::scraper::adapter::{NoticeRef, SiteKey};
 
     fn site() -> SiteKey {

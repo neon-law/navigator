@@ -110,36 +110,27 @@ impl MockAdapter {
 
     /// Replace the login script; consumed front-to-back, one step per
     /// call, and an exhausted script means success.
-    #[must_use]
-    pub(crate) fn login_script(mut self, steps: Vec<LoginStep>) -> Self {
+    pub(crate) fn login_script(&mut self, steps: Vec<LoginStep>) {
         if let Ok(mut core) = self.core.lock() {
             core.login_script = steps.into();
         }
-        self
     }
 
     /// Replace the notices script; entries are returned verbatim, one per
     /// call, without touching the fetcher.
-    #[must_use]
-    pub(crate) fn notices_script(
-        mut self,
-        results: Vec<Result<Vec<NoticeRef>, AdapterError>>,
-    ) -> Self {
+    pub(crate) fn notices_script(&mut self, results: Vec<Result<Vec<NoticeRef>, AdapterError>>) {
         if let Ok(mut core) = self.core.lock() {
             core.notices_script = results.into();
         }
-        self
     }
 
     /// Replace the download script; each download call consumes one
     /// attempt (a Vec of steps), and an exhausted script falls through to
     /// the fetch path.
-    #[must_use]
-    pub(crate) fn download_script(mut self, attempts: Vec<Vec<DownloadStep>>) -> Self {
+    pub(crate) fn download_script(&mut self, attempts: Vec<Vec<DownloadStep>>) {
         if let Ok(mut core) = self.core.lock() {
             core.download_script = attempts.into();
         }
-        self
     }
 
     /// How many times `login` ran.
@@ -249,7 +240,7 @@ impl SiteAdapter for MockAdapter {
             core.download_calls += 1;
             core.download_script.pop_front()
         };
-        let mut scripted = attempt.unwrap_or_default();
+        let scripted = attempt.unwrap_or_default();
         for step in &scripted {
             match step {
                 DownloadStep::Chunk(bytes) => sink
@@ -340,6 +331,7 @@ impl MockFetcher {
     }
 }
 
+#[async_trait::async_trait]
 impl HttpFetcher for MockFetcher {
     async fn fetch(&self, request: &FetchRequest) -> Result<FetchResponse, FetchError> {
         if let Ok(mut requests) = self.requests.lock() {
@@ -421,7 +413,7 @@ pub(crate) async fn seeded_firm_with_admin(
     )
     .await
     .expect("seed the firm admin");
-    let firm_id = store::firms::create(
+    let firm = store::firms::create(
         surreal,
         &store::firms::NewFirm {
             name: format!("Scraper Firm {}", uuid::Uuid::now_v7()),
@@ -432,7 +424,7 @@ pub(crate) async fn seeded_firm_with_admin(
     )
     .await
     .expect("seed the firm");
-    (firm_id, admin.id)
+    (firm.id, admin.id)
 }
 
 /// Store the Firm's `CourtPortal`/`PortalLogin` secret — one JSON body

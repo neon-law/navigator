@@ -238,7 +238,7 @@ mod tests {
         let logins = parse_portal_logins(&serde_json::from_str(LA_SUPERIOR).expect("valid json"))
             .expect("a valid payload");
         let error = logins.login_for("pacer").expect_err("no pacer entry");
-        assert!(matches!(error, CredentialsError::NotProvisioned { key } if key == "pacer"));
+        assert!(matches!(error, CredentialsError::NotProvisioned { ref key } if key == "pacer"));
         assert!(error.to_string().contains("`pacer`"));
     }
 

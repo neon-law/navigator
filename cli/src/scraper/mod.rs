@@ -537,7 +537,6 @@ mod tests {
     }
 
     fn deps(fixture: &Fixture) -> ScraperDeps<'_> {
-        let site_dir = fixture.site_dir();
         ScraperDeps {
             sessions: &fixture.factory,
             surreal: &fixture.surreal,
@@ -699,7 +698,12 @@ mod tests {
         assert_eq!(received[0].bytes, b"first-half-second-half".to_vec());
         let mut hasher = Sha256::new();
         hasher.update(b"first-half-second-half");
-        assert_eq!(received[0].sha256, format!("{:x}", hasher.finalize()));
+        let expected: String = hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(received[0].sha256, expected);
         assert_eq!(
             report.enqueued[0].key, "la-superior/0004/4",
             "the notice key is stable and visible in the report"
