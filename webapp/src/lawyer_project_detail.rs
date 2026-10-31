@@ -1573,6 +1573,13 @@ pub fn LawyerProjectDetail() -> Element {
                     a { class: "nav-link", href: "/app/projects/{view.code}/edit", "Edit project" }
                     " · "
                     a { class: "nav-link", href: "/app/projects/{view.code}/notations/new", "New notation" }
+                    if view.role.is_lawyer_tier() {
+                        " · "
+                        // The conflict check, made visible: the matter's
+                        // relationship-graph page, fed by the read-only
+                        // graph door.
+                        a { class: "nav-link", href: "/app/projects/{view.code}/graph", "Relationship graph" }
+                    }
                 }
                 form {
                     class: "lawyer-detail__inline-form",
