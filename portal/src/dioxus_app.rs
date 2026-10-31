@@ -626,9 +626,10 @@ pub fn font_head(key: views::brand::BrandKey) -> &'static str {
             &CYBER_INJURY_HEAD
         }
         // IEP Defenders pairs the same serif display / sans body faces as
-        // Misericordia, so the brand shares Misericordia's head fragment
-        // (matched separately above).
-        views::brand::BrandKey::IepDefenders => &MISERICORDIA_HEAD,
+        // Misericordia, so the brand shares Misericordia's head fragment.
+        views::brand::BrandKey::Misericordia | views::brand::BrandKey::IepDefenders => {
+            &MISERICORDIA_HEAD
+        }
     }
 }
 
