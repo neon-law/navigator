@@ -5045,6 +5045,7 @@ async fn eml_upload_door(
     Path(id): Path<Uuid>,
     Json(input): Json<EmlUploadRequest>,
 ) -> Result<Response, ApiError> {
+    use base64::Engine as _;
     let in_scope = store::access::can_see_project_as_lawyer(
         &state.surreal,
         lawyer.0.person_id,
@@ -5056,15 +5057,11 @@ async fn eml_upload_door(
     if !in_scope {
         return Err(ApiError::NotFound);
     }
-    use base64::Engine as _;
-    let raw = match base64::engine::general_purpose::STANDARD.decode(input.raw_base64.trim()) {
-        Ok(raw) => raw,
-        Err(_) => {
-            return Ok(bad_request(
-                "not_base64",
-                "raw_base64 must be the raw .eml message, base64-encoded.",
-            ));
-        }
+    let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(input.raw_base64.trim()) else {
+        return Ok(bad_request(
+            "not_base64",
+            "raw_base64 must be the raw .eml message, base64-encoded.",
+        ));
     };
     let parsed = match crate::eml_filing::parse_eml(&raw, input.mailbox.as_deref()) {
         Ok(parsed) => parsed,
@@ -5118,6 +5115,21 @@ async fn eml_upload_door(
         )
             .into_response());
     }
+    file_parsed_eml(&state, id, &lawyer, parsed, kind, visibility, attachments).await
+}
+
+/// The filing half of the .eml door: ingest the parsed message as a
+/// Communication, file its attachments, and report the outcome. Validation
+/// and the dry-run report stay in the handler above.
+async fn file_parsed_eml(
+    state: &ApiState,
+    project_id: Uuid,
+    lawyer: &LawyerSession,
+    parsed: crate::eml_filing::ParsedEml,
+    kind: Option<&str>,
+    visibility: &'static str,
+    attachments: Vec<EmlUploadAttachment>,
+) -> Result<Response, ApiError> {
     let (channel, direction) = if parsed.direction == "outbound" {
         (
             store::communications::channel::EMAIL_OUTBOUND,
@@ -5138,7 +5150,7 @@ async fn eml_upload_door(
     let ingested = store::communications::ingest_email(
         &state.surreal,
         &store::communications::IngestArgs {
-            project_id: id,
+            project_id,
             channel,
             direction,
             author_person_id: Some(author_person_id),
@@ -5153,7 +5165,9 @@ async fn eml_upload_door(
     )
     .await
     .map_err(crate::communications_api::map_communication)?;
-    let filed = if has_attachments {
+    let filed = if parsed.attachments.is_empty() {
+        Vec::new()
+    } else {
         let message_id_slug: String = parsed
             .message_ref
             .chars()
@@ -5167,8 +5181,8 @@ async fn eml_upload_door(
             .collect();
         let kind = kind.expect("invariant: kind_required returned early without one");
         file_mail_attachments(
-            &state,
-            id,
+            state,
+            project_id,
             kind,
             visibility,
             &MailAttachmentSource {
@@ -5180,8 +5194,6 @@ async fn eml_upload_door(
             &parsed.attachments,
         )
         .await?
-    } else {
-        Vec::new()
     };
     let status = if ingested.deduped {
         StatusCode::OK
@@ -9022,19 +9034,19 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         .await
         .expect("a lawyer on the matter can file a raw .eml");
 
-        assert_eq!(response.status(), StatusCode::CREATED, "{response:?}");
+        assert_eq!(response.status(), StatusCode::CREATED);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["source_ref"], "eml:abc-123@example.test", "{json}");
-        assert_eq!(json["direction"], "inbound", "{json}");
-        assert_eq!(json["deduped"], false, "{json}");
-        assert!(json["communication_id"].is_string(), "{json}");
+        assert_eq!(json["source_ref"], "eml:abc-123@example.test");
+        assert_eq!(json["direction"], "inbound");
+        assert_eq!(json["deduped"], false);
+        assert!(json["communication_id"].is_string());
         let filed = store::communications::for_project(&db, project_id)
             .await
             .unwrap();
-        assert_eq!(filed.len(), 1, "{filed:?}");
+        assert_eq!(filed.len(), 1);
         assert_eq!(
             filed[0].source_ref.as_deref(),
             Some("eml:abc-123@example.test")
@@ -9060,7 +9072,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             )
             .await
             .expect("each upload of the same message succeeds");
-            assert_eq!(response.status(), expected_status, "{response:?}");
+            assert_eq!(response.status(), expected_status);
             let body = axum::body::to_bytes(response.into_body(), usize::MAX)
                 .await
                 .unwrap();
@@ -9068,13 +9080,13 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             assert_eq!(
                 json["deduped"],
                 expected_status == StatusCode::OK,
-                "the replay is the deduped one: {json}"
+                "the replay is the deduped one"
             );
         }
         let filed = store::communications::for_project(&db, project_id)
             .await
             .unwrap();
-        assert_eq!(filed.len(), 1, "the replay wrote no second row: {filed:?}");
+        assert_eq!(filed.len(), 1, "the replay wrote no second row");
     }
 
     #[tokio::test]
@@ -9100,20 +9112,20 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
                 .unwrap();
             let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
             let filed = json["filed"].as_array().expect("filed array");
-            assert_eq!(filed.len(), 1, "one pointer per attachment: {json}");
+            assert_eq!(filed.len(), 1, "one pointer per attachment");
             assert_eq!(
                 filed[0]["current_version"]["version"], 1,
-                "the replay filed no second revision: {json}"
+                "the replay filed no second revision"
             );
-            assert_eq!(json["attachments"][0]["filename"], "order.pdf", "{json}");
+            assert_eq!(json["attachments"][0]["filename"], "order.pdf");
             if round == 0 {
-                assert_eq!(status, StatusCode::CREATED, "{json}");
+                assert_eq!(status, StatusCode::CREATED);
                 first = Some(filed[0]["current_version"]["asset_id"].clone());
             } else {
-                assert_eq!(status, StatusCode::OK, "{json}");
+                assert_eq!(status, StatusCode::OK);
                 assert_eq!(
                     json["deduped"], true,
-                    "the replay dedupes the communication: {json}"
+                    "the replay dedupes the communication"
                 );
                 assert_eq!(
                     filed[0]["current_version"]["asset_id"],
@@ -9125,7 +9137,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         let filed = store::communications::for_project(&db, project_id)
             .await
             .unwrap();
-        assert_eq!(filed.len(), 1, "the replay wrote no second row: {filed:?}");
+        assert_eq!(filed.len(), 1, "the replay wrote no second row");
     }
 
     #[tokio::test]
@@ -9148,16 +9160,16 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         .await
         .expect("a dry run succeeds");
 
-        assert_eq!(response.status(), StatusCode::OK, "{response:?}");
+        assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["communication_id"], serde_json::Value::Null, "{json}");
-        assert_eq!(json["attachments"][0]["filename"], "order.pdf", "{json}");
+        assert_eq!(json["communication_id"], serde_json::Value::Null);
+        assert_eq!(json["attachments"][0]["filename"], "order.pdf");
         assert!(
             json["filed"].as_array().unwrap().is_empty(),
-            "a dry run files nothing: {json}"
+            "a dry run files nothing"
         );
         assert!(
             store::communications::for_project(&db, project_id)
@@ -9195,12 +9207,12 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         .await
         .expect("the request is well-formed; the refusal is the body");
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{response:?}");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["error"], "kind_required", "{json}");
+        assert_eq!(json["error"], "kind_required");
     }
 
     #[tokio::test]
@@ -9219,7 +9231,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         )
         .await;
 
-        assert!(matches!(response, Err(ApiError::NotFound)), "{response:?}");
+        assert!(matches!(response, Err(ApiError::NotFound)));
     }
 
     #[test]

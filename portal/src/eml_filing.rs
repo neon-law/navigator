@@ -164,7 +164,7 @@ fn from_address(address: Option<&mail_parser::Address<'_>>) -> String {
     };
     addrs
         .iter()
-        .find_map(|addr| addr.address().map(|a| a.to_ascii_lowercase()))
+        .find_map(|addr| addr.address().map(str::to_ascii_lowercase))
         .unwrap_or_default()
 }
 
@@ -232,10 +232,6 @@ Hello\r\n";
 
     #[test]
     fn non_mime_bytes_no_body_and_no_date_are_named_failures() {
-        assert!(matches!(
-            parse_eml(b"not a MIME message", None),
-            Err(EmlParseError::NotMime)
-        ));
         const NO_BODY: &str = "From: client@example.test\r\n\
 To: lawyer@neonlaw.test\r\n\
 Subject: Empty\r\n\
@@ -243,15 +239,19 @@ Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
 Content-Type: text/plain\r\n\
 \r\n\
    \r\n";
-        assert!(matches!(
-            parse_eml(NO_BODY.as_bytes(), None),
-            Err(EmlParseError::NoBody)
-        ));
         const NO_DATE: &str = "From: client@example.test\r\n\
 To: lawyer@neonlaw.test\r\n\
 Content-Type: text/plain\r\n\
 \r\n\
 Hello\r\n";
+        assert!(matches!(
+            parse_eml(b"not a MIME message", None),
+            Err(EmlParseError::NotMime)
+        ));
+        assert!(matches!(
+            parse_eml(NO_BODY.as_bytes(), None),
+            Err(EmlParseError::NoBody)
+        ));
         assert!(matches!(
             parse_eml(NO_DATE.as_bytes(), None),
             Err(EmlParseError::NoDate)
