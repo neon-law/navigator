@@ -1461,6 +1461,12 @@ impl BrandKey {
         if path == "/purchases" || path.starts_with("/purchases/") {
             return true;
         }
+        // `/world` is Vesta's calculated astrocartography page — the birth-form
+        // surface that stays request-local. Every other brand's host 404s it
+        // through `reject_unpublished_firm_path`.
+        if path == "/world" {
+            return self == Self::Vesta;
+        }
         match self {
             Self::Neon => path.trim_end_matches('/') != "/disputes",
             Self::DeleteYourData => matches!(path, "/" | "/contact" | "/testimonials"),

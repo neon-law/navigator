@@ -37,6 +37,9 @@ serde_yaml.workspace = true
 tokio.workspace = true
 views.workspace = true
 webapp = { workspace = true, features = ["server"] }
+# The /world router resolves the country options for the birth form from the
+# bundled GeoNames index at router-build time.
+geotime.workspace = true
 
 [dev-dependencies]
 rules.workspace = true
