@@ -85,6 +85,7 @@ pub fn mercury_source_reference(transaction_id: Uuid) -> String {
 }
 
 /// Accepts only the canonical form: `mercury::` plus a lowercase hyphenated UUID.
+#[must_use]
 pub fn validate_source_reference(value: &str) -> bool {
     let Some(id) = value.strip_prefix("mercury::") else {
         return false;
