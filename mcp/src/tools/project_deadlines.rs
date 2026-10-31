@@ -49,6 +49,7 @@ pub fn create_descriptor() -> Value {
                 "source_document_id": { "type": "string", "format": "uuid" },
                 "owner_person_id": { "type": "string", "format": "uuid" },
                 "calendar_role": { "type": "string" },
+                "category": { "type": "string", "description": "court, hearing, discovery, or internal. Omitted lets the store settle it from the calendar role or an internal authority." },
                 "internal_lead_days": { "type": "integer" },
                 "client_lead_days": { "type": "integer" },
                 "replay_key": { "type": "string" }
@@ -78,6 +79,7 @@ pub fn update_descriptor() -> Value {
                 "source_document_id": { "type": ["string", "null"], "format": "uuid" },
                 "owner_person_id": { "type": ["string", "null"], "format": "uuid" },
                 "calendar_role": { "type": "string" },
+                "category": { "type": ["string", "null"], "description": "court, hearing, discovery, or internal. An empty string clears it." },
                 "internal_lead_days": { "type": ["integer", "null"] },
                 "client_lead_days": { "type": ["integer", "null"] }
             },
@@ -146,6 +148,7 @@ struct CreateArgs {
     source_document_id: Option<Uuid>,
     owner_person_id: Option<Uuid>,
     calendar_role: String,
+    category: Option<String>,
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
     replay_key: Option<String>,
@@ -165,6 +168,8 @@ struct UpdateArgs {
     source_document_id: Option<Option<Uuid>>,
     owner_person_id: Option<Option<Uuid>>,
     calendar_role: Option<String>,
+    /// An empty string clears the category.
+    category: Option<String>,
     internal_lead_days: Option<Option<i64>>,
     client_lead_days: Option<Option<i64>>,
 }
@@ -250,6 +255,7 @@ pub async fn create_call(
             source_document_id: args.source_document_id,
             owner_person_id: args.owner_person_id,
             calendar_role: args.calendar_role,
+            category: args.category,
             internal_lead_days: args.internal_lead_days,
             client_lead_days: args.client_lead_days,
             replay_key: args.replay_key,
@@ -285,6 +291,7 @@ pub async fn update_call(
             source_document_id: args.source_document_id,
             owner_person_id: args.owner_person_id,
             calendar_role: args.calendar_role,
+            category: args.category.map(Some),
             internal_lead_days: args.internal_lead_days,
             client_lead_days: args.client_lead_days,
         },

@@ -38,6 +38,11 @@ calendar role, and due date before writing. If a row already covers it, update t
   appearance). A hearing is not a filing obligation, and its date is owned by the docket: record the appearance as a
   Docket Entry through the `case-timeline` skill (`navigator project docket add --kind hearing --scheduled-on …`), and
   use a `hearing` row here only for the reminder about it.
+- **What kind of date it is.** `--category` is `court` (a filing or response the court requires), `hearing` (a scheduled
+  appearance), `discovery` (a discovery request, response, disclosure, or cutoff), or `internal` (a firm preparation
+  target). A `hearing` role defaults to the `hearing` category and an `internal` authority kind to `internal`; otherwise
+  the category must be named — court and discovery dates can look alike on their authority alone, and the category is
+  what colors the row on every mirrored Google Calendar (the same fixed color for the same category on every matter).
 - **Court date versus preparation target.** A court deadline and the internal date by which a draft must be ready are
   two rows: the court date under its rule or order, the preparation target as `internal`.
 - **The instant.** `--due-at` is RFC 3339 with an explicit offset, in the court's or counterparty's time zone (for
@@ -58,6 +63,7 @@ navigator project deadline create \
   --authority-kind court_order \
   --authority "Order setting briefing schedule, entered 2026-10-05" \
   --calendar-role firm \
+  --category court \
   --source lawyer \
   --source-document <document id> \
   --owner <lawyer DRI person id> \
@@ -68,6 +74,8 @@ navigator project deadline create \
 
 - **Name what is due.** Creation requires `--title`, a short name for the pleading or response (at most 200 characters).
   Rows recorded without one show only the authority and role. `update <id> --title ""` clears it.
+- **Name the category.** `--category` is `court`, `hearing`, `discovery`, or `internal`; `update <id> --category ""`
+  clears it. Updates preserve the current category when the flag is omitted.
 - **Explain the obligation.** `--description` adds optional detail. An empty description on update clears it.
 - **Choose visibility.** Creation defaults to `--visibility internal`. Selecting `internal` clears the client lead;
   `--visibility client` requires `--client-lead-days` and the store's internal lead. Updates preserve the current choice
@@ -76,8 +84,8 @@ navigator project deadline create \
   ever sees a deadline: with it unset, the date stays internal on the matter page and in every reminder. The internal
   lead is never shorter than the client lead.
 - **Internal-only instructions win.** If the lawyer says a date is internal, leave `--client-lead-days` unset.
-- The command prints the stored row. Read it back and confirm the due instant, role, authority, and lead times match
-  what you meant before going further.
+- The command prints the stored row. Read it back and confirm the due instant, role, category, authority, and lead
+  times match what you meant before going further.
 
 Change a recorded date, or close one when it is met or no longer applies. Neither close deletes the row.
 

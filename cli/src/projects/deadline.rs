@@ -207,6 +207,21 @@ fn apply_visibility(
     Ok(())
 }
 
+/// The `category` a create or update body carries. An empty value clears it;
+/// the portal settles a cleared category from the calendar role and authority
+/// kind on create and refuses when neither does. Validation fails fast here
+/// so a typo never reaches the store.
+fn category_field(category: Option<&str>) -> Result<Option<String>> {
+    let category = category.map(str::trim).filter(|value| !value.is_empty());
+    if category.is_some_and(|value| !store::project_deadlines::CATEGORIES.contains(&value)) {
+        return Err(anyhow!(
+            "--category must be one of {}",
+            store::project_deadlines::CATEGORIES.join(", ")
+        ));
+    }
+    Ok(category.map(str::to_string))
+}
+
 fn export_row(base: &str, code: &str, row: &Value, location: Option<&str>) -> Result<String> {
     let url = reqwest::Url::parse(base)?;
     let mut row = row.clone();
@@ -258,6 +273,7 @@ pub async fn create(
     source_document: Option<Uuid>,
     owner: Option<Uuid>,
     calendar_role: String,
+    category: Option<String>,
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
     replay_key: Option<String>,
@@ -283,6 +299,9 @@ pub async fn create(
             }
             if let Some(description) = description {
                 object.insert("description".into(), json!(description));
+            }
+            if let Some(category) = category_field(category.as_deref())? {
+                object.insert("category".into(), json!(category));
             }
             if let Some(authority) = authority {
                 object.insert("authority".into(), json!(authority));
@@ -335,6 +354,7 @@ pub async fn update(
     source_document: Option<Uuid>,
     owner: Option<Uuid>,
     calendar_role: Option<String>,
+    category: Option<String>,
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
     ics_path: Option<&Path>,
@@ -370,6 +390,16 @@ pub async fn update(
             }
             if let Some(role) = calendar_role {
                 object.insert("calendar_role".into(), json!(role));
+            }
+            // Absent flag preserves the stored category; an empty value
+            // clears it. The portal's double-Option carries the difference.
+            if let Some(raw) = category.as_deref() {
+                object.insert(
+                    "category".into(),
+                    category_field(Some(raw))?
+                        .map(|category| json!(category))
+                        .unwrap_or(Value::Null),
+                );
             }
             if let Some(days) = internal_lead_days {
                 object.insert("internal_lead_days".into(), json!(days));

@@ -28,6 +28,7 @@ pub(crate) struct CreateDeadlineRequest {
     source_document_id: Option<Uuid>,
     owner_person_id: Option<Uuid>,
     calendar_role: String,
+    category: Option<String>,
     internal_lead_days: Option<i64>,
     client_lead_days: Option<i64>,
     replay_key: Option<String>,
@@ -47,6 +48,8 @@ pub(crate) struct UpdateDeadlineRequest {
     source_document_id: Option<Option<Uuid>>,
     owner_person_id: Option<Option<Uuid>>,
     calendar_role: Option<String>,
+    /// An empty string clears the category.
+    category: Option<String>,
     internal_lead_days: Option<Option<i64>>,
     #[serde(default, deserialize_with = "present_client_lead")]
     client_lead_days: Option<Option<i64>>,
@@ -120,6 +123,7 @@ pub(crate) async fn create_deadline(
             source_document_id: input.source_document_id,
             owner_person_id: input.owner_person_id,
             calendar_role: input.calendar_role,
+            category: input.category,
             internal_lead_days: input.internal_lead_days,
             client_lead_days: input.client_lead_days,
             replay_key: input.replay_key,
@@ -152,6 +156,9 @@ pub(crate) async fn update_deadline(
             source_document_id: input.source_document_id,
             owner_person_id: input.owner_person_id,
             calendar_role: input.calendar_role,
+            category: input
+                .category
+                .map(|value| if value.is_empty() { None } else { Some(value) }),
             internal_lead_days: input.internal_lead_days,
             client_lead_days: input.client_lead_days,
         },

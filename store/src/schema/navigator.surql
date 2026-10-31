@@ -365,6 +365,8 @@ DEFINE FIELD OVERWRITE status ON project_deadlines TYPE string
     ASSERT $value IN ['open', 'complete', 'cancelled'];
 DEFINE FIELD OVERWRITE calendar_role ON project_deadlines TYPE string
     ASSERT $value IN ['firm', 'opponent', 'hearing'];
+DEFINE FIELD OVERWRITE category ON project_deadlines TYPE option<string>
+    ASSERT $value IS NONE OR $value IN ['court', 'hearing', 'discovery', 'internal'];
 DEFINE FIELD OVERWRITE internal_lead_days ON project_deadlines TYPE option<int>;
 DEFINE FIELD OVERWRITE client_lead_days ON project_deadlines TYPE option<int>;
 DEFINE FIELD OVERWRITE replay_key ON project_deadlines TYPE option<string>;

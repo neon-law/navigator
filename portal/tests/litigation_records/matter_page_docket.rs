@@ -89,6 +89,7 @@ async fn fixture() -> Fixture {
             source_document_id: None,
             owner_person_id: None,
             calendar_role: "firm".into(),
+            category: None,
             internal_lead_days: Some(7),
             client_lead_days: None,
             replay_key: None,
