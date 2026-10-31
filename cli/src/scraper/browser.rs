@@ -76,11 +76,18 @@ impl BrowserSession {
         })?;
         let caps = super::session::webdriver_capabilities(Some(chrome_binary), config.headless);
         let url = format!("http://127.0.0.1:{}", config.webdriver_port);
-        let client = match ClientBuilder::native()
-            .capabilities(caps)
-            .connect(&url)
-            .await
-        {
+        // rustls, not native-tls: the static musl `navigator` cannot link
+        // OpenSSL. Pin the process crypto provider first, since the workspace
+        // compiles both ring and aws-lc-rs and rustls will not pick one.
+        store::surreal::install_tls_provider();
+        let mut builder = match ClientBuilder::rustls() {
+            Ok(builder) => builder,
+            Err(error) => {
+                let _ = driver.kill();
+                return Err(SessionError::Tls(error));
+            }
+        };
+        let client = match builder.capabilities(caps).connect(&url).await {
             Ok(client) => client,
             Err(error) => {
                 let _ = driver.kill();
