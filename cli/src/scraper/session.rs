@@ -40,6 +40,8 @@ pub(crate) enum SessionError {
     },
     #[error("chromedriver did not open port {port} in time")]
     DriverTimeout { port: u16 },
+    #[error("the WebDriver client could not load its TLS roots")]
+    Tls(#[source] std::io::Error),
     #[error("the WebDriver connection failed")]
     Connect(#[from] fantoccini::error::NewSessionError),
     #[error("the WebDriver operation failed")]
