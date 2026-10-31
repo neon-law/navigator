@@ -16803,7 +16803,12 @@ async fn project_documents_upload_writes_blob_and_document_with_description() {
         .get("location")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    assert_eq!(location, format!("/app/projects/{project_code}"));
+    // The Documents tab, where the table the upload just added to renders;
+    // the workbench opens on Overview, which lists no documents (#176).
+    assert_eq!(
+        location,
+        format!("/app/projects/{project_code}?tab=documents")
+    );
 
     // One document asset — carrying the byte pointer plus upload
     // provenance and the optional description from the form.
@@ -16886,7 +16891,7 @@ async fn project_documents_upload_files_one_document_per_file_in_a_batch() {
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
     assert_eq!(
         resp.headers().get("location").and_then(|v| v.to_str().ok()),
-        Some(format!("/app/projects/{project_code}").as_str())
+        Some(format!("/app/projects/{project_code}?tab=documents").as_str())
     );
 
     let mut docs = store::assets::list_all(&state.surreal).await.unwrap();

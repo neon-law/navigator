@@ -185,10 +185,8 @@ pub async fn upload(
         }
     };
     if batch.files.is_empty() {
-        return Redirect::to(
-            &crate::dioxus_app::project_show_path(&state.surreal, project_id).await,
-        )
-        .into_response();
+        return Redirect::to(&project_documents_path(&state.surreal, project_id).await)
+            .into_response();
     }
     let UploadBatch {
         files: uploads,
@@ -223,8 +221,21 @@ pub async fn upload(
         }
     }
 
-    Redirect::to(&crate::dioxus_app::project_show_path(&state.surreal, project_id).await)
-        .into_response()
+    Redirect::to(&project_documents_path(&state.surreal, project_id).await).into_response()
+}
+
+/// Where an upload lands: the matter's Documents tab, which renders the table
+/// the batch just added to. The workbench opens on Overview (#176), which
+/// lists no documents.
+async fn project_documents_path(
+    surreal: &store::surreal::SurrealDb,
+    project_id: uuid::Uuid,
+) -> String {
+    format!(
+        "{}?tab={}",
+        crate::dioxus_app::project_show_path(surreal, project_id).await,
+        webapp::lawyer_project_detail::MatterTab::Documents.query_value()
+    )
 }
 
 /// The form fields of a Drive import.

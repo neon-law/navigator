@@ -214,6 +214,26 @@ fn assert_refused(response: &axum::http::Response<Body>, message: &str) {
     );
 }
 
+/// A successful add, edit, or removal returns to the matter's Participants
+/// tab, where the ledger it changed is rendered. The workbench opens on
+/// Overview (#176), which does not list people, so landing there hides the
+/// row the lawyer just wrote.
+fn assert_lands_on_participants(
+    response: &axum::http::Response<Body>,
+    project_code: &str,
+    what: &str,
+) {
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .and_then(|v| v.to_str().ok()),
+        Some(format!("/app/projects/{project_code}?tab=participants").as_str()),
+        "{what} must land back on the Participants tab of the matter it changed",
+    );
+}
+
 async fn body_string(response: axum::http::Response<Body>) -> String {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     String::from_utf8(bytes.to_vec()).unwrap()
@@ -410,7 +430,7 @@ async fn admin_manages_project_participation_from_the_matter_workbench() {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_lands_on_participants(&response, &fixture.project_code, "an add");
     let role = store::projects::participation_for_person(
         &fixture.surreal,
         fixture.candidate_id,
@@ -510,7 +530,7 @@ async fn admin_manages_project_participation_from_the_matter_workbench() {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_lands_on_participants(&response, &fixture.project_code, "an edit");
     let role = store::projects::participation_by_id(&fixture.surreal, role.id)
         .await
         .unwrap()
@@ -543,7 +563,8 @@ async fn admin_manages_project_participation_from_the_matter_workbench() {
     );
 
     // The remove control is a plain form post, so a successful removal
-    // redirects back to the matter rather than answering a swap fragment.
+    // redirects back to the matter's Participants tab rather than answering a
+    // swap fragment.
     let response = fixture
         .app
         .clone()
@@ -557,15 +578,7 @@ async fn admin_manages_project_participation_from_the_matter_workbench() {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert_eq!(
-        response
-            .headers()
-            .get(axum::http::header::LOCATION)
-            .and_then(|v| v.to_str().ok()),
-        Some(format!("/app/projects/{}", fixture.project_code).as_str()),
-        "a removal must land back on the matter it changed",
-    );
+    assert_lands_on_participants(&response, &fixture.project_code, "a removal");
 
     let response = fixture
         .app
