@@ -1,0 +1,126 @@
+form_code = "ny__nc5_family_name_change_supplement"
+# UCS-NC5 (05/2022) — Family Name Change Petition – Supplemental Form
+# (Page 1a). The parser reports 28 AcroForm fields. One supplement per
+# family member who answered yes to a UCS-NC4 household disclosure.
+#
+# Every Yes/No pair on this blank is one /Btn parent with two kid widgets
+# under the form's uniform "☐Yes ☐No" layout (each box immediately precedes
+# its label; the left box is Yes throughout — verified against the page
+# text coordinates). The pairs split into two generator designs with
+# different per-kid appearance states:
+#
+# - The seven record-disclosure and status pairs (conviction, bankruptcy,
+#   judgments or liens, pending actions, marriages, children under 21):
+#   the left/Yes kid carries export "1"; the right/No kid carries "0"
+#   (plus a duplicate "1" appearance). Yes maps to "1", No to "0".
+# - The four support pairs (child support, its payment status, spousal
+#   support, its payment status): the left/Yes kid carries export "0" and
+#   the right/No kid "1" — the reverse of the other design. Yes maps to
+#   "0", No to "1".
+#
+# The item-2 role selector ("I am the petitioner / the co-petitioner / a
+# minor under the age of 18") is a three-kid radio with clean per-kid
+# exports 0/1/2 in page order — machine-readable, unlike the same-named
+# field on the NC4 consent pages.
+#
+# Deliberately left unmapped (decision recorded, lawyer or clerk completes):
+# - `IndexNumber` — the clerk's caption stamp.
+# - `BankruptcyJudgmentsLiensParty-attachments` — the lawyer decides at
+#   review whether attachments ride with the supplement.
+# - `Print_Form` / `Reset_Form` — the blank's own page furniture.
+
+[[field]]
+name = "Petitioner(s) Name"
+question = "person__client.name"
+
+[[field]]
+name = "CourtType"
+question = "custom_single_choice__filing_court"
+
+[[field]]
+name = "County"
+question = "custom_single_choice__filing_county"
+
+[[field]]
+name = "FamilyMemberName"
+question = "custom_text__member_present_name"
+
+[[field]]
+name = "ParentRelationshipToMinor"
+question = "custom_single_choice__member_role"
+
+[[field]]
+name = "ConvictedOfCrime"
+question = "custom_single_choice__member_convicted"
+
+[[field]]
+name = "CourtOfConviction"
+question = "custom_text__court_of_conviction"
+
+[[field]]
+name = "Crime"
+question = "custom_text__crime_of_conviction"
+
+[[field]]
+name = "Bankruptcy"
+question = "custom_single_choice__member_bankruptcy"
+
+[[field]]
+name = "JudgmentsOrLiens"
+question = "custom_single_choice__member_judgments_liens"
+
+[[field]]
+name = "PartyToAction"
+question = "custom_single_choice__member_party_to_action"
+
+[[field]]
+name = "BankruptcyJudgmentsLiensParty-specify"
+question = "custom_text__member_disclosure_details"
+
+[[field]]
+name = "CurrentlyMarried"
+question = "custom_single_choice__currently_married"
+
+[[field]]
+name = "PreviouslyMarried"
+question = "custom_single_choice__previously_married"
+
+[[field]]
+name = "ChildrenUnder21"
+question = "custom_single_choice__children_under_21"
+
+[[field]]
+name = "ChildSupport"
+question = "custom_single_choice__member_child_support"
+
+[[field]]
+name = "ChildSupportPayments"
+question = "custom_single_choice__child_support_current"
+
+[[field]]
+name = "ChildSupportArrears"
+question = "custom_text__child_support_arrears"
+
+[[field]]
+name = "CourtIssuingChildSupportOrder"
+question = "custom_text__child_support_order_court"
+
+[[field]]
+name = "SupportCollectionsUnit"
+question = "custom_text__child_support_collection_unit"
+
+[[field]]
+name = "SpousalSupport"
+question = "custom_single_choice__member_spousal_support"
+
+[[field]]
+name = "SpousalSupportPayments"
+question = "custom_single_choice__spousal_support_current"
+
+[[field]]
+name = "SpousalSupportArrears"
+question = "custom_text__spousal_support_arrears"
+
+[[field]]
+name = "CourtIssuingSpousalSupportOrder"
+question = "custom_text__spousal_support_order_court"
