@@ -33,6 +33,8 @@ bands:
       take a claim, we negotiate from strength and file when necessary.
     items:
       - title: Vehicle collisions
+        href: /car-accidents
+        href_label: Car accidents
         body:
           - - text: Car, truck, motorcycle, and pedestrian claims after a collision. We secure the records and go after the insurer that lowballs you.
       - title: Negligence and premises
@@ -41,9 +43,21 @@ bands:
       - title: Medical negligence
         body:
           - - text: Injuries involving medical care. We demand the records others will not hand over and read them line by line.
-      - title: Data theft and cybercrime
+      - title: Data theft
+        href: /data-theft
+        href_label: Data theft
         body:
-          - - text: Stolen personal information, compromised accounts, online fraud, or other cybercrime. Companies blame users. We demand the breach records and put the blame where it belongs.
+          - - text: Stolen personal information or compromised accounts. Companies blame users. We demand the breach records, find out what was taken, and put the blame where it belongs.
+      - title: Cybercrime
+        href: /cybercrime
+        href_label: Cybercrime
+        body:
+          - - text: Online fraud, account takeovers, and impersonation scams. Platforms close tickets. We preserve the evidence and move against the person behind it.
+      - title: Theft
+        href: /theft
+        href_label: Theft
+        body:
+          - - text: Someone took your money or your property. We preserve the proof, follow the records, and pursue the person who took it.
       - title: Digital stalking and online abuse
         body:
           - - text: Repeated unwanted contact, monitoring, or harassment through digital tools. We preserve the evidence and move against the person behind it.

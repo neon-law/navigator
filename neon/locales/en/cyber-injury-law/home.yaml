@@ -90,34 +90,53 @@ cyber_injury:
         report, scene photos, and witness accounts, and we go after the
         insurer that lowballs you.
       - CAR AND OTHER COLLISIONS
+      - /car-accidents
     - - NEGLIGENCE AND LIABILITY
       - >-
         Injuries from someone else's carelessness, such as unsafe products,
         dog bites, or workplace conditions. We prove who was careless and
         hold them to it.
       - CARELESSNESS
+      - ""
     - - MEDICAL NEGLIGENCE
       - >-
         Injuries involving medical care. We demand the records others will
         not hand over and read them line by line.
       - MEDICAL CARE
-    - - DATA THEFT AND CYBERCRIME
+      - ""
+    - - DATA THEFT
       - >-
-        Stolen personal information, compromised accounts, online fraud, or
-        other cybercrime. Companies blame users. We demand the breach
-        records and put the blame where it belongs.
+        Stolen personal information or compromised accounts. Companies blame
+        users. We demand the breach records, find out what was taken, and
+        put the blame where it belongs.
       - STOLEN DATA OR ACCOUNTS
+      - /data-theft
+    - - CYBERCRIME
+      - >-
+        Online fraud, account takeovers, and impersonation scams. Platforms
+        close tickets. We preserve the evidence and move against the person
+        behind it.
+      - ONLINE FRAUD AND SCAMS
+      - /cybercrime
+    - - THEFT
+      - >-
+        Someone took your money or your property. We preserve the proof,
+        follow the records, and pursue the person who took it.
+      - STOLEN MONEY OR PROPERTY
+      - /theft
     - - DIGITAL STALKING AND ONLINE ABUSE
       - >-
         Repeated unwanted contact, monitoring, or harassment using digital
         tools. We take it seriously: we preserve the evidence and move
         against the person behind it.
       - DIGITAL CONDUCT
+      - ""
     - - SLIP AND FALL INJURIES
       - >-
         Falls on wet floors, icy walkways, or poorly kept property. Owners
         blame the victim. We prove who was responsible for the space.
       - UNSAFE PROPERTY
+      - ""
   discovery_note: >-
     Descriptions are general. A lawyer must review the facts and applicable
     law to determine whether the firm can help.

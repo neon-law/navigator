@@ -10,6 +10,17 @@ use crate::lead_capture::{LeadCaptureContext, LeadCaptureCopy};
 use crate::public_chrome::{PublicChrome, PublicFooter};
 use dioxus::prelude::*;
 
+/// A discovery card's link, tagged for Plausible attribution: the tag
+/// derives from the card's own page (`/car-accidents` →
+/// `home-discovery-car-accidents`), so every card is attributable without a
+/// hand-typed tag per card.
+fn discovery_card_href(href: &str) -> String {
+    via_tagged(
+        href,
+        &format!("home-discovery-{}", href.trim_start_matches('/')),
+    )
+}
+
 #[component]
 pub(super) fn CyberInjuryHome(
     chrome: PublicChrome,
@@ -79,15 +90,12 @@ pub(super) fn CyberInjuryHome(
                         p { "{copy.discovery_body}" }
                     }
                     div { class: "cyber-cards", for (index, card) in copy.discovery_cards.iter().enumerate() {
-                        article {
-                            span { class: "cyber-glyph", "aria-hidden": "true",
-                                if index == 0 { CarIcon {} }
-                                else if index == 1 { "⌕" }
-                                else { "↗" }
+                        if card[3].is_empty() {
+                            article { DiscoveryCardContent { index, title: card[0].clone(), body: card[1].clone(), benefit: card[2].clone() } }
+                        } else {
+                            a { class: "cyber-card-link", href: discovery_card_href(&card[3]),
+                                article { DiscoveryCardContent { index, title: card[0].clone(), body: card[1].clone(), benefit: card[2].clone() } }
                             }
-                            h3 { "{card[0]}" }
-                            p { "{card[1]}" }
-                            span { class: "cyber-benefit", "{card[2]}" }
                         }
                     } }
                     p { class: "cyber-fine", "{copy.discovery_note}" }
@@ -169,6 +177,23 @@ fn CarIcon() -> Element {
     }
 }
 
+/// One discovery card's content: the glyph follows the card's position in
+/// the grid, and the title, body, and benefit label come from the catalog.
+/// Linked cards wrap this in the anchor the grid styles.
+#[component]
+fn DiscoveryCardContent(index: usize, title: String, body: String, benefit: String) -> Element {
+    rsx! {
+        span { class: "cyber-glyph", "aria-hidden": "true",
+            if index == 0 { CarIcon {} }
+            else if index == 1 { "⌕" }
+            else { "↗" }
+        }
+        h3 { "{title}" }
+        p { "{body}" }
+        span { class: "cyber-benefit", "{benefit}" }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,7 +204,7 @@ mod tests {
             CyberInjuryHome {
                 chrome: PublicChrome::default(),
                 content: HomeContent { heading: "We use AI to put more money in your pocket".into(), contact_href: "/contact".into(), ..HomeContent::default() },
-                copy: CyberInjuryContent { hero_lines: ["WE USE AI TO".into(), "PUT MORE".into(), "MONEY IN".into(), "YOUR POCKET.".into()], hero_highlights: [String::new(), "MORE".into(), "MONEY IN".into(), "YOUR POCKET.".into()], advertising_label: "Attorney Advertising".into(), utility_lines: ["From YAML".into(), "Coast to Coast with Tech to Boast".into()], footer_wordmark: ["CYBER".into(), "INJURY".into(), "LAW".into()], ticker_lines: ["CAR ACCIDENTS.".into(), "PERSONAL INJURY.".into(), "CYBERCRIME.".into()], discovery_cards: vec![["CAR INJURY".into(), "Vehicle collision claims.".into(), "CAR ACCIDENTS".into()]], incident_label: "A custom incident question".into(), hero_src: "/public/img/cyber-injury-law/cyber-warrior-ferris.png".into(), ..CyberInjuryContent::default() },
+                copy: CyberInjuryContent { hero_lines: ["WE USE AI TO".into(), "PUT MORE".into(), "MONEY IN".into(), "YOUR POCKET.".into()], hero_highlights: [String::new(), "MORE".into(), "MONEY IN".into(), "YOUR POCKET.".into()], advertising_label: "Attorney Advertising".into(), utility_lines: ["From YAML".into(), "Coast to Coast with Tech to Boast".into()], footer_wordmark: ["CYBER".into(), "INJURY".into(), "LAW".into()], ticker_lines: ["CAR ACCIDENTS.".into(), "PERSONAL INJURY.".into(), "CYBERCRIME.".into()], discovery_cards: vec![["CAR INJURY".into(), "Vehicle collision claims.".into(), "CAR ACCIDENTS".into(), "/car-accidents".into()], ["NEGLIGENCE".into(), "Carelessness claims.".into(), "CARELESSNESS".into(), String::new()]], incident_label: "A custom incident question".into(), hero_src: "/public/img/cyber-injury-law/cyber-warrior-ferris.png".into(), ..CyberInjuryContent::default() },
                 lead_capture: Some(LeadCaptureCopy {
                     consent_sentence: "By sending this, you agree to our Privacy Policy.".into(),
                     phone_helper: "Optional. See Privacy Policy and texting terms.".into(),
@@ -224,6 +249,12 @@ mod tests {
         assert!(html.contains("class=\"cyber-lime\">MORE</span>"));
         assert!(html.contains("class=\"cyber-lime\">MONEY IN</span>"));
         assert!(html.contains("class=\"cyber-lime\">YOUR POCKET.</span>"));
+        // A card with a page renders as a link tagged for Plausible; a
+        // card without one stays a bare article.
+        assert!(
+            html.contains("href=\"/car-accidents?via=home-discovery-car-accidents\""),
+            "linked discovery card missing its via tag"
+        );
         assert!(!html.contains("20%"));
         assert!(!html.contains("cyber-fees"));
         assert!(!html.contains("fonts.googleapis.com"));
@@ -235,5 +266,13 @@ mod tests {
             "CyberInjuryLaw should have a single form"
         );
         assert!(!html.contains("name=\"cyber-records\""));
+    }
+
+    #[test]
+    fn discovery_card_links_carry_a_via_tag() {
+        assert_eq!(
+            discovery_card_href("/car-accidents"),
+            "/car-accidents?via=home-discovery-car-accidents"
+        );
     }
 }
