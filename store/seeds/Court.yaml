@@ -926,14 +926,14 @@ records:
     # The statewide Nevada Supreme Court forms (registered above) are accepted
     # here; these rows carry only what is unique to Washoe County.
     forms:
-      - code: washoe__adult_name_change_petition
+      - code: nv__washoe_adult_name_change_petition
         title: Petition for Adult Name Change (Washoe)
         source_url: https://www.washoecourts.com/Forms/Family/10.%20Name%20Changes/NA%20Adult%20Name%20Change/1.%20Petition%20for%20Adult%20Name%20Change.pdf
         sha256: 9a8ceaa3bd70b31300f259fb4fb4bf848adb5cbc75bc6e41f4b2a79d522af029
         filing_office: Family Division Clerk's Office, Second Judicial District Court, 1 S. Sierra St, Reno
         fee_note: The filing fee for a Washoe name change was NOT published on any page the survey fetched (2026-10-30) — treat the amount as unknown.
         fee_waiver_code: null
-      - code: washoe__fee_waiver_application
+      - code: nv__washoe_fee_waiver_application
         title: Application for Waiver of Fees and Costs (Washoe)
         source_url: https://www.washoecourts.com/Forms/Family/1.%20All%20Other%20Family%20Related%20Packets/F-6%20Application%20to%20Waive%20Fees%20and%20Costs/1.%20Application%20for%20Waiver%20of%20Fees%20and%20Costs.pdf
         sha256: 9a930a3ef3d16132fdd011fcf871c65a09a9dbdc804c24ee1642bbd7347736aa
@@ -989,14 +989,14 @@ records:
     # Small claims forms are per-justice-court in Nevada; there is no
     # statewide small-claims set.
     forms:
-      - code: las_vegas__small_claims_complaint
+      - code: nv__las_vegas_small_claims_complaint
         title: Complaint, Small Claims (Las Vegas)
         source_url: https://www.civillawselfhelpcenter.org/images/small-claims/complaints/complaint---small-claims.pdf
         sha256: 9f0c6f7ffe6cca9744f3fad4d6865117ac40abf8b63449942ec035386e6f4907
         filing_office: Las Vegas Justice Court clerk, small claims division
         fee_note: "Filing fee tiered by claim (NRS 4.060 schedule, eff. 2/8/2024): $66 up to $1,000; $86 for $1,000.01-$2,500; $106 for $2,500.01-$5,000; $146 for $5,000.01-$7,500; $196 for $7,500.01-$10,000. No fee may be charged to a defendant appearing. Waiver: the justice-court fee-waiver form or the statewide application."
         fee_waiver_code: null
-      - code: las_vegas__small_claims_counterclaim
+      - code: nv__las_vegas_small_claims_counterclaim
         title: Counterclaim, Small Claims (Las Vegas)
         source_url: https://www.civillawselfhelpcenter.org/images/small-claims/counterclaims/counterclaim---small-claims---las-vegas.pdf
         sha256: 1e52f29cdcc642d58c2d61fa47f16d1339dad88488c68b61732e565faba1d053
@@ -1264,7 +1264,7 @@ records:
     # King County's own local forms ARE fillable AcroForms, unlike the
     # statewide pattern PDFs. eFiling portal: dcfiling.kingcounty.gov.
     forms:
-      - code: kc__adult_name_change_petition
+      - code: wa__adult_name_change_petition
         title: Petition for Name Change (Individual)
         source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-individual-july_2026.pdf
         sha256: a4f86f65b2b30f5fa06284591617f27cee0a43ce334e188b7afb0f55ff72f04a
@@ -1274,7 +1274,7 @@ records:
           currency: USD
         fee_note: "Filing fee $98 per application (includes 1 certified copy; additional copies $5) plus a separate King County Recorder fee: $203.50 individual; $204.50 first family member + $203.50 each additional. Waiver: the statewide GR 34 set (pattern PDFs, unfillable) or the local motion filed in person. Sealed name changes (gender expression/identity, refugee/asylum, DV victim, emancipated minor) go to Superior Court instead."
         fee_waiver_code: null
-      - code: kc__minor_name_change_petition
+      - code: wa__minor_name_change_petition
         title: Petition for Minor Child Name Change
         source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-minor-october-2024.pdf
         sha256: 7d228ed4b18d377ee87a0cd07d81caaac1ec9338deddb51ef98318f325bab5ab
@@ -1284,7 +1284,7 @@ records:
           currency: USD
         fee_note: Both parents' consent or service required; children 14-17 must attend the hearing. Fee as for the adult petition.
         fee_waiver_code: null
-      - code: kc__small_claims_notice
+      - code: wa__small_claims_notice
         title: Notice of Small Claim
         source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/forms_sc/notice-of-small-claim-september-2025.pdf
         sha256: 761f9e321b19237c890d31652f32beeed42a5f5323cb03d6b6246558912d7b96
@@ -1294,7 +1294,7 @@ records:
           currency: USD
         fee_note: "Filing fee $50; limits $10,000 natural person / $5,000 other. Appeal to Superior: $280 cashier's check to the Superior Court Clerk + $40 district appeal-processing fee. A guided e-file interview generates this notice."
         fee_waiver_code: null
-      - code: kc__small_claims_plaintiff_packet
+      - code: wa__small_claims_plaintiff_packet
         title: Small Claims Packet — Plaintiff
         source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/info_instruct_small_claims/small_claims_plaintiff_packet-july-2026.pdf
         sha256: 74a11bf8a81c30a97f43c3abc7c71208fdb8812a0e4ab3e945e98bc479ba41c1
