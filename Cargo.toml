@@ -78,7 +78,7 @@ include_dir = "0.7"
 # Pure-Rust PDF read-modify-write, used by `pdf::fill_acroform` to
 # populate fillable government forms (AcroForm `/Fields`). Distinct from
 # the Typst `render` path, which only emits fresh PDFs.
-lopdf = "0.45"
+lopdf = "0.46"
 parquet = { version = "60", default-features = false, features = ["arrow", "snap"] }
 # Plain-text extraction from an arbitrary PDF, for `navigator site document diff`
 # (#485) — distinct from `lopdf` (read-modify-write for AcroForm filling) and
@@ -145,10 +145,10 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # Rust-native Rego interpreter. The compatibility gate uses only the
 # thread-safe core needed by Navigator's policy; the default feature set
 # pulls in unrelated JSON Schema, URL, crypto, and coverage machinery.
-regorus = { version = "0.13.0", default-features = false, features = ["arc", "std"] }
+regorus = { version = "0.14.0", default-features = false, features = ["arc", "std"] }
 # NRS scraper: parse the legislature's HTML chapter pages. encoding_rs
 # decodes their windows-1252 bytes (MS-Word-filtered HTML) to UTF-8.
-scraper = "0.27"
+scraper = "0.29"
 encoding_rs = "0.8"
 sha1 = "0.11"
 sha2 = "0.11"
@@ -262,7 +262,7 @@ uuid = { version = "1", default-features = false, features = ["std", "v7", "serd
 # Pure-Rust MIME parser. SendGrid Inbound Parse posts the raw RFC 5322
 # message (send_raw=true) with no parsed text part, so `web` extracts the
 # plain-text body itself when threading a support email.
-mail-parser = "0.11"
+mail-parser = "1.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -57,18 +57,19 @@ pub fn parse(bytes: &[u8]) -> Option<ClaimsNotice> {
     let from = message
         .from()
         .and_then(|addresses| addresses.first())
-        .and_then(mail_parser::Addr::address)
+        .and_then(|mailbox| mailbox.address())
         .map(str::to_ascii_lowercase)?;
     if !is_claims_agent_sender(&from) {
         return None;
     }
     if let Some(html) = message
-        .html_part(0)
-        .filter(|part| part.is_text_html())
-        .and_then(mail_parser::MessagePart::text_contents)
+        .html_body()
+        .next()
+        .filter(|part| matches!(part.kind(), mail_parser::PartKind::Html))
+        .and_then(|part| part.text())
     {
-        let (text, _) = super::nef::html_to_text(html);
-        let links: Vec<ClaimLink> = labeled_links(html)
+        let (text, _) = super::nef::html_to_text(&html);
+        let links: Vec<ClaimLink> = labeled_links(&html)
             .into_iter()
             .filter(|link| is_agent_download(&link.url))
             .collect();

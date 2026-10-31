@@ -51,6 +51,9 @@ const TENANCY_AUTHORITY_MIGRATION: &str =
 const SOURCE_DOMAIN_RECORDS_MIGRATION: &str =
     include_str!("../postgres/migrations/20261022120000_create_source_domain_records.sql");
 const SURREAL_SCHEMA: &str = include_str!("schema/navigator.surql");
+#[cfg(test)]
+const MESSAGE_PROCESS_STATE_MIGRATION: &str =
+    include_str!("../postgres/migrations/20261031140000_add_message_process_state.sql");
 
 /// Nested source values that live in one PostgreSQL JSONB column each.
 const JSONB_SOURCE_FIELDS: &[(&str, &str)] = &[
@@ -1206,6 +1209,22 @@ mod tests {
             (
                 "20261031130000_create_case_stage.sql",
                 include_str!("../postgres/migrations/20261031130000_create_case_stage.sql"),
+            ),
+            (
+                "20261031140000_add_message_process_state.sql",
+                MESSAGE_PROCESS_STATE_MIGRATION,
+            ),
+            (
+                "20261101000000_create_time_entry.sql",
+                include_str!("../postgres/migrations/20261101000000_create_time_entry.sql"),
+            ),
+            (
+                "20261101010000_create_timer.sql",
+                include_str!("../postgres/migrations/20261101010000_create_timer.sql"),
+            ),
+            (
+                "20261101020000_create_attorney_rates.sql",
+                include_str!("../postgres/migrations/20261101020000_create_attorney_rates.sql"),
             ),
         ])
         .expect("timestamped migration assembles");

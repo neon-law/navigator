@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::NaiveDate;
-use mail_parser::{MessageParser, MimeHeaders};
+use mail_parser::MessageParser;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -146,7 +146,7 @@ pub(crate) fn parse_email(raw: &[u8]) -> Result<EfspEmail> {
             || filename.to_ascii_lowercase().ends_with(".pdf");
         is_pdf.then(|| Attachment {
             filename,
-            bytes: part.contents().to_vec(),
+            bytes: part.decoded().into_owned(),
         })
     });
     Ok(EfspEmail {

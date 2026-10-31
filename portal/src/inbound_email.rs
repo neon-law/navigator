@@ -31,7 +31,6 @@ use axum::body::{Body, Bytes};
 use axum::extract::{FromRequest, Multipart, Path, State};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::IntoResponse;
-use mail_parser::MimeHeaders as _;
 use serde::Deserialize;
 use thiserror::Error;
 use uuid::Uuid;
@@ -233,15 +232,15 @@ pub fn parse_raw_eml(raw: &[u8]) -> Option<InboundEmail> {
             let filename = part.attachment_name()?.to_string();
             let content_type = part.content_type().map_or_else(
                 || "application/octet-stream".to_string(),
-                |ct| match ct.c_subtype.as_deref() {
-                    Some(sub) => format!("{}/{}", ct.c_type, sub),
-                    None => ct.c_type.to_string(),
+                |ct| match ct.subtype() {
+                    Some(sub) => format!("{}/{}", ct.ctype(), sub),
+                    None => ct.ctype().to_string(),
                 },
             );
             Some(InboundAttachment {
                 filename,
                 content_type,
-                bytes: part.contents().to_vec(),
+                bytes: part.decoded().into_owned(),
             })
         })
         .collect();
@@ -640,7 +639,7 @@ pub async fn parse_multipart(mut form: Multipart) -> Result<InboundEmail, Inboun
     Ok(out)
 }
 
-fn format_mailbox(address: &mail_parser::Addr<'_>) -> String {
+fn format_mailbox(address: mail_parser::Mailbox<'_>) -> String {
     match (address.name(), address.address()) {
         (Some(name), Some(address)) if !name.is_empty() => format!("{name} <{address}>"),
         (_, Some(address)) => address.to_owned(),
@@ -651,8 +650,6 @@ fn format_mailbox(address: &mail_parser::Addr<'_>) -> String {
 /// Recover attachments from SendGrid raw mode.
 #[must_use]
 pub fn attachments_from_raw(raw: &[u8]) -> Vec<InboundAttachment> {
-    use mail_parser::MimeHeaders as _;
-
     let Some(message) = mail_parser::MessageParser::default().parse(raw) else {
         return Vec::new();
     };
@@ -664,8 +661,8 @@ pub fn attachments_from_raw(raw: &[u8]) -> Vec<InboundAttachment> {
                 |mime| {
                     format!(
                         "{}/{}",
-                        mime.c_type,
-                        mime.c_subtype.as_deref().unwrap_or("octet-stream")
+                        mime.ctype(),
+                        mime.subtype().unwrap_or("octet-stream")
                     )
                 },
             );
@@ -675,7 +672,7 @@ pub fn attachments_from_raw(raw: &[u8]) -> Vec<InboundAttachment> {
                     "attachment",
                 ),
                 content_type: non_empty_metadata(&content_type, "application/octet-stream"),
-                bytes: part.contents().to_vec(),
+                bytes: part.decoded().into_owned(),
             }
         })
         .collect()
@@ -1066,15 +1063,162 @@ pub async fn webhook(
     Ok(StatusCode::OK)
 }
 
+/// The inbox-process route the classification layer assigns to an inbound
+/// message. Four routes cover the firm inbox's recurring mail: court
+/// noticing, claims-agent noticing, chambers scheduling, and everything
+/// else. `inbox process` plans against the verdict (see
+/// `docs/glossary/inbox-process.md`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InboxRoute {
+    /// A court-generated Notice of Electronic Filing.
+    Nef,
+    /// A bankruptcy claims-agent notice from a recognized noticing vendor.
+    ClaimsAgent,
+    /// Court mail that is not a noticing event, or any message carrying a
+    /// video-conference link (a hearing).
+    Chambers,
+    /// Anything the classifier cannot name confidently.
+    Other,
+}
+
+impl InboxRoute {
+    /// The storage spelling, matching `store::inbox::route`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Nef => "nef",
+            Self::ClaimsAgent => "claims_agent",
+            Self::Chambers => "chambers",
+            Self::Other => "other",
+        }
+    }
+
+    /// The label the plan and the Slack notice show a lawyer.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Nef => "NEF",
+            Self::ClaimsAgent => "Claims agent",
+            Self::Chambers => "Chambers",
+            Self::Other => "Other",
+        }
+    }
+}
+
+/// A classification verdict: the route plus the exact marker it matched.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteDecision {
+    /// The assigned route.
+    pub route: InboxRoute,
+    /// Why the route was chosen. Names the matched marker and sender
+    /// domain — metadata a lawyer reads on the plan, never body content.
+    pub reason: String,
+}
+
+/// The court noticer's local part: CM/ECF sends notices from an address
+/// ending in `_ECF_Reply` at a `uscourts.gov` domain.
+const ECF_REPLY_SUFFIX: &str = "ecf_reply";
+/// The court's own domain.
+const COURT_DOMAIN: &str = "uscourts.gov";
+/// The notice's own title — the subject of every generated NEF.
+const NEF_SUBJECT_MARKER: &str = "notice of electronic filing";
+/// A CM/ECF notice always says this much about itself in the body.
+const NEF_BODY_MARKER: &str = "cm/ecf";
+/// Sender domains of the recognized bankruptcy claims-agent noticing
+/// vendors (Kroll, Epiq, Stretto, Omnia).
+const CLAIMS_AGENT_DOMAINS: &[&str] = &["kroll.com", "epiq.com", "stretto.com", "omnimanager.com"];
+/// Zoom meeting and government-meeting links: a hearing invitation.
+const HEARING_LINK_MARKERS: &[&str] = &["zoom.us/j/", "zoomgov.com/j/"];
+
+/// `domain` is `suffix` or a subdomain of it: `ecf.alsd.uscourts.gov`
+/// matches `uscourts.gov`, `notuscourts.gov` does not.
+fn domain_matches(domain: &str, suffix: &str) -> bool {
+    domain == suffix || domain.ends_with(&format!(".{suffix}"))
+}
+
+/// The RFC 5322 sender as `local@domain`, lowercased, display names
+/// stripped. Returns `("", "")` for an unparseable header.
+fn sender_parts(from: &str) -> (String, String) {
+    let address = crate::inbox::extract_addr(from).to_ascii_lowercase();
+    match address.rsplit_once('@') {
+        Some((local, domain)) => (local.to_owned(), domain.to_owned()),
+        None => (String::new(), String::new()),
+    }
+}
+
+/// Classify an inbound message from its transport facts: sender, subject,
+/// and body text. The pure core of the inbox-process routing layer —
+/// transport adapters (the SendGrid webhook, the lawyer-mailbox ingest,
+/// `mail parse`) all feed it, and `inbox process` plans against its
+/// verdict. Detection is marker-based and conservative: an unmatched
+/// message routes as [`InboxRoute::Other`] rather than guessing.
+#[must_use]
+pub fn classify_inbound_facts(from: &str, subject: &str, body: &str) -> RouteDecision {
+    let (local, domain) = sender_parts(from);
+    let subject = subject.to_lowercase();
+    let body = body.to_lowercase();
+
+    let ecf_sender = domain_matches(&domain, COURT_DOMAIN) && local.ends_with(ECF_REPLY_SUFFIX);
+    if ecf_sender && (subject.contains(NEF_SUBJECT_MARKER) || body.contains(NEF_BODY_MARKER)) {
+        return RouteDecision {
+            route: InboxRoute::Nef,
+            reason: format!(
+                "sender `{local}@{domain}` is the court's CM/ECF noticing address and the \
+                 message self-identifies as an electronic filing notice"
+            ),
+        };
+    }
+
+    if CLAIMS_AGENT_DOMAINS
+        .iter()
+        .any(|vendor| domain_matches(&domain, vendor))
+    {
+        return RouteDecision {
+            route: InboxRoute::ClaimsAgent,
+            reason: format!(
+                "sender domain `{domain}` is a recognized claims-agent noticing vendor"
+            ),
+        };
+    }
+
+    if domain_matches(&domain, COURT_DOMAIN) {
+        return RouteDecision {
+            route: InboxRoute::Chambers,
+            reason: format!("sender domain `{domain}` is a court domain"),
+        };
+    }
+
+    if let Some(marker) = HEARING_LINK_MARKERS
+        .iter()
+        .find(|marker| body.contains(*marker))
+    {
+        return RouteDecision {
+            route: InboxRoute::Chambers,
+            reason: format!("the body carries a video-conference link (`{marker}`)"),
+        };
+    }
+
+    RouteDecision {
+        route: InboxRoute::Other,
+        reason: "no court, claims-agent, or hearing marker matched".to_owned(),
+    }
+}
+
+/// Classify a parsed inbound message.
+#[must_use]
+pub fn classify_inbound(email: &InboundEmail) -> RouteDecision {
+    classify_inbound_facts(&email.from, &email.subject, &email.text)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::attachment_scanner::{FakeAttachmentScanner, ScanError, ScanVerdict};
     use uuid::Uuid;
 
     use super::{
-        attachments_from_raw, constant_time_eq, is_attachment_field, message_id_from_raw,
-        scan_attachments, sender_domain_authenticated, storage_key_for, InboundAttachment,
-        InboundEmail,
+        attachments_from_raw, classify_inbound, classify_inbound_facts, constant_time_eq,
+        is_attachment_field, message_id_from_raw, scan_attachments, sender_domain_authenticated,
+        storage_key_for, InboundAttachment, InboundEmail, InboxRoute,
     };
 
     #[test]
@@ -1432,5 +1576,118 @@ Content-Type: text/plain\r\n\r\nhello\r\n--nav--\r\n";
             to: vec!["other@example.com".into()],
             from: None,
         }));
+    }
+
+    #[test]
+    fn nef_route_matches_the_court_noticing_address() {
+        let decision = classify_inbound_facts(
+            "United States Bankruptcy Court, N.D. Cal. <ECF_Reply@uscourts.gov>",
+            "Notice of Electronic Filing",
+            "This is an automatic email message from the CM/ECF system.",
+        );
+        assert_eq!(decision.route, InboxRoute::Nef);
+        assert!(decision.reason.contains("CM/ECF noticing address"));
+    }
+
+    #[test]
+    fn nef_route_also_matches_on_a_body_marker_when_the_subject_differs() {
+        let decision = classify_inbound_facts(
+            "<ECF_Reply@alsd.uscourts.gov>",
+            "Automated message: new case 6:26-bk-12345",
+            "This is an automatic email message from the CM/ECF system. Case 6:26-bk-12345.",
+        );
+        assert_eq!(decision.route, InboxRoute::Nef);
+    }
+
+    #[test]
+    fn court_mail_without_a_noticing_marker_routes_as_chambers() {
+        let decision = classify_inbound_facts(
+            "Hon. Judge <chambers@alsd.uscourts.gov>",
+            "Status hearing rescheduled",
+            "The hearing moves to Friday.",
+        );
+        assert_eq!(decision.route, InboxRoute::Chambers);
+    }
+
+    #[test]
+    fn claims_agent_route_matches_recognized_vendor_domains() {
+        let decision = classify_inbound_facts(
+            "Kroll Restructuring Administration <no-reply@claims.kroll.com>",
+            "Notice of Bankruptcy Case",
+            "Case number and claims deadline information.",
+        );
+        assert_eq!(decision.route, InboxRoute::ClaimsAgent);
+        assert!(decision.reason.contains("claims-agent noticing vendor"));
+    }
+
+    #[test]
+    fn lookalike_vendors_do_not_route_as_claims_agents() {
+        let decision = classify_inbound_facts(
+            "<no-reply@notkroll.com>",
+            "Notice of Bankruptcy Case",
+            "Case number and claims deadline information.",
+        );
+        assert_eq!(decision.route, InboxRoute::Other);
+    }
+
+    #[test]
+    fn court_domain_subdomains_route_as_chambers_but_lookalikes_do_not() {
+        let subdomain =
+            classify_inbound_facts("<clerk@ecf.alsd.uscourts.gov>", "Docket update", "");
+        assert_eq!(subdomain.route, InboxRoute::Chambers);
+        let lookalike = classify_inbound_facts("<clerk@notuscourts.gov>", "Docket update", "");
+        assert_eq!(lookalike.route, InboxRoute::Other);
+    }
+
+    #[test]
+    fn a_video_conference_link_routes_the_body_as_chambers() {
+        let decision = classify_inbound_facts(
+            "Opposing Counsel <counsel@example.com>",
+            "Proposed hearing time",
+            "Let's meet: https://zoom.us/j/1234567890",
+        );
+        assert_eq!(decision.route, InboxRoute::Chambers);
+        assert!(decision.reason.contains("video-conference"));
+    }
+
+    #[test]
+    fn ordinary_client_mail_routes_as_other() {
+        let decision = classify_inbound_facts(
+            "Client <client@example.com>",
+            "Question about my case",
+            "When will the hearing be?",
+        );
+        assert_eq!(decision.route, InboxRoute::Other);
+    }
+
+    #[test]
+    fn unparseable_sender_routes_as_other() {
+        let decision = classify_inbound_facts("", "Anything", "body");
+        assert_eq!(decision.route, InboxRoute::Other);
+    }
+
+    #[test]
+    fn storage_spellings_match_the_store_route_vocabulary() {
+        assert_eq!(InboxRoute::Nef.as_str(), store::inbox::route::NEF);
+        assert_eq!(
+            InboxRoute::ClaimsAgent.as_str(),
+            store::inbox::route::CLAIMS_AGENT
+        );
+        assert_eq!(InboxRoute::Chambers.as_str(), store::inbox::route::CHAMBERS);
+        assert_eq!(InboxRoute::Other.as_str(), store::inbox::route::OTHER);
+    }
+
+    #[test]
+    fn the_webhook_adapter_feeds_the_same_pure_core() {
+        let email = InboundEmail {
+            from: "<ECF_Reply@uscourts.gov>".into(),
+            subject: "Notice of Electronic Filing".into(),
+            text: "This is an automatic email message from the CM/ECF system.".into(),
+            ..Default::default()
+        };
+        let adapted = classify_inbound(&email);
+        let facts = classify_inbound_facts(&email.from, &email.subject, &email.text);
+        assert_eq!(adapted, facts);
+        assert_eq!(adapted.route, InboxRoute::Nef);
     }
 }
