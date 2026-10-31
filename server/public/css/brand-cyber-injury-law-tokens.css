@@ -120,6 +120,11 @@
        — the browser accessibility gate found this on the `/design` component
        audit, in dark only. Warning needs no twin: #ffc107 is already 10.6:1. */
     --nav-color-danger: #ea868f;
+    /* Success needed the same twin and was missed the same way: #198754 is
+       3.82:1 on the surface a dashboard delta (`.nav-chart__delta--up`) sits
+       on. #75b798 is its dark-scheme text emphasis, 6.9:1 on the raised
+       surface — the `/design` gate found it in dark only (run 41204389352). */
+    --nav-color-success: #75b798;
     --nav-color-bg: #0d1117;
     --nav-color-surface: #161b22;
     --nav-color-surface-raised: #1c2128;
