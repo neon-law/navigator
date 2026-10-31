@@ -2,8 +2,8 @@ head_title: "{site_name} | Citizenship"
 meta_description: >-
   Abhaya Immigration, a Shook Law PC practice, guides lawful permanent
   residents through naturalization: eligibility, the N-400, the interview,
-  and the oath. Government filing fees are separate, and no approval or
-  timeline is promised.
+  the tests, and the oath. Government filing fees are separate, and no
+  approval or timeline is promised.
 title: Citizenship
 tagline: Naturalization, from the N-400 to the oath.
 skin: practice
@@ -15,16 +15,62 @@ bands:
       - - text: >-
             Most naturalization applicants are lawful permanent residents
             who have held a green card for five years, or for three years
-            when married to and living with a United States citizen. The
-            general requirements also include continuous residence and
-            physical presence in the United States, good moral character,
-            and an English and civics test, with accommodations and
-            exceptions defined by law.
+            when married to and living with a United States citizen. Children
+            born abroad to a United States citizen parent sometimes acquire
+            citizenship automatically through that parent — a different
+            question from naturalization, and worth checking before anyone
+            files an N-400.
       - - text: >-
             Time outside the country, certain criminal history, and
             selective-service registration questions are the places cases
             most often go sideways. It is worth reviewing your own record
-            against the rules before you file.
+            against the rules before you file, because the application asks
+            about all of it under oath.
+  - kind: cards
+    anchor: eligibility
+    overline: Eligibility
+    heading: The general requirements
+    description: >-
+      The rules most applicants must meet. Exceptions and edge cases exist,
+      and some run in your favor.
+    items:
+      - title: Residence and presence
+        body:
+          - - text: >-
+                Applicants are generally eighteen or older, have held a
+                green card for the required five years (three under the
+                marriage rule), have lived mainly in the United States,
+                and have lived for at least three months in the state or
+                district where they file. A trip of more than six months
+                can interrupt the continuity of residence; a trip of a
+                year or more is presumed to do so unless the applicant can
+                explain it within the rules.
+      - title: Good moral character
+        body:
+          - - text: >-
+                The agency looks at the applicant's conduct during a
+                statutory period — arrests and citations, tax compliance,
+                family support obligations, and selective-service
+                registration for men. Old events can still matter, and
+                honesty about them matters more; the application is signed
+                under penalty of perjury.
+      - title: English and civics
+        body:
+          - - text: >-
+                Most applicants take an English test and a civics test.
+                The law defines exceptions: reduced requirements for
+                applicants who have held a green card for many years and
+                are of an advanced age, and accommodations for medically
+                documented disabilities on a separate form.
+      - title: What disqualifies people
+        body:
+          - - text: >-
+                Certain criminal convictions, false claims to United
+                States citizenship, unlawful voting, and abandoning
+                residence through long absences are the classic problems —
+                and some of them bar naturalization permanently, not just
+                for a waiting period. These are the facts to sort out
+                before filing, not after.
   - kind: steps
     anchor: citizenship-process
     overline: How the process works
@@ -38,7 +84,9 @@ bands:
           - - text: >-
                 The naturalization application is Form N-400, filed with
                 United States Citizenship and Immigration Services with the
-                government fee and supporting documents.
+                government fee and supporting documents. Filing is allowed
+                up to ninety days before the required years of residence
+                are complete.
       - title: Biometrics
         body:
           - - text: >-
@@ -47,36 +95,145 @@ bands:
       - title: The interview and the tests
         body:
           - - text: >-
-                An officer reviews the application, asks about your history,
-                and administers the English and civics tests unless an
-                exception applies.
+                An officer reviews the application, asks about your
+                history, and administers the English and civics tests
+                unless an exception applies. Answers here are under oath —
+                the interview is where a record that was not disclosed on
+                the application comes to light.
+      - title: The decision
+        body:
+          - - text: >-
+                USCIS grants the application, continues it to fix a
+                problem — a retaken test or a missing document — or
+                denies it. A continued case is not a denial; the file
+                returns for a new decision later. We cannot promise
+                approval or a timeline; the agency decides.
       - title: The oath
         body:
           - - text: >-
                 If USCIS approves the application, the last step is the
                 Oath of Allegiance at a ceremony, where the certificate of
-                naturalization is issued. We cannot promise approval or a
-                timeline; the agency decides.
+                naturalization is issued.
+  - kind: cards
+    anchor: documents
+    overline: Documents
+    heading: What to gather
+    description: >-
+      What most N-400 files need. The form instructions govern the
+      specifics for your situation.
+    items:
+      - title: Green card and identity
+        body:
+          - - text: >-
+                The permanent resident card, current identification, and
+                the address history for the required period.
+      - title: Residence and travel history
+        body:
+          - - text: >-
+                Every trip outside the United States during the required
+                period — dates left, dates returned, and where. Long trips
+                are the fact that most often needs explaining.
+      - title: Records of any arrests or citations
+        body:
+          - - text: >-
+                Even old ones, even dismissed ones: the police report,
+                court records, and the final disposition. Expunged matters
+                are generally still disclosable for immigration purposes.
+      - title: The marriage-rule documents
+        body:
+          - - text: >-
+                Applicants under the three-year rule add the marriage
+                certificate, proof the citizen spouse has been a citizen
+                for the required period, and evidence of the shared life.
+                Men born after a certain date list selective-service
+                registration; tax returns support the good-moral-character
+                showing.
   - kind: statement
-    heading: What to gather and what it costs
-    lead: Documents and fees, stated plainly.
+    heading: What the process costs
+    lead: Two fees, two different payers.
     body:
       - - text: >-
-            Most applicants need a green card, travel and residence history
-            for the required period, records for any arrests or citations,
-            and marriage documents when applying under the three-year rule.
+            Government filing fees are separate from any attorney fee, and
+            they change. The current amount is published on USCIS.gov.
+            Abhaya Immigration charges a flat fee agreed in writing before
+            work begins; the
+      - - href: "https://www.abhayaimmigration.com/services"
+          text: fee catalog on abhayaimmigration.com
       - - text: >-
-            The government charges its own filing fee, which is separate
-            from any attorney fee. The current amount is published on
-            USCIS.gov, and it changes. We cannot promise approval or a
+            lists what each service costs. We cannot promise approval or a
             timeline; the relevant agency decides.
+  - kind: cards
+    anchor: questions
+    overline: Questions
+    heading: What people ask most
+    items:
+      - title: When can I file the N-400?
+        body:
+          - - text: >-
+                The form can be filed up to ninety days before the
+                required years of residence are complete. Filing early
+                does not shorten the residence requirement itself; the
+                approval cannot happen before the years are met.
+      - title: What happens if I fail the English or civics test?
+        body:
+          - - text: >-
+                The agency usually continues the case and retests the
+                failed part, commonly between sixty and ninety days later.
+                Failing the retake can lead to denial, which is why
+                preparation — and the law's age-and-years exceptions —
+                matter before the first interview.
+      - title: I was arrested years ago. Does that end my case?
+        body:
+          - - text: >-
+                Not necessarily. An arrest is a fact the application asks
+                about; whether it affects good moral character depends on
+                what happened and how long ago. What damages cases is the
+                mismatch between a record and an application that pretends
+                it does not exist. Disclose first; then evaluate.
+      - title: What about my trips abroad?
+        body:
+          - - text: >-
+                Every trip during the required period goes on the
+                application. Trips over six months raise continuity
+                questions; trips over a year are presumed to break
+                residence unless an exception applies. Frequent short
+                absences can also draw scrutiny.
+      - title: Will my children become citizens when I do?
+        body:
+          - - text: >-
+                Possibly — a child under eighteen can acquire citizenship
+                automatically through a parent in defined situations, and
+                some children naturalize on their own N-400s at a reduced
+                age. Which rule fits a family is a case-specific question
+                — worth checking before paperwork begins.
+      - title: Do I have to give up my current citizenship?
+        body:
+          - - text: >-
+                The United States permits citizenship of two countries.
+                Whether the other country does is that country's law, not
+                this one's. The Oath of Allegiance renounces allegiance to
+                other states; how other countries treat that is worth
+                confirming with their authorities.
+  - kind: statement
+    heading: Start with the free tools
+    lead: Some answers are already public.
+    body:
+      - - text: >-
+            The USCIS case-status page, the processing-times page, and the
+            fee calculator are free and current, and our
+      - - href: /immigration/free-support
+          text: free-support hub
+      - - text: >-
+            explains when each one helps and where to find nonprofit legal
+            help. The information on this page is general, not legal advice
+            about your matter.
   - kind: cta
     heading: Review your naturalization case with Abhaya Immigration
     body: >-
-      A first conversation covers whether you meet the general requirements,
-      what your record shows, and what the application needs. Abhaya
-      Immigration, a Shook Law PC practice, guides applicants through
-      naturalization.
+      A first conversation covers whether you meet the general
+      requirements, what your record shows, and what the application
+      needs. Abhaya Immigration, a Shook Law PC practice, guides applicants
+      through naturalization.
     email: "{firm_email}"
     action:
       href: "https://www.abhayaimmigration.com/"
