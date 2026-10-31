@@ -271,7 +271,7 @@ async fn scrape_notices(
             AdapterError::StructureDrift { step, detail } => {
                 ScraperError::SiteStructure { step, detail }
             }
-            last => ScraperError::LoginFailed {
+            last @ AdapterError::Transient { .. } => ScraperError::LoginFailed {
                 site: adapter.site().to_string(),
                 attempts,
                 last: last.to_string(),
