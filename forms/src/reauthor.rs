@@ -134,6 +134,12 @@ const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
             "../../templates/notations/forms/united_states/washington/king_county/kc__minor_name_change_petition.fields"
         ),
     ),
+    (
+        "kc__small_claims_notice",
+        include_str!(
+            "../../templates/notations/forms/united_states/washington/king_county/kc__small_claims_notice.fields"
+        ),
+    ),
 ];
 
 /// The re-authored field manifest for one form, or `None` when the form
