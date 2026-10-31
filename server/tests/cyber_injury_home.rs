@@ -104,7 +104,7 @@ async fn public_pages_emit_complete_open_graph_and_canonical_metadata() {
             let url = format!("{origin}{path}");
             for tag in [
                 format!(r#"content="{title}" property="og:title""#),
-                format!(r#"content="CyberInjuryLaw" property="og:site_name""#),
+                r#"content="CyberInjuryLaw" property="og:site_name""#.to_string(),
                 format!(r#"content="{description}" property="og:description""#),
                 format!(r#"content="{url}" property="og:url""#),
                 format!(
