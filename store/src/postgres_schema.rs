@@ -1174,8 +1174,14 @@ mod tests {
                 include_str!("../postgres/migrations/20261030010000_add_template_firm.sql"),
             ),
             (
-                "20261030120000_create_notation_machine_state.sql",
-                include_str!("../postgres/migrations/20261030120000_create_notation_machine_state.sql"),
+                "20261030130000_create_notation_machine_state.sql",
+                include_str!(
+                    "../postgres/migrations/20261030130000_create_notation_machine_state.sql"
+                ),
+            ),
+            (
+                "20261030120000_create_project_task.sql",
+                include_str!("../postgres/migrations/20261030120000_create_project_task.sql"),
             ),
             (
                 "20261031010000_create_navigator_graph.sql",
