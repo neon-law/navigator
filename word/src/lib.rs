@@ -9,6 +9,7 @@ use base64::Engine as _;
 
 mod adapter;
 pub mod anchor;
+pub mod import;
 pub mod matter;
 mod model;
 pub mod notation;
@@ -16,10 +17,12 @@ pub mod outline;
 pub mod paper;
 mod preflight;
 pub mod protocol;
+pub mod provenance;
 mod render;
 pub mod service;
 
 pub use adapter::{AdapterError, ManagedAdapter, WordAdapter};
+pub use import::{apply_import, dry_run_import, plan_import, ImportError, ImportPlan};
 pub use model::{
     Block, BreakKind, Comment, Diagnostic, DiagnosticCode, DiagnosticSeverity, Document,
     DocumentModel, FieldKind, Inline, NumberingDefinition, NumberingIdentity, OriginalSource,
@@ -34,7 +37,14 @@ pub use outline::{
 };
 pub use preflight::is_docx_filename;
 pub use protocol::{ExportChange, ExportReply, ExportRequest, VerifyReply, VerifyRequest};
-pub use render::{render_notation, PleadingFrame, RenderError, RenderLetterhead, RenderOptions};
+pub use provenance::{
+    read_provenance, template_hash, template_hash_of_path, verify_template_hash, Provenance,
+    ProvenanceError, ProvenanceRecord, PROVENANCE_PART, PROVENANCE_RELATIONSHIP_TYPE,
+};
+pub use render::{
+    render_notation, source_blocks, PleadingFrame, RenderError, RenderLetterhead, RenderOptions,
+    SourceBlock, SourceBlockKind,
+};
 
 /// Verify that a native export retained the governed block identity and
 /// structural kind of the imported baseline. Text may change and revision

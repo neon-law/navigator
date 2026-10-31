@@ -36,6 +36,7 @@ mod mail;
 #[allow(dead_code)]
 mod lsp_source_export;
 mod mcp_bridge;
+mod notation_import;
 mod notation_kinds;
 mod notations_preview;
 mod notices;
@@ -2300,6 +2301,29 @@ enum NotationCmd {
         /// outside a signature block, or drafting note.
         #[arg(long)]
         preview: bool,
+    },
+    /// Apply an edited Word document back into the notation template it was
+    /// rendered from — the second half of `notation word`.
+    ///
+    /// The edited `.docx` carries the export's provenance record; the
+    /// import verifies the template hash and refuses a template that
+    /// changed since the export, refuses drafts still carrying tracked
+    /// changes or review comments, and refuses any edit that drops a
+    /// `{{placeholder}}` or `{{> partial}}` the template needs or invents
+    /// one it never had. Tables are carried verbatim and never touched.
+    /// With `--dry-run` the plan and the updated template print and
+    /// nothing is written.
+    Import {
+        /// Path to the notation template (`.md`) the document was rendered
+        /// from. Updated in place without `--dry-run`.
+        file: PathBuf,
+        /// Path to the edited Word document (`navigator notation word`'s
+        /// output, edited in Word and re-saved). Must end in `.docx`.
+        edited: PathBuf,
+        /// Print the plan and the updated template without writing
+        /// anything.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -4870,6 +4894,11 @@ fn run() -> ExitCode {
                 answers,
                 preview,
             } => run_render(&file, &out, &answers, "docx", preview),
+            NotationCmd::Import {
+                file,
+                edited,
+                dry_run,
+            } => notation_import::run(&file, &edited, dry_run),
         },
         // `lsp publish` and the `assets` pipeline
         // carry operator blast radius but are not cluster lifecycle, so they
@@ -7754,6 +7783,7 @@ fn run_render(
     let bytes = match render_notation_artifact(
         file,
         &body,
+        contents.as_bytes(),
         output_extension,
         format,
         &letterhead,
@@ -7858,9 +7888,11 @@ fn has_extension(out: &Path, expected: &str) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case(expected))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_notation_artifact(
     file: &Path,
     body: &str,
+    template_bytes: &[u8],
     output_extension: &str,
     format: pdf::OutputFormat,
     letterhead: &pdf::Letterhead,
@@ -7883,12 +7915,28 @@ fn render_notation_artifact(
             _ => None,
         };
         let source_revision = notation_render_revision(file);
+        // Every Word render is a draft a lawyer may edit and import back,
+        // so it embeds the export provenance the import verifies: the
+        // template's file name and the hash of the template's bytes at
+        // export time. The name — not the full path — keeps renders
+        // byte-identical wherever the template lives; `notation import`
+        // takes the template path explicitly and verifies it by hash.
+        let template_name = file.file_name().map_or_else(
+            || file.to_string_lossy().into_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let template_hash = word::template_hash(template_bytes);
+        let provenance = word::Provenance {
+            template_path: template_name.as_str(),
+            template_hash: template_hash.as_str(),
+        };
         return word::render_notation(
             body,
             word_letterhead.as_ref(),
             &word::RenderOptions {
                 source_revision: source_revision.as_deref(),
                 pleading,
+                provenance: Some(provenance),
             },
         )
         .map_err(|error| format!("render Word document: {error}"));

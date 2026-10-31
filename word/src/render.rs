@@ -6,6 +6,8 @@ use std::io::{Cursor, Write as _};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use zip::write::SimpleFileOptions;
 
+use crate::provenance::{Provenance, PROVENANCE_PART, PROVENANCE_RELATIONSHIP_TYPE};
+
 /// Firm identity carried by a letter-frame Word document.
 pub struct RenderLetterhead<'a> {
     pub name: &'a str,
@@ -21,6 +23,10 @@ pub struct RenderOptions<'a> {
     pub source_revision: Option<&'a str>,
     /// Court-paper geometry for a pleading; `None` for every other frame.
     pub pleading: Option<PleadingFrame>,
+    /// Export provenance for a draft a lawyer will edit and import back:
+    /// which template produced the package and its hash at export time.
+    /// `None` leaves the package without the provenance part.
+    pub provenance: Option<Provenance<'a>>,
 }
 
 /// Court-paper geometry for a pleading's Word render, in Word's own units:
@@ -128,7 +134,7 @@ pub fn render_notation(
     write_entry(
         &mut archive,
         "_rels/.rels",
-        ROOT_RELS.as_bytes(),
+        root_rels(options.provenance.is_some()).as_bytes(),
         file_options,
     )?;
     write_entry(
@@ -143,6 +149,14 @@ pub fn render_notation(
         APP_XML.as_bytes(),
         file_options,
     )?;
+    if let Some(provenance) = &options.provenance {
+        write_entry(
+            &mut archive,
+            PROVENANCE_PART,
+            provenance.to_xml().as_bytes(),
+            file_options,
+        )?;
+    }
     write_entry(
         &mut archive,
         "word/document.xml",
@@ -219,8 +233,68 @@ fn write_entry(
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
+/// One top-level Markdown block as the renderer's own walker sees it: the
+/// normalized text the Word package carries and the byte range of that
+/// block's source. `notation import` aligns a parsed, edited package against
+/// these and splices replacements back into the template at the same ranges.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceBlock {
+    pub kind: SourceBlockKind,
+    pub text: String,
+    pub source: std::ops::Range<usize>,
+}
+
+/// The Markdown shape a source block was written as. Drives the prefix
+/// (`## `, `- `, `> `) a rewritten block keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceBlockKind {
+    Heading,
+    Paragraph,
+    ListItem,
+    Quote,
+    Table,
+    Rule,
+}
+
+/// The block sequence of `markdown` exactly as [`render_notation`] walks it —
+/// one source of truth for both the Word package and the import baseline, so
+/// the two can never disagree about which paragraph is which.
+#[must_use]
+pub fn source_blocks(markdown: &str) -> Vec<SourceBlock> {
+    blocks_with_source(markdown)
+        .into_iter()
+        .map(|pair| SourceBlock {
+            kind: pair.kind,
+            text: match &pair.block {
+                Block::Paragraph(paragraph) => paragraph.text.clone(),
+                Block::Table(table) => table
+                    .rows
+                    .iter()
+                    .flat_map(|row| row.iter())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            },
+            source: pair.source,
+        })
+        .collect()
+}
+
+struct SourcePair {
+    block: Block,
+    kind: SourceBlockKind,
+    source: std::ops::Range<usize>,
+}
+
 fn blocks(markdown: &str) -> Vec<Block> {
+    blocks_with_source(markdown)
+        .into_iter()
+        .map(|pair| pair.block)
+        .collect()
+}
+
+#[allow(clippy::too_many_lines)]
+fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
     let mut result = Vec::new();
     let mut current: Option<Paragraph> = None;
     let mut table: Option<Table> = None;
@@ -230,19 +304,35 @@ fn blocks(markdown: &str) -> Vec<Block> {
     let mut quote_depth = 0usize;
     let mut group: Option<usize> = None;
     let mut groups = 0usize;
-    for event in Parser::new_ext(
+    // Source tracking: where the block being accumulated starts and the
+    // Markdown shape it was written as. Parallel to `result` — a range is
+    // pushed exactly when a block is.
+    let mut current_start: Option<usize> = None;
+    let mut current_kind = SourceBlockKind::Paragraph;
+    let mut table_start = 0usize;
+    for (event, range) in Parser::new_ext(
         markdown,
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH,
-    ) {
+    )
+    .into_offset_iter()
+    {
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
+                current_start.get_or_insert(range.start);
+                current_kind = SourceBlockKind::Heading;
                 current = Some(Paragraph {
                     style: Some(heading_style(level)),
                     ..Paragraph::default()
                 });
             }
-            Event::Start(Tag::Paragraph) => current = Some(Paragraph::default()),
+            Event::Start(Tag::Paragraph) => {
+                current_start.get_or_insert(range.start);
+                current_kind = SourceBlockKind::Paragraph;
+                current = Some(Paragraph::default());
+            }
             Event::Start(Tag::Item) => {
+                current_start.get_or_insert(range.start);
+                current_kind = SourceBlockKind::ListItem;
                 let mut paragraph = Paragraph::default();
                 paragraph
                     .text
@@ -251,7 +341,10 @@ fn blocks(markdown: &str) -> Vec<Block> {
             }
             Event::Start(Tag::List(_)) => list_depth += 1,
             Event::Start(Tag::BlockQuote(_)) => quote_depth += 1,
-            Event::Start(Tag::Table(_)) => table = Some(Table { rows: Vec::new() }),
+            Event::Start(Tag::Table(_)) => {
+                table = Some(Table { rows: Vec::new() });
+                table_start = range.start;
+            }
             Event::Start(Tag::TableHead | Tag::TableRow) => row = Vec::new(),
             Event::Start(Tag::TableCell) => cell = Some(String::new()),
             Event::End(TagEnd::TableCell) => row.extend(cell.take()),
@@ -266,7 +359,11 @@ fn blocks(markdown: &str) -> Vec<Block> {
                     for row in &mut finished.rows {
                         row.resize(width, String::new());
                     }
-                    result.push(Block::Table(finished));
+                    result.push(SourcePair {
+                        kind: SourceBlockKind::Table,
+                        source: table_start..range.end,
+                        block: Block::Table(finished),
+                    });
                 }
             }
             Event::Text(text) | Event::Code(text) if cell.is_some() => {
@@ -301,11 +398,18 @@ fn blocks(markdown: &str) -> Vec<Block> {
                     .text
                     .push('\n');
             }
-            Event::Rule => result.push(Block::Paragraph(Paragraph {
-                text: "────────────────────────".into(),
-                group,
-                ..Paragraph::default()
-            })),
+            Event::Rule => {
+                let text = "────────────────────────".into();
+                result.push(SourcePair {
+                    kind: SourceBlockKind::Rule,
+                    source: range,
+                    block: Block::Paragraph(Paragraph {
+                        text,
+                        group,
+                        ..Paragraph::default()
+                    }),
+                });
+            }
             Event::Html(html) | Event::InlineHtml(html)
                 if crate::paper::is_html_line_break(&html) =>
             {
@@ -346,7 +450,16 @@ fn blocks(markdown: &str) -> Vec<Block> {
                     strip_trailing_escaped_break(&mut paragraph.text);
                     if !paragraph.text.is_empty() {
                         paragraph.group = group;
-                        result.push(Block::Paragraph(paragraph));
+                        let kind = if quote_depth > 0 {
+                            SourceBlockKind::Quote
+                        } else {
+                            current_kind
+                        };
+                        result.push(SourcePair {
+                            kind,
+                            source: current_start.take().unwrap_or(range.start)..range.end,
+                            block: Block::Paragraph(paragraph),
+                        });
                     }
                 }
             }
@@ -357,7 +470,11 @@ fn blocks(markdown: &str) -> Vec<Block> {
     }
     if let Some(mut paragraph) = current.filter(|paragraph| !paragraph.text.is_empty()) {
         paragraph.group = group;
-        result.push(Block::Paragraph(paragraph));
+        result.push(SourcePair {
+            kind: current_kind,
+            source: current_start.unwrap_or(markdown.len())..markdown.len(),
+            block: Block::Paragraph(paragraph),
+        });
     }
     result
 }
@@ -835,6 +952,25 @@ fn xml(value: &str) -> String {
 }
 
 const ROOT_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>"#;
+
+/// The package's root relationships, plus the provenance part's relationship
+/// when the package carries a provenance record.
+fn root_rels(provenance: bool) -> String {
+    const CLOSE: &str = "</Relationships>";
+    let mut rels = ROOT_RELS
+        .strip_suffix(CLOSE)
+        .unwrap_or(ROOT_RELS)
+        .to_string();
+    if provenance {
+        let _ = write!(
+            rels,
+            "<Relationship Id=\"rId4\" Type=\"{PROVENANCE_RELATIONSHIP_TYPE}\" \
+             Target=\"docProps/navigator.xml\"/>"
+        );
+    }
+    rels.push_str(CLOSE);
+    rels
+}
 const HEADER_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/logo-neon-law.png"/></Relationships>"#;
 const APP_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Neon Law Navigator</Application></Properties>"#;
 const STYLES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:rFonts w:ascii="Noto Serif" w:hAnsi="Noto Serif"/><w:sz w:val="22"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="9"/><w:qFormat/><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:qFormat/><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="heading 4"/><w:basedOn w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Heading5"><w:name w:val="heading 5"/><w:basedOn w:val="Normal"/></w:style></w:styles>"#;
@@ -872,6 +1008,7 @@ mod tests {
             "# Complaint\n\n## 1. Section\n\nPlaintiff states as follows.",
             None,
             &RenderOptions {
+                provenance: None,
                 source_revision: None,
                 pleading: Some(frame),
             },
@@ -973,6 +1110,7 @@ mod tests {
             CAPTIONED,
             None,
             &RenderOptions {
+                provenance: None,
                 source_revision: None,
                 pleading: Some(frame),
             },
@@ -1062,6 +1200,7 @@ mod tests {
             "Plain body.\n",
             None,
             &RenderOptions {
+                provenance: None,
                 source_revision: None,
                 pleading: Some(RAILED),
             },
@@ -1080,6 +1219,7 @@ mod tests {
             &format!("# {long}\n"),
             None,
             &RenderOptions {
+                provenance: None,
                 source_revision: None,
                 pleading: Some(RAILED),
             },
@@ -1117,6 +1257,7 @@ mod tests {
             "```caption\nnot a field line\n```\n",
             None,
             &RenderOptions {
+                provenance: None,
                 source_revision: None,
                 pleading: Some(RAILED),
             },
@@ -1165,6 +1306,7 @@ mod tests {
                 logo_png: b"png",
             }),
             &RenderOptions {
+                provenance: None,
                 source_revision: Some("abc123"),
                 pleading: None,
             },
@@ -1280,6 +1422,7 @@ mod tests {
             FEE_TABLE,
             None,
             &RenderOptions {
+                provenance: None,
                 source_revision: None,
                 pleading: Some(RAILED),
             },
