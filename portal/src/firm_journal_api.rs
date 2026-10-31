@@ -1304,7 +1304,7 @@ mod tests {
     /// One listed transaction, with optional JSON-field overrides; a `null`
     /// override removes the field. `amount` stays a raw JSON numeral because
     /// the import must read the provider's exact decimal text.
-    fn mercury_tx(id: Uuid, overrides: serde_json::Value) -> cloud::mercury::Transaction {
+    fn mercury_tx(id: Uuid, overrides: &serde_json::Value) -> cloud::mercury::Transaction {
         let mut base = serde_json::json!({
             "id": id,
             "accountId": Uuid::now_v7(),
@@ -1326,6 +1326,10 @@ mod tests {
         serde_json::from_value(base).unwrap()
     }
 
+    /// The shared PostgreSQL fixture migrates the canonical schema once per
+    /// process.
+    static MIGRATED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
     /// The Postgres handle the import writes through, with the schema
     /// migrated once per process. `None` where no PostgreSQL fixture is
     /// configured — CI sets `NAV_REQUIRE_POSTGRES=1` so its tests never skip.
@@ -1337,7 +1341,6 @@ mod tests {
             );
             return None;
         }
-        static MIGRATED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
         MIGRATED
             .get_or_init(|| async {
                 let pg = store::postgres::PostgresDb::from_env().await.unwrap();
@@ -1396,7 +1399,7 @@ mod tests {
         (code, project.id)
     }
 
-    async fn import_context<'a>(
+    fn import_context<'a>(
         surreal: &'a store::surreal::SurrealDb,
         pg: &'a store::postgres::PostgresDb,
         storage: &'a std::sync::Arc<dyn cloud::StorageService>,
@@ -1426,8 +1429,7 @@ mod tests {
         let (other, other_id) = import_project(&surreal).await;
         let projects = vec![(code, project_id), (other, other_id)];
         let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context =
-            import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
+        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false);
         let cases = [
             (serde_json::json!({ "postedAt": null }), "unposted"),
             (
@@ -1450,7 +1452,7 @@ mod tests {
             ),
         ];
         for (patch, reason) in cases {
-            let outcome = import_one(&context, &mercury_tx(Uuid::now_v7(), patch)).await;
+            let outcome = import_one(&context, &mercury_tx(Uuid::now_v7(), &patch)).await;
             assert_eq!(outcome.disposition, "skipped", "case {reason}");
             assert_eq!(outcome.reason.as_deref(), Some(reason), "case {reason}");
             assert_eq!(outcome.project_code, None, "case {reason}");
@@ -1468,10 +1470,10 @@ mod tests {
         let (code, project_id) = import_project(&surreal).await;
         let projects = vec![(code.clone(), project_id)];
         let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, true).await;
+        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, true);
         let transaction = mercury_tx(
             Uuid::now_v7(),
-            serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
+            &serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
         );
         let outcome = import_one(&context, &transaction).await;
         assert_eq!(outcome.disposition, "planned");
@@ -1489,11 +1491,10 @@ mod tests {
         let (code, project_id) = import_project(&surreal).await;
         let projects = vec![(code.clone(), project_id)];
         let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context =
-            import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
+        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false);
         let transaction = mercury_tx(
             Uuid::now_v7(),
-            serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
+            &serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
         );
         let first = import_one(&context, &transaction).await;
         assert_eq!(first.disposition, "imported");
@@ -1507,7 +1508,7 @@ mod tests {
         // then reports the rejection instead of charging the card.
         let refused = mercury_tx(
             Uuid::now_v7(),
-            serde_json::json!({
+            &serde_json::json!({
                 "counterpartyName": "",
                 "note": format!("Acme Supplies {code}")
             }),
@@ -1527,11 +1528,10 @@ mod tests {
         let (code, project_id) = import_project(&surreal).await;
         let projects = vec![(code.clone(), project_id)];
         let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context =
-            import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
+        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false);
         let transaction = mercury_tx(
             Uuid::now_v7(),
-            serde_json::json!({
+            &serde_json::json!({
                 "counterpartyName": format!("Acme Supplies {code}"),
                 "attachments": [{
                     "fileName": "receipt.pdf",
