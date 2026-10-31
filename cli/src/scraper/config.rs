@@ -206,6 +206,9 @@ pub(crate) fn parse_section(
     let Some(section) = section else {
         return Ok(ScraperConfig::default());
     };
+    if section.is_null() {
+        return Ok(ScraperConfig::default());
+    }
     let Some(mapping) = section.as_mapping() else {
         return Err(ConfigError::NotAMapping);
     };
