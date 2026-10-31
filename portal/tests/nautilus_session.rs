@@ -76,7 +76,7 @@ async fn fixture() -> Option<Fixture> {
     let model: Arc<dyn gateway::ModelProvider> = stub.clone();
     let app = nautilus::routes_with(
         &state,
-        Some(pg),
+        Some(pg.clone()),
         SandboxBackends {
             model: Some(model),
             // The outage posture: no provider configured, so every search
@@ -172,7 +172,7 @@ async fn seed_spent(surreal: &SurrealDb, person_id: Uuid, spent_cents: i64) {
 /// The billing month the router serves, spelled the way the ledger keys it.
 fn period() -> String {
     let now = Utc::now().date_naive();
-    store::sandbox_usage::billing_period(now.year(), now.month() as u8)
+    store::sandbox_usage::billing_period(now.year(), now.month() as u32)
 }
 
 /// The ledger row after a test's traffic.

@@ -24,7 +24,6 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use axum::Router;
 use chrono::Utc;
-use gateway::StubModelProvider;
 use portal::test_support::{app_state, TEST_SESSION_KEY};
 use portal::{nautilus, SessionData, SessionStore};
 use store::persons::{NewPerson, Role};

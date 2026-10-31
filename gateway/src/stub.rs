@@ -26,7 +26,7 @@ pub struct StubModelProvider {
     input_rate_cents_per_mtok: u64,
     output_rate_cents_per_mtok: u64,
     /// When set, every completion fails with this message.
-    failure: Option<String>,
+    failure: Mutex<Option<String>>,
     /// Scripted tool-call rounds: each successful completion pops the
     /// front entry and reports those calls instead of none. An empty
     /// script means every completion is a plain text reply.
@@ -42,7 +42,7 @@ impl Default for StubModelProvider {
             output_tokens: 500,
             input_rate_cents_per_mtok: 200,
             output_rate_cents_per_mtok: 1_000,
-            failure: None,
+            failure: Mutex::new(None),
             tool_script: Mutex::new(Vec::new()),
             calls: Mutex::new(Vec::new()),
         }
@@ -71,15 +71,18 @@ impl StubModelProvider {
     /// Inject a failure mode: every subsequent completion fails with this
     /// message. `None` clears it. Modeled on a backend outage — the
     /// shape the sandbox session must handle without billing anyone.
-    pub fn set_failure(&mut self, message: Option<String>) {
-        self.failure = message;
+    pub fn set_failure(&self, message: Option<String>) {
+        *self
+            .failure
+            .lock()
+            .expect("stub provider failure-mode lock") = message;
     }
 
     /// Script one round of tool calls: the next successful completion
     /// reports them, the one after reports none (unless more rounds are
     /// queued). Models the search-tool loop deterministically — the
     /// session asks, the model answers with a call, the loop re-prompts.
-    pub fn queue_tool_calls(&mut self, calls: Vec<crate::ToolCall>) {
+    pub fn queue_tool_calls(&self, calls: Vec<crate::ToolCall>) {
         self.tool_script
             .lock()
             .expect("stub provider tool-script lock")
@@ -101,7 +104,12 @@ impl ModelProvider for StubModelProvider {
         {
             let mut calls = self.calls.lock().expect("stub provider lock");
             calls.push(req);
-            if let Some(message) = &self.failure {
+            if let Some(message) = self
+                .failure
+                .lock()
+                .expect("stub provider failure-mode lock")
+                .as_ref()
+            {
                 // Fail before producing any usage: an `Err` carries no
                 // `CompletionResult`, so there is nothing for the meter
                 // to price — the failure-produces-no-usage property by

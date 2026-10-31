@@ -411,7 +411,7 @@ async fn credit_view(
 #[must_use]
 fn current_period() -> String {
     let now = chrono::Utc::now().date_naive();
-    billing_period(now.year(), now.month() as u8)
+    billing_period(now.year(), now.month() as u32)
 }
 
 /// The composer's POST: one prompt, one exchange.
