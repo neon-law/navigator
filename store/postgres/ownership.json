@@ -47,6 +47,13 @@
     "scope": "firm",
     "through": "firm_id or Firm identity; referenced Projects must have the same Firm"
   },
+  "billed_call": {
+    "migration_slice": "billed-calls",
+    "parity_scenario": "one row per completed CallSid; idempotent re-record and content-mismatch conflict; attribution sets the project and never the call facts",
+    "scope": "firm",
+    "target_only": true,
+    "through": "firm_id as resolved by the webhook spine at ingest; no Surreal source"
+  },
   "brand_phone_number": {
     "migration_slice": "brand-phone-numbers",
     "parity_scenario": "one row per Firm receiving number; idempotent re-registration and content-mismatch conflict; per-number credential reference",

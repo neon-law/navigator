@@ -481,6 +481,22 @@ pub fn next_action(
     "Review"
 }
 
+/// Rebuild the deduped result for an already-ingested provider id: the
+/// caller receives the original conversation/message pair, marked `deduped`.
+async fn replay_existing_message(
+    db: &SurrealDb,
+    message_id: Uuid,
+) -> Result<IngestedInbound, InboxError> {
+    let Some(message) = message_by_id(db, message_id).await? else {
+        return Err(InboxError::NotFound);
+    };
+    Ok(IngestedInbound {
+        conversation_id: message.conversation_id,
+        message_id: message.id,
+        deduped: true,
+    })
+}
+
 /// Ingest one provider delivery. A repeated webhook with the same Firm,
 /// channel, account, and provider message id returns the original row.
 ///
@@ -512,14 +528,7 @@ pub async fn ingest_inbound(
     )
     .await?
     {
-        let Some(message) = message_by_id(db, existing).await? else {
-            return Err(InboxError::NotFound);
-        };
-        return Ok(IngestedInbound {
-            conversation_id: message.conversation_id,
-            message_id: message.id,
-            deduped: true,
-        });
+        return replay_existing_message(db, existing).await;
     }
 
     let conversation = match find_open_thread(db, inbound).await? {
@@ -570,14 +579,7 @@ pub async fn ingest_inbound(
         )
         .await?
         {
-            let Some(message) = message_by_id(db, existing).await? else {
-                return Err(InboxError::NotFound);
-            };
-            return Ok(IngestedInbound {
-                conversation_id: message.conversation_id,
-                message_id: message.id,
-                deduped: true,
-            });
+            return replay_existing_message(db, existing).await;
         }
         return Err(error);
     }
@@ -3981,9 +3983,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_call_opens_one_thread_per_caller_and_dedups_by_call_sid() {
-        let db = mem_surreal().await;
-        let world = world(&db).await;
-        fn call<'a>(firm: Uuid, call_sid: &'a str) -> IngestInbound<'a> {
+        fn call(firm: Uuid, call_sid: &str) -> IngestInbound<'_> {
             IngestInbound {
                 firm_id: firm,
                 brand_key: Some("neon"),
@@ -4008,6 +4008,8 @@ mod tests {
                 occurred_at: "2026-10-30T18:00:00+00:00",
             }
         }
+        let db = mem_surreal().await;
+        let world = world(&db).await;
         let first = ingest_inbound(&db, &call(world.firm, "CA1111111"))
             .await
             .unwrap();

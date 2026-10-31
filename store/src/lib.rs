@@ -79,6 +79,7 @@ pub mod answers;
 pub mod assets;
 pub mod attestations;
 pub mod authorities;
+pub mod billed_calls;
 pub mod brand_domains;
 pub mod brand_phone_numbers;
 pub mod brands;
