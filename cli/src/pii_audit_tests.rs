@@ -345,9 +345,10 @@ fn required_ci_gate_runs_pii_with_pinned_local_analyzer() {
         .next()
         .unwrap();
     assert!(gate.contains("presidio-analyzer:2.2.364@sha256:"));
-    assert!(gate.contains("options: --log-driver none"));
+    assert!(gate.contains("docker run --detach --name presidio-analyzer"));
+    assert!(gate.contains("--log-driver none"));
     assert!(gate.contains("pii --analyzer-url http://127.0.0.1:3000"));
-    assert!(gate.contains("--retry-connrefused"));
+    assert!(gate.contains("--retry-all-errors"));
     assert!(!gate.contains("continue-on-error: true"));
     assert!(!workflow.contains(".github/pii/scan.py"));
 }
