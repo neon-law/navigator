@@ -936,7 +936,7 @@ records:
       - code: nv__washoe_fee_waiver_application
         title: Application for Waiver of Fees and Costs (Washoe)
         source_url: https://www.washoecourts.com/Forms/Family/1.%20All%20Other%20Family%20Related%20Packets/F-6%20Application%20to%20Waive%20Fees%20and%20Costs/1.%20Application%20for%20Waiver%20of%20Fees%20and%20Costs.pdf
-        sha256: 9a930a3ef3d16132fdd011fcf871c65a09a9dbdc804c24ee1642bbd7347736aa
+        sha256: 9b5223881ad34dc41dff0820b264010df986e911c3268118561078cbadf950fb
         filing_office: Family Division Clerk's Office, Second Judicial District Court
         fee_note: No filing fee for the application.
         fee_waiver_code: null
@@ -992,7 +992,7 @@ records:
       - code: nv__las_vegas_small_claims_complaint
         title: Complaint, Small Claims (Las Vegas)
         source_url: https://www.civillawselfhelpcenter.org/images/small-claims/complaints/complaint---small-claims.pdf
-        sha256: 9f0c6f7ffe6cca9744f3fad4d6865117ac40abf8b63449942ec035386e6f4907
+        sha256: b9cecb40625f1156f0d540ebe618cc89587e42891f261d37cc0f3399c189fb09
         filing_office: Las Vegas Justice Court clerk, small claims division
         fee_note: "Filing fee tiered by claim (NRS 4.060 schedule, eff. 2/8/2024): $66 up to $1,000; $86 for $1,000.01-$2,500; $106 for $2,500.01-$5,000; $146 for $5,000.01-$7,500; $196 for $7,500.01-$10,000. No fee may be charged to a defendant appearing. Waiver: the justice-court fee-waiver form or the statewide application."
         fee_waiver_code: null
@@ -1509,6 +1509,26 @@ records:
           amount: "210.00"
           currency: USD
         fee_note: "Brought by a parent or legal guardian for a child under 18; a child 14 or older signs a notarized consent, and a non-petitioning parent or guardian consents or is given notice. Same dual-route fees as NC1: NYC Civil Court $65.00 or Supreme/County Court $210.00. Fee waiver: poor person relief by motion — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the NC2 surveyed_forms entry."
+        fee_waiver_code: null
+      - code: ny__nc4_family_name_change_petition
+        title: Family Name Change Petition
+        source_url: https://www.nycourts.gov/FORMS/Name-SexDesignationChange/FamilyNameChangePetition-fillable.pdf
+        sha256: 9beb5f0dc13a8798255ad20e5560afe88f3e02ed337f86aa853f00c4858f5ad9
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        filing_fee:
+          amount: "210.00"
+          currency: USD
+        fee_note: "Family petition brought for more than one person at the same time (petitioners file together; NC5 supplies the additional petitioners' pages). Same dual-route fees as NC1: NYC Civil Court $65.00 or Supreme/County Court $210.00. Fee waiver: poor person relief by motion — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the NC4 surveyed_forms entry."
+        fee_waiver_code: null
+      - code: ny__nc5_family_name_change_supplement
+        title: Family Name Change Petition — Supplemental Form
+        source_url: https://www.nycourts.gov/FORMS/Name-SexDesignationChange/SupplementalFamilyNameChangePetition-fillable.pdf
+        sha256: d625a28b846790890b86303a770867547635ec733c4a93c5fcdfeac856b24e68
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        filing_fee:
+          amount: "210.00"
+          currency: USD
+        fee_note: "Supplemental pages filed with the NC4 family petition — additional petitioners and cross-references; no separate filing fee beyond the NC4 filing. Same dual-route fees as NC1: NYC Civil Court $65.00 or Supreme/County Court $210.00. Fee waiver: poor person relief by motion — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the NC5 surveyed_forms entry."
         fee_waiver_code: null
     surveyed_forms:
       - key: NC1
