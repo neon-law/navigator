@@ -65,7 +65,7 @@ pub static JURISDICTIONS: LazyLock<Vec<(String, String)>> = LazyLock::new(|| {
 /// than Navigator's catalog. A malformed project value still claims the
 /// repository shape, so its manifest finding does not cascade into catalog
 /// path findings.
-fn is_project_repository_tree(path: &Path) -> bool {
+pub(crate) fn is_project_repository_tree(path: &Path) -> bool {
     let mut current = path.parent();
     while let Some(dir) = current {
         let manifest = dir.join("navigator.yaml");
