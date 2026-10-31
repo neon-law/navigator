@@ -219,7 +219,7 @@ async fn footer_renders_disclaimer(world: &mut BrandWorld) {
     );
 }
 
-#[then(regex = r#"^the footer renders the trademark notice: (yes|no)$"#)]
+#[then(regex = r"^the footer renders the trademark notice: (yes|no)$")]
 async fn footer_renders_trademark(world: &mut BrandWorld, renders: String) {
     let present = world.last_body.contains("site-footer__trademark");
     assert_eq!(
@@ -266,7 +266,7 @@ async fn footer_is_the_legal_strip_only(world: &mut BrandWorld) {
 /// creation is the Admin-DRI-only act (`brands::authorize`); the move is
 /// the Owner-only one (`firms::move_brand`), so the two roles both appear.
 #[given(regex = r#"^the brand "([^"]+)" is moved to a firm whose entity is "([^"]+)"$"#)]
-async fn move_brand_to_firm(world: &mut BrandWorld, brand_key: String, entity_name: String) {
+async fn move_brand_to_firm(_world: &mut BrandWorld, brand_key: String, entity_name: String) {
     let surreal = features::shared_surreal().await;
 
     // Two firms and one brand: the brand starts wearing the first firm
