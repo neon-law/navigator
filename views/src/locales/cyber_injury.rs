@@ -60,7 +60,9 @@ pub struct CyberInjuryCopy {
     pub hero_note: String,
     pub discovery_heading: [String; 2],
     pub discovery_body: String,
-    pub discovery_cards: Vec<[String; 3]>,
+    /// The "Matters we review" cards: title, body, benefit label, and the
+    /// practice page the card links to (empty for a card with no page).
+    pub discovery_cards: Vec<[String; 4]>,
     pub discovery_note: String,
     pub assessment_heading: [String; 3],
     pub assessment_body: String,

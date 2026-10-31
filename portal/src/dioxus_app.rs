@@ -3450,7 +3450,10 @@ pub fn marketing_page_router(
     sessions: crate::SessionStore,
     secure_cookies: bool,
 ) -> Router {
-    let injected = webapp::marketing_page::InjectedMarketingPage(content);
+    let injected = webapp::marketing_page::InjectedMarketingPage {
+        path: path.to_string(),
+        content,
+    };
     let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(move || {
         Box::new(injected.clone()) as Box<dyn std::any::Any>
     })

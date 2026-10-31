@@ -1,0 +1,142 @@
+# Cyber Injury Law's cybercrime practice page. Same band vocabulary as the
+# other practice pages; the copy names the platform and the scammer, and no
+# band promises a recovery.
+head_title: "{site_name} | Cybercrime lawyers"
+meta_description: >-
+  Victim of online fraud, an account takeover, or an impersonation scam? Cyber
+  Injury Law preserves the evidence, demands the records the platform holds,
+  and moves against the person behind it. Attorney advertisement. A lawyer
+  reviews the facts before any engagement.
+og_description: >-
+  Online fraud, account takeovers, and impersonation scams. We preserve the
+  evidence and we don't back down. Attorney advertisement.
+title: Cybercrime lawyers
+hero_mark: technology
+tagline: We use AI to put more money in your pocket.
+hero_lines:
+  - text: The platform blames you. We don't accept that.
+    accent_words: 0
+hero_lead: >-
+  Online fraud, account takeovers, and impersonation scams. The platform's
+  answer is a password reset and a closed ticket. The money is already gone,
+  and the logs that would prove what happened rotate away. We preserve the
+  evidence, demand the records the platform and the payment processors hold,
+  trace what happened, and move against the person behind it. A lawyer
+  reviews the facts before any engagement.
+hero_cta:
+  href: /consultation
+  label: Tell us what happened
+skin: practice
+bands:
+  - kind: statement
+    heading: What you are up against
+    lead: The platform's first answer is a closed ticket.
+    body:
+      - - text: >-
+            Report the scam and the platform points at its terms of service.
+            The payment processor points at the platform. The logs that would
+            prove who did this expire on a schedule nobody told you about,
+            and the scammer counts on all of it.
+      - - text: We don't wait for a ticket to close.
+          emphasis: true
+        - text: >-
+              We preserve the messages, the screenshots, and the transaction
+              records, we demand the account and payment records in the form
+              the law allows, and we build the claim the way it will be
+              tested. A lawyer reviews the facts and the applicable law
+              before any engagement.
+  - kind: cards
+    anchor: damages
+    overline: What a claim can recover
+    heading: The loss gets documented, record by record.
+    description: >-
+      Every claim depends on its facts. These are the harms the law may
+      allow, and each one is proven with records, which is why we preserve
+      them first.
+    items:
+      - title: Money the fraud took
+        body:
+          - - text: >-
+                Payments, transfers, and the accounts the scam drained,
+                proven from statements and transaction records.
+      - title: Account and identity harms
+        body:
+          - - text: >-
+                Locked accounts, hijacked profiles, and the cost of securing
+                what the takeover exposed.
+      - title: Harm to your name
+        body:
+          - - text: >-
+                Impersonation reaches the people who trusted you. The record
+                of what the scammer sent in your name is part of the claim.
+      - title: The cost of putting it back together
+        body:
+          - - text: >-
+                The hours, fees, and out-of-pocket costs of unwinding a
+                takeover, proven with receipts and invoices.
+  - kind: steps
+    anchor: how-we-fight
+    overline: How we fight
+    heading: Tell us. We preserve the evidence. Then we pursue.
+    items:
+      - title: Tell us what happened
+        body:
+          - - text: >-
+                A short conversation: what you saw, what you paid, and where
+                the contact started. A lawyer reviews the facts before any
+                engagement.
+        image:
+          asset_key: img/attorney-consultation/attorney-consultation-800w.jpg
+          alt: >-
+            A man in a suit talking with a couple across a desk, going over
+            documents together.
+      - title: We preserve the evidence and demand the records
+        body:
+          - - text: >-
+                Messages, screenshots, payment records, and the platform's
+                own account logs: preserved now and demanded in the form the
+                law allows, before the logs rotate away.
+      - title: We pursue whoever is behind it
+        body:
+          - - text: >-
+                We trace where the money went and name every person the
+                records support, and we don't back down when a platform
+                hides behind its terms.
+  - kind: cards
+    anchor: faq
+    overline: Questions
+    heading: Straight answers.
+    items:
+      - title: Can you get my money back?
+        body:
+          - - text: >-
+                No honest lawyer promises that. What we can do is trace where
+                the money went, preserve the proof, and pursue every route
+                the law allows against the people the records support.
+      - title: The platform says it is my fault. Is that the end of it?
+        body:
+          - - text: >-
+                A terms-of-service answer is not a legal conclusion. What the
+                platform knew and when it knew it are facts we demand in
+                writing.
+      - title: Should I wait for the police?
+        body:
+          - - text: >-
+                Report it; a criminal referral can matter. But a civil claim
+                does not wait for a criminal case, and neither does the
+                evidence.
+      - title: What does it cost to find out where I stand?
+        body:
+          - - text: >-
+                The first conversation is a review of the facts. Fees are set
+                by the signed engagement agreement; no fee percentage is
+                advertised.
+  - kind: cta
+    heading: Scammed? Tell us. We'll look.
+    body: >-
+      Call 1.510.800.2090 or tell us what happened. Attorney advertisement; a
+      lawyer must review the facts before an engagement.
+    email: "{firm_email}"
+    action:
+      href: /consultation
+      label: Tell us what happened

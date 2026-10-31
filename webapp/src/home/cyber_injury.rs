@@ -5,10 +5,21 @@ mod content;
 pub use content::CyberInjuryContent;
 
 use super::HomeContent;
-use crate::components::{BrandFavicon, SocialMeta, THEME_STYLESHEET_HREF};
+use crate::components::{share::via_tagged, BrandFavicon, SocialMeta, THEME_STYLESHEET_HREF};
 use crate::lead_capture::{LeadCaptureContext, LeadCaptureCopy};
 use crate::public_chrome::{PublicChrome, PublicFooter};
 use dioxus::prelude::*;
+
+/// A discovery card's link, tagged for Plausible attribution: the tag
+/// derives from the card's own page (`/car-accidents` →
+/// `home-discovery-car-accidents`), so every card is attributable without a
+/// hand-typed tag per card.
+fn discovery_card_href(href: &str) -> String {
+    via_tagged(
+        href,
+        &format!("home-discovery-{}", href.trim_start_matches('/')),
+    )
+}
 
 #[component]
 pub(super) fn CyberInjuryHome(
@@ -21,7 +32,7 @@ pub(super) fn CyberInjuryHome(
     rsx! {
         document::Title { "{content.head_title}" }
         document::Meta { name: "description", content: content.meta_description.clone() }
-        SocialMeta { title: content.head_title.clone(), description: content.meta_description.clone(), og_description: content.og_description.clone(), site_name: chrome.brand_name.clone(), image: chrome.social_image.clone() }
+        SocialMeta { title: content.head_title.clone(), description: content.meta_description.clone(), og_description: content.og_description.clone(), site_name: chrome.brand_name.clone(), image: chrome.social_image.clone(), url: crate::components::canonical_url(&chrome.canonical_origin, "/") }
         BrandFavicon { logo_href: chrome.logo_href.clone() }
         document::Stylesheet { href: THEME_STYLESHEET_HREF }
         document::Stylesheet { href: crate::brand_style::BRAND_STYLESHEET_HREF }
@@ -39,10 +50,10 @@ pub(super) fn CyberInjuryHome(
                 }
                 nav { "aria-label": "{copy.navigation_label}",
                     a { href: "#cyber-advantage", "{copy.advantage_label}" }
-                    a { href: "/testimonials", span { "aria-hidden": "true", "♡ " } "{copy.testimonials_label}" }
+                    a { href: via_tagged("/testimonials", "home-nav-testimonials"), span { "aria-hidden": "true", "♡ " } "{copy.testimonials_label}" }
                     a { class: "cyber-button cyber-button--small", href: "#cyber-assessment", "{copy.assessment_label}" span { "aria-hidden": "true", "↗" } }
                 }
-                a { class: "cyber-booking", href: "/consultation", "aria-label": "{copy.booking_label}",
+                a { class: "cyber-booking", href: via_tagged("/consultation", "home-booking"), "aria-label": "{copy.booking_label}",
                     img { src: "/public/brand/cyber-consultation-qr.svg", alt: "{copy.booking_qr_alt}", width: "84", height: "84" }
                     span { "{copy.booking_lines[0]}" strong { "{copy.booking_lines[1]}" } small { "{copy.booking_lines[2]}" } }
                 }
@@ -79,15 +90,12 @@ pub(super) fn CyberInjuryHome(
                         p { "{copy.discovery_body}" }
                     }
                     div { class: "cyber-cards", for (index, card) in copy.discovery_cards.iter().enumerate() {
-                        article {
-                            span { class: "cyber-glyph", "aria-hidden": "true",
-                                if index == 0 { CarIcon {} }
-                                else if index == 1 { "⌕" }
-                                else { "↗" }
+                        if card[3].is_empty() {
+                            article { DiscoveryCardContent { index, title: card[0].clone(), body: card[1].clone(), benefit: card[2].clone() } }
+                        } else {
+                            a { class: "cyber-card-link", href: discovery_card_href(&card[3]),
+                                article { DiscoveryCardContent { index, title: card[0].clone(), body: card[1].clone(), benefit: card[2].clone() } }
                             }
-                            h3 { "{card[0]}" }
-                            p { "{card[1]}" }
-                            span { class: "cyber-benefit", "{card[2]}" }
                         }
                     } }
                     p { class: "cyber-fine", "{copy.discovery_note}" }
@@ -121,10 +129,10 @@ pub(super) fn CyberInjuryHome(
                 }
                 div { class: "cyber-connect__links",
                     for (index, (href, qr)) in [
-                        ("https://www.cyberinjurylaw.com/android", "cyber-android-qr.svg"),
-                        ("https://www.cyberinjurylaw.com/iPhone", "cyber-iphone-qr.svg"),
-                        (copy.phone_href.as_str(), "cyber-phone-qr.svg"),
-                        ("https://www.cyberinjurylaw.com/testimonials", "cyber-testimonials-qr.svg"),
+                        (via_tagged("https://www.cyberinjurylaw.com/android", "home-qr-android"), "cyber-android-qr.svg"),
+                        (via_tagged("https://www.cyberinjurylaw.com/iPhone", "home-qr-iphone"), "cyber-iphone-qr.svg"),
+                        (copy.phone_href.clone(), "cyber-phone-qr.svg"),
+                        (via_tagged("https://www.cyberinjurylaw.com/testimonials", "home-qr-testimonials"), "cyber-testimonials-qr.svg"),
                     ].into_iter().enumerate() {
                         div { class: "cyber-connect__item",
                             a { class: "cyber-connect__link", href,
@@ -169,6 +177,23 @@ fn CarIcon() -> Element {
     }
 }
 
+/// One discovery card's content: the glyph follows the card's position in
+/// the grid, and the title, body, and benefit label come from the catalog.
+/// Linked cards wrap this in the anchor the grid styles.
+#[component]
+fn DiscoveryCardContent(index: usize, title: String, body: String, benefit: String) -> Element {
+    rsx! {
+        span { class: "cyber-glyph", "aria-hidden": "true",
+            if index == 0 { CarIcon {} }
+            else if index == 1 { "⌕" }
+            else { "↗" }
+        }
+        h3 { "{title}" }
+        p { "{body}" }
+        span { class: "cyber-benefit", "{benefit}" }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,7 +204,7 @@ mod tests {
             CyberInjuryHome {
                 chrome: PublicChrome::default(),
                 content: HomeContent { heading: "We use AI to put more money in your pocket".into(), contact_href: "/contact".into(), ..HomeContent::default() },
-                copy: CyberInjuryContent { hero_lines: ["WE USE AI TO".into(), "PUT MORE".into(), "MONEY IN".into(), "YOUR POCKET.".into()], hero_highlights: [String::new(), "MORE".into(), "MONEY IN".into(), "YOUR POCKET.".into()], advertising_label: "Attorney Advertising".into(), utility_lines: ["From YAML".into(), "Coast to Coast with Tech to Boast".into()], footer_wordmark: ["CYBER".into(), "INJURY".into(), "LAW".into()], ticker_lines: ["CAR ACCIDENTS.".into(), "PERSONAL INJURY.".into(), "CYBERCRIME.".into()], discovery_cards: vec![["CAR INJURY".into(), "Vehicle collision claims.".into(), "CAR ACCIDENTS".into()]], incident_label: "A custom incident question".into(), hero_src: "/public/img/cyber-injury-law/cyber-warrior-ferris.png".into(), ..CyberInjuryContent::default() },
+                copy: CyberInjuryContent { hero_lines: ["WE USE AI TO".into(), "PUT MORE".into(), "MONEY IN".into(), "YOUR POCKET.".into()], hero_highlights: [String::new(), "MORE".into(), "MONEY IN".into(), "YOUR POCKET.".into()], advertising_label: "Attorney Advertising".into(), utility_lines: ["From YAML".into(), "Coast to Coast with Tech to Boast".into()], footer_wordmark: ["CYBER".into(), "INJURY".into(), "LAW".into()], ticker_lines: ["CAR ACCIDENTS.".into(), "PERSONAL INJURY.".into(), "CYBERCRIME.".into()], discovery_cards: vec![["CAR INJURY".into(), "Vehicle collision claims.".into(), "CAR ACCIDENTS".into(), "/car-accidents".into()], ["NEGLIGENCE".into(), "Carelessness claims.".into(), "CARELESSNESS".into(), String::new()]], incident_label: "A custom incident question".into(), hero_src: "/public/img/cyber-injury-law/cyber-warrior-ferris.png".into(), ..CyberInjuryContent::default() },
                 lead_capture: Some(LeadCaptureCopy {
                     consent_sentence: "By sending this, you agree to our Privacy Policy.".into(),
                     phone_helper: "Optional. See Privacy Policy and texting terms.".into(),
@@ -214,9 +239,22 @@ mod tests {
         ] {
             assert!(html.contains(required), "missing {required}");
         }
+        for tagged in [
+            "href=\"/testimonials?via=home-nav-testimonials\"",
+            "href=\"/consultation?via=home-booking\"",
+            "href=\"https://www.cyberinjurylaw.com/testimonials?via=home-qr-testimonials\"",
+        ] {
+            assert!(html.contains(tagged), "share refs missing {tagged}");
+        }
         assert!(html.contains("class=\"cyber-lime\">MORE</span>"));
         assert!(html.contains("class=\"cyber-lime\">MONEY IN</span>"));
         assert!(html.contains("class=\"cyber-lime\">YOUR POCKET.</span>"));
+        // A card with a page renders as a link tagged for Plausible; a
+        // card without one stays a bare article.
+        assert!(
+            html.contains("href=\"/car-accidents?via=home-discovery-car-accidents\""),
+            "linked discovery card missing its via tag"
+        );
         assert!(!html.contains("20%"));
         assert!(!html.contains("cyber-fees"));
         assert!(!html.contains("fonts.googleapis.com"));
@@ -228,5 +266,13 @@ mod tests {
             "CyberInjuryLaw should have a single form"
         );
         assert!(!html.contains("name=\"cyber-records\""));
+    }
+
+    #[test]
+    fn discovery_card_links_carry_a_via_tag() {
+        assert_eq!(
+            discovery_card_href("/car-accidents"),
+            "/car-accidents?via=home-discovery-car-accidents"
+        );
     }
 }

@@ -1,0 +1,141 @@
+# Cyber Injury Law's car-accident practice page. The headline reads the way
+# the visitor's search does; the bands name the opponent and the firm's next
+# moves without promising an outcome, and every notice the firm publishes
+# rides in the lead and the closing CTA.
+head_title: "{site_name} | Car accident lawyers"
+meta_description: >-
+  Hurt in a car accident? Cyber Injury Law obtains the crash report, the
+  scene photos, and the witness accounts, proves who caused the crash, and
+  goes after the insurer that lowballs you. Attorney advertisement. A lawyer
+  reviews the facts before any engagement.
+og_description: >-
+  Car, truck, motorcycle, and pedestrian claims. We move before evidence
+  disappears, and we don't back down. Attorney advertisement.
+title: Car accident lawyers
+hero_mark: handshake
+tagline: We use AI to put more money in your pocket.
+hero_lines:
+  - text: The insurer moves fast. We move first.
+    accent_words: 0
+hero_lead: >-
+  Car, truck, motorcycle, and pedestrian claims. The insurer secures its
+  advantage in the first days: recorded statements, quick lowball offers,
+  repairs booked on its terms. We secure yours. We obtain the crash report,
+  the scene photos, and the witness accounts, we prove who caused the crash,
+  and we go after the insurer that lowballs you. A lawyer reviews the facts
+  before any engagement.
+hero_cta:
+  href: /consultation
+  label: Tell us what happened
+skin: practice
+bands:
+  - kind: statement
+    heading: What you are up against
+    lead: The insurer's first offer prices its advantage, not your harm.
+    body:
+      - - text: >-
+            Within days of a crash an adjuster may call, ask for a recorded
+            statement, and put a number on the file before your treatment has
+            even started. Crash reports sit with the responding agency, scene
+            evidence fades, and vehicles get repaired or sold.
+      - - text: We move first.
+          emphasis: true
+        - text: >-
+              We demand the crash report and the 911 records, preserve the
+              scene evidence, collect witness accounts while memories are
+              fresh, and assemble the medical file the way a claim is actually
+              proven. A lawyer reviews the facts and the applicable law before
+              any engagement.
+  - kind: cards
+    anchor: damages
+    overline: What a claim can recover
+    heading: The harm gets counted, record by record.
+    description: >-
+      Every claim depends on its facts. These are the damages the law may
+      allow, and each one is proven with records, which is why we demand
+      them early.
+    items:
+      - title: Medical care and rehabilitation
+        body:
+          - - text: >-
+                Emergency care, treatment, therapy, and the care you may still
+                need, proven from the medical file we assemble.
+      - title: Lost income
+        body:
+          - - text: >-
+                The work you missed and the work your injuries may still take
+                from you, proven from employer and tax records.
+      - title: Repairs and other losses
+        body:
+          - - text: >-
+                Vehicle damage, damaged property, and the out-of-pocket costs
+                the crash caused, proven with receipts and invoices.
+      - title: The harm you carry
+        body:
+          - - text: >-
+                Pain, disruption, and the ways the crash changed your life,
+                argued from the record rather than from a formula.
+  - kind: steps
+    anchor: how-we-fight
+    overline: How we fight
+    heading: Tell us. We lock the evidence down. Then we negotiate from strength.
+    items:
+      - title: Tell us what happened
+        body:
+          - - text: >-
+                A short conversation: what happened, where, and who was
+                involved. A lawyer reviews the facts before any engagement.
+        image:
+          asset_key: img/family-recovery/family-recovery-800w.jpg
+          alt: >-
+            Two people sitting together at a kitchen table, reviewing
+            paperwork with a laptop open between them.
+      - title: We lock the evidence down
+        body:
+          - - text: >-
+                Crash report, 911 and dispatch records, scene photos, witness
+                accounts, medical records, and the vehicle data the law
+                allows: requested before it disappears.
+      - title: We negotiate from strength
+        body:
+          - - text: >-
+                A documented claim changes the negotiation. We put the record
+                in front of the insurer, and when the offer insults the harm,
+                we file.
+  - kind: cards
+    anchor: faq
+    overline: Questions
+    heading: Straight answers.
+    items:
+      - title: What does it cost to find out where I stand?
+        body:
+          - - text: >-
+                The first conversation is a review of the facts. Fees are set
+                by the signed engagement agreement; no fee percentage is
+                advertised.
+      - title: The insurer offered me a check. Take it?
+        body:
+          - - text: >-
+                Their first offer prices their advantage, not your harm. Talk
+                to us before you sign anything away; a settlement closes the
+                claim for good.
+      - title: How long do I have to act?
+        body:
+          - - text: >-
+                Deadlines can end a claim before it starts, and some are
+                measured in months rather than years. We check which
+                deadlines apply to your facts.
+      - title: What if the crash was partly my fault?
+        body:
+          - - text: >-
+                Shared fault does not always end a claim. What matters is the
+                proof, which is why we build it early.
+  - kind: cta
+    heading: Hurt? Tell us. We'll look.
+    body: >-
+      Call 1.510.800.2090 or tell us what happened. Attorney advertisement; a
+      lawyer must review the facts before an engagement.
+    email: "{firm_email}"
+    action:
+      href: /consultation
+      label: Tell us what happened

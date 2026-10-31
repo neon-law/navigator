@@ -31,6 +31,13 @@ pub fn explainer(branding: &views::brand::Branding, stem: &str) -> PageContent {
     locales::explainer(branding, stem)
 }
 
+/// A brand's own practice-area page (`/car-accidents` on Cyber Injury Law).
+/// See `locales/en/cyber-injury-law/` and
+/// `views::brand::BrandKey::practice_pages`.
+pub fn practice_page(branding: &views::brand::Branding, stem: &str) -> PageContent {
+    locales::practice_page(branding, stem)
+}
+
 /// `/delete-your-debt` — Neon's own gateway to the DeleteYourDebt.com
 /// practice. See `locales/en/neon/gateway-delete-your-debt.yaml`.
 pub fn delete_your_debt_gateway(
@@ -999,6 +1006,160 @@ mod firm_copy_tests {
         assert!(
             !lowered.contains("business day") && !lowered.contains("turnaround"),
             "the platform page promises no turnaround: {text}"
+        );
+    }
+
+    // ── Cyber Injury Law: aggressive-but-compliant advocacy ─────────────
+    //
+    // The campaign positions the firm as the fighter — it names the
+    // opponent, answers the visitor with action, and repeats its call to
+    // action — while Nevada attorney-advertising rules hold: no outcome
+    // guarantees, and the attorney-advertisement and lawyer-review notices
+    // stay. These guards pin both sides, because the copy is the campaign.
+
+    /// Every word the Cyber Injury Law home page puts in front of a reader,
+    /// serialized whole: the search chrome, the lead, and every campaign
+    /// field. Serializing beats listing fields by hand — a claim placed in a
+    /// new field tomorrow is guarded by the same test.
+    fn cyber_home_text() -> String {
+        serde_yaml::to_string(&super::locales::home(&views::brand::CYBER_INJURY_BRANDING))
+            .expect("Cyber Injury Law home copy serializes")
+    }
+
+    /// Every word the Cyber Injury Law services page puts in front of a
+    /// reader.
+    fn cyber_services_text() -> String {
+        serde_yaml::to_string(&super::locales::legal_services(
+            &views::brand::CYBER_INJURY_BRANDING,
+        ))
+        .expect("Cyber Injury Law services copy serializes")
+    }
+
+    /// The pages fight in plain language: they name the opponent and commit
+    /// to what the firm does, in place of the retired "a lawyer can review
+    /// what happened" pattern.
+    #[test]
+    fn cyber_injury_pages_fight_in_plain_language() {
+        let home = cyber_home_text();
+        let services = cyber_services_text();
+        for (name, text) in [("home", &home), ("services", &services)] {
+            assert!(
+                text.to_lowercase().contains("insurer that lowballs you"),
+                "{name} does not name the opponent it fights: {text}"
+            );
+        }
+        assert!(
+            home.to_lowercase()
+                .contains("we move before evidence disappears"),
+            "the home page commits to acting on evidence first: {home}"
+        );
+        assert!(
+            home.contains("We prove who was careless and hold them to it.")
+                && services.contains("We prove who was responsible and hold them to it."),
+            "both pages answer negligence with what the firm does: {home} | {services}"
+        );
+        assert!(
+            services.contains("We prove who was responsible and hold them to it."),
+            "the services page answers negligence with what the firm does: {services}"
+        );
+        // The hero is stored as words, not a string: join its words to pin
+        // the statement the way a reader meets it.
+        let hero_statement = super::locales::legal_services(&views::brand::CYBER_INJURY_BRANDING)
+            .hero_lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|word| word.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            hero_statement.contains("We don't back down. Neither should you."),
+            "the services hero states the commitment to the fight: {hero_statement}"
+        );
+        assert!(
+            services.contains("negotiate from strength, and file when necessary"),
+            "the services page states how the firm fights: {services}"
+        );
+    }
+
+    /// The hedged pattern the tone rewrite replaced stays replaced. A hedge
+    /// reads as a disclaimer to a visitor who is ready to hire.
+    #[test]
+    fn cyber_injury_pages_do_not_hedge() {
+        for (name, text) in [
+            ("home", cyber_home_text()),
+            ("services", cyber_services_text()),
+        ] {
+            let lowered = text.to_lowercase();
+            for hedge in [
+                "a lawyer can review",
+                "we can discuss the circumstances",
+                "helps determine whether a claim may fit",
+            ] {
+                assert!(
+                    !lowered.contains(hedge),
+                    "{name} hedges with {hedge:?}: {text}"
+                );
+            }
+        }
+    }
+
+    /// Aggressive never means promising a result. The pages commit to effort
+    /// and fighting — never to winning the visitor money. The banned list is
+    /// a floor, not the whole rule: any outcome guarantee is a violation even
+    /// when it is not spelled here.
+    #[test]
+    fn cyber_injury_pages_never_promise_an_outcome() {
+        for (name, text) in [
+            ("home", cyber_home_text()),
+            ("services", cyber_services_text()),
+        ] {
+            let lowered = text.to_lowercase();
+            for promise in [
+                "we guarantee",
+                "guaranteed",
+                "we will win",
+                "you will win",
+                "we will get you money",
+                "money-back",
+            ] {
+                assert!(
+                    !lowered.contains(promise),
+                    "{name} promises {promise:?}: {text}"
+                );
+            }
+        }
+    }
+
+    /// Every required advertising notice still renders.
+    #[test]
+    fn cyber_injury_pages_keep_every_required_notice() {
+        let home = cyber_home_text();
+        let services = cyber_services_text();
+        for notice in [
+            "Attorney Advertising",
+            "Attorney advertisement. A lawyer must review the facts before an engagement.",
+            "Attorney advertisement. Submitting an inquiry does not create an attorney-client relationship. Any engagement requires a written agreement.",
+        ] {
+            assert!(
+                home.contains(notice),
+                "the home page drops a required notice ({notice:?}): {home}"
+            );
+        }
+        assert!(
+            services.contains("Attorney advertisement"),
+            "the services page drops the advertising notice: {services}"
+        );
+        assert!(
+            services.contains("A lawyer reviews the facts before any engagement"),
+            "the services page drops the lawyer-review notice: {services}"
+        );
+        assert!(
+            home.contains("$29/mo") && home.contains("$290/year prepaid"),
+            "the Nautilus referral keeps its prices: {home}"
         );
     }
 }
