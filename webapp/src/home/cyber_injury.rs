@@ -5,7 +5,7 @@ mod content;
 pub use content::CyberInjuryContent;
 
 use super::HomeContent;
-use crate::components::{BrandFavicon, SocialMeta, THEME_STYLESHEET_HREF};
+use crate::components::{share::via_tagged, BrandFavicon, SocialMeta, THEME_STYLESHEET_HREF};
 use crate::lead_capture::{LeadCaptureContext, LeadCaptureCopy};
 use crate::public_chrome::{PublicChrome, PublicFooter};
 use dioxus::prelude::*;
@@ -39,10 +39,10 @@ pub(super) fn CyberInjuryHome(
                 }
                 nav { "aria-label": "{copy.navigation_label}",
                     a { href: "#cyber-advantage", "{copy.advantage_label}" }
-                    a { href: "/testimonials", span { "aria-hidden": "true", "♡ " } "{copy.testimonials_label}" }
+                    a { href: via_tagged("/testimonials", "home-nav-testimonials"), span { "aria-hidden": "true", "♡ " } "{copy.testimonials_label}" }
                     a { class: "cyber-button cyber-button--small", href: "#cyber-assessment", "{copy.assessment_label}" span { "aria-hidden": "true", "↗" } }
                 }
-                a { class: "cyber-booking", href: "/consultation", "aria-label": "{copy.booking_label}",
+                a { class: "cyber-booking", href: via_tagged("/consultation", "home-booking"), "aria-label": "{copy.booking_label}",
                     img { src: "/public/brand/cyber-consultation-qr.svg", alt: "{copy.booking_qr_alt}", width: "84", height: "84" }
                     span { "{copy.booking_lines[0]}" strong { "{copy.booking_lines[1]}" } small { "{copy.booking_lines[2]}" } }
                 }
@@ -121,10 +121,10 @@ pub(super) fn CyberInjuryHome(
                 }
                 div { class: "cyber-connect__links",
                     for (index, (href, qr)) in [
-                        ("https://www.cyberinjurylaw.com/android", "cyber-android-qr.svg"),
-                        ("https://www.cyberinjurylaw.com/iPhone", "cyber-iphone-qr.svg"),
-                        (copy.phone_href.as_str(), "cyber-phone-qr.svg"),
-                        ("https://www.cyberinjurylaw.com/testimonials", "cyber-testimonials-qr.svg"),
+                        (via_tagged("https://www.cyberinjurylaw.com/android", "home-qr-android"), "cyber-android-qr.svg"),
+                        (via_tagged("https://www.cyberinjurylaw.com/iPhone", "home-qr-iphone"), "cyber-iphone-qr.svg"),
+                        (copy.phone_href.clone(), "cyber-phone-qr.svg"),
+                        (via_tagged("https://www.cyberinjurylaw.com/testimonials", "home-qr-testimonials"), "cyber-testimonials-qr.svg"),
                     ].into_iter().enumerate() {
                         div { class: "cyber-connect__item",
                             a { class: "cyber-connect__link", href,
@@ -213,6 +213,13 @@ mod tests {
             "<svg",
         ] {
             assert!(html.contains(required), "missing {required}");
+        }
+        for tagged in [
+            "href=\"/testimonials?via=home-nav-testimonials\"",
+            "href=\"/consultation?via=home-booking\"",
+            "href=\"https://www.cyberinjurylaw.com/testimonials?via=home-qr-testimonials\"",
+        ] {
+            assert!(html.contains(tagged), "share refs missing {tagged}");
         }
         assert!(html.contains("class=\"cyber-lime\">MORE</span>"));
         assert!(html.contains("class=\"cyber-lime\">MONEY IN</span>"));

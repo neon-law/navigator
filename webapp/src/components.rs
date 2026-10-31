@@ -69,6 +69,7 @@ pub mod resource_mark;
 pub mod row_actions;
 pub mod sample_matters_banner;
 pub mod separator;
+pub mod share;
 pub mod site_footer;
 pub mod site_header;
 pub mod social;
