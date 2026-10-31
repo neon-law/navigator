@@ -241,7 +241,46 @@ pub fn lint(root: &Path) -> Vec<ManifestFinding> {
         return findings;
     };
     findings.extend(lint_contents(&path, &contents));
+    findings.extend(lint_draft_targets(root, &path, &contents));
     findings
+}
+
+/// Resolve draft references against the working tree and Git index. Shape-only
+/// consumers can validate unsaved manifests without a repository via `lint_contents`.
+fn lint_draft_targets(root: &Path, path: &Path, contents: &str) -> Vec<ManifestFinding> {
+    let Ok(manifest) = parse(contents) else {
+        return Vec::new();
+    };
+    manifest.pages.iter().filter_map(|page| {
+        let draft = page.draft.as_deref()?;
+        let relative = Path::new(draft);
+        let mut components = relative.components();
+        let admitted = matches!(components.next(), Some(std::path::Component::Normal(name))
+            if name == "drafts" || name == "templates")
+            && components.clone().next().is_some()
+            && components.all(|part| matches!(part, std::path::Component::Normal(_)))
+            && !draft.contains('\\');
+        let target = root.join(relative);
+        let within_root = root.canonicalize().ok().zip(target.canonicalize().ok())
+            .is_some_and(|(root, target)| {
+                target.starts_with(root.join("drafts")) || target.starts_with(root.join("templates"))
+            });
+        let tracked = admitted && std::process::Command::new("git")
+            .args(["--literal-pathspecs", "ls-files", "--error-unmatch", "--", draft])
+            .current_dir(root)
+            .output()
+            .is_ok_and(|output| output.status.success());
+        let regular_file = target.symlink_metadata().is_ok_and(|metadata| metadata.is_file());
+        if admitted && regular_file && within_root && tracked {
+            return None;
+        }
+        let line = rules::pages::declared_pages(contents).iter()
+            .find(|declared| declared.slug == page.slug)
+            .map_or(1, |declared| declared.line_of(contents, "draft"));
+        Some(ManifestFinding::at(path, line, "Y026", format!(
+            "`pages:` draft `{draft}` must resolve to an existing tracked regular file under drafts/ or templates/"
+        )))
+    }).collect()
 }
 
 /// YAML comment tokens, not a `#` grep: quoted and block scalars keep their
