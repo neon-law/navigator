@@ -231,13 +231,13 @@ pub fn parse_raw_eml(raw: &[u8]) -> Option<InboundEmail> {
         .attachments()
         .filter_map(|part| {
             let filename = part.attachment_name()?.to_string();
-            let content_type = part
-                .content_type()
-                .map(|ct| match ct.c_subtype.as_deref() {
+            let content_type = part.content_type().map_or_else(
+                || "application/octet-stream".to_string(),
+                |ct| match ct.c_subtype.as_deref() {
                     Some(sub) => format!("{}/{}", ct.c_type, sub),
                     None => ct.c_type.to_string(),
-                })
-                .unwrap_or_else(|| "application/octet-stream".to_string());
+                },
+            );
             Some(InboundAttachment {
                 filename,
                 content_type,

@@ -188,11 +188,11 @@ mod tests {
         crate::test_support::fs_storage().await
     }
 
-    fn config(addresses: &[&str], firm_id: Uuid) -> Option<Config> {
-        Some(Config {
+    fn config(addresses: &[&str], firm_id: Uuid) -> Config {
+        Config {
             addresses: addresses.iter().map(|a| (*a).to_string()).collect(),
             firm_id,
-        })
+        }
     }
 
     fn email(from: &str, to: &str) -> InboundEmail {
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn receiving_alias_prefers_the_envelope_over_the_display_header() {
-        let config = config(&["nick@neonlaw.com"], fixture_firm()).unwrap();
+        let config = config(&["nick@neonlaw.com"], fixture_firm());
         let mut email = email("Client <client@example.com>", "Nick <other@example.com>");
         email.envelope = Some(SmtpEnvelope {
             to: vec!["nick@neonlaw.com".into()],
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn receiving_alias_falls_back_to_the_display_header_case_insensitively() {
-        let config = config(&["nick@neonlaw.com"], fixture_firm()).unwrap();
+        let config = config(&["nick@neonlaw.com"], fixture_firm());
         let addressed = email("Client <client@example.com>", "Nick <NICK@NEONLAW.COM>");
         assert_eq!(
             config.receiving_alias(&addressed).as_deref(),

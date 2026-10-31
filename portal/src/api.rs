@@ -4692,6 +4692,7 @@ async fn ingest_provider_message_door(
     Path(id): Path<Uuid>,
     Json(input): Json<IngestProviderMessageRequest>,
 ) -> Result<Response, ApiError> {
+    use base64::Engine as _;
     let in_scope = store::access::can_see_project_as_lawyer(
         &state.surreal,
         lawyer.0.person_id,
@@ -4715,12 +4716,8 @@ async fn ingest_provider_message_door(
             "The matter has no owning Firm, so it has no inbox to file into.",
         ));
     };
-    use base64::Engine as _;
-    let raw = match base64::engine::general_purpose::STANDARD.decode(input.raw.as_bytes()) {
-        Ok(raw) => raw,
-        Err(_) => {
-            return Ok(bad_request("invalid_base64", "raw is not valid base64."));
-        }
+    let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(input.raw.as_bytes()) else {
+        return Ok(bad_request("invalid_base64", "raw is not valid base64."));
     };
     if raw.len() > crate::inbound_email::MAX_INBOUND_MESSAGE_BYTES {
         return Ok(bad_request(
