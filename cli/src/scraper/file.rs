@@ -273,6 +273,25 @@ impl FilingStore for ProjectFilingStore {
 
     fn file(&self, name: &str, request: &FilingRequest) -> Result<FiledPaths, StorageError> {
         let bytes_path = self.bytes_path(name);
+        // The same checkout preparation every managed filing runs: a fresh
+        // checkout may have no `documents/` tree or canonical `.gitignore`
+        // yet, and the safety walk below refuses a path git does not ignore.
+        crate::document_sync::ensure_documents_ignored(&self.root).map_err(|error| {
+            StorageError::Pointer {
+                name: name.to_owned(),
+                detail: format!("{error:#}"),
+            }
+        })?;
+        // A fresh checkout has a `documents/` tree but no `Docket Filings`
+        // matter folder yet; create it, then run the safety walk.
+        let parent = bytes_path.parent().ok_or_else(|| StorageError::Pointer {
+            name: name.to_owned(),
+            detail: format!("{} has no parent", bytes_path.display()),
+        })?;
+        std::fs::create_dir_all(parent).map_err(|source| StorageError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
         // The same safety checks every managed document write runs: the
         // path stays inside the checkout's managed tree, and the bytes
         // stay git-ignored.
@@ -406,6 +425,7 @@ mod tests {
 
     const DOCUMENT_BYTES: &[u8] = b"%PDF-1.7 docket notice bytes";
     const OTHER_BYTES: &[u8] = b"%PDF-1.7 a different document";
+    const THIRD_BYTES: &[u8] = b"%PDF-1.7 a third document";
 
     fn sha_of(bytes: &[u8]) -> String {
         hex_digest(&Sha256::digest(bytes))
@@ -584,25 +604,46 @@ mod tests {
     fn a_collision_escalates_to_att_then_att2() {
         let store = MemoryStore::default();
         resolve_filing(&store, &request("4", "Notice of Hearing")).expect("filed");
+        // A different title is a different name — no collision, no
+        // escalation; the plain name is simply taken.
         let second = resolve_filing(&store, &request("4", "Amended Notice")).expect("filed");
         assert_eq!(
             second,
             FilingOutcome::Filed {
-                name: "DKT 0004-att - Amended Notice.pdf".to_owned(),
+                name: "DKT 0004 - Amended Notice.pdf".to_owned(),
                 paths: FiledPaths {
-                    bytes: PathBuf::from("DKT 0004-att - Amended Notice.pdf"),
-                    pointer: PathBuf::from("DKT 0004-att - Amended Notice.pdf.yaml"),
+                    bytes: PathBuf::from("DKT 0004 - Amended Notice.pdf"),
+                    pointer: PathBuf::from("DKT 0004 - Amended Notice.pdf.yaml"),
                 },
             }
         );
-        let third = resolve_filing(&store, &request("4", "Second Amendment")).expect("filed");
+        // A second distinct document that lands on the same DKT name —
+        // the court reissued the notice — escalates to -att.
+        let reissued =
+            FilingRequest::new("4", false, "Notice of Hearing", "pdf", OTHER_BYTES.to_vec())
+                .expect("the document has bytes");
+        let second = resolve_filing(&store, &reissued).expect("filed");
+        assert_eq!(
+            second,
+            FilingOutcome::Filed {
+                name: "DKT 0004-att - Notice of Hearing.pdf".to_owned(),
+                paths: FiledPaths {
+                    bytes: PathBuf::from("DKT 0004-att - Notice of Hearing.pdf"),
+                    pointer: PathBuf::from("DKT 0004-att - Notice of Hearing.pdf.yaml"),
+                },
+            }
+        );
+        let reissued_again =
+            FilingRequest::new("4", false, "Notice of Hearing", "pdf", THIRD_BYTES.to_vec())
+                .expect("the document has bytes");
+        let third = resolve_filing(&store, &reissued_again).expect("filed");
         assert_eq!(
             third,
             FilingOutcome::Filed {
-                name: "DKT 0004-att2 - Second Amendment.pdf".to_owned(),
+                name: "DKT 0004-att2 - Notice of Hearing.pdf".to_owned(),
                 paths: FiledPaths {
-                    bytes: PathBuf::from("DKT 0004-att2 - Second Amendment.pdf"),
-                    pointer: PathBuf::from("DKT 0004-att2 - Second Amendment.pdf.yaml"),
+                    bytes: PathBuf::from("DKT 0004-att2 - Notice of Hearing.pdf"),
+                    pointer: PathBuf::from("DKT 0004-att2 - Notice of Hearing.pdf.yaml"),
                 },
             }
         );
@@ -611,19 +652,22 @@ mod tests {
     #[test]
     fn an_unnumbered_attachment_colliding_escalates_beyond_att() {
         let store = MemoryStore::default();
-        let attachment = |title: &str| {
-            FilingRequest::new("4", true, title, "pdf", DOCUMENT_BYTES.to_vec())
+        let attachment = |bytes: &[u8]| {
+            FilingRequest::new("4", true, "Exhibit A", "pdf", bytes.to_vec())
                 .expect("the document has bytes")
         };
-        resolve_filing(&store, &attachment("Exhibit A")).expect("filed");
-        let second = resolve_filing(&store, &attachment("Exhibit B")).expect("filed");
+        resolve_filing(&store, &attachment(DOCUMENT_BYTES)).expect("filed");
+        // The court prints no attachment number, so two distinct exhibits
+        // land on the same `DKT NNNN-att - Exhibit A.pdf` name; the second
+        // escalates beyond -att.
+        let second = resolve_filing(&store, &attachment(OTHER_BYTES)).expect("filed");
         assert_eq!(
             second,
             FilingOutcome::Filed {
-                name: "DKT 0004-att2 - Exhibit B.pdf".to_owned(),
+                name: "DKT 0004-att2 - Exhibit A.pdf".to_owned(),
                 paths: FiledPaths {
-                    bytes: PathBuf::from("DKT 0004-att2 - Exhibit B.pdf"),
-                    pointer: PathBuf::from("DKT 0004-att2 - Exhibit B.pdf.yaml"),
+                    bytes: PathBuf::from("DKT 0004-att2 - Exhibit A.pdf"),
+                    pointer: PathBuf::from("DKT 0004-att2 - Exhibit A.pdf.yaml"),
                 },
             }
         );
@@ -631,11 +675,23 @@ mod tests {
 
     // ---- The real store: layout and pointer conventions (tempdir) -------
 
+    /// A minimal Project checkout: a Git work tree, since the store files
+    /// only into a tree Git ignores — the same gate every managed write runs.
+    fn checkout() -> (tempfile::TempDir, ProjectFilingStore) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let init = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(dir.path())
+            .status()
+            .expect("git runs");
+        assert!(init.success(), "git init succeeds");
+        let store = ProjectFilingStore::new(dir.path().to_path_buf());
+        (dir, store)
+    }
+
     #[test]
     fn the_project_store_files_bytes_and_pointer_in_the_prescribed_layout() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().to_path_buf();
-        let store = ProjectFilingStore::new(root.clone());
+        let (dir, store) = checkout();
         let outcome = resolve_filing(&store, &request("4", "Notice of Hearing")).expect("filed");
         let FilingOutcome::Filed { name, paths } = outcome else {
             panic!("a fresh name files, it does not dedupe");
@@ -644,7 +700,8 @@ mod tests {
         // The bytes sit flat under documents/Docket Filings/.
         assert_eq!(
             paths.bytes,
-            root.join("documents/Docket Filings/DKT 0004 - Notice of Hearing.pdf")
+            dir.path()
+                .join("documents/Docket Filings/DKT 0004 - Notice of Hearing.pdf")
         );
         assert_eq!(
             std::fs::read(&paths.bytes).expect("bytes on disk"),
@@ -653,14 +710,14 @@ mod tests {
         // The pointer sits at blobs/<name>.yaml, flat beside every other blob.
         assert_eq!(
             paths.pointer,
-            root.join("blobs/DKT 0004 - Notice of Hearing.pdf.yaml")
+            dir.path()
+                .join("blobs/DKT 0004 - Notice of Hearing.pdf.yaml")
         );
     }
 
     #[test]
     fn the_pointer_yaml_matches_the_blob_conventions() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let store = ProjectFilingStore::new(dir.path().to_path_buf());
+        let (_dir, store) = checkout();
         let FilingOutcome::Filed { name, paths } =
             resolve_filing(&store, &request("4", "Notice of Hearing")).expect("filed")
         else {
@@ -698,8 +755,7 @@ mod tests {
 
     #[test]
     fn the_project_store_re_files_the_same_document_without_writing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let store = ProjectFilingStore::new(dir.path().to_path_buf());
+        let (_dir, store) = checkout();
         let first = resolve_filing(&store, &request("4", "Notice of Hearing")).expect("filed");
         let FilingOutcome::Filed { paths, .. } = first else {
             panic!("a fresh name files, it does not dedupe");
@@ -725,23 +781,24 @@ mod tests {
 
     #[test]
     fn the_project_store_escalates_a_real_collision_on_disk() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let store = ProjectFilingStore::new(dir.path().to_path_buf());
+        let (dir, store) = checkout();
         resolve_filing(&store, &request("4", "Notice of Hearing")).expect("filed");
-        let other = FilingRequest::new("4", false, "Amended Notice", "pdf", OTHER_BYTES.to_vec())
-            .expect("the document has bytes");
+        // The court reissued the notice: same DKT name, different bytes.
+        let other =
+            FilingRequest::new("4", false, "Notice of Hearing", "pdf", OTHER_BYTES.to_vec())
+                .expect("the document has bytes");
         let second = resolve_filing(&store, &other).expect("filed beside the first");
         assert_eq!(
             second,
             FilingOutcome::Filed {
-                name: "DKT 0004-att - Amended Notice.pdf".to_owned(),
+                name: "DKT 0004-att - Notice of Hearing.pdf".to_owned(),
                 paths: FiledPaths {
                     bytes: dir
                         .path()
-                        .join("documents/Docket Filings/DKT 0004-att - Amended Notice.pdf"),
+                        .join("documents/Docket Filings/DKT 0004-att - Notice of Hearing.pdf"),
                     pointer: dir
                         .path()
-                        .join("blobs/DKT 0004-att - Amended Notice.pdf.yaml"),
+                        .join("blobs/DKT 0004-att - Notice of Hearing.pdf.yaml"),
                 },
             }
         );
@@ -789,26 +846,29 @@ mod tests {
         assert!(receipt.deduped, "the same document re-enqueues as deduped");
     }
 
-    #[tokio::test]
-    async fn the_dkt_filing_intake_rejects_an_unnameable_document() {
-        let store = MemoryStore::default();
-        let intake = DktFilingIntake::new(&store);
-        let outcome = intake.enqueue(&scraped("not-an-entry", "Notice")).await;
+    /// An entry number the naming module cannot normalize is rejected when
+    /// the download is staged, before any intake or filing runs — nothing
+    /// unnameable can enter the pipeline.
+    #[test]
+    fn an_unnameable_document_is_rejected_at_staging() {
+        let site = SiteKey::new("la-superior").expect("valid key");
+        let notice = crate::scraper::adapter::NoticeRef {
+            entry_number: "not-an-entry".to_owned(),
+            title: "Notice".to_owned(),
+            url: "https://portal.example.com/doc".to_owned(),
+            extension: "pdf".to_owned(),
+        };
+        let outcome = ScrapedDocument::from_download(
+            site,
+            "0004",
+            &notice,
+            sha_of(DOCUMENT_BYTES),
+            DOCUMENT_BYTES.to_vec(),
+        );
         let error = outcome.expect_err("the entry number cannot be normalized");
-        match error {
-            IntakeError::Rejected { detail } => {
-                assert!(
-                    detail.contains("entry_number"),
-                    "the error names the naming failure: {detail}"
-                );
-            }
-            IntakeError::Transient { .. } => {
-                panic!("a naming failure is terminal, not transient")
-            }
-        }
         assert!(
-            store.files.lock().expect("uncontended").is_empty(),
-            "a rejected document files nothing"
+            format!("{error:?}").contains("entry_number"),
+            "the error names the naming failure: {error:?}"
         );
     }
 
