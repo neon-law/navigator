@@ -89,6 +89,9 @@ pub struct CalendarEvent {
     pub summary: String,
     pub description: Option<String>,
     pub location: Option<String>,
+    /// The Calendar API color id an event renders in, from Navigator's fixed
+    /// category map. `None` leaves the calendar's default color.
+    pub color_id: Option<String>,
     /// The instant the event marks, with its own offset.
     pub start: DateTime<FixedOffset>,
     /// RFC 5545 `SEQUENCE`, raised on every update.
@@ -642,6 +645,8 @@ struct EventBody<'a> {
     description: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     location: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color_id: Option<&'a str>,
     start: EventTime,
     end: EventTime,
     status: &'static str,
@@ -676,6 +681,7 @@ fn event_body(event: &CalendarEvent) -> EventBody<'_> {
         summary: &event.summary,
         description: event.description.as_deref(),
         location: event.location.as_deref(),
+        color_id: event.color_id.as_deref(),
         start: EventTime {
             date_time: start.clone(),
         },
@@ -982,8 +988,8 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::{
-        CalendarError, CalendarEvent, CalendarRole, CalendarService, FakeCalendar, GoogleCalendar,
-        StoredEvent,
+        event_body, CalendarError, CalendarEvent, CalendarRole, CalendarService, FakeCalendar,
+        GoogleCalendar, StoredEvent,
     };
 
     #[derive(Debug)]
@@ -1180,6 +1186,7 @@ mod tests {
             summary: "Court order deadline - acme".into(),
             description: Some("Authority: Order setting briefing".into()),
             location: None,
+            color_id: Some("11".into()),
             start: DateTime::parse_from_rfc3339("2026-11-02T17:00:00-08:00").unwrap(),
             sequence: 3,
             cancelled: false,
@@ -1205,6 +1212,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_colored_event_writes_colorid_and_an_uncolored_one_omits_it() {
+        let colored = serde_json::to_value(&event_body(&event())).unwrap();
+        assert_eq!(colored["colorId"], "11");
+        let mut plain = event();
+        plain.color_id = None;
+        let plain = serde_json::to_value(&event_body(&plain)).unwrap();
+        assert!(plain.get("colorId").is_none());
+    }
+
     #[tokio::test]
     async fn insert_event_posts_an_instant_event_with_its_identity() {
         let server = MockServer::start().await;
@@ -1214,6 +1231,7 @@ mod tests {
             .and(body_json(serde_json::json!({
                 "summary": "Court order deadline - acme",
                 "description": "Authority: Order setting briefing",
+                "colorId": "11",
                 "start": { "dateTime": "2026-11-02T17:00:00-08:00" },
                 "end": { "dateTime": "2026-11-02T17:00:00-08:00" },
                 "status": "confirmed",
