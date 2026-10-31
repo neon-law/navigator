@@ -752,7 +752,8 @@ mod tests {
     #[tokio::test]
     async fn login_retries_are_bounded_then_the_run_stops() {
         let fixture = provisioned().await;
-        let adapter = MockAdapter::simple(site()).login_script(vec![
+        let mut adapter = MockAdapter::simple(site());
+        adapter.login_script(vec![
             LoginStep::Transient,
             LoginStep::Transient,
             LoginStep::Transient,
@@ -770,9 +771,9 @@ mod tests {
     #[tokio::test]
     async fn login_recovers_after_transient_failures() {
         let fixture = provisioned().await;
-        let adapter = MockAdapter::simple(site())
-            .login_script(vec![LoginStep::Transient, LoginStep::Succeed])
-            .notices_script(vec![Ok(vec![])]);
+        let mut adapter = MockAdapter::simple(site());
+        adapter.login_script(vec![LoginStep::Transient, LoginStep::Succeed]);
+        adapter.notices_script(vec![Ok(vec![])]);
         run_scraper(&adapter, &query(), &deps(&fixture))
             .await
             .expect("login recovers");
@@ -790,7 +791,8 @@ mod tests {
     #[tokio::test]
     async fn structure_drift_stops_the_run_immediately() {
         let fixture = provisioned().await;
-        let adapter = MockAdapter::simple(site()).login_script(vec![LoginStep::Structure]);
+        let mut adapter = MockAdapter::simple(site());
+        adapter.login_script(vec![LoginStep::Structure]);
         let error = run_scraper(&adapter, &query(), &deps(&fixture))
             .await
             .expect_err("drift hard-stops");
