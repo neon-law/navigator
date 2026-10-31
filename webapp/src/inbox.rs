@@ -197,6 +197,7 @@ async fn selected_channel() -> Option<String> {
             channel.as_str(),
             store::inbox::channel::EMAIL
                 | store::inbox::channel::SMS
+                | store::inbox::channel::VOICE
                 | store::inbox::channel::FACEBOOK
                 | store::inbox::channel::INSTAGRAM
                 | store::inbox::channel::THREADS

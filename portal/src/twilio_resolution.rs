@@ -27,6 +27,8 @@ pub enum Lane {
     SmsIngest,
     /// `POST /webhook/twilio/status` — an outbound text's delivery event.
     SmsStatus,
+    /// `POST /webhook/twilio/voice/status` — a call's status event.
+    VoiceStatus,
 }
 
 impl Lane {
@@ -36,6 +38,7 @@ impl Lane {
         match self {
             Self::SmsIngest => crate::twilio_sms::SMS_WEBHOOK_PATH,
             Self::SmsStatus => crate::twilio_sms::SMS_STATUS_PATH,
+            Self::VoiceStatus => crate::twilio_voice::VOICE_STATUS_PATH,
         }
     }
 
@@ -44,6 +47,7 @@ impl Lane {
     pub const fn kinds(self) -> store::brand_phone_numbers::ChannelKinds {
         match self {
             Self::SmsIngest | Self::SmsStatus => store::brand_phone_numbers::ChannelKinds::Sms,
+            Self::VoiceStatus => store::brand_phone_numbers::ChannelKinds::Voice,
         }
     }
 }
@@ -251,8 +255,16 @@ mod tests {
         assert_eq!(Lane::SmsIngest.signed_path(), "/webhook/twilio/sms");
         assert_eq!(Lane::SmsStatus.signed_path(), "/webhook/twilio/status");
         assert_eq!(
+            Lane::VoiceStatus.signed_path(),
+            "/webhook/twilio/voice/status"
+        );
+        assert_eq!(
             Lane::SmsIngest.kinds(),
             store::brand_phone_numbers::ChannelKinds::Sms
+        );
+        assert_eq!(
+            Lane::VoiceStatus.kinds(),
+            store::brand_phone_numbers::ChannelKinds::Voice
         );
     }
 

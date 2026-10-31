@@ -903,11 +903,11 @@ DEFINE INDEX OVERWRITE firm_slug ON firm FIELDS slug UNIQUE;
 DEFINE TABLE IF NOT EXISTS firm_integration_secret SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE firm_id ON firm_integration_secret TYPE record<firm>;
 DEFINE FIELD OVERWRITE provider ON firm_integration_secret TYPE string
-    ASSERT $value IN ['xero', 'slack', 'notion', 'github', 'mercury', 'forgejo'];
+    ASSERT $value IN ['xero', 'slack', 'notion', 'github', 'mercury', 'forgejo', 'twilio'];
 DEFINE FIELD OVERWRITE kind ON firm_integration_secret TYPE string
     ASSERT $value IN ['xero_client_id', 'xero_client_secret', 'xero_refresh_token',
                       'slack_bot_token', 'notion_token', 'github_app_private_key', 'mercury_read_token', 'xero_tenant_id', 'xero_webhook_key',
-                      'forgejo_access_token'];
+                      'forgejo_access_token', 'twilio_auth_token'];
 DEFINE FIELD OVERWRITE version ON firm_integration_secret TYPE int;
 DEFINE FIELD OVERWRITE ciphertext ON firm_integration_secret TYPE string;
 DEFINE FIELD OVERWRITE wrapped_dek ON firm_integration_secret TYPE string;
@@ -2531,7 +2531,7 @@ DEFINE FIELD OVERWRITE interaction_type ON inbox_conversation TYPE string DEFAUL
 DEFINE FIELD OVERWRITE provider_post_id ON inbox_conversation TYPE option<string>;
 DEFINE FIELD OVERWRITE project_id ON inbox_conversation TYPE option<record<project>>;
 DEFINE FIELD OVERWRITE channel ON inbox_conversation TYPE string
-    ASSERT $value IN ['email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok'];
+    ASSERT $value IN ['email', 'sms', 'voice', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok'];
 DEFINE FIELD OVERWRITE external_address ON inbox_conversation TYPE string;
 DEFINE FIELD OVERWRITE external_name ON inbox_conversation TYPE option<string>;
 DEFINE FIELD OVERWRITE subject ON inbox_conversation TYPE option<string>;
