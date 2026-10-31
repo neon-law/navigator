@@ -1932,6 +1932,7 @@ mod tests {
                     content,
                     lead_capture: LeadCaptureContext::default(),
                     query: String::new(),
+                    path: String::new(),
                 },
             );
             dom.rebuild_in_place();
