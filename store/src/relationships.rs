@@ -25,9 +25,12 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use sqlx::Row;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::PostgresDb;
+use crate::postgres_graph::{ensure_vertices, graph_engine, load_edge, GraphEngine};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 const TABLE: &str = "relationship";
@@ -160,16 +163,84 @@ pub enum RelationshipError {
     /// could not read back.
     #[error("writing a relationship returned no usable row")]
     WriteReturnedNothing,
+    /// The edge the Surreal schema's relation shape and ASSERTs refuse:
+    /// an endpoint kind the relation does not admit, a `confidence_pct`
+    /// outside 0–100, or a `source_kind` outside its closed set. The
+    /// Surreal engine refused these in its schema; the authoritative
+    /// PostgreSQL path carries the same rules in Rust, and both engines
+    /// share the one check.
+    #[error("{0}")]
+    Invalid(String),
+    /// The engine flag could not be read or parsed. A record under an
+    /// unusable flag fails rather than guessing an engine.
+    #[error("{0}")]
+    Engine(String),
+    /// The authoritative PostgreSQL store refused the write.
+    #[error("PostgreSQL: {0}")]
+    Postgres(#[from] crate::postgres::PostgresError),
+    #[error("PostgreSQL: {0}")]
+    Sqlx(#[from] sqlx::Error),
+    /// The graph half of an authoritative write failed after the
+    /// relational row landed — see [`crate::postgres_graph`].
+    #[error("the graph projection could not take the write")]
+    Graph(#[from] crate::postgres_graph::GraphError),
 }
 
-/// Record one typed edge.
+/// Record one typed edge, on the engine [`GRAPH_AUTHORITY_ENV`]
+/// selects: PostgreSQL authoritatively (the relational row, then the
+/// graph's `RELATIONSHIP` edge), or SurrealDB as the rollback path's
+/// write.
+///
+/// The shared validation carries the Surreal schema's rules — the
+/// endpoint kinds the relation admits, the 0–100 confidence ASSERT, the
+/// provenance closed set — to both engines, so one refusal message
+/// covers one rule wherever the row lands.
 ///
 /// # Errors
 ///
-/// [`RelationshipError::Db`] if the write fails — including a
-/// `confidence_pct` outside 0–100, which the schema ASSERT refuses, and
-/// an endpoint kind the relation does not admit.
+/// [`RelationshipError::Invalid`] for an edge the relation's shape
+/// refuses, [`RelationshipError::Db`] if the Surreal write fails,
+/// [`RelationshipError::Postgres`] or [`RelationshipError::Sqlx`] if the
+/// authoritative PostgreSQL write fails, or
+/// [`RelationshipError::Engine`] if the flag itself is unusable.
 pub async fn record(
+    db: &SurrealDb,
+    input: &NewRelationship,
+) -> Result<Relationship, RelationshipError> {
+    validate_new_relationship(input)?;
+    match graph_engine().await.map_err(RelationshipError::Engine)? {
+        GraphEngine::Surreal => record_in_surreal(db, input).await,
+        GraphEngine::Age => record_in_postgres(db, input).await,
+    }
+}
+
+/// The rules the Surreal schema enforced on every `relationship` row:
+/// `TYPE RELATION FROM person|entity TO person|entity`, the confidence
+/// ASSERT, and the provenance closed set. The PostgreSQL table carries
+/// no CHECK constraints — the schema's parity posture keeps them
+/// application-side — so the check runs here, for both engines.
+fn validate_new_relationship(input: &NewRelationship) -> Result<(), RelationshipError> {
+    if !(0..=100).contains(&input.confidence_pct) {
+        return Err(RelationshipError::Invalid(format!(
+            "confidence_pct {} is outside 0-100",
+            input.confidence_pct
+        )));
+    }
+    match input.source_kind.as_str() {
+        SOURCE_MANUAL | SOURCE_DISCLOSURE | SOURCE_RELATIONSHIP_LOG | SOURCE_LLM => {}
+        other => {
+            return Err(RelationshipError::Invalid(format!(
+                "source_kind `{other}` is not one of {SOURCE_MANUAL}, {SOURCE_DISCLOSURE}, \
+                 {SOURCE_RELATIONSHIP_LOG}, {SOURCE_LLM}"
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// The SurrealDB write the check has always used: the rollback engine's
+/// write path, and the seam the fixtures seed the Surreal graph with.
+pub(crate) async fn record_in_surreal(
     db: &SurrealDb,
     input: &NewRelationship,
 ) -> Result<Relationship, RelationshipError> {
@@ -206,6 +277,118 @@ pub async fn record(
         .next()
         .and_then(RelationshipRow::into_relationship)
         .ok_or(RelationshipError::WriteReturnedNothing)
+}
+
+/// The authoritative write: the relational row first (the store of
+/// record), then the graph's `RELATIONSHIP` edge, whose vertices the
+/// write ensures before loading. The id is a fresh UUID string — the
+/// relational table's text key, in the shape the fixtures and the
+/// parity pass read. The Surreal graph table is retired from this path:
+/// under the `age` engine it receives nothing, which is the retirement.
+///
+/// The display names travel from SurrealDB, the store that still mints
+/// persons and entities; the vertex-ensure function falls back to the
+/// relational row's own name for a `None`.
+async fn record_in_postgres(
+    db: &SurrealDb,
+    input: &NewRelationship,
+) -> Result<Relationship, RelationshipError> {
+    let postgres = PostgresDb::from_env().await?;
+    let inserted = sqlx::query(
+        "INSERT INTO \"relationship\" (id, \"in\", \"out\", kind, confidence_pct, \
+         source_kind, source_id, detail, inserted_at, updated_at) \
+         VALUES ($1, $2::jsonb, $3::jsonb, $4, $5, $6, $7::jsonb, $8, now(), now()) \
+         RETURNING inserted_at, updated_at",
+    )
+    .bind(Uuid::now_v7().to_string())
+    .bind(record_link_json(input.from.table(), input.from_id).to_string())
+    .bind(record_link_json(input.to.table(), input.to_id).to_string())
+    .bind(&input.kind)
+    .bind(i64::from(input.confidence_pct))
+    .bind(&input.source_kind)
+    .bind(
+        input
+            .source_id
+            .map(|id| serde_json::json!(id.to_string()).to_string()),
+    )
+    .bind(&input.detail)
+    .fetch_one(&postgres.0)
+    .await?;
+
+    let relationship = Relationship {
+        from: input.from,
+        from_id: input.from_id,
+        to: input.to,
+        to_id: input.to_id,
+        kind: input.kind.clone(),
+        confidence_pct: input.confidence_pct,
+        source_kind: input.source_kind.clone(),
+        source_id: input.source_id,
+        detail: input.detail.clone(),
+        inserted_at: inserted.try_get("inserted_at")?,
+        updated_at: inserted.try_get("updated_at")?,
+    };
+
+    write_edge_with_names(db, &postgres, input).await?;
+    Ok(relationship)
+}
+
+/// The JSONB record link the mirror normalized — `{"tb": ..., "id":
+/// {"Uuid": ...}}` — the shape the graph projection's reader parses back
+/// into endpoint table and UUID.
+fn record_link_json(table: &str, id: Uuid) -> serde_json::Value {
+    serde_json::json!({"tb": table, "id": {"Uuid": id.to_string()}})
+}
+
+/// Resolve the endpoints' display names from SurrealDB and land the
+/// edge. A name lookup that fails fails the write: the row above is
+/// not yet visible to the graph when this runs, so a retry re-walks
+/// the whole path and lands one row, one edge.
+async fn write_edge_with_names(
+    db: &SurrealDb,
+    postgres: &PostgresDb,
+    input: &NewRelationship,
+) -> Result<(), RelationshipError> {
+    let from_name = endpoint_name(db, input.from, input.from_id).await?;
+    let to_name = endpoint_name(db, input.to, input.to_id).await?;
+    ensure_vertices(postgres, input.from.table(), &[(input.from_id, from_name)]).await?;
+    ensure_vertices(postgres, input.to.table(), &[(input.to_id, to_name)]).await?;
+    load_edge(
+        postgres,
+        "relationship",
+        serde_json::json!({
+            "from_id": input.from_id.to_string(),
+            "to_id": input.to_id.to_string(),
+            "kind": input.kind,
+            "confidence_pct": input.confidence_pct,
+            "source_kind": input.source_kind,
+            "source_id": input.source_id.map(|id| id.to_string()),
+            "detail": input.detail,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+/// One endpoint's display name, read from SurrealDB. A row that is
+/// gone reads as `None`, and the vertex projects with no name — the
+/// explanation falls back to the id until the next rebuild.
+async fn endpoint_name(
+    db: &SurrealDb,
+    endpoint: Endpoint,
+    id: Uuid,
+) -> Result<Option<String>, RelationshipError> {
+    let name = match endpoint {
+        Endpoint::Person => crate::persons::find_by_id(db, id)
+            .await
+            .map_err(|error| RelationshipError::Engine(format!("read the edge's person: {error}")))?
+            .map(|person| person.name),
+        Endpoint::Entity => crate::entities::find_by_id(db, id)
+            .await
+            .map_err(|error| RelationshipError::Engine(format!("read the edge's entity: {error}")))?
+            .map(|entity| entity.name),
+    };
+    Ok(name)
 }
 
 /// Every typed edge, oldest first.
