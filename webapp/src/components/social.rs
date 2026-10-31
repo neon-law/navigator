@@ -91,29 +91,95 @@ pub fn SocialMeta(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{cell::RefCell, rc::Rc};
+
+    use dioxus::document::{Document, Eval, LinkProps, MetaProps, NoOpDocument};
+
+    /// The recorder the head-component tests observe through. Dioxus hoists
+    /// `document::Meta` into the head via a [`Document`] provider, and a bare
+    /// test `VirtualDom` has none, so the tests provide this one and read what
+    /// the component asked it to publish.
+    #[derive(Clone, Default, PartialEq)]
+    struct RecordingDocument {
+        metas: Rc<RefCell<Vec<(String, String)>>>,
+        links: Rc<RefCell<Vec<(String, String)>>>,
+    }
+
+    impl Document for RecordingDocument {
+        fn eval(&self, js: String) -> Eval {
+            NoOpDocument.eval(js)
+        }
+
+        fn create_meta(&self, props: MetaProps) {
+            let attrs = props.attributes();
+            let key = attrs
+                .iter()
+                .find(|(k, _)| *k == "property" || *k == "name")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            let content = attrs
+                .iter()
+                .find(|(k, _)| *k == "content")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            self.metas.borrow_mut().push((key, content));
+        }
+
+        fn create_link(&self, props: LinkProps) {
+            let attrs = props.attributes();
+            let rel = attrs
+                .iter()
+                .find(|(k, _)| *k == "rel")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            let href = attrs
+                .iter()
+                .find(|(k, _)| *k == "href")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            self.links.borrow_mut().push((rel, href));
+        }
+    }
+
+    /// Render one `SocialMeta` into a `VirtualDom` that carries a recording
+    /// document, then return that document for the assertions to read.
+    #[component]
+    fn social_meta_harness(recorder: RecordingDocument, url: String, image: String) -> Element {
+        provide_context(Rc::new(recorder.clone()) as Rc<dyn Document>);
+        rsx! {
+            SocialMeta {
+                title: "Home".to_string(),
+                description: "The home page.".to_string(),
+                site_name: "CyberInjuryLaw".to_string(),
+                image,
+                url,
+            }
+        }
+    }
+
+    fn render_social_meta(url: Option<&str>, image: Option<&str>) -> RecordingDocument {
+        let doc = RecordingDocument::default();
+        let mut dom = VirtualDom::new_with_props(
+            social_meta_harness,
+            social_meta_harnessProps {
+                recorder: doc.clone(),
+                url: url.map(str::to_string).unwrap_or_default(),
+                image: image.map(str::to_string).unwrap_or_default(),
+            },
+        );
+        dom.rebuild_in_place();
+        doc
+    }
 
     #[test]
     fn a_text_wordmark_does_not_emit_social_image_metadata() {
-        fn app() -> Element {
-            rsx! {
-                SocialMeta {
-                    title: "Lawyer Shook".to_string(),
-                    description: "The Guieb & Shook PC holding page.".to_string(),
-                    site_name: "Lawyer Shook".to_string(),
-                    image: String::new(),
-                }
-            }
-        }
-        let mut dom = VirtualDom::new(app);
-        dom.rebuild_in_place();
-        let out = dioxus_ssr::render(&dom);
+        let doc = render_social_meta(None, None);
+        let metas = doc.metas.borrow();
         assert!(
-            !out.contains("og:image"),
-            "no empty Open Graph image: {out}"
-        );
-        assert!(
-            !out.contains("twitter:image"),
-            "no empty Twitter image: {out}"
+            metas
+                .iter()
+                .all(|(key, _)| key != "og:image" && key != "twitter:image"),
+            "no empty Open Graph or Twitter image: {metas:?}"
         );
     }
 
@@ -148,46 +214,37 @@ mod tests {
 
     #[test]
     fn a_page_with_a_url_emits_og_url_and_a_canonical_link() {
-        fn app() -> Element {
-            rsx! {
-                SocialMeta {
-                    title: "Home".to_string(),
-                    description: "The home page.".to_string(),
-                    site_name: "CyberInjuryLaw".to_string(),
-                    image: String::new(),
-                    url: "https://www.cyberinjurylaw.com/".to_string(),
-                }
-            }
-        }
-        let mut dom = VirtualDom::new(app);
-        dom.rebuild_in_place();
-        let out = dioxus_ssr::render(&dom);
+        let doc = render_social_meta(Some("https://www.cyberinjurylaw.com/"), None);
         assert!(
-            out.contains(r#"content="https://www.cyberinjurylaw.com/" property="og:url""#),
-            "og:url must carry the absolute page URL: {out}"
+            doc.metas.borrow().contains(&(
+                "og:url".to_string(),
+                "https://www.cyberinjurylaw.com/".to_string()
+            )),
+            "og:url must carry the absolute page URL: {:?}",
+            doc.metas.borrow()
         );
         assert!(
-            out.contains(r#"rel="canonical" href="https://www.cyberinjurylaw.com/""#),
-            "the canonical link must carry the same URL: {out}"
+            doc.links.borrow().contains(&(
+                "canonical".to_string(),
+                "https://www.cyberinjurylaw.com/".to_string()
+            )),
+            "the canonical link must carry the same URL: {:?}",
+            doc.links.borrow()
         );
     }
 
     #[test]
     fn a_page_without_a_url_emits_no_og_url_and_no_canonical_link() {
-        fn app() -> Element {
-            rsx! {
-                SocialMeta {
-                    title: "Home".to_string(),
-                    description: "The home page.".to_string(),
-                    site_name: "CyberInjuryLaw".to_string(),
-                    image: String::new(),
-                }
-            }
-        }
-        let mut dom = VirtualDom::new(app);
-        dom.rebuild_in_place();
-        let out = dioxus_ssr::render(&dom);
-        assert!(!out.contains("og:url"), "{out}");
-        assert!(!out.contains("canonical"), "{out}");
+        let doc = render_social_meta(None, None);
+        let metas = doc.metas.borrow();
+        assert!(
+            metas.iter().all(|(key, _)| key != "og:url"),
+            "no og:url without a page URL: {metas:?}"
+        );
+        let links = doc.links.borrow();
+        assert!(
+            links.iter().all(|(rel, _)| rel != "canonical"),
+            "no canonical link without a page URL: {links:?}"
+        );
     }
 }
