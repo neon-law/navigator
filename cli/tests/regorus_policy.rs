@@ -453,9 +453,18 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // + 3 for the relationship-graph views (`/app/api/graph/{view}/{id}`):
     //   lawyer admission for all three views, non-lawyer denial, and the
     //   read-only method/path-shape boundary = 627.
+    //
+    // + 5 for the pages the graph islands live on: the lawyer-graph page
+    //   (`/app/people/{id}/graph`) carries its own lawyer-tier rule — the
+    //   avatar rule's shape — with the six-case tier matrix, the lower-tier
+    //   denial, and a read-only pin; the matter page and the firm page ride
+    //   the ENG-81 matter-surface and `/app/lawyer` workbench prefix rules,
+    //   each pinned so a narrowing of either prefix surfaces here rather
+    //   than leaving a page unreachable in production.
+    // 627 + 5 = 632.
     assert_eq!(
         test_names.len(),
-        627,
+        632,
         "the policy decision inventory changed; review every new or removed rule"
     );
 
