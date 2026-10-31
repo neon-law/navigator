@@ -79,6 +79,7 @@ pub mod firm_new;
 pub mod firm_show;
 pub mod glossary_page;
 pub mod gov_forms;
+pub mod graph_views;
 pub mod harvard_outline;
 pub mod home;
 pub mod html_escape;
