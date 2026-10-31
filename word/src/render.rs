@@ -83,6 +83,8 @@ pub enum RenderError {
 struct Paragraph {
     style: Option<&'static str>,
     text: String,
+    /// Byte ranges styled as Markdown emphasis; the import baseline stays plain text.
+    italics: Vec<std::ops::Range<usize>>,
     /// The `<!-- keep -->` group this paragraph belongs to. Paragraphs
     /// sharing a group are kept on one page: each is told to stay with the
     /// next, so Word moves the whole group together when it fits and
@@ -91,9 +93,9 @@ struct Paragraph {
 }
 
 /// A GFM pipe table: the header row first, every row padded to the header's
-/// width. Cell text is plain, as in a paragraph.
+/// width. Cells retain the same emphasis runs as body paragraphs.
 struct Table {
-    rows: Vec<Vec<String>>,
+    rows: Vec<Vec<Paragraph>>,
 }
 
 enum Block {
@@ -271,7 +273,7 @@ pub fn source_blocks(markdown: &str) -> Vec<SourceBlock> {
                     .rows
                     .iter()
                     .flat_map(|row| row.iter())
-                    .cloned()
+                    .map(|cell| cell.text.clone())
                     .collect::<Vec<_>>()
                     .join(" | "),
             },
@@ -298,9 +300,10 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
     let mut result = Vec::new();
     let mut current: Option<Paragraph> = None;
     let mut table: Option<Table> = None;
-    let mut row: Vec<String> = Vec::new();
-    let mut cell: Option<String> = None;
-    let mut list_depth = 0usize;
+    let mut row: Vec<Paragraph> = Vec::new();
+    let mut cell: Option<Paragraph> = None;
+    let mut lists: Vec<Option<u64>> = Vec::new();
+    let mut italic_depth = 0usize;
     let mut quote_depth = 0usize;
     let mut group: Option<usize> = None;
     let mut groups = 0usize;
@@ -327,8 +330,10 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
             }
             Event::Start(Tag::Paragraph) => {
                 current_start.get_or_insert(range.start);
-                current_kind = SourceBlockKind::Paragraph;
-                current = Some(Paragraph::default());
+                if current.is_none() {
+                    current_kind = SourceBlockKind::Paragraph;
+                    current = Some(Paragraph::default());
+                }
             }
             Event::Start(Tag::Item) => {
                 current_start.get_or_insert(range.start);
@@ -336,17 +341,37 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                 let mut paragraph = Paragraph::default();
                 paragraph
                     .text
-                    .push_str(if list_depth > 1 { "    • " } else { "• " });
+                    .push_str(&"    ".repeat(lists.len().saturating_sub(1)));
+                if let Some(Some(number)) = lists.last_mut() {
+                    let _ = write!(paragraph.text, "{number}. ");
+                    *number = number.saturating_add(1);
+                } else {
+                    paragraph.text.push_str("• ");
+                }
                 current = Some(paragraph);
             }
-            Event::Start(Tag::List(_)) => list_depth += 1,
+            Event::Start(Tag::List(start)) => {
+                // A tight list has no paragraph-end event before its nested list.
+                // Finish the parent item before starting the child's counter.
+                if let Some(mut paragraph) = current.take().filter(|p| !p.text.is_empty()) {
+                    paragraph.group = group;
+                    result.push(SourcePair {
+                        kind: current_kind,
+                        source: current_start.take().unwrap_or(range.start)..range.start,
+                        block: Block::Paragraph(paragraph),
+                    });
+                }
+                lists.push(start);
+            }
+            Event::Start(Tag::Emphasis) => italic_depth += 1,
+            Event::End(TagEnd::Emphasis) => italic_depth = italic_depth.saturating_sub(1),
             Event::Start(Tag::BlockQuote(_)) => quote_depth += 1,
             Event::Start(Tag::Table(_)) => {
                 table = Some(Table { rows: Vec::new() });
                 table_start = range.start;
             }
             Event::Start(Tag::TableHead | Tag::TableRow) => row = Vec::new(),
-            Event::Start(Tag::TableCell) => cell = Some(String::new()),
+            Event::Start(Tag::TableCell) => cell = Some(Paragraph::default()),
             Event::End(TagEnd::TableCell) => row.extend(cell.take()),
             Event::End(TagEnd::TableHead | TagEnd::TableRow) => {
                 if let Some(table) = table.as_mut() {
@@ -357,7 +382,7 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                 if let Some(mut finished) = table.take() {
                     let width = finished.rows.first().map_or(0, Vec::len);
                     for row in &mut finished.rows {
-                        row.resize(width, String::new());
+                        row.resize_with(width, Paragraph::default);
                     }
                     result.push(SourcePair {
                         kind: SourceBlockKind::Table,
@@ -367,19 +392,28 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                 }
             }
             Event::Text(text) | Event::Code(text) if cell.is_some() => {
-                cell.get_or_insert_with(String::new).push_str(&text);
+                append_text(
+                    cell.get_or_insert_with(Paragraph::default),
+                    &text,
+                    italic_depth > 0,
+                );
             }
             Event::SoftBreak if cell.is_some() => {
-                cell.get_or_insert_with(String::new).push(' ');
+                append_text(
+                    cell.get_or_insert_with(Paragraph::default),
+                    " ",
+                    italic_depth > 0,
+                );
             }
             Event::HardBreak if cell.is_some() => {
-                cell.get_or_insert_with(String::new).push('\n');
+                cell.get_or_insert_with(Paragraph::default).text.push('\n');
             }
             Event::Text(text) | Event::Code(text) => {
-                current
-                    .get_or_insert_with(Paragraph::default)
-                    .text
-                    .push_str(&text);
+                append_text(
+                    current.get_or_insert_with(Paragraph::default),
+                    &text,
+                    italic_depth > 0,
+                );
             }
             // A soft break is a plain source-line wrap (S102 packs prose to
             // 120 columns, so most paragraphs carry several); CommonMark
@@ -387,10 +421,11 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
             // break — a trailing `\` or two trailing spaces, and not at the
             // end of the block — becomes a `<w:br/>` in `document_xml`.
             Event::SoftBreak => {
-                current
-                    .get_or_insert_with(Paragraph::default)
-                    .text
-                    .push(' ');
+                append_text(
+                    current.get_or_insert_with(Paragraph::default),
+                    " ",
+                    italic_depth > 0,
+                );
             }
             Event::HardBreak => {
                 current
@@ -414,7 +449,7 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                 if crate::paper::is_html_line_break(&html) =>
             {
                 if let Some(cell) = cell.as_mut() {
-                    cell.push('\n');
+                    cell.text.push('\n');
                 } else {
                     current
                         .get_or_insert_with(Paragraph::default)
@@ -426,7 +461,7 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
             // placeholder: an empty rule the signer completes by hand.
             Event::Html(html) | Event::InlineHtml(html) if crate::paper::is_signer_box(&html) => {
                 if let Some(cell) = cell.as_mut() {
-                    cell.push(SIGNER_BOX_RUN);
+                    append_text(cell, &SIGNER_BOX_RUN.to_string(), italic_depth > 0);
                 } else {
                     current
                         .get_or_insert_with(Paragraph::default)
@@ -435,7 +470,7 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                 }
             }
             Event::Html(html) | Event::InlineHtml(html) => match crate::paper::keep_marker(&html) {
-                Some(crate::paper::Keep::Open) if quote_depth == 0 && list_depth == 0 => {
+                Some(crate::paper::Keep::Open) if quote_depth == 0 && lists.is_empty() => {
                     groups += 1;
                     group = Some(groups);
                 }
@@ -446,6 +481,10 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                 if let Some(mut paragraph) = current.take() {
                     if quote_depth > 0 {
                         paragraph.text.insert_str(0, "    ");
+                        for range in &mut paragraph.italics {
+                            range.start += 4;
+                            range.end += 4;
+                        }
                     }
                     strip_trailing_escaped_break(&mut paragraph.text);
                     if !paragraph.text.is_empty() {
@@ -463,7 +502,9 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                     }
                 }
             }
-            Event::End(TagEnd::List(_)) => list_depth = list_depth.saturating_sub(1),
+            Event::End(TagEnd::List(_)) => {
+                lists.pop();
+            }
             Event::End(TagEnd::BlockQuote(_)) => quote_depth = quote_depth.saturating_sub(1),
             _ => {}
         }
@@ -540,7 +581,7 @@ fn document_xml(
             }
             body.push_str("</w:pPr>");
         }
-        body.push_str(&runs_xml(&paragraph.text, false));
+        body.push_str(&paragraph_runs_xml(paragraph, false));
         body.push_str("</w:p>");
     }
     let first_header = if has_letterhead {
@@ -557,10 +598,54 @@ fn document_xml(
     )
 }
 
+/// Append a text event without losing its emphasis or contaminating the plain import baseline.
+fn append_text(paragraph: &mut Paragraph, text: &str, italic: bool) {
+    let start = paragraph.text.len();
+    paragraph.text.push_str(text);
+    if italic && !text.is_empty() {
+        if let Some(last) = paragraph
+            .italics
+            .last_mut()
+            .filter(|range| range.end == start)
+        {
+            last.end = paragraph.text.len();
+        } else {
+            paragraph.italics.push(start..paragraph.text.len());
+        }
+    }
+}
+
+fn paragraph_runs_xml(paragraph: &Paragraph, bold: bool) -> String {
+    let mut out = String::new();
+    let mut from = 0;
+    for range in &paragraph.italics {
+        let start = range.start.min(paragraph.text.len());
+        let end = range.end.min(paragraph.text.len());
+        out.push_str(&runs_xml(&paragraph.text[from..start], bold, false));
+        out.push_str(&runs_xml(&paragraph.text[start..end], bold, true));
+        from = end;
+    }
+    out.push_str(&runs_xml(&paragraph.text[from..], bold, false));
+    out
+}
+
 /// A paragraph's text as runs, a `<w:br/>` for each hard break and an
 /// underlined rule for each Signer Box.
-fn runs_xml(text: &str, bold: bool) -> String {
-    let weight = if bold { "<w:rPr><w:b/></w:rPr>" } else { "" };
+fn runs_xml(text: &str, bold: bool, italic: bool) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    let mut weight = String::new();
+    if bold || italic {
+        weight.push_str("<w:rPr>");
+        if bold {
+            weight.push_str("<w:b/>");
+        }
+        if italic {
+            weight.push_str("<w:i/>");
+        }
+        weight.push_str("</w:rPr>");
+    }
     let mut runs = String::new();
     for (index, line) in text.split('\n').enumerate() {
         if index > 0 {
@@ -625,7 +710,7 @@ fn table_xml(table: &Table, text_width: u32) -> String {
             let _ = write!(
                 out,
                 r#"<w:tc><w:tcPr><w:tcW w:w="{width}" w:type="dxa"/></w:tcPr><w:p>{}</w:p></w:tc>"#,
-                runs_xml(text, header)
+                paragraph_runs_xml(text, header)
             );
         }
         out.push_str("</w:tr>");
@@ -1509,5 +1594,76 @@ mod tests {
         assert!(!document.contains("signer-box"), "{document}");
         assert!(!document.contains("{{"), "{document}");
         assert!(!document.contains('\u{E000}'), "{document}");
+    }
+    #[test]
+    fn word_preserves_italic_runs_in_paragraphs_and_table_cells() {
+        let bytes = render_notation(
+            "Plain _/s/ Sample Counsel_ plain.\n\n| _Heading_ |\n| --- |\n| _Italic cell_ |\n",
+            None,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+        let doc = part(&bytes, "word/document.xml");
+        assert!(doc.contains("<w:i/>"), "italic run missing: {doc}");
+        assert!(
+            doc.contains("<w:i/></w:rPr><w:t xml:space=\"preserve\">/s/ Sample Counsel</w:t>"),
+            "{doc}"
+        );
+        assert!(
+            doc.contains("<w:i/></w:rPr><w:t xml:space=\"preserve\">Italic cell</w:t>"),
+            "{doc}"
+        );
+        assert!(
+            doc.contains("<w:r><w:t xml:space=\"preserve\"> plain.</w:t>"),
+            "emphasis leaked: {doc}"
+        );
+        assert!(
+            doc.contains("<w:b/><w:i/></w:rPr><w:t xml:space=\"preserve\">Heading</w:t>"),
+            "{doc}"
+        );
+        let source = super::source_blocks("Plain _italic_ text.");
+        assert_eq!(source[0].text, "Plain italic text.");
+    }
+
+    #[test]
+    fn ordered_lists_keep_their_start_and_nested_numbering() {
+        let source = super::source_blocks(
+            "3. Third\n4. Fourth\n   1. Nested\n   2. Next\n5. Fifth\n\n- Bullet\n",
+        );
+        let text: Vec<_> = source.iter().map(|block| block.text.as_str()).collect();
+        assert_eq!(
+            text,
+            [
+                "3. Third",
+                "4. Fourth",
+                "    1. Nested",
+                "    2. Next",
+                "5. Fifth",
+                "• Bullet"
+            ]
+        );
+    }
+    #[test]
+    fn unicode_emphasis_keeps_its_boundaries_across_breaks_and_quotes() {
+        let bytes = render_notation(
+            "> Préface _café  \nnaïve_ plain.\n",
+            None,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+        let doc = part(&bytes, "word/document.xml");
+        assert!(
+            doc.contains("<w:i/></w:rPr><w:t xml:space=\"preserve\">café</w:t>"),
+            "{doc}"
+        );
+        assert!(
+            doc.contains("<w:i/></w:rPr><w:t xml:space=\"preserve\">naïve</w:t>"),
+            "{doc}"
+        );
+        assert!(doc.contains("<w:br/>"), "{doc}");
+        assert!(
+            doc.contains("<w:r><w:t xml:space=\"preserve\"> plain.</w:t>"),
+            "{doc}"
+        );
     }
 }
