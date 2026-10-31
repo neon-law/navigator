@@ -35392,6 +35392,7 @@ diskann 0.56.0  —  MIT
 diskann-utils 0.56.0  —  MIT
 diskann-vector 0.56.0  —  MIT
 diskann-wide 0.56.0  —  MIT
+encodify 1.0.2  —  Apache-2.0 OR MIT
 flatbuffers 25.12.19  —  Apache-2.0
 generational-box 0.7.10  —  MIT OR Apache-2.0
 geo 0.32.0  —  MIT OR Apache-2.0
@@ -35400,7 +35401,7 @@ glidesort 0.1.2  —  MIT OR Apache-2.0
 gloo-net 0.6.0  —  MIT OR Apache-2.0
 gloo-timers 0.3.0  —  MIT OR Apache-2.0
 gloo-utils 0.2.0  —  MIT OR Apache-2.0
-hashify 0.2.9  —  Apache-2.0 OR MIT
+hashify 0.3.1  —  Apache-2.0 OR MIT
 i_overlay 4.0.7  —  MIT
 include_dir 0.7.4  —  MIT
 include_dir_macros 0.7.4  —  MIT
@@ -35414,7 +35415,7 @@ kube-client 4.2.0  —  Apache-2.0
 kube-core 4.2.0  —  Apache-2.0
 lazy-js-bundle 0.7.10  —  MIT OR Apache-2.0
 libwebp-sys 0.9.6  —  MIT
-mail-parser 0.11.9  —  Apache-2.0 OR MIT
+mail-parser 1.0.0  —  Apache-2.0 OR MIT
 manganis 0.7.10  —  MIT OR Apache-2.0
 manganis-core 0.7.10  —  MIT OR Apache-2.0
 manganis-macro 0.7.10  —  MIT OR Apache-2.0
