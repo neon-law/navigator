@@ -260,7 +260,10 @@ jobs:
             --log-driver none \
             ghcr.io/data-privacy-stack/presidio-analyzer:2.2.364@sha256:ae8f6f111ac2f04e3fec552f7f80edd0dcbfa2dd69ee1b9e030475be31669885
       - name: wait for the local PII analyzer
-        run: curl --fail --silent --output /dev/null --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:3000/health
+        # --retry-all-errors, not just --retry-connrefused: docker's port proxy
+        # accepts the connection and the booting app resets it, which curl
+        # reports as exit 56 and would otherwise not retry at all.
+        run: curl --fail --silent --output /dev/null --retry 30 --retry-all-errors --retry-delay 2 http://127.0.0.1:3000/health
       - name: scan for personal data with Presidio
         run: '"${CARGO_TARGET_DIR:-target}/debug/navigator" pii --analyzer-url http://127.0.0.1:3000'
       - name: scan the working tree for secrets
