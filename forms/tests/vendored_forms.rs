@@ -63,10 +63,36 @@ fn vendored_forms_pin_their_bucket_objects() {
         );
 
         assert!(
-            form.origin_url.starts_with("https://") && form.origin_url.contains(".gov"),
-            "{}: origin_url must be an HTTPS government URL, got `{}`",
+            official_origin(&form.origin_url),
+            "{}: origin_url must be an HTTPS government URL (or an allowlisted \
+             official court domain), got `{}`",
             form.code,
             form.origin_url
         );
     }
+}
+
+/// Official court domains that do not sit under `.gov`. Washoe County's
+/// courts publish their forms on washoecourts.com, and the Eighth
+/// Judicial District Court's Civil Law Self-Help Center publishes the
+/// Clark County small-claims forms on civillawselfhelpcenter.org — both
+/// verified as the official sources in the project's court-form surveys
+/// (October 2026) and SHA-256-pin-matched against the downloaded blanks.
+const OFFICIAL_NON_GOV_DOMAINS: [&str; 2] = ["washoecourts.com", "civillawselfhelpcenter.org"];
+
+/// Whether an origin URL points at a verified official government source:
+/// any HTTPS host under `.gov`, or an allowlisted official court domain.
+fn official_origin(url: &str) -> bool {
+    if !url.starts_with("https://") {
+        return false;
+    }
+    let host = url
+        .trim_start_matches("https://")
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    host.contains(".gov")
+        || OFFICIAL_NON_GOV_DOMAINS
+            .iter()
+            .any(|d| host == *d || host.ends_with(&format!(".{d}")))
 }

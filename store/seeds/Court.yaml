@@ -1479,7 +1479,17 @@ records:
     # statewide whether filed in Supreme/County Court or NYC Civil Court;
     # this record carries the Supreme/County Court route (fees and RJI
     # note included). County Court accepts the same forms at the same fee.
-    forms: []
+    forms:
+      - code: ny__nc1_adult_name_change_petition
+        title: Name Change and/or Sex Designation Change Petition for Individual Adult (18+)
+        source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/AdultName-SexDesignationChangePetition-fillable.pdf
+        sha256: 5139cf708a05ac98f4a283c7667b4bbc62a88540cb784a0643af2b7bc32ff45e
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        filing_fee:
+          amount: "210.00"
+          currency: USD
+        fee_note: "One template serves both routes the form itself supports: NYC Civil Court at $65.00, or Supreme/County Court of the county of residence at $210.00 (the intake asks which court, confirmed by the lawyer at review). Fee waiver: poor person relief by motion with a sworn financial affidavit — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the NC1 surveyed_forms entry."
+        fee_waiver_code: null
     surveyed_forms:
       - key: NC1
         title: Name Change and/or Sex Designation Change Petition for Individual Adult (18+)
