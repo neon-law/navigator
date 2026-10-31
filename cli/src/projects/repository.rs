@@ -425,7 +425,13 @@ pub(crate) fn validate_gate(
     let blueprints = blueprint_selection(root, &mut errors, &mut warnings);
     let templates = match blueprints {
         rules::project_blueprints::BlueprintSelection::Selected(directory) if manifest_valid => {
-            validate_templates(root, directory, &mut errors, &mut warnings)
+            validate_templates(
+                root,
+                directory,
+                engagement_executed(root),
+                &mut errors,
+                &mut warnings,
+            )
         }
         _ => 0,
     };
@@ -1908,6 +1914,7 @@ pub(crate) const RELEASE_TAG_SHAPE: &str =
 fn validate_templates(
     root: &Path,
     blueprint_directory: rules::project_blueprints::BlueprintDirectory,
+    engagement_executed: bool,
     errors: &mut Vec<Finding>,
     warnings: &mut Vec<Finding>,
 ) -> usize {
@@ -1956,12 +1963,71 @@ fn validate_templates(
         return 0;
     }
 
-    let rules = rules::navigator_default_rules_with_codes(&rules::canonical_question_codes());
+    let rules = templates_rule_set(engagement_executed);
     let mut declared_codes = BTreeMap::new();
     for path in &paths {
         lint_project_template(path, &rules, &mut declared_codes, errors, warnings);
     }
     paths.len()
+}
+
+/// The rule set `validate_templates` lints Project templates with. When the
+/// Project's engagement is executed (LAW-226), N132 runs in its executed
+/// variant, which waives the onboarding engagement-arbitration requirement
+/// the same way `navigator_default_rules_with_codes` swaps in the
+/// registry-backed N104.
+fn templates_rule_set(engagement_executed: bool) -> Vec<Box<dyn rules::Rule>> {
+    let mut rules = rules::navigator_default_rules_with_codes(&rules::canonical_question_codes());
+    if engagement_executed {
+        for rule in rules.iter_mut() {
+            if rule.code() == "N132" {
+                *rule = Box::new(rules::clauses::ClauseReferences::executed(true));
+            }
+        }
+    }
+    rules
+}
+
+/// Whether the Project's engagement has been executed, read from the
+/// committed document pointers (LAW-226): any pointer carrying a
+/// `docusign_envelope_id` is a signed copy, and the gate has no other
+/// committed signal for "this engagement went out and came back signed".
+///
+/// A pointer that fails to parse counts as no evidence — the unwaived
+/// requirement stands, and the parse fault surfaces through the pointer
+/// checks that already judge `blobs/`.
+fn engagement_executed(root: &Path) -> bool {
+    let blobs = root.join(POINTER_DIRECTORY);
+    let Ok(entries) = walkdir(&blobs) else {
+        return false;
+    };
+    entries
+        .into_iter()
+        .filter(|path| crate::document_sync::is_pointer_path(path))
+        .filter_map(|path| crate::document_sync::read_pointer(&path).ok())
+        .flatten()
+        .any(|pointer| pointer.docusign_envelope_id.is_some())
+}
+
+/// Every file under `root`, recursively; a missing root is the empty list.
+fn walkdir(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out)?;
+            } else {
+                out.push(path);
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    if root.is_dir() {
+        walk(root, &mut out)?;
+    }
+    Ok(out)
 }
 
 /// `Y014` — a Project repository's document pointers live under `blobs/`,
@@ -2986,17 +3052,18 @@ mod tests {
 
     use super::{
         blueprint_selection, california_law_firm_entity_claims, cd_workflow, cd_workflow_for,
-        emit_scaffold, firm_trade_name_claims, gate_workflow_prefix, is_release_tag,
-        lint_project_template, misnamed_firm_entities, missing_root_gitignore_lines,
-        publish_workflow_prefix, repair_root_gitignore, repair_skills, repository_name,
-        retired_workflow_refused, validate_agent_contract, validate_cd_workflow,
-        validate_client_visibility, validate_documents_gitignore, validate_gate,
-        validate_github_path, validate_layout, validate_skills, validate_workflow, workflow,
-        workflow_for, Finding, LayoutOutcome, AGENT_CONTRACT_BASE, ALLOWED_ROOTS,
-        AUTOMERGE_WORKFLOW_CONTENTS, CD_WORKFLOW, CLAUDE_SETTINGS, CLAUDE_SETTINGS_CONTENTS,
-        DEFAULT_WORKFLOW_HOME, DRAFT_DIRECTORY, ENTITY_CODE, FINAL_RETIRED_WORKFLOW_RELEASE,
-        FIRM_TRADE_NAME_CODE, PROJECT_MANIFEST, RETIRED_CD_WORKFLOW, RETIRED_SYNCED_SKILLS,
-        RETIRED_WORKFLOW, ROOT_GITIGNORE, SYNCED_SKILLS, TEMPLATE_DIRECTORY, WORKFLOW,
+        emit_scaffold, engagement_executed, firm_trade_name_claims, gate_workflow_prefix,
+        is_release_tag, lint_project_template, misnamed_firm_entities,
+        missing_root_gitignore_lines, publish_workflow_prefix, repair_root_gitignore,
+        repair_skills, repository_name, retired_workflow_refused, validate_agent_contract,
+        validate_cd_workflow, validate_client_visibility, validate_documents_gitignore,
+        validate_gate, validate_github_path, validate_layout, validate_skills, validate_templates,
+        validate_workflow, workflow, workflow_for, Finding, LayoutOutcome, AGENT_CONTRACT_BASE,
+        ALLOWED_ROOTS, AUTOMERGE_WORKFLOW_CONTENTS, CD_WORKFLOW, CLAUDE_SETTINGS,
+        CLAUDE_SETTINGS_CONTENTS, DEFAULT_WORKFLOW_HOME, DRAFT_DIRECTORY, ENTITY_CODE,
+        FINAL_RETIRED_WORKFLOW_RELEASE, FIRM_TRADE_NAME_CODE, PROJECT_MANIFEST,
+        RETIRED_CD_WORKFLOW, RETIRED_SYNCED_SKILLS, RETIRED_WORKFLOW, ROOT_GITIGNORE,
+        SYNCED_SKILLS, TEMPLATE_DIRECTORY, WORKFLOW,
     };
     use super::{
         tracked_file_admitted, validate_tracked_files, CANONICAL_GITATTRIBUTES, CODEOWNERS,
@@ -5691,6 +5758,91 @@ jobs:
             .expect("a Y019 finding");
         assert!(message.contains("matter.department"), "{message}");
         assert!(message.contains("footer_title"), "{message}");
+    }
+
+    /// A signed copy under `blobs/`, built through the store's own writer so
+    /// the fixture cannot drift from the pointer schema.
+    fn signed_pointer_yaml() -> String {
+        store::document_pointers::DocumentPointer {
+            kind: "onboarding".into(),
+            visibility: "internal".into(),
+            folder: None,
+            current_version: store::document_pointers::PointerVersion {
+                version: 1,
+                asset_id: uuid::Uuid::now_v7(),
+                created_at: "2026-10-31T00:00:00Z".into(),
+                sha256: "0".repeat(64),
+                size_bytes: 1,
+                canonical_url: None,
+                checked_on: None,
+            },
+            previous_version: None,
+            authority_id: None,
+            docusign_envelope_id: Some(uuid::Uuid::now_v7()),
+            xero_invoice_id: None,
+            signing: None,
+            notarization: Vec::new(),
+            service: Vec::new(),
+            evidence: None,
+        }
+        .to_yaml()
+        .unwrap()
+    }
+
+    fn template_gate_errors(root: &Path, executed: bool) -> Vec<String> {
+        let mut errors: Vec<Finding> = Vec::new();
+        let mut warnings: Vec<Finding> = Vec::new();
+        validate_templates(
+            root,
+            rules::project_blueprints::BlueprintDirectory::Templates,
+            executed,
+            &mut errors,
+            &mut warnings,
+        );
+        errors.into_iter().map(|error| error.message).collect()
+    }
+
+    /// LAW-226: the gate reads execution evidence from the committed pointers.
+    /// With a signed copy under `blobs/`, an onboarding template missing
+    /// `engagement_arbitration` passes; without one it still fails.
+    #[test]
+    fn an_executed_engagement_skips_n132_and_the_unexecuted_still_fails() {
+        let template = "---\nkind: onboarding\nquestionnaire: [entity__company]\n---\nLetter.\n";
+
+        let unsigned = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(unsigned.path().join("templates")).unwrap();
+        std::fs::write(
+            unsigned.path().join("templates/onboarding__letter.md"),
+            template,
+        )
+        .unwrap();
+        assert!(!super::engagement_executed(unsigned.path()));
+        let findings = template_gate_errors(unsigned.path(), false);
+        assert!(
+            findings.iter().any(|finding| finding.starts_with("N132: ")
+                && finding.contains("engagement_arbitration@")),
+            "{findings:?}"
+        );
+
+        let signed = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(signed.path().join("templates")).unwrap();
+        std::fs::write(
+            signed.path().join("templates/onboarding__letter.md"),
+            template,
+        )
+        .unwrap();
+        std::fs::create_dir_all(signed.path().join("blobs/onboarding")).unwrap();
+        std::fs::write(
+            signed.path().join("blobs/onboarding/retainer_signed.yaml"),
+            signed_pointer_yaml(),
+        )
+        .unwrap();
+        assert!(super::engagement_executed(signed.path()));
+        let findings = template_gate_errors(signed.path(), true);
+        assert!(
+            !findings.iter().any(|finding| finding.starts_with("N132: ")),
+            "{findings:?}"
+        );
     }
 
     #[test]

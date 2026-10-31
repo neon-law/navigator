@@ -69,6 +69,9 @@ Every `kind: onboarding` template must declare the highest active version of `en
 and place it in the body with `{{> name}}`; `N132` (and so `navigator project gate`) fails the template otherwise. The
 onboarding scaffold stub starts with the clause, its `clauses:` block, and the two jurisdiction states. An offboarding
 letter ends an engagement already governed by the signed onboarding letter, so the requirement does not apply to it.
+Neither does it apply once the engagement itself is executed (LAW-226): when a committed document pointer carries a
+`docusign_envelope_id`, the gate skips the requirement, because the signed copy was generated from the template as it
+stood when it was sent and forcing today's clause into it would change nothing the client sees.
 
 The body references `{{> arbitration}}`. Governing law, arbitration seat, court forum, and administrator are distinct
 decisions. The Clause accepts a jurisdiction state or an existing single-choice state for its law and seat. A
