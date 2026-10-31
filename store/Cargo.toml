@@ -32,6 +32,10 @@ cloud.workspace = true
 # `source_pages` locates a quote in a stored PDF asset and lifts the pages
 # it falls on, through `pdf::passage` (#893).
 pdf.workspace = true
+# The canonical scaffold a fresh Project repository is seeded with, shared
+# with `navigator repository scaffold` so the CLI and the server write the
+# same bytes (docs/project-repositories.md).
+project-scaffold.workspace = true
 # Jitter for the optimistic-concurrency retry in `persons`: losers that all
 # back off by the same interval simply re-stage the same collision.
 rand.workspace = true
