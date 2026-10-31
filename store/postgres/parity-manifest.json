@@ -340,13 +340,20 @@
       "extra_column": null,
       "extra_table": null,
       "missing_column": null,
+      "missing_table": "sandbox_usage",
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": null,
       "missing_table": "schema_version",
       "table": null
     }
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 107,
+    "table_count": 108,
     "tables": {
       "address": {
         "city": "string",
@@ -1458,6 +1465,16 @@
         "notation_id": "record<notation>",
         "status": "string",
         "title": "string",
+        "updated_at": "datetime"
+      },
+      "sandbox_usage": {
+        "granted_cents": "int",
+        "id": "record",
+        "inserted_at": "datetime",
+        "overage": "bool",
+        "period": "string",
+        "person_id": "record<person>",
+        "spent_cents": "int",
         "updated_at": "datetime"
       },
       "schema_version": {

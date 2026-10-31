@@ -1026,6 +1026,13 @@
       "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
     ]
   },
+  "sandbox_usage": {
+    "scenario": "stable identity; tenant link isolation and no inferred participation",
+    "runtime_tests": [],
+    "remaining": [
+      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+    ]
+  },
   "schema_version": {
     "scenario": "operator authorization; no matter visibility grant",
     "runtime_tests": [],

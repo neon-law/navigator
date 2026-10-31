@@ -16,6 +16,7 @@ use workflows::StateMachineRuntime;
 
 use crate::principal::Principal;
 use crate::protocol::{codes, Request, Response, PROTOCOL_VERSION};
+use crate::search::SearchBackends;
 use crate::tools::{self, ToolError};
 
 /// State the MCP router carries. Holds clones of the shared `Db`
@@ -61,6 +62,13 @@ pub struct McpState {
     /// questionnaire complete with its workflow *not* started rather than
     /// claiming a start that did not happen.
     pub post_questionnaire: Option<Arc<dyn workflows::PostQuestionnaireDrive>>,
+    /// The private legal-search backends (`CourtListener`, `Descrybe`) the
+    /// sandbox search tools dispatch through. `portal::bootstrap` builds
+    /// them from environment configuration; the `Option` is for test
+    /// fixtures that exercise only the non-search tools. A tool whose
+    /// backends are absent degrades its searches to "search unavailable"
+    /// rather than failing boot or the calling session.
+    pub search: Option<SearchBackends>,
 }
 
 impl McpState {
@@ -76,6 +84,7 @@ impl McpState {
             email: None,
             forge: None,
             post_questionnaire: None,
+            search: None,
         }
     }
 }
@@ -352,6 +361,8 @@ mod tests {
             "glossary_show",
             "project_skill_list",
             "project_skill_show",
+            "search_case_law",
+            "search_legal_aid",
         ] {
             assert!(
                 names.contains(&offered),
@@ -359,7 +370,7 @@ mod tests {
             );
         }
 
-        assert_eq!(names.len(), 24, "got {names:?}");
+        assert_eq!(names.len(), 26, "got {names:?}");
         for name in &names {
             assert!(
                 !name.starts_with("aida_"),

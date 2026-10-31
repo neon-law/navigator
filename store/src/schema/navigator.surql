@@ -2695,3 +2695,34 @@ DEFINE FIELD OVERWRITE provider_account_id ON social_account_selection TYPE stri
 DEFINE FIELD OVERWRITE inserted_at ON social_account_selection TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON social_account_selection TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE social_account_selection_brand_provider ON social_account_selection FIELDS brand_key, provider UNIQUE;
+
+-- `sandbox_usage`: the metered-credit ledger behind the Nautilus Legal
+-- Sandbox (the glossary's Legal Sandbox). A subscriber's subscription
+-- includes $5 of model usage per billing month; one row here is one
+-- subscriber's credit for one month — the grant (500 cents, the `billing`
+-- convention: integer cents, never a float), the running debit across
+-- completions, and the overage flag.
+--
+-- The row's own record id is the compound natural key
+-- `⟨<person uuid>:<period>⟩`, not an independently minted UUID. That is
+-- the concurrency boundary, for the reason the store has already paid
+-- for twice (`store/tests/person_mailbox_race.rs`, `store::xero_invoices`):
+-- a UNIQUE index does not serialize racers that each mint their own
+-- record id, and a `WHERE` predicate over a table scan does not enter the
+-- optimistic layer's read set the way a direct record address does.
+-- First-touch `CREATE`s of one month collide on the row's key, and the
+-- metered debit (`store::sandbox_usage::debit`) is an `UPDATE` addressed
+-- at that key whose `WHERE` holds the whole decision, so two parallel
+-- tabs of the same subscriber serialize instead of double-spending.
+--
+-- The index is a plain lookup for the overage-invoice read (a closed
+-- period's owing rows), not a uniqueness guard — the record id is that.
+DEFINE TABLE IF NOT EXISTS sandbox_usage SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD OVERWRITE person_id ON sandbox_usage TYPE record<person>;
+DEFINE FIELD OVERWRITE period ON sandbox_usage TYPE string;
+DEFINE FIELD OVERWRITE granted_cents ON sandbox_usage TYPE int;
+DEFINE FIELD OVERWRITE spent_cents ON sandbox_usage TYPE int;
+DEFINE FIELD OVERWRITE overage ON sandbox_usage TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE inserted_at ON sandbox_usage TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON sandbox_usage TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE sandbox_usage_period ON sandbox_usage FIELDS period, overage;
