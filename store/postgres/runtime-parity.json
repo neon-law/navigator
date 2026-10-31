@@ -1,1193 +1,1206 @@
 {
-  "address": {
-    "scenario": "stable identity; tenant link isolation and no inferred participation",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
-    ]
-  },
-  "answer": {
-    "scenario": "notation isolation; append-only corrections; latest per notation/state; respondent and author provenance",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/workflow_tests.rs",
-        "function": "notations_events_and_answers_converge_with_order_and_provenance",
-        "proves": "Notation, transition and answer images preserve ordering and provenance, with Project-filtered SQL reads."
-      }
-    ],
-    "remaining": [
-      "Equivalent application runtime queries, complete authorization decisions, and questionnaire/post-intake behavior require separate acceptance."
-    ]
-  },
-  "asset": {
-    "scenario": "content-addressed bytes and revision pointers; internal default; Project isolation; legal hold and retention",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/documents_tests.rs",
-        "function": "a_revision_chain_converges_through_retention_and_removal",
-        "proves": "Revision pointers and retention/deletion stamps converge across stores through the document lifecycle."
-      }
-    ],
-    "remaining": [
-      "Equivalent document application queries and Project visibility enforcement require separate acceptance."
-    ]
-  },
-  "attestation": {
-    "scenario": "pending, recorded, and failed attestations; source identity and Notation retention",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/attestations_tests.rs",
-        "function": "status_updates_replay_with_source_id_and_insertion_time",
-        "proves": "Pending-to-recorded-to-failed upserts preserve UUIDv4 identity and insertion time while replay remains idempotent."
-      },
-      {
-        "file": "store/src/postgres_mirror/attestations_tests.rs",
-        "function": "parity_repairs_changed_rows_and_removes_target_only_rows",
-        "proves": "Parity identifies changed and target-only rows, and reconcile repairs source state and removes target-only state."
-      },
-      {
-        "file": "store/src/postgres_mirror/attestations_tests.rs",
-        "function": "notation_deletion_is_restricted_and_orphan_attestation_stays_visible",
-        "proves": "PostgreSQL restricts Notation deletion while an attestation exists; a source orphan remains visibly divergent and durable through reconcile."
-      }
-    ],
-    "remaining": [
-      "Application reads, authorization decisions, and deployment cutover remain outside this mirror acceptance."
-    ]
-  },
-  "authority": {
-    "scenario": "stable catalog lookup; unauthorized mutation refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/catalog_tests.rs",
-        "function": "catalog_rows_converge_through_their_lifecycle",
-        "proves": "Catalog row images converge through create, replay, updates and removal."
-      }
-    ],
-    "remaining": [
-      "Equivalent application catalog lookup and unauthorized mutation refusal require separate acceptance."
-    ]
-  },
-  "authority_use": {
-    "scenario": "Project-specific use of shared authority; saved source/version attribution; no cross-Project grant",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "blog_video": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/blog_videos_tests.rs",
-        "function": "video_uploads_mirror_replay_and_reconcile_with_brand_ownership",
-        "proves": "Real PostgreSQL keeps the upload UUID and measured fields, links it to its Brand's Firm, detects and repairs target drift, refuses an unknown Brand, and removes a source-deleted upload during reconciliation."
-      },
-      {
-        "file": "store/src/posts.rs",
-        "function": "declared_video_must_be_this_brands_measured_upload",
-        "proves": "A Post refuses a measured video uploaded for a different Brand."
-      }
-    ],
-    "remaining": [
-      "PostgreSQL application reads and deployment cutover remain separate acceptance."
-    ]
-  },
-  "brand": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/tenancy_tests.rs",
-        "function": "firm_brand_project_and_membership_rows_converge_through_their_lifecycle",
-        "proves": "Firm, Brand, Project and membership images preserve source identities through create, update, replay and removal."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries, authorization/capability decisions, and concurrent tenancy invariants require separate acceptance."
-    ]
-  },
-  "cap_table_holding": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "case": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "case_docket_entry": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "citation": {
-    "scenario": "authority-use isolation; exact saved source and pinpoint; verification provenance",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "communication": {
-    "scenario": "same-Project round trip; channel/source_ref dedup; client-visible projection unchanged",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/conversations_tests.rs",
-        "function": "communications_and_email_threads_replay_reconcile_and_delete",
-        "proves": "Communication and thread images replay, repair drift and remove deleted source rows."
-      }
-    ],
-    "remaining": [
-      "Equivalent client-visible projections and cross-Firm/cross-Project read/write refusal require separate acceptance."
-    ]
-  },
-  "contract_review": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "credential": {
-    "scenario": "stable identity; tenant link isolation and no inferred participation",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
-    ]
-  },
-  "deployment_secret_change": {
-    "scenario": "operator authorization; no matter visibility grant",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "disclosure": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "discovery_item": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "discovery_request": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "document_comment": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "draft": {
-    "scenario": "view equals source projection; no independent writes",
-    "runtime_tests": [],
-    "remaining": [
-      "Disposition derived_view requires its own reviewed replacement/retirement acceptance and runtime evidence."
-    ]
-  },
-  "efiling_transactions": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "email_conversation": {
-    "scenario": "Project isolation; optional Firm/Project assignment; pre-attribution scope preserved",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/conversations_tests.rs",
-        "function": "communications_and_email_threads_replay_reconcile_and_delete",
-        "proves": "Communication and thread images replay, repair drift and remove deleted source rows."
-      }
-    ],
-    "remaining": [
-      "Equivalent client-visible projections and cross-Firm/cross-Project read/write refusal require separate acceptance."
-    ]
-  },
-  "email_conversation_message": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/conversations_tests.rs",
-        "function": "communications_and_email_threads_replay_reconcile_and_delete",
-        "proves": "Communication and thread images replay, repair drift and remove deleted source rows."
-      }
-    ],
-    "remaining": [
-      "Equivalent client-visible projections and cross-Firm/cross-Project read/write refusal require separate acceptance."
-    ]
-  },
-  "email_delivery": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/email_deliveries/tests.rs",
-        "function": "receipt_delivery_attempt_mirror_replays_reconciles_and_cascades",
-        "proves": "Receipt, delivery and attempt images round-trip, replay and reconcile with their source parents."
-      }
-    ],
-    "remaining": [
-      "Equivalent application reads, full ingress deduplication/bounded retry and cross-tenant refusal require separate acceptance."
-    ]
-  },
-  "email_delivery_attempt": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/email_deliveries/tests.rs",
-        "function": "receipt_delivery_attempt_mirror_replays_reconciles_and_cascades",
-        "proves": "Receipt, delivery and attempt images round-trip, replay and reconcile with their source parents."
-      }
-    ],
-    "remaining": [
-      "Equivalent application reads, full ingress deduplication/bounded retry and cross-tenant refusal require separate acceptance."
-    ]
-  },
-  "email_receipt": {
-    "scenario": "ingress fingerprint deduplication; Firm ownership; provider envelope preserved; bounded retry",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/email_deliveries/tests.rs",
-        "function": "receipt_delivery_attempt_mirror_replays_reconciles_and_cascades",
-        "proves": "Receipt, delivery and attempt images round-trip, replay and reconcile with their source parents."
-      }
-    ],
-    "remaining": [
-      "Equivalent application reads, full ingress deduplication/bounded retry and cross-tenant refusal require separate acceptance."
-    ]
-  },
-  "email_token": {
-    "scenario": "stable identity; tenant link isolation and no inferred participation",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
-    ]
-  },
-  "entity": {
-    "scenario": "stable identity; tenant link isolation and no inferred participation",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/identity_tests.rs",
-        "function": "person_and_entity_rows_converge_through_their_lifecycle",
-        "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries, directory/participation isolation, and unauthorized mutations are not established by this mirror lifecycle."
-    ]
-  },
-  "entity_role": {
-    "scenario": "stable identity; tenant link isolation and no inferred participation",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
-    ]
-  },
-  "entity_type": {
-    "scenario": "stable catalog lookup; unauthorized mutation refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/identity_tests.rs",
-        "function": "person_and_entity_rows_converge_through_their_lifecycle",
-        "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries, directory/participation isolation, and unauthorized mutations are not established by this mirror lifecycle."
-    ]
-  },
-  "estate_asset": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "expunge_record": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "expunge_request": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "fiduciary_role": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "filing": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "finance_aggregate": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "firm": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/tenancy_tests.rs",
-        "function": "firm_brand_project_and_membership_rows_converge_through_their_lifecycle",
-        "proves": "Firm, Brand, Project and membership images preserve source identities through create, update, replay and removal."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries, authorization/capability decisions, and concurrent tenancy invariants require separate acceptance."
-    ]
-  },
-  "firm_anchor": {
-    "scenario": "operator authorization; no matter visibility grant",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "firm_brand": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/tenancy_tests.rs",
-        "function": "firm_brand_project_and_membership_rows_converge_through_their_lifecycle",
-        "proves": "Firm, Brand, Project and membership images preserve source identities through create, update, replay and removal."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries, authorization/capability decisions, and concurrent tenancy invariants require separate acceptance."
-    ]
-  },
-  "firm_integration_secret": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/firm_secrets_tests.rs",
-        "function": "encrypted_secret_versions_replay_reconcile_and_revoke",
-        "proves": "Encrypted secret versions mirror without exposing secret values, replay unchanged, reconcile status drift, and remove stale source versions."
-      },
-      {
-        "file": "store/src/postgres_mirror/firm_secrets_tests.rs",
-        "function": "parity_detects_and_reconcile_removes_target_only_firm_secrets",
-        "proves": "Parity includes target-only Firm secret rows and reconciliation removes stale secrets even when the source Firm is absent."
-      }
-    ],
-    "remaining": [
-      "Equivalent application secret reads, cross-Firm authorization refusal, and production KMS/runtime acceptance require separate acceptance."
-    ]
-  },
-  "git_access_token": {
-    "scenario": "Project isolation; same-Firm assignment; unassigned record visibility",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/records_tests.rs",
-        "function": "git_access_mirrors_hashes_only_and_follows_revocation",
-        "proves": "Token rows hold only the SHA-256 hash with Person and optional Project links; a revoked token is removed from PostgreSQL."
-      }
-    ],
-    "remaining": [
-      "Token validation, Firm ownership of unassigned rows, and read cutover remain outside this mirror acceptance."
-    ]
-  },
-  "git_repository": {
-    "scenario": "operator authorization; no matter visibility grant",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/records_tests.rs",
-        "function": "git_access_mirrors_hashes_only_and_follows_revocation",
-        "proves": "Repository rows keep their source UUID and remote hash; a replay changes nothing."
-      }
-    ],
-    "remaining": [
-      "Token validation, Firm ownership of unassigned rows, and read cutover remain outside this mirror acceptance."
-    ]
-  },
-  "glossary_term": {
-    "scenario": "stable catalog lookup; unauthorized mutation refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/catalog_tests.rs",
-        "function": "catalog_rows_converge_through_their_lifecycle",
-        "proves": "Catalog row images converge through create, replay, updates and removal."
-      }
-    ],
-    "remaining": [
-      "Equivalent application catalog lookup and unauthorized mutation refusal require separate acceptance."
-    ]
-  },
-  "inbox_assignment": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
-      }
-    ],
-    "remaining": [
-      "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
-    ]
-  },
-  "inbox_conversation": {
-    "scenario": "same-Firm assignment; Project reassignment history; participation revocation; internal visibility",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
-      }
-    ],
-    "remaining": [
-      "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
-    ]
-  },
-  "inbox_delivery_attempt": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
-      }
-    ],
-    "remaining": [
-      "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
-    ]
-  },
-  "inbox_ingress": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
-      }
-    ],
-    "remaining": [
-      "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
-    ]
-  },
-  "iolta_account": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "iolta_allocation": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "iolta_withdrawal": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "journal_entry": {
-    "scenario": "immutable balanced exact-quantity postings; command deduplication; reversals; source provenance and timestamp triage",
-    "runtime_tests": [
-      {
-        "file": "store/tests/journal_startup_migration.rs",
-        "function": "startup_import_preserves_identity_timestamps_and_reversal_order_then_retries",
-        "proves": "Legacy import preserves entry IDs and source insertion times, orders reversals and retries idempotently."
-      },
-      {
-        "file": "store/tests/firm_journal.rs",
-        "function": "concurrent_duplicate_commands_survive_retry_and_refuse_changed_payload",
-        "proves": "Concurrent duplicate journal commands are idempotent and changed payloads are refused."
-      }
-    ],
-    "remaining": [
-      "Balanced exact-quantity postings, complete source provenance/timestamp triage and all application-read parity require additional reviewed evidence."
-    ]
-  },
-  "jurisdiction": {
-    "scenario": "stable catalog lookup; unauthorized mutation refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/identity_tests.rs",
-        "function": "person_and_entity_rows_converge_through_their_lifecycle",
-        "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries, directory/participation isolation, and unauthorized mutations are not established by this mirror lifecycle."
-    ]
-  },
-  "lead": {
-    "scenario": "same-mailbox repeat increments submissions; another Brand remains separate; nullable Person attribution is preserved",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/leads_tests.rs",
-        "function": "leads_and_consent_history_mirror_replay_and_reconcile_without_rewriting_evidence",
-        "proves": "Lead images and append-only consent history replay and reconcile without rewriting evidence."
-      }
-    ],
-    "remaining": [
-      "Equivalent application mailbox/Brand lookup and nullable attribution queries require separate acceptance."
-    ]
-  },
-  "lead_consent": {
-    "scenario": "append-only consent tuples preserve event IDs, ordering, and all source fields; divergent target history remains reportable",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/leads_tests.rs",
-        "function": "leads_and_consent_history_mirror_replay_and_reconcile_without_rewriting_evidence",
-        "proves": "Lead images and append-only consent history replay and reconcile without rewriting evidence."
-      }
-    ],
-    "remaining": [
-      "Equivalent application mailbox/Brand lookup and nullable attribution queries require separate acceptance."
-    ]
-  },
-  "letter": {
-    "scenario": "same-Mailroom round trip; incoming and outgoing; optional Project id preserved",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/mailrooms_letters_tests.rs",
-        "function": "source_rows_round_trip_and_reconcile_by_their_existing_ids",
-        "proves": "Mailroom and Letter images round-trip and reconcile under their source IDs."
-      }
-    ],
-    "remaining": [
-      "Equivalent application address/mailroom queries and all incoming/outgoing Project assignment cases require separate acceptance."
-    ]
-  },
-  "mailroom": {
-    "scenario": "same-Address round trip; unique name preserved",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/mailrooms_letters_tests.rs",
-        "function": "source_rows_round_trip_and_reconcile_by_their_existing_ids",
-        "proves": "Mailroom and Letter images round-trip and reconcile under their source IDs."
-      }
-    ],
-    "remaining": [
-      "Equivalent application address/mailroom queries and all incoming/outgoing Project assignment cases require separate acceptance."
-    ]
-  },
-  "matter_caption": {
-    "scenario": "one caption per Project with nested parties and counsel; an explicit empty block removes it; replay writes nothing; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/matter_pages_captions_tests.rs",
-        "function": "a_caption_round_trips_its_nested_fields_and_an_explicit_empty_block_removes_it",
-        "proves": "Nested caption fields round-trip; an explicit empty block removes the caption."
-      }
-    ],
-    "remaining": [
-      "Equivalent application caption queries and cross-Firm access refusal require separate acceptance."
-    ]
-  },
-  "matter_page": {
-    "scenario": "whole-set sync replaces the Project's pages with source IDs, order, and lens sections; removed pages leave; replay writes nothing; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/matter_pages_captions_tests.rs",
-        "function": "a_whole_set_sync_converges_replays_and_drops_removed_pages",
-        "proves": "Whole-set page sync preserves source IDs and order, drops removed pages and replays unchanged."
-      }
-    ],
-    "remaining": [
-      "Equivalent application page queries and cross-Firm access refusal require separate acceptance."
-    ]
-  },
-  "message": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/inbox.rs",
-        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
-        "proves": "All five Inbox table images mirror and mutable target drift reconciles."
-      }
-    ],
-    "remaining": [
-      "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
-    ]
-  },
-  "notarization": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "notation": {
-    "scenario": "state-machine identity and events; Project isolation; questionnaire and post-intake phases stay distinct",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/workflow_tests.rs",
-        "function": "notations_events_and_answers_converge_with_order_and_provenance",
-        "proves": "Notation, transition and answer images preserve ordering and provenance, with Project-filtered SQL reads."
-      }
-    ],
-    "remaining": [
-      "Equivalent application runtime queries, complete authorization decisions, and questionnaire/post-intake behavior require separate acceptance."
-    ]
-  },
-  "notation_clause": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/workflow_tests.rs",
-        "function": "notation_clauses_keep_author_and_render_order_across_edits",
-        "proves": "PostgreSQL mirror writes preserve author, body and ordering across clause edits and moves; parity detects target-only stale rows and reconciliation removes them; parent Notation deletion cascades."
-      }
-    ],
-    "remaining": [
-      "Application reads and complete authorization decisions, including cross-Project and cross-Firm refusal, require separate acceptance; this mirror regression does not establish them."
-    ]
-  },
-  "notation_document": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "notation_document_comment": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "notation_document_version": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "notation_draft": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/records_tests.rs",
-        "function": "notation_inputs_mirror_and_follow_their_notation",
-        "proves": "Notation drafts keep their Project link and expiry; changed target rows are repaired and a deleted preview is removed."
-      }
-    ],
-    "remaining": [
-      "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
-    ]
-  },
-  "notation_event": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/workflow_tests.rs",
-        "function": "notations_events_and_answers_converge_with_order_and_provenance",
-        "proves": "Notation, transition and answer images preserve ordering and provenance, with Project-filtered SQL reads."
-      }
-    ],
-    "remaining": [
-      "Equivalent application runtime queries, complete authorization decisions, and questionnaire/post-intake behavior require separate acceptance."
-    ]
-  },
-  "notation_meter_entry": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "Disposition pending_retirement_decision requires its own reviewed replacement/retirement acceptance and runtime evidence."
-    ]
-  },
-  "notation_package": {
-    "scenario": "stable catalog lookup; unauthorized mutation refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/catalog_tests.rs",
-        "function": "catalog_rows_converge_through_their_lifecycle",
-        "proves": "Catalog row images converge through create, replay, updates and removal."
-      }
-    ],
-    "remaining": [
-      "Equivalent application catalog lookup and unauthorized mutation refusal require separate acceptance."
-    ]
-  },
-  "notation_package_template": {
-    "scenario": "stable catalog lookup; unauthorized mutation refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/catalog_tests.rs",
-        "function": "catalog_rows_converge_through_their_lifecycle",
-        "proves": "Catalog row images converge through create, replay, updates and removal."
-      }
-    ],
-    "remaining": [
-      "Equivalent application catalog lookup and unauthorized mutation refusal require separate acceptance."
-    ]
-  },
-  "notation_rate": {
-    "scenario": "stable catalog lookup; unauthorized mutation refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/catalog_tests.rs",
-        "function": "catalog_rows_converge_through_their_lifecycle",
-        "proves": "Catalog row images converge through create, replay, updates and removal."
-      }
-    ],
-    "remaining": [
-      "Equivalent application catalog lookup and unauthorized mutation refusal require separate acceptance."
-    ]
-  },
-  "notation_source": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/records_tests.rs",
-        "function": "notation_inputs_mirror_and_follow_their_notation",
-        "proves": "Notation sources keep their source UUID, Notation link, and review order; a Notation removed from SurrealDB takes its sources in PostgreSQL."
-      }
-    ],
-    "remaining": [
-      "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
-    ]
-  },
-  "person": {
-    "scenario": "case-folded unique email; stable external identity; singular role; Firm directory and Project participation isolation",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/identity_tests.rs",
-        "function": "person_and_entity_rows_converge_through_their_lifecycle",
-        "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries, directory/participation isolation, and unauthorized mutations are not established by this mirror lifecycle."
-    ]
-  },
-  "person_delegate": {
-    "scenario": "stable identity; tenant link isolation and no inferred participation",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
-    ]
-  },
-  "person_external_identity": {
-    "scenario": "stable identity; tenant link isolation and no inferred participation",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
-    ]
-  },
-  "person_firm_role": {
-    "scenario": "unique Person/Firm membership; exactly one Admin DRI for active Firms; capability checks",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/tenancy_tests.rs",
-        "function": "firm_brand_project_and_membership_rows_converge_through_their_lifecycle",
-        "proves": "Firm, Brand, Project and membership images preserve source identities through create, update, replay and removal."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries, authorization/capability decisions, and concurrent tenancy invariants require separate acceptance."
-    ]
-  },
-  "person_mailbox": {
-    "scenario": "stable identity; tenant link isolation and no inferred participation",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/identity_detail_tests.rs",
-        "function": "each_identity_detail_row_converges_through_its_lifecycle",
-        "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
-    ]
-  },
-  "person_project_role": {
-    "scenario": "unique Person/Project participation; participation derives from role; no source-forge access grant",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/tenancy_tests.rs",
-        "function": "firm_brand_project_and_membership_rows_converge_through_their_lifecycle",
-        "proves": "Firm, Brand, Project and membership images preserve source identities through create, update, replay and removal."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries, authorization/capability decisions, and concurrent tenancy invariants require separate acceptance."
-    ]
-  },
-  "playbook": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/records_tests.rs",
-        "function": "project_records_mirror_replay_reconcile_and_remove",
-        "proves": "Playbook rows keep their Entity link and JSON positions; a source edit reaches PostgreSQL through the row key."
-      }
-    ],
-    "remaining": [
-      "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
-    ]
-  },
-  "post": {
-    "scenario": "Brand ownership; publication schedule and status; immutable receipt links; provider/account deduplication",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/tests.rs",
-        "function": "create_update_and_delete_converge_and_replays_write_nothing",
-        "proves": "Editorial row images converge through create, update and delete; replays do not write."
-      }
-    ],
-    "remaining": [
-      "Equivalent application reads, Brand isolation and complete provider/account deduplication require separate acceptance."
-    ]
-  },
-  "project": {
-    "scenario": "immutable unique code; valid Firm/Brand pair; participation isolation; close/reopen lifecycle and retention dates",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/tenancy_tests.rs",
-        "function": "firm_brand_project_and_membership_rows_converge_through_their_lifecycle",
-        "proves": "Firm, Brand, Project and membership images preserve source identities through create, update, replay and removal."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries, authorization/capability decisions, and concurrent tenancy invariants require separate acceptance."
-    ]
-  },
-  "project_deadlines": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/deadlines_tests.rs",
-        "function": "project_deadline_mirrors_replay_and_reconcile",
-        "proves": "Deadline image replay is unchanged and reconciliation repairs drift."
-      }
-    ],
-    "remaining": [
-      "Equivalent deadline application reads and cross-Firm/cross-Project refusal require separate acceptance."
-    ]
-  },
-  "project_module": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/records_tests.rs",
-        "function": "project_records_mirror_replay_reconcile_and_remove",
-        "proves": "Module rows mirror under their source UUID with Project and enabling Person links; replay is unchanged, a re-enabled pair replaces the stale row, and a disabled module is removed."
-      }
-    ],
-    "remaining": [
-      "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
-    ]
-  },
-  "project_reference": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/project_references_tests.rs",
-        "function": "both_endpoint_kinds_converge_and_source_deletion_removes_the_mirror",
-        "proves": "Person and Entity endpoint references converge and source deletion removes the target."
-      }
-    ],
-    "remaining": [
-      "Equivalent application reads and cross-Firm/cross-Project access refusal require separate acceptance."
-    ]
-  },
-  "project_service": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/project_services_tests.rs",
-        "function": "project_service_mirrors_replay_and_reconcile",
-        "proves": "Service images preserve source fields through mirror replay and drift repair."
-      }
-    ],
-    "remaining": [
-      "Equivalent application reads and complete cross-Firm/cross-Project refusal require separate acceptance."
-    ]
-  },
-  "question": {
-    "scenario": "stable catalog lookup; unauthorized mutation refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/catalog_tests.rs",
-        "function": "catalog_rows_converge_through_their_lifecycle",
-        "proves": "Catalog row images converge through create, replay, updates and removal."
-      }
-    ],
-    "remaining": [
-      "Equivalent application catalog lookup and unauthorized mutation refusal require separate acceptance."
-    ]
-  },
-  "relationship": {
-    "scenario": "typed Person/Entity endpoints; confidence range; source provenance; tenant-filtered AGE traversal and rebuild",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "relationship_log": {
-    "scenario": "append-only provenance; scoped history; actor attribution; graph rebuild preserves evidence",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "review_document": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "schema_version": {
-    "scenario": "operator authorization; no matter visibility grant",
-    "runtime_tests": [],
-    "remaining": [
-      "Disposition migration_ledger requires its own reviewed replacement/retirement acceptance and runtime evidence."
-    ]
-  },
-  "sent_email": {
-    "scenario": "Project isolation; same-Firm assignment; unassigned record visibility",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/sent_emails_tests.rs",
-        "function": "sent_email_audit_replays_preserve_history_and_report_drift",
-        "proves": "Sent-email audit replay preserves existing history and reports divergent evidence."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries, unassigned visibility and same-Firm assignment require separate acceptance."
-    ]
-  },
-  "signature": {
-    "scenario": "provider/envelope correlation; duplicate completion harmless; signed artifact retrieval; notation isolation",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "social_account": {
-    "scenario": "ciphertext and wrapped key copied byte-for-byte; Firm and Person ownership; revoke clears secrets",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/social_accounts_tests.rs",
-        "function": "encrypted_social_account_mirrors_replays_revocation_and_reconcile",
-        "proves": "Encrypted bundles round-trip byte-for-byte and revocation/replay/reconciliation preserve source state."
-      }
-    ],
-    "remaining": [
-      "Equivalent application reads and complete Firm/Person access decisions require separate acceptance."
-    ]
-  },
-  "social_account_selection": {
-    "remaining": [
-      "Application reads and end-to-end OAuth cancellation behavior remain separate acceptance."
-    ],
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/social_account_selections_tests.rs",
-        "function": "selections_replay_update_isolate_and_reconcile_on_real_postgres",
-        "proves": "Real PostgreSQL lifecycle covers stable-key replay/update, Brand/Firm isolation, denied saves, drift repair, disconnect preservation, source deletion and target-only cleanup."
-      },
-      {
-        "file": "store/src/postgres_mirror/social_account_selections_tests.rs",
-        "function": "selection_timestamps_keep_source_microseconds_on_real_postgres",
-        "proves": "Source timestamps retain their value at PostgreSQL microsecond precision without substitution."
-      },
-      {
-        "file": "store/src/postgres_mirror/social_account_selections_tests.rs",
-        "function": "saved_selection_write_hook_uses_the_isolated_postgres_database",
-        "proves": "The public save operation reaches its opt-in PostgreSQL hook in an isolated database."
-      }
-    ],
-    "scenario": "saved destination round trip; cancellation preservation; Brand and Firm isolation"
-  },
-  "social_handle": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/tests.rs",
-        "function": "create_update_and_delete_converge_and_replays_write_nothing",
-        "proves": "Editorial row images converge through create, update and delete; replays do not write."
-      }
-    ],
-    "remaining": [
-      "Equivalent application reads, Brand isolation and complete provider/account deduplication require separate acceptance."
-    ]
-  },
-  "social_oauth_attempt": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "social_publication": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/tests.rs",
-        "function": "create_update_and_delete_converge_and_replays_write_nothing",
-        "proves": "Editorial row images converge through create, update and delete; replays do not write."
-      }
-    ],
-    "remaining": [
-      "Equivalent application reads, Brand isolation and complete provider/account deduplication require separate acceptance."
-    ]
-  },
-  "statutory_deadline": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/records_tests.rs",
-        "function": "project_records_mirror_replay_reconcile_and_remove",
-        "proves": "Statutory deadline rows keep their source UUID, Project link, and calendar dates; reconcile restores missing rows."
-      }
-    ],
-    "remaining": [
-      "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
-    ]
-  },
-  "summary_sender_approval": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/communications_tests.rs",
-        "function": "approval_and_audit_rows_reconcile_without_duplicate_audit_events",
-        "proves": "Approval images reconcile and audit-event replay does not duplicate history."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries and cross-Firm access refusal require separate acceptance."
-    ]
-  },
-  "summary_sender_approval_event": {
-    "scenario": "same-Firm round trip; cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/communications_tests.rs",
-        "function": "approval_and_audit_rows_reconcile_without_duplicate_audit_events",
-        "proves": "Approval images reconcile and audit-event replay does not duplicate history."
-      }
-    ],
-    "remaining": [
-      "Equivalent application queries and cross-Firm access refusal require separate acceptance."
-    ]
-  },
-  "template": {
-    "scenario": "version pins; one current row per scoped code; shared and Project catalogs coexist",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/workflow_tests.rs",
-        "function": "workflow_template_versions_are_mirrored_and_retained",
-        "proves": "Exact Template versions named by Notations are mirrored and retained."
-      }
-    ],
-    "remaining": [
-      "Current-version uniqueness, scoped catalog resolution and all version-pin failure paths require separate runtime evidence."
-    ]
-  },
-  "testimonial": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [
-      {
-        "file": "store/src/postgres_mirror/records_tests.rs",
-        "function": "project_records_mirror_replay_reconcile_and_remove",
-        "proves": "Testimonial rows keep consent timestamps at microsecond precision; changed target rows are named by key and repaired from SurrealDB."
-      }
-    ],
-    "remaining": [
-      "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
-    ]
-  },
-  "verification": {
-    "scenario": "citation scope; verifier attribution; repeat verification preserves evidence",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "visitor_route_count": {
-    "scenario": "operator authorization; no matter visibility grant",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  },
-  "xero_invoice": {
-    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
-  }
+ "address": {
+  "scenario": "stable identity; tenant link isolation and no inferred participation",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+    "function": "each_identity_detail_row_converges_through_its_lifecycle",
+    "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
+  ]
+ },
+ "answer": {
+  "scenario": "notation isolation; append-only corrections; latest per notation/state; respondent and author provenance",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/workflow_tests.rs",
+    "function": "notations_events_and_answers_converge_with_order_and_provenance",
+    "proves": "Notation, transition and answer images preserve ordering and provenance, with Project-filtered SQL reads."
+   }
+  ],
+  "remaining": [
+   "Equivalent application runtime queries, complete authorization decisions, and questionnaire/post-intake behavior require separate acceptance."
+  ]
+ },
+ "asset": {
+  "scenario": "content-addressed bytes and revision pointers; internal default; Project isolation; legal hold and retention",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/documents_tests.rs",
+    "function": "a_revision_chain_converges_through_retention_and_removal",
+    "proves": "Revision pointers and retention/deletion stamps converge across stores through the document lifecycle."
+   }
+  ],
+  "remaining": [
+   "Equivalent document application queries and Project visibility enforcement require separate acceptance."
+  ]
+ },
+ "attestation": {
+  "scenario": "pending, recorded, and failed attestations; source identity and Notation retention",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/attestations_tests.rs",
+    "function": "status_updates_replay_with_source_id_and_insertion_time",
+    "proves": "Pending-to-recorded-to-failed upserts preserve UUIDv4 identity and insertion time while replay remains idempotent."
+   },
+   {
+    "file": "store/src/postgres_mirror/attestations_tests.rs",
+    "function": "parity_repairs_changed_rows_and_removes_target_only_rows",
+    "proves": "Parity identifies changed and target-only rows, and reconcile repairs source state and removes target-only state."
+   },
+   {
+    "file": "store/src/postgres_mirror/attestations_tests.rs",
+    "function": "notation_deletion_is_restricted_and_orphan_attestation_stays_visible",
+    "proves": "PostgreSQL restricts Notation deletion while an attestation exists; a source orphan remains visibly divergent and durable through reconcile."
+   }
+  ],
+  "remaining": [
+   "Application reads, authorization decisions, and deployment cutover remain outside this mirror acceptance."
+  ]
+ },
+ "authority": {
+  "scenario": "stable catalog lookup; unauthorized mutation refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/catalog_tests.rs",
+    "function": "catalog_rows_converge_through_their_lifecycle",
+    "proves": "Catalog row images converge through create, replay, updates and removal."
+   }
+  ],
+  "remaining": [
+   "Equivalent application catalog lookup and unauthorized mutation refusal require separate acceptance."
+  ]
+ },
+ "authority_use": {
+  "scenario": "Project-specific use of shared authority; saved source/version attribution; no cross-Project grant",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "blog_video": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/blog_videos_tests.rs",
+    "function": "video_uploads_mirror_replay_and_reconcile_with_brand_ownership",
+    "proves": "Real PostgreSQL keeps the upload UUID and measured fields, links it to its Brand's Firm, detects and repairs target drift, refuses an unknown Brand, and removes a source-deleted upload during reconciliation."
+   },
+   {
+    "file": "store/src/posts.rs",
+    "function": "declared_video_must_be_this_brands_measured_upload",
+    "proves": "A Post refuses a measured video uploaded for a different Brand."
+   }
+  ],
+  "remaining": [
+   "PostgreSQL application reads and deployment cutover remain separate acceptance."
+  ]
+ },
+ "brand": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/tenancy_tests.rs",
+    "function": "firm_brand_project_and_membership_rows_converge_through_their_lifecycle",
+    "proves": "Firm, Brand, Project and membership images preserve source identities through create, update, replay and removal."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries, authorization/capability decisions, and concurrent tenancy invariants require separate acceptance."
+  ]
+ },
+ "cap_table_holding": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "case": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "case_docket_entry": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "citation": {
+  "scenario": "authority-use isolation; exact saved source and pinpoint; verification provenance",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "communication": {
+  "scenario": "same-Project round trip; channel/source_ref dedup; client-visible projection unchanged",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/conversations_tests.rs",
+    "function": "communications_and_email_threads_replay_reconcile_and_delete",
+    "proves": "Communication and thread images replay, repair drift and remove deleted source rows."
+   }
+  ],
+  "remaining": [
+   "Equivalent client-visible projections and cross-Firm/cross-Project read/write refusal require separate acceptance."
+  ]
+ },
+ "contract_review": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "credential": {
+  "scenario": "stable identity; tenant link isolation and no inferred participation",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+    "function": "each_identity_detail_row_converges_through_its_lifecycle",
+    "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
+  ]
+ },
+ "deployment_secret_change": {
+  "scenario": "operator authorization; no matter visibility grant",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "disclosure": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "discovery_item": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "discovery_request": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "document_comment": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "draft": {
+  "scenario": "view equals source projection; no independent writes",
+  "runtime_tests": [],
+  "remaining": [
+   "Disposition derived_view requires its own reviewed replacement/retirement acceptance and runtime evidence."
+  ]
+ },
+ "efiling_transactions": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "email_conversation": {
+  "scenario": "Project isolation; optional Firm/Project assignment; pre-attribution scope preserved",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/conversations_tests.rs",
+    "function": "communications_and_email_threads_replay_reconcile_and_delete",
+    "proves": "Communication and thread images replay, repair drift and remove deleted source rows."
+   }
+  ],
+  "remaining": [
+   "Equivalent client-visible projections and cross-Firm/cross-Project read/write refusal require separate acceptance."
+  ]
+ },
+ "email_conversation_message": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/conversations_tests.rs",
+    "function": "communications_and_email_threads_replay_reconcile_and_delete",
+    "proves": "Communication and thread images replay, repair drift and remove deleted source rows."
+   }
+  ],
+  "remaining": [
+   "Equivalent client-visible projections and cross-Firm/cross-Project read/write refusal require separate acceptance."
+  ]
+ },
+ "email_delivery": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/email_deliveries/tests.rs",
+    "function": "receipt_delivery_attempt_mirror_replays_reconciles_and_cascades",
+    "proves": "Receipt, delivery and attempt images round-trip, replay and reconcile with their source parents."
+   }
+  ],
+  "remaining": [
+   "Equivalent application reads, full ingress deduplication/bounded retry and cross-tenant refusal require separate acceptance."
+  ]
+ },
+ "email_delivery_attempt": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/email_deliveries/tests.rs",
+    "function": "receipt_delivery_attempt_mirror_replays_reconciles_and_cascades",
+    "proves": "Receipt, delivery and attempt images round-trip, replay and reconcile with their source parents."
+   }
+  ],
+  "remaining": [
+   "Equivalent application reads, full ingress deduplication/bounded retry and cross-tenant refusal require separate acceptance."
+  ]
+ },
+ "email_receipt": {
+  "scenario": "ingress fingerprint deduplication; Firm ownership; provider envelope preserved; bounded retry",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/email_deliveries/tests.rs",
+    "function": "receipt_delivery_attempt_mirror_replays_reconciles_and_cascades",
+    "proves": "Receipt, delivery and attempt images round-trip, replay and reconcile with their source parents."
+   }
+  ],
+  "remaining": [
+   "Equivalent application reads, full ingress deduplication/bounded retry and cross-tenant refusal require separate acceptance."
+  ]
+ },
+ "email_token": {
+  "scenario": "stable identity; tenant link isolation and no inferred participation",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+    "function": "each_identity_detail_row_converges_through_its_lifecycle",
+    "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
+  ]
+ },
+ "entity": {
+  "scenario": "stable identity; tenant link isolation and no inferred participation",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/identity_tests.rs",
+    "function": "person_and_entity_rows_converge_through_their_lifecycle",
+    "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries, directory/participation isolation, and unauthorized mutations are not established by this mirror lifecycle."
+  ]
+ },
+ "entity_role": {
+  "scenario": "stable identity; tenant link isolation and no inferred participation",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+    "function": "each_identity_detail_row_converges_through_its_lifecycle",
+    "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
+  ]
+ },
+ "entity_type": {
+  "scenario": "stable catalog lookup; unauthorized mutation refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/identity_tests.rs",
+    "function": "person_and_entity_rows_converge_through_their_lifecycle",
+    "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries, directory/participation isolation, and unauthorized mutations are not established by this mirror lifecycle."
+  ]
+ },
+ "estate_asset": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "expunge_record": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "expunge_request": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "fiduciary_role": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "filing": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "finance_aggregate": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "firm": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/tenancy_tests.rs",
+    "function": "firm_brand_project_and_membership_rows_converge_through_their_lifecycle",
+    "proves": "Firm, Brand, Project and membership images preserve source identities through create, update, replay and removal."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries, authorization/capability decisions, and concurrent tenancy invariants require separate acceptance."
+  ]
+ },
+ "firm_anchor": {
+  "scenario": "operator authorization; no matter visibility grant",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "firm_brand": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/tenancy_tests.rs",
+    "function": "firm_brand_project_and_membership_rows_converge_through_their_lifecycle",
+    "proves": "Firm, Brand, Project and membership images preserve source identities through create, update, replay and removal."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries, authorization/capability decisions, and concurrent tenancy invariants require separate acceptance."
+  ]
+ },
+ "firm_integration_secret": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/firm_secrets_tests.rs",
+    "function": "encrypted_secret_versions_replay_reconcile_and_revoke",
+    "proves": "Encrypted secret versions mirror without exposing secret values, replay unchanged, reconcile status drift, and remove stale source versions."
+   },
+   {
+    "file": "store/src/postgres_mirror/firm_secrets_tests.rs",
+    "function": "parity_detects_and_reconcile_removes_target_only_firm_secrets",
+    "proves": "Parity includes target-only Firm secret rows and reconciliation removes stale secrets even when the source Firm is absent."
+   }
+  ],
+  "remaining": [
+   "Equivalent application secret reads, cross-Firm authorization refusal, and production KMS/runtime acceptance require separate acceptance."
+  ]
+ },
+ "git_access_token": {
+  "scenario": "Project isolation; same-Firm assignment; unassigned record visibility",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/records_tests.rs",
+    "function": "git_access_mirrors_hashes_only_and_follows_revocation",
+    "proves": "Token rows hold only the SHA-256 hash with Person and optional Project links; a revoked token is removed from PostgreSQL."
+   }
+  ],
+  "remaining": [
+   "Token validation, Firm ownership of unassigned rows, and read cutover remain outside this mirror acceptance."
+  ]
+ },
+ "git_repository": {
+  "scenario": "operator authorization; no matter visibility grant",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/records_tests.rs",
+    "function": "git_access_mirrors_hashes_only_and_follows_revocation",
+    "proves": "Repository rows keep their source UUID and remote hash; a replay changes nothing."
+   }
+  ],
+  "remaining": [
+   "Token validation, Firm ownership of unassigned rows, and read cutover remain outside this mirror acceptance."
+  ]
+ },
+ "glossary_term": {
+  "scenario": "stable catalog lookup; unauthorized mutation refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/catalog_tests.rs",
+    "function": "catalog_rows_converge_through_their_lifecycle",
+    "proves": "Catalog row images converge through create, replay, updates and removal."
+   }
+  ],
+  "remaining": [
+   "Equivalent application catalog lookup and unauthorized mutation refusal require separate acceptance."
+  ]
+ },
+ "inbox_assignment": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/inbox.rs",
+    "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
+    "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+   }
+  ],
+  "remaining": [
+   "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
+  ]
+ },
+ "inbox_conversation": {
+  "scenario": "same-Firm assignment; Project reassignment history; participation revocation; internal visibility",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/inbox.rs",
+    "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
+    "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+   }
+  ],
+  "remaining": [
+   "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
+  ]
+ },
+ "inbox_delivery_attempt": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/inbox.rs",
+    "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
+    "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+   }
+  ],
+  "remaining": [
+   "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
+  ]
+ },
+ "inbox_ingress": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/inbox.rs",
+    "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
+    "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+   }
+  ],
+  "remaining": [
+   "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
+  ]
+ },
+ "iolta_account": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "iolta_allocation": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "iolta_withdrawal": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "journal_entry": {
+  "scenario": "immutable balanced exact-quantity postings; command deduplication; reversals; source provenance and timestamp triage",
+  "runtime_tests": [
+   {
+    "file": "store/tests/journal_startup_migration.rs",
+    "function": "startup_import_preserves_identity_timestamps_and_reversal_order_then_retries",
+    "proves": "Legacy import preserves entry IDs and source insertion times, orders reversals and retries idempotently."
+   },
+   {
+    "file": "store/tests/firm_journal.rs",
+    "function": "concurrent_duplicate_commands_survive_retry_and_refuse_changed_payload",
+    "proves": "Concurrent duplicate journal commands are idempotent and changed payloads are refused."
+   }
+  ],
+  "remaining": [
+   "Balanced exact-quantity postings, complete source provenance/timestamp triage and all application-read parity require additional reviewed evidence."
+  ]
+ },
+ "jurisdiction": {
+  "scenario": "stable catalog lookup; unauthorized mutation refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/identity_tests.rs",
+    "function": "person_and_entity_rows_converge_through_their_lifecycle",
+    "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries, directory/participation isolation, and unauthorized mutations are not established by this mirror lifecycle."
+  ]
+ },
+ "lead": {
+  "scenario": "same-mailbox repeat increments submissions; another Brand remains separate; nullable Person attribution is preserved",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/leads_tests.rs",
+    "function": "leads_and_consent_history_mirror_replay_and_reconcile_without_rewriting_evidence",
+    "proves": "Lead images and append-only consent history replay and reconcile without rewriting evidence."
+   }
+  ],
+  "remaining": [
+   "Equivalent application mailbox/Brand lookup and nullable attribution queries require separate acceptance."
+  ]
+ },
+ "lead_consent": {
+  "scenario": "append-only consent tuples preserve event IDs, ordering, and all source fields; divergent target history remains reportable",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/leads_tests.rs",
+    "function": "leads_and_consent_history_mirror_replay_and_reconcile_without_rewriting_evidence",
+    "proves": "Lead images and append-only consent history replay and reconcile without rewriting evidence."
+   }
+  ],
+  "remaining": [
+   "Equivalent application mailbox/Brand lookup and nullable attribution queries require separate acceptance."
+  ]
+ },
+ "letter": {
+  "scenario": "same-Mailroom round trip; incoming and outgoing; optional Project id preserved",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/mailrooms_letters_tests.rs",
+    "function": "source_rows_round_trip_and_reconcile_by_their_existing_ids",
+    "proves": "Mailroom and Letter images round-trip and reconcile under their source IDs."
+   }
+  ],
+  "remaining": [
+   "Equivalent application address/mailroom queries and all incoming/outgoing Project assignment cases require separate acceptance."
+  ]
+ },
+ "mailroom": {
+  "scenario": "same-Address round trip; unique name preserved",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/mailrooms_letters_tests.rs",
+    "function": "source_rows_round_trip_and_reconcile_by_their_existing_ids",
+    "proves": "Mailroom and Letter images round-trip and reconcile under their source IDs."
+   }
+  ],
+  "remaining": [
+   "Equivalent application address/mailroom queries and all incoming/outgoing Project assignment cases require separate acceptance."
+  ]
+ },
+ "matter_caption": {
+  "scenario": "one caption per Project with nested parties and counsel; an explicit empty block removes it; replay writes nothing; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/matter_pages_captions_tests.rs",
+    "function": "a_caption_round_trips_its_nested_fields_and_an_explicit_empty_block_removes_it",
+    "proves": "Nested caption fields round-trip; an explicit empty block removes the caption."
+   }
+  ],
+  "remaining": [
+   "Equivalent application caption queries and cross-Firm access refusal require separate acceptance."
+  ]
+ },
+ "matter_page": {
+  "scenario": "whole-set sync replaces the Project's pages with source IDs, order, and lens sections; removed pages leave; replay writes nothing; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/matter_pages_captions_tests.rs",
+    "function": "a_whole_set_sync_converges_replays_and_drops_removed_pages",
+    "proves": "Whole-set page sync preserves source IDs and order, drops removed pages and replays unchanged."
+   }
+  ],
+  "remaining": [
+   "Equivalent application page queries and cross-Firm access refusal require separate acceptance."
+  ]
+ },
+ "message": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/inbox.rs",
+    "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
+    "proves": "All five Inbox table images mirror and mutable target drift reconciles."
+   }
+  ],
+  "remaining": [
+   "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
+  ]
+ },
+ "notarization": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "notation": {
+  "scenario": "state-machine identity and events; Project isolation; questionnaire and post-intake phases stay distinct",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/workflow_tests.rs",
+    "function": "notations_events_and_answers_converge_with_order_and_provenance",
+    "proves": "Notation, transition and answer images preserve ordering and provenance, with Project-filtered SQL reads."
+   }
+  ],
+  "remaining": [
+   "Equivalent application runtime queries, complete authorization decisions, and questionnaire/post-intake behavior require separate acceptance."
+  ]
+ },
+ "notation_clause": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/workflow_tests.rs",
+    "function": "notation_clauses_keep_author_and_render_order_across_edits",
+    "proves": "PostgreSQL mirror writes preserve author, body and ordering across clause edits and moves; parity detects target-only stale rows and reconciliation removes them; parent Notation deletion cascades."
+   }
+  ],
+  "remaining": [
+   "Application reads and complete authorization decisions, including cross-Project and cross-Firm refusal, require separate acceptance; this mirror regression does not establish them."
+  ]
+ },
+ "notation_document": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "notation_document_comment": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "notation_document_version": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "notation_draft": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/records_tests.rs",
+    "function": "notation_inputs_mirror_and_follow_their_notation",
+    "proves": "Notation drafts keep their Project link and expiry; changed target rows are repaired and a deleted preview is removed."
+   }
+  ],
+  "remaining": [
+   "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
+  ]
+ },
+ "notation_event": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/workflow_tests.rs",
+    "function": "notations_events_and_answers_converge_with_order_and_provenance",
+    "proves": "Notation, transition and answer images preserve ordering and provenance, with Project-filtered SQL reads."
+   }
+  ],
+  "remaining": [
+   "Equivalent application runtime queries, complete authorization decisions, and questionnaire/post-intake behavior require separate acceptance."
+  ]
+ },
+ "notation_meter_entry": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "Disposition pending_retirement_decision requires its own reviewed replacement/retirement acceptance and runtime evidence."
+  ]
+ },
+ "notation_package": {
+  "scenario": "stable catalog lookup; unauthorized mutation refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/catalog_tests.rs",
+    "function": "catalog_rows_converge_through_their_lifecycle",
+    "proves": "Catalog row images converge through create, replay, updates and removal."
+   }
+  ],
+  "remaining": [
+   "Equivalent application catalog lookup and unauthorized mutation refusal require separate acceptance."
+  ]
+ },
+ "notation_package_template": {
+  "scenario": "stable catalog lookup; unauthorized mutation refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/catalog_tests.rs",
+    "function": "catalog_rows_converge_through_their_lifecycle",
+    "proves": "Catalog row images converge through create, replay, updates and removal."
+   }
+  ],
+  "remaining": [
+   "Equivalent application catalog lookup and unauthorized mutation refusal require separate acceptance."
+  ]
+ },
+ "notation_rate": {
+  "scenario": "stable catalog lookup; unauthorized mutation refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/catalog_tests.rs",
+    "function": "catalog_rows_converge_through_their_lifecycle",
+    "proves": "Catalog row images converge through create, replay, updates and removal."
+   }
+  ],
+  "remaining": [
+   "Equivalent application catalog lookup and unauthorized mutation refusal require separate acceptance."
+  ]
+ },
+ "notation_source": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/records_tests.rs",
+    "function": "notation_inputs_mirror_and_follow_their_notation",
+    "proves": "Notation sources keep their source UUID, Notation link, and review order; a Notation removed from SurrealDB takes its sources in PostgreSQL."
+   }
+  ],
+  "remaining": [
+   "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
+  ]
+ },
+ "person": {
+  "scenario": "case-folded unique email; stable external identity; singular role; Firm directory and Project participation isolation",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/identity_tests.rs",
+    "function": "person_and_entity_rows_converge_through_their_lifecycle",
+    "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries, directory/participation isolation, and unauthorized mutations are not established by this mirror lifecycle."
+  ]
+ },
+ "person_delegate": {
+  "scenario": "stable identity; tenant link isolation and no inferred participation",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+    "function": "each_identity_detail_row_converges_through_its_lifecycle",
+    "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
+  ]
+ },
+ "person_external_identity": {
+  "scenario": "stable identity; tenant link isolation and no inferred participation",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+    "function": "each_identity_detail_row_converges_through_its_lifecycle",
+    "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
+  ]
+ },
+ "person_firm_role": {
+  "scenario": "unique Person/Firm membership; exactly one Admin DRI for active Firms; capability checks",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/tenancy_tests.rs",
+    "function": "firm_brand_project_and_membership_rows_converge_through_their_lifecycle",
+    "proves": "Firm, Brand, Project and membership images preserve source identities through create, update, replay and removal."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries, authorization/capability decisions, and concurrent tenancy invariants require separate acceptance."
+  ]
+ },
+ "person_mailbox": {
+  "scenario": "stable identity; tenant link isolation and no inferred participation",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/identity_detail_tests.rs",
+    "function": "each_identity_detail_row_converges_through_its_lifecycle",
+    "proves": "Identity-detail images converge through replay and lifecycle changes with explicit parent identities."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries and access decisions, including no inferred Project participation, require separate acceptance."
+  ]
+ },
+ "person_phone": {
+  "scenario": "E.164 canonical spelling at the write boundary; one primary per Person; row identity stable across label and primary changes",
+  "runtime_tests": [
+   {
+    "file": "store/tests/person_phones.rs",
+    "function": "setting_a_number_primary_demotes_the_previous_primary",
+    "proves": "Row identity is stable across label and primary changes: differently formatted spellings converge on one row and exactly one primary survives each write, the facts the whole-row projection must reproduce."
+   }
+  ],
+  "remaining": [
+   "PostgreSQL-side whole-row convergence for person_phone is covered by the shared source_domain_records mirror machinery; a live-Postgres parity run for this table specifically is pending with the identity-storage slice."
+  ]
+ },
+ "person_project_role": {
+  "scenario": "unique Person/Project participation; participation derives from role; no source-forge access grant",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/tenancy_tests.rs",
+    "function": "firm_brand_project_and_membership_rows_converge_through_their_lifecycle",
+    "proves": "Firm, Brand, Project and membership images preserve source identities through create, update, replay and removal."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries, authorization/capability decisions, and concurrent tenancy invariants require separate acceptance."
+  ]
+ },
+ "playbook": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/records_tests.rs",
+    "function": "project_records_mirror_replay_reconcile_and_remove",
+    "proves": "Playbook rows keep their Entity link and JSON positions; a source edit reaches PostgreSQL through the row key."
+   }
+  ],
+  "remaining": [
+   "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
+  ]
+ },
+ "post": {
+  "scenario": "Brand ownership; publication schedule and status; immutable receipt links; provider/account deduplication",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/tests.rs",
+    "function": "create_update_and_delete_converge_and_replays_write_nothing",
+    "proves": "Editorial row images converge through create, update and delete; replays do not write."
+   }
+  ],
+  "remaining": [
+   "Equivalent application reads, Brand isolation and complete provider/account deduplication require separate acceptance."
+  ]
+ },
+ "project": {
+  "scenario": "immutable unique code; valid Firm/Brand pair; participation isolation; close/reopen lifecycle and retention dates",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/tenancy_tests.rs",
+    "function": "firm_brand_project_and_membership_rows_converge_through_their_lifecycle",
+    "proves": "Firm, Brand, Project and membership images preserve source identities through create, update, replay and removal."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries, authorization/capability decisions, and concurrent tenancy invariants require separate acceptance."
+  ]
+ },
+ "project_deadlines": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/deadlines_tests.rs",
+    "function": "project_deadline_mirrors_replay_and_reconcile",
+    "proves": "Deadline image replay is unchanged and reconciliation repairs drift."
+   }
+  ],
+  "remaining": [
+   "Equivalent deadline application reads and cross-Firm/cross-Project refusal require separate acceptance."
+  ]
+ },
+ "project_module": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/records_tests.rs",
+    "function": "project_records_mirror_replay_reconcile_and_remove",
+    "proves": "Module rows mirror under their source UUID with Project and enabling Person links; replay is unchanged, a re-enabled pair replaces the stale row, and a disabled module is removed."
+   }
+  ],
+  "remaining": [
+   "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
+  ]
+ },
+ "project_reference": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/project_references_tests.rs",
+    "function": "both_endpoint_kinds_converge_and_source_deletion_removes_the_mirror",
+    "proves": "Person and Entity endpoint references converge and source deletion removes the target."
+   }
+  ],
+  "remaining": [
+   "Equivalent application reads and cross-Firm/cross-Project access refusal require separate acceptance."
+  ]
+ },
+ "project_service": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/project_services_tests.rs",
+    "function": "project_service_mirrors_replay_and_reconcile",
+    "proves": "Service images preserve source fields through mirror replay and drift repair."
+   }
+  ],
+  "remaining": [
+   "Equivalent application reads and complete cross-Firm/cross-Project refusal require separate acceptance."
+  ]
+ },
+ "question": {
+  "scenario": "stable catalog lookup; unauthorized mutation refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/catalog_tests.rs",
+    "function": "catalog_rows_converge_through_their_lifecycle",
+    "proves": "Catalog row images converge through create, replay, updates and removal."
+   }
+  ],
+  "remaining": [
+   "Equivalent application catalog lookup and unauthorized mutation refusal require separate acceptance."
+  ]
+ },
+ "relationship": {
+  "scenario": "typed Person/Entity endpoints; confidence range; source provenance; tenant-filtered AGE traversal and rebuild",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "relationship_log": {
+  "scenario": "append-only provenance; scoped history; actor attribution; graph rebuild preserves evidence",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "review_document": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "schema_version": {
+  "scenario": "operator authorization; no matter visibility grant",
+  "runtime_tests": [],
+  "remaining": [
+   "Disposition migration_ledger requires its own reviewed replacement/retirement acceptance and runtime evidence."
+  ]
+ },
+ "sent_email": {
+  "scenario": "Project isolation; same-Firm assignment; unassigned record visibility",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/sent_emails_tests.rs",
+    "function": "sent_email_audit_replays_preserve_history_and_report_drift",
+    "proves": "Sent-email audit replay preserves existing history and reports divergent evidence."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries, unassigned visibility and same-Firm assignment require separate acceptance."
+  ]
+ },
+ "signature": {
+  "scenario": "provider/envelope correlation; duplicate completion harmless; signed artifact retrieval; notation isolation",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "social_account": {
+  "scenario": "ciphertext and wrapped key copied byte-for-byte; Firm and Person ownership; revoke clears secrets",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/social_accounts_tests.rs",
+    "function": "encrypted_social_account_mirrors_replays_revocation_and_reconcile",
+    "proves": "Encrypted bundles round-trip byte-for-byte and revocation/replay/reconciliation preserve source state."
+   }
+  ],
+  "remaining": [
+   "Equivalent application reads and complete Firm/Person access decisions require separate acceptance."
+  ]
+ },
+ "social_account_selection": {
+  "remaining": [
+   "Application reads and end-to-end OAuth cancellation behavior remain separate acceptance."
+  ],
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/social_account_selections_tests.rs",
+    "function": "selections_replay_update_isolate_and_reconcile_on_real_postgres",
+    "proves": "Real PostgreSQL lifecycle covers stable-key replay/update, Brand/Firm isolation, denied saves, drift repair, disconnect preservation, source deletion and target-only cleanup."
+   },
+   {
+    "file": "store/src/postgres_mirror/social_account_selections_tests.rs",
+    "function": "selection_timestamps_keep_source_microseconds_on_real_postgres",
+    "proves": "Source timestamps retain their value at PostgreSQL microsecond precision without substitution."
+   },
+   {
+    "file": "store/src/postgres_mirror/social_account_selections_tests.rs",
+    "function": "saved_selection_write_hook_uses_the_isolated_postgres_database",
+    "proves": "The public save operation reaches its opt-in PostgreSQL hook in an isolated database."
+   }
+  ],
+  "scenario": "saved destination round trip; cancellation preservation; Brand and Firm isolation"
+ },
+ "social_handle": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/tests.rs",
+    "function": "create_update_and_delete_converge_and_replays_write_nothing",
+    "proves": "Editorial row images converge through create, update and delete; replays do not write."
+   }
+  ],
+  "remaining": [
+   "Equivalent application reads, Brand isolation and complete provider/account deduplication require separate acceptance."
+  ]
+ },
+ "social_oauth_attempt": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "social_publication": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/tests.rs",
+    "function": "create_update_and_delete_converge_and_replays_write_nothing",
+    "proves": "Editorial row images converge through create, update and delete; replays do not write."
+   }
+  ],
+  "remaining": [
+   "Equivalent application reads, Brand isolation and complete provider/account deduplication require separate acceptance."
+  ]
+ },
+ "statutory_deadline": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/records_tests.rs",
+    "function": "project_records_mirror_replay_reconcile_and_remove",
+    "proves": "Statutory deadline rows keep their source UUID, Project link, and calendar dates; reconcile restores missing rows."
+   }
+  ],
+  "remaining": [
+   "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
+  ]
+ },
+ "summary_sender_approval": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/communications_tests.rs",
+    "function": "approval_and_audit_rows_reconcile_without_duplicate_audit_events",
+    "proves": "Approval images reconcile and audit-event replay does not duplicate history."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries and cross-Firm access refusal require separate acceptance."
+  ]
+ },
+ "summary_sender_approval_event": {
+  "scenario": "same-Firm round trip; cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/communications_tests.rs",
+    "function": "approval_and_audit_rows_reconcile_without_duplicate_audit_events",
+    "proves": "Approval images reconcile and audit-event replay does not duplicate history."
+   }
+  ],
+  "remaining": [
+   "Equivalent application queries and cross-Firm access refusal require separate acceptance."
+  ]
+ },
+ "template": {
+  "scenario": "version pins; one current row per scoped code; shared and Project catalogs coexist",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/workflow_tests.rs",
+    "function": "workflow_template_versions_are_mirrored_and_retained",
+    "proves": "Exact Template versions named by Notations are mirrored and retained."
+   }
+  ],
+  "remaining": [
+   "Current-version uniqueness, scoped catalog resolution and all version-pin failure paths require separate runtime evidence."
+  ]
+ },
+ "testimonial": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [
+   {
+    "file": "store/src/postgres_mirror/records_tests.rs",
+    "function": "project_records_mirror_replay_reconcile_and_remove",
+    "proves": "Testimonial rows keep consent timestamps at microsecond precision; changed target rows are named by key and repaired from SurrealDB."
+   }
+  ],
+  "remaining": [
+   "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
+  ]
+ },
+ "verification": {
+  "scenario": "citation scope; verifier attribution; repeat verification preserves evidence",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "visitor_route_count": {
+  "scenario": "operator authorization; no matter visibility grant",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ },
+ "xero_invoice": {
+  "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+  "runtime_tests": [],
+  "remaining": [
+   "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+  ]
+ }
 }

@@ -108,6 +108,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "person_delegate",
     "person_external_identity",
     "person_mailbox",
+    "person_phone",
     "summary_sender_approval",
     "summary_sender_approval_event",
     "communication",

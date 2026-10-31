@@ -346,7 +346,7 @@
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 106,
+    "table_count": 107,
     "tables": {
       "address": {
         "city": "string",
@@ -1281,6 +1281,15 @@
         "id": "record",
         "person_id": "record<person>"
       },
+      "person_phone": {
+        "e164": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "is_primary": "bool",
+        "label": "string",
+        "person_id": "record<person>",
+        "updated_at": "datetime"
+      },
       "person_project_role": {
         "id": "record",
         "inserted_at": "string",
@@ -1648,7 +1657,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 129,
+    "table_count": 130,
     "tables": {
       "address": {
         "columns": {
@@ -3735,6 +3744,20 @@
         "references": [
           "person"
         ]
+      },
+      "person_phone": {
+        "columns": {
+          "e164": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "is_primary": "BOOLEAN",
+          "label": "TEXT",
+          "person_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "person_phone",
+        "references": []
       },
       "person_project_role": {
         "columns": {

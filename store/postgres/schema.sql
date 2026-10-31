@@ -2347,6 +2347,22 @@ CREATE TRIGGER project_task_events_immutable
     BEFORE UPDATE OR DELETE ON project_task_events
     FOR EACH ROW EXECUTE FUNCTION reject_project_task_event_mutation();
 
+-- Migration: 20261030130000_create_person_phone.sql
+-- Full-row PostgreSQL destination for the `person_phone` source table.
+
+-- Direct record links retain UUIDs. This link column has no PostgreSQL FK so
+-- source orphans remain importable and are reported separately.
+
+CREATE TABLE "person_phone" (
+    "e164" TEXT NOT NULL,
+    "id" UUID NOT NULL PRIMARY KEY,
+    "inserted_at" TIMESTAMPTZ NOT NULL,
+    "is_primary" BOOLEAN NOT NULL,
+    "label" TEXT NOT NULL,
+    "person_id" UUID NOT NULL,
+    "updated_at" TIMESTAMPTZ NOT NULL
+);
+
 -- Migration: 20261031010000_create_navigator_graph.sql
 -- Migration: 20261031010000_create_navigator_graph.sql
 -- The Apache AGE relationship graph, projected from the relational mirrors.
