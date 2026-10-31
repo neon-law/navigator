@@ -67,16 +67,26 @@ empty:
 | --- | --- | --- |
 | `Client Production/` | What the client supplied | `exhibit` |
 | `Correspondence (Served)/` | Letters served or received | `letter` |
-| `Discovery/` | Discovery requests and responses | none: set `folder: Discovery` |
+| `Discovery (Served)/` | Discovery served or received | none: set `folder:` |
 | `Docket Filings/` | Court paper and docket ingest | `pleading`, `filing` |
-| `Work Product/` | Memos, transcripts, drafts | every other kind |
+| `Court Rules/` | Local rules and standing orders | none |
+| `Engagement/` | The letters that open and close the engagement | `onboarding` |
+| `Work Product/` | Drafts, research, everything else | every other kind |
+
+`Work Product/` holds the same seven fixed subfolders in every checkout, each suffixed so it reads unambiguously out of
+context and never collides with a served twin (LAW-215): `Client Calls (Work Product)/` (`transcript`), `Correspondence
+(Work Product)/` (letters drafted, not served), `Discovery (Work Product)/` (discovery in preparation), `Motions (Work
+Product)/` (one folder per motion), `Pleadings (Work Product)/`, `Research (Work Product)/` (`memo`), and `Stipulations
+(Work Product)/`.
 
 Git tracks only the pointers under `blobs/`. To file a document, drop it into its matter folder and run `navigator
-project sync`, or run `navigator site document upload --folder "<Folder>"`. `onboarding/`, `offboarding/`, `invoices/`,
-`cases/`, and `rules/` stay beside the matter folders.
+project sync`, or run `navigator site document upload --folder "<Folder>"` — a `Work Product` subfolder's name is its
+whole path below `documents/`, such as `"Work Product/Research (Work Product)"`. `onboarding/`, `offboarding/`,
+`invoices/`, `cases/`, and `rules/` stay beside the matter folders.
 
 A checkout from before the matter folders moves on the next `navigator project sync`, or with `navigator project
-repository migrate-documents`. The move leaves each pointer's checksum and asset id unchanged.
+repository migrate-documents`. A checkout still holding the bare `Discovery/` folder of the five-folder tree refiles
+with `navigator project repository migrate-folders`. Neither move leaves a pointer's checksum or asset id changed.
 
 ## Verify
 

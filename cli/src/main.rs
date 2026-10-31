@@ -1441,6 +1441,24 @@ enum ProjectRepositoryCmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Reslug a checkout into the extended matter folder tree (LAW-215):
+    /// refile bare `Discovery` pointers onto `Discovery (Served)` and move
+    /// every pointer's bytes from the five-folder tree into the folder the
+    /// pointer resolves to now.
+    ///
+    /// Offline and idempotent. A pointer's checksum, asset id, and version
+    /// chain never change; the one pointer rewrite is the bare `Discovery`
+    /// folder line. Bytes under `documents/` no pointer names are listed,
+    /// never guessed at. `navigator project sync` creates the new tree, but
+    /// does not refile.
+    MigrateFolders {
+        /// Project repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// Print the refiles and moves without making them.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -5579,6 +5597,15 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             }
             ProjectRepositoryCmd::MigrateDocuments { dir, dry_run } => {
                 match document_layout::migrate_checkout(&dir, dry_run) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => {
+                        eprintln!("navigator: {error:#}");
+                        ExitCode::from(2)
+                    }
+                }
+            }
+            ProjectRepositoryCmd::MigrateFolders { dir, dry_run } => {
+                match document_layout::migrate_folder_tree(&dir, dry_run) {
                     Ok(()) => ExitCode::SUCCESS,
                     Err(error) => {
                         eprintln!("navigator: {error:#}");
