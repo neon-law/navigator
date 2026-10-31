@@ -3467,29 +3467,40 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
-        "/app/api/inbox/{id}/process": {
-          "get": {
-            "summary": "Show one message's process plan",
-            "description": "One message's classification — the route a fresh run assigns now, its label, the marker it matched — plus what a previous process run recorded (`recorded_route`, `recorded_at`). Reads record nothing. A missing message and a firm outside the caller's membership are both 404 so the door never discloses a conversation. The message body never leaves the server.",
-            "parameters": [
-              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
-            ],
-            "responses": {
-              "200": { "description": "The message's plan", "content": { "application/json": { "schema": { "type": "object" } } } },
-              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
-              "403": { "description": "Authenticated caller is not lawyer tier", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
-              "404": { "description": "No such message, or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
-              "500": { "description": "A database fault, never a rejected field", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
-            }
-          },
+        "/app/api/inbox/process": {
           "post": {
-            "summary": "Record the classified route for one message",
-            "description": "Classifies the message server-side from the same transport facts the SendGrid webhook sees — a client never posts a route — records the route and the processing time, and reports the best-effort Slack notice outcome (`notified`, `no_project`, `no_channel`, `provider_unavailable`); a notice failure never fails the recording. Idempotent: a re-run overwrites with the same truth and sets `already_recorded`. Nothing is sent and no Gmail label is changed here; the CLI archives the Gmail copy itself after applying. Authorization as for the plan read.",
-            "parameters": [
-              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
-            ],
+            "summary": "Show one message's plan, or record the classified route",
+            "description":
+              "One constant-path door for `inbox process` — the parsed message id is body data, \\
+               never URL material. With `apply` false the body only names the message: the response \\
+               is its classification — the route a fresh run assigns now, its label, the marker it \\
+               matched — plus what a previous process run recorded (`recorded_route`, `recorded_at`); \\
+               nothing is written. With `apply` true the message is classified server-side from the \\
+               same transport facts the SendGrid webhook sees — a client never posts a route — and \\
+               the route and processing time are recorded; the response adds the best-effort Slack \\
+               notice outcome (`notified`, `no_project`, `no_channel`, `provider_unavailable`), and \\
+               a notice failure never fails the recording. Idempotent: a re-run overwrites with the \\
+               same truth and sets `already_recorded`. A missing message and a firm outside the \\
+               caller's membership are both 404 so the door never discloses a conversation. The \\
+               message body never leaves the server. Nothing is sent and no Gmail label is changed \\
+               here; the CLI archives the Gmail copy itself after applying.",
+            "requestBody": {
+              "required": true,
+              "content": { "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["message"],
+                  "properties": {
+                    "message": { "type": "string", "format": "uuid",
+                                 "description": "The inbox message to plan or record" },
+                    "apply": { "type": "boolean", "default": false,
+                               "description": "False serves the plan only; true records the classification" }
+                  }
+                }
+              } }
+            },
             "responses": {
-              "200": { "description": "The recorded verdict", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "200": { "description": "The message's plan (apply false), or the recorded verdict (apply true)", "content": { "application/json": { "schema": { "type": "object" } } } },
               "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "403": { "description": "Authenticated caller is not lawyer tier", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "404": { "description": "No such message, or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },

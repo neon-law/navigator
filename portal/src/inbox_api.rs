@@ -1,16 +1,16 @@
 //! Inbox-process doors.
 //!
-//! The process backlog read and the per-message process recording behind
+//! The process backlog read and the body-carried process door behind
 //! `inbox process`. The route itself is classified server-side at apply
 //! time from the same transport facts the SendGrid webhook sees — a client
 //! never posts a route. The message body never leaves the server: plans
 //! carry classification metadata only.
 
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
@@ -104,32 +104,35 @@ pub(crate) async fn unprocessed(
     Ok(Json(views).into_response())
 }
 
-/// `GET /app/api/inbox/{id}/process` — one message's plan, including what
-/// a previous run recorded.
-pub(crate) async fn process_status(
-    State(state): State<ApiState>,
-    LawyerSession(session): LawyerSession,
-    Path(id): Path<Uuid>,
-) -> Result<Response, ApiError> {
-    let actor_id = actor_id(&session)?;
-    let context = store::inbox::process_context(&state.surreal, actor_id, id)
-        .await
-        .map_err(map_inbox)?;
-    Ok(Json(view(context.row, context.state)).into_response())
+/// The body the process door reads: which message, and whether to record.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ProcessRequest {
+    /// The inbox message to plan or record.
+    pub message: Uuid,
+    /// False serves the plan only; true records the classification.
+    #[serde(default)]
+    pub apply: bool,
 }
 
-/// `POST /app/api/inbox/{id}/process` — record the freshly classified route
-/// and the processing time. Idempotent: a re-run overwrites with the same
-/// truth and reports whether the message was already recorded.
-pub(crate) async fn process_apply(
+/// `POST /app/api/inbox/process` — the plan (apply: false) and the
+/// recording (apply: true) behind `inbox process`, one constant-path door:
+/// the parsed message id is body data, never URL material. The apply
+/// classifies the message server-side from the same transport facts the
+/// SendGrid webhook sees and records the route and processing time.
+/// Idempotent: a re-run overwrites with the same truth and reports whether
+/// the message was already recorded.
+pub(crate) async fn process(
     State(state): State<ApiState>,
     LawyerSession(session): LawyerSession,
-    Path(id): Path<Uuid>,
+    Json(request): Json<ProcessRequest>,
 ) -> Result<Response, ApiError> {
     let actor_id = actor_id(&session)?;
-    let context = store::inbox::process_context(&state.surreal, actor_id, id)
+    let context = store::inbox::process_context(&state.surreal, actor_id, request.message)
         .await
         .map_err(map_inbox)?;
+    if !request.apply {
+        return Ok(Json(view(context.row, context.state)).into_response());
+    }
     let decision = classify_inbound_facts(
         &context.row.external_address,
         context.row.subject.as_deref().unwrap_or_default(),
@@ -137,9 +140,14 @@ pub(crate) async fn process_apply(
     );
     let already_recorded = context.state.processed_at.is_some();
     let recorded_at = Utc::now();
-    store::inbox::mark_processed(&state.surreal, id, decision.route.as_str(), recorded_at)
-        .await
-        .map_err(map_inbox)?;
+    store::inbox::mark_processed(
+        &state.surreal,
+        request.message,
+        decision.route.as_str(),
+        recorded_at,
+    )
+    .await
+    .map_err(map_inbox)?;
     let slack_notice = match context.row.project_id {
         Some(project_id) => notify_inbox_routed(&state, project_id).await,
         None => SlackNotice::NoProject,
