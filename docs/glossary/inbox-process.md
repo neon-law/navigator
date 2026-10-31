@@ -1,7 +1,7 @@
 ---
 title: "Inbox Process"
 description: >-
-  The reviewable pass that classifies a lawyer's unprocessed inbox message onto a route, records the verdict, and leaves the filing to a lawyer.
+  The reviewable pass that classifies a lawyer's unprocessed inbox message onto a route and records the verdict.
 ---
 
 The closed pass over the Firm's unprocessed lawyer-mailbox [Messages](email-conversation-message.md): a run classifies
