@@ -2272,6 +2272,7 @@ async fn seed_inbox_walkthrough(db: &store::surreal::SurrealDb) -> store::inbox:
     store::inbox::ingest_inbound(
         db,
         &store::inbox::IngestInbound {
+            project_id: None,
             firm_id: firm,
             brand_key: Some("neon"),
             interaction_type: Some("message"),
@@ -2291,7 +2292,7 @@ async fn seed_inbox_walkthrough(db: &store::surreal::SurrealDb) -> store::inbox:
             matter_consent: false,
             promotional_opt_in: false,
             email_conversation_id: None,
-            attachment_asset_id: None,
+            attachments: Vec::new(),
             occurred_at: "2026-10-10T12:00:00Z",
         },
     )

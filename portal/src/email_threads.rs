@@ -2908,6 +2908,7 @@ mod tests {
         let ingested = store::inbox::ingest_inbound(
             surreal,
             &store::inbox::IngestInbound {
+                project_id: None,
                 firm_id: seat.firm,
                 brand_key: Some("neon"),
                 interaction_type: Some("message"),
@@ -2927,7 +2928,7 @@ mod tests {
                 matter_consent: true,
                 promotional_opt_in: false,
                 email_conversation_id: Some(conversation.id),
-                attachment_asset_id: None,
+                attachments: Vec::new(),
                 occurred_at: "2026-09-27T00:00:00Z",
             },
         )

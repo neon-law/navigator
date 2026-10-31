@@ -111,13 +111,15 @@ impl Config {
 /// log path.
 pub(crate) async fn ingest(
     db: &store::surreal::SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
     email: &InboundEmail,
 ) -> Result<Option<store::inbox::IngestedInbound>, String> {
-    ingest_for_config(db, email, Config::from_env()).await
+    ingest_for_config(db, storage, email, Config::from_env()).await
 }
 
 async fn ingest_for_config(
     db: &store::surreal::SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
     email: &InboundEmail,
     config: Option<Config>,
 ) -> Result<Option<store::inbox::IngestedInbound>, String> {
@@ -137,9 +139,11 @@ async fn ingest_for_config(
         }
     }
     let provider_message_id = crate::inbox::provider_message_id(email);
+    let attachments = crate::inbox::ingest_attachments(db, storage, email).await?;
     store::inbox::ingest_inbound(
         db,
         &store::inbox::IngestInbound {
+            project_id: None,
             firm_id: config.firm_id,
             brand_key: None,
             interaction_type: Some("message"),
@@ -159,7 +163,7 @@ async fn ingest_for_config(
             matter_consent: false,
             promotional_opt_in: false,
             email_conversation_id: None,
-            attachment_asset_id: None,
+            attachments,
             occurred_at: &chrono::Utc::now().to_rfc3339(),
         },
     )
@@ -178,6 +182,10 @@ mod tests {
 
     fn fixture_firm() -> Uuid {
         Uuid::now_v7()
+    }
+
+    async fn storage() -> std::sync::Arc<dyn cloud::StorageService> {
+        crate::test_support::fs_storage().await
     }
 
     fn config(addresses: &[&str], firm_id: Uuid) -> Option<Config> {
@@ -275,24 +283,31 @@ mod tests {
     #[tokio::test]
     async fn unaddressed_mail_is_not_routed() {
         let db = mem_surreal().await;
+        let storage = storage().await;
         let firm_id = seed_firm_with_brand(&db, "neon").await;
         let config = config(&["nick@neonlaw.com"], firm_id);
         let email = email("Client <client@example.com>", "Nick <other@example.com>");
-        let ingested = ingest_for_config(&db, &email, config).await.unwrap();
+        let ingested = ingest_for_config(&db, &storage, &email, config)
+            .await
+            .unwrap();
         assert!(ingested.is_none());
     }
 
     #[tokio::test]
     async fn unconfigured_channel_is_not_routed() {
         let db = mem_surreal().await;
+        let storage = storage().await;
         let email = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
-        let ingested = ingest_for_config(&db, &email, None).await.unwrap();
+        let ingested = ingest_for_config(&db, &storage, &email, None)
+            .await
+            .unwrap();
         assert!(ingested.is_none());
     }
 
     #[tokio::test]
     async fn lawyer_tier_sender_is_never_inbound_correspondence() {
         let db = mem_surreal().await;
+        let storage = storage().await;
         let firm_id = seed_firm_with_brand(&db, "neon").await;
         ensure_person(
             &db,
@@ -301,7 +316,7 @@ mod tests {
         .await;
         let config = config(&["nick@neonlaw.com"], firm_id);
         let own_mail = email("Nick <nick@neonlaw.com>", "Nick <nick@neonlaw.com>");
-        let ingested = ingest_for_config(&db, &own_mail, config.clone())
+        let ingested = ingest_for_config(&db, &storage, &own_mail, config.clone())
             .await
             .unwrap();
         assert!(ingested.is_none());
@@ -311,13 +326,16 @@ mod tests {
             &NewPerson::with_role("Assistant", "clerk@neonlaw.com", Role::Clerk),
         )
         .await;
-        let ingested = ingest_for_config(&db, &clerk_mail, config).await.unwrap();
+        let ingested = ingest_for_config(&db, &storage, &clerk_mail, config)
+            .await
+            .unwrap();
         assert!(ingested.is_none());
     }
 
     #[tokio::test]
     async fn client_mail_ingests_under_one_provider_account_across_aliases() {
         let db = mem_surreal().await;
+        let storage = storage().await;
         let firm_id = seed_firm_with_brand(&db, "neon").await;
         let config = config(&["nick@neonlaw.com", "nick+intake@neonlaw.com"], firm_id);
         let mut first = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
@@ -327,11 +345,11 @@ mod tests {
             "Nick <nick+intake@neonlaw.com>",
         );
         second.message_id = Some("second@example.com".into());
-        let first_ingested = ingest_for_config(&db, &first, config.clone())
+        let first_ingested = ingest_for_config(&db, &storage, &first, config.clone())
             .await
             .unwrap()
             .expect("first delivery ingests");
-        let second_ingested = ingest_for_config(&db, &second, config)
+        let second_ingested = ingest_for_config(&db, &storage, &second, config)
             .await
             .unwrap()
             .expect("second delivery ingests");
@@ -353,15 +371,16 @@ mod tests {
     #[tokio::test]
     async fn redelivered_message_dedupes_on_the_provider_id() {
         let db = mem_surreal().await;
+        let storage = storage().await;
         let firm_id = seed_firm_with_brand(&db, "neon").await;
         let config = config(&["nick@neonlaw.com"], firm_id);
         let mut email = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
         email.message_id = Some("repeat@example.com".into());
-        let first = ingest_for_config(&db, &email, config.clone())
+        let first = ingest_for_config(&db, &storage, &email, config.clone())
             .await
             .unwrap()
             .unwrap();
-        let second = ingest_for_config(&db, &email, config)
+        let second = ingest_for_config(&db, &storage, &email, config)
             .await
             .unwrap()
             .unwrap();
@@ -378,6 +397,7 @@ mod tests {
     #[tokio::test]
     async fn attachment_bytes_change_the_dedup_key_when_the_provider_id_is_missing() {
         let db = mem_surreal().await;
+        let storage = storage().await;
         let firm_id = seed_firm_with_brand(&db, "neon").await;
         let config = config(&["nick@neonlaw.com"], firm_id);
         let mut email = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
@@ -386,11 +406,11 @@ mod tests {
             content_type: "application/pdf".into(),
             bytes: b"%PDF-1.7 attachment bytes".to_vec(),
         });
-        let first = ingest_for_config(&db, &email, config.clone())
+        let first = ingest_for_config(&db, &storage, &email, config.clone())
             .await
             .unwrap()
             .unwrap();
-        let second = ingest_for_config(&db, &email, config)
+        let second = ingest_for_config(&db, &storage, &email, config)
             .await
             .unwrap()
             .unwrap();

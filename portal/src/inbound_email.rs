@@ -947,9 +947,14 @@ pub async fn webhook(
     if summary_eligible {
         if let Some(config) = summary_config {
             let receipt = persist_summary(&state.surreal, &state.storage, config, &email).await?;
-            crate::email_acknowledgment::receive(&state.surreal, state.email.as_ref(), &email)
-                .await
-                .map_err(InboundError::Database)?;
+            crate::email_acknowledgment::receive(
+                &state.surreal,
+                &state.storage,
+                state.email.as_ref(),
+                &email,
+            )
+            .await
+            .map_err(InboundError::Database)?;
             start_summary_workflow(config, &receipt).await?;
         }
         return Ok(StatusCode::ACCEPTED);
@@ -959,7 +964,8 @@ pub async fn webhook(
     // Mail addressed to the lawyer's own mailbox joins the Firm inbox as its
     // own channel (LAW-238). Best-effort like threading: the raw `.eml` is
     // already archived, and a non-2xx would make SendGrid redeliver.
-    if let Err(error) = crate::lawyer_mailbox::ingest(&state.surreal, &email).await {
+    if let Err(error) = crate::lawyer_mailbox::ingest(&state.surreal, &state.storage, &email).await
+    {
         tracing::error!(
             error = %error,
             "lawyer mailbox ingest failed (message archived; inbox not advanced)"
@@ -986,9 +992,14 @@ pub async fn webhook(
             tracing::error!(error = %e, "inbound threading failed (message archived; conversation not advanced)");
         }
     }
-    crate::email_acknowledgment::receive(&state.surreal, state.email.as_ref(), &email)
-        .await
-        .map_err(InboundError::Database)?;
+    crate::email_acknowledgment::receive(
+        &state.surreal,
+        &state.storage,
+        state.email.as_ref(),
+        &email,
+    )
+    .await
+    .map_err(InboundError::Database)?;
     Ok(StatusCode::OK)
 }
 

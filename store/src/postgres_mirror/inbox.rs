@@ -40,6 +40,12 @@ const TABLES: &[Table] = &[
         immutable: true,
     },
     Table {
+        name: "inbox_message_asset",
+        columns: "id,firm_id,message_id,asset_id,filename,position,sha256,inserted_at",
+        references: "id,firm_id,message_id,asset_id",
+        immutable: true,
+    },
+    Table {
         name: "inbox_assignment",
         columns: "id,conversation_id,firm_id,from_project_id,to_project_id,actor_person_id,inserted_at",
         references: "id,conversation_id,firm_id,from_project_id,to_project_id,actor_person_id",
@@ -80,6 +86,7 @@ fn key(name: &str, id: Uuid) -> Result<MirrorKey, MirrorError> {
         "inbox_conversation" => MirrorKey::InboxConversation(id),
         "message" => MirrorKey::InboxMessage(id),
         "inbox_ingress" => MirrorKey::InboxIngress(id),
+        "inbox_message_asset" => MirrorKey::InboxMessageAsset(id),
         "inbox_assignment" => MirrorKey::InboxAssignment(id),
         "inbox_delivery_attempt" => MirrorKey::InboxDeliveryAttempt(id),
         _ => return Err(MirrorError::Source),
@@ -303,6 +310,7 @@ mod tests {
 
     fn inbound(firm_id: Uuid) -> crate::inbox::IngestInbound<'static> {
         crate::inbox::IngestInbound {
+            project_id: None,
             firm_id,
             brand_key: Some("neon"),
             interaction_type: None,
@@ -322,7 +330,7 @@ mod tests {
             matter_consent: false,
             promotional_opt_in: false,
             email_conversation_id: None,
-            attachment_asset_id: None,
+            attachments: Vec::new(),
             occurred_at: "2026-10-20T00:00:00Z",
         }
     }
