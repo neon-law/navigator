@@ -49,11 +49,10 @@ pub(crate) enum ConfigError {
     BadPortalUrl(String),
     #[error("{0}: the site key is invalid: {1}")]
     BadSiteKey(String, String),
-    #[error("no site `{site}` is configured under `scrapers.sites:`; configured sites: {configured}")]
-    UnknownSite {
-        site: String,
-        configured: String,
-    },
+    #[error(
+        "no site `{site}` is configured under `scrapers.sites:`; configured sites: {configured}"
+    )]
+    UnknownSite { site: String, configured: String },
     #[error(
         "`scrapers.sites.{site}`: the portal host `{host}` is not in `allowed_hosts:`; add it with a reason before scraping"
     )]
@@ -312,20 +311,14 @@ fn parse_options(options: Option<&serde_yaml::Value>) -> Result<ScraperOptions, 
     })
 }
 
-fn optional_text(
-    mapping: &serde_yaml::Mapping,
-    key: &str,
-) -> Result<Option<String>, ConfigError> {
+fn optional_text(mapping: &serde_yaml::Mapping, key: &str) -> Result<Option<String>, ConfigError> {
     match mapping.get(key) {
         None => Ok(None),
         Some(value) => scalar_string(value)
             .filter(|text| !text.trim().is_empty())
             .map(Some)
             .ok_or_else(|| {
-                ConfigError::MissingText(
-                    format!("scrapers.options.{key}"),
-                    key.to_owned(),
-                )
+                ConfigError::MissingText(format!("scrapers.options.{key}"), key.to_owned())
             }),
     }
 }
@@ -488,7 +481,9 @@ mod tests {
         )
         .expect("valid yaml");
         let error = parse_section(Some(&value)).expect_err("rejected");
-        assert!(matches!(error, ConfigError::BadSiteKey(ref path, _) if path == "scrapers.sites.LA SUPERIOR"));
+        assert!(
+            matches!(error, ConfigError::BadSiteKey(ref path, _) if path == "scrapers.sites.LA SUPERIOR")
+        );
     }
 
     #[test]
