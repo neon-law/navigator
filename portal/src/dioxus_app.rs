@@ -4547,6 +4547,14 @@ pub fn firm_show_router(
 /// `#[server]` loader as defense in depth.
 pub const APP_OWNER_FIRM_NEW_PATH: &str = "/app/owner/firms/new";
 
+/// The Owner's move-brand control — brand mobility between firms. Under
+/// `/app/owner` for the same reason as [`APP_OWNER_FIRM_NEW_PATH`]: embedded
+/// Rego's `owner_only_path` rule admits no other tier, and
+/// `webapp::firm_move::get_move_brand_form` re-checks the tier as defense in
+/// depth. The `POST` on this same path (the move itself) stays on the admin
+/// router; axum merges the same-path methods.
+pub const APP_OWNER_FIRM_MOVE_PATH: &str = "/app/owner/firms/move-brand";
+
 /// The Firm edit form (ENG-585). Lives under `/app/admin`, exactly like
 /// [`FIRM_SHOW_PATH`] it extends: Owner and Admin both pass the Rego route
 /// bypass, and the fine-grained
