@@ -64,6 +64,81 @@ pub fn immigration_gateway(
     locales::immigration_gateway(branding, deployment_host)
 }
 
+/// `/immigration/family-green-cards` — Abhaya Immigration's family-petition
+/// and marriage-based green-card page. See
+/// `locales/en/neon/immigration-family-green-cards.yaml`.
+pub fn immigration_family_green_cards(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    locales::immigration_family_green_cards(branding, deployment_host)
+}
+
+/// `/immigration/citizenship` — Abhaya Immigration's naturalization page. See
+/// `locales/en/neon/immigration-citizenship.yaml`.
+pub fn immigration_citizenship(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    locales::immigration_citizenship(branding, deployment_host)
+}
+
+/// `/immigration/employment-visas` — Abhaya Immigration's employment-visa
+/// page. See `locales/en/neon/immigration-employment-visas.yaml`.
+pub fn immigration_employment_visas(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    locales::immigration_employment_visas(branding, deployment_host)
+}
+
+/// `/immigration/consular-processing` — Abhaya Immigration's
+/// consular-processing page. See
+/// `locales/en/neon/immigration-consular-processing.yaml`.
+pub fn immigration_consular_processing(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    locales::immigration_consular_processing(branding, deployment_host)
+}
+
+/// `/immigration/uscis-notices` — Abhaya Immigration's page on responding
+/// to USCIS notices. See `locales/en/neon/immigration-uscis-notices.yaml`.
+pub fn immigration_uscis_notices(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    locales::immigration_uscis_notices(branding, deployment_host)
+}
+
+/// `/immigration/humanitarian-relief` — Abhaya Immigration's page on
+/// humanitarian relief. See
+/// `locales/en/neon/immigration-humanitarian-relief.yaml`.
+pub fn immigration_humanitarian_relief(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    locales::immigration_humanitarian_relief(branding, deployment_host)
+}
+
+/// `/immigration/removal-defense` — Abhaya Immigration's immigration-court
+/// defense page. See `locales/en/neon/immigration-removal-defense.yaml`.
+pub fn immigration_removal_defense(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    locales::immigration_removal_defense(branding, deployment_host)
+}
+
+/// `/immigration/free-support` — Abhaya Immigration's free-support hub. See
+/// `locales/en/neon/immigration-free-support.yaml`.
+pub fn immigration_free_support(
+    branding: &views::brand::Branding,
+    deployment_host: Option<&str>,
+) -> PageContent {
+    locales::immigration_free_support(branding, deployment_host)
+}
+
 /// `/estate-planning` — Neon's own gateway to the Vesta Estate Planning
 /// practice. See `locales/en/neon/gateway-estate-planning.yaml`.
 pub fn estate_planning_gateway(

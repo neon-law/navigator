@@ -7076,6 +7076,67 @@ impl IntoResponse for ApiError {
                 })),
             )
                 .into_response(),
+            // The template's declared workflow/questionnaire failed the
+            // engine's parse — a template fault, not a server one (LAW-200:
+            // these answered `500 internal`).
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::Spec(e),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "template_spec",
+                    "message": format!("Template spec: {e}")
+                })),
+            )
+                .into_response(),
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::TemplateSource(
+                    store::template_source::TemplateSourceError::AmbiguousBlueprintDirectories,
+                ),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "ambiguous_blueprint_directories",
+                    "message": "The matter repo contains both `templates/` and `drafts/` blueprint directories; remove one so the template is unambiguous."
+                })),
+            )
+                .into_response(),
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::TemplateSource(
+                    store::template_source::TemplateSourceError::InvalidLayout(details),
+                ),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "invalid_layout",
+                    "message": format!("Invalid matter blueprint layout: {details}")
+                })),
+            )
+                .into_response(),
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::TemplateSource(
+                    store::template_source::TemplateSourceError::NotUtf8(path),
+                ),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "template_not_utf8",
+                    "message": format!("Template `{path}` body is not valid UTF-8.")
+                })),
+            )
+                .into_response(),
+            Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
+                workflows::NotationSessionError::TemplateSource(
+                    store::template_source::TemplateSourceError::Composition(details),
+                ),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "composition",
+                    "message": format!("Clause composition: {details}")
+                })),
+            )
+                .into_response(),
             Self::CreateNotation(crate::project_notation::CreateProjectNotationError::Session(
                 e,
             )) => {

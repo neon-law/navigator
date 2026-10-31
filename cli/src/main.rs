@@ -1186,6 +1186,18 @@ enum ProjectsCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// File a Project's Drive dropbox folder into the matter through the
+    /// portal's drive-import door, as internal documents under their original
+    /// filenames. `--dry-run` plans the pass and writes nothing.
+    DriveIngest {
+        /// The Project code.
+        project_code: String,
+        /// Report what a real pass would do, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Interactively open a Project and write this release's canonical repository files.
     Scaffold {
         /// Empty directory to populate. Defaults to the current directory.
@@ -1648,6 +1660,30 @@ enum CommunicationCmd {
         /// Share the note with the client. Refused for `--role opposing_counsel`.
         #[arg(long)]
         client_visible: bool,
+        /// A subject line.
+        #[arg(long)]
+        subject: Option<String>,
+        /// Print the request and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Log a firm-internal matter note and print the stored Communication
+    /// (LAW-230).
+    ///
+    /// A note has no counterparty and no client visibility: it is the
+    /// lawyer's own observation on the matter, rendered on the workbench's
+    /// Notes tab and never on a client view. Communications stay
+    /// server-only: nothing is written under `documents/`, and `project
+    /// sync` writes no pointer for one.
+    Note {
+        /// The note's Markdown body.
+        #[arg(long)]
+        body_file: PathBuf,
         /// A subject line.
         #[arg(long)]
         subject: Option<String>,
@@ -5091,6 +5127,21 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 )
                 .await
             }
+            CommunicationCmd::Note {
+                body_file,
+                subject,
+                dry_run,
+                project,
+                host,
+            } => {
+                projects::communication::note(
+                    host.host.as_deref(),
+                    project.as_deref(),
+                    projects::communication::NewNote { body_file, subject },
+                    dry_run,
+                )
+                .await
+            }
         },
         ProjectsCmd::Service { action } => match action {
             ServiceCmd::List { host, project } => {
@@ -5441,6 +5492,11 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             )
             .await
         }
+        ProjectsCmd::DriveIngest {
+            project_code,
+            dry_run,
+            host,
+        } => projects::drive_ingest::run(host.host.as_deref(), &project_code, dry_run).await,
         ProjectsCmd::Scaffold {
             dir,
             resume,

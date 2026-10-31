@@ -55,9 +55,23 @@ pub struct DemoColumn {
     pub value_type: String,
 }
 
+/// The visible failure panel in place of a silently-missing demo: a
+/// template that declares a questionnaire the preview cannot parse renders
+/// this instead of an empty section, so degradation is impossible to miss.
+/// `role="alert"` announces it; the body still renders below.
+pub fn questionnaire_error_panel(error: &str) -> Element {
+    rsx! {
+        aside { class: "nav-alert notation-demo__parse-error", role: "alert",
+            h2 { class: "nav-alert__title", "Questionnaire failed to parse" }
+            p { class: "nav-alert__body", "{error}" }
+        }
+    }
+}
+
 /// The client-side-only questionnaire stepper. Renders nothing for a
-/// notation with no declared questionnaire (a template whose frontmatter
-/// carries none, or one `views::questionnaire_preview::parse` couldn't read).
+/// notation with no declared questionnaire. A template whose declared
+/// questionnaire failed to parse never reaches this component silently —
+/// the page renders [`questionnaire_error_panel`] above the document.
 #[component]
 pub fn QuestionnaireDemo(
     questions: Vec<DemoQuestion>,

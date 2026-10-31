@@ -20,11 +20,12 @@ use crate::api::{ApiError, ApiState, LawyerSession};
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CreateCommunicationRequest {
-    /// `call`, `email_inbound`, or `email_outbound`.
+    /// `call`, `email_inbound`, `email_outbound`, or `note`.
     channel: String,
-    /// `inbound` or `outbound`.
+    /// `inbound`, `outbound`, or `internal` (a note).
     direction: String,
-    counterparty: String,
+    /// The other party, as an email or a name. A note has none.
+    counterparty: Option<String>,
     /// The counterparty's `opposing_counsel`, `client`, `court`, or `other` role.
     role: Option<String>,
     /// RFC 3339: when the call or email happened.
@@ -111,12 +112,22 @@ pub(crate) async fn list_communications(
     Ok(Json(rows).into_response())
 }
 
+/// A call or email names who it was with; a note has no counterparty.
+fn require_counterparty(value: Option<&str>, channel: &str) -> Result<String, ApiError> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| ApiError::CommunicationInvalid(format!("{channel} names its counterparty")))
+}
+
 /// Logs an email Communication, then links any call it confirms.
 async fn create_email(
     state: &ApiState,
     author_person_id: Option<Uuid>,
     project_id: Uuid,
     channel: &str,
+    counterparty: &str,
     source_ref: Option<&str>,
     input: &CreateCommunicationRequest,
 ) -> Result<store::communications::Communication, ApiError> {
@@ -146,7 +157,7 @@ async fn create_email(
             channel,
             direction,
             author_person_id,
-            counterparty: Some(input.counterparty.trim()),
+            counterparty: Some(counterparty),
             subject: input.subject.as_deref(),
             body: input.body.trim(),
             source_ref,
@@ -176,6 +187,32 @@ async fn create_email(
         .ok_or_else(|| ApiError::Db("the email could not be read back".into()))
 }
 
+/// A note is a firm-internal observation: no other party, no linkage.
+fn ensure_note_is_unlinked(input: &CreateCommunicationRequest) -> Result<(), ApiError> {
+    for (flag, value) in [
+        ("counterparty", input.counterparty.as_deref()),
+        ("role", input.role.as_deref()),
+        ("source_ref", input.source_ref.as_deref()),
+    ] {
+        if value.is_some_and(|value| !value.trim().is_empty()) {
+            return Err(ApiError::CommunicationInvalid(format!(
+                "a note has no {flag}; it is a firm-internal observation"
+            )));
+        }
+    }
+    if input.client_visible || input.direction.trim() != "internal" {
+        return Err(ApiError::CommunicationInvalid(
+            "a note is always internal; it never reaches a client view".into(),
+        ));
+    }
+    if input.acknowledges.is_some() || input.confirms.is_some() {
+        return Err(ApiError::CommunicationInvalid(
+            "a note acknowledges and confirms nothing; only email does".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// `POST /app/api/projects/{id}/communications`
 pub(crate) async fn create_communication(
     State(state): State<ApiState>,
@@ -192,41 +229,68 @@ pub(crate) async fn create_communication(
         ));
     }
     let row = match input.channel.trim() {
-        store::communications::channel::CALL => store::communications::record_call(
-            &state.surreal,
-            &store::communications::NewCall {
-                project_id: id,
-                author_person_id: session.person_id,
-                counterparty: input.counterparty,
-                subject: input.subject,
-                body: input.body,
-                at: input.at,
-                call: store::communications::CallDetails {
-                    direction: input.direction.trim().to_string(),
-                    counterparty_role: input
-                        .role
-                        .unwrap_or_else(|| {
-                            store::communications::counterparty_role::OTHER.to_string()
-                        })
-                        .trim()
-                        .to_string(),
-                    duration_minutes: input.duration_minutes,
-                    recorded: input
-                        .recorded
-                        .unwrap_or_else(|| store::communications::recorded::NONE.to_string())
-                        .trim()
-                        .to_string(),
-                    meet_and_confer: input.meet_and_confer,
+        store::communications::channel::CALL => {
+            let counterparty = require_counterparty(input.counterparty.as_deref(), "a call")?;
+            store::communications::record_call(
+                &state.surreal,
+                &store::communications::NewCall {
+                    project_id: id,
+                    author_person_id: session.person_id,
+                    counterparty,
+                    subject: input.subject,
+                    body: input.body,
+                    at: input.at,
+                    call: store::communications::CallDetails {
+                        direction: input.direction.trim().to_string(),
+                        counterparty_role: input
+                            .role
+                            .unwrap_or_else(|| {
+                                store::communications::counterparty_role::OTHER.to_string()
+                            })
+                            .trim()
+                            .to_string(),
+                        duration_minutes: input.duration_minutes,
+                        recorded: input
+                            .recorded
+                            .unwrap_or_else(|| store::communications::recorded::NONE.to_string())
+                            .trim()
+                            .to_string(),
+                        meet_and_confer: input.meet_and_confer,
+                    },
+                    agreements: input.agreements,
+                    client_visible: input.client_visible,
                 },
-                agreements: input.agreements,
-                client_visible: input.client_visible,
-            },
-        )
-        .await
-        .map_err(map_communication)?,
+            )
+            .await
+            .map_err(map_communication)?
+        }
+        store::communications::channel::NOTE => {
+            ensure_note_is_unlinked(&input)?;
+            store::communications::log_note(
+                &state.surreal,
+                &store::communications::NewNote {
+                    project_id: id,
+                    author_person_id: session.person_id,
+                    subject: input.subject,
+                    body: input.body,
+                },
+            )
+            .await
+            .map_err(map_communication)?
+        }
         channel @ (store::communications::channel::EMAIL_INBOUND
         | store::communications::channel::EMAIL_OUTBOUND) => {
-            create_email(&state, session.person_id, id, channel, source_ref, &input).await?
+            let counterparty = require_counterparty(input.counterparty.as_deref(), "an email")?;
+            create_email(
+                &state,
+                session.person_id,
+                id,
+                channel,
+                &counterparty,
+                source_ref,
+                &input,
+            )
+            .await?
         }
         other => {
             return Err(ApiError::CommunicationInvalid(format!(

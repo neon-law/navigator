@@ -1,0 +1,78 @@
+head_title: "{site_name} | Employment visas"
+meta_description: >-
+  Abhaya Immigration, a Shook Law PC practice, advises on employment-based
+  visas and employer sponsorship: the categories, the labor certification,
+  and the petitions. Government filing fees are separate, and no approval or
+  timeline is promised.
+title: Employment visas
+tagline: Employment sponsorship, explained before it is filed.
+skin: practice
+bands:
+  - kind: statement
+    heading: Who this is for
+    lead: Workers and the employers who sponsor them.
+    body:
+      - - text: >-
+            Employment-based cases run through several different doors. A
+            company can sponsor a worker for a green card, usually through
+            a test of the labor market and a petition by the employer.
+            People with extraordinary ability, outstanding researchers, and
+            multinational managers may qualify in categories that do not
+            require an employer petition in the same way. Temporary work
+            visas are their own family, each with its own rules.
+      - - text: >-
+            Which door fits depends on the job offer, the person's
+            background, and the employer's willingness to sponsor. The
+            choice made at the start shapes everything after it, so it is
+            worth making carefully.
+  - kind: steps
+    anchor: employment-process
+    overline: How the process works
+    heading: From labor certification to the visa.
+    description: >-
+      The Department of Labor and USCIS split most of the work. The general
+      order for the common sponsored path is below.
+    items:
+      - title: Labor certification
+        body:
+          - - text: >-
+                For most professional positions, the employer first seeks a
+                certification from the Department of Labor that no able and
+                available United States worker applied for the job.
+      - title: The immigrant petition
+        body:
+          - - text: >-
+                The employer files Form I-140 with United States Citizenship
+                and Immigration Services for the approved category.
+      - title: The priority date and the application
+        body:
+          - - text: >-
+                When the category is current in the State Department's
+                monthly visa bulletin, the worker applies to adjust status
+                or applies at a consulate. We cannot promise how long any
+                case takes; the agencies decide.
+  - kind: statement
+    heading: What to gather and what it costs
+    lead: Documents and fees, stated plainly.
+    body:
+      - - text: >-
+            Cases usually rest on the job offer letter, education and
+            experience records, the employer's financial and business
+            documents, and the worker's immigration history.
+      - - text: >-
+            The Department of Labor and USCIS each charge their own fees or
+            none, and the employer and worker each carry defined costs. The
+            current amounts are published on the agencies' sites, and they
+            change. We cannot promise approval or a timeline; the relevant
+            agencies decide.
+  - kind: cta
+    heading: Talk through sponsorship with Abhaya Immigration
+    body: >-
+      A first conversation covers which category fits, who files what, and
+      what the employer and the worker each carry. Abhaya Immigration, a
+      Shook Law PC practice, advises on employment-based visas and employer
+      sponsorship.
+    email: "{firm_email}"
+    action:
+      href: "https://www.abhayaimmigration.com/"
+      label: Talk to Abhaya Immigration

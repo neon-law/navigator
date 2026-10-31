@@ -981,6 +981,10 @@ async fn advance(
         }
         complete_group(surreal, pg, run_id, group, failed).await?;
     }
+    // The graph arm runs last: the AGE graph projects from the mirrors this
+    // run just backfilled, then validates against them and parity-checks its
+    // traversal against SurrealDB.
+    written += crate::postgres_graph::advance(surreal, pg, run_id).await?;
     sqlx::query(
         "UPDATE mirror_backfill_run SET status = 'completed', completed_at = now(), \
          updated_at = now() WHERE id = $1",

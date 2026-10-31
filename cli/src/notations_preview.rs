@@ -164,6 +164,7 @@ async fn run_offline_lint(found: &Resolved, slug: &str, port: u16) -> Result<()>
     let questions = doc.demo_questions.len();
     let states = doc.demo_workflow.len();
     let title = doc.title.clone();
+    let questionnaire_error = doc.questionnaire_error.clone();
 
     let bundle = client_bundle_dir();
     if let Some(dir) = &bundle {
@@ -191,6 +192,13 @@ async fn run_offline_lint(found: &Resolved, slug: &str, port: u16) -> Result<()>
             ""
         }
     );
+    if let Some(error) = &questionnaire_error {
+        eprintln!("    WARNING: {error}");
+        eprintln!(
+            "    the page shows the failure panel in place of the questionnaire — fix the \
+             template; do not trust this preview's counts."
+        );
+    }
     eprintln!("    this is a local render, not the Project's portal — nothing is pushed.");
     match &bundle {
         Some(dir) => eprintln!("    client bundle: {}", dir.display()),

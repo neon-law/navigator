@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use http_body_util::BodyExt;
 use portal::session::SessionData;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
@@ -257,6 +258,73 @@ async fn unknown_project_is_404() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// LAW-200 regression: sibling repositories drifted across blueprint
+/// directory conventions — an older scaffold wrote `templates/`, the
+/// lawyer's letter landed in `drafts/` — leaving BOTH in one repo. The
+/// persist engine refuses the layout loudly
+/// (`TemplateSourceError::AmbiguousBlueprintDirectories`) while preview,
+/// which reads its own directory's file, renders fine — so `notation
+/// create` answered the catch-all `500 internal` for a layout the lawyer
+/// fixes by keeping one blueprint directory. After the typed-failure fix
+/// the cause reaches the lawyer as a 422.
+#[tokio::test]
+async fn a_repo_with_both_blueprint_directories_names_the_cause_not_internal() {
+    let _repo_guard = REPO_ENV_LOCK.lock().await;
+    let (app, surreal) = build_app().await;
+    let project = open_project(&surreal).await;
+    let project_id = project.id;
+    let repo = repos::RepoStore::from_env().unwrap();
+    repo.ensure_code(&project.code).unwrap();
+    repo.commit_as_code(
+        &project.code,
+        repos::Author {
+            name: "Lawyer",
+            email: "lawyer@example.com",
+        },
+        "add the onboarding letter under both blueprint directories",
+        &[
+            ("templates/onboarding.md", VALID_TEMPLATE.as_bytes()),
+            ("drafts/onboarding.md", VALID_TEMPLATE.as_bytes()),
+        ],
+    )
+    .unwrap();
+    let bearer = lawyer_bearer(&surreal, "acting-lawyer@example.com", Some(project_id)).await;
+
+    let resp = post_new(
+        &app,
+        &bearer,
+        &project.code,
+        "onboarding",
+        "libra@example.com",
+    )
+    .await;
+    let status = resp.status();
+    let body = resp.into_body().collect().await.expect("body").to_bytes();
+    let text = String::from_utf8(body.to_vec()).expect("utf-8 body");
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "the ambiguous blueprint layout must reach the lawyer as a typed 422, \
+         not 500 internal — body: {text}"
+    );
+    assert!(
+        text.contains("both `templates/` and `drafts/`"),
+        "the cause must name the layout conflict: {text}"
+    );
+
+    // Nothing opened, and nothing persisted from the refused layout.
+    assert!(store::notations::list_by_project(&surreal, project_id)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(
+        store::templates::resolve(&surreal, Some(project_id), "onboarding")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]

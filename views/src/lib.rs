@@ -18,6 +18,7 @@ pub mod markdown;
 pub mod notation;
 pub mod notations;
 pub mod questionnaire_preview;
+pub mod record_citation;
 pub mod slug;
 pub mod workflow_preview;
 

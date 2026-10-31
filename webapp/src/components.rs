@@ -37,6 +37,7 @@ pub mod breadcrumb;
 pub mod callout;
 pub mod card;
 pub mod catalog_hero;
+pub mod cite_check;
 pub mod code;
 pub mod color_picker;
 pub mod confirm_delete;
@@ -89,6 +90,9 @@ pub use breadcrumb::{BackBreadcrumb, LawyerPortalBreadcrumb};
 pub use callout::{Callout, CalloutTone};
 pub use card::Card;
 pub use catalog_hero::{CatalogHero, CATALOG_STYLESHEET_HREF};
+pub use cite_check::{
+    CiteCheckCitation, CiteCheckPane, CiteCheckSide, CiteCheckStatus, CiteCheckView,
+};
 pub(crate) use code::PlainCodeBlock;
 pub use code::{CodeBlock, COPY_CODE_SCRIPT_HREF};
 pub use color_picker::ColorPicker;

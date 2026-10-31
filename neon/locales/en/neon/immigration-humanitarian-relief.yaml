@@ -1,0 +1,83 @@
+head_title: "{site_name} | Humanitarian relief"
+meta_description: >-
+  Abhaya Immigration, a Shook Law PC practice, handles asylum, T and U visas,
+  and VAWA petitions: who may qualify, the filing rules, and the deadlines.
+  Government filing fees are separate, and no approval or timeline is
+  promised.
+title: Humanitarian relief
+tagline: Protection exists in the law. The rules are strict, and they matter.
+skin: practice
+bands:
+  - kind: statement
+    heading: What the law offers, in plain words
+    lead: Four doors, each with its own rules.
+    body:
+      - - text: >-
+            Asylum is for people who cannot return to their home country
+            because of persecution or a well-founded fear of it on account
+            of race, religion, nationality, political opinion, or
+            membership in a particular social group. An application made
+            after one year in the United States can be barred by the
+            one-year filing deadline, with limited exceptions — the date
+            matters, which is why it deserves attention first.
+      - - text: >-
+            T visas exist for victims of trafficking who cooperate with law
+            enforcement or would face unusual hardship. U visas exist for
+            victims of certain crimes who help law enforcement investigate
+            or prosecute. The Violence Against Women Act (VAWA) lets a
+            spouse, child, or parent of a citizen or resident petition
+            without the abuser's knowledge or participation. Each has its
+            own definition, evidence, and waiting rules; none of them
+            requires asking the person who harmed you for anything.
+  - kind: steps
+    anchor: relief-process
+    overline: How an application moves
+    heading: Filing rules come before anything else.
+    description: >-
+      USCIS decides most of these applications. The general order is below.
+    items:
+      - title: Check the deadline first
+        body:
+          - - text: >-
+                For asylum, the one-year filing deadline and its exceptions
+                are checked before anything else. For T and U visas and
+                VAWA, the qualifying relationship or crime, and the
+                cooperation or hardship rules, define the case.
+      - title: Build the record
+        body:
+          - - text: >-
+                Applications of this kind rest on your own statement,
+                country-conditions evidence, and documents about the harm.
+                Filing in your own words, in your own language, translated,
+                is normal and protected.
+      - title: File and follow the agency
+        body:
+          - - text: >-
+                The application is filed with United States Citizenship and
+                Immigration Services, or with the immigration court if a
+                case is already pending there. Biometrics and interviews
+                follow. We cannot promise approval or a timeline; the agency
+                decides.
+  - kind: statement
+    heading: Costs and honesty about outcomes
+    lead: Fees and outcomes, stated plainly.
+    body:
+      - - text: >-
+            There is no government filing fee for asylum. The other
+            applications may carry fees or fee waivers. Any government fee
+            is separate from any attorney fee.
+      - - text: >-
+            We cannot promise that relief will be granted; the agency or the
+            court decides. We can promise a careful, honest read of what the
+            rules require in your situation.
+  - kind: cta
+    heading: Talk with Abhaya Immigration
+    body: >-
+      A first conversation is private and covers what the law's rules ask
+      for in your situation, and nothing about it goes to anyone else
+      without your say. Abhaya Immigration, a Shook Law PC practice, handles
+      asylum, T and U visas, and VAWA petitions.
+    email: "{firm_email}"
+    action:
+      href: "https://www.abhayaimmigration.com/"
+      label: Talk to Abhaya Immigration

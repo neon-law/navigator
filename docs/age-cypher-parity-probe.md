@@ -38,7 +38,7 @@ Fixture (UUIDs stable across both engines, mirroring the `conflicts.rs` test sce
 
 ## The three traversal shapes
 
-### 1. Bounded frontier walk (`traversal_query`, conflicts.rs:407-495) — ✅ translates
+### 1. Bounded frontier walk (`traversal_query`, conflicts.rs:407-495) — translates
 
 SurrealQL walks `MAX_HOPS=3` rounds of `<->entity_role, <->relationship` from the anchors and projects normalized edge
 rows. openCypher equivalent:
@@ -66,7 +66,7 @@ Two workarounds are load-bearing here (see gaps below): the match must be **unre
 list — AGE rejects `[:A|B]`), and the **label filter happens SQL-side** after `cypher()`. Discipline to keep when the
 design's `WORKS_ON` / `MEMBER_OF` / `HANDLES` labels land in the same graph: an unfiltered walk would collect them.
 
-### 2. Scoring feed (paths for confidence product, adverse flags, floors) — ✅ translates; scoring stays in Rust
+### 2. Scoring feed (paths for confidence product, adverse flags, floors) — translates; scoring stays in Rust
 
 The Rust BFS (`reach`, `check`) consumes per-path kinds, confidences, and hop counts. openCypher hands it over as path
 rows:
@@ -87,7 +87,7 @@ Rust, reading `agtype` as text — exactly the design's plan. **This is confirme
 AGE 1.6.0 cannot compute the confidence product in Cypher (`reduce()` unsupported) nor the adverse flag (`any()`
 unsupported).
 
-### 3. Neighborhood read (`edges_among`, conflicts.rs ~954) — ✅ translates
+### 3. Neighborhood read (`edges_among`, conflicts.rs ~954) — translates
 
 One-hop undirected edges whose both ends are in the node set:
 

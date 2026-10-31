@@ -17,10 +17,32 @@
 //! Person, Entity, Project, and Address questions collect display values in
 //! the public preview without creating records. Signature and other service
 //! steps remain explanatory; a preview cannot execute those operations.
+//!
+//! Degradation is loud, not silent: frontmatter that *declares* a
+//! questionnaire but cannot be read into its chain is a
+//! [`questionnaire_preview::ParseFailure`] the caller surfaces as a
+//! structured warning and a visible page panel — only a template with no
+//! `questionnaire:` block previews without a demo and without an error.
 
 use std::collections::{BTreeMap, HashSet};
 
 use serde::Deserialize;
+
+/// Why a declared questionnaire could not be previewed.
+///
+/// A template that *declares* a `questionnaire:` block never degrades
+/// silently: malformed YAML, a chain that does not resolve linearly, or a
+/// declaration that resolves to no steps reports this failure, and the
+/// preview page renders it as a visible panel. Only frontmatter with no
+/// `questionnaire:` block at all previews with no demo section and no
+/// failure — that is a letter, not a break.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("questionnaire failed to parse: {message}")]
+pub struct ParseFailure {
+    /// What could not be read, and why — carried to the page's error panel
+    /// and to the structured warning the preview logs.
+    pub message: String,
+}
 
 /// One column of a schedule row.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -103,39 +125,75 @@ const END: &str = "END";
 const UNCONDITIONAL: &str = "_";
 
 /// Parse a template's YAML frontmatter into its ordered questionnaire
-/// preview. Returns an empty list for frontmatter with no `questionnaire:`
-/// block, malformed YAML, or a chain that doesn't resolve linearly — a bundled
-/// public page degrades to "no demo" rather than panicking on a shape it
-/// doesn't recognize.
-#[must_use]
-pub fn parse(frontmatter: &str) -> Vec<PreviewQuestion> {
-    let mut value: serde_yaml::Value = match serde_yaml::from_str(frontmatter) {
-        Ok(value) => value,
-        Err(_) => return Vec::new(),
-    };
-    if rules::normalize_value(&mut value).is_err() {
-        return Vec::new();
+/// preview.
+///
+/// Frontmatter with no `questionnaire:` block parses to an empty list — a
+/// letter previews with no demo section and no failure. A template that
+/// *declares* a questionnaire never degrades to a silently empty demo:
+/// malformed YAML, a chain that does not resolve linearly, or a
+/// declaration that resolves to no steps is a [`ParseFailure`], which the
+/// preview carries to the page's visible panel and the structured warning.
+///
+/// # Errors
+///
+/// Returns a [`ParseFailure`] when a declared questionnaire cannot be read
+/// into its linear `BEGIN → … → END` chain.
+pub fn parse(frontmatter: &str) -> Result<Vec<PreviewQuestion>, ParseFailure> {
+    let mut value: serde_yaml::Value =
+        serde_yaml::from_str(frontmatter).map_err(|error| ParseFailure {
+            message: error.to_string(),
+        })?;
+    if value.is_null() {
+        // No frontmatter at all: a body-only document has no demo, not a
+        // failure.
+        return Ok(Vec::new());
     }
-    let Ok(doc) = serde_yaml::from_value::<QuestionnaireFrontmatter>(value) else {
-        return Vec::new();
-    };
+    let declared = value.get("questionnaire").is_some();
+    rules::normalize_value(&mut value).map_err(|message| ParseFailure { message })?;
+    let doc = serde_yaml::from_value::<QuestionnaireFrontmatter>(value).map_err(|error| {
+        ParseFailure {
+            message: error.to_string(),
+        }
+    })?;
+    if !declared {
+        return Ok(Vec::new());
+    }
     let groups = group_index(&doc.questionnaire_groups);
 
     let mut ordered = Vec::new();
     let mut visited = HashSet::new();
     let mut current = BEGIN.to_string();
-    while let Some(next) = doc
-        .questionnaire
-        .get(&current)
-        .and_then(|transitions| transitions.get(UNCONDITIONAL))
-    {
-        if next == END || !visited.insert(next.clone()) {
+    loop {
+        let Some(next) = doc
+            .questionnaire
+            .get(&current)
+            .and_then(|transitions| transitions.get(UNCONDITIONAL))
+        else {
+            return Err(ParseFailure {
+                message: format!(
+                    "the declared chain stops at `{current}`, which declares no unconditional `_` transition"
+                ),
+            });
+        };
+        if next == END {
             break;
+        }
+        if !visited.insert(next.clone()) {
+            return Err(ParseFailure {
+                message: format!(
+                    "the declared chain revisits `{next}` — a cycle, where the runtime walks each state once"
+                ),
+            });
         }
         ordered.push(question_for_state(next, &doc, groups.get(next).cloned()));
         current = next.clone();
     }
-    ordered
+    if ordered.is_empty() {
+        return Err(ParseFailure {
+            message: "a questionnaire is declared but no steps resolve from `BEGIN`".to_string(),
+        });
+    }
+    Ok(ordered)
 }
 
 fn group_index(groups: &[PreviewGroup]) -> BTreeMap<String, String> {
@@ -283,7 +341,8 @@ questionnaire:
 
     #[test]
     fn walks_the_linear_chain_in_declared_order() {
-        let questions = parse(ONBOARDING_LETTER_FRONTMATTER);
+        let questions =
+            parse(ONBOARDING_LETTER_FRONTMATTER).expect("the onboarding questionnaire parses");
         let codes: Vec<&str> = questions.iter().map(|q| q.code.as_str()).collect();
         assert_eq!(
             codes,
@@ -302,7 +361,8 @@ questionnaire:
 
     #[test]
     fn a_custom_state_carries_its_own_real_prompt_and_choices() {
-        let questions = parse(ONBOARDING_LETTER_FRONTMATTER);
+        let questions =
+            parse(ONBOARDING_LETTER_FRONTMATTER).expect("the onboarding questionnaire parses");
         let governing_law = questions
             .iter()
             .find(|q| q.code == "custom_single_choice__governing_law")
@@ -325,7 +385,8 @@ questionnaire:
 
     #[test]
     fn a_record_state_collects_a_preview_name_without_creating_records() {
-        let questions = parse(ONBOARDING_LETTER_FRONTMATTER);
+        let questions =
+            parse(ONBOARDING_LETTER_FRONTMATTER).expect("the onboarding questionnaire parses");
         let client = questions
             .iter()
             .find(|q| q.code == "person__client")
@@ -346,7 +407,7 @@ questionnaire:
     _: END
   END: {}
 ";
-        let questions = parse(frontmatter);
+        let questions = parse(frontmatter).expect("a signature step parses");
         assert_eq!(questions.len(), 1);
         assert_eq!(
             questions[0].prompt,
@@ -356,18 +417,53 @@ questionnaire:
     }
 
     #[test]
-    fn frontmatter_with_no_questionnaire_block_yields_no_questions() {
-        assert!(parse("title: Just a title\n").is_empty());
+    fn frontmatter_with_no_questionnaire_block_yields_no_questions_and_no_failure() {
+        let questions =
+            parse("title: Just a title\n").expect("no questionnaire block is not a failure");
+        assert!(questions.is_empty());
     }
 
     #[test]
-    fn malformed_yaml_yields_no_questions_rather_than_panicking() {
-        assert!(parse("not: [valid, yaml: at all").is_empty());
+    fn empty_frontmatter_yields_no_questions_and_no_failure() {
+        let questions = parse("").expect("no frontmatter at all is not a failure");
+        assert!(questions.is_empty());
+    }
+
+    #[test]
+    fn malformed_yaml_reports_a_parse_failure_rather_than_an_empty_demo() {
+        let failure = parse("not: [valid, yaml: at all")
+            .expect_err("malformed YAML is a parse failure, not a silent demo");
+        assert!(!failure.message.is_empty(), "{failure:?}");
+    }
+
+    #[test]
+    fn a_declared_questionnaire_that_resolves_to_no_steps_is_a_failure() {
+        let frontmatter = r"
+questionnaire:
+  BEGIN:
+    _: END
+  END: {}
+";
+        let failure = parse(frontmatter)
+            .expect_err("a declared questionnaire resolves to steps or fails loudly");
+        assert!(failure.message.contains("no steps resolve"), "{failure:?}");
+    }
+
+    #[test]
+    fn a_chain_that_walks_off_the_declared_states_is_a_failure() {
+        let frontmatter = r"
+questionnaire:
+  BEGIN:
+    _: person__client
+";
+        let failure = parse(frontmatter).expect_err("a dangling transition is a parse failure");
+        assert!(failure.message.contains("person__client"), "{failure:?}");
     }
 
     #[test]
     fn a_shorthand_list_uses_the_bank_prompt_and_a_role_label() {
-        let questions = parse("questionnaire:\n  - custom_usd__annual_fee\n");
+        let questions = parse("questionnaire:\n  - custom_usd__annual_fee\n")
+            .expect("the shorthand form parses");
         assert_eq!(questions.len(), 1);
         assert_eq!(questions[0].role_label, "Annual fee");
         assert_eq!(
@@ -381,7 +477,8 @@ questionnaire:
     fn a_heading_and_schedule_columns_reach_the_preview() {
         let questions = parse(
             "questionnaire:\n  - heading: Licenses\n    questions:\n      - state: schedule__licenses\n        prompt: List each license.\n        columns:\n          - name: product\n            label: Product\n            type: text\n          - name: seats\n            type: number\n",
-        );
+        )
+        .expect("the heading-and-columns form parses");
         assert_eq!(questions.len(), 1);
         assert_eq!(questions[0].group, "Licenses");
         assert_eq!(questions[0].prompt, "List each license.");
@@ -395,8 +492,10 @@ questionnaire:
         assert!(questions[0].is_interactive());
     }
 
+    /// A cycle stops the walk — it never loops — and reports the failure
+    /// instead of handing back a silently truncated demo.
     #[test]
-    fn a_cyclic_chain_stops_instead_of_looping_forever() {
+    fn a_cyclic_chain_stops_instead_of_looping_and_reports_the_failure() {
         let frontmatter = r"
 questionnaire:
   BEGIN:
@@ -406,11 +505,7 @@ questionnaire:
   b:
     _: a
 ";
-        let questions = parse(frontmatter);
-        assert_eq!(
-            questions.len(),
-            2,
-            "stops once a state repeats: {questions:?}"
-        );
+        let failure = parse(frontmatter).expect_err("a cycle is a parse failure");
+        assert!(failure.message.contains("cycle"), "{failure:?}");
     }
 }

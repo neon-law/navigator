@@ -221,6 +221,22 @@ pub enum Section {
     RequirementTracker,
     /// The revisions of each living document.
     RedlineView,
+    /// The matter's activity, one dated entry per day, newest first
+    /// (LAW-235). The day-log page's spine.
+    ActivityLog,
+    /// The pitch headline: the claim, in one line a client can read
+    /// (LAW-223).
+    PitchHeadline,
+    /// One card per claim: what it says, and where it stands.
+    ClaimCards,
+    /// What pursuing the claims costs, on the reader's lens.
+    FeeSummary,
+    /// The clocks the matter runs against: each deadline, and how close.
+    RuleClocks,
+    /// The path chosen for the matter: what route, and why.
+    PathChooser,
+    /// What the client must satisfy for the chosen path to stand.
+    EligibilityChecklist,
 }
 
 /// The sections every kind carries, whatever else it carries.
@@ -278,6 +294,13 @@ impl Section {
         Section::TermComparison,
         Section::RequirementTracker,
         Section::RedlineView,
+        Section::ActivityLog,
+        Section::PitchHeadline,
+        Section::ClaimCards,
+        Section::FeeSummary,
+        Section::RuleClocks,
+        Section::PathChooser,
+        Section::EligibilityChecklist,
     ];
 
     /// The name this section is authored as.
@@ -333,6 +356,13 @@ impl Section {
             Section::TermComparison => "term_comparison",
             Section::RequirementTracker => "requirement_tracker",
             Section::RedlineView => "redline_view",
+            Section::ActivityLog => "activity_log",
+            Section::PitchHeadline => "pitch_headline",
+            Section::ClaimCards => "claim_cards",
+            Section::FeeSummary => "fee_summary",
+            Section::RuleClocks => "rule_clocks",
+            Section::PathChooser => "path_chooser",
+            Section::EligibilityChecklist => "eligibility_checklist",
         }
     }
 
@@ -407,6 +437,13 @@ impl Section {
             Section::TermComparison => "The proposal beside the client's position, by clause",
             Section::RequirementTracker => "Each required filing and whether it was made",
             Section::RedlineView => "The revisions of each living document",
+            Section::ActivityLog => "The matter's activity, one dated entry per day",
+            Section::PitchHeadline => "The claim, in one line a client can read",
+            Section::ClaimCards => "One card per claim: what it says, and where it stands",
+            Section::FeeSummary => "What pursuing the claims costs",
+            Section::RuleClocks => "Each clock the matter runs against, and how close",
+            Section::PathChooser => "The path chosen for the matter, and why",
+            Section::EligibilityChecklist => "What the client must satisfy for the path to stand",
         }
     }
 
@@ -622,6 +659,34 @@ pub fn skeleton(kind: Kind) -> Option<Skeleton> {
             ],
             lawyer_only: &[],
         },
+        // The matter as it happened: one dated entry per day, newest
+        // first. Reading, not working — the records speak for themselves.
+        Kind::DayLog => Skeleton {
+            family: Family::Dashboard,
+            required: &[S::ActivityLog],
+            optional: &[S::KeyDatesStrip],
+            lawyer_only: &[],
+        },
+        // The pitch a lawyer makes to take the matter on: the claim in
+        // one line, one card per claim, and what it costs. All of it
+        // reads on the client lens — a pitch hides nothing from the
+        // person being pitched.
+        Kind::LitigationPitch => Skeleton {
+            family: Family::Dashboard,
+            required: &[S::PitchHeadline, S::ClaimCards, S::FeeSummary],
+            optional: &[S::KeyDatesStrip, S::DownloadList],
+            lawyer_only: &[],
+        },
+        // The lawyer's working plan for a matter: the clocks the matter
+        // runs against, the path chosen for it, and what the client must
+        // satisfy for that path to stand. A plan the lawyer works from
+        // and the client can read.
+        Kind::PracticeGuide => Skeleton {
+            family: Family::Dashboard,
+            required: &[S::RuleClocks, S::PathChooser, S::EligibilityChecklist],
+            optional: &[S::KeyDatesStrip, S::DownloadList],
+            lawyer_only: &[],
+        },
         Kind::Letter
         | Kind::Filing
         | Kind::Will
@@ -725,7 +790,7 @@ mod tests {
                 kind.as_str(),
             );
         }
-        assert_eq!(dashboard_kinds().len(), 12, "the catalog is twelve kinds");
+        assert_eq!(dashboard_kinds().len(), 15, "the catalog is fifteen kinds");
     }
 
     #[test]
@@ -966,6 +1031,84 @@ mod tests {
             assert!(room.catalog().contains(&section), "{}", section.as_str());
             assert!(room.permits(Lens::Client, section), "{}", section.as_str());
         }
+    }
+
+    #[test]
+    fn the_day_log_reads_one_dated_entry_per_day() {
+        let log = skeleton(Kind::DayLog).unwrap();
+        assert_eq!(log.required, [Section::ActivityLog]);
+        assert_eq!(log.family, Family::Dashboard);
+        // Reading, not working: nothing on the day log is firm-only, and
+        // the key dates strip rides along for orientation.
+        assert!(log.lawyer_only.is_empty());
+        for section in [Section::ActivityLog, Section::KeyDatesStrip] {
+            assert!(log.permits(Lens::Client, section), "{}", section.as_str());
+        }
+        assert_eq!(Section::parse("activity_log"), Some(Section::ActivityLog));
+    }
+
+    #[test]
+    fn the_litigation_pitch_hides_nothing_from_the_client_lens() {
+        let pitch = skeleton(Kind::LitigationPitch).unwrap();
+        assert_eq!(
+            pitch.required,
+            [
+                Section::PitchHeadline,
+                Section::ClaimCards,
+                Section::FeeSummary
+            ]
+        );
+        assert_eq!(pitch.family, Family::Dashboard);
+        // A pitch hides nothing from the person being pitched: no
+        // firm-only sections anywhere on it.
+        assert!(pitch.lawyer_only.is_empty());
+        for section in [
+            Section::PitchHeadline,
+            Section::ClaimCards,
+            Section::FeeSummary,
+            Section::KeyDatesStrip,
+            Section::DownloadList,
+        ] {
+            assert!(pitch.permits(Lens::Client, section), "{}", section.as_str());
+        }
+        assert_eq!(
+            Section::parse("pitch_headline"),
+            Some(Section::PitchHeadline)
+        );
+        assert_eq!(Section::parse("claim_cards"), Some(Section::ClaimCards));
+        assert_eq!(Section::parse("fee_summary"), Some(Section::FeeSummary));
+    }
+
+    #[test]
+    fn the_practice_guide_is_a_lawyer_working_plan() {
+        let guide = skeleton(Kind::PracticeGuide).unwrap();
+        assert_eq!(
+            guide.required,
+            [
+                Section::RuleClocks,
+                Section::PathChooser,
+                Section::EligibilityChecklist
+            ]
+        );
+        assert_eq!(guide.family, Family::Dashboard);
+        // A working plan is read by the person it plans for: nothing
+        // on the page is firm-only.
+        assert!(guide.lawyer_only.is_empty());
+        for section in [
+            Section::RuleClocks,
+            Section::PathChooser,
+            Section::EligibilityChecklist,
+            Section::KeyDatesStrip,
+            Section::DownloadList,
+        ] {
+            assert!(guide.permits(Lens::Client, section), "{}", section.as_str());
+        }
+        assert_eq!(Section::parse("rule_clocks"), Some(Section::RuleClocks));
+        assert_eq!(Section::parse("path_chooser"), Some(Section::PathChooser));
+        assert_eq!(
+            Section::parse("eligibility_checklist"),
+            Some(Section::EligibilityChecklist)
+        );
     }
 
     #[test]
