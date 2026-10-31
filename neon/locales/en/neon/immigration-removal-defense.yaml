@@ -1,9 +1,9 @@
 head_title: "{site_name} | Removal defense"
 meta_description: >-
   Abhaya Immigration, a Shook Law PC practice, defends people in immigration
-  court: responding to a Notice to Appear, hearings, bond, and relief from
-  removal. Deadlines in immigration court are short; government filing fees
-  are separate, and no outcome is promised.
+  court: responding to a Notice to Appear, hearings, bond and detention, and
+  relief from removal. Deadlines in immigration court are short; government
+  filing fees are separate, and no outcome is promised.
 title: Removal defense
 tagline: If you have a court date, the calendar is the first thing to know.
 skin: practice
@@ -13,19 +13,36 @@ bands:
     lead: A Notice to Appear starts a court case. It has deadlines.
     body:
       - - text: >-
-            A Notice to Appear is the document that starts a case in
-            immigration court, before the Executive Office for Immigration
-            Review. It names the charges the government says apply and the
-            date and place of your first hearing. Missing a
-            hearing can mean a removal order entered in your absence, so
-            the hearing date is the first thing to find and keep.
+            A Notice to Appear is the document that starts a case in immigration
+            court, before the Executive Office for Immigration Review. It names
+            the charges the government says apply, the sections of law it says
+            you violated, and, separately from the charges, the date and place
+            of your first hearing. Missing a hearing can mean a removal order
+            entered in your absence, so the hearing date is the first thing to
+            find and keep.
       - - text: >-
             There are real ways to fight a case: relief such as asylum or
-            cancellation of removal, bond arguments for people in custody,
-            and challenges to the charges themselves. None of it works from
-            silence — filings carry deadlines the court sets, and they are
-            shorter than most people
-            expect.
+            cancellation of removal, bond arguments for people in custody, and
+            challenges to the charges themselves. None of it works from
+            silence. Filings carry deadlines the court sets, and they are
+            shorter than most people expect; some rights, such as asking to
+            reopen an old case, run on years, not weeks.
+  - kind: statement
+    heading: Who this page is for
+    lead: Anyone the immigration court has summoned, and their families.
+    body:
+      - - text: >-
+            Most people we speak to have just been handed a Notice to Appear,
+            at an interview, at a checkpoint, or after a detention. Some are in
+            immigration custody right now. Some received the notice for a
+            hearing years ago, moved, and missed what happened next. Some came
+            to the United States as children and are facing their first court
+            case with no lawyer and no file of their own.
+      - - text: >-
+            All of them have the same first needs: to know when and where they
+            must appear, what the government says about them, and what the law
+            still allows in their case. None of those answers comes from fear,
+            and none of them should wait.
   - kind: steps
     anchor: removal-process
     overline: What to do now
@@ -37,47 +54,122 @@ bands:
       - title: Find the hearing date
         body:
           - - text: >-
-                The notice names the first hearing, and the court's
-                automated line and online case portal confirm it. Call and
-                check; notices can change.
+                The notice names the first hearing, and the court's automated
+                line and online case portal confirm it. Call and check; hearing
+                dates change, and the court's records, not the paper, decide
+                when you must appear. Write the date down where the whole
+                household can see it.
       - title: Answer the charges in writing when required
         body:
           - - text: >-
-                The court usually sets a deadline for responding to the
-                Notice to Appear. A response admits or denies the charges
-                and states the relief you will seek. We cannot promise an
-                outcome; the judge decides.
+                The court usually sets a deadline for responding to the Notice
+                to Appear. A response admits or denies the charges and states
+                the relief you will seek. Skipping it does not slow the case
+                down; it leaves the government's story unchallenged. We cannot
+                promise an outcome; the judge decides.
       - title: Ask about bond if you are in custody
         body:
           - - text: >-
-                For people detained, a bond hearing before an immigration
-                judge can change the terms of custody while the case
-                proceeds.
+                For people detained, a bond hearing before an immigration judge
+                can change the terms of custody while the case proceeds. Bond
+                arguments rest on ties to the community, family, and any
+                history in front of the court, and they are argued early
+                because the months of a case pass either way.
+      - title: Keep your address current
+        body:
+          - - text: >-
+                The court mails everything to the address it has. You must
+                report a change of address to the court in writing, on its
+                form, within days of moving. An order mailed to an old address
+                is still an order served, and it can be a removal order.
       - title: Pursue relief with evidence
         body:
           - - text: >-
-                Relief from removal — asylum, cancellation, adjustment
-                where the law allows it — is applied for, evidenced, and
-                argued in the same case. The earlier the record starts, the
-                more complete it can be.
+                Relief from removal, including asylum, cancellation of removal,
+                and adjustment where the law allows it, is applied for,
+                evidenced, and argued in the same case. The earlier the record
+                starts, the more complete it can be by the hearing.
+  - kind: statement
+    heading: What the court can order, and what relief exists
+    lead: The judge decides; the record is what you control.
+    body:
+      - - text: >-
+            If the government proves its charges and no relief applies, the
+            judge orders removal. If a form of relief applies, the same
+            proceeding can end in status: asylum decided by the judge,
+            cancellation of removal after the years-of-presence and hardship
+            showings the statute sets, adjustment of status where a green-card
+            basis already exists, and protection under the Convention Against
+            Torture where return would mean torture. Each has its own
+            eligibility rules, filing deadlines, and evidence.
+      - - text: >-
+            Old orders have their own paths: a case decided without someone
+            present can sometimes be reopened, and some cases can be
+            transferred or reopened on other grounds, on strict timelines and
+            with limits the law sets. Whether any of these doors is open is a
+            question for the documents, not a guess.
+  - kind: statement
+    heading: What to gather
+    lead: Bring the notice and everything that came with it.
+    body:
+      - - text: >-
+            The Notice to Appear itself, every other court notice, and any
+            prior filings or orders, even from a case that ended years ago,
+            come first. They carry the charges, the court records, and the
+            dates every deadline runs from.
+      - - text: >-
+            After that, the categories a defense usually needs: identity and
+            civil records, the immigration history, including entries and any
+            prior cases, proof of ties to the community, such as family,
+            work, and time in the United States, and, where relief requires
+            it, evidence of hardship or of fear of return. Records of any
+            criminal case matter, and they matter sooner rather than later,
+            because they shape what relief the law still allows.
+  - kind: statement
+    heading: Common questions
+    lead: Asked in the first days after a notice arrives.
+    body:
+      - - text: >-
+            What happens if I miss a hearing? The judge can order removal in
+            your absence. A missed hearing is not always the end, because
+            some in-absentia orders can be challenged on limited grounds, but
+            the certain path is to appear, or to have counsel appear and
+            explain anything that made an appearance impossible.
+      - - text: >-
+            Can I get a court date changed? A request to reschedule exists,
+            and it must be made on time and for good cause. Requests made
+            after a missed hearing are a different, harder thing.
+      - - text: >-
+            I already have an old removal order. Is anything left? Some old
+            orders can be reopened, and some people can ask to have the case
+            heard again, under strict deadlines and with limits the law sets.
+            The order itself, and the file behind it, decide.
+      - - text: >-
+            Am I entitled to a free lawyer? In immigration court the
+            government does not pay for a lawyer the way criminal court does.
+            Some courts have programs that offer counsel to people in
+            detention, and nonprofit referrals exist. Knowing the date and
+            asking early is what makes any of them possible.
   - kind: statement
     heading: Costs and honesty about outcomes
     lead: Fees and outcomes, stated plainly.
     body:
       - - text: >-
-            Filing fees for court applications, where they apply, are
-            separate from any attorney fee. The current amounts are
-            published by the court and the agencies, and they change.
+            Filing fees for court applications, where they apply, are separate
+            from any attorney fee. The current amounts are published by the
+            court and the agencies, and they change; the firm's own fees are
+            published in the fee catalog at abhayaimmigration.com.
       - - text: >-
-            We cannot promise that a case ends in relief; the judge decides.
-            We can promise deadlines are tracked, filings are prepared
-            carefully, and the hard truths about a case are said out loud.
+            We cannot promise that a case ends in relief; the judge decides. We
+            can promise deadlines are tracked, filings are prepared carefully,
+            and the hard truths about a case are said out loud, early enough to
+            matter.
   - kind: cta
     heading: Bring the Notice to Appear
     body: >-
       A first conversation covers the hearing date, the charges, and what
-      relief the law allows in your case. Abhaya Immigration, a Shook Law
-      PC practice, defends people in immigration court.
+      relief the law allows in your case. Abhaya Immigration, a Shook Law PC
+      practice, defends people in immigration court.
     email: "{firm_email}"
     action:
       href: "https://www.abhayaimmigration.com/"
