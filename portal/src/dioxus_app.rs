@@ -3515,6 +3515,7 @@ fn court_level_label(level: store::courts::CourtLevel) -> &'static str {
         Level::Municipal => "Municipal Court",
         Level::Surrogate => "Surrogate's Court",
         Level::City => "City Court",
+        Level::Family => "Family Court",
     }
 }
 
