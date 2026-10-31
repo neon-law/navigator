@@ -1,0 +1,279 @@
+form_code = "kc__small_claims_plaintiff_packet"
+
+# King County District Court — Small Claims Plaintiff's Packet (KCDC July
+# 2026, 14 pages): a whole-case kit wrapping the Notice of Small Claim
+# (pages 3–5) plus a Notice of Pre-Trial Hearing (page 2), service
+# instructions (pages 6–7), a Declaration of Service (MISC 05.0200, pages
+# 9–10), a Declaration re Service Member's Civil Relief Act (WPF All Cases
+# 01.0200, pages 11–12), and a Satisfaction of Judgment (page 13).
+#
+# Only the fields the client's answers complete before filing are mapped —
+# the notice copy's caption and contact rows, its claim-amount boxes, and
+# its claim-type checkboxes. The kit re-uses one AcroForm field across
+# instruments wherever the author was careless, which forbids four of the
+# standalone notice's mappings here:
+#
+# - `Date` is ONE field spanning the pre-trial hearing notice (page 2) and
+#   the notice copy — filling the due date would also paint the court's
+#   hearing notice. Unmapped; the lawyer writes the due date at review.
+# - `Text1` spans four instruments (hearing notice, notice copy, service
+#   declaration, SCRA declaration) — the claim-facts paragraph would paint
+#   into the SCRA and service declarations. Unmapped; the claim-facts
+#   answer still drives the standalone kc__small_claims_notice template,
+#   and the paragraph is written on the packet copy at review.
+# - `Other` and `Auto DamagesDate of Accident` ship as /Btn widgets in this
+#   kit (the standalone's explanation text box and accident-date box were
+#   re-created as buttons) — unfillable as text. Unmapped; the Other type's
+#   explanation and the accident date are written at review.
+#
+# Deliberately left unmapped (decision recorded, who completes it and when):
+# - Page 2, the Notice of Pre-Trial Hearing — the clerk issues it when the
+#   hearing is set: `No` (case number), `Plaintiff` / `Defendants`
+#   (court-issued caption), `Case Number`, `petdivCaps` (division),
+#   `txtDivAddy` (courthouse address), `Courtroom`, `Time`, `Courthouse`,
+#   `DATED`, and the nameless date/time widgets.
+# - Pages 6–7, the service-method worksheet — how service happens is
+#   advised at review and executed by the process server.
+# - Pages 9–10, the Declaration of Service — the process server completes
+#   it after serving each defendant: server identity, the three
+#   service-method checkbox groups (`PERSONAL SERVICE` /
+#   `SUBSTITUTE SERVICE` / `SERVICE BY MAIL Attach to this form both the
+#   postal receipt and the return receipt signed`), `Address Where Served`,
+#   `Date of Service`, `Address of Server`, `Servers Phone No`,
+#   `Addressed to Name of Defendant`, `Date Mailed`, `Address of Post
+#   Office`, the document checkboxes (`Notice of Small Claims`,
+#   `Notice to Servicemembers and their Dependents`, `Notice of Small Claim
+#   Pretrial Conference`), the business-entity checkbox (`Defendant is a
+#   LLC corporation or other business entity`), and the server's
+#   penalty-of-perjury block.
+# - Pages 11–12, the SCRA declaration — a legal conclusion for the lawyer
+#   at review, like the notice's own SCRA statement: the declarant and
+#   subject lines (`Declare that`, `is not a service member or a`,
+#   `is a service member covered by`, `is a dependent of name`, `Name`,
+#   `Name_2`, `Name_3`), the service-branch and status checkboxes
+#   (`US Armed Forces Army`, `National Guard or Reserves`,
+#   `commissioned corps of`, `Stationed in or`, `In military service meaning
+#   active duty or a call`, `Is within 90 days after termination of or
+#   release`, `Is within 180 days after termination of or release`,
+#   `Not on active duty or a call to active service for`), the page-12
+#   basis-of-knowledge and status pairs (the DMDC-report,
+#   military-dependent-notice, personal-knowledge, and Other boxes; the
+#   served/mailed pair; the counsel and suspension pairs;
+#   `I dont know whether name`, `is a service member`), `cmbdivision1`,
+#   `Text3` / `Text4`, and the signed-at block (`Signed at city`, `state`,
+#   `on date`, `Print Name`).
+# - Page 13, the Satisfaction of Judgment — post-judgment: the judgment
+#   debtor/creditor/date/amount boxes (`Debtor`, `Creditor`, `JudgmentDate`,
+#   `JudgmentDated`, `Amt`), `DATED2`, `Location`, `Sig`, `Plaintiffs`,
+#   the `Title` / `Org` / `Person` / `Individual` attester block,
+#   `Check Box13` / `Check Box14`, and the signature widgets whose field
+#   NAMES carry the form author's name (`Samantha De Abreu` et al.) — the
+#   official blank was built from a filled sample; the field values are
+#   empty and the names are inert.
+# - The interpreter question on the notice copy (`Check Box1` / `Check
+#   Box2` and `Name 1` / `Name 2` / `Language 1` / `Language 2`) — hearing
+#   accommodations are confirmed with the client at review.
+# - `Rent` and `Property Damage` — two more of the nine claim-type
+#   checkboxes; in this kit they are the only kid-ful checkbox fields
+#   (each wraps its single page-4 widget in a named parent with a Kids
+#   array), and the re-author transform's radio merge only absorbs
+#   kid-less checkboxes, so their rules cannot be expressed here. The
+#   questionnaire still asks both answers; the lawyer checks the boxes at
+#   review. Extending the merge to kid-ful single-widget members is the
+#   crate follow-up this template surfaces.
+# - The notice copy's SCRA checkboxes (`Check Box10` / `Check Box11` /
+#   `Check Box12`) and their two narrative boxes (`No defendant is covered
+#   by the Servicemember Civil Relief Act The facts supporting this claim
+#   are`, `I do not know if any defendants are covered by the Servicemember
+#   Civil Relief Act`) — the same lawyer SCRA decision as the standalone
+#   notice.
+# - `Clerk` — the clerk's action line; `Date_2` / `City_5` / `State on` /
+#   `Print or Type Name` — the signed-at block, signed at the review
+#   appointment.
+# The nine claim-type checkboxes are independent yes/no answers (the types
+# combine), not one radio group: `custom_multiple_choice` needs the
+# checkbox-group fill shape tracked under ENG-454, so the questionnaire asks
+# them as adjacent toggles instead of one multi-select question. Keep this
+# map in lockstep with kc__small_claims_notice.fields.toml.
+
+[[field]]
+name = "1"
+question = "people__plaintiffs"
+row = 0
+part = "name"
+
+[[field]]
+name = "1 Address"
+question = "people__plaintiffs"
+row = 0
+part = "street"
+
+[[field]]
+name = "City"
+question = "people__plaintiffs"
+row = 0
+part = "city"
+
+[[field]]
+name = "State"
+question = "people__plaintiffs"
+row = 0
+part = "state"
+
+[[field]]
+name = "Zip"
+question = "people__plaintiffs"
+row = 0
+part = "zip"
+
+[[field]]
+name = "Phone No"
+question = "person__client.phone"
+
+[[field]]
+name = "Email or Alt Phone"
+question = "person__client.email"
+
+[[field]]
+name = "2"
+question = "people__plaintiffs"
+row = 1
+part = "name"
+
+[[field]]
+name = "2 Address"
+question = "people__plaintiffs"
+row = 1
+part = "street"
+
+[[field]]
+name = "City_2"
+question = "people__plaintiffs"
+row = 1
+part = "city"
+
+[[field]]
+name = "State_2"
+question = "people__plaintiffs"
+row = 1
+part = "state"
+
+[[field]]
+name = "Zip_2"
+question = "people__plaintiffs"
+row = 1
+part = "zip"
+
+[[field]]
+name = "1_2"
+question = "people__defendants"
+row = 0
+part = "name"
+
+[[field]]
+name = "1 Address_2"
+question = "people__defendants"
+row = 0
+part = "street"
+
+[[field]]
+name = "City_3"
+question = "people__defendants"
+row = 0
+part = "city"
+
+[[field]]
+name = "State_3"
+question = "people__defendants"
+row = 0
+part = "state"
+
+[[field]]
+name = "Zip_3"
+question = "people__defendants"
+row = 0
+part = "zip"
+
+[[field]]
+name = "2_2"
+question = "people__defendants"
+row = 1
+part = "name"
+
+[[field]]
+name = "2 Address_2"
+question = "people__defendants"
+row = 1
+part = "street"
+
+[[field]]
+name = "City_4"
+question = "people__defendants"
+row = 1
+part = "city"
+
+[[field]]
+name = "State_4"
+question = "people__defendants"
+row = 1
+part = "state"
+
+[[field]]
+name = "Zip_4"
+question = "people__defendants"
+row = 1
+part = "zip"
+
+[[field]]
+name = "THE COURT WILL MAIL YOUR HEARING DATE TO THE ADDRESS YOU PROVIDE"
+question = "custom_usd__claim_amount"
+
+[[field]]
+name = "owes me the sum of"
+question = "person__client.name"
+
+[[field]]
+name = "The amount owed is for"
+question = "custom_usd__claim_amount"
+
+[[field]]
+name = "Check Box3"
+question = "custom_yes_no__claim_faulty_workmanship"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box6"
+question = "custom_yes_no__claim_merchandise"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box8"
+question = "custom_yes_no__claim_auto_damages"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box4"
+question = "custom_yes_no__claim_wages"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box7"
+question = "custom_yes_no__claim_loan"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box9"
+question = "custom_yes_no__claim_return_of_deposit"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box5"
+question = "custom_yes_no__claim_other"
+checked_when = "yes"
+on_state = "Yes"

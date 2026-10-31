@@ -410,6 +410,18 @@ const BUNDLED: &[FormMeta] = &[
         }),
         fee_waiver_code: None,
     },
+    FormMeta {
+        code: "kc__small_claims_plaintiff_packet",
+        jurisdiction: "WA",
+        title: "Small Claims Packet — Plaintiff",
+        origin_url: "https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/info_instruct_small_claims/small_claims_plaintiff_packet-july-2026.pdf",
+        object_path: "forms/united_states/washington/king_county/kc__small_claims_plaintiff_packet.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/washington/king_county/kc__small_claims_plaintiff_packet.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
 ];
 
 /// Return the bundled form registry.

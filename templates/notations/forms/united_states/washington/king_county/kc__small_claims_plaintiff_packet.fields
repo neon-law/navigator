@@ -1,0 +1,150 @@
+custom_usd__claim_amount
+custom_yes_no__claim_auto_damages
+custom_yes_no__claim_faulty_workmanship
+custom_yes_no__claim_loan
+custom_yes_no__claim_merchandise
+custom_yes_no__claim_other
+custom_yes_no__claim_return_of_deposit
+custom_yes_no__claim_wages
+people__defendants.0.city
+people__defendants.0.name
+people__defendants.0.state
+people__defendants.0.street
+people__defendants.0.zip
+people__defendants.1.city
+people__defendants.1.name
+people__defendants.1.state
+people__defendants.1.street
+people__defendants.1.zip
+people__plaintiffs.0.city
+people__plaintiffs.0.name
+people__plaintiffs.0.state
+people__plaintiffs.0.street
+people__plaintiffs.0.zip
+people__plaintiffs.1.city
+people__plaintiffs.1.name
+people__plaintiffs.1.state
+people__plaintiffs.1.street
+people__plaintiffs.1.zip
+person__client.email
+person__client.name
+person__client.phone
+unmapped__Address Where Served
+unmapped__Address of Post Office
+unmapped__Address of Server
+unmapped__Addressed to Name of Defendant
+unmapped__Amt
+unmapped__Auto DamagesDate of Accident
+unmapped__Case Number
+unmapped__Check Box1
+unmapped__Check Box10
+unmapped__Check Box11
+unmapped__Check Box12
+unmapped__Check Box13
+unmapped__Check Box14
+unmapped__Check Box2
+unmapped__City_5
+unmapped__Clerk
+unmapped__Courthouse
+unmapped__Courtroom
+unmapped__Creditor
+unmapped__DATED
+unmapped__DATED2
+unmapped__DECLARATION OF SERVICE
+unmapped__Date
+unmapped__Date Mailed
+unmapped__Date of Service
+unmapped__Date of Service_2
+unmapped__Date_2
+unmapped__Debtor
+unmapped__Declare that
+unmapped__Defendant is a LLC corporation or other business entity
+unmapped__Defendants
+unmapped__Email or Alt Phone_2
+unmapped__Email or Alt Phone_3
+unmapped__Email or Alt Phone_4
+unmapped__I declare under penalty of perjury that the foregoing is true and correct and that I was at the
+unmapped__I do not know if any defendants are covered by the Servicemember Civil Relief Act
+unmapped__I dont know whether name
+unmapped__I have personal knowledge of hisher military or dependent status explain
+unmapped__I sent himher a Notice re Military Dependent form All Cases 010230 to inform
+unmapped__I served the Notice by depositing in the United States Post Office in
+unmapped__I served the above by personally delivering a true copy to the defendant in
+unmapped__Image10_af_image
+unmapped__In military service meaning active duty or a call
+unmapped__Individual
+unmapped__Is within 180 days after termination of or release
+unmapped__Is within 90 days after termination of or release
+unmapped__JudgmentDate
+unmapped__JudgmentDated
+unmapped__Language 1
+unmapped__Language 2
+unmapped__Location
+unmapped__Name
+unmapped__Name 1
+unmapped__Name 2
+unmapped__Name_2
+unmapped__Name_3
+unmapped__National Guard or Reserves
+unmapped__No
+unmapped__No defendant is covered by the Servicemember Civil Relief Act The facts supporting this claim are
+unmapped__None
+unmapped__Not on active duty or a call to active service for
+unmapped__Notice of Small Claim Pretrial Conference
+unmapped__Notice of Small Claims
+unmapped__Notice to Servicemembers and their Dependents
+unmapped__Org
+unmapped__Other
+unmapped__Other explain
+unmapped__PERSONAL SERVICE
+unmapped__Person
+unmapped__Phone No_2
+unmapped__Phone No_3
+unmapped__Plaintiff
+unmapped__Plaintiffs
+unmapped__Print Name
+unmapped__Print or Type Name
+unmapped__Property Damage
+unmapped__Rent
+unmapped__SERVICE BY MAIL Attach to this form both the postal receipt and the return receipt signed
+unmapped__SUBSTITUTE SERVICE
+unmapped__Servers Phone No
+unmapped__She is a service member or a dependent covered by the state andor federal Service
+unmapped__Sig
+unmapped__Signed at city
+unmapped__State on
+unmapped__Stationed in or
+unmapped__Text1
+unmapped__Text2
+unmapped__Text3
+unmapped__Text4
+unmapped__Text5
+unmapped__Text6
+unmapped__Text7
+unmapped__The attached report from the Defense Manpower Data Center DMDC shows hisher
+unmapped__Time
+unmapped__Title
+unmapped__US Armed Forces Army
+unmapped__above in
+unmapped__cmbdivision
+unmapped__cmbdivision1
+unmapped__commissioned corps of
+unmapped__defendant or a witness and I served the following documents
+unmapped__has a lawyer appointed by the court
+unmapped__has hisher own lawyer
+unmapped__has not suspended or delayed this case
+unmapped__has suspended or delayed this case
+unmapped__is a dependent of name
+unmapped__is a service member
+unmapped__is a service member covered by
+unmapped__is not a service member or a
+unmapped__mailed by first class mail on date
+unmapped__o
+unmapped__on date
+unmapped__personally served on date
+unmapped__petdiv
+unmapped__petdivCaps
+unmapped__state
+unmapped__txtDivAddy
+unmapped__undefined
+unmapped__undefined_2
