@@ -150,6 +150,9 @@ enum Operation {
     ReadProfile,
     CreateDraft,
     UpdateDraft,
+    /// `POST users/me/messages/{id}/modify` — the label write behind
+    /// `inbox process --apply`'s archive. Never trash, never send.
+    ModifyMessage,
 }
 
 fn endpoint(
@@ -167,6 +170,25 @@ fn endpoint(
         Operation::ReadProfile => ("GET", vec!["users", "me", "profile"], None),
         Operation::CreateDraft => ("POST", vec!["users", "me", "drafts"], None),
         Operation::UpdateDraft => ("PUT", vec!["users", "me", "drafts"], id.map(str::to_owned)),
+        Operation::ModifyMessage => (
+            "POST",
+            vec!["users", "me", "messages"],
+            id.map(str::to_owned),
+        ),
+    }
+}
+
+/// A path segment that rides after the message id — `modify` — for the
+/// label-write endpoint whose id is never the last segment.
+fn endpoint_suffix(operation: Operation) -> Option<&'static str> {
+    match operation {
+        Operation::ModifyMessage => Some("modify"),
+        Operation::SearchThreads
+        | Operation::ReadThread
+        | Operation::ReadMessage
+        | Operation::ReadProfile
+        | Operation::CreateDraft
+        | Operation::UpdateDraft => None,
     }
 }
 
@@ -207,6 +229,9 @@ impl GmailClient {
             }
             if let Some(item_id) = item_id {
                 path.push(&item_id);
+            }
+            if let Some(suffix) = endpoint_suffix(operation) {
+                path.push(suffix);
             }
         }
         Ok(url)
@@ -291,6 +316,20 @@ impl GmailClient {
             }
         });
         self.call(operation, id, &[], Some(body)).await
+    }
+
+    /// Remove the INBOX label from one message — the archive. Never a
+    /// trash delete: the copy stays readable and searchable.
+    async fn archive_message(&self, id: &str) -> Result<()> {
+        let _: ArchivedMessage = self
+            .call(
+                Operation::ModifyMessage,
+                Some(id),
+                &[],
+                Some(json!({ "removeLabelIds": [INBOX_LABEL] })),
+            )
+            .await?;
+        Ok(())
     }
 }
 
@@ -1269,6 +1308,24 @@ pub async fn run(action: MailAction) -> ExitCode {
     finish(run_inner(action).await)
 }
 
+/// The label `inbox process --apply` removes to archive a Gmail copy.
+const INBOX_LABEL: &str = "INBOX";
+
+/// Gmail's modify response is the whole message resource; the archive only
+/// needs the status, so nothing is read out of it.
+#[derive(Debug, Deserialize)]
+struct ArchivedMessage {}
+
+/// Archive one Gmail message — a web URL or message id — by removing its
+/// INBOX label. Never a trash delete, and never a send. This is the only
+/// Gmail write `inbox process` performs.
+pub async fn archive(reference: &str) -> Result<()> {
+    let id = gmail_message_id(reference)
+        .ok_or_else(|| anyhow!("cannot resolve a Gmail message id from the reference"))?;
+    let client = client().await?;
+    client.archive_message(&id).await
+}
+
 async fn run_inner(action: MailAction) -> Result<()> {
     match action {
         MailAction::Search { query } => {
@@ -1902,7 +1959,7 @@ mod tests {
     }
 
     #[test]
-    fn gmail_endpoints_expose_reads_and_draft_writes_only() {
+    fn gmail_endpoints_expose_reads_draft_writes_and_archive_only() {
         assert_eq!(endpoint(Operation::SearchThreads, None).0, "GET");
         assert_eq!(endpoint(Operation::ReadThread, Some("thread-id")).0, "GET");
         assert_eq!(
@@ -1912,6 +1969,13 @@ mod tests {
         assert_eq!(endpoint(Operation::ReadProfile, None).0, "GET");
         assert_eq!(endpoint(Operation::CreateDraft, None).0, "POST");
         assert_eq!(endpoint(Operation::UpdateDraft, Some("draft-id")).0, "PUT");
+        // The archive is a label write — POST modify — never a delete or a
+        // send.
+        assert_eq!(
+            endpoint(Operation::ModifyMessage, Some("message-id")).0,
+            "POST"
+        );
+        assert_eq!(endpoint_suffix(Operation::ModifyMessage), Some("modify"));
     }
 
     #[test]
@@ -2265,6 +2329,38 @@ mod tests {
                     .and_then(|value| value.to_str().ok())
                     == Some("Bearer test-token")
         }));
+    }
+
+    /// The archive removes the INBOX label and nothing else — never a
+    /// trash delete, never a send, and no other label mutation.
+    #[tokio::test]
+    async fn the_archive_removes_only_the_inbox_label() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/users/me/messages/18fa3bc2d4e5f6a7/modify"))
+            .and(body_partial_json(json!({ "removeLabelIds": ["INBOX"] })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+
+        let client =
+            GmailClient::with_base_url("test-token".into(), Url::parse(&server.uri()).unwrap());
+        client.archive_message("18fa3bc2d4e5f6a7").await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request.method.as_str(), "POST");
+        assert!(request.url.path().contains("/modify"));
+        assert!(!request.url.path().contains("trash"));
+        assert!(!request.url.path().contains("delete"));
+        let body: serde_json::Value = serde_json::from_slice(request.body.as_slice()).unwrap();
+        assert_eq!(body["removeLabelIds"], json!(["INBOX"]));
+        assert!(body.get("delete").is_none());
+        assert!(body.get("addLabelIds").is_none());
     }
 
     #[test]

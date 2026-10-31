@@ -63,6 +63,30 @@ pub mod purpose {
     pub const PROMOTIONAL: &str = "promotional";
 }
 
+/// The inbox-process route vocabulary: the strings a process run records on
+/// a message's `route` field, and the schema's ASSERT vocabulary. Portal
+/// classification (`portal::inbound_email`) maps its verdict onto these
+/// spellings; see `docs/glossary/inbox-process.md`.
+pub mod route {
+    /// A court-generated Notice of Electronic Filing.
+    pub const NEF: &str = "nef";
+    /// A bankruptcy claims-agent notice from a recognized noticing vendor.
+    pub const CLAIMS_AGENT: &str = "claims_agent";
+    /// Court mail that is not a noticing event, or a hearing invitation.
+    pub const CHAMBERS: &str = "chambers";
+    /// Anything the classification layer cannot name confidently.
+    pub const OTHER: &str = "other";
+
+    /// Every route spelling, in classification order.
+    pub const ALL: &[&str] = &[NEF, CLAIMS_AGENT, CHAMBERS, OTHER];
+
+    /// Whether `value` is a route the schema accepts on `message.route`.
+    #[must_use]
+    pub fn is_valid(value: &str) -> bool {
+        ALL.contains(&value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[allow(clippy::struct_excessive_bools)] // Independent flags: unread, matter consent, promotional opt-in, promotional opt-out.
 pub struct Conversation {
@@ -291,6 +315,8 @@ pub enum InboxError {
     OptedOut,
     #[error("{0}")]
     Contact(String),
+    #[error("unknown inbox route: {0}")]
+    InvalidRoute(String),
 }
 
 impl From<surrealdb::Error> for InboxError {
@@ -1476,6 +1502,262 @@ pub async fn list_intake(db: &SurrealDb, actor_id: Uuid) -> Result<Vec<IntakeRow
         });
     }
     Ok(rows)
+}
+
+/// One unprocessed Firm-inbox message in the process backlog. The body is
+/// included for the routing layer's classification; doors never return it
+/// to a client. The conversation's subject and addresses give the plan its
+/// context.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UnprocessedRow {
+    pub id: Uuid,
+    pub conversation_id: Uuid,
+    pub firm_id: Uuid,
+    pub project_id: Option<Uuid>,
+    pub channel: String,
+    pub provider_message_id: Option<String>,
+    pub external_address: String,
+    pub external_name: Option<String>,
+    pub subject: Option<String>,
+    pub body: String,
+    pub occurred_at: String,
+    pub inserted_at: DateTime<Utc>,
+}
+
+/// A message's recorded process state. `processed_at: None` means the
+/// message has never been processed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProcessState {
+    /// The recorded route spelling (`route::*`).
+    pub route: Option<String>,
+    /// When the process run recorded it.
+    pub processed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(SurrealValue)]
+struct UnprocessedMessageRow {
+    id: surrealdb::types::RecordId,
+    conversation_id: surrealdb::types::RecordId,
+    provider_message_id: Option<String>,
+    body: String,
+    occurred_at: String,
+    inserted_at: surrealdb::types::Datetime,
+}
+
+#[derive(SurrealValue)]
+struct ProcessStateRow {
+    route: Option<String>,
+    /// The writer stores an RFC 3339 string, matching the message table's
+    /// string-timestamp convention (`occurred_at`); parse on the way out.
+    processed_at: Option<String>,
+}
+
+/// Parse the stored `processed_at` back into a UTC instant. Anything the
+/// parser refuses is a corrupted field, reported — never invented around.
+fn parse_processed_at(stored: &str) -> Result<DateTime<Utc>, InboxError> {
+    DateTime::parse_from_rfc3339(stored)
+        .map(|parsed| parsed.with_timezone(&Utc))
+        .map_err(|error| InboxError::Db(format!("invalid processed_at {stored:?}: {error}")))
+}
+
+/// The Firm-inbox messages no process run has recorded yet, oldest first.
+/// The owner sees every firm's backlog; lawyers, clerks, and admins see
+/// their firms'; anyone else is denied. Each row carries the conversation
+/// context and the raw body the classification layer reads.
+///
+/// # Errors
+///
+/// A store failure or a denial for a client-tier actor.
+pub async fn unprocessed_inbox(
+    db: &SurrealDb,
+    actor_id: Uuid,
+) -> Result<Vec<UnprocessedRow>, InboxError> {
+    let actor = load_person(db, actor_id).await?;
+    let visible_firms = if actor.role == Role::Owner {
+        None
+    } else if matches!(actor.role, Role::Lawyer | Role::Clerk | Role::Admin) {
+        Some(
+            crate::firms::memberships_for_person(db, actor_id)
+                .await
+                .map_err(|error| InboxError::Db(error.to_string()))?
+                .into_iter()
+                .map(|membership| membership.firm_id)
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        return Err(InboxError::Denied);
+    };
+
+    let mut response = db
+        .query(format!(
+            "SELECT id, conversation_id, provider_message_id, body, occurred_at, inserted_at \
+             FROM {MESSAGE} WHERE direction = 'inbound' AND processed_at IS NONE \
+             ORDER BY inserted_at ASC"
+        ))
+        .await?
+        .check()?;
+    let rows: Vec<UnprocessedMessageRow> = response.take(0)?;
+
+    let mut unprocessed = Vec::new();
+    for row in rows {
+        let Some(message_id) = record_uuid(&row.id) else {
+            continue;
+        };
+        let Some(conversation_id) = record_uuid(&row.conversation_id) else {
+            continue;
+        };
+        let conversation = conversation_by_id(db, conversation_id)
+            .await?
+            .ok_or(InboxError::NotFound)?;
+        if let Some(firms) = &visible_firms {
+            if !firms.contains(&conversation.firm_id) {
+                continue;
+            }
+        }
+        unprocessed.push(UnprocessedRow {
+            id: message_id,
+            conversation_id: conversation.id,
+            firm_id: conversation.firm_id,
+            project_id: conversation.project_id,
+            channel: conversation.channel,
+            provider_message_id: row.provider_message_id,
+            external_address: conversation.external_address,
+            external_name: conversation.external_name,
+            subject: conversation.subject,
+            body: row.body,
+            occurred_at: row.occurred_at,
+            inserted_at: row.inserted_at.into(),
+        });
+    }
+    Ok(unprocessed)
+}
+
+/// The recorded process state of one message. `Ok(None)` means the message
+/// does not exist; a state with `processed_at: None` has never been
+/// processed.
+///
+/// # Errors
+///
+/// A store failure.
+pub async fn process_state(
+    db: &SurrealDb,
+    message_id: Uuid,
+) -> Result<Option<ProcessState>, InboxError> {
+    let mut response = db
+        .query("SELECT route, processed_at FROM ONLY $id")
+        .bind(("id", record_id(MESSAGE, message_id)))
+        .await?
+        .check()?;
+    let row: Option<ProcessStateRow> = response.take(0)?;
+    row.map(|row| {
+        Ok(ProcessState {
+            route: row.route,
+            processed_at: row
+                .processed_at
+                .map(|stored| parse_processed_at(&stored))
+                .transpose()?,
+        })
+    })
+    .transpose()
+}
+
+/// Record the route and processing time on one message. Idempotent: a
+/// re-run overwrites with the same truth, and the Postgres mirror write
+/// follows.
+///
+/// # Errors
+///
+/// An unknown route spelling, a store failure, or a mirror-write failure.
+pub async fn mark_processed(
+    db: &SurrealDb,
+    message_id: Uuid,
+    route: &str,
+    processed_at: DateTime<Utc>,
+) -> Result<(), InboxError> {
+    if !route::is_valid(route) {
+        return Err(InboxError::InvalidRoute(route.to_owned()));
+    }
+    db.query(
+        "UPDATE $id SET route = $route, processed_at = $processed_at, updated_at = time::now()",
+    )
+    .bind(("id", record_id(MESSAGE, message_id)))
+    .bind(("route", route))
+    .bind(("processed_at", processed_at.to_rfc3339()))
+    .await?
+    .check()?;
+    after_write(db, MirrorKey::InboxMessage(message_id)).await;
+    Ok(())
+}
+
+/// One message's process context: the row the classification layer reads
+/// plus the recorded state. Visibility follows the intake gate — the owner
+/// sees any firm; lawyers, clerks, and admins their firms; a missing record
+/// and a firm outside the caller's membership both report not found, so
+/// the door never discloses a conversation it cannot serve.
+///
+/// # Errors
+///
+/// A store failure, a denial for a client-tier actor, or not found
+/// (including out-of-scope).
+pub async fn process_context(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    message_id: Uuid,
+) -> Result<ProcessContext, InboxError> {
+    let actor = load_person(db, actor_id).await?;
+    let message = message_by_id(db, message_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    let conversation = conversation_by_id(db, message.conversation_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if actor.role != Role::Owner {
+        if !matches!(actor.role, Role::Lawyer | Role::Clerk | Role::Admin) {
+            return Err(InboxError::Denied);
+        }
+        let memberships = crate::firms::memberships_for_person(db, actor_id)
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?;
+        if !memberships
+            .iter()
+            .any(|membership| membership.firm_id == conversation.firm_id)
+        {
+            return Err(InboxError::NotFound);
+        }
+    }
+    let state = process_state(db, message_id)
+        .await?
+        .unwrap_or(ProcessState {
+            route: None,
+            processed_at: None,
+        });
+    Ok(ProcessContext {
+        row: UnprocessedRow {
+            id: message.id,
+            conversation_id: message.conversation_id,
+            firm_id: conversation.firm_id,
+            project_id: conversation.project_id,
+            channel: conversation.channel,
+            provider_message_id: message.provider_message_id,
+            external_address: conversation.external_address,
+            external_name: conversation.external_name,
+            subject: conversation.subject,
+            body: message.body,
+            occurred_at: message.occurred_at,
+            inserted_at: message.inserted_at,
+        },
+        state,
+    })
+}
+
+/// The intake gate's row plus the recorded process state, served by the
+/// single-message doors.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProcessContext {
+    /// The message and conversation facts classification reads.
+    pub row: UnprocessedRow,
+    /// What a previous process run recorded, if anything.
+    pub state: ProcessState,
 }
 
 /// Intake detail. Assigned message bodies stay hidden unless the actor
@@ -4277,5 +4559,174 @@ mod tests {
             advance_delivery(delivery::UNKNOWN, delivery::SUBMITTED),
             delivery::UNKNOWN
         );
+    }
+
+    async fn ingest_for(db: &SurrealDb, firm: Uuid, provider_id: &str) -> Uuid {
+        let message = inbound(
+            firm,
+            channel::EMAIL,
+            "process-account",
+            provider_id,
+            "client@example.com",
+        );
+        ingest_inbound(db, &message).await.unwrap().message_id
+    }
+
+    #[tokio::test]
+    async fn unprocessed_inbox_scopes_by_firm_membership() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let firm_message = ingest_for(&db, world.firm, "process-scope-1").await;
+        let foreign_message = ingest_for(&db, world.other_firm, "process-scope-2").await;
+
+        let owner_view = unprocessed_inbox(&db, world.owner).await.unwrap();
+        let owner_ids: Vec<Uuid> = owner_view.iter().map(|row| row.id).collect();
+        assert!(owner_ids.contains(&firm_message));
+        assert!(owner_ids.contains(&foreign_message));
+
+        let lawyer_view = unprocessed_inbox(&db, world.lawyer).await.unwrap();
+        let lawyer_ids: Vec<Uuid> = lawyer_view.iter().map(|row| row.id).collect();
+        assert!(lawyer_ids.contains(&firm_message));
+        assert!(!lawyer_ids.contains(&foreign_message));
+
+        assert!(matches!(
+            unprocessed_inbox(&db, world.client).await,
+            Err(InboxError::Denied)
+        ));
+    }
+
+    #[tokio::test]
+    async fn unprocessed_inbox_lists_only_unprocessed_messages() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let first = ingest_for(&db, world.firm, "process-list-1").await;
+        let second = ingest_for(&db, world.firm, "process-list-2").await;
+        mark_processed(&db, first, route::NEF, Utc::now())
+            .await
+            .unwrap();
+
+        let listed = unprocessed_inbox(&db, world.lawyer).await.unwrap();
+        let ids: Vec<Uuid> = listed.iter().map(|row| row.id).collect();
+        assert!(ids.contains(&second));
+        assert!(!ids.contains(&first));
+    }
+
+    #[tokio::test]
+    async fn unprocessed_inbox_orders_oldest_first() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let first = ingest_for(&db, world.firm, "process-order-1").await;
+        let second = ingest_for(&db, world.firm, "process-order-2").await;
+        db.query("UPDATE $id SET inserted_at = <datetime>'2026-01-01T00:00:00Z'")
+            .bind(("id", record_id(MESSAGE, second)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+
+        let listed = unprocessed_inbox(&db, world.lawyer).await.unwrap();
+        let ids: Vec<Uuid> = listed.iter().map(|row| row.id).collect();
+        assert_eq!(ids, vec![second, first]);
+    }
+
+    #[tokio::test]
+    async fn mark_processed_records_route_and_time_idempotently() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let message_id = ingest_for(&db, world.firm, "process-mark-1").await;
+        let at = Utc::now();
+        mark_processed(&db, message_id, route::NEF, at)
+            .await
+            .unwrap();
+
+        let state = process_state(&db, message_id).await.unwrap().unwrap();
+        assert_eq!(state.route.as_deref(), Some(route::NEF));
+        assert_eq!(state.processed_at, Some(at));
+
+        // A re-run overwrites with the same truth instead of failing.
+        mark_processed(&db, message_id, route::CHAMBERS, at)
+            .await
+            .unwrap();
+        let state = process_state(&db, message_id).await.unwrap().unwrap();
+        assert_eq!(state.route.as_deref(), Some(route::CHAMBERS));
+
+        assert!(matches!(
+            mark_processed(&db, message_id, "garbage", at).await,
+            Err(InboxError::InvalidRoute(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn messages_written_before_process_fields_read_as_unprocessed() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let message_id = ingest_for(&db, world.firm, "process-historical-1").await;
+        // A row written before the process fields existed carries neither.
+        db.query("UPDATE $id UNSET route, processed_at")
+            .bind(("id", record_id(MESSAGE, message_id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+
+        let state = process_state(&db, message_id).await.unwrap().unwrap();
+        assert_eq!(state.processed_at, None);
+        assert_eq!(state.route, None);
+
+        // And the tolerant read still lets a process run record the route.
+        mark_processed(&db, message_id, route::OTHER, Utc::now())
+            .await
+            .unwrap();
+        let state = process_state(&db, message_id).await.unwrap().unwrap();
+        assert_eq!(state.route.as_deref(), Some(route::OTHER));
+    }
+
+    #[tokio::test]
+    async fn process_state_of_a_missing_message_is_none() {
+        let db = mem_surreal().await;
+        assert!(process_state(&db, Uuid::now_v7()).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn process_context_scopes_the_single_message_like_the_backlog() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let firm_message = ingest_for(&db, world.firm, "process-ctx-1").await;
+        let foreign_message = ingest_for(&db, world.other_firm, "process-ctx-2").await;
+        mark_processed(&db, firm_message, route::NEF, Utc::now())
+            .await
+            .unwrap();
+
+        // The Owner sees any firm's message, with its recorded state.
+        let owner = process_context(&db, world.owner, firm_message)
+            .await
+            .unwrap();
+        assert_eq!(owner.state.route.as_deref(), Some(route::NEF));
+        assert!(!owner.row.body.is_empty());
+        assert_eq!(owner.row.external_address, "client@example.com");
+
+        // A firm member sees their own firm's message.
+        let member = process_context(&db, world.lawyer, firm_message)
+            .await
+            .unwrap();
+        assert_eq!(member.row.id, firm_message);
+
+        // Another firm's message is not found, never disclosed.
+        assert!(matches!(
+            process_context(&db, world.lawyer, foreign_message).await,
+            Err(InboxError::NotFound)
+        ));
+
+        // A client-tier actor is denied.
+        assert!(matches!(
+            process_context(&db, world.client, firm_message).await,
+            Err(InboxError::Denied)
+        ));
+
+        // A missing message is not found.
+        assert!(matches!(
+            process_context(&db, world.owner, Uuid::now_v7()).await,
+            Err(InboxError::NotFound)
+        ));
     }
 }

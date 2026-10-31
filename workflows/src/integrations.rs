@@ -76,16 +76,21 @@ pub enum SlackNoticeEvent {
     ProjectClosed,
     ProjectReconciled,
     IntegrationUnavailable,
+    /// An inbox message was routed by the process verb. The notice says
+    /// only that the routing happened — the route itself lives in the
+    /// matter's backlog, never in the channel.
+    InboxRouted,
 }
 
 impl SlackNoticeEvent {
     /// Every event kind, so a door can answer with the closed vocabulary it
     /// accepts rather than leaving a caller to guess at the spelling.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::ProjectOpened,
         Self::ProjectClosed,
         Self::ProjectReconciled,
         Self::IntegrationUnavailable,
+        Self::InboxRouted,
     ];
 
     /// Parse one event kind. The vocabulary is closed, so an unrecognized
@@ -103,6 +108,7 @@ impl SlackNoticeEvent {
             Self::ProjectClosed => "project_closed",
             Self::ProjectReconciled => "project_reconciled",
             Self::IntegrationUnavailable => "integration_unavailable",
+            Self::InboxRouted => "inbox_routed",
         }
     }
 }
