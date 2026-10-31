@@ -324,15 +324,19 @@ fn ensure_archive_ready(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn git_text(root: &Path, args: &[&str]) -> Result<String> {
+pub(crate) fn git_text(root: &Path, args: &[&str]) -> Result<String> {
     let output = git(root, args)?;
     if !output.status.success() {
-        return Err(anyhow!("git {} failed", args.join(" ")));
+        return Err(anyhow!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn git(root: &Path, args: &[&str]) -> Result<std::process::Output> {
+pub(crate) fn git(root: &Path, args: &[&str]) -> Result<std::process::Output> {
     Command::new("git")
         .arg("-C")
         .arg(root)
@@ -363,7 +367,7 @@ async fn archive_forge_repository(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn github_token() -> Result<String> {
+pub(crate) fn github_token() -> Result<String> {
     for key in ["GH_TOKEN", "GITHUB_TOKEN"] {
         if let Ok(value) = std::env::var(key) {
             if !value.trim().is_empty() {
@@ -387,7 +391,7 @@ fn github_token() -> Result<String> {
     Ok(token)
 }
 
-fn github_owner_name(remote: &str) -> Result<(String, String)> {
+pub(crate) fn github_owner_name(remote: &str) -> Result<(String, String)> {
     let url = remote.trim().trim_end_matches(".git");
     let path = if let Some(rest) = url.strip_prefix("git@github.com:") {
         rest

@@ -1155,6 +1155,7 @@ mod tests {
                 "no_live_row",
                 "pages",
                 "project",
+                "scrapers",
                 "skills",
                 "version"
             ]
