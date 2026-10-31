@@ -1326,28 +1326,60 @@ mod tests {
         serde_json::from_value(base).unwrap()
     }
 
-    /// The shared PostgreSQL fixture migrates the canonical schema once per
-    /// process.
-    static MIGRATED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    /// The disposable fixture database, created and migrated once per process.
+    static FIXTURE_DB: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
 
-    /// The Postgres handle the import writes through, with the schema
-    /// migrated once per process. `None` where no PostgreSQL fixture is
-    /// configured — CI sets `NAV_REQUIRE_POSTGRES=1` so its tests never skip.
+    /// The Postgres handle the import writes through, against a disposable
+    /// database on the synthetic fixture. `None` where the fixture port is
+    /// absent — CI sets `NAV_REQUIRE_POSTGRES=1` so its tests never skip.
     async fn import_pg() -> Option<store::postgres::PostgresDb> {
-        if std::env::var("NAVIGATOR_POSTGRES_HOST").is_err() {
+        let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
             assert!(
                 std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
-                "PostgreSQL fixture required"
+                "required PostgreSQL fixture lacks its disposable port"
             );
             return None;
-        }
-        MIGRATED
+        };
+        let port: u16 = port.parse().expect("test PostgreSQL port is numeric");
+        let options = |database: &str| {
+            sqlx::postgres::PgConnectOptions::new()
+                .host("127.0.0.1")
+                .port(port)
+                .username("postgres")
+                .password("synthetic")
+                .database(database)
+                .ssl_mode(sqlx::postgres::PgSslMode::Disable)
+        };
+        let database = FIXTURE_DB
             .get_or_init(|| async {
-                let pg = store::postgres::PostgresDb::from_env().await.unwrap();
-                pg.migrate_embedded(None).await.unwrap();
+                let database =
+                    format!("navigator_firm_journal_{}", uuid::Uuid::new_v4().simple());
+                let admin = sqlx::postgres::PgPoolOptions::new()
+                    .max_connections(1)
+                    .connect_with(options("postgres"))
+                    .await
+                    .expect("connect to the synthetic PostgreSQL fixture");
+                let create = format!("CREATE DATABASE \"{database}\"");
+                sqlx::query(sqlx::AssertSqlSafe(create))
+                    .execute(&admin)
+                    .await
+                    .expect("create the disposable fixture database");
+                let migrated = store::postgres::PostgresDb::connect(options(&database))
+                    .await
+                    .expect("connect the disposable fixture database");
+                migrated
+                    .migrate_embedded(None)
+                    .await
+                    .expect("migrate the disposable fixture database");
+                database
             })
-            .await;
-        Some(store::postgres::PostgresDb::from_env().await.unwrap())
+            .await
+            .clone();
+        Some(
+            store::postgres::PostgresDb::connect(options(&database))
+                .await
+                .unwrap(),
+        )
     }
 
     /// A synthetic Project whose hyphenated code appears verbatim as one
@@ -1399,7 +1431,7 @@ mod tests {
         (code, project.id)
     }
 
-    fn import_context<'a>(
+    async fn import_context<'a>(
         surreal: &'a store::surreal::SurrealDb,
         pg: &'a store::postgres::PostgresDb,
         storage: &'a std::sync::Arc<dyn cloud::StorageService>,
@@ -1413,7 +1445,19 @@ mod tests {
             pg,
             projects,
             client,
-            actor_id: Uuid::now_v7(),
+            // The actor must exist as a Person so the import's mirror step
+            // can write it before the creation trigger's foreign key needs
+            // it — in production the actor is always the session's person.
+            actor_id: store::persons::create(
+                surreal,
+                &store::persons::NewPerson::new(
+                    "Mercury import actor",
+                    &format!("mercury-import-{}@example.test", Uuid::new_v4()),
+                ),
+            )
+            .await
+            .unwrap()
+            .id,
             dry_run,
         }
     }
@@ -1429,7 +1473,7 @@ mod tests {
         let (other, other_id) = import_project(&surreal).await;
         let projects = vec![(code, project_id), (other, other_id)];
         let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false);
+        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
         let cases = [
             (serde_json::json!({ "postedAt": null }), "unposted"),
             (
@@ -1470,7 +1514,7 @@ mod tests {
         let (code, project_id) = import_project(&surreal).await;
         let projects = vec![(code.clone(), project_id)];
         let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, true);
+        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, true).await;
         let transaction = mercury_tx(
             Uuid::now_v7(),
             &serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
@@ -1491,7 +1535,7 @@ mod tests {
         let (code, project_id) = import_project(&surreal).await;
         let projects = vec![(code.clone(), project_id)];
         let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false);
+        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
         let transaction = mercury_tx(
             Uuid::now_v7(),
             &serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
@@ -1528,7 +1572,7 @@ mod tests {
         let (code, project_id) = import_project(&surreal).await;
         let projects = vec![(code.clone(), project_id)];
         let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
-        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false);
+        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
         let transaction = mercury_tx(
             Uuid::now_v7(),
             &serde_json::json!({
