@@ -4782,7 +4782,12 @@ Sign: {{client.signature}}";
             .expect("brand lookup")
             .expect("seed practice wears neon");
 
-        let resp = start_walk_on_brand(state, &views::brand::DEFAULT_BRANDING, &email).await;
+        let resp = Box::pin(start_walk_on_brand(
+            state,
+            &views::brand::DEFAULT_BRANDING,
+            &email,
+        ))
+        .await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
 
         let project = store::projects::find_by_name(&surreal, &format!("(pending) {email}"))
@@ -4835,7 +4840,12 @@ Sign: {{client.signature}}";
             .expect("other firm wears lawyer-shook");
 
         let email = format!("walk-other-firm-{}@example.com", Uuid::now_v7());
-        let resp = start_walk_on_brand(state, &views::brand::LAWYER_SHOOK_BRANDING, &email).await;
+        let resp = Box::pin(start_walk_on_brand(
+            state,
+            &views::brand::LAWYER_SHOOK_BRANDING,
+            &email,
+        ))
+        .await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
 
         let project = store::projects::find_by_name(&surreal, &format!("(pending) {email}"))
@@ -4865,8 +4875,12 @@ Sign: {{client.signature}}";
         .expect("detach delete-your-data so no Firm wears it");
 
         let email = format!("walk-unworn-{}@example.com", Uuid::now_v7());
-        let resp =
-            start_walk_on_brand(state, &views::brand::DELETE_YOUR_DATA_BRANDING, &email).await;
+        let resp = Box::pin(start_walk_on_brand(
+            state,
+            &views::brand::DELETE_YOUR_DATA_BRANDING,
+            &email,
+        ))
+        .await;
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         let loc = resp
             .headers()

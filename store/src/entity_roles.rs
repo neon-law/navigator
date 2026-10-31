@@ -28,9 +28,12 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use sqlx::Row;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::PostgresDb;
+use crate::postgres_graph::{ensure_vertices, graph_engine, load_edge, GraphEngine};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 const TABLE: &str = "entity_role";
@@ -81,6 +84,19 @@ pub enum EntityRoleError {
     /// could not read back.
     #[error("writing an entity role returned no usable row")]
     WriteReturnedNothing,
+    /// The engine flag could not be read or parsed. A grant under an
+    /// unusable flag fails rather than guessing an engine.
+    #[error("{0}")]
+    Engine(String),
+    /// The authoritative PostgreSQL store refused the write.
+    #[error("PostgreSQL: {0}")]
+    Postgres(#[from] crate::postgres::PostgresError),
+    #[error("PostgreSQL: {0}")]
+    Sqlx(#[from] sqlx::Error),
+    /// The graph half of an authoritative write failed after the
+    /// relational row landed — see [`crate::postgres_graph`].
+    #[error("the graph projection could not take the write")]
+    Graph(#[from] crate::postgres_graph::GraphError),
 }
 
 fn is_duplicate_tie(error: &surrealdb::Error) -> bool {
@@ -95,8 +111,9 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<EntityRole>, Enti
         .collect())
 }
 
-/// Record that `person_id` holds `role` in `entity_id`, returning the
-/// tie whether this call created it or found it already there.
+/// Record one structural tie, on the engine [`GRAPH_AUTHORITY_ENV`]
+/// selects: PostgreSQL authoritatively (the relational row, then the
+/// graph's `HAS_ROLE` edge), or SurrealDB as the rollback path's write.
 ///
 /// Idempotent and race-safe: the `entity_role_tie` index makes the
 /// second writer lose, and the loser re-reads rather than failing. The
@@ -104,7 +121,10 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<EntityRole>, Enti
 ///
 /// # Errors
 ///
-/// [`EntityRoleError::Db`] if the lookup or the write fails.
+/// [`EntityRoleError::Db`] if the Surreal lookup or write fails,
+/// [`EntityRoleError::Postgres`] or [`EntityRoleError::Sqlx`] if the
+/// authoritative PostgreSQL write fails, or [`EntityRoleError::Engine`]
+/// if the flag itself is unusable.
 pub async fn grant(
     db: &SurrealDb,
     person_id: Uuid,
@@ -112,6 +132,22 @@ pub async fn grant(
     role: &str,
 ) -> Result<EntityRole, EntityRoleError> {
     let role = role.trim();
+    match graph_engine().await.map_err(EntityRoleError::Engine)? {
+        GraphEngine::Surreal => grant_in_surreal(db, person_id, entity_id, role).await,
+        GraphEngine::Age => grant_in_postgres(db, person_id, entity_id, role).await,
+    }
+}
+
+/// The SurrealDB write the check has always used: the rollback engine's
+/// write path, and the seam the fixtures seed the Surreal graph with.
+/// Its PostgreSQL copy is the mirror's business, exactly as before the
+/// cutover.
+pub(crate) async fn grant_in_surreal(
+    db: &SurrealDb,
+    person_id: Uuid,
+    entity_id: Uuid,
+    role: &str,
+) -> Result<EntityRole, EntityRoleError> {
     if let Some(existing) = find(db, person_id, entity_id, role).await? {
         return Ok(existing);
     }
@@ -156,6 +192,131 @@ pub async fn grant(
             .ok_or(EntityRoleError::WriteReturnedNothing),
         Err(error) => Err(EntityRoleError::Db(error)),
     }
+}
+
+/// The authoritative write: the relational row first (the store of
+/// record), then the graph's `HAS_ROLE` edge, whose vertices the write
+/// ensures before loading — the projection may not have rebuilt since
+/// the person or entity was minted. The Surreal graph table is retired
+/// from this path: under the `age` engine it receives nothing, which is
+/// the retirement.
+///
+/// The display names travel from SurrealDB, the store that still mints
+/// persons and entities; the vertex-ensure function falls back to the
+/// relational row's own name for a `None`.
+async fn grant_in_postgres(
+    db: &SurrealDb,
+    person_id: Uuid,
+    entity_id: Uuid,
+    role: &str,
+) -> Result<EntityRole, EntityRoleError> {
+    let postgres = PostgresDb::from_env().await?;
+    if let Some(existing) = find_in_postgres(&postgres, person_id, entity_id, role).await? {
+        return Ok(existing);
+    }
+
+    let written = sqlx::query(
+        "INSERT INTO entity_role (person_id, entity_id, role) \
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (person_id, entity_id, role) DO NOTHING \
+         RETURNING inserted_at, updated_at",
+    )
+    .bind(person_id)
+    .bind(entity_id)
+    .bind(role)
+    .fetch_optional(&postgres.0)
+    .await?;
+
+    let Some(row) = written else {
+        // Another writer minted the same tie between the read above and
+        // this write. Its row is the answer — the same loser-rereads
+        // contract the Surreal path's unique index provides.
+        return find_in_postgres(&postgres, person_id, entity_id, role)
+            .await?
+            .ok_or(EntityRoleError::WriteReturnedNothing);
+    };
+    let tie = EntityRole {
+        person_id,
+        entity_id,
+        role: role.to_string(),
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    };
+
+    write_edge_with_names(db, &postgres, person_id, entity_id, role).await?;
+    Ok(tie)
+}
+
+/// Resolve the endpoints' display names from SurrealDB and land the
+/// tie's graph edge. A name lookup that fails fails the write: the edge
+/// is not yet written anywhere when this runs, so a retry re-walks the
+/// whole path and lands one row, one edge.
+async fn write_edge_with_names(
+    db: &SurrealDb,
+    postgres: &PostgresDb,
+    person_id: Uuid,
+    entity_id: Uuid,
+    role: &str,
+) -> Result<(), EntityRoleError> {
+    let person = crate::persons::find_by_id(db, person_id)
+        .await
+        .map_err(|error| EntityRoleError::Engine(format!("read the tie's person: {error}")))?;
+    let entity = crate::entities::find_by_id(db, entity_id)
+        .await
+        .map_err(|error| EntityRoleError::Engine(format!("read the tie's entity: {error}")))?;
+    ensure_vertices(
+        postgres,
+        PERSON_TABLE,
+        &[(person_id, person.map(|p| p.name))],
+    )
+    .await?;
+    ensure_vertices(
+        postgres,
+        ENTITY_TABLE,
+        &[(entity_id, entity.map(|e| e.name))],
+    )
+    .await?;
+    load_edge(
+        postgres,
+        "has_role",
+        serde_json::json!({
+            "from_id": person_id.to_string(),
+            "to_id": entity_id.to_string(),
+            "role": role,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+/// The one tie matching all three parts of the natural key, read from
+/// PostgreSQL — the authoritative copy under the `age` engine.
+async fn find_in_postgres(
+    postgres: &PostgresDb,
+    person_id: Uuid,
+    entity_id: Uuid,
+    role: &str,
+) -> Result<Option<EntityRole>, EntityRoleError> {
+    let row = sqlx::query(
+        "SELECT person_id, entity_id, role, inserted_at, updated_at \
+         FROM entity_role \
+         WHERE person_id = $1 AND entity_id = $2 AND role = $3",
+    )
+    .bind(person_id)
+    .bind(entity_id)
+    .bind(role)
+    .fetch_optional(&postgres.0)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    Ok(Some(EntityRole {
+        person_id: row.try_get("person_id")?,
+        entity_id: row.try_get("entity_id")?,
+        role: row.try_get("role")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    }))
 }
 
 /// The one tie matching all three parts of the natural key, if any.

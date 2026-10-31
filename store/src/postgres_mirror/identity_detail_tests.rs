@@ -702,6 +702,16 @@ async fn identity_detail_write_hook_probe() {
                     "{table:?}"
                 );
             }
+        } else if table.table == "entity_role" {
+            // Under AGE authority the Surreal graph tables are out of the
+            // write path (docs/age-graph-runbook.md): the roles the probe
+            // granted exist only in PostgreSQL, so parity reports them as
+            // target-only divergence by design, not mirror drift.
+            assert_eq!(table.source_rows, 0, "{table:?}");
+            assert!(table.target_rows > 0, "{table:?}");
+            for key in &table.divergent {
+                assert!(matches!(key, MirrorKey::EntityRole { .. }), "{table:?}");
+            }
         } else {
             assert!(table.divergent.is_empty(), "{table:?}");
             assert!(table.target_rows > 0, "{table:?}");

@@ -35,6 +35,8 @@ cannot decay the way the old seven-line stub did.
 - [PostgreSQL compatibility](postgres-compatibility.md) — application, extension and durable-state recovery tests.
 - [AGE Cypher-parity probe](age-cypher-parity-probe.md) — the conflict-check traversals proven as openCypher on the
   pinned PostgreSQL 16.15 + AGE 1.6.0 image, with parity gaps and the upgrade-path implication.
+- [AGE graph runbook](age-graph-runbook.md) — provisioning, migrations, backfill and parity, staging and production
+  sequencing, and the frozen-Surreal rollback hazard for the AGE-authoritative graph.
 - [Project recovery archives](project-recovery-archives.md) — the archived-projects lane, verified generations,
   and restore.
 - [DBOS durability](dbos-durability.md) — DBOS system schema, the effect-key rule, and the Restate port order.

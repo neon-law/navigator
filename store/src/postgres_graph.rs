@@ -24,14 +24,14 @@
 //! construction — firm-scale rows, not ledger-scale — and each source table
 //! is read in full, ordered, before it is batched into the loaders.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::conflicts::{self, NodeRef, ParityEdge};
-use crate::postgres::PostgresDb;
+use crate::postgres::{PostgresDb, PostgresError};
 use crate::postgres_backfill::BackfillError;
 use crate::surreal::SurrealDb;
 
@@ -98,6 +98,143 @@ pub enum GraphError {
     /// The Surreal side of a traversal comparison failed.
     #[error("the Surreal conflict traversal failed")]
     SurrealTraversal,
+}
+
+/// Which store walks the relationship graph, read once per check from
+/// `NAVIGATOR_GRAPH_AUTHORITY`.
+///
+/// `age` is the default: the graph tables' authoritative copy is
+/// PostgreSQL's — the write path lands rows in `entity_role` and
+/// `relationship` and their edges in the `navigator_graph` projection —
+/// so the traversal reads the store that owns the data. `surreal` is the
+/// rollback path, and it is honest about its limit: the Surreal graph
+/// tables are retired from the write path, so they go stale the moment
+/// the process writes anything. Set the flag to `surreal` to compare an
+/// old answer or to finish an emergency rollback that also flips the
+/// writes back, not for day-to-day truth. The flag exists so a bad
+/// cutover is a one-line rollback, not a redeploy.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum GraphEngine {
+    /// The original SurrealQL traversal over `<->entity_role` and
+    /// `<->relationship`.
+    Surreal,
+    /// The `navigator_graph` projection in Apache AGE, in this module.
+    #[default]
+    Age,
+}
+
+/// The environment variable that selects the graph engine.
+pub(crate) const GRAPH_AUTHORITY_ENV: &str = "NAVIGATOR_GRAPH_AUTHORITY";
+
+/// Parse [`GRAPH_AUTHORITY_ENV`]'s value.
+///
+/// Accepts `surreal` and `age`, case-insensitively; anything else is an
+/// error naming the accepted values — a typo must fail a boot or a test
+/// loudly rather than silently run the wrong engine.
+pub(crate) fn parse_graph_engine(value: &str) -> Result<GraphEngine, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "surreal" => Ok(GraphEngine::Surreal),
+        "age" => Ok(GraphEngine::Age),
+        other => Err(format!(
+            "{GRAPH_AUTHORITY_ENV} must be `surreal` or `age`, got `{other}`"
+        )),
+    }
+}
+
+/// The engine this process runs the conflict graph on, resolved from the
+/// environment once per call.
+///
+/// No variable set means [`GraphEngine::Age`]. An unusable value is an
+/// error — see [`parse_graph_engine`].
+pub(crate) fn graph_engine_from_env() -> Result<GraphEngine, String> {
+    match std::env::var(GRAPH_AUTHORITY_ENV) {
+        Ok(value) => parse_graph_engine(&value),
+        Err(std::env::VarError::NotPresent) => Ok(GraphEngine::default()),
+        Err(error) => Err(format!("read {GRAPH_AUTHORITY_ENV}: {error}")),
+    }
+}
+
+/// The engine a graph read or write runs on: [`graph_engine_from_env`],
+/// refined by the deployment's own shape.
+///
+/// A deployment that has not configured PostgreSQL at all runs the
+/// Surreal engine — the same opt-in posture that keeps its whole web off
+/// PostgreSQL until its configuration says otherwise, and the shape
+/// every Surreal-only fixture boot has. When [`GraphEngine::Age`] is
+/// selected and PostgreSQL is configured but unreachable, the call
+/// fails: a graph write may not silently vanish, and a check may not
+/// silently answer from a stale copy.
+///
+/// # Errors
+///
+/// [`GRAPH_AUTHORITY_ENV`]'s value is unusable, or the AGE engine needs
+/// PostgreSQL and the connection fails.
+pub(crate) async fn graph_engine() -> Result<GraphEngine, String> {
+    match graph_engine_from_env()? {
+        GraphEngine::Surreal => Ok(GraphEngine::Surreal),
+        GraphEngine::Age => match PostgresDb::from_env().await {
+            Ok(_) => Ok(GraphEngine::Age),
+            Err(PostgresError::Configuration) => Ok(GraphEngine::Surreal),
+            Err(error) => Err(format!(
+                "the AGE graph engine needs PostgreSQL and it is unusable: {error}"
+            )),
+        },
+    }
+}
+
+/// The runtime write path's vertex ensure: the graph gains the vertices
+/// the one new edge needs, keyed by the Surreal record UUIDs, with the
+/// name the display surfaces show. A name here wins; the function falls
+/// back to the relational row's own name for a `None` — and to no name
+/// for a row the relational table does not have, which the explanation
+/// renders as the id until the next rebuild refreshes names.
+///
+/// The endpoint tables are the graph's own vertex kinds — `person` and
+/// `entity` for every edge the runtime writes — passed by call sites
+/// that compile them from [`crate::relationships::Endpoint`], never from
+/// input.
+///
+/// # Errors
+///
+/// [`GraphError::Store`] if the ensure fails.
+pub(crate) async fn ensure_vertices(
+    pg: &PostgresDb,
+    table: &str,
+    rows: &[(Uuid, Option<String>)],
+) -> Result<(), GraphError> {
+    let payload = json!({"rows": rows
+        .iter()
+        .map(|(id, name)| json!({"id": id.to_string(), "name": name}))
+        .collect::<Vec<_>>()})
+    .to_string();
+    sqlx::query(ENSURE_VERTICES_SQL)
+        .bind(table)
+        .bind(&payload)
+        .execute(&pg.0)
+        .await?;
+    Ok(())
+}
+
+/// The runtime write path's one-edge load. The Surreal write this
+/// mirrors was one `RELATE`, so one `CREATE` is the same semantics; the
+/// next wholesale projection rebuild is the deduplicator of last
+/// resort, and the conflict check reads edges by id, which a rebuild
+/// renumbers anyway.
+///
+/// # Errors
+///
+/// [`GraphError::Store`] if the load fails.
+pub(crate) async fn load_edge(
+    pg: &PostgresDb,
+    edge_kind: &str,
+    payload: Value,
+) -> Result<(), GraphError> {
+    sqlx::query(LOAD_EDGES_SQL)
+        .bind(edge_kind)
+        .bind(json!({"rows": [payload]}).to_string())
+        .execute(&pg.0)
+        .await?;
+    Ok(())
 }
 
 /// What the graph holds against its sources, after a projection. Counts
@@ -557,6 +694,10 @@ async fn complete_checkpoint(
 const LOAD_VERTICES_SQL: &str = "SELECT * FROM graph_load_vertices($1, $2) AS t(v)";
 const LOAD_EDGES_SQL: &str = "SELECT * FROM graph_load_edges($1, $2) AS t(v)";
 
+/// The runtime write path's vertex ensure: the graph gains at most the
+/// endpoints of the edge being written, read back from the graph itself.
+const ENSURE_VERTICES_SQL: &str = "SELECT graph_ensure_vertices($1, $2) AS created";
+
 /// The one graph reader the parity pass calls, by literal name.
 const CONFLICT_EDGES_SQL: &str = "SELECT t.v::text FROM graph_conflict_edges($1) AS t(v)";
 
@@ -591,6 +732,157 @@ async fn read_graph(
         .map(|row| row.try_get::<String, _>(0))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+/// The runtime conflict walk, by literal name.
+const CONFLICT_WALK_SQL: &str = "SELECT t.v::text FROM graph_conflict_edges($1) AS t(v)";
+
+/// One hop out of a frontier, by literal name.
+const CONFLICT_FRONTIER_SQL: &str = "SELECT t.v::text FROM graph_conflict_frontier($1) AS t(v)";
+
+/// One edge the runtime conflict walk returned, with what the scoring and
+/// the explanations need: the normalization the Surreal traversal projects
+/// (`TRAVERSAL_FIELDS`) — edge table, kind token, confidence — plus the
+/// endpoint names that ride along in both engines' rows.
+pub(crate) struct TraversalEdge {
+    pub(crate) edge_table: String,
+    pub(crate) from_table: String,
+    pub(crate) from_id: String,
+    pub(crate) from_name: Option<String>,
+    pub(crate) to_table: String,
+    pub(crate) to_id: String,
+    pub(crate) to_name: Option<String>,
+    pub(crate) kind: String,
+    pub(crate) confidence_pct: i32,
+}
+
+/// The bounded conflict walk over `anchors`, read the way the runtime
+/// `age` engine reads it: one call to the projection's
+/// `graph_conflict_edges` — three per-hop rounds of
+/// `graph_conflict_frontier` inside the function, the same bound the
+/// Surreal walk's [`MAX_HOPS`] encodes. Each round re-matches earlier
+/// rounds' edges (the anchors stay in the advancing frontier), so the
+/// rows are deduplicated by edge id; the Surreal engine's
+/// `array::distinct` does the same at its hop boundaries.
+///
+/// # Errors
+///
+/// [`GraphError::Traversal`] for a row that does not decode to a known
+/// edge shape — the walk refuses to score what it cannot read.
+pub(crate) async fn conflict_traversal(
+    pg: &PostgresDb,
+    anchors: &[NodeRef],
+) -> Result<Vec<TraversalEdge>, GraphError> {
+    if anchors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let anchor_list: Vec<Value> = anchors
+        .iter()
+        .map(|anchor| json!(anchor.id.to_string()))
+        .collect();
+    let rows = read_graph(pg, CONFLICT_WALK_SQL, &json!(anchor_list).to_string()).await?;
+    let mut edges = Vec::with_capacity(rows.len());
+    let mut seen_edge_ids = HashSet::new();
+    for row in rows {
+        let value: Value = serde_json::from_str(&row).map_err(|_| GraphError::Traversal)?;
+        if let Some(edge_id) = value.get("edge_id").and_then(Value::as_i64) {
+            if !seen_edge_ids.insert(edge_id) {
+                continue;
+            }
+        }
+        edges.push(traversal_edge(&value)?);
+    }
+    Ok(edges)
+}
+
+/// One hop out of `nodes` — the matter page's frontier read, restricted
+/// to the given nodes by [`crate::conflicts::edges_among`].
+///
+/// # Errors
+///
+/// [`GraphError::Traversal`] for a row that does not decode.
+pub(crate) async fn conflict_frontier_edges(
+    pg: &PostgresDb,
+    nodes: &[NodeRef],
+) -> Result<Vec<TraversalEdge>, GraphError> {
+    if nodes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let frontier: Vec<Value> = nodes
+        .iter()
+        .map(|node| json!(node.id.to_string()))
+        .collect();
+    let rows = read_graph(
+        pg,
+        CONFLICT_FRONTIER_SQL,
+        &json!({"frontier": frontier}).to_string(),
+    )
+    .await?;
+    let mut edges = Vec::with_capacity(rows.len());
+    for row in rows {
+        let value: Value = serde_json::from_str(&row).map_err(|_| GraphError::Traversal)?;
+        edges.push(traversal_edge(&value)?);
+    }
+    Ok(edges)
+}
+
+/// One walk row (`agtype` JSON text) as a runtime traversal edge.
+fn traversal_edge(value: &Value) -> Result<TraversalEdge, GraphError> {
+    let edge_type = value
+        .get("edge_type")
+        .and_then(Value::as_str)
+        .ok_or(GraphError::Traversal)?;
+    let (edge_table, kind, confidence_pct) = normalized_kind(edge_type, value)?;
+    let (from_table, from_id) = parity_endpoint(value.get("from_id"), value.get("from_label"))?;
+    let (to_table, to_id) = parity_endpoint(value.get("to_id"), value.get("to_label"))?;
+    Ok(TraversalEdge {
+        edge_table,
+        from_table,
+        from_id,
+        from_name: value
+            .get("from_name")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        to_table,
+        to_id,
+        to_name: value
+            .get("to_name")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        kind,
+        confidence_pct,
+    })
+}
+
+/// The edge-type match both readers share: the AGE edge label normalized
+/// back to its edge table, the kind token the conflict check reads, and
+/// the confidence (the implicit 100 a structural tie carries).
+fn normalized_kind(edge_type: &str, value: &Value) -> Result<(String, String, i32), GraphError> {
+    match edge_type {
+        "HAS_ROLE" => Ok((
+            "entity_role".to_string(),
+            value
+                .get("role")
+                .and_then(Value::as_str)
+                .ok_or(GraphError::Traversal)?
+                .to_string(),
+            100,
+        )),
+        "RELATIONSHIP" => Ok((
+            "relationship".to_string(),
+            value
+                .get("kind")
+                .and_then(Value::as_str)
+                .ok_or(GraphError::Traversal)?
+                .to_string(),
+            value
+                .get("confidence_pct")
+                .and_then(Value::as_i64)
+                .and_then(|pct| i32::try_from(pct).ok())
+                .ok_or(GraphError::Traversal)?,
+        )),
+        _ => Err(GraphError::Traversal),
+    }
 }
 
 /// Read one vertex source table and load it in batches. Rows with no name
@@ -689,9 +981,22 @@ async fn relationship_source_rows(pg: &PostgresDb) -> Result<RelationshipRows, G
         match (from_table, from_id, to_table, to_id) {
             (Some(from_table), Some(from_id), Some(to_table), Some(to_id)) => {
                 let source_id: Option<String> = row.try_get::<Option<String>, _>("source_id")?;
+                // The column is the Surreal record link the mirror wrote —
+                // `{"tb": "relationship_log", "id": {"Uuid": ...}}` — so the
+                // edge property carries the referenced row's UUID, the part
+                // of the chain the graph can resolve. A bare JSON string
+                // (a runtime-written row) passes through as itself.
                 let source_id = source_id
                     .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-                    .and_then(|value| value.as_str().map(str::to_string));
+                    .and_then(|value| match &value {
+                        Value::Object(_) => value
+                            .get("id")
+                            .and_then(|id| id.get("Uuid"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        Value::String(text) => Some(text.clone()),
+                        _ => None,
+                    });
                 endpoints.push((from_table.clone(), from_id.clone()));
                 endpoints.push((to_table.clone(), to_id.clone()));
                 payloads.push(json!({
@@ -940,34 +1245,16 @@ fn normalize_age_edge(value: &Value) -> Result<ParityEdge, GraphError> {
         .get("edge_type")
         .and_then(Value::as_str)
         .ok_or(GraphError::Traversal)?;
-    let (edge_table, kind, confidence_pct) = match edge_type {
-        // Structural tie: the role is the kind, the confidence the implicit
-        // 100 the conflict check reads it as.
-        "HAS_ROLE" => (
-            "entity_role",
-            value.get("role").and_then(Value::as_str),
-            100,
-        ),
-        "RELATIONSHIP" => (
-            "relationship",
-            value.get("kind").and_then(Value::as_str),
-            value
-                .get("confidence_pct")
-                .and_then(Value::as_i64)
-                .and_then(|pct| i32::try_from(pct).ok())
-                .ok_or(GraphError::Traversal)?,
-        ),
-        _ => return Err(GraphError::Traversal),
-    };
+    let (edge_table, kind, confidence_pct) = normalized_kind(edge_type, value)?;
     let (from_table, from_id) = parity_endpoint(value.get("from_id"), value.get("from_label"))?;
     let (to_table, to_id) = parity_endpoint(value.get("to_id"), value.get("to_label"))?;
     Ok(ParityEdge {
-        edge_table: edge_table.to_string(),
+        edge_table,
         from_table,
         from_id,
         to_table,
         to_id,
-        kind: kind.ok_or(GraphError::Traversal)?.to_string(),
+        kind,
         confidence_pct,
     })
 }
