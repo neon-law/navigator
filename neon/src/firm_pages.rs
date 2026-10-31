@@ -858,9 +858,10 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     let free_courts = dioxus_app::embedded()
         .expect("invariant: the shipped court registry parses; the store's tests are the gate");
     routers.push(with_branded(
-        dioxus_app::free_resources_index_router(
-            dioxus_app::free_resources_index_content(&free_copy, &free_courts),
-        ),
+        dioxus_app::free_resources_index_router(dioxus_app::free_resources_index_content(
+            &free_copy,
+            &free_courts,
+        )),
         branded_map(branding, |resolved| {
             webapp::free_resources::InjectedFreeResourcesIndex(
                 dioxus_app::free_resources_index_content(
@@ -884,7 +885,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
                     dioxus_app::free_resources_jurisdiction_content(
                         &locales::free_resources(resolved),
                         &group,
-                    )
+                    ),
                 )
             }),
         ));

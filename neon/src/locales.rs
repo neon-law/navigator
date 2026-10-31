@@ -238,7 +238,6 @@ pub fn team(branding: &views::brand::Branding) -> views::locales::TeamCopy {
         .expect("invariant: navigator project gate validates the team catalog")
 }
 
-
 /// The free court-form catalog's copy — the brand's free-of-charge and
 /// no-outcome promises included, the page-kind gate (`Y002`) the same one
 /// every other page's YAML passes.
@@ -251,9 +250,8 @@ pub fn free_resources(branding: &views::brand::Branding) -> views::locales::Free
     let raw = catalog_yaml(branding.brand_key, "free-resources")
         .expect("invariant: the mounted brand publishes the free-resources catalog");
     let interpolated = interpolate(raw, branding.firm.site_name, branding.firm_email);
-    serde_yaml::from_str(&interpolated).expect(
-        "invariant: navigator project gate validates the free-resources catalog",
-    )
+    serde_yaml::from_str(&interpolated)
+        .expect("invariant: navigator project gate validates the free-resources catalog")
 }
 
 /// Load one catalog file as `T`, after resolving shared copy and the mounted

@@ -131,8 +131,8 @@ pub struct FreeResourcesIndexView {
 
 /// Resolve the shared chrome and the injected jurisdiction content.
 #[server]
-pub async fn free_resources_jurisdiction_view()
--> Result<FreeResourcesJurisdictionView, ServerFnError> {
+pub async fn free_resources_jurisdiction_view(
+) -> Result<FreeResourcesJurisdictionView, ServerFnError> {
     let content = dioxus_fullstack_core::FullstackContext::extract::<
         axum::Extension<InjectedFreeResourcesJurisdiction>,
         _,
@@ -447,21 +447,26 @@ mod tests {
             out.contains(r#"href="/free-legal-resources/index.json""#),
             "JSON link: {out}"
         );
-        assert!(out.contains("Everything on these pages is free of charge."), "free: {out}");
-        assert!(out.contains("These pages promise no outcome."), "no outcome: {out}");
+        assert!(
+            out.contains("Everything on these pages is free of charge."),
+            "free: {out}"
+        );
+        assert!(
+            out.contains("These pages promise no outcome."),
+            "no outcome: {out}"
+        );
     }
 
     #[test]
     fn an_empty_index_renders_the_loading_state_not_a_blank_page() {
-        let content = FreeResourcesIndexContent {
-            jurisdictions: Vec::new(),
-            ..index()
-        };
-        let out = ssr(|| {
-            rsx! {
-                FreeResourcesIndexPage { chrome: PublicChrome::default(), content }
-            }
-        });
+        fn app() -> Element {
+            let content = FreeResourcesIndexContent {
+                jurisdictions: Vec::new(),
+                ..index()
+            };
+            rsx! { FreeResourcesIndexPage { chrome: PublicChrome::default(), content } }
+        }
+        let out = ssr(app);
         assert!(out.contains("The court-form registry is loading."), "{out}");
     }
 
@@ -473,32 +478,41 @@ mod tests {
             }
         });
         assert!(out.contains("Courts and forms in Nevada"), "heading: {out}");
-        assert!(out.contains("Eighth Judicial District Court"), "court: {out}");
+        assert!(
+            out.contains("Eighth Judicial District Court"),
+            "court: {out}"
+        );
         assert!(out.contains("Clark · District Court"), "subtitle: {out}");
         assert!(out.contains("Petition for Adult Name Change"), "row: {out}");
-        assert!(out.contains("Family Division Clerk's Office"), "office: {out}");
+        assert!(
+            out.contains("Family Division Clerk&#39;s Office"),
+            "office: {out}"
+        );
         assert!(out.contains("$270.00"), "fee: {out}");
-        assert!(out.contains("Application to Waive Filing Fee"), "waiver: {out}");
+        assert!(
+            out.contains("Application to Waive Filing Fee"),
+            "waiver: {out}"
+        );
         assert!(
             out.contains(r#"href="https://selfhelp.nvcourts.gov/name-change""#),
             "source link: {out}"
         );
         assert!(
-            out.contains(r#"href="https://assets.example.org/forms/united_states/nevada/\
-                            eighth_judicial_district_court/nv__adult_name_change_petition.pdf""#),
+            out.contains(
+                r#"href="https://assets.example.org/forms/united_states/nevada/eighth_judicial_district_court/nv__adult_name_change_petition.pdf""#
+            ),
             "blank link: {out}"
         );
     }
 
     #[test]
     fn an_empty_court_states_its_registry_is_empty() {
-        let mut content = jurisdiction();
-        content.courts[0].forms.clear();
-        let out = ssr(move || {
-            rsx! {
-                FreeResourcesJurisdictionPage { chrome: PublicChrome::default(), content }
-            }
-        });
+        fn app() -> Element {
+            let mut content = jurisdiction();
+            content.courts[0].forms.clear();
+            rsx! { FreeResourcesJurisdictionPage { chrome: PublicChrome::default(), content } }
+        }
+        let out = ssr(app);
         assert!(
             out.contains("This court has no forms in the registry yet."),
             "empty court state: {out}"
@@ -507,13 +521,12 @@ mod tests {
 
     #[test]
     fn an_empty_jurisdiction_states_its_registry_is_empty() {
-        let mut content = jurisdiction();
-        content.courts.clear();
-        let out = ssr(move || {
-            rsx! {
-                FreeResourcesJurisdictionPage { chrome: PublicChrome::default(), content }
-            }
-        });
+        fn app() -> Element {
+            let mut content = jurisdiction();
+            content.courts.clear();
+            rsx! { FreeResourcesJurisdictionPage { chrome: PublicChrome::default(), content } }
+        }
+        let out = ssr(app);
         assert!(
             out.contains("No court in this jurisdiction has forms in the registry yet."),
             "empty jurisdiction state: {out}"
@@ -522,14 +535,13 @@ mod tests {
 
     #[test]
     fn a_row_without_a_fee_or_waiver_leaves_those_cells_empty() {
-        let mut content = jurisdiction();
-        content.courts[0].forms[0].fee = None;
-        content.courts[0].forms[0].fee_waiver = None;
-        let out = ssr(move || {
-            rsx! {
-                FreeResourcesJurisdictionPage { chrome: PublicChrome::default(), content }
-            }
-        });
+        fn app() -> Element {
+            let mut content = jurisdiction();
+            content.courts[0].forms[0].fee = None;
+            content.courts[0].forms[0].fee_waiver = None;
+            rsx! { FreeResourcesJurisdictionPage { chrome: PublicChrome::default(), content } }
+        }
+        let out = ssr(app);
         assert!(!out.contains("$270.00"), "no fee cell: {out}");
         assert!(
             !out.contains("Application to Waive Filing Fee"),

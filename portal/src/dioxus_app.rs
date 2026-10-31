@@ -3617,8 +3617,7 @@ pub fn free_resources_index_content(
         jurisdictions: jurisdiction_groups(courts)
             .iter()
             .map(|group| {
-                let form_count: usize =
-                    group.courts.iter().map(|court| court.forms.len()).sum();
+                let form_count: usize = group.courts.iter().map(|court| court.forms.len()).sum();
                 webapp::free_resources::FreeResourceJurisdictionSummary {
                     href: free_resources_jurisdiction_path(&jurisdiction_slug(&group.name)),
                     name: group.name.clone(),
@@ -3682,9 +3681,9 @@ pub fn free_resources_index_router(
     content: webapp::free_resources::FreeResourcesIndexContent,
 ) -> Router {
     let injected = webapp::free_resources::InjectedFreeResourcesIndex(content);
-    let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(
-        move || Box::new(injected.clone()) as Box<dyn std::any::Any>,
-    )
+    let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(move || {
+        Box::new(injected.clone()) as Box<dyn std::any::Any>
+    })
         as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]));
 
     Router::<FullstackState>::new()
@@ -3708,9 +3707,9 @@ pub fn free_resources_jurisdiction_router(
     content: webapp::free_resources::FreeResourcesJurisdictionContent,
 ) -> Router {
     let injected = webapp::free_resources::InjectedFreeResourcesJurisdiction(content);
-    let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(
-        move || Box::new(injected.clone()) as Box<dyn std::any::Any>,
-    )
+    let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(move || {
+        Box::new(injected.clone()) as Box<dyn std::any::Any>
+    })
         as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]));
 
     Router::<FullstackState>::new()
@@ -3862,8 +3861,6 @@ mod free_resources_guards {
         }
     }
 }
-
-
 
 /// The public show page for one bundled notation — the `/notations`
 /// catalog's default link for every card. `{slug}` is a distinct path per

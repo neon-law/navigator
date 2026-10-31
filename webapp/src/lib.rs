@@ -67,7 +67,6 @@ pub mod catalog_material;
 pub mod catalog_slide_body;
 pub mod catalog_slides;
 pub mod catalog_step;
-pub mod free_resources;
 pub mod deployment_keys;
 #[cfg(feature = "server")]
 pub mod error_pages;
@@ -78,6 +77,7 @@ pub mod firm_footer;
 pub mod firm_invoice_graphs;
 pub mod firm_new;
 pub mod firm_show;
+pub mod free_resources;
 pub mod glossary_page;
 pub mod gov_forms;
 pub mod harvard_outline;

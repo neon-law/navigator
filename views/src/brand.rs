@@ -3439,7 +3439,11 @@ mod tests {
                 "{key:?} serves the JSON endpoint"
             );
         }
-        for key in [BrandKey::DeleteYourData, BrandKey::LawyerShook, BrandKey::Summons] {
+        for key in [
+            BrandKey::DeleteYourData,
+            BrandKey::LawyerShook,
+            BrandKey::Summons,
+        ] {
             assert!(
                 !key.publishes_firm_path("/free-legal-resources"),
                 "{key:?} has no catalog to serve"
