@@ -197,6 +197,7 @@ mod tiktok_comments;
 pub(crate) mod twilio_registry_harness;
 pub mod twilio_resolution;
 pub mod twilio_sms;
+pub mod twilio_voice;
 pub mod visitor_analytics;
 pub mod webhook_auth;
 pub mod welcome;
@@ -735,6 +736,10 @@ fn public_ingress_routes() -> Router<AppState> {
         .route(
             twilio_sms::SMS_WEBHOOK_PATH,
             axum::routing::post(twilio_sms::webhook),
+        )
+        .route(
+            crate::twilio_voice::VOICE_STATUS_PATH,
+            axum::routing::post(crate::twilio_voice::status),
         )
         .route(
             "/webhook/sendgrid/inbound/{secret}",

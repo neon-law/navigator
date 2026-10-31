@@ -51,21 +51,20 @@ pub(crate) async fn register_number(
     number: &str,
     token: &str,
 ) -> Uuid {
-    let dri = store::persons::create(
-        db,
-        &store::persons::NewPerson::with_role(
-            "Synthetic administrator",
-            format!("spine-{}@example.com", Uuid::now_v7()),
-            store::persons::Role::Admin,
-        ),
-    )
-    .await
-    .unwrap();
+    // The secret store admits only the Firm's Admin DRI, so the seed acts
+    // as the Firm's seeded administrator rather than minting a synthetic
+    // person no membership row would admit.
+    let dri = store::firms::memberships_for_firm(db, firm_id)
+        .await
+        .unwrap_or_else(|error| panic!("seed reads the Firm's memberships: {error}"))
+        .into_iter()
+        .find(|row| row.is_dri && row.membership == store::firms::FirmMembership::Admin)
+        .unwrap_or_else(|| panic!("seed firm has no Admin DRI to authorize the secret put"));
     store::firm_secrets::put(
         db,
         store::firm_secrets::SecretPutRequest {
             actor_role: store::persons::Role::Admin,
-            actor_person_id: Some(dri.id),
+            actor_person_id: Some(dri.person_id),
             firm_id,
             provider: store::firm_secrets::IntegrationProvider::Twilio,
             kind: store::firm_secrets::IntegrationSecretKind::TwilioAuthToken,

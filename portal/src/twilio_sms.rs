@@ -50,7 +50,7 @@ pub const TWILIO_AUTH_TOKEN: &str = "TWILIO_AUTH_TOKEN";
 pub const SMS_WEBHOOK_PATH: &str = "/webhook/twilio/sms";
 pub const SMS_STATUS_PATH: &str = "/webhook/twilio/status";
 
-const SIGNATURE_HEADER: &str = "x-twilio-signature";
+pub(crate) const SIGNATURE_HEADER: &str = "x-twilio-signature";
 
 /// An empty TwiML document: acknowledge the text without auto-replying.
 const EMPTY_TWIML: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response></Response>";
@@ -166,8 +166,9 @@ pub(crate) fn verify_signature(
 
 /// The spine over the shared state. A configured registry resolves the
 /// request; an unconfigured one keeps the lane off at 404, the same answer
-/// an unknown number gets.
-async fn resolve(
+/// an unknown number gets. Shared by every Twilio webhook handler — the
+/// voice lane rides the same resolution, never a second auth path.
+pub(crate) async fn resolve(
     state: &crate::AppState,
     lane: crate::twilio_resolution::Lane,
     key_number: &str,
