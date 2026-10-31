@@ -3716,10 +3716,10 @@
 {"file":"store/src/schema/mod.rs","line":2579,"function":"the_firm_anchor_key_refuses_a_fork_but_admits_namesakes","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/schema/mod.rs","line":2585,"function":"the_firm_anchor_key_refuses_a_fork_but_admits_namesakes","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/schema/mod.rs","line":2597,"function":"the_firm_anchor_key_refuses_a_fork_but_admits_namesakes","operation":"query","sql_operations":["CREATE"],"tables":["entity"],"transaction":false}
-{"file":"store/src/seed.rs","line":877,"function":"require_unique","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"store/src/seed.rs","line":2951,"function":"seed_entity_types","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"store/src/seed.rs","line":3784,"function":"remote_hash","operation":"update","sql_operations":[],"tables":[],"transaction":false}
-{"file":"store/src/seed.rs","line":7045,"function":"seeds_attorney_credentials_with_correct_numbers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/seed.rs","line":879,"function":"require_unique","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/seed.rs","line":2953,"function":"seed_entity_types","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/seed.rs","line":3786,"function":"remote_hash","operation":"update","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/seed.rs","line":7047,"function":"seeds_attorney_credentials_with_correct_numbers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/sent_emails.rs","line":149,"function":"record","operation":"bind","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/sent_emails.rs","line":149,"function":"record","operation":"bind","sql_operations":[],"tables":["sent_email"],"transaction":false}
 {"file":"store/src/sent_emails.rs","line":149,"function":"record","operation":"query","sql_operations":["SELECT","CREATE"],"tables":[],"transaction":false}
