@@ -141,7 +141,7 @@ pub struct InboxThreadPage {
 }
 
 #[cfg(feature = "server")]
-async fn chrome() -> (Option<crate::components::AppLogo>, String, String) {
+pub(crate) async fn chrome() -> (Option<crate::components::AppLogo>, String, String) {
     (
         crate::app_chrome::app_logo_from_context().await,
         crate::app_chrome::app_tokens_href_from_context().await,
@@ -150,7 +150,7 @@ async fn chrome() -> (Option<crate::components::AppLogo>, String, String) {
 }
 
 #[cfg(feature = "server")]
-async fn person_id() -> Option<uuid::Uuid> {
+pub(crate) async fn person_id() -> Option<uuid::Uuid> {
     dioxus_fullstack_core::FullstackContext::extract::<
         axum::Extension<crate::portal_project_list::PersonId>,
         _,
@@ -162,7 +162,7 @@ async fn person_id() -> Option<uuid::Uuid> {
 }
 
 #[cfg(feature = "server")]
-async fn csrf_token() -> String {
+pub(crate) async fn csrf_token() -> String {
     dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<crate::csrf::CsrfToken>, _>()
         .await
         .map(|axum::Extension(token)| token.0)
@@ -170,7 +170,7 @@ async fn csrf_token() -> String {
 }
 
 #[cfg(feature = "server")]
-async fn query_error() -> Option<String> {
+pub(crate) async fn query_error() -> Option<String> {
     #[derive(serde::Deserialize, Default)]
     struct Flash {
         error: Option<String>,

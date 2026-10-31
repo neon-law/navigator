@@ -54,6 +54,17 @@ impl PrivilegeLabel {
             _ => None,
         }
     }
+
+    /// Read the label back from the stored or form-posted string. The human
+    /// review queue's resolve form posts one of these.
+    ///
+    /// # Errors
+    ///
+    /// Returns `None` for any other string.
+    #[must_use]
+    pub fn from_form(value: &str) -> Option<Self> {
+        Self::parse(value)
+    }
 }
 
 /// How far a triage row has travelled from suggestion to a human decision.
@@ -339,6 +350,440 @@ pub fn automated_disposition(
         (PrivilegeLabel::Uncertain, _) | (_, None) => TriageDisposition::NeedsHuman,
         (_, Some(_)) => TriageDisposition::Suggested,
     }
+}
+
+/// One triage row joined with the message context the review queue renders.
+/// Triage records never journal message text, so the queue renders what the
+/// row and the conversation hold: the sender, channel, and Brand the ingest
+/// recorded, plus the classifier's suggestion and its audit rationale.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TriageReviewRow {
+    pub triage: InboxTriage,
+    pub conversation_id: Uuid,
+    pub sender: String,
+    pub channel: String,
+    pub brand_key: Option<String>,
+    /// The suggested Project's name, when the suggestion still resolves.
+    pub suggested_project_name: Option<String>,
+}
+
+/// The dispositions that still wait for a person: the rule layer or a
+/// classifier left the row at [`TriageDisposition::NeedsHuman`], or the row
+/// carries a suggestion a person has yet to confirm.
+fn awaits_a_person(disposition: TriageDisposition) -> bool {
+    matches!(
+        disposition,
+        TriageDisposition::NeedsHuman | TriageDisposition::Suggested
+    )
+}
+
+/// The triage rows awaiting a person, visible to this actor. The same
+/// firm-scoped visibility the inbox list uses: an Owner reads every Firm's
+/// rows, the other firm tiers read the Firms they belong to, and a Client is
+/// denied. Rows whose decision is already recorded are gone from the queue.
+///
+/// # Errors
+///
+/// [`InboxError::Denied`] for a Client; database errors otherwise.
+pub async fn list_for_review(
+    db: &SurrealDb,
+    actor_id: Uuid,
+) -> Result<Vec<TriageReviewRow>, InboxError> {
+    let actor = crate::persons::find_by_id(db, actor_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    let visible_firms: Option<Vec<Uuid>> = if actor.role == crate::persons::Role::Owner {
+        None
+    } else if matches!(
+        actor.role,
+        crate::persons::Role::Admin | crate::persons::Role::Lawyer | crate::persons::Role::Clerk
+    ) {
+        Some(
+            crate::firms::memberships_for_person(db, actor_id)
+                .await
+                .map_err(|error| InboxError::Db(error.to_string()))?
+                .into_iter()
+                .map(|membership| membership.firm_id)
+                .collect(),
+        )
+    } else {
+        return Err(InboxError::Denied);
+    };
+    let mut response = db
+        .query(format!(
+            "SELECT {SELECT} FROM {TABLE} \
+             WHERE disposition = 'needs_human' OR disposition = 'suggested' \
+             ORDER BY updated_at DESC"
+        ))
+        .await?
+        .check()?;
+    let rows: Vec<TriageRow> = response.take(0)?;
+    let mut review_rows = Vec::new();
+    for row in rows {
+        let Some(triage) = row.into_triage() else {
+            continue;
+        };
+        if let Some(firms) = &visible_firms {
+            if !firms.contains(&triage.firm_id) {
+                continue;
+            }
+        }
+        let Some(row) = review_row(db, triage).await? else {
+            continue;
+        };
+        review_rows.push(row);
+    }
+    Ok(review_rows)
+}
+
+/// The review context for one triage row: the conversation its message
+/// landed in and the suggested Project's name.
+async fn review_row(
+    db: &SurrealDb,
+    triage: InboxTriage,
+) -> Result<Option<TriageReviewRow>, InboxError> {
+    let Ok(conversation) = conversation_for_message(db, triage.message_id).await else {
+        // A message whose conversation vanished leaves no queue entry to
+        // act on — the row is orphaned, not a routing decision.
+        return Ok(None);
+    };
+    let suggested_project_name = match triage.suggested_project_id {
+        Some(project_id) => crate::projects::find_by_id(db, project_id)
+            .await?
+            .map(|project| project.name),
+        None => None,
+    };
+    Ok(Some(TriageReviewRow {
+        sender: conversation
+            .external_name
+            .clone()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| conversation.external_address.clone()),
+        channel: conversation.channel.clone(),
+        brand_key: conversation.brand_key.clone(),
+        conversation_id: conversation.id,
+        suggested_project_name,
+        triage,
+    }))
+}
+
+/// The conversation one triaged Message landed in — the row's channel and
+/// sender live there, not on the triage record.
+async fn conversation_for_message(
+    db: &SurrealDb,
+    message_id: Uuid,
+) -> Result<crate::inbox::Conversation, InboxError> {
+    let message = crate::inbox::message_by_id(db, message_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    crate::inbox::conversation_by_id(db, message.conversation_id)
+        .await?
+        .ok_or(InboxError::NotFound)
+}
+
+/// One triage row by its id.
+///
+/// # Errors
+///
+/// Returns a database error.
+pub async fn find_by_id(db: &SurrealDb, triage_id: Uuid) -> Result<Option<InboxTriage>, InboxError> {
+    let mut response = db
+        .query(format!("SELECT {SELECT} FROM $id"))
+        .bind(("id", record_id(TABLE, triage_id)))
+        .await?
+        .check()?;
+    let rows: Vec<TriageRow> = response.take(0)?;
+    Ok(rows.into_iter().find_map(TriageRow::into_triage))
+}
+
+/// A person's decision on one triage row — what the review actions write.
+struct ReviewDecision {
+    privilege: PrivilegeLabel,
+    privilege_confidence: Option<f64>,
+    suggested_project_id: Option<Uuid>,
+    project_confidence: Option<f64>,
+    rationale: Option<String>,
+    disposition: TriageDisposition,
+    labeled_example: bool,
+}
+
+/// Write a person's decision onto the row and mirror it. The audit trail is
+/// the row itself: the new disposition, the decision's rationale, and — for
+/// a correction — the labeled-example flag.
+async fn write_review_decision(
+    db: &SurrealDb,
+    triage_id: Uuid,
+    decision: ReviewDecision,
+) -> Result<InboxTriage, InboxError> {
+    let mut response = db
+        .query(format!(
+            "UPDATE $id SET privilege = $privilege, \
+             privilege_confidence = $privilege_confidence, \
+             suggested_project_id = $suggested, \
+             project_confidence = $project_confidence, rationale = $rationale, \
+             disposition = $disposition, labeled_example = $labeled_example, \
+             updated_at = time::now() RETURN {SELECT}"
+        ))
+        .bind(("id", record_id(TABLE, triage_id)))
+        .bind(("privilege", decision.privilege.as_str().to_string()))
+        .bind(("privilege_confidence", decision.privilege_confidence))
+        .bind((
+            "suggested",
+            decision
+                .suggested_project_id
+                .map(|id| record_id(crate::projects::PROJECT_TABLE, id)),
+        ))
+        .bind(("project_confidence", decision.project_confidence))
+        .bind(("rationale", decision.rationale.clone()))
+        .bind(("disposition", decision.disposition.as_str().to_string()))
+        .bind(("labeled_example", decision.labeled_example))
+        .await?
+        .check()?;
+    let rows: Vec<TriageRow> = response.take(0)?;
+    let row = rows
+        .into_iter()
+        .find_map(TriageRow::into_triage)
+        .ok_or(InboxError::NotFound)?;
+    after_write(db, MirrorKey::InboxTriage(row.id)).await;
+    Ok(row)
+}
+
+/// A row a person may still decide: never one whose decision is recorded.
+fn require_open(row: &InboxTriage) -> Result<(), InboxError> {
+    if awaits_a_person(row.disposition) {
+        Ok(())
+    } else {
+        Err(InboxError::Invalid(
+            "the triage decision is already recorded; re-run triage to reopen it".into(),
+        ))
+    }
+}
+
+/// A person confirms the suggested Project: the conversation is attributed
+/// to it through the participation-checked assignment door, and the row's
+/// disposition records the confirmation. Confirm assigns the suggested
+/// Project only — a different choice is an override.
+///
+/// # Errors
+///
+/// [`InboxError::NotFound`] when the row or Project does not exist,
+/// [`InboxError::Invalid`] when the row is decided or names no suggestion,
+/// [`InboxError::Denied`] when the actor fails the review authority, and
+/// [`InboxError::CrossFirm`] when the suggestion crosses Firms.
+pub async fn confirm_project(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    triage_id: Uuid,
+    project_id: Uuid,
+) -> Result<InboxTriage, InboxError> {
+    let row = find_by_id(db, triage_id).await?.ok_or(InboxError::NotFound)?;
+    require_open(&row)?;
+    // Authorize before reading any suggestion state: an unauthorized actor
+    // is denied outright and learns nothing about the row.
+    crate::inbox::require_triage_reviewer(db, actor_id, project_id).await?;
+    let Some(suggested) = row.suggested_project_id else {
+        return Err(InboxError::Invalid(
+            "the triage row names no suggested project to confirm".into(),
+        ));
+    };
+    if project_id != suggested {
+        return Err(InboxError::Invalid(
+            "confirm assigns the suggested project only; choose override to correct it".into(),
+        ));
+    }
+    let assignment = crate::inbox::assign_for_triage_review(
+        db,
+        actor_id,
+        row_conversation_id(db, &row).await?,
+        project_id,
+    )
+    .await?;
+    write_review_decision(
+        db,
+        triage_id,
+        ReviewDecision {
+            privilege: row.privilege,
+            privilege_confidence: row.privilege_confidence,
+            suggested_project_id: Some(assignment.to_project_id),
+            project_confidence: row.project_confidence,
+            rationale: row.rationale.clone(),
+            disposition: TriageDisposition::Confirmed,
+            labeled_example: row.labeled_example,
+        },
+    )
+    .await
+}
+
+/// A person corrects the suggestion: the conversation is attributed to the
+/// corrected Project through the same door, the correction itself is the
+/// labeled example the next classifier generation trains on, and the row's
+/// disposition records the override.
+///
+/// # Errors
+///
+/// [`InboxError::NotFound`] when the row or Project does not exist,
+/// [`InboxError::Invalid`] when the row is decided or the rationale is
+/// blank, [`InboxError::Denied`] when the actor fails the review authority,
+/// and [`InboxError::CrossFirm`] when the correction crosses Firms.
+pub async fn override_project(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    triage_id: Uuid,
+    project_id: Uuid,
+    rationale: &str,
+) -> Result<InboxTriage, InboxError> {
+    let rationale = rationale.trim();
+    if rationale.is_empty() {
+        return Err(InboxError::Invalid("an override carries a rationale".into()));
+    }
+    let row = find_by_id(db, triage_id).await?.ok_or(InboxError::NotFound)?;
+    require_open(&row)?;
+    let project = crate::projects::find_by_id(db, project_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if project.firm_id != Some(row.firm_id) {
+        return Err(InboxError::CrossFirm);
+    }
+    let assignment = crate::inbox::assign_for_triage_review(
+        db,
+        actor_id,
+        row_conversation_id(db, &row).await?,
+        project_id,
+    )
+    .await?;
+    write_review_decision(
+        db,
+        triage_id,
+        ReviewDecision {
+            privilege: row.privilege,
+            privilege_confidence: row.privilege_confidence,
+            suggested_project_id: Some(assignment.to_project_id),
+            // A human decision carries no classifier confidence.
+            project_confidence: None,
+            // The model's rationale survives in `raw_output`; the row
+            // carries the human decision that superseded it.
+            rationale: Some(format!("human override: {rationale}")),
+            disposition: TriageDisposition::Overridden,
+            labeled_example: true,
+        },
+    )
+    .await
+}
+
+/// A person settles an uncertain privilege label. The rule layer stays
+/// authoritative on both sides of the form: a social-origin channel is
+/// forced back to [`PrivilegeLabel::NotPrivileged`] whatever the form
+/// posts, and the disposition is recomputed from the settled label. The
+/// human's reason is kept on the row; the classifier's own artifact
+/// survives in `raw_output`.
+///
+/// # Errors
+///
+/// [`InboxError::NotFound`] when the row does not exist,
+/// [`InboxError::Invalid`] when the row is decided, the label is not a
+/// resolution, or the rationale is blank, and [`InboxError::Denied`] when
+/// the actor fails the review authority.
+pub async fn resolve_privilege(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    triage_id: Uuid,
+    requested: PrivilegeLabel,
+    rationale: &str,
+) -> Result<InboxTriage, InboxError> {
+    let rationale = rationale.trim();
+    if rationale.is_empty() {
+        return Err(InboxError::Invalid("a resolution carries a rationale".into()));
+    }
+    let row = find_by_id(db, triage_id).await?.ok_or(InboxError::NotFound)?;
+    require_open(&row)?;
+    let actor = crate::persons::find_by_id(db, actor_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if !crate::inbox::triage_reviewer_may_resolve(db, &actor, row.firm_id).await? {
+        return Err(InboxError::Denied);
+    }
+    let channel = conversation_for_message(db, row.message_id)
+        .await?
+        .channel;
+    // The structural rule outranks the form: a social-origin channel is
+    // never privileged, however the human asked.
+    let privilege = if crate::inbox::is_social_channel(&channel) {
+        PrivilegeLabel::NotPrivileged
+    } else {
+        match requested {
+            PrivilegeLabel::Uncertain => {
+                return Err(InboxError::Invalid(
+                    "a resolution settles the label; uncertain is what the queue is for".into(),
+                ));
+            }
+            settled => settled,
+        }
+    };
+    write_review_decision(
+        db,
+        triage_id,
+        ReviewDecision {
+            privilege,
+            privilege_confidence: None,
+            suggested_project_id: row.suggested_project_id,
+            project_confidence: row.project_confidence,
+            rationale: Some(format!("human review: {rationale}")),
+            disposition: automated_disposition(privilege, row.suggested_project_id),
+            labeled_example: row.labeled_example,
+        },
+    )
+    .await
+}
+
+/// A fresh pass of the rule layer over a triage row: the label is
+/// recomputed from the message's channel alone — a social-origin channel
+/// lands `NotPrivileged`, client email and SMS land `Uncertain` (the
+/// hosted classifier's re-run rides the workflow lane, not the portal) —
+/// and the disposition follows. A row a person resolved returns to the
+/// queue; an existing labeled example stays labeled.
+///
+/// # Errors
+///
+/// [`InboxError::NotFound`] when the row does not exist and
+/// [`InboxError::Denied`] when the actor fails the review authority.
+pub async fn rerun(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    triage_id: Uuid,
+) -> Result<InboxTriage, InboxError> {
+    let row = find_by_id(db, triage_id).await?.ok_or(InboxError::NotFound)?;
+    let actor = crate::persons::find_by_id(db, actor_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if !crate::inbox::triage_reviewer_may_resolve(db, &actor, row.firm_id).await? {
+        return Err(InboxError::Denied);
+    }
+    let channel = conversation_for_message(db, row.message_id)
+        .await?
+        .channel;
+    let privilege = privilege_label(&channel, None);
+    write_review_decision(
+        db,
+        triage_id,
+        ReviewDecision {
+            privilege,
+            privilege_confidence: None,
+            suggested_project_id: row.suggested_project_id,
+            project_confidence: row.project_confidence,
+            rationale: row.rationale.clone(),
+            disposition: automated_disposition(privilege, row.suggested_project_id),
+            labeled_example: row.labeled_example,
+        },
+    )
+    .await
+}
+
+/// The conversation id behind a triage row — the assignment doors need it.
+async fn row_conversation_id(
+    db: &SurrealDb,
+    row: &InboxTriage,
+) -> Result<Uuid, InboxError> {
+    Ok(conversation_for_message(db, row.message_id).await?.id)
 }
 
 #[cfg(test)]
@@ -666,5 +1111,443 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(found, first);
+    }
+
+    // -- The human review queue -------------------------------------------------
+
+    use super::{
+        confirm_project, conversation_for_message, find_by_id, list_for_review, override_project,
+        rerun, resolve_privilege, write_review_decision, ReviewDecision,
+    };
+    use crate::firms::{FirmMembership, NewPersonFirmRole};
+    use crate::persons::{self, NewPerson, Role};
+
+    async fn person(db: &crate::surreal::SurrealDb, name: &str, role: Role) -> Uuid {
+        persons::create(
+            db,
+            &NewPerson::with_role(
+                name,
+                format!(
+                    "{}-{}@example.com",
+                    name.to_lowercase().replace(" ", "-"),
+                    Uuid::now_v7()
+                ),
+                role,
+            ),
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    async fn member(
+        db: &crate::surreal::SurrealDb,
+        person_id: Uuid,
+        firm_id: Uuid,
+        membership: FirmMembership,
+    ) {
+        crate::firms::ensure_membership(
+            db,
+            &NewPersonFirmRole {
+                person_id,
+                firm_id,
+                membership,
+                is_dri: false,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Give the lawyer a firm-side participation row on the Project — the
+    /// row `can_see_project` resolves for the participation check.
+    async fn participate(db: &crate::surreal::SurrealDb, person_id: Uuid, project_id: Uuid) {
+        crate::projects::add_participation(
+            db,
+            project_id,
+            person_id,
+            crate::projects::participation_for_role(Role::Lawyer),
+        )
+        .await
+        .unwrap();
+    }
+
+    /// A NeedsHuman email row whose classifier suggested `project`.
+    async fn needs_human_with_suggestion(
+        db: &crate::surreal::SurrealDb,
+        firm: Uuid,
+        tag: &'static str,
+        project: Option<Uuid>,
+    ) -> (Uuid, crate::inbox::IngestedInbound) {
+        let message = inbound(db, firm, "email", tag).await;
+        let row = record(
+            db,
+            &new_triage(
+                message.message_id,
+                firm,
+                project,
+                PrivilegeLabel::Uncertain,
+                TriageDisposition::NeedsHuman,
+            ),
+        )
+        .await
+        .unwrap();
+        (row.id, message)
+    }
+
+    #[tokio::test]
+    async fn the_queue_lists_awaiting_rows_and_hides_the_rest() {
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let other = crate::test_support::seed_firm_with_brand(&db, "lawyer-shook").await;
+        let owner = person(&db, "Queue Owner", Role::Owner).await;
+        let lawyer = person(&db, "Queue Lawyer", Role::Lawyer).await;
+        member(&db, lawyer, firm, FirmMembership::Lawyer).await;
+        let (_, first) = needs_human_with_suggestion(&db, firm, "queue-first", None).await;
+        needs_human_with_suggestion(&db, other, "queue-other", None).await;
+        // A row a person already decided never waits in the queue.
+        let (decided, _) = needs_human_with_suggestion(&db, firm, "queue-decided", None).await;
+        let decided_row = find_by_id(&db, decided).await.unwrap().unwrap();
+        write_review_decision(
+            &db,
+            decided,
+            ReviewDecision {
+                privilege: decided_row.privilege,
+                privilege_confidence: decided_row.privilege_confidence,
+                suggested_project_id: None,
+                project_confidence: None,
+                rationale: Some("human review: no project applies".into()),
+                disposition: TriageDisposition::Overridden,
+                labeled_example: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        // An Owner reads every Firm's awaiting rows; the decided row is gone.
+        let owner_rows = list_for_review(&db, owner).await.unwrap();
+        assert_eq!(owner_rows.len(), 2);
+        assert!(owner_rows
+            .iter()
+            .all(|row| row.triage.disposition != TriageDisposition::Overridden));
+
+        // A firm-tier member reads only their Firm's rows.
+        let lawyer_rows = list_for_review(&db, lawyer).await.unwrap();
+        assert_eq!(lawyer_rows.len(), 1);
+        assert_eq!(lawyer_rows[0].triage.message_id, first.message_id);
+        assert_eq!(lawyer_rows[0].channel, "email");
+
+        // A Client is denied outright.
+        let client = person(&db, "Queue Client", Role::Client).await;
+        assert!(matches!(
+            list_for_review(&db, client).await,
+            Err(InboxError::Denied)
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_owner_confirms_the_suggested_project() {
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let owner = person(&db, "Confirm Owner", Role::Owner).await;
+        let project = seed_project(&db, firm, "Confirm Target").await;
+        let (triage_id, message) =
+            needs_human_with_suggestion(&db, firm, "confirm-owner", Some(project.id)).await;
+
+        let confirmed = confirm_project(&db, owner, triage_id, project.id)
+            .await
+            .unwrap();
+        assert_eq!(confirmed.disposition, TriageDisposition::Confirmed);
+        assert!(!confirmed.labeled_example);
+        // The suggestion is now the conversation's assignment, recorded as
+        // an auditable assignment row.
+        let conversation = conversation_for_message(&db, message.message_id)
+            .await
+            .unwrap();
+        assert_eq!(conversation.project_id, Some(project.id));
+        assert_eq!(
+            crate::inbox::assignments(&db, conversation.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        // The decision is recorded; a second confirm cannot rewrite it.
+        let again = confirm_project(&db, owner, triage_id, project.id).await;
+        assert!(matches!(again, Err(InboxError::Invalid(_))));
+        assert!(
+            list_for_review(&db, owner).await.unwrap().is_empty(),
+            "a decided row leaves the queue"
+        );
+    }
+
+    #[tokio::test]
+    async fn confirm_takes_the_suggested_project_only() {
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let owner = person(&db, "Confirm Strict Owner", Role::Owner).await;
+        let suggested = seed_project(&db, firm, "Suggested Matter").await;
+        let other = seed_project(&db, firm, "Other Matter").await;
+        let (triage_id, message) =
+            needs_human_with_suggestion(&db, firm, "confirm-strict", Some(suggested.id)).await;
+
+        let error = confirm_project(&db, owner, triage_id, other.id).await;
+        assert!(matches!(error, Err(InboxError::Invalid(_))));
+        let conversation = conversation_for_message(&db, message.message_id)
+            .await
+            .unwrap();
+        assert_eq!(conversation.project_id, None);
+    }
+
+    #[tokio::test]
+    async fn a_lawyer_confirms_only_while_participating() {
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let project = seed_project(&db, firm, "Participation Matter").await;
+        let (outside_id, _) = needs_human_with_suggestion(&db, firm, "confirm-lawyer-out", None)
+            .await;
+        let (triage_id, message) =
+            needs_human_with_suggestion(&db, firm, "confirm-lawyer", Some(project.id)).await;
+        let lawyer = person(&db, "Firm Lawyer", Role::Lawyer).await;
+        member(&db, lawyer, firm, FirmMembership::Lawyer).await;
+
+        // Firm membership alone is not the participation check.
+        let denied = confirm_project(&db, lawyer, triage_id, project.id).await;
+        assert!(matches!(denied, Err(InboxError::Denied)));
+        let conversation = conversation_for_message(&db, message.message_id)
+            .await
+            .unwrap();
+        assert_eq!(conversation.project_id, None);
+
+        // With active participation the same action lands.
+        participate(&db, lawyer, project.id).await;
+        confirm_project(&db, lawyer, triage_id, project.id)
+            .await
+            .unwrap();
+        let conversation = conversation_for_message(&db, message.message_id)
+            .await
+            .unwrap();
+        assert_eq!(conversation.project_id, Some(project.id));
+
+        // An Admin acts without participation; a Client never acts.
+        let admin = person(&db, "Firm Admin", Role::Admin).await;
+        let admin_row = {
+            let message = inbound(&db, firm, "email", "confirm-admin").await;
+            record(
+                &db,
+                &new_triage(
+                    message.message_id,
+                    firm,
+                    Some(project.id),
+                    PrivilegeLabel::Uncertain,
+                    TriageDisposition::NeedsHuman,
+                ),
+            )
+            .await
+            .unwrap()
+        };
+        confirm_project(&db, admin, admin_row.id, project.id)
+            .await
+            .unwrap();
+        let client = person(&db, "Confirm Client", Role::Client).await;
+        let (client_row, _) =
+            needs_human_with_suggestion(&db, firm, "confirm-client", Some(project.id)).await;
+        assert!(matches!(
+            confirm_project(&db, client, client_row, project.id).await,
+            Err(InboxError::Denied)
+        ));
+        assert!(matches!(
+            confirm_project(&db, client, outside_id, project.id).await,
+            Err(InboxError::Denied)
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_override_records_the_correction_as_a_labeled_example() {
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let owner = person(&db, "Override Owner", Role::Owner).await;
+        let suggested = seed_project(&db, firm, "Wrong Suggestion").await;
+        let corrected = seed_project(&db, firm, "Right Matter").await;
+        let (triage_id, message) =
+            needs_human_with_suggestion(&db, firm, "override-labeled", Some(suggested.id)).await;
+
+        let overridden = override_project(
+            &db,
+            owner,
+            triage_id,
+            corrected.id,
+            "the sender is on the Right Matter",
+        )
+        .await
+        .unwrap();
+        assert_eq!(overridden.disposition, TriageDisposition::Overridden);
+        assert!(overridden.labeled_example);
+        assert_eq!(overridden.suggested_project_id, Some(corrected.id));
+        assert_eq!(overridden.project_confidence, None);
+        assert!(overridden
+            .rationale
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("human override:"));
+        let conversation = conversation_for_message(&db, message.message_id)
+            .await
+            .unwrap();
+        assert_eq!(conversation.project_id, Some(corrected.id));
+
+        // The correction crosses Firms at its own peril.
+        let other = crate::test_support::seed_firm_with_brand(&db, "lawyer-shook").await;
+        let foreign = seed_project(&db, other, "Foreign Matter").await;
+        let (open_row, _) = needs_human_with_suggestion(&db, firm, "override-foreign", None).await;
+        let error = override_project(&db, owner, open_row, foreign.id, "cross firm").await;
+        assert!(matches!(error, Err(InboxError::CrossFirm)));
+        // And an override carries a rationale.
+        let (blank_row, _) =
+            needs_human_with_suggestion(&db, firm, "override-blank", None).await;
+        let error = override_project(&db, owner, blank_row, corrected.id, "  ").await;
+        assert!(matches!(error, Err(InboxError::Invalid(_))));
+    }
+
+    #[tokio::test]
+    async fn resolving_privilege_keeps_the_rule_layer_authoritative() {
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let owner = person(&db, "Resolve Owner", Role::Owner).await;
+
+        // The human may settle client email either way.
+        let (email_row, _) = needs_human_with_suggestion(&db, firm, "resolve-email", None).await;
+        let resolved = resolve_privilege(
+            &db,
+            owner,
+            email_row,
+            PrivilegeLabel::Privileged,
+            "the sender is a client discussing their trust",
+        )
+        .await
+        .unwrap();
+        assert_eq!(resolved.privilege, PrivilegeLabel::Privileged);
+        assert_eq!(resolved.privilege_confidence, None);
+        assert_eq!(resolved.disposition, TriageDisposition::NeedsHuman);
+        assert!(resolved
+            .rationale
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("human review:"));
+
+        // The human may call client email not privileged — a person can.
+        let (email_two, _) = needs_human_with_suggestion(&db, firm, "resolve-email-two", None).await;
+        let settled = resolve_privilege(
+            &db,
+            owner,
+            email_two,
+            PrivilegeLabel::NotPrivileged,
+            "a newsletter, not a client",
+        )
+        .await
+        .unwrap();
+        assert_eq!(settled.privilege, PrivilegeLabel::NotPrivileged);
+
+        // A social-origin message is not the human's to flag: the rule
+        // layer forces the label back, whatever the form posts.
+        let message = inbound(&db, firm, "instagram", "resolve-social").await;
+        let social = record(
+            &db,
+            &new_triage(
+                message.message_id,
+                firm,
+                None,
+                PrivilegeLabel::NotPrivileged,
+                TriageDisposition::NeedsHuman,
+            ),
+        )
+        .await
+        .unwrap();
+        let forced = resolve_privilege(
+            &db,
+            owner,
+            social.id,
+            PrivilegeLabel::Privileged,
+            "this looks privileged to me",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            forced.privilege,
+            PrivilegeLabel::NotPrivileged,
+            "the structural rule outranks the form"
+        );
+
+        // Resolving to Uncertain is not a resolution; a resolution carries
+        // a reason.
+        let (open_row, _) = needs_human_with_suggestion(&db, firm, "resolve-open", None).await;
+        assert!(matches!(
+            resolve_privilege(&db, owner, open_row, PrivilegeLabel::Uncertain, "keep guessing")
+                .await,
+            Err(InboxError::Invalid(_))
+        ));
+        assert!(matches!(
+            resolve_privilege(&db, owner, open_row, PrivilegeLabel::Privileged, "  ").await,
+            Err(InboxError::Invalid(_))
+        ));
+
+        // A Client never resolves; an outside-the-Firm Lawyer cannot see
+        // the row's Firm.
+        let client = person(&db, "Resolve Client", Role::Client).await;
+        assert!(matches!(
+            resolve_privilege(&db, client, open_row, PrivilegeLabel::Privileged, "mine").await,
+            Err(InboxError::Denied)
+        ));
+        let outsider = person(&db, "Resolve Outsider", Role::Lawyer).await;
+        assert!(matches!(
+            resolve_privilege(&db, outsider, open_row, PrivilegeLabel::Privileged, "not mine")
+                .await,
+            Err(InboxError::Denied)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_rerun_returns_a_resolved_row_to_the_queue() {
+        let db = crate::test_support::mem_surreal().await;
+        let firm = crate::test_support::seed_firm_with_brand(&db, "neon").await;
+        let owner = person(&db, "Rerun Owner", Role::Owner).await;
+        let project = seed_project(&db, firm, "Rerun Matter").await;
+
+        // A confirmed email row reopens as Uncertain — the portal re-runs
+        // the rule layer, and email without a classifier is uncertain.
+        let (triage_id, _) = needs_human_with_suggestion(&db, firm, "rerun-email", Some(project.id))
+            .await;
+        confirm_project(&db, owner, triage_id, project.id).await.unwrap();
+        let reopened = rerun(&db, owner, triage_id).await.unwrap();
+        assert_eq!(reopened.privilege, PrivilegeLabel::Uncertain);
+        assert_eq!(reopened.disposition, TriageDisposition::NeedsHuman);
+        assert_eq!(reopened.suggested_project_id, Some(project.id));
+        assert!(
+            list_for_review(&db, owner).await.unwrap().len() == 1,
+            "the reopened row waits again"
+        );
+
+        // A labeled example survives the re-run.
+        let overridden = override_project(&db, owner, triage_id, project.id, "still right").await.unwrap();
+        assert!(overridden.labeled_example);
+        let rerun_row = rerun(&db, owner, triage_id).await.unwrap();
+        assert!(rerun_row.labeled_example);
+
+        // A social row re-runs to the rule layer's settled label.
+        let message = inbound(&db, firm, "threads", "rerun-social").await;
+        let social = record(
+            &db,
+            &new_triage(
+                message.message_id,
+                firm,
+                Some(project.id),
+                PrivilegeLabel::NotPrivileged,
+                TriageDisposition::Suggested,
+            ),
+        )
+        .await
+        .unwrap();
+        let social_rerun = rerun(&db, owner, social.id).await.unwrap();
+        assert_eq!(social_rerun.privilege, PrivilegeLabel::NotPrivileged);
+        assert_eq!(social_rerun.disposition, TriageDisposition::Suggested);
     }
 }

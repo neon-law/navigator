@@ -20,6 +20,9 @@ use crate::session::SessionData;
 
 const SMS_SIGNATURE: &str = "x-navigator-signature";
 
+/// Every triage action redirects back to the review queue.
+const TRIAGE_QUEUE: &str = "/app/inbox/triage";
+
 /// Start a message-keyed Restate workflow after the inbound Message has been
 /// persisted. Repeated provider deliveries attach to the same Slack alert.
 pub async fn start_inbound_message_alert(message_id: Uuid) -> Result<(), String> {
@@ -347,6 +350,118 @@ pub async fn assign_post(
             }
         }
         Err(error) => redirect_error(&back, &error.to_string()),
+    }
+}
+
+/// `POST /app/inbox/{conversation_id}/triage/{triage_id}/confirm/{project_id}`
+///
+/// A person confirms the classifier's suggested Project. The store door
+/// re-checks the suggestion matches, runs the participation-checked
+/// assignment, and records the Confirmed disposition.
+pub async fn triage_confirm_post(
+    State(db): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path((_conversation_id, triage_id, project_id)): Path<(Uuid, Uuid, Uuid)>,
+) -> Response {
+    let Some(actor_id) = actor_id(session) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match store::inbox_triage::confirm_project(&db, actor_id, triage_id, project_id).await {
+        Ok(_) => Redirect::to(TRIAGE_QUEUE).into_response(),
+        Err(error) => redirect_error(TRIAGE_QUEUE, &error.to_string()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TriageOverrideForm {
+    #[serde(rename = "_csrf")]
+    _csrf: Option<String>,
+    project_id: Uuid,
+    rationale: String,
+}
+
+/// `POST /app/inbox/{conversation_id}/triage/{triage_id}/override`
+///
+/// A person corrects the suggestion with a different Project and a
+/// rationale; the correction is recorded as a labeled example.
+pub async fn triage_override_post(
+    State(db): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path((_conversation_id, triage_id)): Path<(Uuid, Uuid)>,
+    axum::Form(form): axum::Form<TriageOverrideForm>,
+) -> Response {
+    let Some(actor_id) = actor_id(session) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match store::inbox_triage::override_project(
+        &db,
+        actor_id,
+        triage_id,
+        form.project_id,
+        &form.rationale,
+    )
+    .await
+    {
+        Ok(_) => Redirect::to(TRIAGE_QUEUE).into_response(),
+        Err(error) => redirect_error(TRIAGE_QUEUE, &error.to_string()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TriageResolveForm {
+    #[serde(rename = "_csrf")]
+    _csrf: Option<String>,
+    privilege: String,
+    rationale: String,
+}
+
+/// `POST /app/inbox/{conversation_id}/triage/{triage_id}/resolve`
+///
+/// A person settles an uncertain privilege label. The rule layer stays
+/// authoritative server-side: a social-origin channel is forced back to
+/// not-privileged whatever the form posts.
+pub async fn triage_resolve_post(
+    State(db): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path((_conversation_id, triage_id)): Path<(Uuid, Uuid)>,
+    axum::Form(form): axum::Form<TriageResolveForm>,
+) -> Response {
+    let Some(actor_id) = actor_id(session) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(requested) = store::inbox_triage::PrivilegeLabel::from_form(&form.privilege) else {
+        return redirect_error(TRIAGE_QUEUE, "unknown privilege label");
+    };
+    match store::inbox_triage::resolve_privilege(
+        &db,
+        actor_id,
+        triage_id,
+        requested,
+        &form.rationale,
+    )
+    .await
+    {
+        Ok(_) => Redirect::to(TRIAGE_QUEUE).into_response(),
+        Err(error) => redirect_error(TRIAGE_QUEUE, &error.to_string()),
+    }
+}
+
+/// `POST /app/inbox/{conversation_id}/triage/{triage_id}/rerun`
+///
+/// A fresh pass of the rule layer over the row: the label is recomputed
+/// from the message's channel and the disposition follows. A decided row
+/// returns to the queue.
+pub async fn triage_rerun_post(
+    State(db): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path((_conversation_id, triage_id)): Path<(Uuid, Uuid)>,
+) -> Response {
+    let Some(actor_id) = actor_id(session) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match store::inbox_triage::rerun(&db, actor_id, triage_id).await {
+        Ok(_) => Redirect::to(TRIAGE_QUEUE).into_response(),
+        Err(error) => redirect_error(TRIAGE_QUEUE, &error.to_string()),
     }
 }
 
@@ -1455,5 +1570,403 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    }
+
+    // -- The triage review queue's doors ----------------------------------------
+
+    use store::inbox_triage::{NewInboxTriage, PrivilegeLabel, TriageDisposition};
+
+    /// A NeedsHuman email triage row with a suggested Project, over a
+    /// fresh conversation, in `firm`'s inbox.
+    async fn triaged_email(
+        db: &store::surreal::SurrealDb,
+        firm: Uuid,
+        tag: &str,
+        project: Option<Uuid>,
+    ) -> (Uuid, store::inbox::IngestedInbound) {
+        let message = store::inbox::ingest_inbound(
+            db,
+            &inbound(firm, store::inbox::channel::EMAIL, "support", tag, "reader@example.com"),
+        )
+        .await
+        .unwrap();
+        let row = store::inbox_triage::record(
+            db,
+            &NewInboxTriage {
+                message_id: message.message_id,
+                firm_id: firm,
+                suggested_project_id: project,
+                project_confidence: None,
+                privilege: PrivilegeLabel::Uncertain,
+                privilege_confidence: None,
+                rationale: Some("uncertain: classifier below floor".into()),
+                model_id: Some("gemini-flash-lite".into()),
+                prompt_version: "triage-v1".into(),
+                raw_output: None,
+                disposition: TriageDisposition::NeedsHuman,
+                labeled_example: false,
+            },
+        )
+        .await
+        .unwrap();
+        (row.id, message)
+    }
+
+    fn location(response: &Response) -> Option<String> {
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    }
+
+    #[tokio::test]
+    async fn triage_doors_require_a_session() {
+        let db = store::test_support::mem_surreal().await;
+        let (owner, _admin, firm, project) = inbox_matter(&db).await;
+        let (triage_id, _) =
+            triaged_email(&db, firm.id, "triage-door-anon", Some(project.id)).await;
+        let state = crate::test_support::app_state(db).await;
+
+        let confirmed = triage_confirm_post(
+            State(state.surreal.clone()),
+            None,
+            Path((Uuid::now_v7(), triage_id, project.id)),
+        )
+        .await;
+        assert_eq!(confirmed.status(), StatusCode::NOT_FOUND);
+
+        let resolved = triage_resolve_post(
+            State(state.surreal.clone()),
+            None,
+            Path((Uuid::now_v7(), triage_id)),
+            axum::Form(TriageResolveForm {
+                _csrf: None,
+                privilege: "privileged".into(),
+                rationale: "why".into(),
+            }),
+        )
+        .await;
+        assert_eq!(resolved.status(), StatusCode::NOT_FOUND);
+
+        assert_eq!(
+            store::inbox_triage::find_by_id(&state.surreal, triage_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .disposition,
+            TriageDisposition::NeedsHuman
+        );
+        let _ = owner;
+    }
+
+    #[tokio::test]
+    async fn an_owner_confirms_a_suggestion_and_it_persists() {
+        let db = store::test_support::mem_surreal().await;
+        let (owner, _admin, firm, project) = inbox_matter(&db).await;
+        let (triage_id, message) =
+            triaged_email(&db, firm.id, "triage-owner-confirm", Some(project.id)).await;
+        let state = crate::test_support::app_state(db).await;
+
+        let response = triage_confirm_post(
+            State(state.surreal.clone()),
+            Some(axum::Extension(session(
+                &owner.email,
+                store::persons::Role::Owner,
+                owner.id,
+            ))),
+            Path((message.conversation_id, triage_id, project.id)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(location(&response).as_deref(), Some(TRIAGE_QUEUE));
+
+        let conversation = store::inbox::conversation_by_id(
+            &state.surreal,
+            message.conversation_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(conversation.project_id, Some(project.id));
+        let row = store::inbox_triage::find_by_id(&state.surreal, triage_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.disposition, TriageDisposition::Confirmed);
+        assert!(!row.labeled_example);
+        // The decided row leaves the queue.
+        assert!(
+            store::inbox_triage::list_for_review(&state.surreal, owner.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_firm_member_confirms_only_while_participating() {
+        let db = store::test_support::mem_surreal().await;
+        let (owner, _admin, firm, project) = inbox_matter(&db).await;
+        let (triage_id, message) =
+            triaged_email(&db, firm.id, "triage-lawyer-confirm", Some(project.id)).await;
+        let lawyer = store::persons::create(
+            &db,
+            &store::persons::NewPerson::with_role(
+                "Triage Lawyer",
+                format!("triage-lawyer-{}@example.com", Uuid::now_v7()),
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        store::firms::ensure_membership(
+            &db,
+            &store::firms::NewPersonFirmRole {
+                person_id: lawyer.id,
+                firm_id: firm.id,
+                membership: store::firms::FirmMembership::Lawyer,
+                is_dri: false,
+            },
+        )
+        .await
+        .unwrap();
+        let state = crate::test_support::app_state(db).await;
+
+        // Firm membership alone is not the participation check.
+        let denied = triage_confirm_post(
+            State(state.surreal.clone()),
+            Some(axum::Extension(session(
+                &lawyer.email,
+                store::persons::Role::Lawyer,
+                lawyer.id,
+            ))),
+            Path((message.conversation_id, triage_id, project.id)),
+        )
+        .await;
+        assert_eq!(denied.status(), StatusCode::SEE_OTHER);
+        assert!(location(&denied)
+            .unwrap_or_default()
+            .starts_with(&format!("{TRIAGE_QUEUE}?error=")));
+        let conversation = store::inbox::conversation_by_id(
+            &state.surreal,
+            message.conversation_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(conversation.project_id, None);
+
+        // With active participation the same action lands.
+        store::projects::add_participation(
+            &state.surreal,
+            project.id,
+            lawyer.id,
+            store::projects::participation_for_role(store::persons::Role::Lawyer),
+        )
+        .await
+        .unwrap();
+        let confirmed = triage_confirm_post(
+            State(state.surreal.clone()),
+            Some(axum::Extension(session(
+                &lawyer.email,
+                store::persons::Role::Lawyer,
+                lawyer.id,
+            ))),
+            Path((message.conversation_id, triage_id, project.id)),
+        )
+        .await;
+        assert_eq!(confirmed.status(), StatusCode::SEE_OTHER);
+        let conversation = store::inbox::conversation_by_id(
+            &state.surreal,
+            message.conversation_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(conversation.project_id, Some(project.id));
+        // The Owner's own door still works on another row: sanity in one.
+        assert!(
+            store::inbox_triage::list_for_review(&state.surreal, owner.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_override_persists_the_correction_as_a_labeled_example() {
+        let db = store::test_support::mem_surreal().await;
+        let (owner, _admin, firm, project) = inbox_matter(&db).await;
+        let (triage_id, message) =
+            triaged_email(&db, firm.id, "triage-override", None).await;
+        let state = crate::test_support::app_state(db).await;
+
+        let response = triage_override_post(
+            State(state.surreal.clone()),
+            Some(axum::Extension(session(
+                &owner.email,
+                store::persons::Role::Owner,
+                owner.id,
+            ))),
+            Path((message.conversation_id, triage_id)),
+            axum::Form(TriageOverrideForm {
+                _csrf: None,
+                project_id: project.id,
+                rationale: "the sender is on this matter".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let row = store::inbox_triage::find_by_id(&state.surreal, triage_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.disposition, TriageDisposition::Overridden);
+        assert!(row.labeled_example);
+        let conversation = store::inbox::conversation_by_id(
+            &state.surreal,
+            message.conversation_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(conversation.project_id, Some(project.id));
+    }
+
+    #[tokio::test]
+    async fn resolving_privilege_keeps_the_rule_layer_authoritative() {
+        let db = store::test_support::mem_surreal().await;
+        let (owner, _admin, firm, _project) = inbox_matter(&db).await;
+
+        // The human settles client email either way.
+        let (email_row, email_message) =
+            triaged_email(&db, firm.id, "triage-resolve-email", None).await;
+        // A social row: the structural rule outranks the form.
+        let social = store::inbox::ingest_inbound(
+            &db,
+            &inbound(
+                firm.id,
+                store::inbox::channel::INSTAGRAM,
+                "ig-page",
+                "triage-resolve-social",
+                "poster@example.com",
+            ),
+        )
+        .await
+        .unwrap();
+        let social_row = store::inbox_triage::record(
+            &db,
+            &NewInboxTriage {
+                message_id: social.message_id,
+                firm_id: firm.id,
+                suggested_project_id: None,
+                project_confidence: None,
+                privilege: PrivilegeLabel::NotPrivileged,
+                privilege_confidence: None,
+                rationale: None,
+                model_id: None,
+                prompt_version: store::inbox_triage::RULES_ONLY_PROMPT.into(),
+                raw_output: None,
+                disposition: TriageDisposition::NeedsHuman,
+                labeled_example: false,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+        let state = crate::test_support::app_state(db).await;
+
+        let settled = triage_resolve_post(
+            State(state.surreal.clone()),
+            Some(axum::Extension(session(
+                &owner.email,
+                store::persons::Role::Owner,
+                owner.id,
+            ))),
+            Path((email_message.conversation_id, email_row)),
+            axum::Form(TriageResolveForm {
+                _csrf: None,
+                privilege: "privileged".into(),
+                rationale: "a client discussing their matter".into(),
+            }),
+        )
+        .await;
+        assert_eq!(settled.status(), StatusCode::SEE_OTHER);
+        let row = store::inbox_triage::find_by_id(&state.surreal, email_row)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.privilege, PrivilegeLabel::Privileged);
+
+        // The social row's forced label: the form asked for privileged.
+        let forced = triage_resolve_post(
+            State(state.surreal.clone()),
+            Some(axum::Extension(session(
+                &owner.email,
+                store::persons::Role::Owner,
+                owner.id,
+            ))),
+            Path((social.conversation_id, social_row)),
+            axum::Form(TriageResolveForm {
+                _csrf: None,
+                privilege: "privileged".into(),
+                rationale: "looks privileged to me".into(),
+            }),
+        )
+        .await;
+        assert_eq!(forced.status(), StatusCode::SEE_OTHER);
+        let row = store::inbox_triage::find_by_id(&state.surreal, social_row)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.privilege,
+            PrivilegeLabel::NotPrivileged,
+            "the structural rule outranks the form"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rerun_returns_a_decided_row_to_the_queue() {
+        let db = store::test_support::mem_surreal().await;
+        let (owner, _admin, firm, project) = inbox_matter(&db).await;
+        let (triage_id, message) =
+            triaged_email(&db, firm.id, "triage-rerun", Some(project.id)).await;
+        let state = crate::test_support::app_state(db).await;
+        let owner_session = Some(axum::Extension(session(
+            &owner.email,
+            store::persons::Role::Owner,
+            owner.id,
+        )));
+
+        triage_confirm_post(
+            State(state.surreal.clone()),
+            owner_session.clone(),
+            Path((message.conversation_id, triage_id, project.id)),
+        )
+        .await
+        .status();
+        let response = triage_rerun_post(
+            State(state.surreal.clone()),
+            owner_session,
+            Path((message.conversation_id, triage_id)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let row = store::inbox_triage::find_by_id(&state.surreal, triage_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.privilege, PrivilegeLabel::Uncertain);
+        assert_eq!(row.disposition, TriageDisposition::NeedsHuman);
+        assert_eq!(
+            store::inbox_triage::list_for_review(&state.surreal, owner.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

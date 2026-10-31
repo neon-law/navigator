@@ -267,6 +267,8 @@ pub enum InboxError {
     Denied,
     #[error("conversation was not found")]
     NotFound,
+    #[error("{0}")]
+    Invalid(String),
     #[error("that project is in another firm")]
     CrossFirm,
     #[error("empty message")]
@@ -619,6 +621,106 @@ pub async fn assign(
     {
         return Err(InboxError::Denied);
     }
+    assign_write(db, actor_id, &conversation, project_id).await
+}
+
+/// The triage review queue's assignment door. Owner and Admin always; a
+/// Lawyer or Clerk only while their participation on the target Project is
+/// active — the `participant_still_may_reply` shape, evaluated against the
+/// Project the triage suggests or a correction names.
+///
+/// # Errors
+///
+/// [`InboxError::Denied`] for a Client, an actor outside the Firm, or a
+/// Lawyer/Clerk without active participation on the Project. The other
+/// cases of [`assign`] apply unchanged.
+pub(crate) async fn assign_for_triage_review(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    conversation_id: Uuid,
+    project_id: Uuid,
+) -> Result<Assignment, InboxError> {
+    let actor = load_person(db, actor_id).await?;
+    let conversation = conversation_by_id(db, conversation_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    let project = projects::find_by_id(db, project_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if project.firm_id != Some(conversation.firm_id) {
+        return Err(InboxError::CrossFirm);
+    }
+    if !triage_reviewer_may_assign(db, &actor, project_id).await? {
+        return Err(InboxError::Denied);
+    }
+    assign_write(db, actor_id, &conversation, project_id).await
+}
+
+/// Whether the actor may act on a triage row whose human decision assigns
+/// `project_id`. Owner and Admin always; a Lawyer or Clerk passes the same
+/// participation check the reply doors use; a Client never.
+pub(crate) async fn triage_reviewer_may_assign(
+    db: &SurrealDb,
+    actor: &persons::Person,
+    project_id: Uuid,
+) -> Result<bool, InboxError> {
+    match actor.role {
+        Role::Owner | Role::Admin => Ok(true),
+        Role::Lawyer | Role::Clerk => sees_project(db, actor.id, actor.role, project_id).await,
+        Role::Client => Ok(false),
+    }
+}
+
+/// Whether the actor may act on a triage row that names no Project —
+/// privilege resolution and re-runs. Owner and Admin always; a Lawyer or
+/// Clerk when they belong to the row's Firm (the same visibility the queue
+/// list grants); a Client never.
+pub(crate) async fn triage_reviewer_may_resolve(
+    db: &SurrealDb,
+    actor: &persons::Person,
+    firm_id: Uuid,
+) -> Result<bool, InboxError> {
+    match actor.role {
+        Role::Owner | Role::Admin => Ok(true),
+        Role::Lawyer | Role::Clerk => Ok(crate::firms::memberships_for_person(db, actor.id)
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?
+            .iter()
+            .any(|membership| membership.firm_id == firm_id)),
+        Role::Client => Ok(false),
+    }
+}
+
+/// Authorization-only door for the triage review actions: denies before any
+/// row or suggestion state is read, so an unauthorized actor learns nothing
+/// from the error it receives.
+///
+/// # Errors
+///
+/// [`InboxError::Denied`] when the actor fails the review authority,
+/// [`InboxError::NotFound`] when the actor does not exist.
+pub(crate) async fn require_triage_reviewer(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    project_id: Uuid,
+) -> Result<(), InboxError> {
+    let actor = load_person(db, actor_id).await?;
+    if triage_reviewer_may_assign(db, &actor, project_id).await? {
+        Ok(())
+    } else {
+        Err(InboxError::Denied)
+    }
+}
+
+/// The shared write behind both assignment doors: re-point the conversation,
+/// mirror it, rescope any email thread, and record the assignment row.
+async fn assign_write(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    conversation: &Conversation,
+    project_id: Uuid,
+) -> Result<Assignment, InboxError> {
+    let conversation_id = conversation.id;
     let from_project_id = conversation.project_id;
     db.query("UPDATE $id SET project_id = $project, unread = true, updated_at = time::now()")
         .bind(("id", record_id(CONVERSATION, conversation_id)))
