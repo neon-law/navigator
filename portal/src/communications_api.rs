@@ -65,7 +65,7 @@ async fn require_participant(
     }
 }
 
-fn map_communication(error: store::communications::CommunicationError) -> ApiError {
+pub(crate) fn map_communication(error: store::communications::CommunicationError) -> ApiError {
     match error {
         store::communications::CommunicationError::Invalid(message) => {
             ApiError::CommunicationInvalid(message)
