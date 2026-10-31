@@ -284,7 +284,7 @@ PIERCE_SUP = "\n".join([
 ])
 CLARK_WA_DC = "\n".join([
     sf("CLARKWAPETADULT", "Petition for Individual Adult Name Change", None, "https://clark.wa.gov/media/document/95066", FILL["unv"], "Clark County District Court clerk, 1200 Franklin St, Vancouver",
-       note="Filing fees due at filing, non-refundable: $296.50 individual adult; $298.50 family or minor. Petitions filed in person; hearings virtual by default; additional certified copies $5. GR 34 fee waiver available upon request. Sealed name changes go to the Superior Court Clerk's Office (564-397-2292)."),
+       note="Filing fees due at filing, non-refundable: $296.50 individual adult; $298.50 family or minor. Petitions filed in person; hearings virtual by default; additional certified copies $5. GR 34 fee waiver available upon request. Sealed name changes go to the Superior Court Clerk's Office."),
     sf("CLARKWAPETMINOR", "Petition for Minor Name Change", None, "https://clark.wa.gov/media/document/95061", FILL["unv"], "Clark County District Court clerk", note="Fee $298.50 (family or minor)."),
     sf("CLARKWAPETFAMILY", "Petition for Family Name Change", None, "https://clark.wa.gov/media/document/95056", FILL["unv"], "Clark County District Court clerk", note="Fee $298.50 (family or minor)."),
     sf("CLARKWACONFID", "Confidential Identification Information Form (required for ALL name changes)", None, "https://clark.wa.gov/media/document/212476", FILL["unv"], "Clark County District Court clerk"),

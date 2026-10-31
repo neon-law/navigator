@@ -1355,7 +1355,7 @@ records:
         source_url: https://clark.wa.gov/media/document/95066
         sha256: e0c21d4ca3455ede2a4eeb4bc09d28906dc2382567fd8a14caddc0be07df4084
         filing_office: Clark County District Court clerk, 1200 Franklin St, Vancouver
-        fee_note: "Filing fees due at filing, non-refundable: $296.50 individual adult; $298.50 family or minor. Petitions filed in person; hearings virtual by default; additional certified copies $5. GR 34 fee waiver available upon request. Sealed name changes go to the Superior Court Clerk's Office (564-397-2292)."
+        fee_note: "Filing fees due at filing, non-refundable: $296.50 individual adult; $298.50 family or minor. Petitions filed in person; hearings virtual by default; additional certified copies $5. GR 34 fee waiver available upon request. Sealed name changes go to the Superior Court Clerk's Office."
         fillability: unverified
       - key: CLARKWAPETMINOR
         title: Petition for Minor Name Change
