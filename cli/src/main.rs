@@ -1452,6 +1452,38 @@ enum ProjectsCmd {
         #[arg(long)]
         record: Option<String>,
     },
+    /// Create or adopt a Project's external surfaces through the live
+    /// site's admin reconcile door.
+    ///
+    /// `reconcile` is the idempotent backfill: for every Project visible to
+    /// this login (or one `--project` code) it runs the same pass matter-open
+    /// runs best-effort, so a matter opened while the forge was down gains
+    /// its governed, seeded repository on the next run, and re-running
+    /// changes nothing. Each Project reports its own outcome — a Firm whose
+    /// Forgejo is unconfigured is skipped with the missing coordinate
+    /// named, never a failed run.
+    Surfaces {
+        #[command(subcommand)]
+        action: SurfacesCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum SurfacesCmd {
+    /// Create or adopt each Project's source repository — seeded and
+    /// governed when the forge is Forgejo — through
+    /// `POST /app/api/project-surfaces/{id}`.
+    Reconcile {
+        /// Project code, e.g. `acme`. Omit to reconcile every Project
+        /// visible to this login.
+        #[arg(long)]
+        project: Option<String>,
+        /// Emit the per-Project outcomes as JSON.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        host: HostOpt,
+    },
 }
 
 #[derive(Subcommand)]
@@ -5753,6 +5785,16 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             ci, check, deep, ..
         } => projects::pinned_gate::dispatch(GateMode::Content { ci, check, deep }).await,
         ProjectsCmd::Preview { port } => projects::preview::run(port).await,
+        ProjectsCmd::Surfaces { action } => match action {
+            SurfacesCmd::Reconcile {
+                project,
+                json,
+                host,
+            } => {
+                projects::surfaces_reconcile::run(host.host.as_deref(), project.as_deref(), json)
+                    .await
+            }
+        },
         ProjectsCmd::Pages { action } => projects::pages_init::run(action).await,
         ProjectsCmd::Setup {
             project_code,

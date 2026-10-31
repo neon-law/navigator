@@ -1290,7 +1290,11 @@ fn canonical_document(base: &str) -> Value {
                Each step is idempotent — an existing folder or repository is adopted, a recorded \
                `repository_url` is left alone, and an entirely absent provider configuration \
                skips that surface with a reason in the response. Partial or invalid provider \
-               configuration fails the request with its initialization error. \
+               configuration fails the request with its initialization error. A Project whose \
+               Firm is missing a Forgejo coordinate (the Forgejo root URL, or the Firm's \
+               `forgejo_access_token` integration secret) answers `422 forgejo_unavailable` \
+               naming every missing piece, so a fleet-wide backfill sweep can report it per \
+               Project and continue. \
                Matter-open runs this pass best-effort; this door is the \
                admin retry for a failed or legacy Project. Project participation is never copied \
                onto the forge. Authorization: admin-tier only (`owner`/`admin`).",
@@ -1306,6 +1310,9 @@ fn canonical_document(base: &str) -> Value {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "404": { "description": "No matter with that id", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "422": { "description": "The Project's Firm is missing a Forgejo coordinate; the message names every missing piece", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "500": { "description": "Drive, forge, or the store failed", "content": { "application/json": {

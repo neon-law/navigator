@@ -611,7 +611,7 @@ pub fn navigator_default_rules() -> Vec<Box<dyn Rule>> {
         Box::new(F129AudiencesOnlyCustom),
         Box::new(F130PleadingBodyHasNoCaption),
         Box::new(F131TemplateHasNoDraftingMarkers),
-        Box::new(crate::clauses::ClauseReferences),
+        Box::new(crate::clauses::ClauseReferences::default()),
         // Mutual exclusivity runs on templates too: a template that wrongly
         // declares a `starts_at` timestamp is flagged here (the event side
         // is enforced by `navigator_event_rules`).

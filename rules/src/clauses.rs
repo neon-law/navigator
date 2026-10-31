@@ -388,11 +388,17 @@ pub fn current_source(code: &str) -> Result<String, String> {
 /// Why an onboarding template fails the engagement-arbitration requirement,
 /// or `None` when it includes the current Clause (or is not an onboarding).
 /// A compiled snapshot pins the Clause under `clause_sources:` and has already
-/// expanded its references.
-fn missing_engagement_arbitration(markdown: &str) -> Option<String> {
+/// expanded its references. `engagement_executed` is LAW-226's waiver: the
+/// executed engagement was generated from this template as it stood when it
+/// was sent, so once execution evidence exists the template stops being
+/// required to carry today's clause.
+fn missing_engagement_arbitration(markdown: &str, engagement_executed: bool) -> Option<String> {
     let (yaml, body) = crate::frontmatter::split(markdown)?;
     let doc: Value = serde_yaml::from_str(yaml).ok()?;
     if doc.get("kind").and_then(Value::as_str) != Some("onboarding") {
+        return None;
+    }
+    if engagement_executed {
         return None;
     }
     let current = current_source(ENGAGEMENT_ARBITRATION).ok()?;
@@ -419,7 +425,25 @@ fn missing_engagement_arbitration(markdown: &str) -> Option<String> {
 }
 
 /// Validate Clause composition and the expanded body's existing notation rules.
-pub struct ClauseReferences;
+#[derive(Debug, Default)]
+pub struct ClauseReferences {
+    /// LAW-226: execution evidence — a committed signed-copy pointer carrying
+    /// a `docusign_envelope_id` — waives the onboarding
+    /// engagement-arbitration requirement. `Default` is the unwaived rule,
+    /// what every non-gate caller gets.
+    engagement_executed: bool,
+}
+
+impl ClauseReferences {
+    /// The rule as the Project gate runs it, told whether the Project's
+    /// engagement has been executed.
+    #[must_use]
+    pub const fn executed(engagement_executed: bool) -> Self {
+        Self {
+            engagement_executed,
+        }
+    }
+}
 
 impl crate::Rule for ClauseReferences {
     fn code(&self) -> &'static str {
@@ -427,7 +451,9 @@ impl crate::Rule for ClauseReferences {
     }
 
     fn lint(&self, file: &crate::SourceFile) -> Vec<crate::Violation> {
-        if let Some(message) = missing_engagement_arbitration(&file.contents) {
+        if let Some(message) =
+            missing_engagement_arbitration(&file.contents, self.engagement_executed)
+        {
             return vec![crate::Violation {
                 code: "N132",
                 path: file.path.clone(),
@@ -508,7 +534,7 @@ mod tests {
     fn retired_versions_refuse_new_references_but_saved_snapshots_stay_readable() {
         use crate::Rule;
         let authored = source("governing_law@1", "{{> law}}");
-        let violations = super::ClauseReferences.lint(&crate::SourceFile {
+        let violations = super::ClauseReferences::default().lint(&crate::SourceFile {
             path: "synthetic.md".into(),
             contents: authored.clone(),
         });
@@ -612,7 +638,7 @@ mod tests {
             source("dispute_resolution@1", "No reference."),
             source("dispute_resolution@1", "{{> absent}}"),
         ] {
-            let violations = super::ClauseReferences.lint(&crate::SourceFile {
+            let violations = super::ClauseReferences::default().lint(&crate::SourceFile {
                 path: "sample.md".into(),
                 contents: source,
             });
@@ -635,7 +661,7 @@ mod tests {
     #[test]
     fn an_onboarding_template_must_include_the_current_engagement_arbitration() {
         use crate::Rule;
-        let lint = |file: crate::SourceFile| super::ClauseReferences.lint(&file);
+        let lint = |file: crate::SourceFile| super::ClauseReferences::default().lint(&file);
         assert!(lint(onboarding(ARBITRATION, "{{> arbitration}}\n")).is_empty());
         for file in [
             onboarding("", "Letter.\n"),
@@ -660,11 +686,37 @@ mod tests {
     fn a_compiled_onboarding_snapshot_satisfies_the_requirement() {
         use crate::Rule;
         let compiled = compile(&onboarding(ARBITRATION, "{{> arbitration}}\n").contents).unwrap();
-        let violations = super::ClauseReferences.lint(&crate::SourceFile {
+        let violations = super::ClauseReferences::default().lint(&crate::SourceFile {
             path: "onboarding__letter.md".into(),
             contents: compiled,
         });
         assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    /// LAW-226: once the engagement is executed, an onboarding template no
+    /// longer has to carry today's `engagement_arbitration` — the signed copy
+    /// was generated from the template as it stood. The waiver covers the
+    /// requirement only: composition checks (retired sources, bindings)
+    /// still apply, and the default rule stays unwaived.
+    #[test]
+    fn an_executed_engagement_waives_the_requirement_and_the_unexecuted_still_fails() {
+        use crate::Rule;
+        let file = onboarding("", "Letter.\n");
+        let executed = super::ClauseReferences::executed(true);
+        assert!(executed.lint(&file).is_empty(), "executed skips");
+        assert_eq!(
+            super::ClauseReferences::default().lint(&file).len(),
+            1,
+            "default (not executed) still fails"
+        );
+
+        let retired = onboarding(
+            "clauses:\n  law:\n    source: governing_law@1\n    inputs:\n      jurisdiction: jurisdiction__law\n      forum: custom_text__forum\n",
+            "{{> law}}\n",
+        );
+        let violations = executed.lint(&retired);
+        assert_eq!(violations.len(), 1, "composition still applies");
+        assert!(violations[0].message.contains("retired"), "{violations:?}");
     }
 
     #[test]
