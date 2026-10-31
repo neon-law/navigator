@@ -893,6 +893,34 @@ fn collect_flatten_draws(
     let mut stamps: Vec<StampDraw> = Vec::new();
     let mut widget_ids: BTreeSet<ObjectId> = BTreeSet::new();
 
+    // A widget's page: real forms associate widgets with pages through
+    // the page's `/Annots` array, and not every widget carries an
+    // explicit `/P` back-reference (the UCS name-change blanks rely on
+    // `/Annots` alone). Index the association once so a stamp lands on
+    // the page that annotates it instead of silently on the first page.
+    let mut page_by_widget: BTreeMap<ObjectId, ObjectId> = BTreeMap::new();
+    for page_id in doc.get_pages().values().copied() {
+        let annots: Vec<ObjectId> = match annots_slot(doc, page_id) {
+            Some(AnnotsSlot::Inline(pid)) => doc
+                .get_dictionary(pid)
+                .ok()
+                .and_then(|p| p.get(b"Annots").ok())
+                .and_then(|o| o.as_array().ok())
+                .map(|a| a.iter().filter_map(|o| o.as_reference().ok()).collect())
+                .unwrap_or_default(),
+            Some(AnnotsSlot::Indirect(id)) => doc
+                .objects
+                .get(&id)
+                .and_then(|o| o.as_array().ok())
+                .map(|a| a.iter().filter_map(|o| o.as_reference().ok()).collect())
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        for wid in annots {
+            page_by_widget.insert(wid, page_id);
+        }
+    }
+
     for fid in field_ids {
         let Ok(dict) = doc.get_object(*fid).and_then(Object::as_dict) else {
             continue;
@@ -910,11 +938,11 @@ fn collect_flatten_draws(
         // The widgets carrying the visible box: the field itself when it
         // has no kids, else each kid.
         let widgets: Vec<ObjectId> = if kids.is_empty() { vec![*fid] } else { kids };
-        let page_of = |wdict: &Dictionary| {
-            wdict
-                .get(b"P")
-                .and_then(Object::as_reference)
-                .ok()
+        let page_of = |wid: &ObjectId, wdict: &Dictionary| {
+            page_by_widget
+                .get(wid)
+                .copied()
+                .or_else(|| wdict.get(b"P").and_then(Object::as_reference).ok())
                 .or(field_page)
                 .or(first_page)
         };
@@ -933,7 +961,7 @@ fn collect_flatten_draws(
                 let Some((ap, bbox, matrix)) = appearance_stream(doc, wdict, state) else {
                     continue;
                 };
-                let (Some(rect), Some(page)) = (rect_of(wdict), page_of(wdict)) else {
+                let (Some(rect), Some(page)) = (rect_of(wdict), page_of(&wid, wdict)) else {
                     continue;
                 };
                 stamps.push(StampDraw {
@@ -958,7 +986,7 @@ fn collect_flatten_draws(
                 let Ok(wdict) = doc.get_object(wid).and_then(Object::as_dict) else {
                     continue;
                 };
-                let (Some(rect), Some(page)) = (rect_of(wdict), page_of(wdict)) else {
+                let (Some(rect), Some(page)) = (rect_of(wdict), page_of(&wid, wdict)) else {
                     continue;
                 };
                 texts.push(TextDraw {
@@ -1840,7 +1868,7 @@ mod tests {
     };
     use crate::PdfError;
     use lopdf::content::Content;
-    use lopdf::{Dictionary, Document, Object, Stream};
+    use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
     use std::collections::BTreeMap;
 
     fn fields(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -2441,6 +2469,147 @@ mod tests {
         assert!(
             page_text(&flat).unwrap().contains("Neon Law LLC"),
             "value survives as page text"
+        );
+    }
+
+    /// A two-page document whose second page annotates a radio group's
+    /// kids — with no `/P` back-reference anywhere, so the page
+    /// association lives solely in the page's `/Annots` array, the shape
+    /// the UCS name-change blanks use.
+    fn two_page_radio_without_p() -> Vec<u8> {
+        let blank = blank_acroform_with(&[FieldSpec::Radio {
+            name: "color".into(),
+            options: vec!["1".into(), "2".into()],
+        }]);
+        let mut doc = Document::load_mem(&blank).unwrap();
+        let first = *doc.get_pages().values().next().unwrap();
+        let pages_id = doc
+            .get_dictionary(first)
+            .unwrap()
+            .get(b"Parent")
+            .and_then(Object::as_reference)
+            .unwrap();
+        let kids: Vec<ObjectId> = doc
+            .get_dictionary(first)
+            .unwrap()
+            .get(b"Annots")
+            .ok()
+            .and_then(|o| o.as_array().ok())
+            .map(|a| a.iter().filter_map(|o| o.as_reference().ok()).collect())
+            .unwrap_or_default();
+        assert_eq!(kids.len(), 2, "the fixture radio has two kid widgets");
+
+        // Real Form-XObject appearance streams with a /BBox, so the
+        // stamp has something to paint.
+        for kid in &kids {
+            let mut on = Dictionary::new();
+            on.set("Type", Object::Name(b"XObject".to_vec()));
+            on.set("Subtype", Object::Name(b"Form".to_vec()));
+            on.set(
+                "BBox",
+                Object::Array(vec![
+                    Object::Integer(0),
+                    Object::Integer(0),
+                    Object::Integer(14),
+                    Object::Integer(14),
+                ]),
+            );
+            let on_id = doc.add_object(Object::Stream(Stream::new(
+                on,
+                b"q 0 0 0 rg 2 2 10 10 re f Q".to_vec(),
+            )));
+            let off_id = doc.add_object(Object::Stream(Stream::new(
+                {
+                    let mut d = Dictionary::new();
+                    d.set("Type", Object::Name(b"XObject".to_vec()));
+                    d.set("Subtype", Object::Name(b"Form".to_vec()));
+                    d.set(
+                        "BBox",
+                        Object::Array(vec![
+                            Object::Integer(0),
+                            Object::Integer(0),
+                            Object::Integer(14),
+                            Object::Integer(14),
+                        ]),
+                    );
+                    d
+                },
+                b"".to_vec(),
+            )));
+            let Some(Object::Dictionary(dict)) = doc.objects.get_mut(kid) else {
+                continue;
+            };
+            let mut n = Dictionary::new();
+            n.set("1", Object::Reference(on_id));
+            n.set("Off", Object::Reference(off_id));
+            let mut ap = Dictionary::new();
+            ap.set("N", Object::Dictionary(n));
+            dict.set("AP", Object::Dictionary(ap));
+            dict.remove(b"P");
+        }
+
+        // Move the annotations to a new second page and empty page 1's
+        // array, so only `/Annots` associates the widgets with a page.
+        let second = doc.new_object_id();
+        let mut page = Dictionary::new();
+        page.set("Type", Object::Name(b"Page".to_vec()));
+        page.set("Parent", Object::Reference(pages_id));
+        page.set(
+            "MediaBox",
+            Object::Array(vec![
+                Object::Integer(0),
+                Object::Integer(0),
+                Object::Integer(612),
+                Object::Integer(792),
+            ]),
+        );
+        page.set(
+            "Annots",
+            Object::Array(kids.iter().copied().map(Object::Reference).collect()),
+        );
+        doc.objects.insert(second, Object::Dictionary(page));
+        doc.get_dictionary_mut(first)
+            .unwrap()
+            .set("Annots", Object::Array(vec![]));
+        if let Some(Object::Dictionary(pages)) = doc.objects.get_mut(&pages_id) {
+            if let Ok(Object::Array(existing)) = pages.get_mut(b"Kids") {
+                existing.push(Object::Reference(second));
+            }
+            pages.set("Count", Object::Integer(2));
+        }
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn flatten_stamps_a_radio_on_the_page_that_annotates_it() {
+        let blank = two_page_radio_without_p();
+        let filled = fill_acroform(&blank, &fields(&[("color", "1")])).unwrap();
+        let flat = flatten(&filled).unwrap();
+
+        let doc = Document::load_mem(&flat).unwrap();
+        let mut stamped: Vec<usize> = Vec::new();
+        for (index, pid) in doc.page_iter().enumerate() {
+            let mut carries_stamp = false;
+            for sid in doc.get_page_contents(pid) {
+                let Ok(stream) = doc.get_object(sid).and_then(Object::as_stream) else {
+                    continue;
+                };
+                let data = stream
+                    .decompressed_content()
+                    .unwrap_or_else(|_| stream.content.clone());
+                carries_stamp |= data.windows("NavFlatX".len()).any(|w| w == b"NavFlatX");
+            }
+            if carries_stamp {
+                stamped.push(index);
+            }
+        }
+        assert_eq!(
+            stamped,
+            vec![1],
+            "the checked radio's stamp must land on the page whose \
+             /Annots array carries the widget, not on the first page"
         );
     }
 
