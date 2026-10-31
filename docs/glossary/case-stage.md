@@ -1,12 +1,12 @@
 ---
 title: "Case Stage"
-description: "Where a matter sits in the Firm's own ordered workflow — Firm-authored vocabulary with an audited per-matter history."
+description: "Where a matter sits in the Firm's ordered workflow — Firm-authored vocabulary with an audited history."
 ---
 Where a [Matter](matter.md) sits in the [Firm](firm.md)'s own workflow — intake, pleading, discovery, trial prep, and so
 on. The vocabulary is **Firm data, not a hardcoded enum**: the Firm names its stages and their order, and each stage may
 name the `case_type` it belongs to when the workflow differs by kind of matter. A Case Stage is deliberately distinct
 from two neighbors it must never be conflated with. [`project.status`](project.md) is the lifecycle — `open`, `closed`,
-`archived` — and lives on the Project itself. `case.status` is the litigation posture before one [forum](case.md) —
+`archived` — and lives on the Project itself. `case.status` is the litigation posture before one [forum](case.md):
 `open`, `stayed`, `closed`. Neither answers "where are we in the Firm's process", and UI copy never uses a Case Stage
 word for either of them. **The current stage is the newest history row.** A matter holds no mutable stage column: it
 holds an append-only `stage_event` — the stage it moved from, the stage it moved to, the [Person](person.md) who moved

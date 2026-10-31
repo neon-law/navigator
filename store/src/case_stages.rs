@@ -87,9 +87,7 @@ fn from_definition_row(row: &sqlx::postgres::PgRow) -> Result<StageDefinition, C
 }
 
 fn validate_note(note: Option<&String>) -> Result<(), CaseStageError> {
-    if note
-        .is_some_and(|note| note.trim().is_empty() || note.trim().len() > 500)
-    {
+    if note.is_some_and(|note| note.trim().is_empty() || note.trim().len() > 500) {
         return Err(CaseStageError::Invalid("note"));
     }
     Ok(())
@@ -328,34 +326,52 @@ mod tests {
     fn refuses_an_untitled_or_oversized_label() {
         let mut value = input();
         value.label = "   ".into();
-        assert!(matches!(validate(&value), Err(CaseStageError::Invalid("label"))));
+        assert!(matches!(
+            validate(&value),
+            Err(CaseStageError::Invalid("label"))
+        ));
         let mut value = input();
         value.label = "x".repeat(101);
-        assert!(matches!(validate(&value), Err(CaseStageError::Invalid("label"))));
+        assert!(matches!(
+            validate(&value),
+            Err(CaseStageError::Invalid("label"))
+        ));
     }
 
     #[test]
     fn refuses_a_negative_position() {
         let mut value = input();
         value.position = -1;
-        assert!(matches!(validate(&value), Err(CaseStageError::Invalid("position"))));
+        assert!(matches!(
+            validate(&value),
+            Err(CaseStageError::Invalid("position"))
+        ));
     }
 
     #[test]
     fn refuses_a_blank_or_oversized_case_type() {
         let mut value = input();
         value.case_type = Some("   ".into());
-        assert!(matches!(validate(&value), Err(CaseStageError::Invalid("case_type"))));
+        assert!(matches!(
+            validate(&value),
+            Err(CaseStageError::Invalid("case_type"))
+        ));
         let mut value = input();
         value.case_type = Some("x".repeat(101));
-        assert!(matches!(validate(&value), Err(CaseStageError::Invalid("case_type"))));
+        assert!(matches!(
+            validate(&value),
+            Err(CaseStageError::Invalid("case_type"))
+        ));
     }
 
     #[test]
     fn refuses_a_blank_or_oversized_note() {
         assert!(validate_note(None).is_ok());
         let blank = Some("   ".to_string());
-        assert!(matches!(validate_note(blank.as_ref()), Err(CaseStageError::Invalid("note"))));
+        assert!(matches!(
+            validate_note(blank.as_ref()),
+            Err(CaseStageError::Invalid("note"))
+        ));
         let oversized = Some("x".repeat(501));
         assert!(matches!(
             validate_note(oversized.as_ref()),
@@ -611,7 +627,10 @@ mod tests {
             .bind(actor)
             .execute(pg.pool())
             .await;
-            assert!(cross_firm.is_err(), "a cross-Firm stage write must be refused");
+            assert!(
+                cross_firm.is_err(),
+                "a cross-Firm stage write must be refused"
+            );
 
             // So is one that breaks the chain.
             let broken_chain = sqlx::query(
@@ -625,7 +644,10 @@ mod tests {
             .bind(actor)
             .execute(pg.pool())
             .await;
-            assert!(broken_chain.is_err(), "a chain-breaking write must be refused");
+            assert!(
+                broken_chain.is_err(),
+                "a chain-breaking write must be refused"
+            );
         }
 
         #[tokio::test]
