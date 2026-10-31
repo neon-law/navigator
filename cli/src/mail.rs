@@ -2547,7 +2547,6 @@ mod tests {
     }
 
     fn attachment_summary(message: &mail_parser::Message<'_>) -> Vec<(String, String, Vec<u8>)> {
-        use mail_parser::MimeHeaders;
         message
             .attachments()
             .map(|part| {
@@ -2559,7 +2558,7 @@ mod tests {
                         content_type.ctype(),
                         content_type.subtype().unwrap_or_default()
                     ),
-                    part.contents().to_vec(),
+                    part.decoded().into_owned(),
                 )
             })
             .collect()
@@ -2606,7 +2605,7 @@ mod tests {
         let message = parsed(&raw);
         assert_eq!(message.body_text(0).unwrap().trim(), "Synthetic body");
         assert_eq!(
-            message.in_reply_to().as_text(),
+            message.in_reply_to().and_then(|ids| ids.last()),
             Some("message-1@example.test")
         );
         assert_eq!(
@@ -2913,11 +2912,11 @@ mod tests {
         let message = parsed(&raw);
         assert_eq!(message.subject(), Some("Re: A question"));
         assert_eq!(
-            message.in_reply_to().as_text(),
+            message.in_reply_to().and_then(|ids| ids.last()),
             Some("message-1@example.test")
         );
         assert_eq!(
-            message.references().as_text(),
+            message.references().and_then(|ids| ids.last()),
             Some("message-1@example.test")
         );
         assert_eq!(
@@ -2934,7 +2933,7 @@ mod tests {
         let message = parsed(&raw);
         assert_eq!(message.attachments().count(), 0);
         assert_eq!(
-            message.in_reply_to().as_text(),
+            message.in_reply_to().and_then(|ids| ids.last()),
             Some("message-1@example.test")
         );
     }

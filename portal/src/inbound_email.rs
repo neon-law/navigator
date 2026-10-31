@@ -31,7 +31,6 @@ use axum::body::{Body, Bytes};
 use axum::extract::{FromRequest, Multipart, Path, State};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::IntoResponse;
-use mail_parser::MimeHeaders as _;
 use serde::Deserialize;
 use thiserror::Error;
 use uuid::Uuid;
@@ -233,15 +232,15 @@ pub fn parse_raw_eml(raw: &[u8]) -> Option<InboundEmail> {
             let filename = part.attachment_name()?.to_string();
             let content_type = part.content_type().map_or_else(
                 || "application/octet-stream".to_string(),
-                |ct| match ct.c_subtype.as_deref() {
-                    Some(sub) => format!("{}/{}", ct.c_type, sub),
-                    None => ct.c_type.to_string(),
+                |ct| match ct.subtype() {
+                    Some(sub) => format!("{}/{}", ct.ctype(), sub),
+                    None => ct.ctype().to_string(),
                 },
             );
             Some(InboundAttachment {
                 filename,
                 content_type,
-                bytes: part.contents().to_vec(),
+                bytes: part.decoded().into_owned(),
             })
         })
         .collect();
@@ -640,7 +639,7 @@ pub async fn parse_multipart(mut form: Multipart) -> Result<InboundEmail, Inboun
     Ok(out)
 }
 
-fn format_mailbox(address: &mail_parser::Addr<'_>) -> String {
+fn format_mailbox(address: mail_parser::Mailbox<'_>) -> String {
     match (address.name(), address.address()) {
         (Some(name), Some(address)) if !name.is_empty() => format!("{name} <{address}>"),
         (_, Some(address)) => address.to_owned(),
@@ -651,8 +650,6 @@ fn format_mailbox(address: &mail_parser::Addr<'_>) -> String {
 /// Recover attachments from SendGrid raw mode.
 #[must_use]
 pub fn attachments_from_raw(raw: &[u8]) -> Vec<InboundAttachment> {
-    use mail_parser::MimeHeaders as _;
-
     let Some(message) = mail_parser::MessageParser::default().parse(raw) else {
         return Vec::new();
     };
@@ -664,8 +661,8 @@ pub fn attachments_from_raw(raw: &[u8]) -> Vec<InboundAttachment> {
                 |mime| {
                     format!(
                         "{}/{}",
-                        mime.c_type,
-                        mime.c_subtype.as_deref().unwrap_or("octet-stream")
+                        mime.ctype(),
+                        mime.subtype().unwrap_or("octet-stream")
                     )
                 },
             );
@@ -675,7 +672,7 @@ pub fn attachments_from_raw(raw: &[u8]) -> Vec<InboundAttachment> {
                     "attachment",
                 ),
                 content_type: non_empty_metadata(&content_type, "application/octet-stream"),
-                bytes: part.contents().to_vec(),
+                bytes: part.decoded().into_owned(),
             }
         })
         .collect()

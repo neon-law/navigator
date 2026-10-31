@@ -99,11 +99,12 @@ pub fn parse_eml(bytes: &[u8]) -> Result<Notice, NefError> {
 fn message_text(bytes: &[u8]) -> (String, Vec<String>) {
     if let Some(message) = mail_parser::MessageParser::default().parse(bytes) {
         if let Some(html) = message
-            .html_part(0)
-            .filter(|part| part.is_text_html())
-            .and_then(mail_parser::MessagePart::text_contents)
+            .html_body()
+            .next()
+            .filter(|part| matches!(part.kind(), mail_parser::PartKind::Html))
+            .and_then(|part| part.text())
         {
-            return html_to_text(html);
+            return html_to_text(&html);
         }
         if let Some(text) = message.body_text(0) {
             return (text.into_owned(), Vec::new());
