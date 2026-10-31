@@ -1,4 +1,4 @@
-//! Thin `CronJob` trigger for polling inbound YouTube comments into the
+//! Thin `CronJob` trigger for polling inbound `YouTube` comments into the
 //! firm inbox.
 
 use anyhow::{Context, Result};
