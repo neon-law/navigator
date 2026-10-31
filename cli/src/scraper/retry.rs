@@ -116,7 +116,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{RetryClock, RetryPolicy, TokioClock, backoff_delay, with_retries};
+    use super::{backoff_delay, with_retries, RetryClock, RetryPolicy, TokioClock};
     use std::sync::Mutex;
 
     /// Records every delay instead of sleeping, so tests assert the exact
@@ -153,14 +153,26 @@ mod tests {
     #[test]
     fn backoff_doubles_and_saturates() {
         let policy = instant_policy(20);
-        assert_eq!(backoff_delay(&policy, 0), std::time::Duration::from_millis(250));
-        assert_eq!(backoff_delay(&policy, 1), std::time::Duration::from_millis(500));
-        assert_eq!(backoff_delay(&policy, 2), std::time::Duration::from_millis(1000));
+        assert_eq!(
+            backoff_delay(&policy, 0),
+            std::time::Duration::from_millis(250)
+        );
+        assert_eq!(
+            backoff_delay(&policy, 1),
+            std::time::Duration::from_millis(500)
+        );
+        assert_eq!(
+            backoff_delay(&policy, 2),
+            std::time::Duration::from_millis(1000)
+        );
         let huge = RetryPolicy {
             max_attempts: u32::MAX,
             base_delay: std::time::Duration::from_secs(u64::from(u32::MAX)),
         };
-        assert_eq!(backoff_delay(&huge, 100), std::time::Duration::from_secs(u64::from(u32::MAX)));
+        assert_eq!(
+            backoff_delay(&huge, 100),
+            std::time::Duration::from_secs(u64::from(u32::MAX))
+        );
     }
 
     #[tokio::test]
@@ -250,7 +262,10 @@ mod tests {
         .await;
         let failure = outcome.expect_err("hard stop");
         assert_eq!(failure.attempts, 1, "no retry for a hard-stop error");
-        assert!(clock.delays().is_empty(), "no backoff for a hard-stop error");
+        assert!(
+            clock.delays().is_empty(),
+            "no backoff for a hard-stop error"
+        );
     }
 
     #[tokio::test]

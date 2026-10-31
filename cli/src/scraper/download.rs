@@ -221,12 +221,10 @@ impl DownloadSink {
     /// When the part file cannot be truncated.
     #[cfg_attr(not(test), allow(dead_code))] // adapters restart on a checksum mismatch
     pub(crate) fn restart(&mut self) -> Result<(), DownloadError> {
-        self.file
-            .set_len(0)
-            .map_err(|source| DownloadError::Io {
-                path: self.part_path.clone(),
-                source,
-            })?;
+        self.file.set_len(0).map_err(|source| DownloadError::Io {
+            path: self.part_path.clone(),
+            source,
+        })?;
         self.offset = 0;
         self.hasher = Sha256::new();
         Ok(())

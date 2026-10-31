@@ -10,12 +10,12 @@ use std::process::ExitCode;
 use clap::Subcommand;
 use uuid::Uuid;
 
-use crate::scraper::adapter::{NoticeQuery, SiteKey, find_adapter};
+use crate::scraper::adapter::{find_adapter, NoticeQuery, SiteKey};
 use crate::scraper::fetcher::HttpFetcherOverReqwest;
 use crate::scraper::intake::UnwiredIntake;
 use crate::scraper::retry::{RetryPolicy, TokioClock};
 use crate::scraper::session::{ChromiumSessions, SessionConfig};
-use crate::scraper::{ScraperDeps, registered_adapters, run_scraper};
+use crate::scraper::{registered_adapters, run_scraper, ScraperDeps};
 
 #[derive(Subcommand)]
 pub(crate) enum ScraperCmd {

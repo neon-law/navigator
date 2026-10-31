@@ -20,15 +20,15 @@ pub(crate) mod adapter;
 pub(crate) mod cmd;
 pub(crate) mod credentials;
 pub(crate) mod download;
-pub(crate) mod fs;
 pub(crate) mod fetcher;
+pub(crate) mod fs;
 pub(crate) mod intake;
 pub(crate) mod retry;
 pub(crate) mod session;
 #[cfg(test)]
 pub(crate) mod testing;
 
-pub(crate) use cmd::{ScraperCmd, run};
+pub(crate) use cmd::{run, ScraperCmd};
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -37,9 +37,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::scraper::adapter::{AdapterError, NoticeKey, NoticeQuery, SiteAdapter};
 use crate::scraper::credentials::CredentialsError;
-use crate::scraper::download::{DownloadError, DownloadLedger, DownloadSink, staging_name};
-use crate::scraper::intake::{IntakeError, InboxIntake, NamingError, ScrapedDocument};
-use crate::scraper::retry::{RetryClock, RetryFailure, RetryPolicy, with_retries};
+use crate::scraper::download::{staging_name, DownloadError, DownloadLedger, DownloadSink};
+use crate::scraper::intake::{InboxIntake, IntakeError, NamingError, ScrapedDocument};
+use crate::scraper::retry::{with_retries, RetryClock, RetryFailure, RetryPolicy};
 use crate::scraper::session::{BrowserSession, SessionError, SessionFactory};
 
 /// Why a run failed. Every variant is named for the operator: which step,
@@ -168,12 +168,20 @@ impl std::fmt::Display for RunReport {
                 "scrape of {} docket {} since {at}:\n",
                 self.site, self.docket
             )?,
-            None => write!(formatter, "scrape of {} docket {}:\n", self.site, self.docket)?,
+            None => write!(
+                formatter,
+                "scrape of {} docket {}:\n",
+                self.site, self.docket
+            )?,
         }
         writeln!(
             formatter,
             "  discovered {}; downloaded {}; resumed {}; staged already {}; marked done already {}",
-            self.discovered, self.downloaded, self.resumed, self.skipped_filed, self.skipped_completed
+            self.discovered,
+            self.downloaded,
+            self.resumed,
+            self.skipped_filed,
+            self.skipped_completed
         )?;
         for record in &self.enqueued {
             writeln!(
@@ -270,12 +278,11 @@ async fn scrape_notices(
     // successful login is worth having even if discovery then fails.
     session.persist_cookies().await?;
 
-    let notices =
-        with_retries(&deps.fetch_policy, deps.clock, is_transient, || {
-            adapter.notices(deps.fetcher, query)
-        })
-        .await
-        .map_err(|failure| map_step_failure("notice discovery", failure))?;
+    let notices = with_retries(&deps.fetch_policy, deps.clock, is_transient, || {
+        adapter.notices(deps.fetcher, query)
+    })
+    .await
+    .map_err(|failure| map_step_failure("notice discovery", failure))?;
     report.discovered = notices.len();
 
     let mut ledger = DownloadLedger::load(deps.ledger_path.clone())?;
@@ -305,18 +312,15 @@ async fn scrape_notices(
                 if entry.is_some() {
                     ledger.forget(&key)?;
                 }
-                let staged_path = deps
-                    .downloads_dir
-                    .join(format!("{}.{}", staging_name(&key), notice.extension));
+                let staged_path =
+                    deps.downloads_dir
+                        .join(format!("{}.{}", staging_name(&key), notice.extension));
                 // Each attempt reopens the sink: a failed attempt's bytes are
                 // already in the part file, so the next attempt — this run's
                 // or a later run's — continues from that byte offset.
-                let had_partial = DownloadSink::open(
-                    &deps.staging_dir,
-                    staged_path.clone(),
-                    key.clone(),
-                )
-                .map(|sink| sink.resume_offset() > 0)?;
+                let had_partial =
+                    DownloadSink::open(&deps.staging_dir, staged_path.clone(), key.clone())
+                        .map(|sink| sink.resume_offset() > 0)?;
                 let staging_dir = deps.staging_dir.clone();
                 let final_path = staged_path.clone();
                 let final_key = key.clone();
@@ -330,20 +334,17 @@ async fn scrape_notices(
                     let staging_dir = staging_dir.clone();
                     let key = closure_key.clone();
                     async move {
-                        let mut sink =
-                            DownloadSink::open(&staging_dir, staged_path, key).map_err(
-                                |error| AdapterError::Transient {
-                                    step: "download staging".to_owned(),
-                                    detail: error.to_string(),
-                                },
-                            )?;
+                        let mut sink = DownloadSink::open(&staging_dir, staged_path, key).map_err(
+                            |error| AdapterError::Transient {
+                                step: "download staging".to_owned(),
+                                detail: error.to_string(),
+                            },
+                        )?;
                         adapter.download(deps.fetcher, notice, &mut sink).await
                     }
                 })
                 .await
-                .map_err(|failure| {
-                    map_step_failure(&format!("download of {key}"), failure)
-                })?;
+                .map_err(|failure| map_step_failure(&format!("download of {key}"), failure))?;
                 let sink = DownloadSink::open(&deps.staging_dir, final_path, final_key)?;
                 let completed = sink.finish()?;
                 ledger.record(completed.clone())?;
@@ -363,16 +364,18 @@ async fn scrape_notices(
             sha256,
             bytes,
         )?;
-        let receipt =
-            with_retries(&deps.fetch_policy, deps.clock, |error: &IntakeError| {
-                matches!(error, IntakeError::Transient { .. })
-            }, || deps.intake.enqueue(&document))
-            .await
-            .map_err(|failure| ScraperError::TransientExhausted {
-                step: format!("intake of {key}"),
-                attempts: failure.attempts,
-                detail: failure.last.to_string(),
-            })?;
+        let receipt = with_retries(
+            &deps.fetch_policy,
+            deps.clock,
+            |error: &IntakeError| matches!(error, IntakeError::Transient { .. }),
+            || deps.intake.enqueue(&document),
+        )
+        .await
+        .map_err(|failure| ScraperError::TransientExhausted {
+            step: format!("intake of {key}"),
+            attempts: failure.attempts,
+            detail: failure.last.to_string(),
+        })?;
         run_state.mark(key.clone());
         run_state.save(&deps.run_state_path)?;
         report.enqueued.push(EnqueueRecord {
@@ -399,8 +402,13 @@ fn is_transient(error: &AdapterError) -> bool {
 /// Map a step's retry failure onto the run error, naming the step.
 fn map_step_failure(step: &str, failure: RetryFailure<AdapterError>) -> ScraperError {
     match failure.last {
-        AdapterError::StructureDrift { step, detail } => ScraperError::SiteStructure { step, detail },
-        AdapterError::Transient { step: transient_step, detail } => ScraperError::TransientExhausted {
+        AdapterError::StructureDrift { step, detail } => {
+            ScraperError::SiteStructure { step, detail }
+        }
+        AdapterError::Transient {
+            step: transient_step,
+            detail,
+        } => ScraperError::TransientExhausted {
             step: format!("{step}: {transient_step}"),
             attempts: failure.attempts,
             detail,
@@ -418,11 +426,16 @@ pub(crate) fn registered_adapters() -> Vec<Box<dyn SiteAdapter>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EnqueueRecord, NoticeQuery, RunReport, ScraperDeps, ScraperError, registered_adapters, run_scraper};
-    use crate::scraper::adapter::{AdapterError, SiteKey, find_adapter};
+    use super::{
+        registered_adapters, run_scraper, EnqueueRecord, NoticeQuery, RunReport, ScraperDeps,
+        ScraperError,
+    };
+    use crate::scraper::adapter::{find_adapter, AdapterError, SiteKey};
     use crate::scraper::intake::RecordingIntake;
     use crate::scraper::retry::RetryPolicy;
-    use crate::scraper::testing::{DownloadStep, LoginStep, MockAdapter, MockFetcher, StubClock, StubSessions};
+    use crate::scraper::testing::{
+        DownloadStep, LoginStep, MockAdapter, MockFetcher, StubClock, StubSessions,
+    };
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -476,9 +489,11 @@ mod tests {
 
     async fn provisioned() -> Fixture {
         let fixture = fixture().await;
-        fixture.put_portal_secret(&serde_json::json!({
-            "la-superior": {"username": "firm@example.com", "password": "staple"}
-        })).await;
+        fixture
+            .put_portal_secret(&serde_json::json!({
+                "la-superior": {"username": "firm@example.com", "password": "staple"}
+            }))
+            .await;
         fixture
     }
 
@@ -538,10 +553,12 @@ mod tests {
 
     #[test]
     fn the_registry_looks_adapters_up_by_site_key() {
-        let adapters: Vec<Box<dyn crate::scraper::adapter::SiteAdapter>> = vec![Box::new(
-            MockAdapter::simple(site()),
-        )];
-        assert!(find_adapter(&registered_adapters(), &site()).is_none(), "no real adapters yet");
+        let adapters: Vec<Box<dyn crate::scraper::adapter::SiteAdapter>> =
+            vec![Box::new(MockAdapter::simple(site()))];
+        assert!(
+            find_adapter(&registered_adapters(), &site()).is_none(),
+            "no real adapters yet"
+        );
         let found = find_adapter(&adapters, &site()).expect("the mock is found");
         assert_eq!(found.site(), &site());
         assert!(find_adapter(&adapters, &SiteKey::new("pacer").expect("valid key")).is_none());
@@ -571,7 +588,8 @@ mod tests {
         assert_eq!(received[0].filename, "DKT 0004 - Notice of Hearing.pdf");
         assert_eq!(received[0].bytes, b"PDF-A".to_vec());
         assert_eq!(
-            received[1].filename, "DKT 0005 - Order Granting Extension.pdf"
+            received[1].filename,
+            "DKT 0005 - Order Granting Extension.pdf"
         );
         assert!(fixture.run_state_path().exists(), "run state persists");
         assert_eq!(fixture.factory.opens(), 1, "exactly one browser session");
@@ -696,7 +714,10 @@ mod tests {
             .await
             .expect_err("the run hard-stops");
         assert!(matches!(error, ScraperError::TransientExhausted { .. }));
-        assert!(fixture.intake.received().is_empty(), "no partial document enqueued");
+        assert!(
+            fixture.intake.received().is_empty(),
+            "no partial document enqueued"
+        );
         assert_eq!(
             std::fs::read_dir(fixture.downloads_dir())
                 .map(|entries| entries.count())
@@ -743,7 +764,10 @@ mod tests {
         assert_eq!(adapter.login_calls(), 2);
         let seen = adapter.seen_logins();
         assert_eq!(seen.len(), 2, "every attempt sees the same resolved login");
-        assert_eq!(seen[0], ("firm@example.com".to_owned(), "staple".to_owned()));
+        assert_eq!(
+            seen[0],
+            ("firm@example.com".to_owned(), "staple".to_owned())
+        );
         assert_eq!(seen[1], seen[0]);
         assert_eq!(fixture.factory.opens(), 1, "one session across the retry");
     }
@@ -801,7 +825,9 @@ mod tests {
             .await
             .expect_err("the payload is not an object");
         assert!(
-            error.to_string().contains("not shaped as a portal login payload"),
+            error
+                .to_string()
+                .contains("not shaped as a portal login payload"),
             "the error names the remedy: {error}"
         );
         assert_eq!(fixture.factory.opens(), 0);
@@ -858,7 +884,8 @@ mod tests {
         assert!(!state.contains(&key));
         state.mark(key.clone());
         assert!(state.contains(&key));
-        let path = std::env::temp_dir().join(format!("navigator-run-state-{}", uuid::Uuid::now_v7()));
+        let path =
+            std::env::temp_dir().join(format!("navigator-run-state-{}", uuid::Uuid::now_v7()));
         state.save(&path).expect("save run state");
         let reloaded = super::RunState::load(&path).expect("load run state");
         assert_eq!(reloaded, state);
@@ -867,9 +894,9 @@ mod tests {
 
     #[test]
     fn a_missing_run_state_file_is_a_fresh_run() {
-        let path = std::env::temp_dir().join(format!("navigator-run-state-{}", uuid::Uuid::now_v7()));
+        let path =
+            std::env::temp_dir().join(format!("navigator-run-state-{}", uuid::Uuid::now_v7()));
         let state = super::RunState::load(&path).expect("a missing file is empty");
         assert_eq!(state, super::RunState::default());
     }
 }
-

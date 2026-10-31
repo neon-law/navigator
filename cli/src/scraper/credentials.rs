@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use cloud::RuntimeKms;
 use store::firm_secrets::{
-    IntegrationProvider, IntegrationSecretKind, SecretStoreError, resolve_firm_credential,
+    resolve_firm_credential, IntegrationProvider, IntegrationSecretKind, SecretStoreError,
 };
 use store::surreal::SurrealDb;
 
@@ -127,7 +127,9 @@ impl PortalLogins {
 ///
 /// When the value is not an object keyed by site with `username` and
 /// `password` strings in each entry.
-pub(crate) fn parse_portal_logins(value: &serde_json::Value) -> Result<PortalLogins, CredentialsError> {
+pub(crate) fn parse_portal_logins(
+    value: &serde_json::Value,
+) -> Result<PortalLogins, CredentialsError> {
     let serde_json::Value::Object(entries) = value else {
         return Err(CredentialsError::InvalidPayload {
             detail: "expected a JSON object keyed by site".to_owned(),
@@ -140,13 +142,17 @@ pub(crate) fn parse_portal_logins(value: &serde_json::Value) -> Result<PortalLog
                 detail: format!("the `{key}` entry is not an object"),
             });
         };
-        let Some(username) = entry_object.get("username").and_then(serde_json::Value::as_str)
+        let Some(username) = entry_object
+            .get("username")
+            .and_then(serde_json::Value::as_str)
         else {
             return Err(CredentialsError::InvalidPayload {
                 detail: format!("the `{key}` entry has no `username` string"),
             });
         };
-        let Some(password) = entry_object.get("password").and_then(serde_json::Value::as_str)
+        let Some(password) = entry_object
+            .get("password")
+            .and_then(serde_json::Value::as_str)
         else {
             return Err(CredentialsError::InvalidPayload {
                 detail: format!("the `{key}` entry has no `password` string"),
@@ -195,7 +201,7 @@ pub(crate) async fn resolve_portal_logins(
 
 #[cfg(test)]
 mod tests {
-    use super::{CredentialsError, parse_portal_logins};
+    use super::{parse_portal_logins, CredentialsError};
     use store::firm_secrets::SecretStoreError;
 
     const LA_SUPERIOR: &str = r#"{
@@ -215,11 +221,9 @@ mod tests {
     fn a_non_object_payload_is_invalid() {
         let error =
             parse_portal_logins(&serde_json::json!(["not", "a", "map"])).expect_err("rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("expected a JSON object keyed by site")
-        );
+        assert!(error
+            .to_string()
+            .contains("expected a JSON object keyed by site"));
     }
 
     #[test]
@@ -240,18 +244,15 @@ mod tests {
 
     #[test]
     fn an_incomplete_entry_fails_before_any_browser_opens() {
-        let payload = serde_json::json!({"la-superior": {"username": "firm@example.com", "password": ""}});
+        let payload =
+            serde_json::json!({"la-superior": {"username": "firm@example.com", "password": ""}});
         let logins = parse_portal_logins(&payload).expect("a valid payload");
         let error = logins
             .login_for("la-superior")
             .expect("the entry exists")
             .ensure_complete("la-superior")
             .expect_err("empty password");
-        assert!(
-            error
-                .to_string()
-                .contains("empty password")
-        );
+        assert!(error.to_string().contains("empty password"));
     }
 
     #[test]
@@ -267,8 +268,7 @@ mod tests {
     /// Seed a Firm and store the portal-login payload through the shared
     /// test helpers — the real `store::firm_secrets` lane, admin-authored.
     async fn seeded_firm(surreal: &store::surreal::SurrealDb, payload: Option<&str>) -> uuid::Uuid {
-        let (firm_id, admin_id) =
-            crate::scraper::testing::seeded_firm_with_admin(surreal).await;
+        let (firm_id, admin_id) = crate::scraper::testing::seeded_firm_with_admin(surreal).await;
         if let Some(payload) = payload {
             crate::scraper::testing::put_portal_secret(
                 surreal,

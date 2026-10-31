@@ -158,15 +158,12 @@ impl BrowserSession {
         config: &SessionConfig,
         site: &SiteKey,
     ) -> Result<Self, SessionError> {
-        let mut driver = chromedriver_command(
-            &config.chrome.chromedriver,
-            config.webdriver_port,
-        )
-        .spawn()
-        .map_err(|source| SessionError::DriverLaunch {
-            path: config.chrome.chromedriver.clone(),
-            source,
-        })?;
+        let mut driver = chromedriver_command(&config.chrome.chromedriver, config.webdriver_port)
+            .spawn()
+            .map_err(|source| SessionError::DriverLaunch {
+                path: config.chrome.chromedriver.clone(),
+                source,
+            })?;
         if let Err(error) = poll_port_until(config.webdriver_port, DRIVER_START_TIMEOUT).await {
             let _ = driver.kill();
             return Err(error);
@@ -180,7 +177,11 @@ impl BrowserSession {
         })?;
         let caps = webdriver_capabilities(Some(chrome_binary), config.headless);
         let url = format!("http://127.0.0.1:{}", config.webdriver_port);
-        let client = match ClientBuilder::native().capabilities(caps).connect(&url).await {
+        let client = match ClientBuilder::native()
+            .capabilities(caps)
+            .connect(&url)
+            .await
+        {
             Ok(client) => client,
             Err(error) => {
                 let _ = driver.kill();
@@ -208,7 +209,10 @@ impl BrowserSession {
         let Some(client) = self.client.as_ref() else {
             return Ok(());
         };
-        let cookies = client.get_all_cookies().await.map_err(SessionError::Cookie)?;
+        let cookies = client
+            .get_all_cookies()
+            .await
+            .map_err(SessionError::Cookie)?;
         let state = SessionState {
             cookies: cookies.iter().map(persisted_cookie).collect(),
         };
@@ -268,10 +272,8 @@ impl BrowserSession {
         Self {
             client: None,
             driver: None,
-            state_path: std::env::temp_dir().join(format!(
-                "navigator-scraper-stub-{}",
-                uuid::Uuid::now_v7()
-            )),
+            state_path: std::env::temp_dir()
+                .join(format!("navigator-scraper-stub-{}", uuid::Uuid::now_v7())),
         }
     }
 }
@@ -324,9 +326,7 @@ fn save_state(path: &Path, state: &SessionState) -> Result<(), SessionError> {
 fn load_state(path: &Path) -> Result<SessionState, SessionError> {
     match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(SessionError::Serialize),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-            Ok(SessionState::default())
-        }
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(SessionState::default()),
         Err(source) => Err(SessionError::Io {
             path: path.to_path_buf(),
             source,
@@ -402,15 +402,16 @@ async fn poll_port_until(port: u16, deadline: std::time::Duration) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::{
-        PersistedCookie, SessionState, chromedriver_command, load_state, poll_port_until,
-        save_state, session_state_path, webdriver_capabilities,
+        chromedriver_command, load_state, poll_port_until, save_state, session_state_path,
+        webdriver_capabilities, PersistedCookie, SessionState,
     };
     use std::net::TcpListener;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("navigator-scraper-{name}-{}", uuid::Uuid::now_v7()));
+        let dir =
+            std::env::temp_dir().join(format!("navigator-scraper-{name}-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&dir).expect("create test dir");
         dir
     }
@@ -431,7 +432,10 @@ mod tests {
         let dir = temp_dir("state-round-trip");
         let path = dir.join("session.json");
         let state = SessionState {
-            cookies: vec![sample_cookie("session", Some(1_800_000_000)), sample_cookie("pref", None)],
+            cookies: vec![
+                sample_cookie("session", Some(1_800_000_000)),
+                sample_cookie("pref", None),
+            ],
         };
         save_state(&path, &state).expect("save state");
         assert_eq!(load_state(&path).expect("load state"), state);
@@ -486,7 +490,9 @@ mod tests {
             .get("args")
             .and_then(serde_json::Value::as_array)
             .expect("args array");
-        assert!(args.iter().any(|value| value.as_str() == Some("--headless=new")));
+        assert!(args
+            .iter()
+            .any(|value| value.as_str() == Some("--headless=new")));
 
         let headed = webdriver_capabilities(None, false);
         let options = headed
@@ -498,7 +504,9 @@ mod tests {
             .get("args")
             .and_then(serde_json::Value::as_array)
             .expect("args array");
-        assert!(!args.iter().any(|value| value.as_str() == Some("--headless=new")));
+        assert!(!args
+            .iter()
+            .any(|value| value.as_str() == Some("--headless=new")));
     }
 
     #[test]

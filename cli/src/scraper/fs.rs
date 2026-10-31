@@ -23,11 +23,7 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), std::io::Err
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let temp = PathBuf::from(format!(
-        "{}.tmp-{}",
-        path.display(),
-        uuid::Uuid::now_v7()
-    ));
+    let temp = PathBuf::from(format!("{}.tmp-{}", path.display(), uuid::Uuid::now_v7()));
     std::fs::write(&temp, bytes)?;
     std::fs::rename(&temp, path)?;
     Ok(())

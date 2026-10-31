@@ -117,7 +117,8 @@ pub(crate) struct NoticeQuery {
 #[derive(Debug, Clone, thiserror::Error)]
 pub(crate) enum AdapterError {
     #[error("site structure changed: {step} no longer matches ({detail})")]
-    #[cfg_attr(not(test), allow(dead_code))] // site adapters raise this; the base registers none yet
+    #[cfg_attr(not(test), allow(dead_code))]
+    // site adapters raise this; the base registers none yet
     StructureDrift { step: String, detail: String },
     #[error("transient failure at {step}: {detail}")]
     Transient { step: String, detail: String },
@@ -139,11 +140,7 @@ pub(crate) trait SiteAdapter: Send + Sync {
     /// number of times before the run hard-stops, so an implementation must
     /// not hammer a portal that is clearly refusing (bad password or a
     /// rewritten login form should surface promptly).
-    async fn login(
-        &self,
-        session: &BrowserSession,
-        login: &SiteLogin,
-    ) -> Result<(), AdapterError>;
+    async fn login(&self, session: &BrowserSession, login: &SiteLogin) -> Result<(), AdapterError>;
 
     /// Discover the notices for one docket.
     async fn notices(

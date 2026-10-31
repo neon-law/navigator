@@ -52,11 +52,8 @@ impl ScrapedDocument {
         sha256: String,
         bytes: Vec<u8>,
     ) -> Result<Self, NamingError> {
-        let filename = store::cases::filing_name(
-            &notice.entry_number,
-            &notice.title,
-            &notice.extension,
-        )?;
+        let filename =
+            store::cases::filing_name(&notice.entry_number, &notice.title, &notice.extension)?;
         Ok(Self {
             site,
             docket: docket.to_owned(),
@@ -100,10 +97,7 @@ pub(crate) trait InboxIntake: Send + Sync {
     ///
     /// `Transient` failures may be retried by the orchestration; anything
     /// else is terminal for the run.
-    async fn enqueue(
-        &self,
-        document: &ScrapedDocument,
-    ) -> Result<IntakeReceipt, IntakeError>;
+    async fn enqueue(&self, document: &ScrapedDocument) -> Result<IntakeReceipt, IntakeError>;
 }
 
 /// The test double: records every document handed across the seam and can
@@ -123,10 +117,7 @@ impl RecordingIntake {
     #[must_use]
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn received(&self) -> Vec<ScrapedDocument> {
-        self.received
-            .lock()
-            .expect("uncontended")
-            .clone()
+        self.received.lock().expect("uncontended").clone()
     }
 
     #[must_use]
@@ -138,13 +129,8 @@ impl RecordingIntake {
 
 #[async_trait::async_trait]
 impl InboxIntake for RecordingIntake {
-    async fn enqueue(
-        &self,
-        document: &ScrapedDocument,
-    ) -> Result<IntakeReceipt, IntakeError> {
-        let call = self
-            .calls
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    async fn enqueue(&self, document: &ScrapedDocument) -> Result<IntakeReceipt, IntakeError> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let failures = self
             .transient_failures_first
             .load(std::sync::atomic::Ordering::SeqCst);
@@ -172,10 +158,7 @@ pub(crate) struct FailingIntake;
 
 #[async_trait::async_trait]
 impl InboxIntake for FailingIntake {
-    async fn enqueue(
-        &self,
-        document: &ScrapedDocument,
-    ) -> Result<IntakeReceipt, IntakeError> {
+    async fn enqueue(&self, document: &ScrapedDocument) -> Result<IntakeReceipt, IntakeError> {
         let _ = document;
         Err(IntakeError::Transient {
             detail: "the inbox service is restarting".to_owned(),
@@ -193,10 +176,7 @@ pub(crate) struct UnwiredIntake;
 
 #[async_trait::async_trait]
 impl InboxIntake for UnwiredIntake {
-    async fn enqueue(
-        &self,
-        document: &ScrapedDocument,
-    ) -> Result<IntakeReceipt, IntakeError> {
+    async fn enqueue(&self, document: &ScrapedDocument) -> Result<IntakeReceipt, IntakeError> {
         Err(IntakeError::Rejected {
             detail: format!(
                 "the omnichannel intake for scraped documents is not wired yet; `{}` is staged but was not delivered",
@@ -262,7 +242,10 @@ mod tests {
         let receipt = receipt.expect("accepted");
         assert!(!receipt.deduped);
         assert_eq!(intake.received().len(), 1);
-        assert_eq!(intake.received()[0].filename, "DKT 0004 - Notice of Hearing.pdf");
+        assert_eq!(
+            intake.received()[0].filename,
+            "DKT 0004 - Notice of Hearing.pdf"
+        );
         assert_eq!(intake.calls(), 1);
     }
 
@@ -274,7 +257,10 @@ mod tests {
         };
         let first = intake.enqueue(&document("4", "Notice of Hearing")).await;
         assert!(matches!(first, Err(IntakeError::Transient { .. })));
-        assert!(intake.received().is_empty(), "a rejected document is not recorded");
+        assert!(
+            intake.received().is_empty(),
+            "a rejected document is not recorded"
+        );
         let second = intake.enqueue(&document("4", "Notice of Hearing")).await;
         assert!(second.is_ok());
         assert_eq!(intake.received().len(), 1);

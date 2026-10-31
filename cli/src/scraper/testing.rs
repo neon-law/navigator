@@ -8,12 +8,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::scraper::adapter::{
-    AdapterError, NoticeQuery, NoticeRef, SiteAdapter, SiteKey,
-};
+use crate::scraper::adapter::{AdapterError, NoticeQuery, NoticeRef, SiteAdapter, SiteKey};
 use crate::scraper::credentials::SiteLogin;
-use crate::scraper::download::{DownloadSink, fetch_into};
-use crate::scraper::fetcher::{FetchRequest, FetchResponse, FetchError, HttpFetcher};
+use crate::scraper::download::{fetch_into, DownloadSink};
+use crate::scraper::fetcher::{FetchError, FetchRequest, FetchResponse, HttpFetcher};
 use crate::scraper::retry::RetryClock;
 use crate::scraper::session::{BrowserSession, SessionError, SessionFactory};
 
@@ -153,7 +151,10 @@ impl MockAdapter {
     /// How many times `download` ran.
     #[must_use]
     pub(crate) fn download_calls(&self) -> u32 {
-        self.core.lock().map(|core| core.download_calls).unwrap_or(0)
+        self.core
+            .lock()
+            .map(|core| core.download_calls)
+            .unwrap_or(0)
     }
 
     /// The `(username, password)` every login attempt saw, in order —
@@ -458,4 +459,3 @@ pub(crate) async fn put_portal_secret(
     .await
     .expect("provision the portal login secret");
 }
-
