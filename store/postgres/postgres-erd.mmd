@@ -1467,6 +1467,24 @@ erDiagram
         string state
         datetime updated_at
     }
+    stage_definition {
+        string case_type
+        uuid firm_id
+        uuid id
+        datetime inserted_at
+        string label
+        int position
+        datetime updated_at
+    }
+    stage_event {
+        uuid actor_person_id
+        uuid from_stage_id
+        uuid id
+        string note
+        datetime occurred_at
+        uuid project_id
+        uuid to_stage_id
+    }
     statutory_deadline {
         datetime due_on
         uuid id
@@ -1701,6 +1719,10 @@ erDiagram
     firm }o--|| social_account_selection : references
     brand }o--|| social_handle : references
     post }o--|| social_publication : references
+    firm }o--|| stage_definition : references
+    person }o--|| stage_event : references
+    project }o--|| stage_event : references
+    stage_definition }o--|| stage_event : references
     project }o--|| statutory_deadline : references
     firm }o--|| summary_sender_approval : references
     person }o--|| summary_sender_approval : references
