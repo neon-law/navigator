@@ -131,6 +131,7 @@ pub async fn get_matter_tasks() -> Result<Vec<TaskRow>, ServerFnError> {
 #[cfg(test)]
 mod tests {
     use super::TaskRow;
+    use chrono::DateTime;
     use std::collections::HashMap;
     use store::tasks::ProjectTask;
     use uuid::Uuid;
@@ -146,8 +147,8 @@ mod tests {
             due_on: Some(
                 chrono::NaiveDate::from_ymd_opt(2026, 11, 9).expect("invariant: fixed date"),
             ),
-            inserted_at: Default::default(),
-            updated_at: Default::default(),
+            inserted_at: DateTime::default(),
+            updated_at: DateTime::default(),
         }
     }
 
