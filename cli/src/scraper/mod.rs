@@ -730,7 +730,7 @@ mod tests {
             "no partial document enqueued"
         );
         assert_eq!(
-            std::fs::read_dir(fixture.downloads_dir()).map_or(0, |entries| entries.count()),
+            std::fs::read_dir(fixture.downloads_dir()).map_or(0, std::iter::Iterator::count),
             0,
             "no finished document was staged"
         );
