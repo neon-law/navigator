@@ -478,6 +478,7 @@
       "workflows-service/src/dbos_ingress.rs",
       "workflows-service/src/dbos_notation.rs",
       "workflows-service/src/dri_digest.rs",
+      "workflows-service/src/project_slack.rs",
       "workflows-service/src/social_publisher.rs",
       "workflows/src/email/service.rs",
       "workflows/src/guardrail.rs",
@@ -1638,10 +1639,10 @@
       3695,
       3723,
       3951,
-      4045,
-      4072,
-      4141,
-      4143
+      4076,
+      4103,
+      4178,
+      4180
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -1869,6 +1870,7 @@
       "store/src/courts.rs",
       "store/src/delegations.rs",
       "store/src/document_pointers.rs",
+      "store/src/drive_import.rs",
       "store/src/email_tokens.rs",
       "store/src/entities.rs",
       "store/src/entity_commands.rs",
@@ -2123,9 +2125,9 @@
     ],
     "query_call_ids": [
       891,
-      4019,
-      4027,
-      4029
+      4050,
+      4058,
+      4060
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -3659,6 +3661,7 @@
       "store/src/surreal/record.rs",
       "store/src/surreal/test_support.rs",
       "store/src/synthetic_portfolio.rs",
+      "store/src/tasks.rs",
       "store/src/template_source.rs",
       "store/src/templates.rs",
       "store/src/test_support.rs",
@@ -3789,9 +3792,10 @@
       3942,
       3944,
       3945,
-      3985,
-      3995,
-      4097
+      3980,
+      4016,
+      4026,
+      4128
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -3946,6 +3950,7 @@
       "store/src/seed/sample_records.rs",
       "store/src/surreal/record.rs",
       "store/src/synthetic_portfolio.rs",
+      "store/src/tasks.rs",
       "store/src/test_support.rs",
       "webapp/src/entity_list.rs"
     ],
@@ -3969,7 +3974,8 @@
       2933,
       2956,
       3195,
-      3996
+      3979,
+      4027
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -4983,10 +4989,10 @@
       3909,
       3914,
       3952,
-      3967,
-      3993,
-      4073,
-      4142
+      3998,
+      4024,
+      4104,
+      4179
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -5046,7 +5052,7 @@
       2461,
       3029,
       3032,
-      3986
+      4017
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -6022,6 +6028,7 @@
       "store/src/seed/sample_records.rs",
       "store/src/surreal/record.rs",
       "store/src/synthetic_portfolio.rs",
+      "store/src/tasks.rs",
       "store/src/template_source.rs",
       "store/src/test_support.rs",
       "views/src/brand.rs",
@@ -6070,7 +6077,8 @@
       2931,
       2954,
       3197,
-      3997
+      3978,
+      4028
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -7167,6 +7175,7 @@
       "workflows-service/src/dbos_ingress.rs",
       "workflows-service/src/dbos_nightly_project_update.rs",
       "workflows-service/src/dbos_notation.rs",
+      "workflows-service/src/dbos_project_slack.rs",
       "workflows-service/src/dbos_reconcile.rs",
       "workflows-service/src/dri_digest.rs",
       "workflows-service/src/email_summary.rs",
@@ -7238,10 +7247,10 @@
       3741,
       3742,
       3744,
-      4111,
-      4113,
-      4115,
-      4117
+      4148,
+      4150,
+      4152,
+      4154
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -7676,7 +7685,7 @@
       3820,
       3822,
       3824,
-      4083
+      4114
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -8710,6 +8719,7 @@
       "store/src/surreal/record.rs",
       "store/src/surreal/test_support.rs",
       "store/src/synthetic_portfolio.rs",
+      "store/src/tasks.rs",
       "store/src/templates.rs",
       "store/src/test_support.rs",
       "store/src/testimonials.rs",
@@ -9026,13 +9036,14 @@
       3954,
       3955,
       3956,
-      3988,
-      3999,
-      4002,
-      4010,
-      4016,
-      4020,
-      4096
+      3977,
+      4019,
+      4030,
+      4033,
+      4041,
+      4047,
+      4051,
+      4127
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -9429,6 +9440,7 @@
       "store/src/projects.rs",
       "store/src/schema/mod.rs",
       "store/src/seed.rs",
+      "store/src/tasks.rs",
       "store/src/test_support.rs",
       "webapp/src/people.rs"
     ],
@@ -9464,7 +9476,9 @@
       3784,
       3788,
       3792,
-      3989
+      3959,
+      3983,
+      4020
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -9662,6 +9676,7 @@
       "cli/src/projects/deadline.rs",
       "cli/src/projects/deadline_proposal.rs",
       "cli/src/projects/docket/entries.rs",
+      "cli/src/projects/drive_ingest.rs",
       "cli/src/projects/efiling.rs",
       "cli/src/projects/finance.rs",
       "cli/src/projects/reference.rs",
@@ -9834,6 +9849,7 @@
       "workflows-service/src/dbos_inbound_message_alert.rs",
       "workflows-service/src/dbos_ingress.rs",
       "workflows-service/src/dbos_nightly_project_update.rs",
+      "workflows-service/src/dbos_project_slack.rs",
       "workflows-service/src/dri_digest.rs",
       "workflows-service/src/general_nag.rs",
       "workflows-service/src/inbound_message_alert.rs",
@@ -9908,12 +9924,12 @@
       3877,
       3882,
       3884,
-      4121,
-      4133,
-      4135,
-      4137,
-      4139,
-      4174
+      4158,
+      4170,
+      4172,
+      4174,
+      4176,
+      4211
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -10064,6 +10080,7 @@
       "cli/src/projects/doctor.rs",
       "cli/src/projects/document_check.rs",
       "cli/src/projects/drift.rs",
+      "cli/src/projects/drive_ingest.rs",
       "cli/src/projects/efiling.rs",
       "cli/src/projects/finance.rs",
       "cli/src/projects/gate.rs",
@@ -10291,6 +10308,7 @@
       "store/src/statutory_deadlines.rs",
       "store/src/summary_sender_approvals.rs",
       "store/src/synthetic_portfolio.rs",
+      "store/src/tasks.rs",
       "store/src/template_source.rs",
       "store/src/templates.rs",
       "store/src/test_support.rs",
@@ -10359,6 +10377,7 @@
       "workflows-service/src/bin/nightly-project-update-trigger.rs",
       "workflows-service/src/dbos_ingress.rs",
       "workflows-service/src/dbos_nightly_project_update.rs",
+      "workflows-service/src/dbos_project_slack.rs",
       "workflows-service/src/dri_digest.rs",
       "workflows-service/src/email_summary.rs",
       "workflows-service/src/finance_aggregate.rs",
@@ -10587,18 +10606,20 @@
       3907,
       3916,
       3961,
-      3962,
-      3964,
-      3969,
-      3971,
-      3983,
-      3990,
+      3981,
+      3992,
+      3993,
+      3995,
       4000,
-      4003,
-      4011,
-      4017,
-      4047,
-      4049
+      4002,
+      4014,
+      4021,
+      4031,
+      4034,
+      4042,
+      4048,
+      4078,
+      4080
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -11132,7 +11153,7 @@
       3282,
       3641,
       3647,
-      4085
+      4116
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -11801,7 +11822,7 @@
       3209,
       3211,
       3335,
-      4144
+      4181
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -12604,12 +12625,12 @@
       3302,
       3702,
       3757,
-      3958,
-      3967,
-      3973,
-      3976,
-      3978,
-      4081
+      3989,
+      3998,
+      4004,
+      4007,
+      4009,
+      4112
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -12688,11 +12709,11 @@
     ],
     "query_call_ids": [
       3005,
-      4001,
-      4004,
-      4006,
-      4008,
-      4012
+      4032,
+      4035,
+      4037,
+      4039,
+      4043
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -12815,9 +12836,9 @@
     ],
     "query_call_ids": [
       896,
-      4021,
-      4023,
-      4025
+      4052,
+      4054,
+      4056
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -12883,7 +12904,7 @@
       3727,
       3728,
       3729,
-      4032
+      4063
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
@@ -12946,8 +12967,8 @@
       "store/src/xero_invoices.rs"
     ],
     "query_call_ids": [
-      4048,
-      4050
+      4079,
+      4081
     ],
     "review_state": "runtime test references are reviewed assertion scope, not execution results or application-read parity",
     "runtime_parity": {
