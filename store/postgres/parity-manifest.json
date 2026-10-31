@@ -1094,9 +1094,11 @@
         "inserted_at": "datetime",
         "occurred_at": "string",
         "parent_message_id": "option<record<message>>",
+        "processed_at": "option<string>",
         "provider_message_id": "option<string>",
         "provider_ref": "option<string>",
         "purpose": "string",
+        "route": "option<string>",
         "updated_at": "datetime",
         "visibility": "option<string>"
       },
@@ -3272,9 +3274,11 @@
           "inserted_at": "TIMESTAMPTZ",
           "occurred_at": "TEXT",
           "parent_message_id": "UUID",
+          "processed_at": "TEXT",
           "provider_message_id": "TEXT",
           "provider_ref": "TEXT",
           "purpose": "TEXT",
+          "route": "TEXT",
           "updated_at": "TIMESTAMPTZ",
           "visibility": "TEXT"
         },
