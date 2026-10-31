@@ -851,6 +851,46 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         "/business",
         resolve_transactional_content(branding),
     ));
+    // The free court-form catalog: the registry's public surface. One
+    // branded index, one branded page per jurisdiction the registry
+    // covers, and the unbranded JSON twin of the same rows. Brands with
+    // no `free-resources` catalog mount neither branded page.
+    let free_courts = dioxus_app::embedded()
+        .expect("invariant: the shipped court registry parses; the store's tests are the gate");
+    if let Some(free_copy) = locales::free_resources(branding) {
+        routers.push(with_branded(
+            dioxus_app::free_resources_index_router(dioxus_app::free_resources_index_content(
+                &free_copy,
+                &free_courts,
+            )),
+            branded_optional_map(branding, |resolved| {
+                locales::free_resources(resolved).map(|copy| {
+                    webapp::free_resources::InjectedFreeResourcesIndex(
+                        dioxus_app::free_resources_index_content(&copy, &free_courts),
+                    )
+                })
+            }),
+        ));
+        for group in dioxus_app::jurisdiction_groups(&free_courts) {
+            let path = dioxus_app::free_resources_jurisdiction_path(
+                &dioxus_app::jurisdiction_slug(&group.name),
+            );
+            routers.push(with_branded(
+                dioxus_app::free_resources_jurisdiction_router(
+                    &path,
+                    dioxus_app::free_resources_jurisdiction_content(&free_copy, &group),
+                ),
+                branded_optional_map(branding, |resolved| {
+                    locales::free_resources(resolved).map(|copy| {
+                        webapp::free_resources::InjectedFreeResourcesJurisdiction(
+                            dioxus_app::free_resources_jurisdiction_content(&copy, &group),
+                        )
+                    })
+                }),
+            ));
+        }
+    }
+    routers.push(dioxus_app::free_resources_json_router());
     // The platform page. It carries a commercial offer, so it sits with the
     // firm's own pages.
     // The retired consumer plan. The firm speaks to emerging technology
@@ -1098,6 +1138,23 @@ fn branded_map<T>(
         .iter()
         .copied()
         .map(|key| (key, build(key.resolve_branding(default))))
+        .collect()
+}
+
+/// Like [`branded_map`], but skips brands whose `build` yields `None` —
+/// a brand without, say, the free-resources catalog carries no entry, and
+/// [`inject_branded`] passes such requests through uninjected.
+fn branded_optional_map<T>(
+    default: &'static views::brand::Branding,
+    build: impl Fn(&views::brand::Branding) -> Option<T>,
+) -> HashMap<BrandKey, T> {
+    BrandKey::ALL
+        .iter()
+        .copied()
+        .filter_map(|key| {
+            let value = build(key.resolve_branding(default))?;
+            Some((key, value))
+        })
         .collect()
 }
 

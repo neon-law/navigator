@@ -47,6 +47,7 @@ pub const DEFAULT_LOCALE: &str = "en";
 /// and `services` do; only the stem is new.
 pub const KNOWN_PAGES: &[&str] = &[
     "fractional-gc",
+    "free-resources",
     "gateway-accidents",
     "gateway-delete-your-data",
     "gateway-delete-your-debt",
@@ -271,6 +272,41 @@ pub struct LitigationCopy {
     pub lead: String,
     pub cta_label: String,
     pub body: Vec<Paragraph>,
+}
+
+/// The free court-form catalog's words around the registry rows. The rows
+/// themselves never pass through here — they come from `store/seeds/Court.yaml`
+/// — so this catalog holds only the promises (free of charge, no outcome
+/// promised), the table labels, and the empty states. `{jurisdiction}` in
+/// `meta_description` and `courts_heading` is filled with the jurisdiction's
+/// seeded display name by the page builder; the other brand placeholders
+/// (`{site_name}`, `{firm_email}`) resolve through the usual locale loader.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FreeResourcesCopy {
+    pub head_title: String,
+    pub meta_description: String,
+    pub title: String,
+    pub lede: String,
+    /// The promise that everything on the page is free of charge.
+    pub free_statement: String,
+    /// The promise that using the page promises no court outcome.
+    pub no_outcome: String,
+    /// The jurisdiction page's courts heading; `{jurisdiction}` filled by the
+    /// page builder.
+    pub courts_heading: String,
+    pub filing_office_label: String,
+    pub fee_label: String,
+    pub fee_waiver_label: String,
+    pub source_label: String,
+    pub blank_label: String,
+    /// A court whose registry form list is empty.
+    pub empty_court: String,
+    /// A jurisdiction with no courts at all — reachable only if the registry
+    /// grows one, so the page builder's data-driven shape already covers it.
+    pub empty_jurisdiction: String,
+    pub footnote: String,
+    /// The index page's link label for the machine-readable JSON endpoint.
+    pub json_label: String,
 }
 
 /// One of the three words the fractional-GC practice is named by.
@@ -606,6 +642,10 @@ pub enum LocalePageKind {
     Transactional,
     Marketing,
     Team,
+    /// `free-resources` — the free court-form catalog's words around the
+    /// rows. The rows themselves never pass through here: they come from
+    /// `store/seeds/Court.yaml`, and the page builder joins them to this copy.
+    FreeResources,
     /// `shared.yaml` — the cross-repository copy catalog, not a page.
     Shared,
     /// `services-catalog.yaml` — the structured individual-services schedule
@@ -620,6 +660,7 @@ pub fn locale_page_kind(stem: &str) -> Option<LocalePageKind> {
         "home" => Some(LocalePageKind::Home),
         "team" => Some(LocalePageKind::Team),
         "litigation" => Some(LocalePageKind::Litigation),
+        "free-resources" => Some(LocalePageKind::FreeResources),
         "fractional-gc" => Some(LocalePageKind::Transactional),
         "legal-aid"
         | "navigator"
@@ -730,6 +771,7 @@ pub fn parse_locale_file(stem: &str, yaml: &str) -> Result<(), String> {
         LocalePageKind::Transactional => deserialize::<TransactionalCopy>(stem, yaml),
         LocalePageKind::Marketing => deserialize::<MarketingPageCopy>(stem, yaml),
         LocalePageKind::Team => deserialize::<TeamCopy>(stem, yaml),
+        LocalePageKind::FreeResources => deserialize::<FreeResourcesCopy>(stem, yaml),
         LocalePageKind::Shared | LocalePageKind::ServicesCatalog => {
             unreachable!("handled above")
         }

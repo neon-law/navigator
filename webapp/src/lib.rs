@@ -77,6 +77,7 @@ pub mod firm_footer;
 pub mod firm_invoice_graphs;
 pub mod firm_new;
 pub mod firm_show;
+pub mod free_resources;
 pub mod glossary_page;
 pub mod gov_forms;
 pub mod harvard_outline;

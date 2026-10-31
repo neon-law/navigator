@@ -33,7 +33,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The registry YAML embedded at compile time — the file this module types.
 /// Public so cross-crate tests reconcile the exact bytes the binary ships.
@@ -42,7 +42,7 @@ pub const COURT_SEED_YAML: &str = include_str!("../seeds/Court.yaml");
 /// One court, or the court that approves a statewide form set. A
 /// county-specific court names its county; a city or township court names
 /// its city too.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Court {
     /// Stable slug (`eighth_judicial_district_court`). It is also the
@@ -64,7 +64,7 @@ pub struct Court {
 
 /// The class of court a form is filed in. Closed: a new class is an edit
 /// here plus a seed row, reviewed together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CourtLevel {
     /// A court of last resort. A statewide self-help form set is registered
@@ -91,7 +91,7 @@ pub enum CourtLevel {
 
 /// One form a court's filing office accepts, keyed to a forms-shelf
 /// template code.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CourtForm {
     /// Forms-shelf template code (`nv__adult_name_change_petition`) — the
@@ -124,7 +124,7 @@ pub struct CourtForm {
 
 /// A filing fee as the filing office publishes it: a decimal amount and an
 /// ISO 4217 currency code.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FilingFee {
     /// Decimal amount (`"270.00"`, `"0.00"`).
@@ -211,6 +211,27 @@ fn seeded_jurisdiction_codes() -> BTreeSet<String> {
         .into_iter()
         .map(|record| record.code)
         .collect()
+}
+
+/// The jurisdiction's display name as `store/seeds/Jurisdiction.yaml`
+/// seeds it (`NV` → `Nevada`), or `None` for a code the seed does not carry.
+#[must_use]
+pub fn jurisdiction_name(code: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Seed {
+        records: Vec<Record>,
+    }
+    #[derive(Deserialize)]
+    struct Record {
+        name: String,
+        code: String,
+    }
+    serde_yaml::from_str::<Seed>(crate::seed::JURISDICTION_SEED_YAML)
+        .expect("Jurisdiction.yaml parses against its seed shape")
+        .records
+        .into_iter()
+        .find(|record| record.code == code)
+        .map(|record| record.name)
 }
 
 fn validate(courts: &[Court]) -> Result<(), RegistryError> {
@@ -322,7 +343,9 @@ fn is_decimal_amount(amount: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{embedded, is_decimal_amount, is_sha256_pin, parse, RegistryError};
+    use super::{
+        embedded, is_decimal_amount, is_sha256_pin, jurisdiction_name, parse, Court, RegistryError,
+    };
 
     /// Wrap one or more full court records (already YAML-indented) in the
     /// seed envelope, so each fixture reads as the document it parses.
@@ -340,6 +363,30 @@ mod tests {
         sha256: {VALID_SHA256}
         filing_office: Family Division Clerk's Office"
         )
+    }
+
+    #[test]
+    fn jurisdiction_name_reads_the_seed_display_name() {
+        assert_eq!(
+            jurisdiction_name("NV").as_deref(),
+            Some("Nevada"),
+            "`NV` is seeded as Nevada"
+        );
+        assert_eq!(
+            jurisdiction_name("ZZ"),
+            None,
+            "a code Jurisdiction.yaml does not seed names nothing"
+        );
+    }
+
+    #[test]
+    fn the_registry_serializes_back_to_its_own_shape() {
+        // The public JSON endpoint serves the registry as JSON; the round
+        // trip must not invent or drop a field.
+        let courts = embedded().expect("shipped court registry must parse and validate");
+        let json = serde_json::to_string(&courts).expect("registry serializes");
+        let round: Vec<Court> = serde_json::from_str(&json).expect("registry round-trips");
+        assert_eq!(round, courts);
     }
 
     #[test]
