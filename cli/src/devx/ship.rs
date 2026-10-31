@@ -2559,6 +2559,7 @@ pub(super) fn run_selected_ship(
     // Held until the ship returns: dropping it deletes the scratch
     // kubeconfig and registry login.
     let _credentials = ShipCredentials::cluster_and_registry(&cfg)?;
+    ensure_ship_permissions(&cfg, deployment, opts, lane)?;
     if lane_requires_asset_preflight(lane) {
         // The applicable inventory — on-disk markdown when `server/content` is
         // a directory, otherwise the references embedded in this CLI — is
@@ -2571,6 +2572,292 @@ pub(super) fn run_selected_ship(
         ShipLane::RestartOnly => restart_only(&cfg, opts.dry_run),
         ShipLane::Roll => roll(&cfg, deployment, opts, root),
     }
+}
+
+/// The authenticated caller's capability, scoped exactly like the request it gates.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ShipPermission {
+    namespace: String,
+    group: String,
+    resource: String,
+    verb: String,
+}
+
+impl ShipPermission {
+    fn new(namespace: &str, group: &str, resource: &str, verb: &str) -> Self {
+        Self {
+            namespace: namespace.to_owned(),
+            group: group.to_owned(),
+            resource: resource.to_owned(),
+            verb: verb.to_owned(),
+        }
+    }
+
+    fn describe(&self) -> String {
+        let resource = if self.group.is_empty() {
+            self.resource.clone()
+        } else {
+            format!("{}.{}", self.resource, self.group)
+        };
+        let scope = if self.namespace.is_empty() {
+            "cluster"
+        } else {
+            &self.namespace
+        };
+        format!("{} {resource} ({scope})", self.verb)
+    }
+}
+
+/// Resolve the resource names used in the rendered release. Refuse unknown
+/// kinds so a new manifest cannot silently escape the permission preflight.
+fn manifest_permissions(manifest: &str, namespace: &str) -> Result<BTreeSet<ShipPermission>> {
+    use serde::Deserialize;
+    let mut permissions = BTreeSet::new();
+    for document in serde_yaml::Deserializer::from_str(manifest) {
+        let value =
+            serde_json::Value::deserialize(document).context("parse permission manifest")?;
+        if value.is_null() {
+            continue;
+        }
+        let kind = value
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .context("permission manifest has no kind")?;
+        let resource = match kind {
+            "Namespace" => "namespaces",
+            "StorageClass" => "storageclasses",
+            "Deployment" => "deployments",
+            "StatefulSet" => "statefulsets",
+            "CronJob" => "cronjobs",
+            "Job" => "jobs",
+            "Service" => "services",
+            "Secret" => "secrets",
+            "ConfigMap" => "configmaps",
+            "ServiceAccount" => "serviceaccounts",
+            "PersistentVolumeClaim" => "persistentvolumeclaims",
+            "Ingress" => "ingresses",
+            "NetworkPolicy" => "networkpolicies",
+            "PodDisruptionBudget" => "poddisruptionbudgets",
+            "Role" => "roles",
+            "RoleBinding" => "rolebindings",
+            "ClusterRole" => "clusterroles",
+            "ClusterRoleBinding" => "clusterrolebindings",
+            "BackendConfig" => "backendconfigs",
+            "FrontendConfig" => "frontendconfigs",
+            "ManagedCertificate" => "managedcertificates",
+            "SecretProviderClass" => "secretproviderclasses",
+            "PodMonitoring" => "podmonitorings",
+            "Rules" => "rules",
+            other => {
+                bail!("permission preflight has no resource mapping for rendered kind {other}")
+            }
+        };
+        let version = value
+            .get("apiVersion")
+            .and_then(serde_json::Value::as_str)
+            .context("permission manifest has no apiVersion")?;
+        let group = version.split_once('/').map_or("", |(group, _)| group);
+        let scope = if matches!(
+            kind,
+            "Namespace" | "StorageClass" | "ClusterRole" | "ClusterRoleBinding"
+        ) {
+            ""
+        } else {
+            value
+                .pointer("/metadata/namespace")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(namespace)
+        };
+        // Client-side apply and its server-side diff need reads, creation,
+        // and patches. An update is a distinct API verb, not a synonym for patch.
+        for verb in ["get", "create", "patch"] {
+            permissions.insert(ShipPermission::new(scope, group, resource, verb));
+        }
+    }
+    ensure!(
+        !permissions.is_empty(),
+        "permission manifest contains no resources"
+    );
+    Ok(permissions)
+}
+
+fn ensure_ship_permissions(
+    cfg: &ShipConfig,
+    deployment: &super::deployments::Deployment,
+    opts: &ShipOpts,
+    lane: ShipLane,
+) -> Result<()> {
+    let mut permissions = BTreeSet::new();
+    for verb in ["get", "list", "watch", "patch"] {
+        permissions.insert(ShipPermission::new(
+            &cfg.namespace,
+            "apps",
+            "deployments",
+            verb,
+        ));
+    }
+    if lane == ShipLane::Roll {
+        let tag = opts.tag.as_deref().context("release roll requires --tag")?;
+        registry::validate_release_tag(tag)?;
+        let subs = deployment_substitutions(deployment, tag)?;
+        let rendered = render_release_plan(&subs, cfg, deployment)?;
+        let target = rendered.application.path().join(GKE_KUSTOMIZE_SUBPATH);
+        omit_unwritten_objects(
+            &target,
+            &super::deployments::skipped_projected_objects(deployment)?,
+        )?;
+        permissions.extend(manifest_permissions(
+            &kustomize_build(&target)?,
+            &cfg.namespace,
+        )?);
+        permissions.extend(manifest_permissions(&rendered.collector, &cfg.namespace)?);
+        let mut services = vec![
+            "postgres",
+            "postgres/access",
+            "postgres/migrate",
+            "forgejo/database",
+            "forgejo",
+        ];
+        if rendered.mirror_enabled {
+            services.push("postgres/mirror");
+        }
+        for service in services {
+            let path = render_service_overlay(&rendered.application, cfg, service)?;
+            permissions.extend(manifest_permissions(
+                &kustomize_build(&path)?,
+                &cfg.namespace,
+            )?);
+        }
+        for (group, resource, verbs) in [
+            ("", "secrets", &["get"][..]),
+            ("", "configmaps", &["get"][..]),
+            ("", "persistentvolumeclaims", &["get", "patch"][..]),
+            (
+                "apps",
+                "statefulsets",
+                &["get", "list", "watch", "delete"][..],
+            ),
+            ("batch", "jobs", &["get", "list", "watch", "delete"][..]),
+            ("batch", "cronjobs", &["get", "list", "patch", "delete"][..]),
+            (
+                "networking.gke.io",
+                "managedcertificates",
+                &["get", "delete"][..],
+            ),
+        ] {
+            for verb in verbs {
+                permissions.insert(ShipPermission::new(&cfg.namespace, group, resource, verb));
+            }
+        }
+    } else if lane == ShipLane::ImageOnly {
+        // kubectl diff uses server-side dry-run requests, which require
+        // create/patch authorization even though no objects are persisted.
+        let tag = opts
+            .tag
+            .as_deref()
+            .context("image-only roll requires --tag")?;
+        registry::validate_release_tag(tag)?;
+        let subs = deployment_substitutions(deployment, tag)?;
+        let rendered = render_manifests_with(&subs)?;
+        permissions.extend(manifest_permissions(
+            &kustomize_build(&rendered.path().join(GKE_KUSTOMIZE_SUBPATH))?,
+            &cfg.namespace,
+        )?);
+        for verb in ["get", "list", "patch"] {
+            permissions.insert(ShipPermission::new(
+                &cfg.namespace,
+                "batch",
+                "cronjobs",
+                verb,
+            ));
+        }
+    }
+    check_ship_permissions(&permissions, |permission| {
+        review_ship_permission(cfg, permission)
+    })
+}
+
+fn check_ship_permissions(
+    permissions: &BTreeSet<ShipPermission>,
+    mut review: impl FnMut(&ShipPermission) -> Result<bool>,
+) -> Result<()> {
+    let mut missing = Vec::new();
+    for permission in permissions {
+        let allowed = review(permission).with_context(|| {
+            format!(
+                "Kubernetes permissions could not be checked for {}; no rollout was attempted",
+                permission.describe()
+            )
+        })?;
+        if !allowed {
+            missing.push(permission.describe());
+        }
+    }
+    ensure!(missing.is_empty(),
+        "missing Kubernetes permissions: {}. Ask the deployment administrator for the grants required by this ship lane; GKE roles/container.developer covers namespaced workload access and includes reading Secret values. Cluster-scoped objects may require separate grants. No rollout was attempted",
+        missing.join(", ")
+    );
+    Ok(())
+}
+
+/// Submit a `SelfSubjectAccessReview` as the authenticated caller. It creates
+/// no workload and never impersonates another principal.
+fn review_ship_permission(cfg: &ShipConfig, permission: &ShipPermission) -> Result<bool> {
+    use std::io::Write;
+    use std::process::Stdio;
+    #[derive(serde::Deserialize)]
+    struct Review {
+        status: ReviewStatus,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ReviewStatus {
+        allowed: bool,
+        #[serde(default)]
+        evaluation_error: String,
+    }
+    let request = serde_json::json!({
+        "apiVersion": "authorization.k8s.io/v1", "kind": "SelfSubjectAccessReview",
+        "spec": { "resourceAttributes": {
+            "namespace": permission.namespace, "group": permission.group,
+            "resource": permission.resource, "verb": permission.verb
+        }}
+    });
+    let mut child = kubectl_ctx(cfg)
+        .args([
+            "create",
+            "--raw",
+            "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews",
+            "-f",
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("start SelfSubjectAccessReview")?;
+    let write_result = child
+        .stdin
+        .take()
+        .context("open access review input")
+        .and_then(|mut stdin| {
+            stdin
+                .write_all(request.to_string().as_bytes())
+                .context("write access review")
+        });
+    let output = child.wait_with_output().context("wait for access review")?;
+    write_result?;
+    ensure!(
+        output.status.success(),
+        "SelfSubjectAccessReview request failed; check cluster connectivity and authentication"
+    );
+    let review: Review =
+        serde_json::from_slice(&output.stdout).context("parse SelfSubjectAccessReview response")?;
+    ensure!(
+        review.status.evaluation_error.is_empty(),
+        "SelfSubjectAccessReview could not evaluate access"
+    );
+    Ok(review.status.allowed)
 }
 
 fn cloud_context_command(cfg: &ShipConfig) -> Command {
@@ -3869,7 +4156,8 @@ fn ensure_secret_invariants(cfg: &ShipConfig, dry_run: bool, manifests: &str) ->
             "DRY-RUN: checking required keys vs Secret + each web-binary Deployment env (read-only)"
         );
     }
-    let secret_keys = secret_data_keys(cfg)?;
+    let secret_keys = secret_data_keys(cfg)
+        .context("Secret invariants could not be checked; the Secret could not be read")?;
     check_secret_invariants(cfg, manifests, &secret_keys)
 }
 
@@ -5397,6 +5685,94 @@ mod tests {
     const TEST_REGISTRY: &str = "ghcr.io/example/navigator";
     use super::*;
     use base64::Engine as _;
+
+    #[test]
+    fn permission_manifests_preserve_resource_groups_and_scopes() {
+        let permissions = manifest_permissions(
+            "apiVersion: v1\nkind: Secret\nmetadata:\n  namespace: example-other\n---\napiVersion: storage.k8s.io/v1\nkind: StorageClass\n",
+            "example-default",
+        ).unwrap();
+        assert_eq!(permissions.len(), 6);
+        for verb in ["get", "create", "patch"] {
+            assert!(permissions.contains(&ShipPermission::new(
+                "example-other",
+                "",
+                "secrets",
+                verb
+            )));
+            assert!(permissions.contains(&ShipPermission::new(
+                "",
+                "storage.k8s.io",
+                "storageclasses",
+                verb
+            )));
+        }
+        assert!(manifest_permissions(
+            "apiVersion: example.invalid/v1\nkind: Unknown\n",
+            "example-default"
+        )
+        .is_err());
+        assert!(manifest_permissions("malformed: [", "example-default").is_err());
+    }
+
+    #[test]
+    fn permission_resource_mapping_covers_embedded_manifest_kinds() {
+        fn check(directory: &Dir<'_>) {
+            for file in directory.files() {
+                let Some(text) = file.contents_utf8() else {
+                    continue;
+                };
+                for kind in text.lines().filter_map(|line| line.strip_prefix("kind: ")) {
+                    if kind != "Kustomization" {
+                        manifest_permissions(
+                            &format!("apiVersion: v1\nkind: {kind}\n"),
+                            "example-default",
+                        )
+                        .unwrap_or_else(|error| panic!("{}: {error}", file.path().display()));
+                    }
+                }
+            }
+            for child in directory.dirs() {
+                check(child);
+            }
+        }
+        for directory in [
+            &GKE_MANIFESTS,
+            &EXPORTS_MANIFESTS,
+            &K8S_BASE_MANIFESTS,
+            &POSTGRES_MANIFESTS,
+            &FORGEJO_MANIFESTS,
+        ] {
+            check(directory);
+        }
+    }
+
+    #[test]
+    fn permission_denials_are_aggregated_and_unavailable_reviews_are_distinct() {
+        let permissions = [
+            ShipPermission::new("example-default", "", "secrets", "get"),
+            ShipPermission::new("example-default", "apps", "deployments", "patch"),
+        ]
+        .into_iter()
+        .collect();
+        let mut reviewed = 0;
+        let error = check_ship_permissions(&permissions, |_| {
+            reviewed += 1;
+            Ok(false)
+        })
+        .unwrap_err();
+        assert_eq!(reviewed, 2);
+        let message = error.to_string();
+        assert!(message.contains("get secrets"));
+        assert!(message.contains("patch deployments.apps"));
+        assert!(message.contains("roles/container.developer"));
+        check_ship_permissions(&permissions, |_| Ok(true)).unwrap();
+        let error = check_ship_permissions(&permissions, |_| bail!("unavailable")).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("permissions could not be checked"));
+        assert!(!error.to_string().contains("missing Kubernetes permissions"));
+    }
 
     #[test]
     fn cloud_context_uses_only_the_selected_installations_coordinates() {
