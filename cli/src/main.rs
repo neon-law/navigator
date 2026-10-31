@@ -36,6 +36,7 @@ mod mail;
 #[allow(dead_code)]
 mod lsp_source_export;
 mod mcp_bridge;
+mod notation_import;
 mod notation_kinds;
 mod notations_preview;
 mod notices;
@@ -52,6 +53,7 @@ mod release_version;
 #[allow(dead_code)]
 mod remote;
 mod sas;
+mod scraper;
 mod sendgrid_openapi;
 mod site_asset;
 mod surreal_archive;
@@ -890,6 +892,13 @@ enum Command {
         #[command(subcommand)]
         action: ProjectsCmd,
     },
+    /// Scrape court and program portals into the omnichannel inbox. Site
+    /// adapters run on the shared framework base: pinned-Chrome sessions,
+    /// Firm-store portal logins, resumable downloads, inbox intake.
+    Scraper {
+        #[command(subcommand)]
+        action: scraper::ScraperCmd,
+    },
     /// The notation author's workbench: a Project repository's
     /// `templates/<stem>.md` (the fleet layout), or Navigator's own bundled
     /// catalog under `templates/notations/`.
@@ -972,6 +981,10 @@ enum ProjectsCmd {
         /// A private name or Project code to refuse; repeat for each.
         #[arg(long = "term")]
         terms: Vec<String>,
+        /// A Project whose code and participants are resolved into private
+        /// terms from the store; repeat for each matter in the draft.
+        #[arg(long = "project")]
+        projects: Vec<String>,
     },
     /// Record e-filing transaction status and file court-stamped copies.
     Efiling {
@@ -1067,11 +1080,29 @@ enum ProjectsCmd {
         /// both. `navigator project setup` creates the calendar.
         #[arg(long = "calendar", value_name = "ID")]
         calendar: Option<String>,
+        /// The Project's Drive ingest folder id, in the Firm's Projects
+        /// shared drive. Written to `project.drive_folder_id` and the live
+        /// Project; an empty value clears both. `navigator project setup`
+        /// creates the folder, or adopts one named for the code that
+        /// already exists.
+        #[arg(long = "drive-folder", value_name = "ID")]
+        drive_folder: Option<String>,
+        /// Preview every change without writing navigator.yaml or the live
+        /// Project row.
+        #[arg(long)]
+        dry_run: bool,
         /// The client's booking page: the address of an appointment schedule
         /// made on the Project calendar in Google Calendar. Written to the
         /// live Project only and shown to the client; an empty value clears it.
         #[arg(long, value_name = "URL")]
         booking_url: Option<String>,
+        /// The jurisdiction an onboarding Notation's Clauses bind to: the state
+        /// whose law and arbitration seat an engagement letter names. Written
+        /// to the live Project row and read live at render time by a Clause
+        /// input bound to `project.onboarding_jurisdiction`; an empty value
+        /// clears it.
+        #[arg(long, value_name = "STATE")]
+        jurisdiction: Option<String>,
         /// Firm name to assign to the live Project (requires --brand).
         #[arg(long, requires = "brand")]
         firm: Option<String>,
@@ -1080,6 +1111,11 @@ enum ProjectsCmd {
         brand: Option<String>,
         #[command(flatten)]
         host: HostOpt,
+    },
+    /// Run the read-only document checks over a documents tree (LAW-217).
+    Documents {
+        #[command(subcommand)]
+        action: DocumentsCmd,
     },
     /// Reconcile the Git-ignored `documents/` and the committed `blobs/` with
     /// the live Project in both directions: download live revisions, upload
@@ -1183,6 +1219,18 @@ enum ProjectsCmd {
         /// Wait until the import commits or is refused.
         #[arg(long)]
         wait: bool,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// File a Project's Drive dropbox folder into the matter through the
+    /// portal's drive-import door, as internal documents under their original
+    /// filenames. `--dry-run` plans the pass and writes nothing.
+    DriveIngest {
+        /// The Project code.
+        project_code: String,
+        /// Report what a real pass would do, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -1404,6 +1452,38 @@ enum ProjectsCmd {
         #[arg(long)]
         record: Option<String>,
     },
+    /// Create or adopt a Project's external surfaces through the live
+    /// site's admin reconcile door.
+    ///
+    /// `reconcile` is the idempotent backfill: for every Project visible to
+    /// this login (or one `--project` code) it runs the same pass matter-open
+    /// runs best-effort, so a matter opened while the forge was down gains
+    /// its governed, seeded repository on the next run, and re-running
+    /// changes nothing. Each Project reports its own outcome — a Firm whose
+    /// Forgejo is unconfigured is skipped with the missing coordinate
+    /// named, never a failed run.
+    Surfaces {
+        #[command(subcommand)]
+        action: SurfacesCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum SurfacesCmd {
+    /// Create or adopt each Project's source repository — seeded and
+    /// governed when the forge is Forgejo — through
+    /// `POST /app/api/project-surfaces/{id}`.
+    Reconcile {
+        /// Project code, e.g. `acme`. Omit to reconcile every Project
+        /// visible to this login.
+        #[arg(long)]
+        project: Option<String>,
+        /// Emit the per-Project outcomes as JSON.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        host: HostOpt,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1428,6 +1508,55 @@ enum ProjectRepositoryCmd {
         /// Print the pointer moves without making them.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Reslug a checkout into the extended matter folder tree (LAW-215):
+    /// refile bare `Discovery` pointers onto `Discovery (Served)` and move
+    /// every pointer's bytes from the five-folder tree into the folder the
+    /// pointer resolves to now.
+    ///
+    /// Offline and idempotent. A pointer's checksum, asset id, and version
+    /// chain never change; the one pointer rewrite is the bare `Discovery`
+    /// folder line. Bytes under `documents/` no pointer names are listed,
+    /// never guessed at. `navigator project sync` creates the new tree, but
+    /// does not refile.
+    MigrateFolders {
+        /// Project repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// Print the refiles and moves without making them.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum DocumentsCmd {
+    /// Read-only check of a documents tree with the same matter-folder,
+    /// filename, and collision rules a checkout's `documents/` lives under:
+    /// nothing is uploaded, renamed, or moved (LAW-217).
+    Check {
+        /// Project checkout root whose committed pointers `--deep` compares
+        /// against. Defaults to the current directory. Without
+        /// `--documents-dir` or `--drive-local`, the tree checked is this
+        /// checkout's own `documents/`.
+        dir: Option<PathBuf>,
+        /// Check this tree instead of the checkout's `documents/`. Any tree
+        /// laid out like `documents/` works — a Google-Drive matter folder
+        /// included — and no `navigator.yaml` is read without `--deep`.
+        #[arg(long, value_name = "PATH")]
+        documents_dir: Option<PathBuf>,
+        /// Check the Project's matter folder in Google Drive for desktop
+        /// instead, resolved from `~/Library/CloudStorage` by the Project
+        /// code in `navigator.yaml`.
+        #[arg(long, conflicts_with = "documents_dir")]
+        drive_local: bool,
+        /// Also compare each committed pointer under `<dir>/blobs` against
+        /// its `sha256` and `size_bytes`, wherever the bytes live.
+        #[arg(long)]
+        deep: bool,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1660,6 +1789,30 @@ enum CommunicationCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Log a firm-internal matter note and print the stored Communication
+    /// (LAW-230).
+    ///
+    /// A note has no counterparty and no client visibility: it is the
+    /// lawyer's own observation on the matter, rendered on the workbench's
+    /// Notes tab and never on a client view. Communications stay
+    /// server-only: nothing is written under `documents/`, and `project
+    /// sync` writes no pointer for one.
+    Note {
+        /// The note's Markdown body.
+        #[arg(long)]
+        body_file: PathBuf,
+        /// A subject line.
+        #[arg(long)]
+        subject: Option<String>,
+        /// Print the request and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1874,6 +2027,20 @@ enum DeadlineCmd {
     },
     /// Print every deadline on the Project as one RFC 5545 calendar.
     Ics {
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Mirror the Project's deadlines into its shared matter calendar
+    /// through the portal, repairing drift. Requires the Firm's calendar
+    /// integration; `--dry-run` plans without writing.
+    Sync {
+        /// Plan the mirror without writing — the door answers what it
+        /// would insert, patch, and delete.
+        #[arg(long)]
+        dry_run: bool,
         /// Project code. Defaults to project.name in navigator.yaml.
         #[arg(long)]
         project: Option<String>,
@@ -2210,6 +2377,29 @@ enum NotationCmd {
         /// outside a signature block, or drafting note.
         #[arg(long)]
         preview: bool,
+    },
+    /// Apply an edited Word document back into the notation template it was
+    /// rendered from — the second half of `notation word`.
+    ///
+    /// The edited `.docx` carries the export's provenance record; the
+    /// import verifies the template hash and refuses a template that
+    /// changed since the export, refuses drafts still carrying tracked
+    /// changes or review comments, and refuses any edit that drops a
+    /// `{{placeholder}}` or `{{> partial}}` the template needs or invents
+    /// one it never had. Tables are carried verbatim and never touched.
+    /// With `--dry-run` the plan and the updated template print and
+    /// nothing is written.
+    Import {
+        /// Path to the notation template (`.md`) the document was rendered
+        /// from. Updated in place without `--dry-run`.
+        file: PathBuf,
+        /// Path to the edited Word document (`navigator notation word`'s
+        /// output, edited in Word and re-saved). Must end in `.docx`.
+        edited: PathBuf,
+        /// Print the plan and the updated template without writing
+        /// anything.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -3960,6 +4150,47 @@ struct ExecutionArgs {
     /// Never the notary's name or commission number.
     #[arg(long, value_parser = parse_notarization)]
     notarization: Vec<store::documents::Notarization>,
+    /// The exhibit metadata the matter's evidence index reads (LAW-185).
+    #[command(flatten)]
+    evidence: EvidenceArgs,
+}
+
+/// The exhibit metadata `site document upload` records for the evidence
+/// index. Every flag is optional; the block is recorded only when at least
+/// one is given.
+#[derive(clap::Args)]
+struct EvidenceArgs {
+    /// The date the exhibit itself bears, `YYYY-MM-DD` — a letter's own
+    /// date, a photograph's capture date — not the filing date.
+    #[arg(long = "evidence-dated-at", value_parser = parse_calendar_date)]
+    dated_at: Option<chrono::NaiveDate>,
+    /// Where the exhibit came from, one line — a person, an agency, a URL.
+    #[arg(long = "evidence-source")]
+    source: Option<String>,
+    /// How confidently the exhibit is tied to what it supports:
+    /// `exact`, `inferred`, or `unknown`.
+    #[arg(long = "evidence-confidence", value_parser = parse_evidence_confidence)]
+    confidence: Option<store::documents::EvidenceConfidence>,
+    /// A claim reference the exhibit bears on, repeatable — exactly the
+    /// reference the reader should follow, `¶ 12` or
+    /// `Count II — Conversion`, not prose.
+    #[arg(long = "evidence-supports")]
+    supports: Vec<String>,
+}
+
+impl EvidenceArgs {
+    fn record(self) -> Option<store::documents::Evidence> {
+        let any = self.dated_at.is_some()
+            || self.source.is_some()
+            || self.confidence.is_some()
+            || !self.supports.is_empty();
+        any.then_some(store::documents::Evidence {
+            dated_at: self.dated_at,
+            source: self.source,
+            confidence: self.confidence,
+            supports: self.supports,
+        })
+    }
 }
 
 impl ExecutionArgs {
@@ -3970,6 +4201,7 @@ impl ExecutionArgs {
                 .zip(self.signed_on)
                 .map(|(method, signed_on)| store::documents::Signing { method, signed_on }),
             notarization: self.notarization,
+            evidence: self.evidence.record(),
         }
     }
 }
@@ -3980,6 +4212,9 @@ impl ExecutionArgs {
 /// the checkout's own `navigator.yaml` — a pointer path below `blobs/` (the
 /// committed `.yaml`), or the bytes below `documents/` it names, is enough for
 /// a lawyer to name a file rather than an id or a host.
+// The `upload` variant flattens every flag clap cannot box, so it is far
+// larger than the read variants; the enum is built once per process run.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum DocumentAction {
     /// File a local document into a matter (`POST /app/api/projects/{id}/documents`).
@@ -4500,6 +4735,7 @@ fn run() -> ExitCode {
         }
         Command::Mail { action } => runtime().block_on(mail::run(action)),
         Command::Projects { action } => runtime().block_on(run_projects(action)),
+        Command::Scraper { action } => runtime().block_on(scraper::run(action)),
         // The docs reference helpers need no cluster, so they are handled
         // here rather than routed into the KIND dispatcher with the rest
         // of `dev`.
@@ -4735,6 +4971,11 @@ fn run() -> ExitCode {
                 answers,
                 preview,
             } => run_render(&file, &out, &answers, "docx", preview),
+            NotationCmd::Import {
+                file,
+                edited,
+                dry_run,
+            } => notation_import::run(&file, &edited, dry_run),
         },
         // `lsp publish` and the `assets` pipeline
         // carry operator blast radius but are not cluster lifecycle, so they
@@ -4890,7 +5131,11 @@ async fn open_surreal() -> Result<store::surreal::SurrealDb, ExitCode> {
 #[allow(clippy::too_many_lines)]
 async fn run_projects(action: ProjectsCmd) -> ExitCode {
     match action {
-        ProjectsCmd::FeedbackCheck { file, terms } => {
+        ProjectsCmd::FeedbackCheck {
+            file,
+            terms,
+            projects,
+        } => {
             let text = match file {
                 Some(path) => std::fs::read_to_string(path),
                 None => std::io::read_to_string(std::io::stdin()),
@@ -4899,6 +5144,24 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 eprintln!("navigator: could not read the draft");
                 return ExitCode::from(2);
             };
+            // The store opens only for a --project draft: a term-only check
+            // must work without any database configured.
+            let resolved = if projects.is_empty() {
+                Vec::new()
+            } else {
+                let db = match open_surreal().await {
+                    Ok(db) => db,
+                    Err(exit) => return exit,
+                };
+                match cli::pii_audit::private_terms(&db, &projects).await {
+                    Ok(terms) => terms,
+                    Err(e) => {
+                        eprintln!("navigator: {e:#}");
+                        return ExitCode::from(2);
+                    }
+                }
+            };
+            let terms = cli::pii_audit::merge_terms(&resolved, &terms);
             let findings = cli::feedback_scan::scan(&text, &terms);
             for f in &findings {
                 eprintln!(
@@ -5091,6 +5354,21 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 )
                 .await
             }
+            CommunicationCmd::Note {
+                body_file,
+                subject,
+                dry_run,
+                project,
+                host,
+            } => {
+                projects::communication::note(
+                    host.host.as_deref(),
+                    project.as_deref(),
+                    projects::communication::NewNote { body_file, subject },
+                    dry_run,
+                )
+                .await
+            }
         },
         ProjectsCmd::Service { action } => match action {
             ServiceCmd::List { host, project } => {
@@ -5241,6 +5519,11 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             DeadlineCmd::Ics { host, project } => {
                 projects::deadline::ics(host.host.as_deref(), project.as_deref()).await
             }
+            DeadlineCmd::Sync {
+                host,
+                project,
+                dry_run,
+            } => projects::deadline::sync(host.host.as_deref(), project.as_deref(), dry_run).await,
             DeadlineCmd::Reopen { host, project, id } => {
                 projects::deadline::reopen(host.host.as_deref(), project.as_deref(), id).await
             }
@@ -5363,27 +5646,33 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             private_notion_page,
             calendar,
             booking_url,
+            jurisdiction,
+            drive_folder,
+            dry_run,
             firm,
             brand,
             host,
         } => {
-            projects::set::run(
-                host.host.as_deref(),
-                project_code.as_deref(),
+            projects::set::run(projects::set::SetRequest {
+                host_override: host.host.as_deref(),
+                project_override: project_code.as_deref(),
                 from_live,
-                [
+                supplied: [
                     lawyer_dri.as_deref(),
                     client_dri.as_deref(),
                     private_slack_channel.as_deref(),
                     private_notion_page.as_deref(),
                 ],
-                projects::set::LiveFields {
+                live_fields: projects::set::LiveFields {
                     calendar_id: calendar.as_deref(),
+                    drive_folder_id: drive_folder.as_deref(),
                     booking_url: booking_url.as_deref(),
+                    jurisdiction: jurisdiction.as_deref(),
                 },
-                firm.as_deref(),
-                brand.as_deref(),
-            )
+                firm: firm.as_deref(),
+                brand: brand.as_deref(),
+                dry_run,
+            })
             .await
         }
         ProjectsCmd::Sync {
@@ -5441,6 +5730,11 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             )
             .await
         }
+        ProjectsCmd::DriveIngest {
+            project_code,
+            dry_run,
+            host,
+        } => projects::drive_ingest::run(host.host.as_deref(), &project_code, dry_run).await,
         ProjectsCmd::Scaffold {
             dir,
             resume,
@@ -5491,6 +5785,16 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             ci, check, deep, ..
         } => projects::pinned_gate::dispatch(GateMode::Content { ci, check, deep }).await,
         ProjectsCmd::Preview { port } => projects::preview::run(port).await,
+        ProjectsCmd::Surfaces { action } => match action {
+            SurfacesCmd::Reconcile {
+                project,
+                json,
+                host,
+            } => {
+                projects::surfaces_reconcile::run(host.host.as_deref(), project.as_deref(), json)
+                    .await
+            }
+        },
         ProjectsCmd::Pages { action } => projects::pages_init::run(action).await,
         ProjectsCmd::Setup {
             project_code,
@@ -5530,6 +5834,30 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     }
                 }
             }
+            ProjectRepositoryCmd::MigrateFolders { dir, dry_run } => {
+                match document_layout::migrate_folder_tree(&dir, dry_run) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => {
+                        eprintln!("navigator: {error:#}");
+                        ExitCode::from(2)
+                    }
+                }
+            }
+        },
+        ProjectsCmd::Documents { action } => match action {
+            DocumentsCmd::Check {
+                dir,
+                documents_dir,
+                drive_local,
+                deep,
+                json,
+            } => run_documents_check(
+                dir.as_deref().unwrap_or(Path::new(".")),
+                documents_dir,
+                drive_local,
+                deep,
+                json,
+            ),
         },
         ProjectsCmd::Search {
             pattern,
@@ -6793,6 +7121,142 @@ impl rules::FileFilter for ProjectGateMarkdownFilter<'_> {
     }
 }
 
+/// Sort `local_bytes::verify_with`'s findings into check failures (modified
+/// bytes) and reported-missing pointers, the checkout's ordinary state.
+fn split_byte_findings(
+    byte_findings: &[projects::local_bytes::Finding],
+    findings: &mut Vec<projects::document_check::CheckFailure>,
+    missing: &mut Vec<String>,
+) {
+    for finding in byte_findings {
+        match &finding.status {
+            projects::local_bytes::Status::Match => {}
+            projects::local_bytes::Status::Missing => {
+                // A checkout that never downloaded a document's bytes is
+                // ordinary, so a missing pointer passes — reported, not failed.
+                missing.push(finding.pointer.clone());
+            }
+            projects::local_bytes::Status::Modified { reason } => {
+                findings.push(projects::document_check::CheckFailure {
+                    location: finding.pointer.clone(),
+                    message: format!("modified: {reason}"),
+                });
+            }
+        }
+    }
+}
+
+/// `navigator project documents check` (LAW-217) — the read-only document
+/// checks over one documents tree: the checkout's own `documents/` by
+/// default, or any tree laid out like it via `--documents-dir` or
+/// `--drive-local`. Unlike `project gate --check` it never contacts a
+/// deployment and never writes — a Drive copy is not a checkout to fix — so
+/// the only failure exit but `2` is a finding. `--deep` additionally hashes
+/// each committed pointer's bytes against its `sha256` and `size_bytes`,
+/// reading them from whichever tree is being checked.
+fn run_documents_check(
+    dir: &Path,
+    documents_dir: Option<PathBuf>,
+    drive_local: bool,
+    deep: bool,
+    json: bool,
+) -> ExitCode {
+    let documents = if let Some(path) = documents_dir {
+        path
+    } else if drive_local {
+        let (project, _) = match crate::document_sync::read_manifest(dir) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                eprintln!("navigator: --drive-local needs a Project checkout: {error:#}");
+                return ExitCode::from(2);
+            }
+        };
+        match projects::document_check::resolve_drive_local(&project) {
+            Ok(path) => path,
+            Err(error) => {
+                eprintln!("navigator: {error:#}");
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        dir.join(document_sync::DOCUMENT_DIRECTORY)
+    };
+
+    let mut findings = match projects::document_check::check_documents_root(&documents) {
+        Ok(findings) => findings,
+        Err(error) => {
+            eprintln!("navigator: {error:#}");
+            return ExitCode::from(2);
+        }
+    };
+
+    // The pointer byte checks are a checkout question `--deep` answers
+    // against whichever tree holds the bytes (LAW-217): the checkout's
+    // `documents/` by default, or `--documents-dir` / the Drive copy.
+    let checkout = dir.join(projects::manifest::FILE).is_file();
+    let mut missing: Vec<String> = Vec::new();
+    if deep && checkout {
+        match projects::local_bytes::verify_with(dir, &documents) {
+            Ok(byte_findings) => split_byte_findings(&byte_findings, &mut findings, &mut missing),
+            Err(error) => {
+                eprintln!("navigator: {error:#}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    if json {
+        let report = serde_json::json!({
+            "root": documents.display().to_string(),
+            "findings": findings
+                .iter()
+                .map(|finding| serde_json::json!({
+                    "location": finding.location,
+                    "message": finding.message,
+                }))
+                .collect::<Vec<_>>(),
+            "missing": missing,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).expect("the report is valid JSON")
+        );
+    } else {
+        for pointer in &missing {
+            println!("{}", palette::dim(format!("{pointer}: missing")));
+        }
+        for finding in &findings {
+            println!(
+                "{}",
+                diagnostic_line(
+                    rules::Severity::Error,
+                    &finding.location,
+                    None,
+                    &finding.message,
+                )
+            );
+        }
+        println!(
+            "{}",
+            palette::dim(if findings.is_empty() {
+                format!("documents check: no findings in {}", documents.display())
+            } else {
+                format!(
+                    "documents check: {} finding(s) in {}; nothing was written",
+                    findings.len(),
+                    documents.display()
+                )
+            })
+        );
+    }
+
+    if findings.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 /// `--check` alone (LAW-62): the live document check, and nothing an offline
 /// pass could have already told the caller. `verify` runs the full offline
 /// gate — including this same live-row question, at the end of [`run_gate`]
@@ -7127,6 +7591,18 @@ fn parse_signing_method(value: &str) -> Result<store::documents::SigningMethod, 
     })
 }
 
+/// Parse one `--evidence-confidence` value.
+fn parse_evidence_confidence(value: &str) -> Result<store::documents::EvidenceConfidence, String> {
+    store::documents::EvidenceConfidence::parse(value).ok_or_else(|| {
+        let accepted = store::documents::EvidenceConfidence::ALL
+            .iter()
+            .map(|confidence| format!("`{}`", confidence.as_str()))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        format!("evidence confidence must be {accepted}")
+    })
+}
+
 /// Parse one `--notarization` value: five comma-separated `key=value` pairs,
 /// each key exactly once, validated as the server validates it.
 fn parse_notarization(value: &str) -> Result<store::documents::Notarization, String> {
@@ -7427,6 +7903,7 @@ fn run_render(
     let bytes = match render_notation_artifact(
         file,
         &body,
+        contents.as_bytes(),
         output_extension,
         format,
         &letterhead,
@@ -7531,9 +8008,11 @@ fn has_extension(out: &Path, expected: &str) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case(expected))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_notation_artifact(
     file: &Path,
     body: &str,
+    template_bytes: &[u8],
     output_extension: &str,
     format: pdf::OutputFormat,
     letterhead: &pdf::Letterhead,
@@ -7556,12 +8035,28 @@ fn render_notation_artifact(
             _ => None,
         };
         let source_revision = notation_render_revision(file);
+        // Every Word render is a draft a lawyer may edit and import back,
+        // so it embeds the export provenance the import verifies: the
+        // template's file name and the hash of the template's bytes at
+        // export time. The name — not the full path — keeps renders
+        // byte-identical wherever the template lives; `notation import`
+        // takes the template path explicitly and verifies it by hash.
+        let template_name = file.file_name().map_or_else(
+            || file.to_string_lossy().into_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let template_hash = word::template_hash(template_bytes);
+        let provenance = word::Provenance {
+            template_path: template_name.as_str(),
+            template_hash: template_hash.as_str(),
+        };
         return word::render_notation(
             body,
             word_letterhead.as_ref(),
             &word::RenderOptions {
                 source_revision: source_revision.as_deref(),
                 pleading,
+                provenance: Some(provenance),
             },
         )
         .map_err(|error| format!("render Word document: {error}"));

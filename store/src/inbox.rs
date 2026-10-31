@@ -27,6 +27,7 @@ use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const CONVERSATION: &str = "inbox_conversation";
 const MESSAGE: &str = "message";
+const MESSAGE_ASSET: &str = "inbox_message_asset";
 const INGRESS: &str = "inbox_ingress";
 const ASSIGNMENT: &str = "inbox_assignment";
 const ATTEMPT: &str = "inbox_delivery_attempt";
@@ -119,9 +120,24 @@ pub struct Assignment {
     pub inserted_at: DateTime<Utc>,
 }
 
+/// One attachment on an ingested provider message: its content-addressed
+/// Asset, original filename, and sha256. The provider's attachment order is
+/// preserved on the link; the first attachment is the Message's primary one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IngestAttachment {
+    pub asset_id: Uuid,
+    pub filename: String,
+    pub sha256: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct IngestInbound<'a> {
     pub firm_id: Uuid,
+    /// Project attribution set at ingest time (the CLI ingest door). Support
+    /// and webhook paths leave it `None`: the conversation stays on the Firm
+    /// until an Owner assigns it. Only threads carrying the same attribution
+    /// absorb the delivery — an unassigned thread never silently adopts one.
+    pub project_id: Option<Uuid>,
     pub brand_key: Option<&'a str>,
     pub interaction_type: Option<&'a str>,
     pub provider_post_id: Option<&'a str>,
@@ -140,7 +156,7 @@ pub struct IngestInbound<'a> {
     pub matter_consent: bool,
     pub promotional_opt_in: bool,
     pub email_conversation_id: Option<Uuid>,
-    pub attachment_asset_id: Option<Uuid>,
+    pub attachments: Vec<IngestAttachment>,
     pub occurred_at: &'a str,
 }
 
@@ -537,10 +553,14 @@ pub async fn ingest_inbound(
         delivery::RECEIVED,
         purpose::MATTER,
         inbound.visibility,
-        inbound.attachment_asset_id,
+        inbound
+            .attachments
+            .first()
+            .map(|attachment| attachment.asset_id),
         inbound.occurred_at,
     )
     .await?;
+    link_message_assets(db, inbound.firm_id, message_id, &inbound.attachments).await?;
     if let Some(parent_provider_id) = inbound.parent_provider_message_id {
         let parent = parent_message_id(db, conversation.id, parent_provider_id).await?;
         if let Some(parent_id) = parent {
@@ -553,30 +573,7 @@ pub async fn ingest_inbound(
         }
     }
     if let Err(error) = create_ingress(db, inbound, message_id).await {
-        let _ = db
-            .query("DELETE $id")
-            .bind(("id", record_id(MESSAGE, message_id)))
-            .await;
-        after_write(db, MirrorKey::InboxMessage(message_id)).await;
-        if let Some(existing) = find_ingress(
-            db,
-            inbound.firm_id,
-            inbound.channel,
-            inbound.provider_account,
-            inbound.provider_message_id,
-        )
-        .await?
-        {
-            let Some(message) = message_by_id(db, existing).await? else {
-                return Err(InboxError::NotFound);
-            };
-            return Ok(IngestedInbound {
-                conversation_id: message.conversation_id,
-                message_id: message.id,
-                deduped: true,
-            });
-        }
-        return Err(error);
+        return recover_deduped_ingress(db, inbound, message_id, error).await;
     }
     let _ = db
         .query("UPDATE $id SET unread = true, updated_at = time::now()")
@@ -588,6 +585,141 @@ pub async fn ingest_inbound(
         message_id,
         deduped: false,
     })
+}
+
+/// The attachments linked to one Inbox Message, in provider order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MessageAttachment {
+    pub asset_id: Uuid,
+    pub filename: String,
+    pub position: i64,
+    pub sha256: String,
+}
+
+#[derive(SurrealValue)]
+struct MessageAssetRow {
+    asset_id: surrealdb::types::RecordId,
+    filename: String,
+    position: i64,
+    sha256: String,
+}
+
+impl MessageAssetRow {
+    fn into_attachment(self) -> Option<MessageAttachment> {
+        Some(MessageAttachment {
+            asset_id: record_uuid(&self.asset_id)?,
+            filename: self.filename,
+            position: self.position,
+            sha256: self.sha256,
+        })
+    }
+}
+
+/// Link a Message to its attachment Assets in provider order. Re-linking
+/// the same message and sha reuses the row, so a retried ingest cannot
+/// duplicate a link.
+async fn link_message_assets(
+    db: &SurrealDb,
+    firm_id: Uuid,
+    message_id: Uuid,
+    attachments: &[IngestAttachment],
+) -> Result<(), InboxError> {
+    for (position, attachment) in attachments.iter().enumerate() {
+        let position = i64::try_from(position).unwrap_or(i64::MAX);
+        let mut response = db
+            .query(format!(
+                "SELECT VALUE id FROM {MESSAGE_ASSET} \
+                 WHERE message_id = $message AND sha256 = $sha LIMIT 1"
+            ))
+            .bind(("message", record_id(MESSAGE, message_id)))
+            .bind(("sha", attachment.sha256.clone()))
+            .await?
+            .check()?;
+        let existing: Vec<surrealdb::types::RecordId> = response.take(0)?;
+        if !existing.is_empty() {
+            continue;
+        }
+        db.query(
+            "CREATE $id SET firm_id = $firm, message_id = $message, \
+             asset_id = $asset, filename = $filename, position = $position, sha256 = $sha",
+        )
+        .bind(("id", record_id(MESSAGE_ASSET, Uuid::now_v7())))
+        .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
+        .bind(("message", record_id(MESSAGE, message_id)))
+        .bind((
+            "asset",
+            record_id(crate::assets::TABLE, attachment.asset_id),
+        ))
+        .bind(("filename", attachment.filename.clone()))
+        .bind(("position", position))
+        .bind(("sha", attachment.sha256.clone()))
+        .await?
+        .check()?;
+    }
+    Ok(())
+}
+
+/// The attachments linked to one Inbox Message, in provider order. Firm
+/// scoping rides on the link row: a caller outside the message's Firm
+/// sees nothing.
+///
+/// # Errors
+///
+/// Propagates any database error.
+pub async fn message_assets(
+    db: &SurrealDb,
+    firm_id: Uuid,
+    message_id: Uuid,
+) -> Result<Vec<MessageAttachment>, InboxError> {
+    let mut response = db
+        .query(format!(
+            "SELECT asset_id, filename, position, sha256 FROM {MESSAGE_ASSET} \
+             WHERE firm_id = $firm AND message_id = $message ORDER BY position"
+        ))
+        .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
+        .bind(("message", record_id(MESSAGE, message_id)))
+        .await?
+        .check()?;
+    let rows: Vec<MessageAssetRow> = response.take(0)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(MessageAssetRow::into_attachment)
+        .collect())
+}
+
+/// A lost ingress-creation race: another worker filed the same provider
+/// message between our dedup check and our ingress write. Roll our message
+/// back and surface the winner's row instead of failing the ingest.
+async fn recover_deduped_ingress(
+    db: &SurrealDb,
+    inbound: &IngestInbound<'_>,
+    message_id: Uuid,
+    error: InboxError,
+) -> Result<IngestedInbound, InboxError> {
+    let _ = db
+        .query("DELETE $id")
+        .bind(("id", record_id(MESSAGE, message_id)))
+        .await;
+    after_write(db, MirrorKey::InboxMessage(message_id)).await;
+    if let Some(existing) = find_ingress(
+        db,
+        inbound.firm_id,
+        inbound.channel,
+        inbound.provider_account,
+        inbound.provider_message_id,
+    )
+    .await?
+    {
+        let Some(message) = message_by_id(db, existing).await? else {
+            return Err(InboxError::NotFound);
+        };
+        return Ok(IngestedInbound {
+            conversation_id: message.conversation_id,
+            message_id: message.id,
+            deduped: true,
+        });
+    }
+    Err(error)
 }
 
 /// Attribute or reassign a conversation to a Project in the same Firm.
@@ -997,6 +1129,7 @@ pub async fn open_sms_conversation(
         return Err(InboxError::Denied);
     }
     let thread = IngestInbound {
+        project_id: None,
         firm_id,
         brand_key,
         interaction_type: Some("message"),
@@ -1016,7 +1149,7 @@ pub async fn open_sms_conversation(
         matter_consent: true,
         promotional_opt_in: false,
         email_conversation_id: None,
-        attachment_asset_id: None,
+        attachments: Vec::new(),
         occurred_at: &Utc::now().to_rfc3339(),
     };
     let conversation = match find_open_thread(db, &thread).await? {
@@ -1856,6 +1989,7 @@ async fn find_open_thread(
              AND channel = $channel AND brand_key = $brand AND provider_account = $account \
              AND interaction_type = $interaction \
              AND (provider_thread_ref = $thread OR $thread IS NONE) \
+             AND project_id = $project \
              AND external_address = $address ORDER BY inserted_at DESC LIMIT 1"
         ))
         .bind(("firm", record_id(crate::firms::TABLE, inbound.firm_id)))
@@ -1866,6 +2000,10 @@ async fn find_open_thread(
             inbound.interaction_type.unwrap_or("message").to_string(),
         ))
         .bind(("thread", inbound.provider_thread_ref.map(str::to_string)))
+        .bind((
+            "project",
+            inbound.project_id.map(|id| record_id("project", id)),
+        ))
         .bind(("account", inbound.provider_account.to_string()))
         .bind(("address", inbound.external_address.to_string()))
         .await?
@@ -1884,7 +2022,7 @@ async fn create_conversation(
     let mut response = db
         .query(format!(
             "CREATE $id SET firm_id = $firm, brand_key = $brand, interaction_type = $interaction_type, \
-             provider_post_id = $provider_post_id, project_id = NONE, channel = $channel, \
+             provider_post_id = $provider_post_id, project_id = $project, channel = $channel, \
              external_address = $address, external_name = $name, subject = $subject, \
              unread = true, provider_account = $account, provider_thread_ref = $thread, \
              source_page = $source_page, source_channel = $source_channel, \
@@ -1897,6 +2035,10 @@ async fn create_conversation(
         .bind(("brand", inbound.brand_key.map(str::to_string)))
         .bind(("interaction_type", inbound.interaction_type.unwrap_or("message").to_string()))
         .bind(("provider_post_id", inbound.provider_post_id.map(str::to_string)))
+        .bind((
+            "project",
+            inbound.project_id.map(|id| record_id("project", id)),
+        ))
         .bind(("channel", inbound.channel.to_string()))
         .bind(("address", inbound.external_address.to_string()))
         .bind(("name", inbound.external_name.map(str::to_string)))
@@ -2485,6 +2627,7 @@ mod tests {
         address: &'a str,
     ) -> IngestInbound<'a> {
         IngestInbound {
+            project_id: None,
             firm_id: firm,
             brand_key: None,
             interaction_type: None,
@@ -2504,9 +2647,160 @@ mod tests {
             matter_consent: true,
             promotional_opt_in: false,
             email_conversation_id: None,
-            attachment_asset_id: None,
+            attachments: Vec::new(),
             occurred_at: "2026-09-27T00:00:00Z",
         }
+    }
+
+    fn attachment(asset_id: Uuid, filename: &str, sha: &str) -> IngestAttachment {
+        IngestAttachment {
+            asset_id,
+            filename: filename.to_string(),
+            sha256: sha.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn attachments_ingest_as_ordered_assets() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let first = Uuid::now_v7();
+        let second = Uuid::now_v7();
+        let mut message = inbound(
+            world.firm,
+            channel::EMAIL,
+            "fixture-account",
+            "email-attachments-1",
+            "client@example.com",
+        );
+        message.attachments = vec![
+            attachment(first, "complaint.pdf", "sha-complaint"),
+            attachment(second, "contract.docx", "sha-contract"),
+        ];
+        let ingested = ingest_inbound(&db, &message).await.unwrap();
+        assert!(!ingested.deduped);
+
+        let linked = message_assets(&db, world.firm, ingested.message_id)
+            .await
+            .unwrap();
+        assert_eq!(linked.len(), 2);
+        assert_eq!(linked[0].asset_id, first);
+        assert_eq!(linked[0].filename, "complaint.pdf");
+        assert_eq!(linked[0].position, 0);
+        assert_eq!(linked[0].sha256, "sha-complaint");
+        assert_eq!(linked[1].asset_id, second);
+        assert_eq!(linked[1].position, 1);
+
+        let stored = message_by_id(&db, ingested.message_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.attachment_asset_id, Some(first));
+    }
+
+    #[tokio::test]
+    async fn redelivered_attachments_do_not_duplicate_links() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let asset = Uuid::now_v7();
+        let message = inbound(
+            world.firm,
+            channel::EMAIL,
+            "fixture-account",
+            "email-attachments-2",
+            "client@example.com",
+        );
+        let mut redelivery = message.clone();
+        redelivery.attachments = vec![attachment(asset, "exhibit.pdf", "sha-exhibit")];
+        let first = ingest_inbound(&db, &redelivery).await.unwrap();
+        let second = ingest_inbound(&db, &redelivery).await.unwrap();
+        assert!(second.deduped);
+        assert_eq!(second.message_id, first.message_id);
+
+        // The deduped redelivery returns the original message before any
+        // link write, so the link set is unchanged.
+        let linked = message_assets(&db, world.firm, first.message_id)
+            .await
+            .unwrap();
+        assert_eq!(linked.len(), 1);
+
+        // A direct re-link of the same message and sha also reuses the row.
+        link_message_assets(&db, world.firm, first.message_id, &redelivery.attachments)
+            .await
+            .unwrap();
+        let linked = message_assets(&db, world.firm, first.message_id)
+            .await
+            .unwrap();
+        assert_eq!(linked.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn attachments_are_firm_scoped() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let mut message = inbound(
+            world.firm,
+            channel::EMAIL,
+            "fixture-account",
+            "email-attachments-3",
+            "client@example.com",
+        );
+        message.attachments = vec![attachment(Uuid::now_v7(), "discovery.pdf", "sha-discovery")];
+        let ingested = ingest_inbound(&db, &message).await.unwrap();
+        let foreign = message_assets(&db, world.other_firm, ingested.message_id)
+            .await
+            .unwrap();
+        assert!(foreign.is_empty());
+    }
+
+    #[tokio::test]
+    async fn ingest_time_project_attribution_scopes_thread_matching() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let mut attributed = inbound(
+            world.firm,
+            channel::EMAIL,
+            "fixture-account",
+            "email-attributed-1",
+            "client@example.com",
+        );
+        attributed.project_id = Some(world.project);
+        let first = ingest_inbound(&db, &attributed).await.unwrap();
+        let stored = conversation_by_id(&db, first.conversation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.project_id, Some(world.project));
+
+        // A second attributed delivery joins the attributed thread.
+        let mut follow_up = inbound(
+            world.firm,
+            channel::EMAIL,
+            "fixture-account",
+            "email-attributed-2",
+            "client@example.com",
+        );
+        follow_up.project_id = Some(world.project);
+        let second = ingest_inbound(&db, &follow_up).await.unwrap();
+        assert_eq!(second.conversation_id, first.conversation_id);
+        assert!(!second.deduped);
+
+        // An unattributed delivery from the same address never silently
+        // adopts the attributed thread; it starts its own.
+        let unattributed = inbound(
+            world.firm,
+            channel::EMAIL,
+            "fixture-account",
+            "email-attributed-3",
+            "client@example.com",
+        );
+        let third = ingest_inbound(&db, &unattributed).await.unwrap();
+        assert_ne!(third.conversation_id, first.conversation_id);
+        let own_thread = conversation_by_id(&db, third.conversation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(own_thread.project_id, None);
     }
 
     async fn assigned_sms(db: &SurrealDb, world: &World) -> Uuid {
@@ -3883,7 +4177,7 @@ mod tests {
             "msg-1",
             "sender@example.com",
         );
-        inbound.attachment_asset_id = Some(asset_id);
+        inbound.attachments = vec![attachment(asset_id, "complaint.pdf", "sha-reader")];
         let ingested = ingest_inbound(&db, &inbound).await.unwrap();
         assert_eq!(
             readable_attachment(&db, world.owner, ingested.message_id)

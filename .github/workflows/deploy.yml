@@ -278,7 +278,7 @@ jobs:
       # required regardless. The checker reads THIS commit's
       # `[workspace.package].version`, and the fallback below compiles the CLI
       # out of this tree when no published binary can be had.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 90
         with:
           fetch-depth: 0
@@ -446,7 +446,7 @@ jobs:
         if: >-
           github.ref_name == 'main' && steps.dedup.outputs.duplicate != 'true'
           && steps.checker.outputs.ready != 'true'
-        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.98.0
       # THE WHOLE RELEASE DECISION, in one step so the job has one place to read
@@ -666,7 +666,7 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
             ci_cache_scope: navigator-workflows-service-amd64
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 90
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         timeout-minutes: 90
@@ -690,7 +690,7 @@ jobs:
       - name: install rust toolchain
         timeout-minutes: 90
         if: matrix.image == 'neon-server'
-        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.98.0
       - uses: ./.github/actions/slack-progress
@@ -707,7 +707,7 @@ jobs:
       - name: cache cargo
         timeout-minutes: 90
         if: matrix.image == 'neon-server'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin/
@@ -827,7 +827,7 @@ jobs:
           step: "upload image artifact"
       - name: upload image artifact
         timeout-minutes: 90
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-image-${{ matrix.image }}
           path: /tmp/${{ matrix.image }}.tar
@@ -846,7 +846,7 @@ jobs:
       - name: upload alias image artifact
         timeout-minutes: 90
         if: matrix.alias != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-image-${{ matrix.alias }}
           path: /tmp/${{ matrix.alias }}.tar
@@ -886,7 +886,7 @@ jobs:
       # No disk sweep: `blacksmith-4vcpu-ubuntu-2404` has a single ~145 GB root
       # disk, ample for the service images, the KIND node image, and the e2e
       # build, and the sweep's tool-cache deletion would only need undoing.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 90
 
       - uses: ./.github/actions/slack-progress
@@ -930,7 +930,7 @@ jobs:
       # per-commit images never touch a registry.
       - name: download built service images
         timeout-minutes: 90
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: ci-image-*
           path: /tmp/ci-images
@@ -1021,7 +1021,7 @@ jobs:
           step: "install rust toolchain"
       - name: install rust toolchain
         timeout-minutes: 90
-        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.98.0
       - uses: ./.github/actions/slack-progress
@@ -1033,7 +1033,7 @@ jobs:
           step: "cache cargo"
       - name: cache cargo
         timeout-minutes: 90
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin/
@@ -1238,7 +1238,7 @@ jobs:
       - name: cache Chrome for Testing
         timeout-minutes: 90
         id: chrome-for-testing-cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.tool_cache }}/chrome-for-testing/${{ env.CHROME_FOR_TESTING_VERSION }}
           key: chrome-for-testing-linux64-${{ env.CHROME_FOR_TESTING_VERSION }}
@@ -1366,7 +1366,7 @@ jobs:
           step: "install cargo-nextest"
       - name: install cargo-nextest
         timeout-minutes: 90
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           # Pin the runner version: the browser gate now depends on
           # nextest-specific retry, JUnit-path, and --no-capture behavior, so a
@@ -1481,7 +1481,7 @@ jobs:
       - name: upload E2E JUnit + diagnostics
         timeout-minutes: 90
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-diagnostics
           path: |
@@ -1603,7 +1603,7 @@ jobs:
     steps:
       # The local `slack-progress` composite action lives in this tree, so it
       # cannot be used before a checkout.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 90
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
@@ -1756,7 +1756,7 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
             ci_cache_scope: navigator-workflows-service-amd64
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 90
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         timeout-minutes: 90
@@ -2164,7 +2164,7 @@ jobs:
           jq -n --arg image "${IMAGE_NAME}" --arg digest "${IMAGE_DIGEST}" --arg alias "${ALIAS}" \
               --arg alias_digest "${IMAGE_DIGEST}" \
               'if $alias == "" then {($image): $digest} else {($image): $digest, ($alias): $alias_digest} end' > image-digest.json
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-digest-${{ matrix.image }}
           path: image-digest.json
@@ -2252,7 +2252,7 @@ jobs:
     steps:
       # No disk reclaim: every leg runs on a Blacksmith machine with a ~145 GB
       # root disk, so a docker build has room without a sweep.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 90
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         timeout-minutes: 90
@@ -2467,7 +2467,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.digest.outputs.digest }}
         run: |
           jq -n --arg image "${IMAGE_NAME}" --arg digest "${IMAGE_DIGEST}" '{($image): $digest}' > image-digest.json
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-digest-${{ matrix.image }}
           path: image-digest.json
@@ -2526,11 +2526,11 @@ jobs:
     steps:
       # Same ref logic as the macOS build: this job only runs for a tag
       # release, so the tag is the ref.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 90
         with:
           ref: ${{ github.sha }}
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         timeout-minutes: 90
         with:
           toolchain: 1.98.0
@@ -2592,7 +2592,7 @@ jobs:
           step: "upload the Linux CLI archive"
       - name: upload the Linux CLI archive
         timeout-minutes: 90
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: navigator-linux-cli
           path: |
@@ -2629,7 +2629,7 @@ jobs:
           step: "upload the Linux LSP archive"
       - name: upload the Linux LSP archive
         timeout-minutes: 90
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: navigator-linux-lsp
           path: dist/navigator-lsp-${{ needs.release-version.outputs.tag }}-linux.tar.gz
@@ -2661,11 +2661,11 @@ jobs:
     steps:
       # Same ref logic as the other two builds: this job only runs for a real
       # release, so the published SHA is the ref.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 90
         with:
           ref: ${{ github.sha }}
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         timeout-minutes: 90
         with:
           toolchain: 1.98.0
@@ -2794,7 +2794,7 @@ jobs:
           step: "upload the macOS CLI archive"
       - name: upload the macOS CLI archive
         timeout-minutes: 90
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: navigator-macos-cli
           path: |
@@ -2875,7 +2875,7 @@ jobs:
       - name: upload the macOS installer package
         timeout-minutes: 90
         if: steps.apple-signing.outputs.present == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: navigator-macos-pkg
           path: dist/navigator-${{ needs.release-version.outputs.tag }}-macos.pkg
@@ -2922,7 +2922,7 @@ jobs:
           step: "upload the macOS LSP archive"
       - name: upload the macOS LSP archive
         timeout-minutes: 90
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: navigator-macos-lsp
           path: dist/navigator-lsp-${{ needs.release-version.outputs.tag }}-macos.tar.gz
@@ -2968,7 +2968,7 @@ jobs:
       # than downloaded. The license files and `NOTICE` are also attached standalone to
       # the public distribution host below, alongside the archives that
       # already carry a copy of each beside the executable.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 90
         with:
           sparse-checkout: |
@@ -2978,7 +2978,7 @@ jobs:
             LICENSE-MIT
             LICENSE-APACHE-2
             NOTICE
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: image-digest-*
           path: ${{ runner.temp }}/image-digests
@@ -2991,7 +2991,7 @@ jobs:
           step: "download the Linux CLI archive"
       - name: download the Linux CLI archive
         timeout-minutes: 90
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: navigator-linux-cli
           path: dist
@@ -3004,7 +3004,7 @@ jobs:
           step: "download the macOS CLI archive"
       - name: download the macOS CLI archive
         timeout-minutes: 90
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: navigator-macos-cli
           path: dist
@@ -3022,7 +3022,7 @@ jobs:
           step: "download the macOS installer package"
       - name: download the macOS installer package
         timeout-minutes: 90
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         continue-on-error: true
         with:
           name: navigator-macos-pkg
@@ -3036,7 +3036,7 @@ jobs:
           step: "download the Linux LSP archive"
       - name: download the Linux LSP archive
         timeout-minutes: 90
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: navigator-linux-lsp
           path: dist
@@ -3049,7 +3049,7 @@ jobs:
           step: "download the macOS LSP archive"
       - name: download the macOS LSP archive
         timeout-minutes: 90
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: navigator-macos-lsp
           path: dist
@@ -3276,7 +3276,7 @@ jobs:
     steps:
       # Sparse: this job publishes nothing of its own and needs the tree only
       # so the local `slack-progress` action is on disk.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 90
         with:
           sparse-checkout: .github/actions/slack-progress
@@ -3433,7 +3433,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 90
         with:
           sparse-checkout: .github/actions/slack-progress
@@ -3693,8 +3693,8 @@ jobs:
       id-token: write
       packages: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: navigator-linux-cli
           path: dist
@@ -3765,7 +3765,7 @@ jobs:
           done
           echo "::error::GHCR mirror of ${target}:${RELEASE_TAG} failed after retries"
           exit 1
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-digest-navigator-cli
           path: image-digest.json
@@ -3799,7 +3799,7 @@ jobs:
     permissions:
       actions: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: image-digest-*
           path: ${{ runner.temp }}/image-digests

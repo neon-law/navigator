@@ -1,19 +1,119 @@
 head_title: "{site_name} | Immigration"
 meta_description: >-
-  Immigration work is offered through Abhaya Immigration: family petitions,
-  employment visas, green cards, naturalization, consular processing, employer
-  sponsorship, and USCIS notice responses. Government filing fees are separate,
+  Abhaya Immigration, a Shook Law PC practice, handles family petitions,
+  employment visas, green cards, naturalization, consular processing, USCIS
+  notice responses, humanitarian relief, and removal defense, with a
+  free-support hub of official tools. Government filing fees are separate,
   and no approval or timeline is promised.
 title: Immigration
-tagline: Immigration help, through Abhaya.
+tagline: Your next chapter, without fear.
 hero_mark: gavel
 hero_lead: >-
-  Family petitions, employment visas, green cards, naturalization,
-  consular processing, employer sponsorship, and USCIS notice responses are
-  offered through Abhaya Immigration. Government
-  filing fees are separate from the attorney fee. We cannot promise approval
-  or a government timeline; the relevant agency decides.
+  Abhaya Immigration, the immigration practice of Shook Law PC, is named for
+  the Sanskrit word for fearlessness. This page is the map: every matter the
+  practice handles, how an engagement works, and the free support you can use
+  today. We cannot promise approval or a government timeline; the relevant
+  agency decides, and government filing fees are separate from the attorney
+  fee.
 hero_cta:
   href: "https://www.abhayaimmigration.com/"
   label: Visit Abhaya Immigration
 skin: practice
+bands:
+  - kind: statement
+    heading: What fearlessness means here
+    lead: Knowing the rules before you file.
+    body:
+      - - text: >-
+            Fearlessness is not a promise about how a case ends. No honest
+            lawyer can promise that, and the agencies decide. It is knowing
+            the rules before you file, hearing the hard truths about your
+            case early, and never being surprised by a deadline you could
+            have known about.
+      - - text: >-
+            That is the practice behind this section: plain words for every
+            matter, the process each agency runs, the documents that matter,
+            and the fees — a flat attorney fee agreed in writing, with
+            government filing fees separate.
+  - kind: statement
+    heading: Where does your case start
+    lead: Every matter the practice handles, in the words you would use for it.
+    body:
+      - - text: Family green cards
+          href: /immigration/family-green-cards
+        - text: " — keeping a family together: marriage, parents, children, siblings, and adjustment of status."
+      - - text: Citizenship
+          href: /immigration/citizenship
+        - text: " — naturalization, from the N-400 to the oath."
+      - - text: Employment visas
+          href: /immigration/employment-visas
+        - text: " — work-based visas and employer sponsorship."
+      - - text: Consular processing
+          href: /immigration/consular-processing
+        - text: " — the National Visa Center, the DS-260, and the embassy interview."
+      - - text: USCIS notices
+          href: /immigration/uscis-notices
+        - text: " — answering a request for evidence, a notice of intent to deny, or another letter with a deadline."
+      - - text: Humanitarian relief
+          href: /immigration/humanitarian-relief
+        - text: " — asylum, T and U visas, and VAWA, in plain words."
+      - - text: Removal defense
+          href: /immigration/removal-defense
+        - text: " — a Notice to Appear, immigration court, bond, and the relief the law allows. If you have a court date, start here."
+  - kind: steps
+    anchor: engagement
+    overline: How an engagement works
+    heading: A first conversation, then a plan.
+    description: >-
+      The shape is the same for every matter; the forms differ.
+    items:
+      - title: The first conversation
+        body:
+          - - text: >-
+                You describe your situation in your own words — what you hope
+                to do, where you are now, and any deadline or notice you are
+                facing. If English is not your first language, say so when
+                you reach out.
+      - title: The fee, in writing
+        body:
+          - - text: >-
+                The attorney fee is a flat amount agreed in writing before
+                work begins. Government filing fees and other agreed costs
+                are separate.
+      - title: The filings, and the agencies that decide them
+        body:
+          - - text: >-
+                Petitions and applications go to the agency responsible for
+                that stage: United States Citizenship and Immigration
+                Services, the National Visa Center and a consulate, or the
+                immigration court. We cannot promise approval or a timeline;
+                the agency decides.
+      - title: What happens next, in the open
+        body:
+          - - text: >-
+                You always know what was filed, what the agency said, and
+                what the next step is — including the hard truths, said
+                early, while there is still time to act on them.
+  - kind: statement
+    heading: Before you hire anyone
+    lead: Some answers are free.
+    body:
+      - - text: >-
+            The agencies' own tools answer most first questions: case status,
+            processing times, the fee calculator, document checklists,
+            know-your-rights material, and nonprofit referrals, each with
+            guidance on when it helps and when to stop reading and call a
+            lawyer. They are collected, with that guidance, in the
+        - text: free-support hub
+          href: /immigration/free-support
+        - text: .
+  - kind: cta
+    heading: Talk through your case with Abhaya Immigration
+    body: >-
+      A first conversation covers which matter is yours, what the law
+      generally requires, and what the next step is. If you have already
+      worked through the free-support hub, bring what you found.
+    email: "{firm_email}"
+    action:
+      href: "https://www.abhayaimmigration.com/"
+      label: Visit Abhaya Immigration

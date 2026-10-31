@@ -76,19 +76,31 @@ each answer terse.
   case-management system organises a matter. `navigator project sync` creates every folder, even when it is empty:
   * `Client Production/` holds what the client supplied, such as exhibits (`kind: exhibit`).
   * `Correspondence (Served)/` holds letters served or received (`kind: letter`).
-  * `Discovery/` holds discovery requests and responses.
+  * `Discovery (Served)/` holds discovery actually served or received.
   * `Docket Filings/` holds court paper: pleadings, filings, and docket ingest (`kind: pleading`, `filing`).
-  * `Work Product/` holds memos, transcripts, drafts, and every other kind.
+  * `Court Rules/` holds the court's local rules and standing orders.
+  * `Engagement/` holds the letters that open and close the engagement (`kind: onboarding`).
+  * `Work Product/` holds drafts, research, and every other kind. Its seven fixed subfolders each carry the suffix so
+    they read unambiguously out of context and never collide with a served twin (LAW-215): `Client Calls (Work
+    Product)/` (call notes and transcripts, `kind: transcript`), `Correspondence (Work Product)/` (letters the firm
+    drafted but did not serve), `Discovery (Work Product)/` (discovery in preparation), `Motions (Work Product)/` (one
+    folder per motion), `Pleadings (Work Product)/` (pleadings in draft), `Research (Work Product)/` (memos, `kind:
+    memo`), and `Stipulations (Work Product)/`.
   * `onboarding/`, `offboarding/`, `invoices/`, `cases/`, and `rules/` keep their bytes at the pointer's own path.
 
   The slug is the path below the matter folder: `documents/Docket Filings/pleadings/motion.pdf` for
   `blobs/pleadings/motion.pdf.yaml`. A file dropped into a matter folder is uploaded on the next sync with that folder's
-  kind, and a subfolder inside one is part of the slug. Never commit anything under `documents/`.
+  kind, and a lawyer-made subfolder inside one is part of the slug. Never commit anything under `documents/`. A checkout
+  from before LAW-215 holds a bare `Discovery/` folder instead of `Discovery (Served)/`; `navigator project repository
+  migrate-folders` refiles it.
 * `drafts/` holds Drafts, the notation blueprints, directly under it; `templates/` is an alias the gate warns about.
   Memo notations use `kind: memo`. Use placeholders for client data and matter facts; answers and work product stay in
   Navigator. A Notation is a database record, never a file here.
 * `seeds/` holds seed data that `navigator site import` creates or updates.
 * `notes/` is git-ignored. Write call notes there for `navigator project communication create --body-file`.
+* `mail/` is git-ignored. Saved mail lives there: `navigator mail save <message-url>` writes a message's
+  `YYYY.MM.DD_<subject>.eml` copy, and email bodies kept on disk for `navigator mail draft --body-file` belong there
+  too. Saved mail is a matter fact, never Git; the gate refuses anything under `mail/`.
 * Handoff note: work that may outlast the session keeps its state in `notes/HANDOFF-<topic>.md.local`. The gate does
   not read it, and no matter fact leaves the repository. Follow `.agents/skills/working-notes/SKILL.md`.
   * Write it before a session ends with work in flight, near compaction, or when the lawyer asks. Rewrite it when the
@@ -128,9 +140,10 @@ substitute browser or native-app automation for a server that is available.
 * **Slack** — private channel for updates.
 * **Linear** — CLI feedback, named by mechanism and never by matter. Remove personal and matter identifiers before
   filing: write `<client>`, `<claim number>`, `<email>`, `<phone>`, `<address>`, `<identifier>` in their place, and
-  never quote matter text. Run `navigator project feedback-check --term <Project code> --term <client name>` on the
-  draft (repeat `--term` for each private name); it runs locally and refuses a draft that still carries one. Show the
-  checked text to the lawyer before filing.
+  never quote matter text. Run `navigator project feedback-check --project <Project code>` on the draft (repeat
+  `--project` for each matter in it, plus `--term` for a private name the store does not know); it resolves each
+  Project's code and participants' names, mailboxes, and phones from the store, runs locally, and refuses a draft that
+  still carries one. Show the checked text to the lawyer before filing.
 * **CourtListener** — dockets, filings, parties, and judges.
 * **Midpage** — statutes and rules.
 * **Descrybe** — case law.
@@ -145,6 +158,11 @@ For a client email:
 * The attorney reviews the complete draft in Gmail before any separate sending action.
 * The CLI strips the `--` signature delimiter and an exact trailing `NAVIGATOR_GMAIL_SIGNATURE`, but not other prose, so
   inspect the draft.
+* To file a received message into the matter's Communication log, run `navigator mail parse <gmail-web-url>` (the URL
+  copied from the browser), `navigator mail parse <message.eml>`, or `navigator mail parse <document.pdf>` — the last
+  uploads through the document lane. Filing is a record write only; it never sends or archives in Gmail.
+* To keep a Gmail message's .eml copy in this checkout, run `navigator mail save <gmail-web-url>`; it writes
+  `mail/YYYY.MM.DD_<subject>.eml` and refuses a filename that drops the send-date prefix.
 
 ## Feedback
 

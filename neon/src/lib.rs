@@ -77,6 +77,16 @@ pub const PUBLIC_PATHS: &[&str] = &[
     // The Neon-hosted gateway to the Abhaya Immigration practice. Same
     // Neon-only shape as `/delete-your-debt` above.
     "/immigration",
+    // The `/immigration` practice pages and free-support hub, one catalog
+    // per matter. Same Neon-only shape as `/immigration` above.
+    "/immigration/family-green-cards",
+    "/immigration/citizenship",
+    "/immigration/employment-visas",
+    "/immigration/consular-processing",
+    "/immigration/uscis-notices",
+    "/immigration/humanitarian-relief",
+    "/immigration/removal-defense",
+    "/immigration/free-support",
     // The Neon-hosted gateway to the Vesta Estate Planning practice. Same
     // Neon-only shape as `/delete-your-debt` above.
     "/estate-planning",
@@ -186,6 +196,14 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
                 "/delete-your-data",
                 "/nautilus",
                 "/immigration",
+                "/immigration/family-green-cards",
+                "/immigration/citizenship",
+                "/immigration/employment-visas",
+                "/immigration/consular-processing",
+                "/immigration/uscis-notices",
+                "/immigration/humanitarian-relief",
+                "/immigration/removal-defense",
+                "/immigration/free-support",
                 "/estate-planning",
                 "/accidents",
                 "/divorce",
@@ -375,7 +393,7 @@ fn indexed_page(title: &str, path: &str, description: &str) -> portal::LlmsTxtLi
 /// The pages `/llms.txt` lists, in the order a reader meets them: the firm's
 /// practice, then its fee schedule, then everything it publishes beside them.
 fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
-    vec![
+    let mut pages = vec![
         indexed_page(
             mark,
             "/",
@@ -407,15 +425,9 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
              excluded and must be prepaid; a lawyer review starts at $20. Coming to iPhone and \
              Android.",
         ),
-        indexed_page(
-            "Immigration",
-            "/immigration",
-            "Neon's gateway page naming Abhaya Immigration as \
-             the destination for family petitions, employment visas, green cards, \
-             naturalization, consular processing, employer sponsorship, and USCIS \
-             notice responses. Government filing fees are \
-             separate, and no approval or timeline is promised.",
-        ),
+    ];
+    pages.extend(immigration_indexed_pages());
+    pages.extend([
         indexed_page(
             "Estate planning",
             "/estate-planning",
@@ -474,7 +486,92 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
             "/team",
             "A short directory that links to each person's profile.",
         ),
-    ]
+    ]);
+    pages
+}
+
+/// Neon's `/immigration*` entries in its `/llms.txt` index: the gateway
+/// first, then each practice page a reader can follow from it. Lifted
+/// out of [`indexed_pages`] for the same reason [`services_page_link`]
+/// is its own function.
+fn immigration_indexed_pages() -> Vec<portal::LlmsTxtLink> {
+    const PAGES: &[(&str, &str, &str)] = &[
+        (
+            "Immigration",
+            "/immigration",
+            "Neon's gateway page naming Abhaya Immigration as \
+             the destination for family petitions, employment visas, green cards, \
+             naturalization, consular processing, employer sponsorship, and USCIS \
+             notice responses. Government filing fees are \
+             separate, and no approval or timeline is promised.",
+        ),
+        (
+            "Family green cards",
+            "/immigration/family-green-cards",
+            "Abhaya Immigration's family-petition and marriage-based green-card page: \
+             who can petition, the I-130 and I-485 stages, the interview, and the \
+             documents a case needs. Government filing fees are separate, and no \
+             approval or timeline is promised.",
+        ),
+        (
+            "Citizenship",
+            "/immigration/citizenship",
+            "Abhaya Immigration's naturalization page: N-400 eligibility, biometrics, \
+             the interview and tests, and the oath. Government filing fees are \
+             separate, and no approval or timeline is promised.",
+        ),
+        (
+            "Employment visas",
+            "/immigration/employment-visas",
+            "Abhaya Immigration's employment-visa page: the categories, the labor \
+             certification, the employer's I-140 petition, and the visa bulletin. \
+             Government filing fees are separate, and no approval or timeline is \
+             promised.",
+        ),
+        (
+            "Consular processing",
+            "/immigration/consular-processing",
+            "Abhaya Immigration's consular-processing page: the National Visa Center, \
+             the DS-260, the embassy interview, and waiver questions. Government \
+             filing fees are separate, and no approval or timeline is promised.",
+        ),
+        (
+            "USCIS notices",
+            "/immigration/uscis-notices",
+            "Abhaya Immigration's page on responding to requests for evidence, notices \
+             of intent to deny, and other USCIS notices: what the notice asks, the \
+             deadline, and what a complete response contains. Government filing fees \
+             are separate, and no outcome is promised.",
+        ),
+        (
+            "Humanitarian relief",
+            "/immigration/humanitarian-relief",
+            "Abhaya Immigration's page on asylum, T and U visas, and VAWA petitions: \
+             who may qualify, the one-year asylum filing deadline, and the evidence \
+             the applications ask for. Government filing fees are separate, and no \
+             approval or timeline is promised.",
+        ),
+        (
+            "Removal defense",
+            "/immigration/removal-defense",
+            "Abhaya Immigration's page on immigration-court defense: responding to a \
+             Notice to Appear, keeping the hearing date, bond, and relief from \
+             removal. Court deadlines are short; government filing fees are separate, \
+             and no outcome is promised.",
+        ),
+        (
+            "Free support",
+            "/immigration/free-support",
+            "Abhaya Immigration's free-support hub: USCIS case status, processing times, \
+             and fee tools; document checklists; know-your-rights material; and \
+             recognized nonprofit legal-service referrals, with a notario-fraud \
+             warning.",
+        ),
+    ];
+    PAGES
+        .iter()
+        .map(|(title, path, description)| indexed_page(title, path, description))
+        .collect()
 }
 
 /// Neon's `/services` entry in its own `llms.txt` index.

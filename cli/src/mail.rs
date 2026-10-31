@@ -19,6 +19,13 @@ const GOOGLE_TOKEN_API: &str = "https://oauth2.googleapis.com/token";
 const MAX_SEARCH_RESULTS: u8 = 25;
 /// Gmail's 25 MB message limit, measured on the encoded MIME message.
 const MAX_MESSAGE_BYTES: u64 = 25_000_000;
+/// Where `mail save` writes by default: the Project checkout's git-ignored
+/// working folder for email bodies, drafts, and saved copies of sent mail
+/// (`cli/src/projects/repository.rs`'s `MAIL_DIRECTORY`).
+const MAIL_DIRECTORY: &str = "mail";
+/// The asset-lane kind a `mail parse` file-path upload takes when `--kind`
+/// is not passed: mail correspondence is served correspondence.
+const DEFAULT_PARSE_UPLOAD_KIND: &str = "letter";
 
 const DRAFT_ATTACH_HELP: &str = "\
 Attachments:
@@ -85,12 +92,61 @@ pub enum MailAction {
         #[arg(long)]
         host: Option<String>,
     },
+    /// File one message as a matter Communication: a Gmail web-URL message, a
+    /// local .eml, or a PDF/file path through the document-upload lane.
+    Parse {
+        /// Gmail web URL (copied from the browser), a local .eml path, or a
+        /// local PDF/file path to upload as a document.
+        reference: String,
+        /// Matter code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        /// Navigator host. Defaults to host in navigator.yaml.
+        #[arg(long)]
+        host: Option<String>,
+        /// Asset-lane kind for a file-path upload. Defaults to `letter`.
+        #[arg(long, value_parser = crate::parse_asset_kind)]
+        kind: Option<String>,
+    },
+    /// Save a Gmail message's .eml copy under the git-ignored mail/ folder.
+    Save {
+        /// Gmail web URL or Gmail message id.
+        reference: String,
+        /// Directory to save into. Defaults to mail/.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Output filename. Defaults to the convention: YYYY.MM.DD_<subject>.eml.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// File a saved RFC 5322 message (.eml) into the matter inbox through
+    /// the Navigator ingest door. Ingest-only: nothing is sent, and no
+    /// Gmail OAuth setup is required. Re-running is safe — the door
+    /// dedupes on the provider Message-ID (falling back to a raw-content
+    /// hash).
+    Ingest {
+        /// Path to the raw RFC 5322 message to file.
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+        /// Matter code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        /// Navigator host. Defaults to host in navigator.yaml.
+        #[arg(long)]
+        host: Option<String>,
+        /// Provider account the message was read from (for example the
+        /// Gmail address). Ingress dedup keys on it. Defaults to
+        /// cli-ingest.
+        #[arg(long)]
+        provider_account: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Operation {
     SearchThreads,
     ReadThread,
+    ReadMessage,
     ReadProfile,
     CreateDraft,
     UpdateDraft,
@@ -103,6 +159,11 @@ fn endpoint(
     match operation {
         Operation::SearchThreads => ("GET", vec!["users", "me", "threads"], None),
         Operation::ReadThread => ("GET", vec!["users", "me", "threads"], id.map(str::to_owned)),
+        Operation::ReadMessage => (
+            "GET",
+            vec!["users", "me", "messages"],
+            id.map(str::to_owned),
+        ),
         Operation::ReadProfile => ("GET", vec!["users", "me", "profile"], None),
         Operation::CreateDraft => ("POST", vec!["users", "me", "drafts"], None),
         Operation::UpdateDraft => ("PUT", vec!["users", "me", "drafts"], id.map(str::to_owned)),
@@ -195,6 +256,25 @@ impl GmailClient {
             .await
     }
 
+    /// One message in `format=full`, the shape `mail file` and `mail parse`
+    /// read headers, bodies, and attachments from.
+    async fn message(&self, id: &str) -> Result<GmailMessage> {
+        self.call(
+            Operation::ReadMessage,
+            Some(id),
+            &[("format", "full")],
+            None,
+        )
+        .await
+    }
+
+    /// One message in `format=raw`: the complete RFC 822 copy `mail save`
+    /// writes to disk.
+    async fn raw_message(&self, id: &str) -> Result<RawGmailMessage> {
+        self.call(Operation::ReadMessage, Some(id), &[("format", "raw")], None)
+            .await
+    }
+
     async fn profile(&self) -> Result<GmailProfile> {
         self.call(Operation::ReadProfile, None, &[], None).await
     }
@@ -245,6 +325,12 @@ struct ThreadSummary {
 struct GmailThread {
     id: String,
     messages: Vec<GmailMessage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGmailMessage {
+    /// URL-safe base64 of the complete RFC 822 message.
+    raw: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -776,6 +862,169 @@ fn source_reference(mailbox: &str, message_id: &str) -> String {
     format!("gmail:{}:{message_id}", mailbox.trim().to_ascii_lowercase())
 }
 
+/// The Gmail message id a reference names: a Gmail web URL copied from the
+/// browser (`https://mail.google.com/mail/u/0/#inbox/<id>`, the legacy
+/// `?th=<id>` form included) or a bare Gmail message id. None when the
+/// reference is neither, so a misspelled file path falls through to the
+/// caller's file handling.
+fn gmail_message_id(reference: &str) -> Option<String> {
+    if let Ok(url) = Url::parse(reference) {
+        if !url.host_str()?.ends_with("mail.google.com") {
+            return None;
+        }
+        if let Some((_, id)) = url.query_pairs().find(|(name, _)| name == "th") {
+            return Some(id.into_owned()).filter(|id| is_gmail_id(id));
+        }
+        let id = url
+            .fragment()?
+            .rsplit('/')
+            .find(|segment| !segment.is_empty())?;
+        return Some(id.to_string()).filter(|id| is_gmail_id(id));
+    }
+    Some(reference.to_string()).filter(|id| is_gmail_id(id))
+}
+
+/// Gmail message ids are base64url strings (commonly 16 characters) with
+/// digits in them; the digit requirement keeps a search term or misspelled
+/// path from looking like an id.
+fn is_gmail_id(id: &str) -> bool {
+    (8..=128).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && id.bytes().any(|b| b.is_ascii_digit())
+}
+
+/// The Communication request body for one filed message. Pure, so the Gmail
+/// and .eml paths cannot drift apart.
+fn communication_request(
+    mailbox: &str,
+    from: &str,
+    to: &str,
+    subject: Option<&str>,
+    at: &str,
+    body: &str,
+    message_id: &str,
+) -> serde_json::Value {
+    let direction =
+        if email_from_address(from).as_deref() == Some(mailbox.to_ascii_lowercase().as_str()) {
+            "outbound"
+        } else {
+            "inbound"
+        };
+    let counterparty = if direction == "inbound" { from } else { to };
+    json!({
+        "channel": if direction == "inbound" { "email_inbound" } else { "email_outbound" },
+        "direction": direction,
+        "counterparty": counterparty,
+        "at": at,
+        "body": body,
+        "subject": subject,
+        "source_ref": source_reference(mailbox, message_id),
+    })
+}
+
+/// Gmail returns `format=raw` messages URL-safe base64 encoded.
+///
+/// # Errors
+///
+/// [`anyhow::Error`] when the response carries no raw field or it does not
+/// decode.
+fn decode_gmail_raw(raw: &str) -> Result<Vec<u8>> {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(raw.trim())
+        .context("decode Gmail raw message")
+}
+
+/// The conventional saved-mail filename: the send date, the subject as a
+/// slug, and the .eml extension — `2026.10.30_Retainer questions.eml` shape.
+fn conventional_mail_name(sent_on: &str, subject: &str) -> String {
+    let subject = subject.trim();
+    let slug = subject_slug(subject).unwrap_or_else(|| "no-subject".to_string());
+    format!("{sent_on}_{slug}.eml")
+}
+
+/// The subject as a path-safe slug: alphanumeric characters, `-`, `.`, and
+/// `_` survive; whitespace becomes `_`; everything else drops. None when
+/// nothing survives.
+fn subject_slug(subject: &str) -> Option<String> {
+    let mut slug = String::new();
+    let mut trailing_separator = true;
+    for character in subject.chars() {
+        if slug.len() >= 64 {
+            break;
+        }
+        if character.is_alphanumeric() || character == '-' || character == '.' {
+            slug.push(character);
+            trailing_separator = false;
+        } else if (character.is_whitespace() || character == '_') && !trailing_separator {
+            slug.push('_');
+            trailing_separator = true;
+        }
+    }
+    let slug = slug.trim_matches(['_', '.', '-']).to_string();
+    (!slug.is_empty()).then_some(slug)
+}
+
+/// A saved-mail filename must start with its send date and keep the .eml
+/// extension: `YYYY.MM.DD_<name>.eml`.
+///
+/// # Errors
+///
+/// [`anyhow::Error`] naming the convention when the filename does not follow
+/// it.
+fn check_mail_save_name(name: &str) -> Result<()> {
+    let bytes = name.as_bytes();
+    let dated = bytes.len() >= 15
+        && bytes[..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'.'
+        && bytes[5..7].iter().all(u8::is_ascii_digit)
+        && bytes[7] == b'.'
+        && bytes[8..10].iter().all(u8::is_ascii_digit)
+        && bytes[10] == b'_';
+    let eml = std::path::Path::new(name)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("eml"));
+    if dated && eml {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "the filename must follow the convention YYYY.MM.DD_<name>.eml, the send date first"
+    ))
+}
+
+/// What `write_saved_mail` did.
+#[derive(Debug, Eq, PartialEq)]
+enum SavedMail {
+    Written,
+    AlreadySaved,
+}
+
+/// Write the .eml copy without clobbering: an identical file is already
+/// saved (a re-run is idempotent); a different one is refused.
+///
+/// # Errors
+///
+/// [`anyhow::Error`] when an existing file's contents differ or the write
+/// fails.
+fn write_saved_mail(path: &Path, bytes: &[u8]) -> Result<SavedMail> {
+    if path.exists() {
+        let existing = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        if existing == bytes {
+            return Ok(SavedMail::AlreadySaved);
+        }
+        return Err(anyhow!(
+            "{} already exists with different contents; remove it or pass --name",
+            path.display()
+        ));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    std::fs::write(path, bytes).with_context(|| format!("write {}", path.display()))?;
+    Ok(SavedMail::Written)
+}
+
 fn scoped_query(query: &str, project: Option<&str>) -> String {
     let Some(email) = project.and_then(|_| client_contact_from_manifest()) else {
         return query.to_owned();
@@ -1077,6 +1326,39 @@ async fn run_inner(action: MailAction) -> Result<()> {
             project,
             host,
         } => file_thread(&thread, project.as_deref(), host.as_deref()).await,
+        MailAction::Parse {
+            reference,
+            project,
+            host,
+            kind,
+        } => {
+            parse_command(
+                &reference,
+                project.as_deref(),
+                host.as_deref(),
+                kind.as_deref(),
+            )
+            .await
+        }
+        MailAction::Save {
+            reference,
+            dir,
+            name,
+        } => save_message_command(&reference, dir.as_deref(), name.as_deref()).await,
+        MailAction::Ingest {
+            path,
+            project,
+            host,
+            provider_account,
+        } => {
+            ingest_provider_message(
+                &path,
+                project.as_deref(),
+                host.as_deref(),
+                provider_account.as_deref(),
+            )
+            .await
+        }
     }
 }
 
@@ -1206,6 +1488,53 @@ fn print_thread(thread: &GmailThread) {
     }
 }
 
+/// Files one saved RFC 5322 message into the matter inbox through the
+/// Navigator ingest door (`POST /app/api/projects/{id}/inbox-ingest`).
+/// Ingest-only: the door stores the message as an Inbox conversation
+/// attributed to the Project and never sends anything. The raw bytes travel
+/// as base64 and the server re-parses them, so the CLI cannot claim fields
+/// the message does not carry.
+async fn ingest_provider_message(
+    path: &Path,
+    project_code: Option<&str>,
+    host: Option<&str>,
+    provider_account: Option<&str>,
+) -> Result<()> {
+    let raw = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let local = crate::projects::manifest::read(Path::new("."));
+    let project_code = project_code
+        .or_else(|| {
+            local
+                .as_ref()
+                .and_then(|manifest| manifest.project.as_deref())
+        })
+        .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
+    let host = host.or_else(|| local.as_ref().and_then(|manifest| manifest.host.as_deref()));
+    let (base, navigator_token) = crate::remote::resolve(host)?;
+    let project_id =
+        crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
+            .await?;
+    let body = json!({
+        "raw": base64::engine::general_purpose::STANDARD.encode(&raw),
+        "provider_account": provider_account,
+    });
+    let response = reqwest::Client::new()
+        .post(format!("{base}/app/api/projects/{project_id}/inbox-ingest"))
+        .bearer_auth(navigator_token)
+        .timeout(std::time::Duration::from_secs(30))
+        .json(&body)
+        .send()
+        .await
+        .context("ingest provider message")?;
+    let status = response.status();
+    let text = response.text().await.context("read ingest response")?;
+    if !status.is_success() {
+        return Err(anyhow!("ingest refused: {status} {text}"));
+    }
+    println!("{text}");
+    Ok(())
+}
+
 async fn file_thread(
     thread_id: &str,
     project_code: Option<&str>,
@@ -1293,33 +1622,246 @@ struct FileTarget<'a> {
     mailbox: &'a str,
 }
 
-async fn file_message(target: &FileTarget<'_>, message: &GmailMessage, body: &str) -> Result<()> {
-    let from = header(message, "From").unwrap_or_default();
-    let to = header(message, "To").unwrap_or_default();
-    let direction = if email_from_address(from).as_deref()
-        == Some(target.mailbox.to_ascii_lowercase().as_str())
-    {
-        "outbound"
-    } else {
-        "inbound"
-    };
-    let counterparty = if direction == "inbound" { from } else { to };
-    let request = json!({
-        "channel": if direction == "inbound" { "email_inbound" } else { "email_outbound" },
-        "direction": direction,
-        "counterparty": counterparty,
-        "at": now_or_message_date(message)?,
-        "body": body,
-        "subject": header(message, "Subject"),
-        "source_ref": source_reference(target.mailbox, &message.id),
+/// `mail parse`: file one message as a matter Communication. A Gmail web URL
+/// (or message id) fetches through the read-only Gmail path `mail file`
+/// uses; a local .eml files from its own bytes; any other local file rides
+/// the existing `navigator document upload` lane as a document.
+async fn parse_command(
+    reference: &str,
+    project: Option<&str>,
+    host: Option<&str>,
+    kind: Option<&str>,
+) -> Result<()> {
+    if Path::new(reference).exists() {
+        return parse_local_file(reference, project, host, kind).await;
+    }
+    let message_id = gmail_message_id(reference).ok_or_else(|| {
+    anyhow!(
+            "the reference is neither an existing file, a Gmail web URL, nor a Gmail message id: {reference}"
+        )
+    })?;
+    parse_gmail_message(&message_id, project, host).await
+}
+
+async fn parse_gmail_message(
+    message_id: &str,
+    project: Option<&str>,
+    host: Option<&str>,
+) -> Result<()> {
+    let local = crate::projects::manifest::read(Path::new("."));
+    let project_code = project
+        .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
+        .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
+    let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
+    let (base, navigator_token) = crate::remote::resolve(host)?;
+    let project_id =
+        crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
+            .await?;
+    let gmail = client().await?;
+    let profile = gmail.profile().await?;
+    let message = gmail.message(message_id).await?;
+    let payload = message
+        .payload
+        .as_ref()
+        .ok_or_else(|| anyhow!("message {message_id} has no supported body"))?;
+    let mut names = Vec::new();
+    attachments(payload, &mut names);
+    if !names.is_empty() {
+        return Err(anyhow!(
+            "message {message_id} carries attachments ({}); \
+             this CLI cannot file email attachments yet, so nothing was filed",
+            names.join(", ")
+        ));
+    }
+    let body = plain_text(payload)
+        .filter(|body| !body.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow!("message {message_id} has no supported text body; nothing was filed")
+        })?;
+    let expected_contact = local.as_ref().and_then(|manifest| {
+        manifest_project_contact(
+            Some(project_code),
+            manifest.project.as_deref(),
+            manifest.client_dri.as_deref(),
+        )
     });
+    if let Some(contact) = expected_contact {
+        if !message_mentions_contact(&message, &contact) {
+            eprintln!(
+                "warning: message does not appear to belong to this Project's client contact"
+            );
+        }
+    }
+    let target = FileTarget {
+        base: &base,
+        navigator_token: &navigator_token,
+        project_id,
+        mailbox: &profile.email_address,
+    };
+    file_message(&target, &message, &body).await?;
+    println!("Filed the message as a Communication");
+    Ok(())
+}
+
+async fn parse_local_file(
+    reference: &str,
+    project: Option<&str>,
+    host: Option<&str>,
+    kind: Option<&str>,
+) -> Result<()> {
+    let local = crate::projects::manifest::read(Path::new("."));
+    let project_code = project
+        .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
+        .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
+    let path = Path::new(reference);
+    if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("eml"))
+    {
+        return parse_eml_file(path, project_code, host).await;
+    }
+    let kind = kind.unwrap_or(DEFAULT_PARSE_UPLOAD_KIND);
+    println!("Uploading {} as a {kind} document", path.display());
+    let exit = crate::remote::document_upload(
+        host,
+        project_code,
+        path,
+        kind,
+        Some("internal"),
+        None,
+        None,
+        None,
+        None,
+        &crate::remote::DocumentExecution::default(),
+        None,
+    )
+    .await;
+    if exit == std::process::ExitCode::SUCCESS {
+        Ok(())
+    } else {
+        Err(anyhow!("document upload failed"))
+    }
+}
+
+async fn parse_eml_file(path: &Path, project_code: &str, host: Option<&str>) -> Result<()> {
+    let local = crate::projects::manifest::read(Path::new("."));
+    let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
+    let (base, navigator_token) = crate::remote::resolve(host)?;
+    let project_id =
+        crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
+            .await?;
+    let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    // The door parses and files the message server-side, so a local .eml
+    // files without any per-machine Gmail OAuth setup.
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let response = reqwest::Client::new()
+        .post(format!("{base}/app/api/projects/{project_id}/mail/eml"))
+        .bearer_auth(&navigator_token)
+        .json(&json!({ "raw_base64": encoded }))
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .context("file the .eml through the mail/eml door")?;
+    if !response.status().is_success() {
+        return Err(anyhow!("file the .eml refused: {}", response.status()));
+    }
+    let filed: serde_json::Value = response.json().await.context("read the door's response")?;
+    let summary = eml_filing_summary(&filed);
+    println!("Filed {} as a Communication", path.display());
+    if summary.deduped {
+        println!("Already filed (deduped on {})", summary.source_ref);
+    }
+    if summary.attachments_filed > 0 {
+        println!(
+            "Filed {} attachment(s) as documents",
+            summary.attachments_filed
+        );
+    }
+    Ok(())
+}
+
+/// What the .eml door's response means for the operator. Pure, so the
+/// response's shape is read in exactly one place.
+fn eml_filing_summary(response: &serde_json::Value) -> EmlFiled {
+    EmlFiled {
+        source_ref: response["source_ref"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        deduped: response["deduped"].as_bool().unwrap_or(false),
+        attachments_filed: response["filed"].as_array().map_or(0, std::vec::Vec::len),
+    }
+}
+
+struct EmlFiled {
+    source_ref: String,
+    deduped: bool,
+    attachments_filed: usize,
+}
+
+/// `mail save`: fetch the message's RFC 822 copy through the read-only Gmail
+/// path and write it under the Project checkout's git-ignored mail/ folder
+/// with the conventional YYYY.MM.DD_<subject>.eml name. Saving never sends.
+async fn save_message_command(
+    reference: &str,
+    dir: Option<&Path>,
+    name: Option<&str>,
+) -> Result<()> {
+    let message_id = gmail_message_id(reference).ok_or_else(|| {
+        anyhow!("the reference is neither a Gmail web URL nor a Gmail message id: {reference}")
+    })?;
+    if let Some(name) = name {
+        check_mail_save_name(name)?;
+    }
+    let gmail = client().await?;
+    let raw_field = gmail.raw_message(&message_id).await?;
+    let raw = decode_gmail_raw(
+        raw_field
+            .raw
+            .as_deref()
+            .ok_or_else(|| anyhow!("message {message_id} came back with no raw copy"))?,
+    )?;
+    let message = mail_parser::MessageParser::default()
+        .parse(&raw)
+        .ok_or_else(|| anyhow!("the saved message is not a MIME email"))?;
+    let name = if let Some(name) = name {
+        name.to_string()
+    } else {
+        let sent_on = message
+            .date()
+            .map(|date| format!("{:04}.{:02}.{:02}", date.year, date.month, date.day))
+            .ok_or_else(|| anyhow!("the message has no Date header; pass --name"))?;
+        conventional_mail_name(&sent_on, message.subject().unwrap_or(""))
+    };
+    let path = dir.unwrap_or_else(|| Path::new(MAIL_DIRECTORY)).join(&name);
+    match write_saved_mail(&path, &raw)? {
+        SavedMail::Written => println!("Saved {}", path.display()),
+        SavedMail::AlreadySaved => println!("Already saved: {}", path.display()),
+    }
+    Ok(())
+}
+
+async fn file_message(target: &FileTarget<'_>, message: &GmailMessage, body: &str) -> Result<()> {
+    let request = communication_request(
+        target.mailbox,
+        header(message, "From").unwrap_or_default(),
+        header(message, "To").unwrap_or_default(),
+        header(message, "Subject"),
+        &now_or_message_date(message)?,
+        body,
+        &message.id,
+    );
+    post_communication(target, &request).await
+}
+
+async fn post_communication(target: &FileTarget<'_>, request: &serde_json::Value) -> Result<()> {
     let response = reqwest::Client::new()
         .post(format!(
             "{}/app/api/projects/{}/communications",
             target.base, target.project_id
         ))
         .bearer_auth(target.navigator_token)
-        .json(&request)
+        .json(request)
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
@@ -1363,9 +1905,177 @@ mod tests {
     fn gmail_endpoints_expose_reads_and_draft_writes_only() {
         assert_eq!(endpoint(Operation::SearchThreads, None).0, "GET");
         assert_eq!(endpoint(Operation::ReadThread, Some("thread-id")).0, "GET");
+        assert_eq!(
+            endpoint(Operation::ReadMessage, Some("message-id")).0,
+            "GET"
+        );
         assert_eq!(endpoint(Operation::ReadProfile, None).0, "GET");
         assert_eq!(endpoint(Operation::CreateDraft, None).0, "POST");
         assert_eq!(endpoint(Operation::UpdateDraft, Some("draft-id")).0, "PUT");
+    }
+
+    #[test]
+    fn gmail_web_urls_yield_their_message_id() {
+        assert_eq!(
+            gmail_message_id("https://mail.google.com/mail/u/0/#inbox/18fa3bc2d4e5f6a7").as_deref(),
+            Some("18fa3bc2d4e5f6a7")
+        );
+        assert_eq!(
+            gmail_message_id("https://mail.google.com/mail/u/1/#label/Work/AbC_-12345678")
+                .as_deref(),
+            Some("AbC_-12345678")
+        );
+        assert_eq!(
+            gmail_message_id("https://mail.google.com/mail/u/0/?ui=2&view=om&th=18fa3bc2d4e5f6a7")
+                .as_deref(),
+            Some("18fa3bc2d4e5f6a7")
+        );
+        assert_eq!(
+            gmail_message_id("18fa3bc2d4e5f6a7").as_deref(),
+            Some("18fa3bc2d4e5f6a7")
+        );
+    }
+
+    #[test]
+    fn non_gmail_references_name_no_message() {
+        assert_eq!(
+            gmail_message_id("https://example.com/mail/u/0/#inbox/18fa3bc2d4e5f6a7"),
+            None
+        );
+        assert_eq!(
+            gmail_message_id("https://mail.google.com/mail/u/0/#search/retainer"),
+            None
+        );
+        assert_eq!(gmail_message_id("notes/draft-body.txt"), None);
+        assert_eq!(gmail_message_id("short"), None);
+    }
+
+    #[test]
+    fn communication_requests_carry_direction_counterparty_and_source() {
+        let inbound = communication_request(
+            "lawyer@neonlaw.test",
+            "Client <client@example.test>",
+            "lawyer@neonlaw.test",
+            Some("Retainer questions"),
+            "2026-10-30T14:03:00+00:00",
+            "Can I sign electronically?",
+            "<abc-123@example.test>",
+        );
+        assert_eq!(inbound["channel"], "email_inbound");
+        assert_eq!(inbound["direction"], "inbound");
+        assert_eq!(inbound["counterparty"], "Client <client@example.test>");
+        assert_eq!(
+            inbound["source_ref"],
+            "gmail:lawyer@neonlaw.test:<abc-123@example.test>"
+        );
+
+        let outbound = communication_request(
+            "lawyer@neonlaw.test",
+            "lawyer@neonlaw.test",
+            "client@example.test",
+            None,
+            "2026-10-30T14:03:00+00:00",
+            "Draft is ready for your review.",
+            "18fa3bc2d4e5f6a7",
+        );
+        assert_eq!(outbound["channel"], "email_outbound");
+        assert_eq!(outbound["direction"], "outbound");
+        assert_eq!(outbound["counterparty"], "client@example.test");
+    }
+
+    #[test]
+    fn an_eml_door_response_summarizes_dedup_and_attachments() {
+        let summary = eml_filing_summary(&serde_json::json!({
+            "source_ref": "eml:abc-123@example.test",
+            "direction": "inbound",
+            "deduped": true,
+            "communication_id": "0195c9e1-7c2f-7000-8000-000000000000",
+            "attachments": [],
+            "filed": [
+                { "current_version": { "version": 1 } },
+                { "current_version": { "version": 1 } }
+            ]
+        }));
+        assert_eq!(summary.source_ref, "eml:abc-123@example.test");
+        assert!(summary.deduped);
+        assert_eq!(summary.attachments_filed, 2);
+
+        // A dry-run response: no communication row, no attachments filed.
+        let summary = eml_filing_summary(&serde_json::json!({
+            "source_ref": "eml:sha256:9f2b",
+            "direction": "inbound",
+            "deduped": false,
+            "attachments": [],
+            "filed": []
+        }));
+        assert_eq!(summary.source_ref, "eml:sha256:9f2b");
+        assert!(!summary.deduped);
+        assert_eq!(summary.attachments_filed, 0);
+    }
+
+    #[test]
+    fn gmail_raw_copies_decode_from_url_safe_base64() {
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(b"From: client@example.test\r\n\r\nHello");
+        assert_eq!(
+            decode_gmail_raw(&encoded).unwrap(),
+            b"From: client@example.test\r\n\r\nHello".to_vec()
+        );
+        assert!(decode_gmail_raw("not base64!").is_err());
+    }
+
+    #[test]
+    fn saved_mail_names_carry_the_send_date_and_subject_slug() {
+        assert_eq!(
+            conventional_mail_name("2026.10.30", "Retainer questions: phase 2!"),
+            "2026.10.30_Retainer_questions_phase_2.eml"
+        );
+        assert_eq!(
+            conventional_mail_name("2026.10.30", "   "),
+            "2026.10.30_no-subject.eml"
+        );
+        assert_eq!(
+            conventional_mail_name("2026.10.30", "Fwd: the signed order"),
+            "2026.10.30_Fwd_the_signed_order.eml"
+        );
+    }
+
+    #[test]
+    fn save_names_must_carry_the_send_date_prefix_and_eml_extension() {
+        assert!(check_mail_save_name("2026.10.30_Retainer questions.eml").is_ok());
+        assert!(check_mail_save_name("2026.10.30_.eml").is_ok());
+        assert!(check_mail_save_name("mail.eml").is_err());
+        assert!(check_mail_save_name("2026-10-30_dashes.eml").is_err());
+        assert!(check_mail_save_name("2026.10.30_wrong.pdf").is_err());
+        assert!(check_mail_save_name("2026.10.30_no_extension").is_err());
+    }
+
+    #[test]
+    fn saved_mail_never_clobbers_a_changed_file() {
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("mail").join("2026.10.30_Order.eml");
+        assert_eq!(
+            write_saved_mail(&path, b"first").unwrap(),
+            SavedMail::Written
+        );
+        assert!(path.exists());
+        assert_eq!(
+            write_saved_mail(&path, b"first").unwrap(),
+            SavedMail::AlreadySaved
+        );
+        let error = write_saved_mail(&path, b"different")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("different contents"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+    }
+
+    #[test]
+    fn agent_contract_documents_mail_parse_and_save() {
+        let contract = include_str!("projects/agent_contract.md");
+        assert!(contract.contains("navigator mail parse"));
+        assert!(contract.contains("navigator mail save"));
+        assert!(contract.contains("`mail/` is git-ignored"));
     }
 
     #[test]
@@ -2307,5 +3017,322 @@ mod tests {
         let body = body.split("async fn client()").next().unwrap();
         assert!(body.contains("print!(\"{}\", report.text)"));
         assert!(!body.contains("eprintln!") && !body.contains("println!(\"{account"));
+    }
+
+    fn message_with_body(mime_type: &str, body_data: &str) -> GmailMessage {
+        GmailMessage {
+            id: "message-1".into(),
+            internal_date: None,
+            payload: Some(MessagePart {
+                mime_type: Some(mime_type.into()),
+                headers: Some(vec![MessageHeader {
+                    name: "From".into(),
+                    value: "Client <client@example.test>".into(),
+                }]),
+                body: Some(MessageBody {
+                    data: Some(body_data.into()),
+                    attachment_id: None,
+                }),
+                parts: None,
+                filename: None,
+            }),
+        }
+    }
+
+    fn encoded(data: &[u8]) -> String {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
+    }
+
+    #[test]
+    fn thread_printing_survives_missing_bodies_and_names_attachments() {
+        let text = message_with_body("text/plain", &encoded(b"Can I sign electronically?"));
+        let html_only = message_with_body("text/html", &encoded(b"<p>Confirmed</p>"));
+        let no_payload = GmailMessage {
+            id: "message-3".into(),
+            internal_date: None,
+            payload: None,
+        };
+        let with_attachment = GmailMessage {
+            id: "message-4".into(),
+            internal_date: None,
+            payload: Some(MessagePart {
+                mime_type: Some("multipart/mixed".into()),
+                headers: Some(vec![MessageHeader {
+                    name: "Subject".into(),
+                    value: "Signed retainer".into(),
+                }]),
+                body: None,
+                parts: Some(vec![MessagePart {
+                    mime_type: Some("application/pdf".into()),
+                    headers: None,
+                    body: Some(MessageBody {
+                        data: None,
+                        attachment_id: Some("att-1".into()),
+                    }),
+                    parts: None,
+                    filename: Some("contract.pdf".into()),
+                }]),
+                filename: None,
+            }),
+        };
+        print_thread(&GmailThread {
+            id: "thread-1".into(),
+            messages: vec![text, html_only, no_payload, with_attachment],
+        });
+    }
+
+    #[test]
+    fn the_thread_timestamp_comes_from_gmails_internal_date() {
+        let mut message = synthetic_message(&[("From", "client@example.test")]);
+        message.internal_date = Some("1760000000000".into());
+        let at = now_or_message_date(&message).unwrap();
+        assert!(at.starts_with("2025-10-09T"), "{at}");
+
+        message.internal_date = None;
+        assert!(now_or_message_date(&message)
+            .unwrap_err()
+            .to_string()
+            .contains("no timestamp"));
+
+        message.internal_date = Some("not-a-number".into());
+        assert!(now_or_message_date(&message).is_err());
+
+        message.internal_date = Some("99999999999999999999".into());
+        assert!(now_or_message_date(&message).is_err());
+    }
+
+    #[test]
+    fn attachment_mime_types_follow_the_extension_caselessly() {
+        assert_eq!(mime_type_for(Path::new("report.PDF")), "application/pdf");
+        assert_eq!(mime_type_for(Path::new("notes.txt")), "text/plain");
+        assert_eq!(mime_type_for(Path::new("calendar.ICS")), "text/calendar");
+        assert_eq!(mime_type_for(Path::new("photo.heic")), "image/heic");
+        assert_eq!(
+            mime_type_for(Path::new("archive.unknownext")),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            mime_type_for(Path::new("noextension")),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn encoded_attachment_size_is_base64_plus_line_breaks() {
+        assert_eq!(base64_encoded_len(0), 0);
+        assert_eq!(base64_encoded_len(1), 6);
+        assert_eq!(base64_encoded_len(3), 6);
+        assert_eq!(base64_encoded_len(57), 78);
+    }
+
+    #[test]
+    fn attachment_names_must_be_utf8_and_printable() {
+        assert_eq!(
+            attachment_filename(Path::new("signed retainer.pdf")).unwrap(),
+            "signed retainer.pdf"
+        );
+
+        let control = std::env::temp_dir().join("bad\u{0007}name.pdf");
+        assert!(attachment_filename(&control).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let non_utf8 = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/attachment-\xff.pdf"));
+            assert!(attachment_filename(non_utf8).is_err());
+        }
+    }
+
+    #[test]
+    fn attachments_are_read_whole_and_refused_over_gmails_limit() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let Err(missing) = load_attachments(&[directory.path().join("absent.pdf")], "body") else {
+            panic!("a missing attachment must be refused");
+        };
+        assert!(missing.to_string().contains("absent.pdf"));
+
+        let Err(directory_attachment) = load_attachments(&[directory.path().to_path_buf()], "body")
+        else {
+            panic!("a directory must not load as an attachment");
+        };
+        assert!(directory_attachment.to_string().contains("is not a file"));
+
+        let oversized = directory.path().join("huge.bin");
+        let file = std::fs::File::create(&oversized).unwrap();
+        file.set_len(30_000_000).unwrap();
+        let Err(error) = load_attachments(&[oversized], "body") else {
+            panic!("a 30MB attachment must be refused");
+        };
+        assert!(error.to_string().contains("once encoded, over Gmail's"));
+
+        let first = directory.path().join("first.bin");
+        let second = directory.path().join("second.bin");
+        std::fs::File::create(&first)
+            .unwrap()
+            .set_len(13_000_000)
+            .unwrap();
+        std::fs::File::create(&second)
+            .unwrap()
+            .set_len(13_000_000)
+            .unwrap();
+        let Err(total) = load_attachments(&[first, second], "body") else {
+            panic!("two 13MB attachments must be refused together");
+        };
+        assert!(total.to_string().contains("the draft with 2 attachments"));
+
+        let small = directory.path().join("exhibit.txt");
+        std::fs::write(&small, b"exhibit text").unwrap();
+        let loaded = load_attachments(std::slice::from_ref(&small), "body").unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].filename, "exhibit.txt");
+        assert_eq!(loaded[0].mime_type, "text/plain");
+        assert_eq!(loaded[0].bytes, b"exhibit text");
+    }
+
+    #[test]
+    fn encoded_words_and_filename_parameters_stay_rfc_compliant() {
+        let encoded_subject = encoded_word("Retainer — questions");
+        let (marker, remainder) = encoded_subject.split_once("?B?").unwrap();
+        assert_eq!(marker, "=?UTF-8");
+        let payload = remainder.strip_suffix("?=").unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .unwrap();
+        assert_eq!(String::from_utf8(decoded).unwrap(), "Retainer — questions");
+
+        let (name, filename) = filename_parameters("signed \"final\" copy.pdf");
+        assert_eq!(name, "name=\"signed \\\"final\\\" copy.pdf\"");
+        assert_eq!(filename, "filename=\"signed \\\"final\\\" copy.pdf\"");
+
+        let (name, filename) = filename_parameters("café.txt");
+        assert!(name.starts_with("name=\"=?UTF-8?B?"), "{name}");
+        assert_eq!(filename, "filename*=UTF-8''caf%C3%A9.txt");
+    }
+
+    #[test]
+    fn header_values_refuse_line_breaks_and_blank_recipients_are_dropped() {
+        assert!(safe_header("Subject\r\nBcc: x", "subject").is_err());
+        assert_eq!(safe_header("  padded  ", "subject").unwrap(), "padded");
+
+        let joined = address_list(
+            &["a@x.test".into(), "   ".into(), " b@y.test ".into()],
+            "recipient",
+        )
+        .unwrap();
+        assert_eq!(joined, "a@x.test, b@y.test");
+        assert!(address_list(&["bad\nvalue".into()], "recipient").is_err());
+    }
+
+    #[test]
+    fn addresses_are_extracted_from_display_names_and_lowercased() {
+        let collected: Vec<String> =
+            addresses("Ms. Client <Client@Example.test>; other@y.test, junk").collect();
+        assert_eq!(collected, vec!["client@example.test", "other@y.test"]);
+
+        assert_eq!(
+            email_from_address("Lawyer <lawyer@neonlaw.test>").as_deref(),
+            Some("lawyer@neonlaw.test")
+        );
+        assert_eq!(email_from_address("not-an-address"), None);
+    }
+
+    #[test]
+    fn a_scoped_query_only_scopes_when_the_manifest_names_a_contact() {
+        assert_eq!(scoped_query("retainer", None), "retainer");
+    }
+
+    #[tokio::test]
+    async fn an_empty_or_missing_draft_body_is_refused_before_connecting() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let missing = save_draft_command(
+            DraftRequest {
+                to: vec!["a@x.test".into()],
+                cc: vec![],
+                bcc: vec![],
+                subject: Some("s".into()),
+                body_file: directory.path().join("absent.txt"),
+                thread: None,
+                draft_id: None,
+                attach: vec![],
+            },
+            || async { Err(anyhow!("must not connect")) },
+        )
+        .await;
+        let Err(missing) = missing else {
+            panic!("a missing draft body must be refused");
+        };
+        assert!(missing.to_string().contains("read draft body"));
+
+        let body_file = directory.path().join("body.txt");
+        std::fs::write(&body_file, "   \n").unwrap();
+        let empty = save_draft_command(
+            DraftRequest {
+                to: vec!["a@x.test".into()],
+                cc: vec![],
+                bcc: vec![],
+                subject: Some("s".into()),
+                body_file,
+                thread: None,
+                draft_id: None,
+                attach: vec![],
+            },
+            || async { Err(anyhow!("must not connect")) },
+        )
+        .await;
+        let Err(empty) = empty else {
+            panic!("an empty draft body must be refused");
+        };
+        assert!(empty.to_string().contains("draft body is empty"));
+    }
+
+    #[tokio::test]
+    async fn parse_save_and_file_references_are_named_when_unusable() {
+        let error = parse_command("definitely-absent-reference.txt", Some("p"), None, None)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("neither an existing file, a Gmail web URL, nor a Gmail message id"),
+            "{error}"
+        );
+
+        let error = save_message_command("definitely-absent-reference.txt", None, None)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("neither a Gmail web URL nor a Gmail message id"),
+            "{error}"
+        );
+
+        let error = file_thread("thread-1", None, None).await.unwrap_err();
+        assert!(error.to_string().contains("pass --project"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn filing_a_communication_to_a_dead_endpoint_names_the_failure() {
+        let target = FileTarget {
+            base: "http://127.0.0.1:1",
+            navigator_token: "token",
+            project_id: uuid::Uuid::nil(),
+            mailbox: "lawyer@neonlaw.test",
+        };
+        let error = post_communication(&target, &serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("file email Communication"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn finish_maps_result_to_exit_code() {
+        assert_eq!(finish(Ok(())), ExitCode::SUCCESS);
+        assert_eq!(finish(Err(anyhow!("boom"))), ExitCode::FAILURE);
     }
 }

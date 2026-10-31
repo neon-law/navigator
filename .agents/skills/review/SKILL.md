@@ -189,10 +189,10 @@ git rev-parse HEAD   # must equal the headRefOid recorded in step 1
 
 If the head has moved since step 1, restart the review at the new head.
 
-Commit each finding's fix on its own, with the covering test in the same commit. Sign every commit: `production`
-requires signatures with no bypass, so an unsigned commit cannot enter the merge queue. State the durable reason a
-reader can still check in a year (the rule in `AGENTS.md`, the constraint the test enforces, the behavior at the
-boundary). Never cite the review conversation, a chat tool, or a person.
+Commit each finding's fix on its own, with the covering test in the same commit. Sign every commit: signing remains the
+convention even though CI no longer refuses unsigned commits. State the durable reason a reader can still check in a
+year (the rule in `AGENTS.md`, the constraint the test enforces, the behavior at the boundary). Never cite the review
+conversation, a chat tool, or a person.
 
 ```bash
 rtk git commit -S -m "fix(store): reject an empty participation set at the boundary"

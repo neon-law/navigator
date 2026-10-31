@@ -13,7 +13,37 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use crate::{Rule, SourceFile, Violation};
+use crate::{s106::S106MarkdownHygiene, Rule, SourceFile, Violation};
+
+/// Decodes a markdown file's raw bytes as UTF-8, emitting a synthetic
+/// `S106` violation (naming the path and the offending byte offset) when
+/// the bytes are not valid UTF-8. Returns `Err` only for filesystem
+/// failures — a decoding failure is a *violation*, not an error, so a
+/// corrupt file is reported and the walk continues.
+fn decode_source(path: &Path, contents: &[u8]) -> (SourceFile, Option<Violation>) {
+    match std::str::from_utf8(contents) {
+        Ok(text) => (
+            SourceFile {
+                path: path.to_path_buf(),
+                contents: text.to_string(),
+            },
+            None,
+        ),
+        Err(err) => {
+            // The lossy text still feeds the rules so every fixpoint
+            // linter (M009 trailing spaces and friends) can run over
+            // what survives; the S106 violation is what fails the gate.
+            let violation = S106MarkdownHygiene::decode_violation(path, err.valid_up_to());
+            (
+                SourceFile {
+                    path: path.to_path_buf(),
+                    contents: String::from_utf8_lossy(contents).into_owned(),
+                },
+                Some(violation),
+            )
+        }
+    }
+}
 
 /// The result of linting a directory: how many files were inspected
 /// and every violation produced.
@@ -193,11 +223,13 @@ impl RuleEngine {
             if !self.filter.include_file(path) {
                 continue;
             }
-            let contents = fs::read_to_string(path)?;
-            let file = SourceFile {
-                path: PathBuf::from(path),
-                contents,
+            let (file, decode_violation) = {
+                let bytes = fs::read(path)?;
+                decode_source(path, &bytes)
             };
+            if let Some(violation) = decode_violation {
+                report.violations.push(violation);
+            }
             for rule in &self.rules {
                 report.violations.extend(rule.lint(&file));
             }
@@ -263,11 +295,13 @@ impl ClassifiedRuleEngine {
             if !self.filter.include_file(path) {
                 continue;
             }
-            let contents = fs::read_to_string(path)?;
-            let file = SourceFile {
-                path: PathBuf::from(path),
-                contents,
+            let (file, decode_violation) = {
+                let bytes = fs::read(path)?;
+                decode_source(path, &bytes)
             };
+            if let Some(violation) = decode_violation {
+                report.violations.push(violation);
+            }
             report.violations.extend(lint_source_classified_with_codes(
                 &file,
                 &self.valid_question_codes,
@@ -544,6 +578,10 @@ pub fn navigator_default_rules() -> Vec<Box<dyn Rule>> {
         Box::new(S103KindEnum),
         Box::new(S104MissingKind),
         Box::new(crate::S105DocumentTerminology),
+        // S106 is cross-cutting like the kind checks: encoding hygiene is
+        // a property of every Markdown file, template or prose. See the
+        // rule's module doc for the PR #142 corruption it exists to catch.
+        Box::new(crate::s106::S106MarkdownHygiene),
         Box::new(F101FrontmatterTitle),
         Box::new(F102RespondentType),
         Box::new(F103SnakeCaseFilename),
@@ -573,7 +611,7 @@ pub fn navigator_default_rules() -> Vec<Box<dyn Rule>> {
         Box::new(F129AudiencesOnlyCustom),
         Box::new(F130PleadingBodyHasNoCaption),
         Box::new(F131TemplateHasNoDraftingMarkers),
-        Box::new(crate::clauses::ClauseReferences),
+        Box::new(crate::clauses::ClauseReferences::default()),
         // Mutual exclusivity runs on templates too: a template that wrongly
         // declares a `starts_at` timestamp is flagged here (the event side
         // is enforced by `navigator_event_rules`).
@@ -1056,14 +1094,14 @@ mod tests {
     /// literally so this test fails loudly if a future change
     /// silently reorders or drops a rule.
     const EXPECTED_DEFAULT_RULE_CODES: &[&str] = &[
-        "S101", "S102", "S103", "S104", "S105", "N101", "N102", "N103", "N104", "N105", "N106",
-        "N107", "N108", "N109", "N110", "N112", "N113", "N114", "N115", "N116", "N117", "N118",
-        "N120", "N121", "N122", "N123", "N125", "N128", "N129", "N130", "N131", "N132", "E002",
-        "M001", "M003", "M004", "M005", "M007", "M009", "M010", "M011", "M012", "M018", "M019",
-        "M020", "M021", "M022", "M023", "M024", "M025", "M026", "M027", "M028", "M029", "M030",
-        "M031", "M032", "M034", "M035", "M037", "M038", "M039", "M040", "M042", "M045", "M046",
-        "M047", "M048", "M049", "M050", "M051", "M052", "M053", "M054", "M055", "M056", "M057",
-        "M058", "M059", "M060", "M061",
+        "S101", "S102", "S103", "S104", "S105", "S106", "N101", "N102", "N103", "N104", "N105",
+        "N106", "N107", "N108", "N109", "N110", "N112", "N113", "N114", "N115", "N116", "N117",
+        "N118", "N120", "N121", "N122", "N123", "N125", "N128", "N129", "N130", "N131", "N132",
+        "E002", "M001", "M003", "M004", "M005", "M007", "M009", "M010", "M011", "M012", "M018",
+        "M019", "M020", "M021", "M022", "M023", "M024", "M025", "M026", "M027", "M028", "M029",
+        "M030", "M031", "M032", "M034", "M035", "M037", "M038", "M039", "M040", "M042", "M045",
+        "M046", "M047", "M048", "M049", "M050", "M051", "M052", "M053", "M054", "M055", "M056",
+        "M057", "M058", "M059", "M060", "M061",
     ];
 
     #[test]

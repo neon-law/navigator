@@ -222,6 +222,10 @@ struct FakeForgeState {
     governance_reconciles: usize,
     /// Update pull requests by `(Project code, branch)`.
     update_pulls: BTreeMap<(String, String), FakeUpdatePull>,
+    /// The provisioning-relevant calls in arrival order — ensure,
+    /// initialize, govern — so a test can assert the order a flow ran in,
+    /// not only that each step happened.
+    call_log: Vec<(&'static str, String)>,
 }
 
 /// One update pull request [`FakeForge`] holds: the proposed file and
@@ -370,6 +374,17 @@ impl FakeForge {
             .governance_reconciles
     }
 
+    /// The provisioning-relevant calls in arrival order: `("ensure", code)`,
+    /// `("initialize", code)`, `("govern", code)`.
+    #[must_use]
+    pub fn call_log(&self) -> Vec<(&'static str, String)> {
+        self.state
+            .lock()
+            .expect("fake forge mutex poisoned")
+            .call_log
+            .clone()
+    }
+
     /// Every update pull request opened for `project_code`, by branch.
     #[must_use]
     pub fn update_pulls(&self, project_code: &str) -> BTreeMap<String, FakeUpdatePull> {
@@ -402,6 +417,7 @@ impl crate::forgejo_governance::RepositoryGovernance for FakeForge {
     async fn reconcile_governance(&self, project_code: &str) -> anyhow::Result<Vec<String>> {
         let mut state = self.state.lock().expect("fake forge mutex poisoned");
         state.governance_reconciles += 1;
+        state.call_log.push(("govern", project_code.to_string()));
         Ok(state
             .governance_drift
             .remove(project_code)
@@ -459,6 +475,7 @@ impl ForgeService for FakeForge {
     async fn ensure_repository(&self, project_code: &str) -> Result<ForgeRepository, ForgeError> {
         let mut state = self.state.lock().expect("fake forge mutex poisoned");
         state.ensure_calls += 1;
+        state.call_log.push(("ensure", project_code.to_string()));
         if let Some(existing) = state.repositories.get(project_code) {
             return Ok(existing.clone());
         }
@@ -515,6 +532,9 @@ impl ForgeService for FakeForge {
         message: &str,
     ) -> Result<String, ForgeError> {
         let mut state = self.state.lock().expect("fake forge mutex poisoned");
+        state
+            .call_log
+            .push(("initialize", project_code.to_string()));
         if !state.repositories.contains_key(project_code) {
             return Err(ForgeError::ProjectRepositoryMissing {
                 name: project_code.to_string(),

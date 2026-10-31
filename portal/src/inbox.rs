@@ -44,6 +44,39 @@ pub async fn start_inbound_message_alert(message_id: Uuid) -> Result<(), String>
     .map_err(|error| error.to_string())
 }
 
+/// Ingest a parsed inbound email's clean attachments as content-addressed
+/// Assets. Quarantined attachments never reach here: the scanner strips
+/// their bytes, and only their safe metadata survives on the email. The
+/// sha256 comes from the same bytes the Asset stores, so the link row's
+/// dedup key always matches the stored content.
+///
+/// # Errors
+///
+/// Propagates storage or database failures as the ingest door's error string.
+pub(crate) async fn ingest_attachments(
+    db: &store::surreal::SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
+    email: &InboundEmail,
+) -> Result<Vec<store::inbox::IngestAttachment>, String> {
+    let mut attachments = Vec::new();
+    for attachment in &email.attachments {
+        let content_type = if attachment.content_type.trim().is_empty() {
+            "application/octet-stream"
+        } else {
+            attachment.content_type.trim()
+        };
+        let asset_id = store::assets::ingest_content(db, storage, &attachment.bytes, content_type)
+            .await
+            .map_err(|error| format!("attachment ingest failed: {error}"))?;
+        attachments.push(store::inbox::IngestAttachment {
+            asset_id,
+            filename: attachment.filename.clone(),
+            sha256: store::assets::sha256_hex(&attachment.bytes),
+        });
+    }
+    Ok(attachments)
+}
+
 /// Record support intake in the shared email/SMS transcript. Public Neon Law
 /// mailboxes resolve their owning Firm by brand when no explicit inbox Firm is
 /// configured. Token-addressed Lawyer/Clerk replies keep their threading path.
@@ -53,13 +86,15 @@ pub async fn start_inbound_message_alert(message_id: Uuid) -> Result<(), String>
 /// Propagates database failures or a missing Firm for a public support mailbox.
 pub async fn ingest_support_email(
     db: &store::surreal::SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
     email: &InboundEmail,
 ) -> Result<Option<store::inbox::IngestedInbound>, String> {
-    ingest_support_email_for_firm(db, email, inbox_firm_id()).await
+    ingest_support_email_for_firm(db, storage, email, inbox_firm_id()).await
 }
 
 async fn ingest_support_email_for_firm(
     db: &store::surreal::SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
     email: &InboundEmail,
     configured_firm: Option<Uuid>,
 ) -> Result<Option<store::inbox::IngestedInbound>, String> {
@@ -92,6 +127,7 @@ async fn ingest_support_email_for_firm(
     }
     let provider_message_id = provider_message_id(email);
     let email_conversation_id = linked_email_conversation(db, email, &from).await?;
+    let attachments = ingest_attachments(db, storage, email).await?;
     let account = std::env::var("NAVIGATOR_EMAIL_PROVIDER_ACCOUNT")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -99,6 +135,7 @@ async fn ingest_support_email_for_firm(
     store::inbox::ingest_inbound(
         db,
         &store::inbox::IngestInbound {
+            project_id: None,
             firm_id,
             brand_key: brand.map(views::brand::BrandKey::as_str),
             interaction_type: Some("message"),
@@ -118,7 +155,7 @@ async fn ingest_support_email_for_firm(
             matter_consent: false,
             promotional_opt_in: false,
             email_conversation_id,
-            attachment_asset_id: None,
+            attachments,
             occurred_at: &chrono::Utc::now().to_rfc3339(),
         },
     )
@@ -178,7 +215,7 @@ fn receiving_brand(mailbox: &str) -> Option<views::brand::BrandKey> {
     })
 }
 
-fn provider_message_id(email: &InboundEmail) -> String {
+pub(crate) fn provider_message_id(email: &InboundEmail) -> String {
     if let Some(id) = email.message_id.as_ref().filter(|id| !id.is_empty()) {
         return id.clone();
     }
@@ -574,6 +611,7 @@ pub async fn sms_inbound(
     match store::inbox::ingest_inbound(
         &state.surreal,
         &store::inbox::IngestInbound {
+            project_id: None,
             firm_id,
             brand_key: Some("neon"),
             interaction_type: Some("message"),
@@ -593,7 +631,7 @@ pub async fn sms_inbound(
             matter_consent: false,
             promotional_opt_in: false,
             email_conversation_id: None,
-            attachment_asset_id: None,
+            attachments: Vec::new(),
             occurred_at: &chrono::Utc::now().to_rfc3339(),
         },
     )
@@ -668,10 +706,15 @@ mod tests {
     use axum::extract::{Path, State};
     use axum::http::StatusCode;
 
+    async fn storage() -> std::sync::Arc<dyn cloud::StorageService> {
+        crate::test_support::fs_storage().await
+    }
+
     #[tokio::test]
     async fn unconfigured_support_mail_is_ignored() {
         let db = store::test_support::mem_surreal().await;
-        ingest_support_email(&db, &InboundEmail::default())
+        let storage = storage().await;
+        ingest_support_email(&db, &storage, &InboundEmail::default())
             .await
             .unwrap();
     }
@@ -763,6 +806,7 @@ mod tests {
     #[tokio::test]
     async fn receiving_accounts_keep_two_brands_and_firms_separate() {
         let db = store::test_support::mem_surreal().await;
+        let storage = storage().await;
         let neon = store::test_support::seed_firm_with_brand(&db, "neon").await;
         let shook = store::test_support::seed_firm_with_brand(&db, "lawyer-shook").await;
         for (mailbox, firm, brand) in [
@@ -776,7 +820,7 @@ mod tests {
                 message_id: Some("synthetic-provider-id".into()),
                 ..InboundEmail::default()
             };
-            let saved = ingest_support_email_for_firm(&db, &email, None)
+            let saved = ingest_support_email_for_firm(&db, &storage, &email, None)
                 .await
                 .unwrap()
                 .unwrap();
@@ -788,6 +832,7 @@ mod tests {
             assert_eq!(thread.brand_key.as_deref(), Some(brand));
             assert!(ingest_support_email_for_firm(
                 &db,
+                &storage,
                 &email,
                 Some(if firm == neon { shook } else { neon })
             )
@@ -1052,8 +1097,10 @@ mod tests {
     async fn ingest_support_email_persists_public_mail_and_skips_lawyer_private_mail() {
         let db = store::test_support::mem_surreal().await;
         let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
+        let storage = storage().await;
         let public = ingest_support_email_for_firm(
             &db,
+            &storage,
             &InboundEmail {
                 from: "Reader <reader@example.com>".into(),
                 to: "support@neonlaw.com".into(),
@@ -1079,6 +1126,7 @@ mod tests {
         .unwrap();
         let skipped = ingest_support_email_for_firm(
             &db,
+            &storage,
             &InboundEmail {
                 from: lawyer.email,
                 to: "private@example.com".into(),
@@ -1167,6 +1215,7 @@ mod tests {
         address: &'a str,
     ) -> store::inbox::IngestInbound<'a> {
         store::inbox::IngestInbound {
+            project_id: None,
             firm_id,
             brand_key: Some("neon"),
             interaction_type: Some("comment"),
@@ -1186,7 +1235,7 @@ mod tests {
             matter_consent: true,
             promotional_opt_in: false,
             email_conversation_id: None,
-            attachment_asset_id: None,
+            attachments: Vec::new(),
             occurred_at: "2026-10-09T00:00:00Z",
         }
     }

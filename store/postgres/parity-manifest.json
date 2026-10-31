@@ -303,6 +303,20 @@
     },
     {
       "extra_column": null,
+      "extra_table": "project_task",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "project_task_events",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "purchase",
       "missing_column": null,
       "missing_table": null,
@@ -332,7 +346,7 @@
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 106,
+    "table_count": 107,
     "tables": {
       "address": {
         "city": "string",
@@ -367,6 +381,7 @@
         "deleted_commit_sha": "option<string>",
         "derived_from": "any",
         "description": "option<string>",
+        "evidence": "any",
         "filename": "option<string>",
         "id": "record",
         "inserted_at": "datetime",
@@ -911,6 +926,16 @@
         "provider_account": "string",
         "provider_message_id": "string"
       },
+      "inbox_message_asset": {
+        "asset_id": "record<asset>",
+        "filename": "string",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "message_id": "record<message>",
+        "position": "int",
+        "sha256": "string"
+      },
       "iolta_account": {
         "balance_cents": "int",
         "currency": "string",
@@ -1333,6 +1358,7 @@
         "internal_slack_channel_url": "option<string>",
         "jurisdiction_id": "option<record<jurisdiction>>",
         "name": "string",
+        "onboarding_jurisdiction": "option<string>",
         "private_notion_page_url": "option<string>",
         "repository_url": "option<string>",
         "shared_notion_page_url": "option<string>",
@@ -1632,7 +1658,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 127,
+    "table_count": 130,
     "tables": {
       "address": {
         "columns": {
@@ -1722,6 +1748,7 @@
           "deleted_commit_sha": "TEXT",
           "derived_from": "JSONB",
           "description": "TEXT",
+          "evidence": "JSONB",
           "filename": "TEXT",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
@@ -2816,6 +2843,38 @@
           "message"
         ]
       },
+      "inbox_message_asset": {
+        "columns": {
+          "asset_id": "UUID",
+          "filename": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "message_id": "UUID",
+          "position": "INTEGER",
+          "sha256": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "asset_id",
+            "asset"
+          ],
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "message_id",
+            "message"
+          ]
+        ],
+        "name": "inbox_message_asset",
+        "references": [
+          "asset",
+          "firm",
+          "message"
+        ]
+      },
       "iolta_account": {
         "columns": {
           "balance_cents": "BIGINT",
@@ -3824,6 +3883,7 @@
           "internal_slack_channel_url": "TEXT",
           "jurisdiction_id": "UUID",
           "name": "TEXT",
+          "onboarding_jurisdiction": "TEXT",
           "private_notion_page_url": "TEXT",
           "repository_url": "TEXT",
           "shared_notion_page_url": "TEXT",
@@ -4165,6 +4225,61 @@
         "foreign_keys": [],
         "name": "project_source_import",
         "references": []
+      },
+      "project_task": {
+        "columns": {
+          "REFERENCES": "person_project_role",
+          "assignee_id": "UUID",
+          "body": "TEXT",
+          "due_on": "DATE",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "state": "TEXT",
+          "title": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "REFERENCES",
+            "person_project_role"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "project_task",
+        "references": [
+          "person_project_role",
+          "project"
+        ]
+      },
+      "project_task_events": {
+        "columns": {
+          "actor_person_id": "UUID",
+          "after_state": "JSONB",
+          "before_state": "JSONB",
+          "event_kind": "TEXT",
+          "id": "UUID",
+          "occurred_at": "TIMESTAMPTZ",
+          "project_task_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "actor_person_id",
+            "person"
+          ],
+          [
+            "project_task_id",
+            "project_task"
+          ]
+        ],
+        "name": "project_task_events",
+        "references": [
+          "person",
+          "project_task"
+        ]
       },
       "purchase": {
         "columns": {

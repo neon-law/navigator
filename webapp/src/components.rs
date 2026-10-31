@@ -37,6 +37,7 @@ pub mod breadcrumb;
 pub mod callout;
 pub mod card;
 pub mod catalog_hero;
+pub mod cite_check;
 pub mod code;
 pub mod color_picker;
 pub mod confirm_delete;
@@ -70,6 +71,7 @@ pub mod row_actions;
 pub mod sample_matters_banner;
 pub mod separator;
 pub mod share;
+pub mod signature_seal;
 pub mod site_footer;
 pub mod site_header;
 pub mod social;
@@ -90,6 +92,9 @@ pub use breadcrumb::{BackBreadcrumb, LawyerPortalBreadcrumb};
 pub use callout::{Callout, CalloutTone};
 pub use card::Card;
 pub use catalog_hero::{CatalogHero, CATALOG_STYLESHEET_HREF};
+pub use cite_check::{
+    CiteCheckCitation, CiteCheckPane, CiteCheckSide, CiteCheckStatus, CiteCheckView,
+};
 pub(crate) use code::PlainCodeBlock;
 pub use code::{CodeBlock, COPY_CODE_SCRIPT_HREF};
 pub use color_picker::ColorPicker;
@@ -138,6 +143,7 @@ pub use row_actions::RowActions;
 pub use sample_matters_banner::render_sample_matters_banner;
 pub use sample_matters_banner::{SampleMattersBanner, SAMPLE_MATTERS_BANNER_ID};
 pub use separator::{Separator, SeparatorOrientation};
+pub use signature_seal::{provider_label, signed_on, SignatureSeal, SignatureSealData};
 pub use site_footer::{
     FooterAttorney, FooterBarLicense, FooterBrandLink, FooterMembership, FooterNavLink,
     FooterOffice, FooterSocialLink, SiteFooterLegal, FOOTER_TAGLINE,

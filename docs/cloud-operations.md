@@ -180,6 +180,10 @@ deliberately **not** a placeholder that a follow-up `kubectl set image` corrects
 deletes the running pod before the replacement is ready, so an apply carrying an unpullable tag takes that tier down for
 the whole gap. One write, one `ReplicaSet`.
 
+Before asset checks, a live ship submits Kubernetes `SelfSubjectAccessReview` requests as the authenticated caller for
+its lane and rendered resources. It reports missing verb/resource grants separately from access reviews or Secret
+invariants it could not check. Offline `--dry-run` plans do not submit these reviews.
+
 The preflight ordering is load-bearing, not incidental. `web` enforces its boot invariants at startup and crash-loops
 when a required key is missing, so `ship` diffs the requirements against the production Secret plus each web-binary
 Deployment's env **before** the reconcile touches the cluster. An unsatisfied requirement therefore aborts a ship that

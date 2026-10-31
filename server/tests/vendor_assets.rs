@@ -131,7 +131,16 @@ fn only_approved_browser_distributions_are_vendored() {
                     | ("PDF.js worker", "vendor/pdfjs/pdf.worker.min.mjs")
                     | ("PDF.js Apache-2.0 license", "vendor/pdfjs/LICENSE")
             );
-            !(swagger || mermaid || pdfjs)
+            // The relationship-graph views' same-origin renderer pair, in the
+            // Mermaid pattern: exactly the pinned bundle and its license.
+            let graph = matches!(
+                (asset.name.as_str(), asset.served_path.as_str()),
+                ("Sigma.js renderer", "vendor/sigma/sigma.min.js")
+                    | ("Sigma.js MIT license", "vendor/sigma/LICENSE")
+                    | ("Graphology core", "vendor/graphology/graphology.umd.min.js")
+                    | ("Graphology MIT license", "vendor/graphology/LICENSE")
+            );
+            !(swagger || mermaid || pdfjs || graph)
         })
         .map(|asset| format!("{} ({})", asset.name, asset.served_path))
         .collect::<Vec<_>>();
@@ -181,6 +190,32 @@ fn every_pdfjs_asset_is_pinned() {
                 .any(|asset| asset.served_path == served),
             "unrecorded PDF.js asset: {served}"
         );
+    }
+}
+
+/// The graph-renderer exception admits exactly the pinned Sigma.js bundle and
+/// Graphology core and their licenses — a refresh that drops in an addon
+/// without recording it fails here, in the Mermaid/PDF.js pattern.
+#[test]
+fn every_graph_renderer_asset_is_pinned() {
+    let public = public_dir();
+    let raw = std::fs::read_to_string(public.join("VENDOR.toml")).expect("read VENDOR.toml");
+    let manifest: Manifest = toml::from_str(&raw).expect("parse VENDOR.toml");
+    for dir in ["vendor/sigma", "vendor/graphology"] {
+        for entry in std::fs::read_dir(public.join(dir))
+            .unwrap_or_else(|e| panic!("read graph renderer directory {dir}: {e}"))
+        {
+            let entry = entry.expect("graph renderer asset");
+            assert!(entry.file_type().expect("asset type").is_file());
+            let served = format!("{dir}/{}", entry.file_name().to_string_lossy());
+            assert!(
+                manifest
+                    .asset
+                    .iter()
+                    .any(|asset| asset.served_path == served),
+                "unrecorded graph renderer asset: {served}"
+            );
+        }
     }
 }
 

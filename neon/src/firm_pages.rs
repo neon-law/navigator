@@ -194,6 +194,43 @@ const NV_DISSOLUTION: &str =
 const NV_MODIFIED_BUSINESS_TAX: &str = include_str!(
     "../../templates/notations/forms/united_states/nevada/state/nv__modified_business_tax.md"
 );
+const CA_NAME_CHANGE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_petition.md"
+);
+const CA_NAME_CHANGE_ATTACHMENT: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_attachment.md"
+);
+const CA_NAME_CHANGE_ORDER_TO_SHOW_CAUSE: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_order_to_show_cause.md"
+);
+const CA_NAME_CHANGE_DECREE: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_decree.md"
+);
+const CA_CIVIL_CASE_COVER_SHEET: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__civil_case_cover_sheet.md"
+);
+const CA_GENDER_IDENTITY_NAME_CHANGE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_petition.md"
+);
+const CA_GENDER_IDENTITY_NAME_CHANGE_ORDER_TO_SHOW_CAUSE: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_order_to_show_cause.md"
+);
+const CA_GENDER_IDENTITY_NAME_CHANGE_DECREE: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_decree.md"
+);
+const CA_GENDER_RECOGNITION_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_recognition_petition.md"
+);
+const CA_GENDER_RECOGNITION_ORDER: &str = include_str!(
+    "../../templates/notations/forms/united_states/california/california_superior_court/ca__gender_recognition_order.md"
+);
+const NV_ADULT_NAME_CHANGE_PETITION: &str = include_str!(
+    "../../templates/notations/forms/united_states/nevada/nevada_supreme_court/nv__adult_name_change_petition.md"
+);
+const NV_DV_PROTECTION_ORDER_APPLICATION: &str = include_str!(
+    "../../templates/notations/forms/united_states/nevada/nevada_supreme_court/nv__dv_protection_order_application.md"
+);
+
 const NV_CHARITABLE: &str = include_str!(
     "../../templates/notations/forms/united_states/nevada/state/nv__charitable_solicitation_registration.md"
 );
@@ -378,6 +415,66 @@ fn notation_preview_docs() -> Vec<webapp::notation_preview::PreviewDoc> {
             "notations/forms/united_states/nevada/state/nv__charitable_solicitation_registration.md",
             NV_CHARITABLE,
         ),
+        preview_doc(
+            "california-name-change-petition",
+            "notations/forms/united_states/california/california_superior_court/ca__name_change_petition.md",
+            CA_NAME_CHANGE_PETITION,
+        ),
+        preview_doc(
+            "california-name-change-attachment",
+            "notations/forms/united_states/california/california_superior_court/ca__name_change_attachment.md",
+            CA_NAME_CHANGE_ATTACHMENT,
+        ),
+        preview_doc(
+            "california-name-change-order-to-show-cause",
+            "notations/forms/united_states/california/california_superior_court/ca__name_change_order_to_show_cause.md",
+            CA_NAME_CHANGE_ORDER_TO_SHOW_CAUSE,
+        ),
+        preview_doc(
+            "california-name-change-decree",
+            "notations/forms/united_states/california/california_superior_court/ca__name_change_decree.md",
+            CA_NAME_CHANGE_DECREE,
+        ),
+        preview_doc(
+            "california-civil-case-cover-sheet",
+            "notations/forms/united_states/california/california_superior_court/ca__civil_case_cover_sheet.md",
+            CA_CIVIL_CASE_COVER_SHEET,
+        ),
+        preview_doc(
+            "california-gender-identity-name-change-petition",
+            "notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_petition.md",
+            CA_GENDER_IDENTITY_NAME_CHANGE_PETITION,
+        ),
+        preview_doc(
+            "california-gender-identity-name-change-order-to-show-cause",
+            "notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_order_to_show_cause.md",
+            CA_GENDER_IDENTITY_NAME_CHANGE_ORDER_TO_SHOW_CAUSE,
+        ),
+        preview_doc(
+            "california-gender-identity-name-change-decree",
+            "notations/forms/united_states/california/california_superior_court/ca__gender_identity_name_change_decree.md",
+            CA_GENDER_IDENTITY_NAME_CHANGE_DECREE,
+        ),
+        preview_doc(
+            "california-gender-recognition-petition",
+            "notations/forms/united_states/california/california_superior_court/ca__gender_recognition_petition.md",
+            CA_GENDER_RECOGNITION_PETITION,
+        ),
+        preview_doc(
+            "california-gender-recognition-order",
+            "notations/forms/united_states/california/california_superior_court/ca__gender_recognition_order.md",
+            CA_GENDER_RECOGNITION_ORDER,
+        ),
+        preview_doc(
+            "nevada-adult-name-change-petition",
+            "notations/forms/united_states/nevada/nevada_supreme_court/nv__adult_name_change_petition.md",
+            NV_ADULT_NAME_CHANGE_PETITION,
+        ),
+        preview_doc(
+            "nevada-dv-protection-order-application",
+            "notations/forms/united_states/nevada/nevada_supreme_court/nv__dv_protection_order_application.md",
+            NV_DV_PROTECTION_ORDER_APPLICATION,
+        ),
     ]);
     docs
 }
@@ -517,6 +614,90 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
                 "nevada-charitable-solicitation-registration",
                 "Registration before soliciting donations in Nevada.",
                 NV_CHARITABLE,
+            ),
+            notation_card(
+                "California",
+                "Petition for Change of Name (NC-100)",
+                "california-name-change-petition",
+                "The petition that opens a California name-change case.",
+                CA_NAME_CHANGE_PETITION,
+            ),
+            notation_card(
+                "California",
+                "Name and Information About the Person Whose Name is to be Changed (NC-110)",
+                "california-name-change-attachment",
+                "The NC-110 attachment carrying birthplace, reason, and other petition detail.",
+                CA_NAME_CHANGE_ATTACHMENT,
+            ),
+            notation_card(
+                "California",
+                "Order to Show Cause—Change of Name (NC-120)",
+                "california-name-change-order-to-show-cause",
+                "The order setting the hearing on a California name change.",
+                CA_NAME_CHANGE_ORDER_TO_SHOW_CAUSE,
+            ),
+            notation_card(
+                "California",
+                "Decree Changing Name (NC-130)",
+                "california-name-change-decree",
+                "The court order that finalizes a California name change.",
+                CA_NAME_CHANGE_DECREE,
+            ),
+            notation_card(
+                "California",
+                "Civil Case Cover Sheet (CM-010)",
+                "california-civil-case-cover-sheet",
+                "The cover sheet that opens a California civil case.",
+                CA_CIVIL_CASE_COVER_SHEET,
+            ),
+            notation_card(
+                "California",
+                "Petition for Change of Name to Conform to Gender Identity (NC-200)",
+                "california-gender-identity-name-change-petition",
+                "Asks a California court for a name change that conforms to gender identity.",
+                CA_GENDER_IDENTITY_NAME_CHANGE_PETITION,
+            ),
+            notation_card(
+                "California",
+                "Order to Show Cause—Change of Name to Conform to Gender Identity (NC-225)",
+                "california-gender-identity-name-change-order-to-show-cause",
+                "The order setting the hearing on a gender-identity name change.",
+                CA_GENDER_IDENTITY_NAME_CHANGE_ORDER_TO_SHOW_CAUSE,
+            ),
+            notation_card(
+                "California",
+                "Decree Changing Name to Conform to Gender Identity (NC-230)",
+                "california-gender-identity-name-change-decree",
+                "The court order finalizing a gender-identity name change.",
+                CA_GENDER_IDENTITY_NAME_CHANGE_DECREE,
+            ),
+            notation_card(
+                "California",
+                "Petition for Recognition of Gender Change (NC-300)",
+                "california-gender-recognition-petition",
+                "Asks a California court to recognize a gender change and order new certificates.",
+                CA_GENDER_RECOGNITION_PETITION,
+            ),
+            notation_card(
+                "California",
+                "Order Recognizing Gender Change (NC-330)",
+                "california-gender-recognition-order",
+                "The court order recognizing a gender change and directing new certificates.",
+                CA_GENDER_RECOGNITION_ORDER,
+            ),
+            notation_card(
+                "Nevada",
+                "Petition for Adult Name Change",
+                "nevada-adult-name-change-petition",
+                "The statewide petition for an adult to change their name in Nevada.",
+                NV_ADULT_NAME_CHANGE_PETITION,
+            ),
+            notation_card(
+                "Nevada",
+                "Application for Protection Order Against Domestic Violence",
+                "nevada-dv-protection-order-application",
+                "The statewide application for a Nevada domestic-violence protection order.",
+                NV_DV_PROTECTION_ORDER_APPLICATION,
             ),
         ],
         contact_email: views::brand::firm_email().to_string(),
@@ -670,6 +851,46 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         "/business",
         resolve_transactional_content(branding),
     ));
+    // The free court-form catalog: the registry's public surface. One
+    // branded index, one branded page per jurisdiction the registry
+    // covers, and the unbranded JSON twin of the same rows. Brands with
+    // no `free-resources` catalog mount neither branded page.
+    let free_courts = dioxus_app::embedded()
+        .expect("invariant: the shipped court registry parses; the store's tests are the gate");
+    if let Some(free_copy) = locales::free_resources(branding) {
+        routers.push(with_branded(
+            dioxus_app::free_resources_index_router(dioxus_app::free_resources_index_content(
+                &free_copy,
+                &free_courts,
+            )),
+            branded_optional_map(branding, |resolved| {
+                locales::free_resources(resolved).map(|copy| {
+                    webapp::free_resources::InjectedFreeResourcesIndex(
+                        dioxus_app::free_resources_index_content(&copy, &free_courts),
+                    )
+                })
+            }),
+        ));
+        for group in dioxus_app::jurisdiction_groups(&free_courts) {
+            let path = dioxus_app::free_resources_jurisdiction_path(
+                &dioxus_app::jurisdiction_slug(&group.name),
+            );
+            routers.push(with_branded(
+                dioxus_app::free_resources_jurisdiction_router(
+                    &path,
+                    dioxus_app::free_resources_jurisdiction_content(&free_copy, &group),
+                ),
+                branded_optional_map(branding, |resolved| {
+                    locales::free_resources(resolved).map(|copy| {
+                        webapp::free_resources::InjectedFreeResourcesJurisdiction(
+                            dioxus_app::free_resources_jurisdiction_content(&copy, &group),
+                        )
+                    })
+                }),
+            ));
+        }
+    }
+    routers.push(dioxus_app::free_resources_json_router());
     // The platform page. It carries a commercial offer, so it sits with the
     // firm's own pages.
     // The retired consumer plan. The firm speaks to emerging technology
@@ -823,6 +1044,57 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         state.sessions.clone(),
         portal::secure_cookies(state),
     ));
+    // The seven `/immigration/<page>` practice pages and the free-support
+    // hub — every one a marketing catalog under the same Neon-host
+    // admission shape as `/immigration` above.
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/family-green-cards",
+        firm_copy::immigration_family_green_cards(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/citizenship",
+        firm_copy::immigration_citizenship(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/employment-visas",
+        firm_copy::immigration_employment_visas(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/consular-processing",
+        firm_copy::immigration_consular_processing(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/uscis-notices",
+        firm_copy::immigration_uscis_notices(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/humanitarian-relief",
+        firm_copy::immigration_humanitarian_relief(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/removal-defense",
+        firm_copy::immigration_removal_defense(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
+    routers.push(dioxus_app::marketing_page_router(
+        "/immigration/free-support",
+        firm_copy::immigration_free_support(branding, deployment_host),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
     // `/estate-planning` — Neon's own gateway to the Vesta Estate Planning
     // practice. Same admission shape as `/delete-your-debt` above.
     routers.push(dioxus_app::marketing_page_router(
@@ -900,6 +1172,23 @@ fn branded_map<T>(
         .iter()
         .copied()
         .map(|key| (key, build(key.resolve_branding(default))))
+        .collect()
+}
+
+/// Like [`branded_map`], but skips brands whose `build` yields `None` —
+/// a brand without, say, the free-resources catalog carries no entry, and
+/// [`inject_branded`] passes such requests through uninjected.
+fn branded_optional_map<T>(
+    default: &'static views::brand::Branding,
+    build: impl Fn(&views::brand::Branding) -> Option<T>,
+) -> HashMap<BrandKey, T> {
+    BrandKey::ALL
+        .iter()
+        .copied()
+        .filter_map(|key| {
+            let value = build(key.resolve_branding(default))?;
+            Some((key, value))
+        })
         .collect()
 }
 
@@ -1671,7 +1960,92 @@ mod notation_catalog_tests {
                 views::harvard_outline::stage_html(&document),
                 "preview body must come from {source_path}"
             );
+            assert!(
+                preview.questionnaire_error.is_none(),
+                "{source_path} previews behind a failure panel: {:?}",
+                preview.questionnaire_error
+            );
         }
+    }
+
+    /// The fail-loud sweep: every legal-shelf template — `forms/` and
+    /// `neon_law/` — must yield a readable, non-empty questionnaire with at
+    /// least one interactive step, and a non-empty compiled body. A template
+    /// that declares a questionnaire it cannot parse used to preview as a
+    /// silently empty demo (the reported "no questions" symptom); now the
+    /// typed parse failure surfaces here and in the preview's visible panel
+    /// instead.
+    #[test]
+    fn every_legal_shelf_template_yields_a_live_questionnaire_and_body() {
+        let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let templates_root = repository_root.join("templates");
+        let notations_root = templates_root.join("notations");
+        let mut paths = BTreeSet::new();
+        for shelf in ["forms", "neon_law"] {
+            collect_markdown_paths(&notations_root.join(shelf), &templates_root, &mut paths);
+        }
+        assert!(
+            paths.len() >= 20,
+            "the legal shelves hold {} templates — the sweep only makes sense over the real catalog",
+            paths.len()
+        );
+
+        let mut degraded: Vec<String> = Vec::new();
+        for path in &paths {
+            let source =
+                fs::read_to_string(templates_root.join(path)).expect("shelf template exists");
+            let mut problems: Vec<String> = Vec::new();
+
+            let composed = match rules::clauses::compile(&source) {
+                Ok(composed) => Some(composed),
+                Err(error) => {
+                    problems.push(format!("clause composition failed: {error}"));
+                    None
+                }
+            };
+
+            let document = composed.as_deref().map(views::harvard_outline::parse);
+            let frontmatter = document
+                .as_ref()
+                .and_then(|doc| doc.frontmatter.clone())
+                .unwrap_or_default();
+            match views::questionnaire_preview::parse(&frontmatter) {
+                Err(failure) => problems.push(format!(
+                    "questionnaire failed to parse: {}",
+                    failure.message
+                )),
+                Ok(questions) if questions.is_empty() => {
+                    problems.push("the questionnaire resolved to no demo questions".to_string());
+                }
+                Ok(questions) => {
+                    if !questions
+                        .iter()
+                        .any(views::questionnaire_preview::PreviewQuestion::is_interactive)
+                    {
+                        problems.push(
+                            "every resolved step is non-interactive — nothing to answer"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+
+            if let Some(composed) = composed {
+                let document = views::harvard_outline::parse(&composed);
+                if document.units.is_empty() {
+                    problems.push("the compiled body is empty".to_string());
+                }
+            }
+
+            for problem in problems {
+                degraded.push(format!("{path}: {problem}"));
+            }
+        }
+        assert!(
+            degraded.is_empty(),
+            "the sweep surfaced silently-degrading templates:\n{}",
+            degraded.join("\n")
+        );
     }
 
     /// LAW-53: every catalog card's `kind` facet must come from the
@@ -1760,5 +2134,89 @@ mod notation_catalog_tests {
             .collect();
         assert!(names.contains("lawyer_review"), "{names:?}");
         assert!(names.contains("BEGIN"), "{names:?}");
+    }
+}
+
+#[cfg(test)]
+mod catalog_projection_tests {
+    use super::*;
+
+    #[test]
+    fn a_notation_card_projects_its_declared_kind_and_slug() {
+        let src = "---\nkind: letter\n---\n\nA letter body.\n";
+        let card = notation_card(
+            "Estate planning",
+            "Signing preparation",
+            "estate-signing-preparation",
+            "What to bring to a signing.",
+            src,
+        );
+        assert_eq!(card.href, "/notations/estate-signing-preparation");
+        assert_eq!(card.eyebrow, "Estate planning");
+        assert_eq!(card.title, "Signing preparation");
+        assert_eq!(card.summary, "What to bring to a signing.");
+        assert_eq!(card.kind, "letter");
+        assert_eq!(card.kind_label, "Letter");
+        assert!(!card.category.is_empty());
+        assert!(!card.category_slug.is_empty());
+    }
+
+    #[test]
+    fn a_card_without_a_declared_kind_is_blank_kind_and_label() {
+        let card = notation_card(
+            "Estate planning",
+            "Signing preparation",
+            "estate-signing-preparation",
+            "What to bring to a signing.",
+            "No frontmatter here.\n",
+        );
+        assert_eq!(card.kind, "");
+        assert_eq!(card.kind_label, "");
+        assert_eq!(card.category, "");
+        assert_eq!(card.category_slug, "");
+        assert_eq!(card.href, "/notations/estate-signing-preparation");
+    }
+
+    #[test]
+    fn the_portfolio_names_practices_from_the_catalog_or_the_family_byline() {
+        let described = views::brand::BrandKey::ALL
+            .iter()
+            .copied()
+            .find(|key| {
+                !matches!(
+                    key,
+                    views::brand::BrandKey::LawyerShook | views::brand::BrandKey::GuiebShook
+                )
+            })
+            .expect("a third brand exists in the portfolio");
+        let href = described.public_home_href();
+        let practices = portfolio_practices(vec![webapp::home::PracticeLink {
+            mark: webapp::components::PracticeMark::Scales,
+            heading: "Whatever".into(),
+            body: "Authored description from the brand's own home.".into(),
+            href: href.clone(),
+            logo_href: String::new(),
+            font_family: String::new(),
+            primary_color: String::new(),
+        }]);
+
+        assert!(!practices.is_empty());
+        // The authored description reaches the practice whose href it names;
+        // every other practice keeps its family byline.
+        assert!(practices.iter().any(|practice| practice.href == href
+            && practice.body == "Authored description from the brand's own home."));
+        assert!(practices
+            .iter()
+            .filter(|practice| practice.href != href)
+            .all(|practice| !practice.body.is_empty()));
+        // The holding brands never appear in the portfolio.
+        assert!(!practices.iter().any(
+            |practice| practice.href == views::brand::BrandKey::LawyerShook.public_home_href()
+        ));
+        // Sorted by heading, so the catalog order is presentation-stable.
+        let headings: Vec<&str> = practices.iter().map(|p| p.heading.as_str()).collect();
+        let mut sorted = headings.clone();
+        sorted.sort_unstable();
+        assert_eq!(headings, sorted);
     }
 }

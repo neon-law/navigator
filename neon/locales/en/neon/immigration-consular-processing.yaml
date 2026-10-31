@@ -1,0 +1,239 @@
+head_title: "{site_name} | Consular processing"
+meta_description: >-
+  Abhaya Immigration, a Shook Law PC practice, walks families through
+  consular processing: eligibility, the National Visa Center, the DS-260,
+  the embassy interview, documents, fees, and waivers. Government filing
+  fees are separate, and no approval or timeline is promised.
+title: Consular processing
+tagline: The last step happens at a consulate. Prepare for it.
+skin: practice
+bands:
+  - kind: statement
+    heading: Who this is for
+    lead: Applicants who complete their green card abroad.
+    body:
+      - - text: >-
+            When the person applying for a green card lives outside the
+            United States, the case finishes at a consulate instead of
+            inside the country. The same approved petition stands behind it;
+            the difference is where the application happens and who
+            interviews you. This is called consular processing.
+      - - text: >-
+            It also applies to people inside the United States who choose to
+            complete their case abroad, and to applicants who need a waiver
+            for something that would otherwise keep them out. An unlawful
+            presence bar or certain past violations do not always end a
+            case, but they change how it must be filed, and they deserve a
+            careful look before anything is submitted. That look is the
+            first thing Abhaya Immigration does in a consular case.
+  - kind: cards
+    anchor: consular-eligibility
+    overline: Eligibility
+    heading: Who finishes a case at a consulate, and what can get in the way.
+    description: >-
+      General rules, stated plainly. Whether a bar applies, and whether a
+      waiver is possible, turns on facts only a full record can show — none
+      of this is advice about your particular case.
+    items:
+      - title: The applicant lives abroad
+        body:
+          - - text: >-
+                    A person outside the United States with an approved
+                    family-based or employment-based petition processes their
+                    application at the embassy or consulate for their district.
+                    No United States status is needed to start; the qualifying
+                    relationship or job does that work.
+      - title: The applicant is inside the United States
+        body:
+          - - text: >-
+                    A person lawfully present can often adjust status inside the
+                    country instead. Some choose consular processing anyway —
+                    for family circumstances, travel plans, or timing. The
+                    choice deserves planning before anything is filed, because
+                    leaving the country mid-case has consequences.
+      - title: The applicant needs a waiver
+        body:
+          - - text: >-
+                    Unlawful presence beyond defined limits, certain past
+                    violations, and some misrepresentations can bar a person
+                    from entering even with an approved petition. Waivers exist
+                    for several of these, and they are decided on hardship and
+                    rehabilitation showings that have their own standards.
+      - title: What usually gets in the way
+        body:
+          - - text: >-
+                    The common complications are incomplete civil records,
+                    certificates that do not cover every country of residence,
+                    a sponsor's income below the support threshold without a
+                    joint sponsor, and gaps in passport or travel history.
+                    None of these is necessarily fatal; all of them are easier
+                    to fix before the embassy asks.
+  - kind: steps
+    anchor: consular-process
+    overline: How the process works
+    heading: The petition is only the beginning.
+    description: >-
+      The National Visa Center and the embassy handle the later stages. The
+      general order is below.
+    items:
+      - title: The approved petition
+        body:
+          - - text: >-
+                    A relative or employer files the petition with United
+                    States Citizenship and Immigration Services first. After it
+                    is approved, the case moves to the Department of State.
+      - title: The National Visa Center
+        body:
+          - - text: >-
+                    The National Visa Center collects fees, civil documents,
+                    and financial support forms, and holds the case until the
+                    visa category is current in the monthly visa bulletin. We
+                    cannot promise how long any case takes; the agencies decide.
+      - title: The interview at the embassy
+        body:
+          - - text: >-
+                    The applicant files Form DS-260, attends the medical
+                    examination with an authorized physician, and interviews at
+                    the embassy or consulate for the district. The officer
+                    reviews the petition, the documents, and the applicant's
+                    answers, and decides the application.
+      - title: Arrival as a resident
+        body:
+          - - text: >-
+                    If the visa is issued, the applicant enters the United
+                    States as a lawful permanent resident, and the green card
+                    arrives by mail after entry. The visa packet must not be
+                    opened — it is opened by the inspecting officer at the
+                    port of entry.
+  - kind: cards
+    anchor: consular-documents
+    overline: Documents
+    heading: What the embassy asks for.
+    description: >-
+      Every consulate publishes its own list, and it governs. These are the
+      categories almost every consular case draws on.
+    items:
+      - title: Civil records
+        body:
+          - - text: >-
+                    Birth, marriage, and divorce certificates, plus police
+                    certificates from every country the applicant lived in for
+                    the defined period. Documents not in English need certified
+                    translations, and some countries require documents the
+                    embassy legalizes first.
+      - title: Financial support
+        body:
+          - - text: >-
+                    The petitioner files an affidavit of support, with tax
+                    returns and income records. A household income below the
+                    poverty-guideline threshold does not end the case — a joint
+                    sponsor who meets the threshold can join — but it must be
+                    solved before the interview.
+      - title: Identity and travel
+        body:
+          - - text: >-
+                    A passport valid past the intended travel date, passport
+                    photos to the embassy's specification, and a complete
+                    account of prior United States visas, entries, and
+                    extensions. The travel history is the record the officer
+                    checks first against any bar question.
+      - title: The medical examination
+        body:
+          - - text: >-
+                    The examination is done by an authorized physician, usually
+                    close to the interview date, and covers vaccination history
+                    and the health categories the regulations name. The clinic
+                    reports the result to the embassy in a sealed or electronic
+                    packet, not to the applicant.
+  - kind: statement
+    heading: What it costs
+    lead: Fees, stated plainly and published.
+    body:
+      - - text: >-
+            The Department of State charges its own fees for the DS-260 and
+            the affidavit of support, separate from the petition fees
+            already paid to USCIS and from any attorney fee. The current
+            amounts are published on the agencies' sites, and they change.
+            We cannot promise approval or a timeline; the relevant agencies
+            decide.
+      - - text: >-
+            Attorney fees for the filings in this practice are flat fees per
+            filing, published in
+      - - text: Abhaya Immigration's fee catalog
+          href: "https://www.abhayaimmigration.com/services"
+      - - text: >-
+            . For free tools you can use while a case waits — the visa
+            bulletin, the embassy pages, the case-status checker — the
+      - - text: free-support hub
+          href: "/immigration/free-support"
+      - - text: >-
+            links to them with a short guide on when each one helps.
+  - kind: cards
+    anchor: consular-faq
+    overline: Common questions
+    heading: Questions families ask before the embassy stage.
+    items:
+      - title: Can I visit the United States while my case is pending?
+        body:
+          - - text: >-
+                Travel during a pending green-card case is the hardest
+                question in consular practice, because the visitor rules expect
+                intent to go home. A planned immigrant petition does not
+                automatically bar a visit, but it is a fact an officer at the
+                border can consider. The answer depends on the visa you hold
+                and the stage of the case — ask before you book.
+      - title: What happens at the interview?
+        body:
+          - - text: >-
+                The officer confirms the applicant's identity, goes through
+                the petition and documents, and asks questions about the
+                qualifying relationship or job and about anything in the
+                record that needs explaining. Most interviews are short. The
+                preparation that matters is a complete document set and
+                honest, specific answers.
+      - title: How long does the National Visa Center stage take?
+        body:
+          - - text: >-
+                It depends on the category, the country, and how quickly the
+                requested documents arrive. The center's own published
+                timelines and the visa bulletin are the honest sources, and
+                both are linked from our free-support hub. We cannot promise
+                how long any case takes; the agencies decide.
+      - title: I overstayed a visa years ago. Is my case over?
+        body:
+          - - text: >-
+                Not necessarily. Unlawful presence can bar reentry for defined
+                periods, and waivers exist for qualifying cases, usually
+                decided on the hardship a denial would cause. The facts —
+                dates, entries, departures, the exact way status ended —
+                decide everything. Bring the complete history before assuming
+                the worst.
+      - title: What if the embassy denies the visa?
+        body:
+          - - text: >-
+                The officer gives a reason, often in writing, and some
+                reasons are fixable — a missing document, a support-form
+                correction — while others are refusals that need a waiver
+                petition. The notice itself tells you which kind it is. Both
+                kinds have next steps, and neither one is the end of the
+                road by default.
+      - title: Does my family come with me?
+        body:
+          - - text: >-
+                Spouses and unmarried children under the defined age can
+                usually process with the principal applicant in the same
+                category, each with their own application and documents. The
+                details — ages, marriages, prior histories — decide who
+                qualifies with whom, so the family group should be mapped
+                before the petition is filed.
+  - kind: cta
+    heading: Prepare the consulate stage with Abhaya Immigration
+    body: >-
+      A first conversation covers where your case stands, which documents
+      the embassy will ask for, and whether a waiver question applies.
+      Abhaya Immigration, a Shook Law PC practice, walks families through
+      consular processing.
+    email: "{firm_email}"
+    action:
+      href: "https://www.abhayaimmigration.com/"
+      label: Talk to Abhaya Immigration

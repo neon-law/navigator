@@ -207,6 +207,7 @@ to resolve it.
 | `S103` | Error | The declared `kind:` must be a recognized document kind, and never a matter page kind. | No |
 | `S104` | Error | A file's declared `kind:` must agree with its notation/event structure. | No |
 | `S105` | Error | Teaching prose must use Pointer, Blob, and Matter Folder consistently with the glossary. | No |
+| `S106` | Error | Markdown is not valid UTF-8, has a stray control char, U+FFFD, or a disallowed non-ASCII char. | No |
 
 `S102` runs on notation templates as well as prose, because a template renders into an instrument a client signs; the
 rule's own guards hold back the structured YAML. The single exception is a GitHub intake notation under
@@ -259,7 +260,7 @@ trailing backslash — is left alone, which is what a signature block is built f
 | `N129` | Error | A notation's `audiences:` may only narrow its `custom_*` questions. | No |
 | `N130` | Error | A pleading body carries no caption markup; the caption comes from `matter:` and frontmatter. | No |
 | `N131` | Error | A template carries no drafting marker: bracket, stray blank, note, or typed Signer Box marker. | No |
-| `N132` | Error | Clause references pin a version and bind inputs; an onboarding has `engagement_arbitration`. | No |
+| `N132` | Error | Pins a version and binds inputs; an unexecuted onboarding has `engagement_arbitration`. | No |
 
 ### E-family — events
 

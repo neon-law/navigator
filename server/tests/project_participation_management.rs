@@ -229,7 +229,10 @@ async fn admin_manages_project_participation_from_the_matter_workbench() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", fixture.project_code))
+                .uri(format!(
+                    "/app/projects/{}?tab=participants",
+                    fixture.project_code
+                ))
                 .header("cookie", &fixture.lawyer_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1151,7 +1154,10 @@ async fn the_matter_people_ledger_labels_the_accountability_marker() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", fixture.project_code))
+                .uri(format!(
+                    "/app/projects/{}?tab=participants",
+                    fixture.project_code
+                ))
                 .header("cookie", &fixture.lawyer_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1341,7 +1347,10 @@ async fn the_workbench_html_form_persists_a_lawyer_dri() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{}", fixture.project_code))
+                .uri(format!(
+                    "/app/projects/{}?tab=participants",
+                    fixture.project_code
+                ))
                 .header("cookie", &fixture.dri_cookie)
                 .body(Body::empty())
                 .unwrap(),
@@ -1449,6 +1458,23 @@ async fn an_unassigned_admin_designates_from_the_participation_page() {
     assert_eq!(lawyer_dri_holders(&fixture).await.len(), 2);
 }
 
+/// Render the lawyer workbench at `uri`, asserting the page answered.
+async fn workbench_html(app: &axum::Router, uri: String, cookie: &str) -> String {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    body_string(response).await
+}
+
 /// A lawyer already on a matter whose lawyer set is empty can name themselves
 /// from the workbench. That is the write the empty-set gap used to refuse.
 #[tokio::test]
@@ -1499,20 +1525,18 @@ async fn a_lawyer_on_an_unassigned_matter_names_themselves_dri() {
     };
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
-    let page = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/app/projects/{}", project.code))
-                .header("cookie", &cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(page.status(), StatusCode::OK);
-    let html = body_string(page).await;
-    assert!(html.contains("This project has no lawyer DRI"), "{html}");
+    let html = workbench_html(
+        &app,
+        format!("/app/projects/{}?tab=participants", project.code),
+        &cookie,
+    )
+    .await;
+    let overview_html =
+        workbench_html(&app, format!("/app/projects/{}", project.code), &cookie).await;
+    assert!(
+        overview_html.contains("This project has no lawyer DRI"),
+        "{overview_html}"
+    );
     assert!(html.contains("Make DRI"), "{html}");
     let action = format!("/app/projects/{}/people/{}/dri", project.code, row.id);
     assert!(html.contains(&format!(r#"action="{action}""#)), "{html}");
@@ -1530,18 +1554,12 @@ async fn a_lawyer_on_an_unassigned_matter_names_themselves_dri() {
             .unwrap();
     assert_eq!(holders, vec![lawyer.id]);
 
-    let reloaded = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/app/projects/{}", project.code))
-                .header("cookie", &cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let body = body_string(reloaded).await;
+    let body = workbench_html(
+        &app,
+        format!("/app/projects/{}?tab=participants", project.code),
+        &cookie,
+    )
+    .await;
     assert!(body.contains("Lawyer DRI: On Matter"), "{body}");
     assert!(body.contains(">Lawyer DRI<"), "{body}");
 }

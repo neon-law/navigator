@@ -107,6 +107,7 @@ pub mod s102;
 pub mod s103;
 pub mod s104;
 pub mod s105;
+pub mod s106;
 pub mod source_archive;
 pub mod tables;
 pub mod workflow_steps;
@@ -216,6 +217,7 @@ pub use s102::S102LinePacking;
 pub use s103::S103KindEnum;
 pub use s104::S104MissingKind;
 pub use s105::S105DocumentTerminology;
+pub use s106::S106MarkdownHygiene;
 pub use workflow_steps::{
     is_allowed_prefix, lookup as lookup_workflow_step, StepStatus, WorkflowStep, WORKFLOW_STEPS,
 };
@@ -332,6 +334,9 @@ pub fn description_for_code(code: &str) -> &'static str {
         "S102" => "Line could absorb more text from the next line",
         "S103" => "Declared `kind:` must be a recognized document kind",
         "S105" => "Use the glossary document terminology in teaching prose",
+        "S106" => {
+            "Markdown must be valid UTF-8, free of control characters and the U+FFFD replacement character, and use only the allowed non-ASCII typography"
+        }
         "S104" => "A file's declared `kind:` must agree with its notation/event structure",
         "N101" => "Notation template must declare a non-empty `title`",
         "N102" => "Notation template must declare a valid `respondent_type`",

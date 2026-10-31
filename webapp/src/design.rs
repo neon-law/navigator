@@ -29,22 +29,25 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::charts::{BarChart, DeltaTone, DonutChart, LineChart, Series, SeriesPoint, StatCard};
 use crate::components::aster::{AsterArtwork, AsterPose};
 use crate::components::{
     wire_runs, Accordion, ActionItem, ActionList, AppLogo, AppNavbar, AppProfileMenu, Avatar,
     BackBreadcrumb, Badge, BadgeTone, Callout, CalloutTone, Card, CatalogHero, Choice, ChoiceGroup,
-    ChoiceGroupOption, ClientDriView, ClientDriViewBanner, CodeBlock, Column, ConfirmDelete,
-    CopyRun, DataTable, Empty, ExternalLink, FactCard, FactGrid, Feed, FeedAccent, FeedPost,
-    FeedSource, Field, FooterAttorney, FooterBarLicense, FooterBrandLink, FooterMembership,
-    FooterNavLink, FooterOffice, FooterSocialLink, FormCard, GitHubStars, Hero, HeroAlign,
-    HeroLevel, Honeypot, Icon, IconName, LawyerPortalBreadcrumb, LegalBlueprintDisclaimer,
-    NavigatorDestination, NavigatorFooter, NavigatorFooterLink, NavigatorNavbar, NavigatorShell,
-    NotationDocument, NotationDocumentData, OpenTermLink, Pagination, Panel, PeopleListInputs,
-    PersonChoice, PersonPicker, PricingCard, PricingSection, Progress, PublicShell, QuestionStage,
-    RowActions, RunParagraph, SampleMattersBanner, Separator, SeparatorOrientation,
-    SiteFooterLegal, SiteHeader, SiteNavLink, SocialMeta, SortState, Stage, StageWidth, StatusCell,
-    StatusStrip, StepMeta, Stepper, StepperPanel, Tab, Tabs, TestimonialCards, TestimonialSection,
-    Toast, ToastTone, ToggleGroup, ToggleOption, THEME_STYLESHEET_HREF,
+    ChoiceGroupOption, CiteCheckCitation, CiteCheckPane, CiteCheckSide, CiteCheckStatus,
+    CiteCheckView, ClientDriView, ClientDriViewBanner, CodeBlock, Column, ConfirmDelete, CopyRun,
+    DataTable, Empty, ExternalLink, FactCard, FactGrid, Feed, FeedAccent, FeedPost, FeedSource,
+    Field, FooterAttorney, FooterBarLicense, FooterBrandLink, FooterMembership, FooterNavLink,
+    FooterOffice, FooterSocialLink, FormCard, GitHubStars, Hero, HeroAlign, HeroLevel, Honeypot,
+    Icon, IconName, LawyerPortalBreadcrumb, LegalBlueprintDisclaimer, NavigatorDestination,
+    NavigatorFooter, NavigatorFooterLink, NavigatorNavbar, NavigatorShell, NotationDocument,
+    NotationDocumentData, OpenTermLink, Pagination, Panel, PeopleListInputs, PersonChoice,
+    PersonPicker, PricingCard, PricingSection, Progress, PublicShell, QuestionStage, RowActions,
+    RunParagraph, SampleMattersBanner, Separator, SeparatorOrientation, SignatureSeal,
+    SignatureSealData, SiteFooterLegal, SiteHeader, SiteNavLink, SocialMeta, SortState, Stage,
+    StageWidth, StatusCell, StatusStrip, StepMeta, Stepper, StepperPanel, Tab, Tabs,
+    TestimonialCards, TestimonialSection, Toast, ToastTone, ToggleGroup, ToggleOption,
+    THEME_STYLESHEET_HREF,
 };
 // The vendor marks come from their own module rather than the theme root: they
 // are the one component whose colours are a third party's rather than the
@@ -332,6 +335,316 @@ fn DemoTableSection() -> Element {
     }
 }
 
+/// The dashboard showcase's period chips — which bucket size the line chart
+/// draws. A client-side signal holds the choice, so a click swaps the buckets
+/// with no round trip; the server render and the pre-hydration HTML carry
+/// [`DashboardPeriod::Month`], the SSR-safe default, so the composition is
+/// complete before any JavaScript runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DashboardPeriod {
+    /// The trailing 14 days.
+    Day,
+    /// The trailing 12 months.
+    #[default]
+    Month,
+}
+
+impl DashboardPeriod {
+    /// The chip's label.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Day => "Day",
+            Self::Month => "Month",
+        }
+    }
+
+    /// The fixture rows behind the chip's period: `(bucket, signed
+    /// retainers, open matters)`.
+    fn intake_rows(self) -> &'static [(&'static str, f64, f64)] {
+        match self {
+            Self::Day => DAILY_INTAKE,
+            Self::Month => MONTHLY_INTAKE,
+        }
+    }
+}
+
+/// Synthetic daily intake — the trailing 14 days, firm-authored, never client
+/// data. Every stat, chart, and table row on the showcase reads one of these
+/// fixtures, so the composition's numbers agree with each other.
+const DAILY_INTAKE: &[(&str, f64, f64)] = &[
+    ("2026-10-17", 2.0, 8.0),
+    ("2026-10-18", 1.0, 9.0),
+    ("2026-10-19", 3.0, 7.0),
+    ("2026-10-20", 1.0, 8.0),
+    ("2026-10-21", 0.0, 8.0),
+    ("2026-10-22", 2.0, 9.0),
+    ("2026-10-23", 4.0, 11.0),
+    ("2026-10-24", 2.0, 12.0),
+    ("2026-10-25", 1.0, 10.0),
+    ("2026-10-26", 3.0, 12.0),
+    ("2026-10-27", 2.0, 14.0),
+    ("2026-10-28", 1.0, 13.0),
+    ("2026-10-29", 5.0, 16.0),
+    ("2026-10-30", 3.0, 15.0),
+];
+
+/// Synthetic monthly intake — the trailing 12 months, ending with the current
+/// month so the month view and the day view agree at their shared edge.
+const MONTHLY_INTAKE: &[(&str, f64, f64)] = &[
+    ("2025-11", 14.0, 22.0),
+    ("2025-12", 11.0, 19.0),
+    ("2026-01", 17.0, 25.0),
+    ("2026-02", 15.0, 24.0),
+    ("2026-03", 21.0, 29.0),
+    ("2026-04", 19.0, 27.0),
+    ("2026-05", 24.0, 31.0),
+    ("2026-06", 22.0, 30.0),
+    ("2026-07", 26.0, 34.0),
+    ("2026-08", 25.0, 33.0),
+    ("2026-09", 29.0, 37.0),
+    ("2026-10", 31.0, 36.0),
+];
+
+/// Build the line chart's two series from a fixture: retainers on the front
+/// of the ramp, open matters on the second tone.
+fn intake_series(rows: &[(&str, f64, f64)]) -> Vec<Series> {
+    vec![
+        Series::new(
+            "Signed retainers",
+            0,
+            rows.iter()
+                .map(|(label, retainers, _)| SeriesPoint::new(*label, *retainers))
+                .collect(),
+        ),
+        Series::new(
+            "Open matters",
+            1,
+            rows.iter()
+                .map(|(label, _, matters)| SeriesPoint::new(*label, *matters))
+                .collect(),
+        ),
+    ]
+}
+
+/// Open matters by practice area — the donut's slices and, verbatim, the
+/// rows beneath in the `DataTable`. The donut totals 36, the "Open matters"
+/// stat card's value: one fixture, every view agreeing.
+const PRACTICE_MIX: &[(&str, f64)] = &[
+    ("Estate planning", 12.0),
+    ("LLC formation", 9.0),
+    ("Tenant defense", 7.0),
+    ("Annual report", 5.0),
+    ("Immigration", 3.0),
+];
+
+fn practice_mix_series() -> Series {
+    Series::new(
+        "Matters by practice",
+        2,
+        PRACTICE_MIX
+            .iter()
+            .map(|(label, count)| SeriesPoint::new(*label, *count))
+            .collect(),
+    )
+}
+
+/// Where the last 30 days of new intake came from — the bar chart's fixture.
+const INTAKE_SOURCES: &[(&str, f64)] = &[
+    ("Referral", 14.0),
+    ("Web search", 11.0),
+    ("Social", 6.0),
+    ("Walk-in", 4.0),
+];
+
+fn intake_source_series() -> Series {
+    Series::new(
+        "New intake by source",
+        3,
+        INTAKE_SOURCES
+            .iter()
+            .map(|(label, count)| SeriesPoint::new(*label, *count))
+            .collect(),
+    )
+}
+
+/// One stat-card fixture: the headline, the delta versus the prior period,
+/// and the direction the caller judges (a falling backlog counts as up).
+struct StatFixture {
+    label: &'static str,
+    value: &'static str,
+    delta: &'static str,
+    tone: DeltaTone,
+    spark: &'static [(&'static str, f64)],
+}
+
+const SPARK_OPEN: &[(&str, f64)] = &[
+    ("10-23", 11.0),
+    ("10-24", 12.0),
+    ("10-25", 10.0),
+    ("10-26", 12.0),
+    ("10-27", 14.0),
+    ("10-28", 13.0),
+    ("10-29", 16.0),
+    ("10-30", 15.0),
+];
+
+const SPARK_INTAKE: &[(&str, f64)] = &[
+    ("10-24", 4.0),
+    ("10-25", 2.0),
+    ("10-26", 3.0),
+    ("10-27", 5.0),
+    ("10-28", 2.0),
+    ("10-29", 6.0),
+    ("10-30", 4.0),
+];
+
+const SPARK_FILING: &[(&str, f64)] = &[
+    ("10-23", 6.0),
+    ("10-24", 5.0),
+    ("10-25", 5.0),
+    ("10-26", 4.0),
+    ("10-27", 5.0),
+    ("10-28", 4.0),
+    ("10-29", 4.0),
+    ("10-30", 3.0),
+];
+
+/// Four tiles a dashboard leads with. The third demonstrates the delta
+/// contract: "−1" unanswered messages is good news, so the caller passes
+/// [`DeltaTone::Up`] — the direction is the caller's judgment, not the
+/// value's sign.
+const STAT_FIXTURES: &[StatFixture] = &[
+    StatFixture {
+        label: "Open matters",
+        value: "36",
+        delta: "+3",
+        tone: DeltaTone::Up,
+        spark: SPARK_OPEN,
+    },
+    StatFixture {
+        label: "New intake (30 days)",
+        value: "35",
+        delta: "+9",
+        tone: DeltaTone::Up,
+        spark: SPARK_INTAKE,
+    },
+    StatFixture {
+        label: "Unanswered messages",
+        value: "2",
+        delta: "-1",
+        tone: DeltaTone::Up,
+        spark: SPARK_INTAKE,
+    },
+    StatFixture {
+        label: "Median days to first filing",
+        value: "4",
+        delta: "±0",
+        tone: DeltaTone::Flat,
+        spark: SPARK_FILING,
+    },
+];
+
+fn stat_series(spark: &[(&str, f64)]) -> Vec<SeriesPoint> {
+    spark
+        .iter()
+        .map(|(label, value)| SeriesPoint::new(*label, *value))
+        .collect()
+}
+
+/// The dashboard showcase: the chart family assembled into the composition a
+/// dashboard page copies — a stat row, a two-thirds line chart beside a
+/// one-third donut, period chips, and the same fixture rows in a
+/// [`DataTable`]. Every public chart component renders here (the sparkline
+/// inside its `StatCard`, the `ChartFrame` inside every chart).
+#[component]
+fn DashboardShowcase() -> Element {
+    let mut period = use_signal(DashboardPeriod::default);
+    let line_series = intake_series(period.read().intake_rows());
+
+    rsx! {
+        section { id: "dashboard",
+            h2 { "Dashboard" }
+            p {
+                "The chart family assembled into the composition a dashboard page copies: \
+                 a stat row, a two-thirds line chart beside a one-third donut, period chips, \
+                 and the fixture rows in a "
+                code { "DataTable" }
+                ". The chips hold a client-side signal, so a click swaps the buckets \
+                 without a round trip; the server renders the month default, so the \
+                 composition is complete in the pre-hydration HTML."
+            }
+            div { class: "nav-chart__filters", role: "group", "aria-label": "Line chart period",
+                for choice in [DashboardPeriod::Day, DashboardPeriod::Month] {
+                    button {
+                        class: "nav-chart__filter-chip",
+                        "aria-pressed": "{period() == choice}",
+                        onclick: move |_| period.set(choice),
+                        "{choice.label()}"
+                    }
+                }
+            }
+            div { class: "design-dashboard-grid",
+                div { class: "design-dashboard-grid__main",
+                    LineChart {
+                        title: "Intake over time".to_string(),
+                        description: "Signed retainers and open matters per period.".to_string(),
+                        series: line_series,
+                        area: true,
+                    }
+                }
+                div { class: "design-dashboard-grid__aside",
+                    DonutChart {
+                        title: "Matters by practice".to_string(),
+                        description: "Every open matter, by the practice area it belongs to.".to_string(),
+                        series: practice_mix_series(),
+                    }
+                }
+            }
+            div { class: "design-dashboard-stats",
+                for stat in STAT_FIXTURES {
+                    StatCard {
+                        label: stat.label.to_string(),
+                        value: stat.value.to_string(),
+                        delta: Some(stat.delta.to_string()),
+                        delta_tone: stat.tone,
+                        sparkline: Some(stat_series(stat.spark)),
+                    }
+                }
+            }
+            BarChart {
+                title: "New intake by source".to_string(),
+                description: "Where the last 30 days of new intake came from.".to_string(),
+                series: intake_source_series(),
+                horizontal: true,
+            }
+            h3 { "The donut's rows, in the DataTable" }
+            p {
+                "The table and the donut read one fixture, so the chart-and-table \
+                 pairing answers the same numbers — a dashboard never makes you \
+                 reconcile its drawing with its data."
+            }
+            DataTable {
+                columns: vec![
+                    Column::fixed("practice", "Practice area"),
+                    Column::fixed("matters", "Open matters"),
+                ],
+                // Fixed columns on purpose: the fixture is synthetic, and a
+                // sort anchor would navigate to a `?sort=` the route
+                // pre-handler `400`s (only the demo table's keys are
+                // advertised).
+                sort: SortState::parse(None),
+                base_path: "/design".to_string(),
+                for (label, count) in PRACTICE_MIX {
+                    tr { key: "{label}",
+                        td { "{label}" }
+                        td { "{count}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The brand tokens the gallery previews, each drawn from its own `--nav-*`
 /// custom property. The swatch chip resolves the token at paint time, so this
 /// page shows the *running deploy's* brand rather than a hard-coded ramp — the
@@ -374,26 +687,14 @@ pub fn DesignGallery() -> Element {
         // deploy's branding so a white-label install emits its own identity.
         SocialMetaSection {}
         main { id: "design", class: "nav-theme design-gallery",
-            h1 { "Design system" }
-            p {
-                "The firm's living design system, rendered through Dioxus. Every \
-                 block below is the real component the pages use, styled by the \
-                 Dioxus Components theme — no Bootstrap. Dark mode follows your \
-                 OS setting through "
-                code { "prefers-color-scheme" }
-                ", with no pre-paint script."
-            }
-
-            nav { class: "design-astrology-links", "aria-label": "Astrology design views",
-                a { href: "#astrology-chart", "Chart wheel" }
-                a { href: "#astrocartography", "Global map & line overlays" }
-            }
+            GalleryIntro {}
             crate::astrology_chart::AstrologyChartDesign {}
             crate::astrocartography::AstrocartographyDesign {}
 
             ContractsSection {}
             PaletteSection {}
             IconsSection {}
+            DashboardShowcase {}
 
             section {
                 h2 { "Cards" }
@@ -465,6 +766,7 @@ pub fn DesignGallery() -> Element {
             ProgressShowcase {}
             MatterPrimitivesShowcase {}
             NotationDocumentShowcase {}
+            SignatureSealShowcase {}
             QuestionStageShowcase {}
             FormShowcase {}
             PeopleListShowcase {}
@@ -474,6 +776,26 @@ pub fn DesignGallery() -> Element {
             NavigatorChromeShowcase {}
             NavigationShowcase {}
             SnippetsSection {}
+        }
+    }
+}
+/// The gallery's intro copy and section navigation.
+#[component]
+fn GalleryIntro() -> Element {
+    rsx! {
+        h1 { "Design system" }
+        p {
+            "The firm's living design system, rendered through Dioxus. Every \
+             block below is the real component the pages use, styled by the \
+             Dioxus Components theme — no Bootstrap. Dark mode follows your \
+             OS setting through "
+            code { "prefers-color-scheme" }
+            ", with no pre-paint script."
+        }
+        nav { class: "design-astrology-links", "aria-label": "Gallery sections",
+            a { href: "#dashboard", "Dashboard" }
+            a { href: "#astrology-chart", "Chart wheel" }
+            a { href: "#astrocartography", "Global map & line overlays" }
         }
     }
 }
@@ -1628,6 +1950,38 @@ fn MatterPrimitivesShowcase() -> Element {
                 description: "Uploaded files appear here.".to_string(),
                 action: rsx! { a { href: "/design#matter-primitives", "Upload a document" } },
             }
+            h3 { "Cite-check view" }
+            p {
+                "A draft beside the record page it cites: the drafted assertion on the left, the "
+                code { "Complaint" }
+                " page on the right, and the draft's record citations marked with what their "
+                "check says under the split."
+            }
+            CiteCheckView {
+                id: "design-cite-check".to_string(),
+                draft: CiteCheckSide {
+                    pane: CiteCheckPane::Draft,
+                    title: "Draft: Opposition to Motion to Dismiss".to_string(),
+                    body: "The Complaint at 4:12–19 alleges the breach. Id. at 5:2 adds the\nrest of the exchange.".to_string(),
+                },
+                source: CiteCheckSide {
+                    pane: CiteCheckPane::Source,
+                    title: "Complaint (Doc. 3)".to_string(),
+                    body: "¶ 1. The parties signed a written supply contract.\n¶ 2. Seller delivered\nthe goods monthly.".to_string(),
+                },
+                citations: vec![
+                    CiteCheckCitation {
+                        reference: "Complaint at 4:12–19".to_string(),
+                        sentence: "The Complaint at 4:12–19 alleges the breach.".to_string(),
+                        status: CiteCheckStatus::Verified,
+                    },
+                    CiteCheckCitation {
+                        reference: "Id. at 5:2".to_string(),
+                        sentence: "Id. at 5:2 adds the rest of the exchange.".to_string(),
+                        status: CiteCheckStatus::Review,
+                    },
+                ],
+            }
         }
     }
 }
@@ -1709,6 +2063,36 @@ fn NotationDocumentShowcase() -> Element {
                 },
                 id: "design-notation-empty".to_string(),
                 open: true,
+            }
+        }
+    }
+}
+
+/// The navigator-signature seal, beside the notation document it seals: the
+/// executed element, provider, signing date, and the archived documents a
+/// completed envelope leaves behind. The gallery shows the completed state —
+/// the only state that renders a seal; an outstanding envelope renders
+/// nothing, which no screenshot can show.
+#[component]
+fn SignatureSealShowcase() -> Element {
+    rsx! {
+        section { id: "signature-seal",
+            h2 { "Signature seal" }
+            p {
+                "The post-execution mark a matter page shows on a Notation "
+                "whose e-signature envelope has completed: the webhook-stamped "
+                "signing date, the provider, and the signed copy and "
+                "Certificate of Completion the webhook archived. Renders only "
+                "from provider-confirmed execution — never from storage "
+                "presence or workflow state alone."
+            }
+            SignatureSeal {
+                seal: SignatureSealData {
+                    signed_at: "2026-06-30T00:00:00Z".to_string(),
+                    provider: "docusign".to_string(),
+                    signed_href: Some("/design/signature-seal/signed".to_string()),
+                    certificate_href: Some("/design/signature-seal/certificate".to_string()),
+                }
             }
         }
     }
@@ -2233,5 +2617,82 @@ mod tests {
         assert_eq!(html.matches("href=\"/consultation\"").count(), 2);
         assert_eq!(html.matches("Book Consultation").count(), 2);
         assert!(!html.contains("mailto:"), "{html}");
+    }
+
+    /// Every period carries two live series — the line chart has something to
+    /// draw behind either chip, with no non-finite point reaching the SVG.
+    #[test]
+    fn dashboard_fixture_periods_carry_two_live_series() {
+        use super::{intake_series, DashboardPeriod};
+
+        for period in [DashboardPeriod::Day, DashboardPeriod::Month] {
+            let series = intake_series(period.intake_rows());
+            assert_eq!(series.len(), 2, "{period:?}");
+            for s in &series {
+                assert!(s.points.len() >= 2, "{period:?}: {}", s.name);
+                assert!(
+                    s.points
+                        .iter()
+                        .all(|p| p.value.is_finite() && p.value >= 0.0),
+                    "{period:?}: {} has a non-finite or negative point",
+                    s.name
+                );
+            }
+        }
+    }
+
+    /// The SSR default is the month view: the pre-hydration HTML is complete,
+    /// and the month buckets (not the day buckets) are what the server drew.
+    #[test]
+    fn dashboard_period_defaults_to_month_for_the_server_render() {
+        use super::DashboardPeriod;
+        assert_eq!(DashboardPeriod::default(), DashboardPeriod::Month);
+    }
+
+    /// The donut and the paired table read one fixture; its counts are whole,
+    /// positive, and sum to the "Open matters" stat's headline.
+    #[test]
+    fn dashboard_practice_mix_agrees_with_the_stat_row() {
+        use super::PRACTICE_MIX;
+
+        let mut total = 0.0;
+        for (label, count) in PRACTICE_MIX {
+            assert!(*count > 0.0, "{label}: {count}");
+            assert!(count.fract().abs() < 1e-9, "{label}: {count}");
+            total += count;
+        }
+        assert!((total - 36.0).abs() < 1e-9);
+    }
+
+    /// The showcase renders server-side with no hydration: the month chip is
+    /// the pressed one, the month buckets are drawn, and no chart fell into
+    /// its empty state.
+    #[test]
+    fn dashboard_showcase_renders_server_side_with_the_month_default() {
+        use super::DashboardShowcase;
+        use dioxus::prelude::*;
+
+        fn app() -> Element {
+            rsx! { DashboardShowcase {} }
+        }
+
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        let html = dioxus_ssr::render(&dom);
+        // The Month chip pressed, the Day chip not.
+        assert!(html.contains("aria-pressed=\"true\"",), "{html}");
+        assert!(html.contains("aria-pressed=\"false\"",), "{html}");
+        // Month buckets on the line's x axis (no daily bucket appears).
+        assert!(html.contains("2025-11"), "{html}");
+        assert!(!html.contains("2026-10-17"), "{html}");
+        // Both panels of the two-thirds/one-third row drew their drawings.
+        assert!(html.contains("Matters by practice"), "{html}");
+        assert!(html.contains("Signed retainers"), "{html}");
+        assert!(html.contains("New intake by source"), "{html}");
+        // Every stat card carried its sparkline, and none fell to the empty state.
+        assert_eq!(html.matches("nav-chart__stat-value").count(), 4, "{html}");
+        assert!(!html.contains("nav-chart__empty"), "{html}");
+        // The donut's rows reappear in the table beneath.
+        assert!(html.contains("Estate planning"), "{html}");
     }
 }

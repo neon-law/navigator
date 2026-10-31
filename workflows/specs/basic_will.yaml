@@ -14,8 +14,8 @@ prompts:
   specific_bequests: "List each specific gift, one row per gift: who receives it and what it is."
   self_proving: "Should the will include a self-proving affidavit?"
 questionnaire:
-  BEGIN: { _: jurisdiction__law }
-  jurisdiction__law: { _: person__testator }
+  BEGIN: { _: custom_single_choice__law }
+  custom_single_choice__law: { _: person__testator }
   person__testator: { _: person__executor }
   person__executor: { _: person__alternate_executor }
   person__alternate_executor: { _: person__guardian }
@@ -32,6 +32,12 @@ questionnaire:
         type: text
   custom_yes_no__self_proving: { _: END }
   END: {}
+choices:
+  law:
+    CA: California
+    NV: Nevada
+    NY: New York
+    WA: Washington
 workflow:
   BEGIN: { _: lawyer_review }
   lawyer_review: { approved: generate_pdf__will_pdf }

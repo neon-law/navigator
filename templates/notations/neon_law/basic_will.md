@@ -13,9 +13,15 @@ prompts:
   beneficiaries: "Who are the beneficiaries? List every person who inherits under this will."
   specific_bequests: "List each specific gift, one row per gift: who receives it and what it is."
   self_proving: "Should the will include a self-proving affidavit?"
+choices:
+  law:
+    CA: California
+    NV: Nevada
+    NY: New York
+    WA: Washington
 questionnaire:
-  BEGIN: { _: jurisdiction__law }
-  jurisdiction__law: { _: person__testator }
+  BEGIN: { _: custom_single_choice__law }
+  custom_single_choice__law: { _: person__testator }
   person__testator: { _: person__executor }
   person__executor: { _: person__alternate_executor }
   person__alternate_executor: { _: person__guardian }
@@ -87,7 +93,7 @@ I make the specific gifts listed below, one row per gift, as the schedule record
 The testator's state of domicile selects the provisions that follow; exactly one state's subsection applies to this
 will.
 
-{{#if jurisdiction__law=NV}}
+{{#if custom_single_choice__law=NV}}
 
 ### A. Nevada provisions
 
@@ -95,9 +101,7 @@ This will is governed by the laws of the State of Nevada. Nevada Revised Statute
 and the firm's Nevada estates playbook anchors the execution and witnessing formalities this will follows. The firm's
 attorneys confirm the exact statutory wording of these provisions before this will is released.
 
-{{/if}}
-
-{{#if jurisdiction__law=CA}}
+{{else if custom_single_choice__law=CA}}
 
 ### B. California provisions
 
@@ -105,9 +109,7 @@ This will is governed by the laws of the State of California. The firm's attorne
 this section is deliberately left for attorney drafting through the lawyer-review gate, and no statutory language is
 drafted here until they supply it.
 
-{{/if}}
-
-{{#if jurisdiction__law=NY}}
+{{else if custom_single_choice__law=NY}}
 
 ### C. New York provisions
 
@@ -115,9 +117,7 @@ This will is governed by the laws of the State of New York. The firm's attorneys
 this section is deliberately left for attorney drafting through the lawyer-review gate, and no statutory language is
 drafted here until they supply it.
 
-{{/if}}
-
-{{#if jurisdiction__law=WA}}
+{{else if custom_single_choice__law=WA}}
 
 ### D. Washington provisions
 
@@ -147,7 +147,7 @@ Witness's signature: ______________________________
 
 Witness's signature: ______________________________
 
-{{#if custom_yes_no__self_proving=Yes}}
+{{#if custom_yes_no__self_proving=true}}
 
 ## Self-proving affidavit
 

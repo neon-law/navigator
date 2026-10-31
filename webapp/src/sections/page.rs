@@ -563,6 +563,11 @@ async fn load_records(
         &assets,
         client_lens,
     );
+    // The evidence index is the firm's working view of its exhibits — never
+    // carried on a client page.
+    if cx.lens == PageLens::Lawyer {
+        cx.evidence = super::evidence::derive::index(&assets, project_code);
+    }
     cx.documents = assets
         .into_iter()
         // A client reads only what a lawyer marked client-visible, the same

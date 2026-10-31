@@ -1,0 +1,242 @@
+head_title: "{site_name} | Family green cards"
+meta_description: >-
+  Abhaya Immigration, a Shook Law PC practice, handles family petitions and
+  marriage-based green cards: who qualifies, how the petition and the
+  application work, what documents to gather, and what the process costs.
+  Government filing fees are separate, and no approval or timeline is
+  promised.
+title: Family green cards
+tagline: Keep your family together. Start with the truth about your options.
+skin: practice
+bands:
+  - kind: statement
+    heading: Who this is for
+    lead: Spouses, parents, children, and siblings.
+    body:
+      - - text: >-
+            A family relationship is the most common basis for a green card.
+            A United States citizen can petition for a spouse, an unmarried
+            child under twenty-one, an unmarried son or daughter over
+            twenty-one, a married son or daughter of any age, a parent, or a
+            sibling. A lawful permanent resident can petition for a spouse
+            and for unmarried sons and daughters. The category you fall into
+            decides how soon a case can move, because the government limits
+            how many visas some categories receive each year.
+      - - text: >-
+            Where the family member lives shapes the path. If they are
+            already in the United States and a visa is available, the case
+            can usually finish inside the country through adjustment of
+            status. If they are abroad, the case moves through the National
+            Visa Center and a consulate interview instead. Both routes end
+            the same way — lawful permanent residence — but they involve
+            different offices, forms, and waits.
+      - - text: >-
+            Every case starts with the relationship itself. What the
+            government looks for first is proof that the relationship is
+            real, so the evidence you gather matters as much as the forms
+            you file.
+  - kind: cards
+    anchor: eligibility
+    overline: Eligibility
+    heading: Who qualifies, and where cases run into trouble
+    description: >-
+      The general rules below. Your own history can change what they mean
+      for you, which is what a consultation is for.
+    items:
+      - title: Qualifying relationships
+        body:
+          - - text: >-
+                A citizen petitioner can file for the relationships listed
+                above; a lawful permanent resident petitioner, for a spouse
+                and unmarried sons and daughters. A marriage must be legally
+                valid where it took place, and every earlier marriage of
+                each spouse must have ended — by divorce, annulment, or
+                death.
+      - title: Common disqualifiers
+        body:
+          - - text: >-
+                Time in the United States without status can trigger bars
+                to readmission. Certain criminal convictions carry
+                immigration consequences beyond the case itself. Prior visa
+                violations and misrepresentations follow a person from
+                application to application. Some of these problems have a
+                waiver available; some do not.
+      - title: The conditional two years
+        body:
+          - - text: >-
+                A marriage-based case completed inside the United States
+                grants conditional residence first when the marriage is
+                less than two years old at approval. The couple files
+                together near the second anniversary to remove the
+                condition — a second filing with its own deadline, which
+                people miss when nobody tracks it.
+      - title: Waivers, in general
+        body:
+          - - text: >-
+                Some grounds of inadmissibility can be waived on a showing
+                of hardship to a qualifying relative. Whether a waiver
+                exists in your situation, what it requires, and whether it
+                is worth the risk of filing are case-specific questions —
+                general information on this page cannot answer them.
+  - kind: steps
+    anchor: family-process
+    overline: How the process works
+    heading: One petition, then the application.
+    description: >-
+      The agency names decide each stage. The general order is below; your
+      own case may differ.
+    items:
+      - title: The petition
+        body:
+          - - text: >-
+                A citizen or resident relative files Form I-130 with United
+                States Citizenship and Immigration Services (USCIS), with
+                the proof of the relationship attached.
+      - title: The wait and the priority date
+        body:
+          - - text: >-
+                Some categories have more petitions than visas in a year.
+                The State Department publishes which categories are current
+                in its monthly visa bulletin, and the case moves when the
+                category is current. We cannot promise how long any case
+                takes; the agency decides.
+      - title: The green card application
+        body:
+          - - text: >-
+                Inside the United States, the application to adjust status
+                is Form I-485 with USCIS. Abroad, the case moves to the
+                National Visa Center and then to a consulate for Form
+                DS-260 and an interview.
+      - title: The interview and the decision
+        body:
+          - - text: >-
+                An officer reviews the file and questions the applicant,
+                sometimes both spouses together. An approval, a request for
+                more evidence, or a denial can follow; the agency decides.
+  - kind: cards
+    anchor: documents
+    overline: Documents
+    heading: What to gather
+    description: >-
+      Categories, not a checklist for one form — the form instructions
+      govern what a specific filing needs.
+    items:
+      - title: Identity and civil records
+        body:
+          - - text: >-
+                Passports, birth certificates for everyone in the case, the
+                marriage certificate, and the decree that ends every prior
+                marriage of each spouse.
+      - title: Immigration history
+        body:
+          - - text: >-
+                The record of entries and exits, current or former
+                immigration status, any prior applications and their
+                outcomes, and any notices the agencies have sent.
+      - title: Evidence of a real marriage
+        body:
+          - - text: >-
+                For marriage cases, the record of a life lived together:
+                joint leases or mortgages, shared accounts, correspondence
+                addressed to both spouses, photographs across time, and
+                statements from people who know the couple.
+      - title: Financial support
+        body:
+          - - text: >-
+                The petitioning relative signs an affidavit of support and
+                backs it with tax returns and proof of income, so the
+                government can see the new resident will not need public
+                benefits.
+  - kind: statement
+    heading: What the process costs
+    lead: Two fees, two different payers.
+    body:
+      - - text: >-
+            Government filing fees are separate from any attorney fee, and
+            they change. The current amounts are published on USCIS.gov.
+            Abhaya Immigration charges a flat fee agreed in writing before
+            work begins; the
+      - - href: "https://www.abhayaimmigration.com/services"
+          text: fee catalog on abhayaimmigration.com
+      - - text: >-
+            lists what each service costs. We cannot promise approval or a
+            timeline; the relevant agency decides.
+  - kind: cards
+    anchor: questions
+    overline: Questions
+    heading: What people ask most
+    items:
+      - title: How long does the whole process take?
+        body:
+          - - text: >-
+                It depends on the relationship category, whether the case
+                finishes inside the country or at a consulate, and how busy
+                the office handling it is. USCIS publishes its processing
+                times and the State Department publishes the visa bulletin;
+                both are the honest sources for the current wait. We cannot
+                promise how long any case takes.
+      - title: Can my spouse work while the case is pending?
+        body:
+          - - text: >-
+                An applicant who adjusts status inside the United States
+                can generally apply for an employment authorization
+                document while the green card application is pending. Work
+                authorization for people on other paths differs, which is
+                worth confirming for the specific case.
+      - title: I entered without papers. Can I still get a green card through marriage?
+        body:
+          - - text: >-
+                Entry without inspection complicates adjustment of status:
+                as a general rule, a person who entered without permission
+                cannot complete the process inside the United States,
+                though exceptions exist and some cases run through a
+                consulate with a waiver instead. This is one of the facts
+                that most changes a case — review it with a lawyer before
+                anything is filed.
+      - title: My spouse is a green card holder, not a citizen. Does that matter?
+        body:
+          - - text: >-
+                A resident spouse can petition, but the visa category for
+                spouses of residents has an annual limit, so the wait is
+                usually longer than for spouses of citizens. If the
+                petitioner later naturalizes, the case can move to the
+                citizen category.
+      - title: What happens if USCIS says no?
+        body:
+          - - text: >-
+                A denial comes with its reasons in writing. Depending on
+                why, the options can include asking the agency to reopen or
+                reconsider, appealing, or filing again with better
+                evidence. A denial is not always the end, and it is never a
+                reason to ignore the notices that follow it.
+      - title: Do we both have to go to the interview?
+        body:
+          - - text: >-
+                The applicant always goes. In marriage cases the officer
+                can also ask the petitioning spouse to attend, and can
+                question the spouses together or separately. Which of those
+                happens is the officer's call, not something the applicant
+                chooses.
+  - kind: statement
+    heading: Start with the free tools
+    lead: Some answers are already public.
+    body:
+      - - text: >-
+            The USCIS case-status page, the processing-times page, and the
+            fee calculator are free and current, and our
+      - - href: /immigration/free-support
+          text: free-support hub
+      - - text: >-
+            explains when each one helps and where to find nonprofit legal
+            help. The information on this page is general, not legal advice
+            about your matter.
+  - kind: cta
+    heading: Talk through your case with Abhaya Immigration
+    body: >-
+      A first conversation covers who files what, which office decides, and
+      what your case needs. Abhaya Immigration, a Shook Law PC practice,
+      handles family petitions and marriage-based green cards.
+    email: "{firm_email}"
+    action:
+      href: "https://www.abhayaimmigration.com/"
+      label: Talk to Abhaya Immigration

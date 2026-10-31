@@ -1401,3 +1401,61 @@
   opacity: 0.35;
   pointer-events: none;
 }
+
+/* The free court-form catalog's per-court form tables. The rows come from
+   store/seeds/Court.yaml, not copy — this only dresses them. */
+.catalog-court {
+  margin-bottom: 2.5rem;
+}
+
+.catalog-court__subtitle {
+  margin: 0.25rem 0 1rem;
+  color: var(--nav-color-text-muted, inherit);
+}
+
+.catalog-forms-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+}
+
+.catalog-forms-table th,
+.catalog-forms-table td {
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid var(--nav-color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.catalog-forms-table th {
+  font-weight: 600;
+}
+
+.catalog-forms-table__title {
+  display: block;
+  font-weight: 600;
+}
+
+.catalog-forms-table__number {
+  display: block;
+  font-size: 0.8125rem;
+}
+
+/* Six columns will not fit a phone; let each row stack instead of
+   scrolling sideways. */
+@media (max-width: 48rem) {
+  .catalog-forms-table,
+  .catalog-forms-table tbody,
+  .catalog-forms-table tr,
+  .catalog-forms-table td {
+    display: block;
+  }
+
+  .catalog-forms-table thead {
+    display: none;
+  }
+
+  .catalog-forms-table td {
+    border-bottom: none;
+  }
+}

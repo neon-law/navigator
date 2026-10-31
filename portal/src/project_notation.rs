@@ -206,6 +206,44 @@ impl CreateProjectNotationError {
                 )
                     .into_response()
             }
+            // The template's declared workflow/questionnaire failed the
+            // engine's parse — the cause lives in the template, not the
+            // server (LAW-200: this answered `500 internal`).
+            Self::Session(NotationSessionError::Spec(e)) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("template spec: {e}"),
+            )
+                .into_response(),
+            // The project repo carries both blueprint directories — the
+            // lawyer removes one so the template is unambiguous (LAW-200).
+            Self::Session(NotationSessionError::TemplateSource(
+                TemplateSourceError::AmbiguousBlueprintDirectories,
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "the project repo contains both `templates/` and `drafts/` blueprint directories; remove one so the template is unambiguous",
+            )
+                .into_response(),
+            Self::Session(NotationSessionError::TemplateSource(
+                TemplateSourceError::InvalidLayout(details),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("invalid project blueprint layout: {details}"),
+            )
+                .into_response(),
+            Self::Session(NotationSessionError::TemplateSource(
+                TemplateSourceError::NotUtf8(path),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("template `{path}` body is not valid UTF-8"),
+            )
+                .into_response(),
+            Self::Session(NotationSessionError::TemplateSource(
+                TemplateSourceError::Composition(details),
+            )) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("clause composition: {details}"),
+            )
+                .into_response(),
             Self::Session(e) => {
                 tracing::error!(error = %e, "project_notation_new: create failed");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response()
@@ -294,4 +332,56 @@ async fn find_or_create_client(
     }
 
     Ok(person_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http_body_util::BodyExt;
+    use workflows::WorkflowSpecError;
+
+    async fn body_text(response: Response) -> String {
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        String::from_utf8(bytes.to_vec()).expect("utf-8 body")
+    }
+
+    /// LAW-200: the persist layer's template miss is a lawyer-facing cause —
+    /// the sibling-repo filename churn — not an internal failure.
+    #[tokio::test]
+    async fn a_repo_template_miss_reaches_the_lawyer_as_a_typed_404() {
+        let response = CreateProjectNotationError::Session(NotationSessionError::TemplateNotFound(
+            "onboarding".to_string(),
+        ))
+        .into_lawyer_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let text = body_text(response).await;
+        assert!(
+            text.contains("no template `onboarding`"),
+            "the cause must name the missed code: {text}"
+        );
+    }
+
+    /// LAW-200: a questionnaire that fails the engine's runtime parse names
+    /// the offending shape instead of answering `500 internal`.
+    #[tokio::test]
+    async fn a_questionnaire_spec_failure_reaches_the_lawyer_as_a_typed_422() {
+        let response = CreateProjectNotationError::Session(NotationSessionError::Spec(
+            WorkflowSpecError::QuestionnaireCondition {
+                state: "custom_single_choice__governing_law".to_string(),
+                condition: "nevada".to_string(),
+            },
+        ))
+        .into_lawyer_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let text = body_text(response).await;
+        assert!(
+            text.contains("nevada"),
+            "the cause must name the offending condition: {text}"
+        );
+    }
 }

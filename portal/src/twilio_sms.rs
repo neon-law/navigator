@@ -359,6 +359,7 @@ async fn ingest_sms(
     store::inbox::ingest_inbound(
         db,
         &store::inbox::IngestInbound {
+            project_id: None,
             firm_id,
             brand_key: Some(brand.as_str()),
             interaction_type: Some("message"),
@@ -378,7 +379,7 @@ async fn ingest_sms(
             matter_consent: false,
             promotional_opt_in: false,
             email_conversation_id: None,
-            attachment_asset_id: None,
+            attachments: Vec::new(),
             occurred_at: &chrono::Utc::now().to_rfc3339(),
         },
     )

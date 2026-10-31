@@ -3015,3 +3015,64 @@ test_ci_section_counts_only_own_get if {
         }
     }
 }
+
+# Relationship-graph views: lawyer tier at route admission — the handler owns
+# the tenant question (matter scoping, self-or-directory, ViewDirectory), so
+# route admission must not answer it. GET only, one view segment, no depth of
+# path beyond the seed id.
+test_lawyer_can_read_graph_views if {
+    every view in ["project", "lawyer", "firm"] {
+        authz.allow with input as {"path": ["app", "api", "graph", view, "seed-1"], "method": "GET", "session": lawyer_session}
+    }
+}
+
+test_non_lawyer_denied_graph_views if {
+    every session in [client_session, clerk_session, null] {
+        every view in ["project", "lawyer", "firm"] {
+            not authz.allow with input as {"path": ["app", "api", "graph", view, "seed-1"], "method": "GET", "session": session}
+        }
+    }
+}
+
+test_graph_views_are_read_only_and_shape_bound if {
+    not authz.allow with input as {"path": ["app", "api", "graph", "project", "seed-1"], "method": "POST", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "api", "graph", "project"], "method": "GET", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "api", "graph", "project", "seed-1", "extra"], "method": "GET", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "api", "graph", "matter", "seed-1"], "method": "GET", "session": lawyer_session}
+}
+
+# ---------- Relationship-graph pages ----------
+# The pages the graph islands live on. The lawyer-graph page carries its own
+# lawyer-tier rule (the avatar rule's shape); the project and firm pages ride
+# the matter-surface and workbench prefix rules — pinned here so a narrowing
+# of either prefix breaks this test rather than leaving a page unreachable in
+# production while every other check still passes.
+
+test_lawyer_tier_reaches_lawyer_graph_page if {
+    every session in [owner_session, admin_session, lawyer_session] {
+        authz.allow with input as {"path": ["app", "people", "person-1", "graph"], "method": "GET", "session": session}
+    }
+}
+
+test_lower_tiers_denied_lawyer_graph_page if {
+    every session in [clerk_session, client_session, null] {
+        not authz.allow with input as {"path": ["app", "people", "person-1", "graph"], "method": "GET", "session": session}
+    }
+}
+
+test_lawyer_graph_page_is_read_only if {
+    not authz.allow with input as {"path": ["app", "people", "person-1", "graph"], "method": "POST", "session": lawyer_session}
+}
+
+# Any authenticated caller is admitted at the route — the project graph page's
+# loader applies the participation ledger (`store::access::can_see_project`),
+# exactly as the matter surface itself does.
+test_matter_graph_page_rides_the_matter_surface_rule if {
+    authz.allow with input as {"path": ["app", "projects", "matter-1", "graph"], "method": "GET", "session": client_session}
+    authz.allow with input as {"path": ["app", "projects", "matter-1", "graph"], "method": "GET", "session": lawyer_session}
+}
+
+test_firm_graph_page_rides_the_workbench_prefix if {
+    authz.allow with input as {"path": ["app", "lawyer", "firms", "firm-1", "graph"], "method": "GET", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "lawyer", "firms", "firm-1", "graph"], "method": "GET", "session": client_session}
+}

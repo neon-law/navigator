@@ -708,10 +708,12 @@ async fn notation_inventory_keeps_started_workflows_pinned_when_repository_main_
         .as_array()
         .unwrap()
         .contains(&serde_json::json!("generate_pdf__retainer_pdf")));
+    assert!(started["template_stale"].as_bool().unwrap());
     assert!(current["workflow_states"]
         .as_array()
         .unwrap()
         .contains(&serde_json::json!("generate_pdf__engagement_pdf")));
+    assert!(!current["template_stale"].as_bool().unwrap());
     assert_eq!(
         store::templates::resolve(&fx.surreal, Some(fx.project_id), "onboarding__letter")
             .await
@@ -720,6 +722,58 @@ async fn notation_inventory_keeps_started_workflows_pinned_when_repository_main_
             .id,
         pinned.id,
         "reading main must not replace the persisted version"
+    );
+}
+
+#[tokio::test]
+async fn notation_inventory_flags_a_run_without_a_pinned_digest_through_the_template_binding() {
+    let fx = build_fixture().await;
+    let body = include_str!("../../templates/notations/neon_law/onboarding__letter.md");
+    commit_board_sources(&fx, &[("drafts/onboarding__letter.md", body.as_bytes())]);
+    let pinned = store::template_source::persist_from_repo(
+        &fx.surreal,
+        &fx.storage,
+        &repo_store(),
+        fx.project_id,
+        "onboarding__letter",
+    )
+    .await
+    .unwrap()
+    .template;
+    let respondent = store::notations::find_by_id(&fx.surreal, fx.notation_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .person_id;
+    let run = store::notations::create(
+        &fx.surreal,
+        &store::notations::NewNotation::new(pinned.id, respondent, fx.project_id, "lawyer_review"),
+    )
+    .await
+    .unwrap();
+    // A run opened before per-run digests existed carries no pinned
+    // digest of its own; staleness must still resolve through the
+    // store-template binding it was opened against.
+    fx.surreal
+        .query("UPDATE $id UNSET template_body_sha256")
+        .bind(("id", store::surreal::record_id("notation", run.id)))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    let revised = body.replace("generate_pdf__retainer_pdf", "generate_pdf__engagement_pdf");
+    commit_board_sources(&fx, &[("drafts/onboarding__letter.md", revised.as_bytes())]);
+    let inventory = inventory_json(&fx).await;
+    let started: Vec<_> = inventory
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["template_code"] == "onboarding__letter" && !row["notation_id"].is_null())
+        .collect();
+    assert_eq!(started.len(), 1);
+    assert!(
+        started[0]["template_stale"].as_bool().unwrap(),
+        "a run without its own digest must still flag stale through the template binding"
     );
 }
 

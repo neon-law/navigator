@@ -3678,17 +3678,9 @@ mod tests {
         let gate =
             serde_yaml::to_string(&parsed["jobs"]["gate"]).expect("the gate job re-serialises");
         assert!(
-            gate.contains("ops github check-signatures"),
-            "the gate must refuse unsigned commits on the pull-request head so a Cloud Agent \
-             session that disabled commit.gpgsign cannot merge"
-        );
-        assert!(
-            gate.contains("github.event.pull_request.head.sha"),
-            "the signature check must inspect the pull-request head, not the workflow merge commit"
-        );
-        assert!(
-            gate.contains("fetch-depth: 0"),
-            "the signature check needs the PR range in the clone, so the gate cannot stay at depth 1"
+            !gate.contains("ops github check-signatures"),
+            "commit-signature enforcement was removed by owner decision (2026-10-30); \
+             it must not creep back into the gate"
         );
         assert_eq!(
             parsed["jobs"]["rust"]["if"].as_str(),

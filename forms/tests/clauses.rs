@@ -190,7 +190,7 @@ fn employee_offer_letter_includes_the_california_clause_only_for_california() {
         path: "templates/notations/neon_law/employee_offer_letter.md".into(),
         contents: source.to_string(),
     };
-    assert!(rules::Rule::lint(&rules::clauses::ClauseReferences, &file).is_empty());
+    assert!(rules::Rule::lint(&rules::clauses::ClauseReferences::default(), &file).is_empty());
     let snapshot = rules::clauses::compile(source).unwrap();
     assert!(snapshot.contains("california_employment@1"));
     let (_, body) = rules::frontmatter::split(&snapshot).unwrap();
@@ -222,7 +222,7 @@ fn privacy_policy_includes_each_supplement_only_when_its_answer_is_yes() {
         path: "templates/notations/neon_law/privacy_policy.md".into(),
         contents: source.to_string(),
     };
-    assert!(rules::Rule::lint(&rules::clauses::ClauseReferences, &file).is_empty());
+    assert!(rules::Rule::lint(&rules::clauses::ClauseReferences::default(), &file).is_empty());
     let snapshot = rules::clauses::compile(source).unwrap();
     let (_, body) = rules::frontmatter::split(&snapshot).unwrap();
     assert!(!body.contains("{{>"));

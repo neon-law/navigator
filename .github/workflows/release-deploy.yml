@@ -245,7 +245,7 @@ jobs:
       # (`ops deployments --publish`); the runner checks out no deployment tree.
       GCP_PROJECT_ID: ${{ secrets.STAGING_GCP_PROJECT_ID }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: "post progress to #navigator"
         uses: ./.github/actions/slack-progress
@@ -451,7 +451,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: "post the hold to #navigator"
         uses: ./.github/actions/slack-progress
         with:
@@ -483,7 +483,7 @@ jobs:
       # (`ops deployments --publish`); the runner checks out no deployment tree.
       GCP_PROJECT_ID: ${{ secrets.PRODUCTION_GCP_PROJECT_ID }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: "post progress to #navigator"
         uses: ./.github/actions/slack-progress

@@ -870,6 +870,11 @@ async fn dbos_schedules(
     } else {
         None
     };
+    let deadline_mirror = if should_host_deadline_mirror(host_dbos, lookup)? {
+        Some(deadline_mirror_context(rt))
+    } else {
+        None
+    };
     let purchase_activation = if should_host_purchase_activation(host_dbos, lookup)? {
         let pg = store::postgres::PostgresDb::from_env()
             .await
@@ -910,6 +915,7 @@ async fn dbos_schedules(
         project_recovery,
         source_imports,
         retention_purge,
+        deadline_mirror,
         purchase_activation,
         billing_canary,
         billing_digest,
@@ -1018,6 +1024,30 @@ async fn retention_purge_context(
             archive: Some(archive),
             authority,
         }),
+    ))
+}
+
+/// Resolve the independent DeadlineMirror gate.
+fn should_host_deadline_mirror(
+    host_dbos: bool,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<bool> {
+    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
+        return Ok(false);
+    }
+    workflows::dbos_engine::deadline_mirror::enabled(lookup)
+        .context("read NAVIGATOR_DBOS_DEADLINE_MIRROR_ENABLED")
+}
+
+/// The nightly mirror's source: the store, the deployment's Workspace
+/// calendar provider, and the canonical host for matter-page links.
+fn deadline_mirror_context(rt: &HostRuntime) -> workflows::dbos_engine::deadline_mirror::Context {
+    workflows::dbos_engine::deadline_mirror::Context::new(Arc::new(
+        crate::calendar_mirror::ScheduledMirror {
+            surreal: rt.state.surreal.clone(),
+            providers: Arc::clone(&rt.state.integration_providers),
+            base_url: rt.state.canonical_host.host().map(str::to_string),
+        },
     ))
 }
 
@@ -1166,15 +1196,15 @@ fn preflight(brand: &Site, rt: &HostRuntime) {
 #[cfg(test)]
 mod tests {
     use super::{
-        bind_ports, should_host_billing_canary, should_host_dri_digest, should_host_general_nag,
-        should_host_notation_reset, should_host_project_recovery, should_host_retention_purge,
-        should_host_source_imports,
+        bind_ports, should_host_billing_canary, should_host_deadline_mirror,
+        should_host_dri_digest, should_host_general_nag, should_host_notation_reset,
+        should_host_project_recovery, should_host_retention_purge, should_host_source_imports,
     };
 
     type Gate = fn(bool, &dyn Fn(&str) -> Option<String>) -> anyhow::Result<bool>;
 
     /// The schedules gated only by DBOS and their own flag.
-    fn recovery_gates() -> [(Gate, &'static str); 4] {
+    fn recovery_gates() -> [(Gate, &'static str); 5] {
         [
             (
                 |host, lookup| should_host_project_recovery(host, lookup),
@@ -1187,6 +1217,10 @@ mod tests {
             (
                 |host, lookup| should_host_retention_purge(host, lookup),
                 workflows::dbos_engine::retention_purge::ENABLED_ENV,
+            ),
+            (
+                |host, lookup| should_host_deadline_mirror(host, lookup),
+                workflows::dbos_engine::deadline_mirror::ENABLED_ENV,
             ),
             (
                 |host, lookup| should_host_notation_reset(host, lookup),

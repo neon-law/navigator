@@ -878,6 +878,8 @@ pub(crate) struct LiveDocumentSummary {
     pub(crate) signing: Option<store::documents::Signing>,
     #[serde(default)]
     pub(crate) notarization: Vec<store::documents::Notarization>,
+    #[serde(default)]
+    pub(crate) evidence: Option<store::documents::Evidence>,
 }
 
 /// How an executed document was executed, as an upload records it. Empty for
@@ -886,6 +888,7 @@ pub(crate) struct LiveDocumentSummary {
 pub(crate) struct DocumentExecution {
     pub(crate) signing: Option<store::documents::Signing>,
     pub(crate) notarization: Vec<store::documents::Notarization>,
+    pub(crate) evidence: Option<store::documents::Evidence>,
 }
 
 impl DocumentExecution {
@@ -896,6 +899,9 @@ impl DocumentExecution {
         if !self.notarization.is_empty() {
             body["notarization"] =
                 serde_json::to_value(&self.notarization).context("encode notarization")?;
+        }
+        if let Some(evidence) = &self.evidence {
+            body["evidence"] = serde_json::to_value(evidence).context("encode evidence")?;
         }
         Ok(())
     }
@@ -2307,18 +2313,37 @@ pub(crate) fn slug_from_documents_folder(root: &Path, file: &Path) -> Option<Str
             _ => None,
         })
         .collect::<Option<_>>()?;
-    match parts.as_slice() {
-        // A matter folder is where the bytes live, not part of the slug
-        // (LAW-189).
-        ["documents", folder, rest @ ..]
-            if !rest.is_empty()
-                && store::document_pointers::MatterFolder::parse(folder).is_some() =>
-        {
-            Some(rest.join("/"))
-        }
-        ["documents", folders @ .., _] if !folders.is_empty() => Some(parts[1..].join("/")),
-        _ => None,
+    // A matter folder — including a fixed `Work Product` subfolder, whose
+    // name spans two components (LAW-215) — is where the bytes live, not
+    // part of the slug (LAW-189).
+    if let Some(prefix) = documents_folder_prefix_len(&parts) {
+        return Some(parts[1 + prefix..].join("/"));
     }
+    if parts.len() > 2 && parts[0] == "documents" {
+        return Some(parts[1..].join("/"));
+    }
+    None
+}
+
+/// How many leading components of `parts` spell a matter folder's name —
+/// two for a fixed `Work Product` subfolder (LAW-215), one for every other.
+/// The longest match wins, so `Work Product/Research (Work Product)/` never
+/// degrades to its bare parent.
+fn documents_folder_prefix_len(parts: &[&str]) -> Option<usize> {
+    // Folder names are spelled below `documents/`; the leading component is
+    // the checkout's documents root itself.
+    if parts.first() != Some(&"documents") {
+        return None;
+    }
+    let segments = &parts[1..];
+    store::document_pointers::MatterFolder::ALL
+        .iter()
+        .filter_map(|folder| {
+            let names: Vec<&str> = folder.as_str().split('/').collect();
+            (segments.len() > names.len() && segments[..names.len()] == names[..])
+                .then_some(names.len())
+        })
+        .max()
 }
 
 /// `navigator site document visibility <asset_id> --project <code> --visibility …`
@@ -3877,9 +3902,10 @@ pub async fn project_notations(
                 .is_none_or(|entered| now.signed_duration_since(entered) > stale_after)
         });
         let never_started = rows.iter().any(|row| row.notation_id.is_none());
-        if stale || never_started {
+        let stale_template = rows.iter().any(|row| row.template_stale);
+        if stale || never_started || stale_template {
             return Err(anyhow!(
-                "notation pre-flight found never-started or stale work"
+                "notation pre-flight found never-started work, stale review states, or runs whose template changed on main"
             ));
         }
         Ok(())
@@ -3890,7 +3916,7 @@ pub async fn project_notations(
 async fn fetch_notation_board(
     host: Option<&str>,
     project_code: &str,
-) -> Result<Vec<webapp::lawyer_project_detail::ProjectNotationRow>> {
+) -> Result<Vec<webapp::lawyer_project_notations::ProjectNotationRow>> {
     let client = DocumentClient::connect(host, project_code).await?;
     let url = format!(
         "{}/app/api/projects/{}/notation-inventory",
@@ -3918,11 +3944,11 @@ async fn fetch_notation_board(
 pub async fn notation_rows(
     host: Option<&str>,
     project_code: &str,
-) -> Result<Vec<webapp::lawyer_project_detail::ProjectNotationRow>> {
+) -> Result<Vec<webapp::lawyer_project_notations::ProjectNotationRow>> {
     fetch_notation_board(host, project_code).await
 }
 
-fn print_notation_board(rows: &[webapp::lawyer_project_detail::ProjectNotationRow]) {
+fn print_notation_board(rows: &[webapp::lawyer_project_notations::ProjectNotationRow]) {
     let mut states = Vec::new();
     for row in rows {
         for state in &row.workflow_states {
@@ -3941,9 +3967,10 @@ fn print_notation_board(rows: &[webapp::lawyer_project_detail::ProjectNotationRo
             "CLIENT EMAIL".to_string(),
             "SIGNATURE REQUEST".to_string(),
             "LAST".to_string(),
+            "STALE".to_string(),
         ]));
     for row in rows {
-        let mut cells = Vec::with_capacity(states.len() + 5);
+        let mut cells = Vec::with_capacity(states.len() + 6);
         for state in &states {
             if !row.workflow_states.contains(state) {
                 cells.push("—".to_string());
@@ -3981,6 +4008,11 @@ fn print_notation_board(rows: &[webapp::lawyer_project_detail::ProjectNotationRo
                 .clone()
                 .unwrap_or_else(|| "—".to_string()),
         );
+        cells.push(if row.template_stale {
+            "template changed on main".to_string()
+        } else {
+            "—".to_string()
+        });
         table.add_row(cells);
     }
     println!("{table}");
@@ -6277,6 +6309,7 @@ mod tests {
                 county: "Clark".into(),
                 commission_expires: chrono::NaiveDate::from_ymd_opt(2029, 1, 31).unwrap(),
             }],
+            evidence: None,
         };
         assert_eq!(
             document_upload_from(
@@ -6326,6 +6359,17 @@ mod tests {
         assert_eq!(
             slug("documents/Work Product/c.pdf").as_deref(),
             Some("c.pdf")
+        );
+        // A fixed `Work Product` subfolder is matched whole, and its name is
+        // not part of the slug (LAW-215); a lawyer-made subfolder inside one
+        // stays in the slug.
+        assert_eq!(
+            slug("documents/Work Product/Research (Work Product)/memo.pdf").as_deref(),
+            Some("memo.pdf")
+        );
+        assert_eq!(
+            slug("documents/Work Product/Motions (Work Product)/motions/dismiss.pdf").as_deref(),
+            Some("motions/dismiss.pdf")
         );
         // Files at the `documents/` root, or outside it, keep the filename slug.
         assert_eq!(slug("documents/c.pdf"), None);
@@ -7109,6 +7153,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         };
         std::fs::write(&pointer_path, pointer.to_yaml().unwrap()).unwrap();
 

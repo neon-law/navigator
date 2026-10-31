@@ -164,6 +164,7 @@ async fn run_offline_lint(found: &Resolved, slug: &str, port: u16) -> Result<()>
     let questions = doc.demo_questions.len();
     let states = doc.demo_workflow.len();
     let title = doc.title.clone();
+    let questionnaire_error = doc.questionnaire_error.clone();
 
     let bundle = client_bundle_dir();
     if let Some(dir) = &bundle {
@@ -191,6 +192,13 @@ async fn run_offline_lint(found: &Resolved, slug: &str, port: u16) -> Result<()>
             ""
         }
     );
+    if let Some(error) = &questionnaire_error {
+        eprintln!("    WARNING: {error}");
+        eprintln!(
+            "    the page shows the failure panel in place of the questionnaire — fix the \
+             template; do not trust this preview's counts."
+        );
+    }
     eprintln!("    this is a local render, not the Project's portal — nothing is pushed.");
     match &bundle {
         Some(dir) => eprintln!("    client bundle: {}", dir.display()),
@@ -485,7 +493,11 @@ fn slug_for(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalized_stem, read_project_manifest, resolve_template, router, slug_for};
+    use super::{
+        embedded, normalized_stem, open_browser, read_project_manifest, resolve_template, router,
+        slug_for, PUBLIC_CSS, PUBLIC_JS,
+    };
+    use axum::http::StatusCode;
     use std::path::Path;
 
     const TEMPLATE: &str = "---\nkind: onboarding\ntitle: Sample Letter\nquestionnaire:\n  \
@@ -840,5 +852,28 @@ mod tests {
         let (project, host) = read_project_manifest(dir.path()).expect("manifest resolves");
         assert_eq!(project, "acme");
         assert_eq!(host, "www.neonlaw.com");
+    }
+
+    #[test]
+    fn embedded_assets_are_served_and_path_traversal_is_a_404() {
+        let served = embedded(&PUBLIC_CSS, "catalog.css", "text/css; charset=utf-8");
+        assert_eq!(served.status(), StatusCode::OK);
+
+        let traversal = embedded(&PUBLIC_CSS, "../brand-firm.css", "text/css; charset=utf-8");
+        assert_eq!(traversal.status(), StatusCode::NOT_FOUND);
+
+        let missing = embedded(
+            &PUBLIC_JS,
+            "no-such-script.js",
+            "text/javascript; charset=utf-8",
+        );
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn opening_a_browser_is_best_effort_and_never_panics() {
+        // Headless CI has no browser to open; the printed URL is the real
+        // interface, so either outcome here is correct.
+        let _ = open_browser("http://127.0.0.1:9/never-opened");
     }
 }

@@ -1,0 +1,39 @@
+questionnaire:
+  BEGIN:
+    _: person__client
+  person__client:
+    _: person__new_name
+  person__new_name:
+    _: custom_single_choice__current_sex_designation
+  custom_single_choice__current_sex_designation:
+    _: custom_datetime__date_of_birth
+  custom_datetime__date_of_birth:
+    _: custom_text__county_of_residence
+  custom_text__county_of_residence:
+    _: END
+  END: {}
+prompts:
+  client_name: What is your current full legal name, as it appears on your identification?
+  new_name: What new name are you asking the court for? Spell it exactly as you want it to read on the decree.
+  current_sex_designation: What is your current sex designation, as the petition prints it?
+  date_of_birth: What is your date of birth?
+  county_of_residence: In what California county do you live? The petition is filed in the Superior Court of your county.
+choices:
+  current_sex_designation:
+    female: Female
+    male: Male
+    nonbinary: Nonbinary
+    prefer_not_to_say: Prefer not to state
+workflow:
+  BEGIN:
+    intake_submitted: intake_persisted__client
+  intake_persisted__client:
+    petition_rendered: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__name_change_petition_pdf
+    rejected: END
+  generate_pdf__name_change_petition_pdf:
+    pdf_persisted: filing__ca_superior_court
+  filing__ca_superior_court:
+    filed: END
+  END: {}

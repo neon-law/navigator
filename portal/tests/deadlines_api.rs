@@ -82,6 +82,7 @@ async fn fixture() -> Fixture {
         signature_provider: state.signature_provider.clone(),
         contract_reviewer: state.contract_reviewer.clone(),
         integration_providers: state.integration_providers.clone(),
+        canonical_base_url: None,
     });
     Fixture {
         app,

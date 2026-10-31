@@ -22,6 +22,40 @@
 # banner, and the same-origin bootstrap that keeps the route's CSP at
 # `script-src 'self'`), so they are first-party and not pinned here.
 
+# The relationship-graph views render the AGE neighborhoods through the
+# vendored Sigma.js renderer and Graphology core, same-origin: the graph page
+# is a first-party island that fetches `/app/api/graph/*` JSON in the browser
+# and draws it client-side, so the graph queries never bypass the server's
+# depth cap or tenancy.
+
+[[asset]]
+name = "Sigma.js renderer"
+version = "3.0.2"
+upstream_url = "https://cdn.jsdelivr.net/npm/sigma@3.0.2/dist/sigma.min.js"
+served_path = "vendor/sigma/sigma.min.js"
+sha256 = "be6f790da9c1856765b1c430de3b1aac50433223361870edb3097a9868218a88"
+
+[[asset]]
+name = "Sigma.js MIT license"
+version = "3.0.2"
+upstream_url = "https://cdn.jsdelivr.net/npm/sigma@3.0.2/LICENSE.txt"
+served_path = "vendor/sigma/LICENSE"
+sha256 = "2d6beb4435a5186414986ef25facdea68619d0f3e1043b9a795f5c6233914013"
+
+[[asset]]
+name = "Graphology core"
+version = "0.26.0"
+upstream_url = "https://cdn.jsdelivr.net/npm/graphology@0.26.0/dist/graphology.umd.min.js"
+served_path = "vendor/graphology/graphology.umd.min.js"
+sha256 = "dc337efa23903f61e064c8e7e7f93a429e6855dccfc2458802b4ed30c621c087"
+
+[[asset]]
+name = "Graphology MIT license"
+version = "0.26.0"
+upstream_url = "https://cdn.jsdelivr.net/npm/graphology@0.26.0/LICENSE.txt"
+served_path = "vendor/graphology/LICENSE"
+sha256 = "9d396b4882c329077f32861c0d6822dcee48f2d0ff6196d8459af70844196275"
+
 [[asset]]
 name = "Mermaid diagram renderer"
 version = "11.12.0"

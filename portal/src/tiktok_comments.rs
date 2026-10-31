@@ -279,6 +279,7 @@ async fn ingest_comment(
     let received = store::inbox::ingest_inbound(
         &state.surreal,
         &store::inbox::IngestInbound {
+            project_id: None,
             firm_id: account.firm_id,
             brand_key: Some(&account.brand_key),
             interaction_type: Some("comment"),
@@ -298,7 +299,7 @@ async fn ingest_comment(
             matter_consent: false,
             promotional_opt_in: false,
             email_conversation_id: None,
-            attachment_asset_id: None,
+            attachments: Vec::new(),
             occurred_at: &occurred_at.to_rfc3339(),
         },
     )
