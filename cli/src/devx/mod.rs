@@ -24,7 +24,9 @@ use clap::Subcommand;
 pub mod brand;
 mod brand_readiness;
 mod browser_e2e;
-mod chrome;
+// The scraper framework resolves the same pinned Chrome for Testing the
+// e2e harnesses use, so the resolver is crate-reachable.
+pub(crate) mod chrome;
 mod deployment_config;
 mod deployment_derivation;
 pub mod deployments;
