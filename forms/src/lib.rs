@@ -475,6 +475,21 @@ const BUNDLED: &[FormMeta] = &[
         filing_fee: None,
         fee_waiver_code: None,
     },
+    FormMeta {
+        code: "ny__nc1_adult_name_change_petition",
+        jurisdiction: "NY",
+        title: "Name Change and/or Sex Designation Change Petition for Individual Adult (18+)",
+        origin_url: "https://www.nycourts.gov/forms/Name-SexDesignationChange/AdultName-SexDesignationChangePetition-fillable.pdf",
+        object_path: "forms/united_states/new_york/new_york_supreme_court/ny__nc1_adult_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc1_adult_name_change_petition.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "210.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
 ];
 
 /// Return the bundled form registry.

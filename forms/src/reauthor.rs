@@ -774,6 +774,12 @@ mod tests {
             "../../templates/notations/forms/united_states/nevada/las_vegas_justice_court/las_vegas__small_claims_counterclaim.fields"
         ),
     ),
+    (
+        "ny__nc1_adult_name_change_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc1_adult_name_change_petition.fields"
+        ),
+    ),
 ];
         let err = plan(&map, &names, &llc_states()).expect_err("must refuse");
         assert!(
