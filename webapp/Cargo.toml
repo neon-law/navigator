@@ -36,6 +36,10 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 forms = { workspace = true }
 percent-encoding = { workspace = true }
+# Geometry types only (`Point`, `AngularLine`, `LineBody`, `Angle`): the map
+# consumes precomputed line-engine polylines and performs no astronomy itself.
+# Pure Rust, so the wasm client build carries it without a browser boundary.
+ephemeris = { workspace = true }
 # Server-only: the `#[server]` function bodies query the store through the
 # shared `store` crate. It is gated behind the `server` feature so the wasm
 # client build (the `web` feature, selected by `dx`) never pulls it.
@@ -139,6 +143,14 @@ uuid = { workspace = true, features = ["js"] }
 # theme classes) without standing up a router. Matches the pinned `dioxus`
 # version, and is unconditional here so tests build without `--features server`.
 dioxus-ssr = "0.7.9"
+# The kernel-gated specimen-fixture test re-pins the Chiron digest to the
+# locally re-fetched kernel (Horizons regenerates solution-equivalent bytes on
+# every request, so the merged manifest's pin can never be reproduced). A
+# dev-dependency, so it reaches neither the server binary nor the wasm bundle.
+sha2 = { workspace = true }
+# The kernel-gated specimen-fixture test casts the specimen chart through the
+# real line engine (`lines_for`), which needs hifitime's `Epoch` directly.
+hifitime = { workspace = true }
 # The schedules-console tests re-derive the rendered `CronJob` set from
 # `examples/deploy/k8s/exports/kustomization.yaml` themselves, so a bug in
 # `build.rs` fails the gate instead of being agreed with. A dev-dependency, so
