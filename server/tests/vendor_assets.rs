@@ -133,10 +133,17 @@ fn only_approved_browser_distributions_are_vendored() {
             );
             let maplibre = matches!(
                 (asset.name.as_str(), asset.served_path.as_str()),
-                ("MapLibre GL JS main bundle", "vendor/maplibre/maplibre-gl.mjs")
-                    | ("MapLibre GL JS worker", "vendor/maplibre/maplibre-gl-worker.mjs")
-                    | ("MapLibre GL JS CSS", "vendor/maplibre/maplibre-gl.css")
-                    | ("MapLibre BSD-3-Clause license", "vendor/maplibre/LICENSE.txt")
+                (
+                    "MapLibre GL JS main bundle",
+                    "vendor/maplibre/maplibre-gl.mjs"
+                ) | (
+                    "MapLibre GL JS worker",
+                    "vendor/maplibre/maplibre-gl-worker.mjs"
+                ) | ("MapLibre GL JS CSS", "vendor/maplibre/maplibre-gl.css")
+                    | (
+                        "MapLibre BSD-3-Clause license",
+                        "vendor/maplibre/LICENSE.txt"
+                    )
             );
             !(swagger || mermaid || pdfjs || maplibre)
         })

@@ -5419,7 +5419,9 @@ mod tests {
         assert!(renders_astro_island(
             r#"<div id="astro-map-island" class="astro-map-island" data-module-src="/public/vendor/maplibre/maplibre-gl.mjs"></div>"#
         ));
-        assert!(!renders_astro_island(r#"<div class="astro-map-frame"></div>"#));
+        assert!(!renders_astro_island(
+            r#"<div class="astro-map-frame"></div>"#
+        ));
     }
 
     #[test]

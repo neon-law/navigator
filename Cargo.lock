@@ -4379,7 +4379,7 @@ dependencies = [
 
 [[package]]
 name = "ephemeris"
-version = "26.10.30"
+version = "26.10.31"
 dependencies = [
  "hifitime",
  "serde",
@@ -5065,7 +5065,7 @@ dependencies = [
 
 [[package]]
 name = "geotime"
-version = "26.10.30"
+version = "26.10.31"
 dependencies = [
  "chrono",
  "chrono-tz",

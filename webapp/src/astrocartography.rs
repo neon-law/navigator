@@ -46,14 +46,14 @@ pub const SPECIMEN_INSTANT: &str = "2000-01-01T12:00:00Z";
 // raster tile fetch at [`TILE_ORIGIN`].
 // ---------------------------------------------------------------------------
 
-/// The vendored MapLibre GL JS entry module (BSD-3-Clause, pinned in
+/// The vendored `MapLibre` GL JS entry module (BSD-3-Clause, pinned in
 /// `server/public/VENDOR.toml`). The 6.x dist is ESM: the bundle spawns
 /// `maplibre-gl-worker.mjs` as a same-origin module worker resolved relative
 /// to this URL, which the site's `script-src 'self'` policy admits without a
 /// blob-worker exception.
 pub(crate) const MAPLIBRE_MODULE_HREF: &str = "/public/vendor/maplibre/maplibre-gl.mjs";
 
-/// The vendored MapLibre stylesheet (control chrome and attribution).
+/// The vendored `MapLibre` stylesheet (control chrome and attribution).
 const MAPLIBRE_STYLESHEET_HREF: &str = "/public/vendor/maplibre/maplibre-gl.css";
 
 /// The Vesta map style: parchment ground, OSM-derived raster tiles.
@@ -73,7 +73,7 @@ pub const TILE_ORIGIN: &str = "https://tile.openstreetmap.org";
 /// The mount element's class; the island payload script's id is [`ISLAND_DATA_ID`].
 pub const ISLAND_CLASS: &str = "astro-map-island";
 
-/// The DOM id of the island's inline GeoJSON payload.
+/// The DOM id of the island's inline `GeoJSON` payload.
 pub const ISLAND_DATA_ID: &str = "astro-map-island-data";
 
 /// The embedded specimen chart: the line engine's real output at
@@ -307,10 +307,7 @@ struct IslandCollection<'a> {
 ///
 /// A non-finite coordinate (a NaN would serialize as `null` and corrupt the
 /// geometry silently) or a payload that fails to re-parse.
-fn island_geojson(
-    lines: &[AngularLine],
-    provenance: &IslandProvenance,
-) -> Result<String, String> {
+fn island_geojson(lines: &[AngularLine], provenance: &IslandProvenance) -> Result<String, String> {
     let mut features = Vec::with_capacity(lines.len());
     for line in lines {
         let mut coordinates = Vec::new();
@@ -345,7 +342,7 @@ fn island_geojson(
 }
 
 /// One person's line set on the island: an id for layer naming, a label for
-/// controls, and the person's own GeoJSON source. The /world page will carry
+/// controls, and the person's own `GeoJSON` source. The /world page will carry
 /// up to six (the visitor plus five others); the specimen page carries one.
 #[derive(Serialize)]
 struct IslandPersonPayload<'a> {
@@ -360,13 +357,13 @@ struct IslandPayload<'a> {
 }
 
 /// The specimen page's island payload: one person (the calculated specimen)
-/// whose GeoJSON source is the line engine's output, serialized once and
+/// whose `GeoJSON` source is the line engine's output, serialized once and
 /// cached for the life of the process.
 static ISLAND_PAYLOAD: LazyLock<Result<String, String>> = LazyLock::new(|| {
     let lines = specimen_lines()?;
     let (generator, gate) = SPECIMEN_PROVENANCE
         .as_ref()
-        .map_err(|error| error.clone())?;
+        .map_err(std::clone::Clone::clone)?;
     let provenance = IslandProvenance {
         source: generator,
         instant: SPECIMEN_INSTANT,
@@ -573,9 +570,9 @@ pub fn AstrocartographyDesign() -> Element {
     }
 }
 
-/// The interactive MapLibre island: an empty mount the first-party boot script
+/// The interactive `MapLibre` island: an empty mount the first-party boot script
 /// (`/public/js/astrocartography-island.js`) populates from the inline
-/// [`ISLAND_DATA_ID`] payload and the vendored MapLibre bundle.
+/// [`ISLAND_DATA_ID`] payload and the vendored `MapLibre` bundle.
 ///
 /// Progressive enhancement in both directions: the mount ships empty (CSS
 /// `:empty` hides it entirely without JavaScript, so the SVG map below is the
@@ -800,11 +797,7 @@ mod tests {
         let crossing = line(
             LineBody::Sun,
             Angle::Asc,
-            vec![
-                Point(170.0, 10.0),
-                Point(179.0, 12.0),
-                Point(-179.0, 13.0),
-            ],
+            vec![Point(170.0, 10.0), Point(179.0, 12.0), Point(-179.0, 13.0)],
         );
         let simple = line(
             LineBody::Moon,
@@ -833,11 +826,7 @@ mod tests {
     #[test]
     fn island_geojson_rejects_non_finite_coordinates() {
         let nan_line = line(LineBody::Sun, Angle::Mc, vec![Point(f64::NAN, 0.0)]);
-        let infinite_line = line(
-            LineBody::Sun,
-            Angle::Mc,
-            vec![Point(0.0, f64::INFINITY)],
-        );
+        let infinite_line = line(LineBody::Sun, Angle::Mc, vec![Point(0.0, f64::INFINITY)]);
         for bad in [&nan_line, &infinite_line] {
             let error = island_geojson(std::slice::from_ref(bad), &test_provenance())
                 .expect_err("non-finite coordinates are refused");
@@ -852,10 +841,9 @@ mod tests {
     #[test]
     fn island_geojson_matches_the_engine_export() {
         let lines = specimen_lines().expect("embedded fixture parses");
-        let ours: serde_json::Value = serde_json::from_str(
-            &island_geojson(&lines, &test_provenance()).expect("serializes"),
-        )
-        .expect("parses");
+        let ours: serde_json::Value =
+            serde_json::from_str(&island_geojson(&lines, &test_provenance()).expect("serializes"))
+                .expect("parses");
         let engine_provenance = ephemeris::lines::geojson::LineProvenance {
             instant_utc: SPECIMEN_INSTANT.to_string(),
             time_scale_model: String::new(),
@@ -886,10 +874,7 @@ mod tests {
             person["geojson"]["features"].as_array().map(Vec::len),
             Some(48)
         );
-        assert_eq!(
-            person["geojson"]["provenance"]["instant"],
-            SPECIMEN_INSTANT
-        );
+        assert_eq!(person["geojson"]["provenance"]["instant"], SPECIMEN_INSTANT);
     }
 
     /// The payload rides the page inside a `<script type="application/json">`
@@ -927,7 +912,10 @@ mod tests {
         );
         assert!(html.contains(r#"id="astro-map-island-data""#), "{html}");
         let payload = ISLAND_PAYLOAD.as_ref().expect("payload builds");
-        assert!(html.contains(payload), "the payload rides the page verbatim");
+        assert!(
+            html.contains(payload),
+            "the payload rides the page verbatim"
+        );
         assert!(html.contains(r#"name="astro-map-body""#), "{html}");
         assert!(html.contains(r#"value="mean_node""#), "{html}");
         // The stylesheet and boot script ride in the document head via
