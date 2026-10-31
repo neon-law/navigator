@@ -541,6 +541,36 @@ pub async fn pending_links(
         .collect())
 }
 
+/// Confirmed receipts to poll for inbound activity, newest first.
+///
+/// Unlike [`pending_links`], a `permalink` may already be verified: comment
+/// polling reads every confirmed video, not only links awaiting verification.
+///
+/// # Errors
+///
+/// A database failure.
+pub async fn confirmed_links(
+    db: &SurrealDb,
+    provider: &str,
+    limit: usize,
+) -> Result<Vec<SocialPublication>, SocialPublicationError> {
+    let mut response = db
+        .query(format!(
+            "SELECT {SELECT} FROM {TABLE} WHERE provider = $provider AND state = $confirmed \
+             AND provider_post_id IS NOT NONE ORDER BY updated_at DESC LIMIT $limit"
+        ))
+        .bind(("provider", provider.to_string()))
+        .bind(("confirmed", CONFIRMED.to_string()))
+        .bind(("limit", limit.min(100)))
+        .await?
+        .check()?;
+    let rows: Vec<PublicationRow> = response.take(0)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(PublicationRow::into_publication)
+        .collect())
+}
+
 /// Every publication, for the PostgreSQL parity check.
 pub(crate) async fn all(db: &SurrealDb) -> Result<Vec<SocialPublication>, SocialPublicationError> {
     let mut response = db

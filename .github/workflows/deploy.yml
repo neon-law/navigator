@@ -2249,6 +2249,12 @@ jobs:
             build-args: |
               CRATE=workflows-service
               BIN=social-publish-reconciler-trigger
+          - image: navigator-youtube-comments-poll-trigger
+            dockerfile: images/Containerfile.trigger
+            runner: blacksmith-4vcpu-ubuntu-2404
+            build-args: |
+              CRATE=workflows-service
+              BIN=youtube-comments-poll-trigger
     steps:
       # No disk reclaim: every leg runs on a Blacksmith machine with a ~145 GB
       # root disk, so a docker build has room without a sweep.
