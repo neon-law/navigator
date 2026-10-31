@@ -70,7 +70,6 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "ipnet",
     "jsonwebtoken",
     "k8s-openapi",
-    "kube",
     "live-inquiry",
     "lopdf",
     "mail-parser",
