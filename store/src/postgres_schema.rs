@@ -1173,6 +1173,10 @@ mod tests {
                 "20261030010000_add_template_firm.sql",
                 include_str!("../postgres/migrations/20261030010000_add_template_firm.sql"),
             ),
+            (
+                "20261030120000_create_brand_phone_number.sql",
+                include_str!("../postgres/migrations/20261030120000_create_brand_phone_number.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

@@ -163,6 +163,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "brand_phone_number",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "clause",
       "missing_column": null,
       "missing_table": null,
@@ -1632,7 +1639,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 127,
+    "table_count": 128,
     "tables": {
       "address": {
         "columns": {
@@ -1882,6 +1889,20 @@
         "references": [
           "firm"
         ]
+      },
+      "brand_phone_number": {
+        "columns": {
+          "auth_token_secret_ref": "UUID",
+          "brand_key": "TEXT",
+          "channel_kinds": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "number_e164": "TEXT",
+          "twilio_account_sid": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "brand_phone_number",
+        "references": []
       },
       "cap_table_holding": {
         "columns": {

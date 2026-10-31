@@ -80,6 +80,7 @@ pub mod assets;
 pub mod attestations;
 pub mod authorities;
 pub mod brand_domains;
+pub mod brand_phone_numbers;
 pub mod brands;
 pub mod cap_table_holdings;
 pub mod cases;
