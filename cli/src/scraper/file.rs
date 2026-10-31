@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::scraper::download::hex_digest;
-use crate::scraper::intake::{IntakeError, IntakeReceipt, InboxIntake, ScrapedDocument};
+use crate::scraper::intake::{InboxIntake, IntakeError, IntakeReceipt, ScrapedDocument};
 
 /// How many collision escalations one filing may walk before it stops:
 /// `-att`, then `-att2` through `-att32`. A bound keeps a pathological
@@ -126,17 +126,6 @@ impl FilingRequest {
         hex_digest(&Sha256::digest(&self.bytes))
     }
 
-    /// The primary filing name: the plain `DKT NNNN` form, or the
-    /// `DKT NNNN-att` form for an unnumbered attachment.
-    ///
-    /// # Errors
-    ///
-    /// When the court's entry number cannot be normalized to the
-    /// prescribed `DKT NNNN[-att]` form.
-    pub(crate) fn primary_name(&self) -> Result<String, store::cases::FilingNameError> {
-        self.name_at_escalation(if self.unnumbered_attachment { 1 } else { 0 })
-    }
-
     /// The filing name at `escalation`: `0` the plain `DKT NNNN` form, `1`
     /// the `DKT NNNN-att` form, `2` and beyond `DKT NNNN-att2`, ...
     ///
@@ -162,9 +151,7 @@ impl FilingRequest {
 fn normalized_entry(entry_number: &str) -> &str {
     let trimmed = entry_number.trim();
     let bytes = trimmed.as_bytes();
-    let prefixed = bytes.len() >= 4
-        && bytes[..3].eq_ignore_ascii_case(b"DKT")
-        && bytes[3] == b' ';
+    let prefixed = bytes.len() >= 4 && bytes[..3].eq_ignore_ascii_case(b"DKT") && bytes[3] == b' ';
     if prefixed {
         trimmed[4..].trim()
     } else {
@@ -204,10 +191,7 @@ pub(crate) trait FilingStore: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FilingOutcome {
     /// The bytes and pointer were written under `name`.
-    Filed {
-        name: String,
-        paths: FiledPaths,
-    },
+    Filed { name: String, paths: FiledPaths },
     /// The same document — same hash — was already filed under `name`;
     /// nothing was written.
     AlreadyFiled { name: String },
@@ -236,7 +220,7 @@ pub(crate) fn resolve_filing(
             Some(existing) if existing == sha256 => {
                 return Ok(FilingOutcome::AlreadyFiled { name });
             }
-            Some(_) => continue,
+            Some(_) => {}
             None => {
                 let paths = store.file(&name, request)?;
                 return Ok(FilingOutcome::Filed { name, paths });
@@ -292,11 +276,12 @@ impl FilingStore for ProjectFilingStore {
         // The same safety checks every managed document write runs: the
         // path stays inside the checkout's managed tree, and the bytes
         // stay git-ignored.
-        crate::document_sync::ensure_managed_copy_target(&self.root, &bytes_path)
-            .map_err(|error| StorageError::Pointer {
+        crate::document_sync::ensure_managed_copy_target(&self.root, &bytes_path).map_err(
+            |error| StorageError::Pointer {
                 name: name.to_owned(),
                 detail: format!("{error:#}"),
-            })?;
+            },
+        )?;
         crate::scraper::fs::atomic_write(&bytes_path, &request.bytes).map_err(|source| {
             StorageError::Io {
                 path: bytes_path.clone(),
@@ -307,14 +292,12 @@ impl FilingStore for ProjectFilingStore {
             request,
             uuid::Uuid::now_v7(),
             chrono::Utc::now().to_rfc3339(),
-        );
-        let pointer_path =
-            crate::document_sync::write_uploaded_pointer(&self.root, name, &pointer).map_err(
-                |error| StorageError::Pointer {
-                    name: name.to_owned(),
-                    detail: format!("{error:#}"),
-                },
-            )?;
+        )?;
+        let pointer_path = crate::document_sync::write_uploaded_pointer(&self.root, name, &pointer)
+            .map_err(|error| StorageError::Pointer {
+                name: name.to_owned(),
+                detail: format!("{error:#}"),
+            })?;
         Ok(FiledPaths {
             bytes: bytes_path,
             pointer: pointer_path,
@@ -330,9 +313,15 @@ fn pointer_for(
     request: &FilingRequest,
     asset_id: uuid::Uuid,
     created_at: String,
-) -> store::document_pointers::DocumentPointer {
-    store::document_pointers::DocumentPointer {
-        kind: store::document_pointers::MatterFolder::DocketFilings.default_kind().to_owned(),
+) -> Result<store::document_pointers::DocumentPointer, StorageError> {
+    let size_bytes = i64::try_from(request.bytes.len()).map_err(|_| StorageError::Pointer {
+        name: request.entry_number.clone(),
+        detail: "byte count does not fit in a pointer's size_bytes".to_owned(),
+    })?;
+    Ok(store::document_pointers::DocumentPointer {
+        kind: store::document_pointers::MatterFolder::DocketFilings
+            .default_kind()
+            .to_owned(),
         visibility: "internal".to_owned(),
         folder: None,
         current_version: store::document_pointers::PointerVersion {
@@ -340,16 +329,19 @@ fn pointer_for(
             asset_id,
             created_at,
             sha256: request.sha256(),
-            size_bytes: request.bytes.len().cast_signed(),
+            size_bytes,
+            canonical_url: None,
+            checked_on: None,
         },
         previous_version: None,
         authority_id: None,
         docusign_envelope_id: None,
+        xero_invoice_id: None,
         signing: None,
         notarization: Vec::new(),
         service: Vec::new(),
         evidence: None,
-    }
+    })
 }
 
 /// The intake-seam implementation that files docket documents straight
@@ -399,18 +391,18 @@ impl InboxIntake for DktFilingIntake<'_> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::sync::Mutex;
 
     use sha2::{Digest, Sha256};
 
     use super::{
-        normalized_entry, pointer_for, resolve_filing, DktFilingIntake, FilingError,
-        FilingOutcome, FilingRequest, FiledPaths, FilingStore, ProjectFilingStore, StorageError,
+        normalized_entry, pointer_for, resolve_filing, DktFilingIntake, FiledPaths, FilingError,
+        FilingOutcome, FilingRequest, FilingStore, ProjectFilingStore, StorageError,
     };
     use crate::scraper::adapter::SiteKey;
     use crate::scraper::download::hex_digest;
-    use crate::scraper::intake::{IntakeError, ScrapedDocument};
+    use crate::scraper::intake::{InboxIntake, IntakeError, ScrapedDocument};
 
     const DOCUMENT_BYTES: &[u8] = b"%PDF-1.7 docket notice bytes";
     const OTHER_BYTES: &[u8] = b"%PDF-1.7 a different document";
@@ -462,24 +454,21 @@ mod tests {
         }
 
         fn file(&self, name: &str, request: &FilingRequest) -> Result<FiledPaths, StorageError> {
-            self.calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let pointer = pointer_for(
                 request,
                 uuid::Uuid::nil(),
                 "1970-01-01T00:00:00+00:00".to_owned(),
-            );
+            )
+            .expect("the pointer builds");
             self.files
                 .lock()
                 .expect("uncontended")
                 .insert(name.to_owned(), request.bytes.clone());
-            self.pointers
-                .lock()
-                .expect("uncontended")
-                .insert(
-                    name.to_owned(),
-                    pointer.to_yaml().expect("the pointer serializes"),
-                );
+            self.pointers.lock().expect("uncontended").insert(
+                name.to_owned(),
+                pointer.to_yaml().expect("the pointer serializes"),
+            );
             Ok(FiledPaths {
                 bytes: PathBuf::from(name),
                 pointer: PathBuf::from(format!("{name}.yaml")),
@@ -494,7 +483,7 @@ mod tests {
         for entry in ["4", "0004", "DKT 4", "dkt 4", "  4  "] {
             let request = request(entry, "Notice of Hearing");
             assert_eq!(
-                request.primary_name().expect("normalizable"),
+                request.name_at_escalation(0).expect("normalizable"),
                 "DKT 0004 - Notice of Hearing.pdf",
                 "entry `{entry}` normalizes to the prescribed form"
             );
@@ -513,7 +502,7 @@ mod tests {
     fn court_attachment_suffixes_keep_their_number() {
         let request = request("29-1", "Exhibit A");
         assert_eq!(
-            request.primary_name().expect("normalizable"),
+            request.name_at_escalation(0).expect("normalizable"),
             "DKT 0029-1 - Exhibit A.pdf"
         );
     }
@@ -523,32 +512,32 @@ mod tests {
         let request = FilingRequest::new("4", true, "Exhibit A", "pdf", DOCUMENT_BYTES.to_vec())
             .expect("the document has bytes");
         assert_eq!(
-            request.primary_name().expect("normalizable"),
+            request.name_at_escalation(1).expect("normalizable"),
             "DKT 0004-att - Exhibit A.pdf"
         );
     }
 
     #[test]
     fn titles_are_sanitized_and_escalations_compose() {
-        let request = request("4", "Motion re: A/B");
+        let sanitized = request("4", "Motion re: A/B");
         assert_eq!(
-            request.primary_name().expect("normalizable"),
+            sanitized.name_at_escalation(0).expect("normalizable"),
             "DKT 0004 - Motion re- A-B.pdf"
         );
-        let request = request("4", "Order");
+        let escalated = request("4", "Order");
         assert_eq!(
-            request.name_at_escalation(2).expect("normalizable"),
+            escalated.name_at_escalation(2).expect("normalizable"),
             "DKT 0004-att2 - Order.pdf"
         );
     }
 
     #[test]
     fn a_nonnumeric_entry_number_is_rejected_with_the_store_error() {
-        let request = request("x", "Order");
-        assert!(matches!(
-            request.primary_name(),
-            Err(store::cases::FilingNameError(_))
-        ));
+        let outcome = request("x", "Order").name_at_escalation(0);
+        assert!(
+            outcome.is_err(),
+            "a nonnumeric entry number cannot name a filing"
+        );
     }
 
     #[test]
@@ -695,7 +684,10 @@ mod tests {
         assert_eq!(version.version, 1);
         assert!(pointer.previous_version.is_none());
         assert_eq!(version.sha256, sha_of(DOCUMENT_BYTES));
-        assert_eq!(version.size_bytes, i64::try_from(DOCUMENT_BYTES.len()).expect("small"));
+        assert_eq!(
+            version.size_bytes,
+            i64::try_from(DOCUMENT_BYTES.len()).expect("small")
+        );
         let parsed_at = chrono::DateTime::parse_from_rfc3339(&version.created_at)
             .expect("an RFC 3339 timestamp");
         assert_eq!(parsed_at.offset().local_minus_utc(), 0, "stamped in UTC");
@@ -736,9 +728,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = ProjectFilingStore::new(dir.path().to_path_buf());
         resolve_filing(&store, &request("4", "Notice of Hearing")).expect("filed");
-        let other =
-            FilingRequest::new("4", false, "Amended Notice", "pdf", OTHER_BYTES.to_vec())
-                .expect("the document has bytes");
+        let other = FilingRequest::new("4", false, "Amended Notice", "pdf", OTHER_BYTES.to_vec())
+            .expect("the document has bytes");
         let second = resolve_filing(&store, &other).expect("filed beside the first");
         assert_eq!(
             second,
@@ -849,4 +840,3 @@ mod tests {
         );
     }
 }
-

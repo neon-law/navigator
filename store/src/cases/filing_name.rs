@@ -55,7 +55,7 @@ fn safe_title(title: &str) -> String {
 /// The character limit for a filing title; the filesystem byte limit also applies.
 const TITLE_MAX_CHARS: usize = 120;
 
-fn composed_name(number: String, title: &str, ext: &str) -> Result<String, FilingNameError> {
+fn composed_name(number: &str, title: &str, ext: &str) -> Result<String, FilingNameError> {
     let safe = safe_title(title);
     let overhead = format!("DKT {number} - .{ext}").len();
     let budget = 255_usize.checked_sub(overhead).ok_or_else(|| {
@@ -80,7 +80,7 @@ fn composed_name(number: String, title: &str, ext: &str) -> Result<String, Filin
 /// Rejects a nonnumeric entry number or attachment suffix, or a number and
 /// extension that exceed the filename byte limit.
 pub fn filing_name(entry_number: &str, title: &str, ext: &str) -> Result<String, FilingNameError> {
-    composed_name(dkt_number(entry_number.trim())?, title, ext)
+    composed_name(&dkt_number(entry_number.trim())?, title, ext)
 }
 
 /// The `escalation`-th filing that maps to one entry's DKT number: `0` is
@@ -101,9 +101,9 @@ pub fn escalated_filing_name(
 ) -> Result<String, FilingNameError> {
     let number = dkt_number(entry_number.trim())?;
     match escalation {
-        0 => composed_name(number, title, ext),
-        1 => composed_name(format!("{number}-att"), title, ext),
-        n => composed_name(format!("{number}-att{n}"), title, ext),
+        0 => composed_name(&number, title, ext),
+        1 => composed_name(&format!("{number}-att"), title, ext),
+        n => composed_name(&format!("{number}-att{n}"), title, ext),
     }
 }
 

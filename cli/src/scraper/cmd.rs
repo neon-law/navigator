@@ -338,6 +338,7 @@ mod tests {
             since: None,
             firm: Uuid::now_v7(),
             headed: true,
+            file_dkt: false,
         })
         .await;
         assert_eq!(code, std::process::ExitCode::from(2));
@@ -351,6 +352,7 @@ mod tests {
             since: None,
             firm: Uuid::now_v7(),
             headed: true,
+            file_dkt: false,
         })
         .await;
         assert_eq!(code, std::process::ExitCode::from(2));
