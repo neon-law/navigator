@@ -82,6 +82,8 @@ pub mod authorities;
 pub mod brand_domains;
 pub mod brands;
 pub mod cap_table_holdings;
+/// Firm-authored Case Stage vocabulary and audited per-matter transitions.
+pub mod case_stages;
 pub mod cases;
 pub mod clauses;
 pub mod cm_ecf_stamp;
