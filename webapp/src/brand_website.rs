@@ -87,13 +87,11 @@ const COMPILED_SITES: &[CompiledSite] = &[
         www: "www.guiebandshook.com",
         live: true,
     },
-    // Registered but held out: the placeholder RFC 2606 host is real
-    // inventory until IEP's launch decisions land, and the /app listing
-    // must not lie about the registry.
+    // Live: the special-education practice serves its own production host.
     CompiledSite {
-        key: "iep",
-        www: "www.iep.example",
-        live: false,
+        key: "iep-defenders",
+        www: "www.iepdefenders.com",
+        live: true,
     },
 ];
 

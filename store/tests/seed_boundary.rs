@@ -161,7 +161,7 @@ fn identity_seeds_hold_only_the_inventoried_public_firm_facts() {
     entity_names.sort();
     let mut anchors = store::seed::FIRM_ENTITY_NAMES
         .iter()
-        .map(|n| n.to_string())
+        .map(std::string::ToString::to_string)
         .collect::<Vec<_>>();
     anchors.sort();
     assert_eq!(entity_names, anchors);

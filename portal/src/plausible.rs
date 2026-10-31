@@ -39,6 +39,7 @@ pub const PLAUSIBLE_LOADER_HREF: &str = "/public/js/plausible.js";
 const UNCONFIGURED_DEATH_AND_DIVORCE_ID: &str = "pa-unconfigured-death-and-divorce";
 const UNCONFIGURED_AEGIS_ID: &str = "pa-unconfigured-aegis";
 const UNCONFIGURED_GROUNDWORK_ID: &str = "pa-unconfigured-groundwork";
+const UNCONFIGURED_IEP_DEFENDERS_ID: &str = "pa-unconfigured-iep-defenders";
 
 /// The Plausible script id (the `pa-…` stem of the snippet's script URL) for
 /// `key`'s public site.
@@ -61,9 +62,9 @@ pub const fn script_id(key: BrandKey) -> Option<&'static str> {
         BrandKey::Daybridge => Some("pa-j2JWmqoBTNJPRb64xIZ2o"),
         BrandKey::Summons => Some("pa-WUB2cKHxULoouY7ALHjwH"),
         BrandKey::DeathAndDivorce => Some(UNCONFIGURED_DEATH_AND_DIVORCE_ID),
-        // IEP is held out of `BrandKey::LIVE`: it serves no public pages, so
-        // no analytics snippet is configured for it yet.
-        BrandKey::Iep => None,
+        // No analytics site is configured for the practice yet; the
+        // unconfigured stub id keeps the public brand excluded until it is.
+        BrandKey::IepDefenders => Some(UNCONFIGURED_IEP_DEFENDERS_ID),
     }
 }
 
@@ -118,6 +119,7 @@ impl PlausibleSite {
             UNCONFIGURED_DEATH_AND_DIVORCE_ID,
             UNCONFIGURED_AEGIS_ID,
             UNCONFIGURED_GROUNDWORK_ID,
+            UNCONFIGURED_IEP_DEFENDERS_ID,
         ]
         .contains(&script_id)
         {
