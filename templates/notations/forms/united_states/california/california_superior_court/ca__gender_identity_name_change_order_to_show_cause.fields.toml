@@ -1,0 +1,33 @@
+form_code = "ca__gender_identity_name_change_order_to_show_cause"
+
+# NC-225 (Rev. 7/1/2026) — Order to Show Cause—Change of Name to Conform to
+# Gender Identity.
+#
+# Mapped: the petitioner's caption name, the filing county, the item-1
+# recital name, and the current/proposed name slots.
+#
+# Deliberately left unmapped (court or clerk completes):
+# - `SigDateNC125[0]` — the hearing date the clerk writes when the order is
+#   issued.
+# - `Caption[0].AttyPartyInfo[0].*`, `CourtInfo[0].*` beyond the county,
+#   `CaseNumber[0]` — firm identity, court branch, and case number.
+
+[[field]]
+name = "NC-225[0].Page1[0].Caption[0].TitlePartyName[0].Petitioner[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-225[0].Page1[0].List1[0].PetitionerName[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-225[0].Page1[0].List1[0].PresentName1[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-225[0].Page1[0].List1[0].ProposedName1[0]"
+question = "person__new_name.name"
+
+[[field]]
+name = "NC-225[0].Page1[0].Caption[0].CourtInfo[0].CrtCounty[0]"
+question = "custom_text__county_of_residence"

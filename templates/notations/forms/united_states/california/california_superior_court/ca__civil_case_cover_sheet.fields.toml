@@ -1,0 +1,32 @@
+form_code = "ca__civil_case_cover_sheet"
+
+# CM-010 (Rev. 1/1/2024) — Civil Case Cover Sheet.
+#
+# Mapped: the case title (the case name carries the petitioner's name), the
+# filing county, and the declarant's name in the item-11 signature block.
+#
+# Deliberately left unmapped (firm, clerk, or court completes):
+# - `List1[0].Item1Check[0..41]` — the item-1 case-type checkbox wall. Which
+#   case-type code applies to a name-change petition is county practice;
+#   the lawyer checks it per the filing county's convention.
+# - `Caption[0].AttyPartyInfo[0].*`, `CourtInfo[0].*`,
+#   `HearingInfo[0].*` (judge/department), `csn[0].CaseNumber[0]` — firm
+#   identity, court branch, and clerk-assigned entries.
+# - `Page2[0].List4[0].FillText1[0]` — causes-of-action count (not used for
+#   name-change petitions).
+# - `SigDate[0]` — signature date at review.
+#
+# The related-case and complex-case items on page 2 carry no fields for a
+# name-change petition (the boxes themselves are static print).
+
+[[field]]
+name = "CM-010[0].Page1[0].P1Caption[0].TitlePartyName[0].Party1[0]"
+question = "person__client.name"
+
+[[field]]
+name = "CM-010[0].Page2[0].SigName[0]"
+question = "person__client.name"
+
+[[field]]
+name = "CM-010[0].Page1[0].P1Caption[0].CourtInfo[0].CrtCounty[0]"
+question = "custom_text__county_of_residence"

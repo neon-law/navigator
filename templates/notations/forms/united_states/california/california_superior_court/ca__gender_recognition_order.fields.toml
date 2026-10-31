@@ -1,0 +1,89 @@
+form_code = "ca__gender_recognition_order"
+
+# NC-330 (Rev. 7/1/2026, confidential) — Order Recognizing Adult's Change of
+# Gender and Sex Identifier, for Name Change and for Issuance of New
+# Certificates.
+#
+# Mapped: the petitioner's caption name on both pages, the item-9
+# recognition checkboxes (female "1" / male "2" / nonbinary "3"), the
+# item-10 name-change block (legal name when the petition was filed, and
+# the new legal name), and the order's certificate directives (new birth
+# certificate "1", children's birth certificates "1", new marriage license
+# and certificate "Yes") — the directives recite what the NC-300 petition
+# requested, which the questionnaire already carries.
+#
+# Deliberately left unmapped (court completes at or after the hearing):
+# - `OrderCB1/OrderCB2[0]` — the title checkboxes for name change and
+#   certificate issuance; structural, verified by the lawyer.
+# - `List1[0].*` — hearing date, department, or without-hearing recital.
+# - `List2[0].CalRes/NoticeGiven/Objections[0]/[1]`, `objectionName[0]` —
+#   the court's residency, notice, and objection findings.
+# - `List3[0].reqForNC[0]`, the item-3 sex-offender determination
+#   (`SexOffenderReg[0]/[1]`, `Determinations[0]/[1]`), and `Li3B[0].T78[0]`
+#   — the court's CLETS/CJIS determination and name-decree recital.
+# - `List4[0].CheckBox61[0]` — the item-4 minors' certificate request
+#   recital (the operative directive in item 12 is mapped).
+# - `List5[0].*` — adult children's certificate findings (out of scope).
+# - `List7[0].CheckBox19[0]` (allegations true and sufficient) and
+#   `List8[0].*` (other findings) — the court's merits findings.
+# - `List10[0].CheckBox61[0]` (the name of ... is changed to) and
+#   `Li10B[0].CheckBox61[0]` — operative recitals around the mapped name
+#   slots; the lawyer verifies.
+# - `List12[0].TextField12x[0]`/`DateField12x[0]` — the children's names and
+#   birth dates; collected at review when item 12 applies.
+# - `List13[0].*` — the marriage-certificate block (spouse name, issuance
+#   date and county, bride/groom/neither designation).
+# - `CONcb[0]`/`CONcb12[0]` — compound "and change of name" riders.
+# - Signature dates and case numbers — clerk and judge entries.
+
+[[field]]
+name = "NC-330[0].Page1[0].P1Header[0].Petition[0].Petitioner[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-330[0].Page2[0].pXCaption[0].TitlePartyName[0].Petitioner[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-330[0].Page2[0].List9[0].identifier[0]"
+question = "custom_single_choice__sex_identifier"
+checked_when = "female"
+on_state = "1"
+
+[[field]]
+name = "NC-330[0].Page2[0].List9[0].identifier[1]"
+question = "custom_single_choice__sex_identifier"
+checked_when = "male"
+on_state = "2"
+
+[[field]]
+name = "NC-330[0].Page2[0].List9[0].identifier[2]"
+question = "custom_single_choice__sex_identifier"
+checked_when = "nonbinary"
+on_state = "3"
+
+[[field]]
+name = "NC-330[0].Page2[0].List10[0].PresentName[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-330[0].Page2[0].List10[0].Item10[0].Li10A[0].newName[0]"
+question = "person__new_name.name"
+
+[[field]]
+name = "NC-330[0].Page2[0].List11[0].NewBCcb[0]"
+question = "custom_single_choice__new_certificates"
+checked_when = "birth_certificate"
+on_state = "1"
+
+[[field]]
+name = "NC-330[0].Page2[0].List12[0].NewBCcb12[0]"
+question = "custom_single_choice__new_certificates"
+checked_when = "childs_birth_certificate"
+on_state = "1"
+
+[[field]]
+name = "NC-330[0].Page1[0].List6[0].Checkbox1[0]"
+question = "custom_single_choice__new_certificates"
+checked_when = "marriage_license"
+on_state = "Yes"
