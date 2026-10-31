@@ -395,6 +395,21 @@ const BUNDLED: &[FormMeta] = &[
         }),
         fee_waiver_code: None,
     },
+    FormMeta {
+        code: "kc__small_claims_notice",
+        jurisdiction: "WA",
+        title: "Notice of Small Claim",
+        origin_url: "https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/forms_sc/notice-of-small-claim-september-2025.pdf",
+        object_path: "forms/united_states/washington/king_county/kc__small_claims_notice.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/washington/king_county/kc__small_claims_notice.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "50.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
 ];
 
 /// Return the bundled form registry.

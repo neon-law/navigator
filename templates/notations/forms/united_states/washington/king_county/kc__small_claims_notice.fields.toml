@@ -1,0 +1,262 @@
+form_code = "kc__small_claims_notice"
+
+# King County District Court local form — Notice of Small Claim (KCDC
+# September 2025, 3 pages).
+#
+# Mapped: the four caption name rows (two plaintiffs, two defendants),
+# both plaintiff contact rows and both defendant contact rows (name,
+# street, city, state, zip), the client's own phone and email, both
+# claim-amount boxes (the notification paragraph and the statement of
+# claim), the due-date box, all nine claim-type checkboxes plus the
+# Other explanation and the auto-accident date, and the page-3
+# claim-facts narrative box.
+#
+# The survey counted 73 AcroForm tree nodes; the parser sees 62 terminal
+# fields — the difference is the eleven non-terminal parents in the
+# form's nested "Faulty Workmanship" chain, whose nonsense parent name
+# the parser qualifies its children through. The parser's qualified
+# names are the ground truth here.
+#
+# Deliberately left unmapped (decision recorded, firm or clerk completes):
+# - `cmbdivision` — the clerk's division dropdown (ships with the form's
+#   own placeholder value; left as the form ships it).
+# - `No` — the clerk's case-number box.
+# - `o` / `Email or Alt Phone_2` — plaintiff (2)'s phone and email; a
+#   people-list row carries name and address parts only, so a
+#   co-plaintiff's phone/email is confirmed at review.
+# - `Phone No_2` / `Email or Alt Phone_3` / `Phone No_3` /
+#   `Email or Alt Phone_4` — the defendants' phone and email rows (same
+#   people-row limit); service needs the address, which is mapped.
+# - `Faulty Workmanship.1.1.0.1` / `Faulty Workmanship.1.1.1.1` and
+#   `Name 1` / `Name 2` / `Language 1` / `Language 2` — the interpreter
+#   question and rows; hearing accommodations are confirmed with the
+#   client at review.
+# - `Faulty Workmanship.1.1.1.0.1.1` (military service),
+#   `Faulty Workmanship.1.1.1.0.0.1` (no defendant covered), and
+#   `Faulty Workmanship.1.1.1.0.0.0` (do not know) — the Servicemember
+#   Civil Relief Act determination is a legal conclusion for the lawyer
+#   at review, together with its two narrative boxes,
+#   `No defendant is covered by the Servicemember Civil Relief Act The
+#   facts supporting this claim are` (the inline facts blank on the
+#   no-defendant line) and `I do not know if any defendants are covered
+#   by the Servicemember Civil Relief Act` (the continuation box under
+#   it).
+# - `Clerk` — the clerk's action line.
+# - `City_5` / `State on` / `Date_2` / `Print or Type Name` — the
+#   signed-at city, state, date, and printed name; signed at the review
+#   appointment.
+# The nine claim-type checkboxes are independent yes/no answers (the
+# types combine), not one radio group: `custom_multiple_choice` needs
+# the checkbox-group fill shape tracked under ENG-454, so the
+# questionnaire asks them as adjacent toggles instead of one
+# multi-select question.
+
+[[field]]
+name = "1"
+question = "people__plaintiffs"
+row = 0
+part = "name"
+
+[[field]]
+name = "1 Address"
+question = "people__plaintiffs"
+row = 0
+part = "street"
+
+[[field]]
+name = "City"
+question = "people__plaintiffs"
+row = 0
+part = "city"
+
+[[field]]
+name = "State"
+question = "people__plaintiffs"
+row = 0
+part = "state"
+
+[[field]]
+name = "Zip"
+question = "people__plaintiffs"
+row = 0
+part = "zip"
+
+[[field]]
+name = "Phone No"
+question = "person__client.phone"
+
+[[field]]
+name = "Email or Alt Phone"
+question = "person__client.email"
+
+[[field]]
+name = "2"
+question = "people__plaintiffs"
+row = 1
+part = "name"
+
+[[field]]
+name = "2 Address"
+question = "people__plaintiffs"
+row = 1
+part = "street"
+
+[[field]]
+name = "City_2"
+question = "people__plaintiffs"
+row = 1
+part = "city"
+
+[[field]]
+name = "State_2"
+question = "people__plaintiffs"
+row = 1
+part = "state"
+
+[[field]]
+name = "Zip_2"
+question = "people__plaintiffs"
+row = 1
+part = "zip"
+
+[[field]]
+name = "1_2"
+question = "people__defendants"
+row = 0
+part = "name"
+
+[[field]]
+name = "1 Address_2"
+question = "people__defendants"
+row = 0
+part = "street"
+
+[[field]]
+name = "City_3"
+question = "people__defendants"
+row = 0
+part = "city"
+
+[[field]]
+name = "State_3"
+question = "people__defendants"
+row = 0
+part = "state"
+
+[[field]]
+name = "Zip_3"
+question = "people__defendants"
+row = 0
+part = "zip"
+
+[[field]]
+name = "2_2"
+question = "people__defendants"
+row = 1
+part = "name"
+
+[[field]]
+name = "2 Address_2"
+question = "people__defendants"
+row = 1
+part = "street"
+
+[[field]]
+name = "City_4"
+question = "people__defendants"
+row = 1
+part = "city"
+
+[[field]]
+name = "State_4"
+question = "people__defendants"
+row = 1
+part = "state"
+
+[[field]]
+name = "Zip_4"
+question = "people__defendants"
+row = 1
+part = "zip"
+
+[[field]]
+name = "THE COURT WILL MAIL YOUR HEARING DATE TO THE ADDRESS YOU PROVIDE"
+question = "custom_usd__claim_amount"
+
+[[field]]
+name = "owes me the sum of"
+question = "person__client.name"
+
+[[field]]
+name = "The amount owed is for"
+question = "custom_usd__claim_amount"
+
+[[field]]
+name = "Date"
+question = "custom_datetime__amount_due_date"
+
+[[field]]
+name = "Faulty Workmanship.0.0"
+question = "custom_yes_no__claim_faulty_workmanship"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "Faulty Workmanship.0.1"
+question = "custom_yes_no__claim_merchandise"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "Faulty Workmanship.1.1.0.0"
+question = "custom_yes_no__claim_auto_damages"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "Auto DamagesDate of Accident"
+question = "custom_datetime__auto_accident_date"
+
+[[field]]
+name = "Faulty Workmanship.2.0.0"
+question = "custom_yes_no__claim_wages"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "Faulty Workmanship.2.1"
+question = "custom_yes_no__claim_loan"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "Faulty Workmanship.1.0"
+question = "custom_yes_no__claim_return_of_deposit"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "Rent"
+question = "custom_yes_no__claim_rent"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "Property Damage"
+question = "custom_yes_no__claim_property_damage"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "Faulty Workmanship.2.0.1"
+question = "custom_yes_no__claim_other"
+checked_when = "yes"
+on_state = "On"
+
+[[field]]
+name = "Other"
+question = "custom_text__claim_other_description"
+
+[[field]]
+name = "Text1"
+question = "custom_text__claim_facts"
