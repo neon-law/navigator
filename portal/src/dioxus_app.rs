@@ -616,7 +616,6 @@ pub fn font_head(key: views::brand::BrandKey) -> &'static str {
         views::brand::BrandKey::LawyerShook => &LAWYER_SHOOK_HEAD,
         views::brand::BrandKey::GuiebShook => &GUIEB_SHOOK_HEAD,
         views::brand::BrandKey::Vesta => &VESTA_HEAD,
-        views::brand::BrandKey::Misericordia => &MISERICORDIA_HEAD,
         views::brand::BrandKey::Abhaya => &ABHAYA_HEAD,
         views::brand::BrandKey::DeleteYourDebt => &DELETE_YOUR_DEBT_HEAD,
         views::brand::BrandKey::Summons => &SUMMONS_HEAD,
