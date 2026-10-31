@@ -65,12 +65,26 @@ pub(crate) async fn run(action: ScraperCmd) -> ExitCode {
     }
 }
 
-/// Wire the production dependencies and run one adapter over one docket.
+/// Deliberately does not echo the caller's raw `--site`/`--docket` arguments
+/// back through any `eprintln!`: the `rust/cleartext-logging` `CodeQL` query
+/// taints the whole parsed `Command` enum through the unrelated
+/// `Commands::Secrets` arm, so any printed value that transitively descends
+/// from a clap-parsed argument is flagged — even though a site name is not
+/// sensitive. Following `cli/src/projects/skill.rs`, the sink never echoes
+/// the tainted value; the operator already knows what they typed.
+fn unregistered_site_message(registered_sites: impl Iterator<Item = String>) -> String {
+    format!(
+        "navigator scraper: no adapter registered for the requested site; registered sites: {}",
+        registered_sites.collect::<Vec<_>>().join(", ")
+    )
+}
+
 fn exit_failure(step: &str, error: impl std::fmt::Display) -> ExitCode {
     eprintln!("navigator scraper: {step}: {error}");
     ExitCode::from(2)
 }
 
+/// Wire the production dependencies and run one adapter over one docket.
 async fn run_site(
     site: &str,
     docket: &str,
@@ -85,12 +99,8 @@ async fn run_site(
     let adapters = registered_adapters();
     let Some(adapter) = find_adapter(&adapters, &site_key) else {
         eprintln!(
-            "navigator scraper: no adapter registered for `{site}`; registered sites: {}",
-            adapters
-                .iter()
-                .map(|adapter| adapter.site().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "{}",
+            unregistered_site_message(adapters.iter().map(|adapter| adapter.site().to_string()))
         );
         return ExitCode::from(2);
     };
@@ -153,5 +163,24 @@ async fn run_site(
             ExitCode::SUCCESS
         }
         Err(error) => exit_failure("run failed", error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unregistered_site_message;
+
+    #[test]
+    fn an_unregistered_site_names_the_registry_without_echoing_the_argument() {
+        let message = unregistered_site_message(["la-superior"].into_iter().map(ToOwned::to_owned));
+        assert!(message.contains("la-superior"));
+        // The clap-parsed argument must not be echoed back (CodeQL
+        // rust/cleartext-logging taints every value descending from the
+        // parsed `Command` enum).
+        assert_eq!(
+            message,
+            "navigator scraper: no adapter registered for the requested site; \
+             registered sites: la-superior"
+        );
     }
 }
