@@ -5833,3 +5833,27 @@ a.nav-steps__step:focus-visible {
   outline: 2px solid var(--nav-color-focus);
   outline-offset: var(--nav-focus-offset);
 }
+
+/* -- Dashboard showcase (the /design gallery's composition) --------------- */
+
+/* Two-thirds line chart, one-third donut; one column on a phone. */
+.design-dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--nav-space-3);
+  align-items: start;
+  margin-block: var(--nav-space-4);
+}
+
+.design-dashboard-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: var(--nav-space-3);
+  margin-block: var(--nav-space-4);
+}
+
+#dashboard { scroll-margin-top: 2rem; }
+
+@media (max-width: 760px) {
+  .design-dashboard-grid { grid-template-columns: minmax(0, 1fr); }
+}

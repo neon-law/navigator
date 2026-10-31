@@ -972,6 +972,7 @@ fn title_segment(segment: &str) -> String {
             "llc" => "LLC".to_string(),
             "mcp" => "MCP".to_string(),
             "oidc" => "OIDC".to_string(),
+            "uscis" => "USCIS".to_string(),
             other => {
                 let mut chars = other.chars();
                 let Some(first) = chars.next() else {
@@ -5629,6 +5630,14 @@ mod tests {
             (
                 "/notations/irs-form-990",
                 "Neon Law | Notations | IRS Form 990",
+            ),
+            (
+                "/immigration/family-green-cards",
+                "Neon Law | Immigration | Family Green Cards",
+            ),
+            (
+                "/immigration/uscis-notices",
+                "Neon Law | Immigration | USCIS Notices",
             ),
         ];
 
