@@ -128,7 +128,7 @@ pub const ENTITY_SEED_YAML: &str = canonical::ENTITY;
 pub const FIRM_ENTITY_NAME: &str = "Guieb & Shook PC";
 
 /// The second firm Entity the canonical seed ships. `Lex Tecnica LLP`
-/// anchors the `Lex` firm, which wears only the held-out `iep` brand —
+/// anchors the `Lex` firm, which wears only the `iep-defenders` brand —
 /// brand mobility's proof that a brand can belong to a different firm.
 /// Its row joins [`FIRM_ENTITY_NAME`]'s anchor-key discipline, so the
 /// delete guard protects it identically.
@@ -3293,21 +3293,19 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
     },
 ];
 
-/// The second firm's compiled brands: Lex wears only the held-out `iep`
-/// brand, whose row is firm-scoped to Lex from the moment it is first
-/// seeded. Deliberately absent from [`crate::firms::CLOSED_BRAND_KEYS`]:
-/// that list attaches keys to the practice firm and approves their email
-/// domains, and IEP — with no decided production domain — approves none
-/// and gets no backfill until its launch decisions land. Its placeholder
-/// host is the RFC-reserved `iep.example`; naming the real domain later
-/// is a one-line registry edit. `primary_hex` copies the light-mode
-/// primary of the OATH charcoal palette IEP borrows as its placeholder.
+/// The second firm's compiled brands: Lex wears only `iep-defenders`,
+/// whose row is firm-scoped to Lex from the moment it is first seeded.
+/// The key joins [`crate::firms::CLOSED_BRAND_KEYS`] for registry-ordered
+/// footer display and the website-URL backfill, but no practice-firm
+/// attachment — the brand belongs to Lex Tecnica LLP alone. Its row copies
+/// the compiled presentation: `BrandKey::IepDefenders`
+/// `default_typeface` and `default_palette().light.primary`.
 const LEX_COMPILED_BRANDS: &[CompiledBrand] = &[CompiledBrand {
-    key: "iep",
-    website_url: "https://www.iep.example",
-    name: "IEP",
-    typeface: "source-serif-4",
-    primary_hex: "#2F4550",
+    key: "iep-defenders",
+    website_url: "https://www.iepdefenders.com",
+    name: "IEP Defenders",
+    typeface: "source-sans-3",
+    primary_hex: "#5B21B6",
 }];
 
 /// The website URL [`COMPILED_BRANDS`] seeds for `key`, if it names a
@@ -3422,7 +3420,7 @@ async fn ensure_practice_firm(surreal: &SurrealDb) -> anyhow::Result<crate::firm
 }
 
 /// Find or create the deployment's second firm: the `Lex Tecnica LLP`
-/// entity's Firm, wearing only the held-out `iep` brand. Idempotent on
+/// entity's Firm, wearing only the `iep-defenders` brand. Idempotent on
 /// the same terms as [`ensure_practice_firm`] — an existing Firm on this
 /// Entity is left exactly as it is. Its Admin DRI is the same primary
 /// admin: the canonical seed ships exactly one person of record, and
@@ -3463,23 +3461,35 @@ async fn ensure_lex_firm(surreal: &SurrealDb) -> anyhow::Result<crate::firms::Fi
     }
 }
 
+/// The compiled brand keys the canonical practice firm wears: every closed
+/// key except the ones the Lex firm owns. `seed_practice` attaches exactly
+/// this set to the practice firm, and the seed tests assert against it
+/// rather than re-deriving the two-firm split.
+#[must_use]
+pub fn practice_worn_brand_keys() -> Vec<&'static str> {
+    crate::firms::CLOSED_BRAND_KEYS
+        .iter()
+        .copied()
+        .filter(|key| !LEX_COMPILED_BRANDS.iter().any(|brand| brand.key == *key))
+        .collect()
+}
+
 /// The one practice this deployment already is, wearing every registered
-/// house-brand key. Resolves or creates the Firm first (ENG-659: every
-/// compiled brand must be created *as* that Firm's own row, so the Firm has
-/// to exist before [`seed_brands`] runs), then attaches each key through
-/// `firm_brand`.
+/// house-brand key the Lex firm does not own. Resolves or creates the Firm
+/// first (ENG-659: every compiled brand must be created *as* that Firm's
+/// own row, so the Firm has to exist before [`seed_brands`] runs), then
+/// attaches each key through `firm_brand`.
 async fn seed_practice(surreal: &SurrealDb) -> anyhow::Result<()> {
     let firm = ensure_practice_firm(surreal).await?;
     seed_brands(surreal, &firm, COMPILED_BRANDS).await?;
-    for key in crate::firms::CLOSED_BRAND_KEYS {
+    for key in practice_worn_brand_keys() {
         match crate::firms::ensure_brand(surreal, firm.id, key).await {
             Ok(()) | Err(crate::firms::FirmError::DuplicateBrand) => {}
             Err(error) => return Err(error.into()),
         }
     }
-    // The second firm wears only IEP, whose brand row seeds under the Lex
-    // firm — the whole point of brand mobility is that the same key could
-    // wear either firm at runtime, so the seed proves both shapes exist.
+    // The whole point of brand mobility is that the same key could wear
+    // either firm at runtime, so the seed proves both shapes exist.
     let lex = ensure_lex_firm(surreal).await?;
     seed_brands(surreal, &lex, LEX_COMPILED_BRANDS).await?;
     for brand in LEX_COMPILED_BRANDS {
@@ -6206,7 +6216,7 @@ records:
         names.sort();
         let mut expected = super::FIRM_ENTITY_NAMES
             .iter()
-            .map(|n| n.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>();
         expected.sort();
         assert_eq!(names, expected);
@@ -6899,7 +6909,7 @@ records:
     }
 
     #[tokio::test]
-    async fn seeds_two_firms_with_iep_at_lex() {
+    async fn seeds_two_firms_with_iep_defenders_at_lex() {
         let surreal = mem_surreal().await;
         seed_canonical(&surreal, &fs_storage().await)
             .await
@@ -6941,38 +6951,41 @@ records:
         assert_ne!(neon.id, lex.id);
 
         // The practice firm wears every closed house brand; Lex wears
-        // only IEP.
+        // only IEP Defenders.
         let mut neon_keys = crate::firms::brand_keys_for_firm(&surreal, neon.id)
             .await
             .unwrap();
         neon_keys.sort();
         let mut closed = crate::firms::CLOSED_BRAND_KEYS
             .iter()
-            .map(|k| k.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>();
         closed.sort();
         assert_eq!(neon_keys, closed);
         let lex_keys = crate::firms::brand_keys_for_firm(&surreal, lex.id)
             .await
             .unwrap();
-        assert_eq!(lex_keys, vec!["iep".to_string()]);
+        assert_eq!(lex_keys, vec!["iep-defenders".to_string()]);
 
-        // The held-out key resolves to the Lex firm and to nothing else.
+        // The Lex key resolves to the Lex firm and to nothing else.
         assert_eq!(
-            crate::firms::firm_id_for_brand_key(&surreal, "iep")
+            crate::firms::firm_id_for_brand_key(&surreal, "iep-defenders")
                 .await
                 .unwrap(),
             Some(lex.id)
         );
-        let iep = crate::brands::find_by_key(&surreal, "iep")
+        let iep = crate::brands::find_by_key(&surreal, "iep-defenders")
             .await
             .unwrap()
-            .expect("iep brand");
+            .expect("iep-defenders brand");
         assert_eq!(iep.firm_id, Some(lex.id));
-        assert_eq!(iep.name, "IEP");
-        assert_eq!(iep.typeface.as_deref(), Some("source-serif-4"));
-        assert_eq!(iep.primary_color.as_deref(), Some("#2F4550"));
-        assert_eq!(iep.website_url.as_deref(), Some("https://www.iep.example"));
+        assert_eq!(iep.name, "IEP Defenders");
+        assert_eq!(iep.typeface.as_deref(), Some("source-sans-3"));
+        assert_eq!(iep.primary_color.as_deref(), Some("#5B21B6"));
+        assert_eq!(
+            iep.website_url.as_deref(),
+            Some("https://www.iepdefenders.com")
+        );
 
         // A second pass changes nothing: the two firms and their brand
         // associations are already exactly as seeded.

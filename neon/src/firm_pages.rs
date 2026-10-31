@@ -1170,9 +1170,8 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
 /// `path` is the route's own firm path: a brand that does not publish it
 /// (`BrandKey::publishes_firm_path` — the same gate the request middleware
 /// enforces) gets no entry, so its content is never baked. Loading a brand's
-/// catalog that it does not publish would panic — the held-out IEP ships no
-/// catalogs at all — and no request could ever serve the entry: the same gate
-/// refuses the path first.
+/// catalog that it does not publish would panic — and no request could ever
+/// serve the entry: the same gate refuses the path first.
 fn branded_map<T>(
     default: &'static views::brand::Branding,
     path: &str,
@@ -1270,9 +1269,9 @@ fn resolve_firm_contact_content(
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
         ),
-        // IEP belongs to the second firm, so its contact page names Lex
-        // Tecnica LLP — never Guieb & Shook PC.
-        BrandKey::Iep => format!(
+        // IEP Defenders belongs to the second firm, so its contact page
+        // names Lex Tecnica LLP — never Guieb & Shook PC.
+        BrandKey::IepDefenders => format!(
             "Reach {firm_name}, a practice of Lex Tecnica LLP, about legal services. \
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
@@ -1332,7 +1331,7 @@ pub(crate) fn resolve_firm_home_content(
         | BrandKey::Aegis
         | BrandKey::Groundwork
         | BrandKey::DeathAndDivorce
-        | BrandKey::Iep => locales::home_for_host(branding, deployment_host),
+        | BrandKey::IepDefenders => locales::home_for_host(branding, deployment_host),
     }
 }
 

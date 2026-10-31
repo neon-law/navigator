@@ -166,7 +166,8 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
         | BrandKey::DeleteYourDebt
         | BrandKey::Summons
         | BrandKey::Daybridge
-        | BrandKey::DeathAndDivorce => ["/", "/services", "/contact", "/testimonials"]
+        | BrandKey::DeathAndDivorce
+        | BrandKey::IepDefenders => ["/", "/services", "/contact", "/testimonials"]
             .iter()
             .map(|path| (*path).to_string())
             .collect(),
@@ -186,9 +187,6 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
             .iter()
             .map(|path| (*path).to_string())
             .collect(),
-        // Held out: IEP publishes no firm paths anywhere (the launch gate
-        // refuses its placeholder hosts outright), so its sitemap is empty.
-        BrandKey::Iep => std::collections::BTreeSet::new(),
         BrandKey::Neon => {
             let mut paths: std::collections::BTreeSet<String> = [
                 "/",
@@ -305,7 +303,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
         | BrandKey::Groundwork
         | BrandKey::DeathAndDivorce
         | BrandKey::CyberInjuryLaw
-        | BrandKey::Iep) => practice_brand_llms_txt(key),
+        | BrandKey::IepDefenders) => practice_brand_llms_txt(key),
         BrandKey::DeleteYourData => {
             let branding = &views::brand::DELETE_YOUR_DATA_BRANDING;
             let mark = branding.firm.site_name;

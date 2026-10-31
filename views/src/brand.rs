@@ -1018,23 +1018,18 @@ pub const GROUNDWORK_BRANDING: Branding = Branding {
     ..DEFAULT_BRANDING
 };
 
-/// The IEP house identity — Lex Tecnica LLP's Child Rights practice
-/// (Individualized Education Programs and disability rights).
+/// The IEP Defenders brand — Lex Tecnica LLP's special-education practice.
 ///
-/// Every contact field is a deliberate placeholder, not an omission: IEP is
-/// held out of the launch gate (`BrandKey::LIVE`) until its production
-/// domain is decided, so none of this renders publicly. What is compiled
-/// now is the legal identity the seed and the store read — `legal_entity`
-/// names Lex Tecnica LLP, the second firm — and the trademark fields are
-/// empty because no registration exists to cite. Inheriting any of Guieb &
-/// Shook PC's offices, attorneys, memberships, socials, or postal box here
-/// would publish the wrong firm's facts the day the brand launches, so
-/// those fields start empty until Lex's own are decided.
-pub const IEP_BRANDING: Branding = Branding {
+/// Lex Tecnica is a second firm alongside Guieb & Shook PC, so none of
+/// Guieb & Shook PC's offices, attorneys, memberships, socials, or postal
+/// box are inherited here: those fields start empty until Lex's own
+/// verified public details exist. The trademark fields are empty because
+/// no registration exists to cite.
+pub const IEP_DEFENDERS_BRANDING: Branding = Branding {
     firm: SiteBrand {
-        site_name: "IEP",
+        site_name: "IEP Defenders",
         home_href: "/",
-        tagline: "Special-education rights advocacy for students and families.",
+        tagline: "Free special education lawyers defending your child's rights.",
         // No address published for Lex Tecnica LLP yet; the live Firm row,
         // not this fallback, is what the footer's copyright resolves from.
         postal_address: "",
@@ -1046,18 +1041,18 @@ pub const IEP_BRANDING: Branding = Branding {
         // kept in step with `store::seed::LEX_ENTITY_NAME`.
         legal_entity: "Lex Tecnica LLP",
     },
-    firm_email: "contact@iep.example",
-    support_domain: "iep.example",
-    firm_phone: "",
+    firm_email: "IEPDefenders@LexTecnica.com",
+    support_domain: "lextecnica.com",
+    firm_phone: "+1-743-437-4357",
     firm_offices: &[],
     firm_attorneys: &[],
     firm_memberships: &[],
-    firm_social: &[],
-    // Lex wears only IEP, so the family row is IEP alone — not the Guieb &
-    // Shook family `BrandKey::ALL` would advertise.
-    firm_family: &[BrandKey::Iep],
-    // Held empty until IEP's registration status is decided; a brand with
-    // an empty trademark renders no trademark notice at all.
+    firm_social: SHARED_SOCIAL,
+    // Lex wears only IEP Defenders, so the family row is IEP Defenders
+    // alone — not the Guieb & Shook family `BrandKey::ALL` would advertise.
+    firm_family: &[BrandKey::IepDefenders],
+    // Held empty until a registration exists to cite; a brand with an
+    // empty trademark renders no trademark notice at all.
     firm_trademark: "",
     firm_trademark_registration: "",
     firm_trademark_record_url: "",
@@ -1065,18 +1060,21 @@ pub const IEP_BRANDING: Branding = Branding {
     terms_url: "/terms",
     privacy_url: "/privacy",
     base_url: "",
-    primary_domain: "iep.example",
-    firm_disclaimer: "Attorney advertising. IEP is a practice of Lex Tecnica LLP; nothing here is \
-         legal advice without a signed engagement. Past results do not guarantee \
+    primary_domain: "iepdefenders.com",
+    firm_disclaimer:
+        "Attorney advertising. IEP Defenders is a practice of Lex Tecnica LLP; nothing \
+         here is legal advice without a signed engagement. Past results do not guarantee \
          future outcomes.",
     mission_description:
-        "IEP is Lex Tecnica LLP's Child Rights practice: individualized education \
-         programs and disability rights advocacy.",
+        "IEP Defenders defends the rights of students with disabilities and their families, \
+         helping them secure the special education services their schools owe them. It is a \
+         practice of Lex Tecnica LLP.",
     service_description:
-        "Individualized education programs and disability rights advocacy, from IEP, \
-         a practice of Lex Tecnica LLP.",
+        "Special education advocacy from IEP Defenders, a practice of Lex Tecnica LLP: \
+         evaluations, eligibility, IEP implementation, placement, school discipline, state \
+         complaints, mediation, and due process.",
     portal_only: false,
-    brand_key: BrandKey::Iep,
+    brand_key: BrandKey::IepDefenders,
 };
 
 /// A closed key naming which house brand a request resolves to. Distinct
@@ -1109,18 +1107,11 @@ pub enum BrandKey {
     Groundwork,
     /// The Guieb & Shook PC holding page.
     GuiebShook,
-    /// Individualized Education Programs and disability rights advocacy —
-    /// Lex Tecnica LLP's Child Rights practice. Lex Tecnica is a second
-    /// firm alongside Guieb & Shook PC, so this key's brand row and
-    /// `firm_brand` attachment seed under [`crate::seed`] differently
-    /// from every house brand above.
-    ///
-    /// Held out of [`Self::LIVE`] until its production domain is decided:
-    /// its hosts are RFC 2606 placeholders (`iep.example`), which cannot
-    /// resolve publicly, and every served request for them is refused by
-    /// the launch gate. Naming the domain later is a one-line registry
-    /// edit here.
-    Iep,
+    /// IEP Defenders — Lex Tecnica LLP's special-education practice.
+    /// Lex Tecnica is a second firm alongside Guieb & Shook PC, so this
+    /// key's brand row and `firm_brand` attachment seed under
+    /// [`crate::seed`] differently from every house brand above.
+    IepDefenders,
 }
 
 impl BrandKey {
@@ -1140,7 +1131,7 @@ impl BrandKey {
         Self::Aegis,
         Self::Groundwork,
         Self::GuiebShook,
-        Self::Iep,
+        Self::IepDefenders,
     ];
 
     /// The compiled keys whose hosts currently serve a public site. The
@@ -1161,6 +1152,7 @@ impl BrandKey {
         Self::Aegis,
         Self::Groundwork,
         Self::GuiebShook,
+        Self::IepDefenders,
     ];
 
     #[must_use]
@@ -1180,7 +1172,7 @@ impl BrandKey {
             Self::Groundwork => "groundwork",
             Self::GuiebShook => "guieb-shook",
             Self::CyberInjuryLaw => "cyber-injury-law",
-            Self::Iep => "iep",
+            Self::IepDefenders => "iep-defenders",
         }
     }
 
@@ -1209,7 +1201,7 @@ impl BrandKey {
             Self::Groundwork => "real estate transactions and property disputes",
             Self::GuiebShook => "attorneys at law",
             Self::CyberInjuryLaw => "injury claims and cybercrime",
-            Self::Iep => "special-education rights advocacy",
+            Self::IepDefenders => "special education attorneys for your child's IEP",
         }
     }
 
@@ -1307,11 +1299,8 @@ impl BrandKey {
             | Self::DeleteYourDebt
             | Self::Summons
             | Self::Daybridge
-            | Self::DeathAndDivorce => &["home", "services"],
-            // IEP ships no catalog files: it is held out of the launch gate
-            // with no pages authored, and the loader test iterates the stems
-            // each key actually ships.
-            Self::Iep => &[],
+            | Self::DeathAndDivorce
+            | Self::IepDefenders => &["home", "services"],
         }
     }
 
@@ -1383,13 +1372,10 @@ impl BrandKey {
             | Self::Abhaya
             | Self::DeleteYourDebt
             | Self::Daybridge
-            | Self::DeathAndDivorce => {
+            | Self::DeathAndDivorce
+            | Self::IepDefenders => {
                 matches!(path, "/" | "/services" | "/contact" | "/testimonials")
             }
-            // Held out: IEP publishes no firm paths anywhere. The launch
-            // gate refuses its hosts outright, so this arm is the belt to
-            // the gate's suspenders.
-            Self::Iep => false,
         }
     }
 
@@ -1458,7 +1444,7 @@ impl BrandKey {
             Self::Groundwork => "groundworkrealestatelaw.com",
             Self::GuiebShook => "guiebandshook.com",
             Self::CyberInjuryLaw => "cyberinjurylaw.com",
-            Self::Iep => "iep.example",
+            Self::IepDefenders => "iepdefenders.com",
         }
     }
 
@@ -1528,10 +1514,7 @@ impl BrandKey {
             ],
             Self::CyberInjuryLaw => &["www.cyberinjurylaw.com", "staging.cyberinjurylaw.com"],
             Self::GuiebShook => &["www.guiebandshook.com", "staging.guiebandshook.com"],
-            // RFC 2606 placeholder hosts: `.example` is reserved and cannot
-            // resolve publicly, so the launch gate's refusal is the only
-            // treatment these names ever get until the real domain is chosen.
-            Self::Iep => &["www.iep.example", "staging.iep.example"],
+            Self::IepDefenders => &["www.iepdefenders.com", "staging.iepdefenders.com"],
         }
     }
 
@@ -1557,7 +1540,7 @@ impl BrandKey {
             Self::Groundwork => &GROUNDWORK_BRANDING,
             Self::GuiebShook => &GUIEB_SHOOK_BRANDING,
             Self::CyberInjuryLaw => &CYBER_INJURY_BRANDING,
-            Self::Iep => &IEP_BRANDING,
+            Self::IepDefenders => &IEP_DEFENDERS_BRANDING,
         }
     }
 
@@ -1577,10 +1560,9 @@ impl BrandKey {
     #[must_use]
     pub const fn local_port_env_var(self) -> Option<&'static str> {
         match self {
-            // No dedicated local port: Neon is the deployment default, and
-            // IEP ships no pages and no real host, so there is nothing
-            // local to preview until its launch decisions land.
-            Self::Neon | Self::Iep => None,
+            // No dedicated local port: Neon is the deployment default, so
+            // it already answers on the shared port.
+            Self::Neon => None,
             Self::DeleteYourData => Some("NAVIGATOR_LOCAL_DELETE_YOUR_DATA_PORT"),
             Self::LawyerShook => Some("NAVIGATOR_LOCAL_LAWYER_SHOOK_PORT"),
             Self::Vesta => Some("NAVIGATOR_LOCAL_VESTA_PORT"),
@@ -1594,6 +1576,7 @@ impl BrandKey {
             Self::Groundwork => Some("NAVIGATOR_LOCAL_GROUNDWORK_PORT"),
             Self::GuiebShook => Some("NAVIGATOR_LOCAL_GUIEB_SHOOK_PORT"),
             Self::CyberInjuryLaw => Some("NAVIGATOR_LOCAL_CYBER_INJURY_LAW_PORT"),
+            Self::IepDefenders => Some("NAVIGATOR_LOCAL_IEP_DEFENDERS_PORT"),
         }
     }
 }
@@ -3244,22 +3227,23 @@ mod tests {
 
     // --- The launch gate ---------------------------------------------------
 
-    /// IEP is registered but held out: its RFC 2606 placeholder hosts can
-    /// never be admitted, and its compiled trademark fields stay empty until
-    /// a registration exists to cite — so no trademark notice may render for
-    /// it under any footer shape.
+    /// IEP Defenders is registered and live: both of its hosts are admitted
+    /// by the launch gate, and its compiled trademark fields stay empty
+    /// until a registration exists to cite — so no trademark notice may
+    /// render for it under any footer shape.
     #[test]
-    fn iep_is_registered_but_held_out_with_empty_trademark() {
-        let key = BrandKey::parse("iep").expect("iep is registered");
-        assert!(BrandKey::ALL.contains(&key), "iep is in ALL");
-        assert!(!BrandKey::LIVE.contains(&key), "iep stays out of LIVE");
-        assert!(!key.is_live());
+    fn iep_defenders_is_registered_and_live_with_empty_trademark() {
+        let key = BrandKey::parse("iep-defenders").expect("iep-defenders is registered");
+        assert!(BrandKey::ALL.contains(&key), "iep-defenders is in ALL");
+        assert!(BrandKey::LIVE.contains(&key), "iep-defenders is live");
+        assert!(key.is_live());
         for host in key.hosts() {
-            assert_eq!(super::admitted_brand_key(host), None);
-            assert!(super::held_out_host(host));
+            assert_eq!(super::admitted_brand_key(host), Some(key));
+            assert!(!super::held_out_host(host));
         }
-        assert!(super::held_out_host(key.apex()));
-        let branding = BrandKey::Iep.resolve_branding(&DEFAULT_BRANDING);
+        assert_eq!(super::admitted_brand_key_for_apex(key.apex()), Some(key));
+        assert!(!super::held_out_host(key.apex()));
+        let branding = BrandKey::IepDefenders.resolve_branding(&DEFAULT_BRANDING);
         assert_eq!(branding.firm.legal_entity, "Lex Tecnica LLP");
         assert!(branding.firm.is_law_firm);
         assert_eq!(branding.firm_trademark, "");

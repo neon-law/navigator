@@ -58,6 +58,7 @@ pub const CLOSED_BRAND_KEYS: &[&str] = &[
     "aegis",
     "groundwork",
     "guieb-shook",
+    "iep-defenders",
 ];
 
 /// Whether a `brand` row exists carrying this key — the live check
@@ -2688,7 +2689,7 @@ mod tests {
     async fn only_owner_moves_or_attaches() {
         let db = mem_surreal().await;
         let admin = admin_dri_person(&db).await;
-        let firm = practice_with_admin(&db, "Admin DRI Practice", admin.clone()).await;
+        let firm = practice_with_admin(&db, "Admin DRI Practice", admin).await;
         let wearer = practice(&db, "Wearer").await;
         attach_brand(&db, Role::Owner, None, wearer.id, "neon")
             .await
