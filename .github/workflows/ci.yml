@@ -217,15 +217,6 @@ jobs:
   # gate`; that is the cheap gate that lets the rust job stay skipped.
   gate:
     name: gate content
-    services:
-      presidio:
-        image: ghcr.io/data-privacy-stack/presidio-analyzer:2.2.364@sha256:ae8f6f111ac2f04e3fec552f7f80edd0dcbfa2dd69ee1b9e030475be31669885
-        env:
-          LOG_LEVEL: WARNING
-        ports:
-          - 3000:3000
-        # Analyzer errors can contain input text. Never upload its raw logs.
-        options: --log-driver none
     # This standard runner builds one debug `navigator` binary. A cold-cache
     # CLI build takes 36 minutes (run 41067171840), so the job needs a full
     # hour for the content, personal-data, secret, and integrity checks too.
@@ -252,8 +243,27 @@ jobs:
         run: cargo build -p cli --quiet
       - name: gate the content tree with navigator
         run: "${CARGO_TARGET_DIR:-target}/debug/navigator project gate --ci"
+      - name: start the local PII analyzer
+        run: |
+          # Start the analyzer as a plain docker step, not a job service: its
+          # lifetime then spans only the scan instead of the whole build. The
+          # analyzer is healthy in seconds after `docker run` but has been
+          # observed dying (or dropping its port mapping) ~8-11 minutes after
+          # startup, so jobs whose build reaches the old job-service poll later
+          # than that always failed (runs 41185810987, 41187088855 x3) while
+          # shorter builds passed the identical poll. Same pinned digest, port,
+          # env, and log suppression as the service it replaces. Analyzer
+          # errors can contain input text. Never upload its raw logs.
+          docker run --detach --name presidio-analyzer \
+            --env LOG_LEVEL=WARNING \
+            --publish 3000:3000 \
+            --log-driver none \
+            ghcr.io/data-privacy-stack/presidio-analyzer:2.2.364@sha256:ae8f6f111ac2f04e3fec552f7f80edd0dcbfa2dd69ee1b9e030475be31669885
       - name: wait for the local PII analyzer
-        run: curl --fail --silent --output /dev/null --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:3000/health
+        # --retry-all-errors, not just --retry-connrefused: docker's port proxy
+        # accepts the connection and the booting app resets it, which curl
+        # reports as exit 56 and would otherwise not retry at all.
+        run: curl --fail --silent --output /dev/null --retry 30 --retry-all-errors --retry-delay 2 http://127.0.0.1:3000/health
       - name: scan for personal data with Presidio
         run: '"${CARGO_TARGET_DIR:-target}/debug/navigator" pii --analyzer-url http://127.0.0.1:3000'
       - name: scan the working tree for secrets
