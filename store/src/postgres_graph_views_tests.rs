@@ -6,8 +6,8 @@
 //! these surfaces have no Surreal counterpart to stay in parity with.
 
 use super::{firm_view, lawyer_view, project_view, FirmView, GraphView, MAX_GRAPH_DEPTH};
-use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::postgres::PostgresDb;
+use crate::postgres_mirror::tests::{connect, fresh_schema};
 use std::collections::BTreeSet;
 
 /// A synthetic two-firm graph: Firm A holds two lawyers (lead and
@@ -32,7 +32,6 @@ async fn seed_reference(
     pg: &PostgresDb,
     inserted_at: chrono::DateTime<chrono::Utc>,
 ) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid, uuid::Uuid, uuid::Uuid) {
-
     sqlx::query(
         "INSERT INTO entity_type (id, name, inserted_at, updated_at) \
          VALUES ($1, 'Synthetic Entity Type', $2, $2)",
@@ -67,7 +66,12 @@ async fn seed_reference(
 
     // Lead lawyer, co-counsel, client, opposing lawyer — in that order.
     let mut people = Vec::new();
-    for name in ["Lead Lawyer", "Co-counsel", "Client Person", "Opposing Lawyer"] {
+    for name in [
+        "Lead Lawyer",
+        "Co-counsel",
+        "Client Person",
+        "Opposing Lawyer",
+    ] {
         let id = uuid::Uuid::now_v7();
         sqlx::query(
             "INSERT INTO person (id, name, email, inserted_at, updated_at) \
@@ -122,10 +126,7 @@ async fn seed_edges(
 
     let firm_a = uuid::Uuid::now_v7();
     let firm_b = uuid::Uuid::now_v7();
-    for (id, name, slug) in [
-        (firm_a, "Firm A", "firm-a"),
-        (firm_b, "Firm B", "firm-b"),
-    ] {
+    for (id, name, slug) in [(firm_a, "Firm A", "firm-a"), (firm_b, "Firm B", "firm-b")] {
         sqlx::query(
             "INSERT INTO firm (id, name, slug, status, inserted_at, updated_at) \
              VALUES ($1, $2, $3, 'active', $4, $4)",
@@ -260,7 +261,10 @@ fn edge_keys(view: &GraphView) -> Vec<String> {
     view.edges
         .iter()
         .map(|edge| match &edge.kind {
-            Some(kind) => format!("{} {}->{} ({kind})", edge.edge_type, edge.source, edge.target),
+            Some(kind) => format!(
+                "{} {}->{} ({kind})",
+                edge.edge_type, edge.source, edge.target
+            ),
             None => format!("{} {}->{}", edge.edge_type, edge.source, edge.target),
         })
         .collect()
@@ -283,12 +287,24 @@ async fn project_view_renders_the_matter_neighborhood() {
     let view = project_view(&pg, f.matter_one, 2).await.unwrap();
     let ids = node_ids(&view);
     for id in [
-        f.matter_one, f.lead, f.client, f.opposing, f.entity, f.firm_a, f.firm_b,
+        f.matter_one,
+        f.lead,
+        f.client,
+        f.opposing,
+        f.entity,
+        f.firm_a,
+        f.firm_b,
     ] {
         assert!(ids.contains(&id.to_string()), "missing {id} in {ids:?}");
     }
-    assert!(!ids.contains(&f.counsel.to_string()), "co-counsel works Matter Two only");
-    assert!(!ids.contains(&f.matter_two.to_string()), "Matter Two is not on Matter One's view");
+    assert!(
+        !ids.contains(&f.counsel.to_string()),
+        "co-counsel works Matter Two only"
+    );
+    assert!(
+        !ids.contains(&f.matter_two.to_string()),
+        "Matter Two is not on Matter One's view"
+    );
     assert_eq!(view.nodes.len(), 7);
 
     let keys = edge_keys(&view);
@@ -337,7 +353,9 @@ async fn project_view_renders_the_matter_neighborhood() {
     assert_eq!(shallow.edges.len(), 4, "two works_on, two handles");
 
     // Depth beyond the server cap clamps to the cap — same as depth 3.
-    let deep = project_view(&pg, f.matter_one, MAX_GRAPH_DEPTH).await.unwrap();
+    let deep = project_view(&pg, f.matter_one, MAX_GRAPH_DEPTH)
+        .await
+        .unwrap();
     let clamped = project_view(&pg, f.matter_one, 255).await.unwrap();
     assert_eq!(deep, clamped);
 
@@ -347,7 +365,9 @@ async fn project_view_renders_the_matter_neighborhood() {
     // party's unrelated matters never balloon the matter's view.
     let deep_keys = edge_keys(&deep);
     assert!(deep_keys.contains(&format!("MEMBER_OF {}->{}", f.opposing, f.firm_b)));
-    assert!(!deep_keys.iter().any(|key| key.contains("WORKS_ON") && key.contains(&f.matter_two.to_string())));
+    assert!(!deep_keys
+        .iter()
+        .any(|key| key.contains("WORKS_ON") && key.contains(&f.matter_two.to_string())));
     assert_eq!(deep.nodes.len(), 7);
     assert_eq!(deep.edges.len(), 10);
 }
@@ -363,12 +383,16 @@ async fn lawyer_view_renders_the_person_neighborhood() {
     let view = lawyer_view(&pg, f.lead, 2).await.unwrap();
     let ids = node_ids(&view);
     for id in [
-        f.lead, f.matter_one, f.entity, f.firm_a, f.client, f.opposing, f.firm_b, f.matter_two,
+        f.lead,
+        f.matter_one,
+        f.entity,
+        f.firm_a,
+        f.client,
+        f.opposing,
+        f.firm_b,
+        f.matter_two,
     ] {
-        assert!(
-            ids.contains(&id.to_string()),
-            "missing {id} in {ids:?}"
-        );
+        assert!(ids.contains(&id.to_string()), "missing {id} in {ids:?}");
     }
     assert_eq!(
         view.nodes.len(),

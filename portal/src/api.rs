@@ -3192,9 +3192,7 @@ async fn can_view_lawyer_graph(state: &ApiState, lawyer: &LawyerSession, person_
                 membership.firm_id,
             )
             .await;
-        if decision
-            .is_ok_and(store::firm_capability::FirmCapabilityDecision::is_allowed)
-        {
+        if decision.is_ok_and(store::firm_capability::FirmCapabilityDecision::is_allowed) {
             return true;
         }
     }

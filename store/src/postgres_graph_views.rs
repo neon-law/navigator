@@ -150,7 +150,8 @@ pub async fn project_view(
 
     // Hop 1: everything attached to the project itself (parties, handling
     // firms). Later hops walk outward from whoever is newly reached.
-    let attach_rows = read_graph(pg, PROJECT_ATTACH_SQL, &format!("{{\"seed\": \"{seed}\"}}")).await?;
+    let attach_rows =
+        read_graph(pg, PROJECT_ATTACH_SQL, &format!("{{\"seed\": \"{seed}\"}}")).await?;
     let mut frontier = Vec::new();
     for row in attach_rows {
         let raw: EdgeRow = decode(&row, "graph view edge")?;
@@ -179,7 +180,11 @@ pub async fn project_view(
 
 /// The lawyer view: matters worked on, entity roles, firm membership, and the
 /// client/adverse relationships around one person.
-pub async fn lawyer_view(pg: &PostgresDb, person_id: Uuid, depth: u8) -> Result<GraphView, GraphError> {
+pub async fn lawyer_view(
+    pg: &PostgresDb,
+    person_id: Uuid,
+    depth: u8,
+) -> Result<GraphView, GraphError> {
     let seed = person_id.to_string();
     let Some(seed_vertex) = seed_vertex(pg, &seed).await? else {
         return Ok(GraphView::default());
