@@ -38,6 +38,7 @@ pub mod registry;
 pub mod request_identity;
 pub mod social_publisher;
 mod tiktok_business;
+pub mod youtube_comments;
 
 pub use email_config::{from_env as email_from_env, EmailConfigError};
 pub use notation_service::{

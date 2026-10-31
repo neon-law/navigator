@@ -138,6 +138,15 @@ const JOB_COPY: &[JobCopy] = &[
         manual_slug: None,
     },
     JobCopy {
+        cron_name: "youtube-comments-poll-trigger",
+        name: "YouTube comments poll",
+        cadence: "Every fifteen minutes",
+        description: "Reads comments on the Brand's published YouTube videos and files each \
+                      audience comment into the firm inbox on the youtube channel with full \
+                      attribution; the same alert and triage workflows run on every fresh comment.",
+        manual_slug: None,
+    },
+    JobCopy {
         cron_name: "general-nag",
         name: "General channel nag",
         cadence: "Daily · 17:11 PST (prior day)",

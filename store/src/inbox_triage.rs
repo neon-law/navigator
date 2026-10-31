@@ -1137,7 +1137,7 @@ mod tests {
                 name,
                 format!(
                     "{}-{}@example.com",
-                    name.to_lowercase().replace(" ", "-"),
+                    name.to_lowercase().replace(' ', "-"),
                     Uuid::now_v7()
                 ),
                 role,

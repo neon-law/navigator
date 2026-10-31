@@ -34,6 +34,7 @@ use workflows_service::nightly_project_update::{
 use workflows_service::notation_reset::NotationResetService;
 use workflows_service::request_identity::{apply_identity_key, install_crypto_provider};
 use workflows_service::social_publisher::{SocialPublishReconcilerService, SocialPublisherService};
+use workflows_service::youtube_comments::YoutubeCommentsPollerService;
 use workflows_service::{
     email_from_env, notifier_from_env, project_slack::ProjectSlackService, slack_bot_from_env,
     NotationService,
@@ -56,6 +57,10 @@ macro_rules! bind_common_services {
                 $surreal.clone(),
                 $kms.clone(),
                 $assets_storage.clone(),
+            ))
+            .bind(YoutubeCommentsPollerService::new(
+                $surreal.clone(),
+                $kms.clone(),
             ))
             .bind(SocialPublishReconcilerService::new(
                 $surreal.clone(),

@@ -29,6 +29,7 @@ resources:
   - nightly-project-update-trigger
   - notation-reset-trigger
   - social-publish-reconciler-trigger
+  - youtube-comments-poll-trigger
   - general-nag
 
 patches:
