@@ -29,7 +29,7 @@ const TABLES: &[Table] = &[
     },
     Table {
         name: "message",
-        columns: "id,conversation_id,parent_message_id,visibility,direction,body,author_person_id,provider_message_id,provider_ref,delivery_state,purpose,attachment_asset_id,communication_id,occurred_at,alert_state,alert_channel_id,alert_timestamp,inserted_at,updated_at",
+        columns: "id,conversation_id,parent_message_id,visibility,direction,body,author_person_id,provider_message_id,provider_ref,delivery_state,purpose,attachment_asset_id,communication_id,occurred_at,alert_state,alert_channel_id,alert_timestamp,route,processed_at,inserted_at,updated_at",
         references: "id,conversation_id,parent_message_id,author_person_id,attachment_asset_id,communication_id",
         immutable: false,
     },

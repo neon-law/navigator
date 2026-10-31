@@ -152,6 +152,7 @@ pub mod hosting;
 pub mod idp_admin;
 pub mod inbound_email;
 pub mod inbox;
+pub(crate) mod inbox_api;
 pub mod inbox_sms;
 pub mod inbox_transport;
 pub mod intake;

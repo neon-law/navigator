@@ -2593,6 +2593,12 @@ DEFINE FIELD OVERWRITE alert_state ON message TYPE option<string>
     ASSERT $value IS NONE OR $value IN ['pending', 'notified', 'unknown', 'failed', 'disabled'];
 DEFINE FIELD OVERWRITE alert_channel_id ON message TYPE option<string>;
 DEFINE FIELD OVERWRITE alert_timestamp ON message TYPE option<string>;
+-- Inbox-process state: the route the classification layer assigned and when
+-- the lawyer (or the process verb) applied it. Unset until a process run
+-- records both together; see `docs/glossary/inbox-process.md`.
+DEFINE FIELD OVERWRITE route ON message TYPE option<string>
+    ASSERT $value IS NONE OR $value IN ['nef', 'claims_agent', 'chambers', 'other'];
+DEFINE FIELD OVERWRITE processed_at ON message TYPE option<string>;
 DEFINE FIELD OVERWRITE inserted_at ON message TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON message TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE message_conversation ON message FIELDS conversation_id;

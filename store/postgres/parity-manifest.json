@@ -163,6 +163,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "attorney_rate",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "clause",
       "missing_column": null,
       "missing_table": null,
@@ -227,6 +234,13 @@
     {
       "extra_column": null,
       "extra_table": "journal_source_snapshot",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "matter_flat_fee",
       "missing_column": null,
       "missing_table": null,
       "table": null
@@ -339,6 +353,27 @@
     {
       "extra_column": null,
       "extra_table": "stage_event",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "time_entry",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "time_entry_events",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "timer",
       "missing_column": null,
       "missing_table": null,
       "table": null
@@ -1119,9 +1154,11 @@
         "inserted_at": "datetime",
         "occurred_at": "string",
         "parent_message_id": "option<record<message>>",
+        "processed_at": "option<string>",
         "provider_message_id": "option<string>",
         "provider_ref": "option<string>",
         "purpose": "string",
+        "route": "option<string>",
         "updated_at": "datetime",
         "visibility": "option<string>"
       },
@@ -1707,7 +1744,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 132,
+    "table_count": 137,
     "tables": {
       "address": {
         "columns": {
@@ -1864,6 +1901,31 @@
         "name": "attestation",
         "references": [
           "notation"
+        ]
+      },
+      "attorney_rate": {
+        "columns": {
+          "effective_on": "date",
+          "hourly_rate_cents": "integer",
+          "id": "uuid",
+          "inserted_at": "timestamptz",
+          "person_id": "uuid",
+          "project_id": "uuid"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "attorney_rate",
+        "references": [
+          "person",
+          "project"
         ]
       },
       "authority": {
@@ -3260,6 +3322,23 @@
           "project"
         ]
       },
+      "matter_flat_fee": {
+        "columns": {
+          "fee_cents": "bigint",
+          "inserted_at": "timestamptz",
+          "project_id": "uuid"
+        },
+        "foreign_keys": [
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "matter_flat_fee",
+        "references": [
+          "project"
+        ]
+      },
       "matter_page": {
         "columns": {
           "clerk_sections": "TEXT[]",
@@ -3307,9 +3386,11 @@
           "inserted_at": "TIMESTAMPTZ",
           "occurred_at": "TEXT",
           "parent_message_id": "UUID",
+          "processed_at": "TEXT",
           "provider_message_id": "TEXT",
           "provider_ref": "TEXT",
           "purpose": "TEXT",
+          "route": "TEXT",
           "updated_at": "TIMESTAMPTZ",
           "visibility": "TEXT"
         },
@@ -4818,6 +4899,91 @@
           ]
         ],
         "name": "testimonial",
+        "references": [
+          "person",
+          "project"
+        ]
+      },
+      "time_entry": {
+        "columns": {
+          "(billing_status": "=",
+          "REFERENCES": "person_project_role",
+          "attorney_id": "UUID",
+          "billable": "BOOLEAN",
+          "billing_status": "TEXT",
+          "description": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "minutes": "INTEGER",
+          "performed_on": "DATE",
+          "project_id": "UUID",
+          "rate_cents_per_hour": "INTEGER",
+          "source": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "written_off_reason": "TEXT",
+          "xero_invoice_id": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "REFERENCES",
+            "person_project_role"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "time_entry",
+        "references": [
+          "person_project_role",
+          "project"
+        ]
+      },
+      "time_entry_events": {
+        "columns": {
+          "actor_person_id": "UUID",
+          "after_state": "JSONB",
+          "before_state": "JSONB",
+          "event_kind": "TEXT",
+          "id": "UUID",
+          "occurred_at": "TIMESTAMPTZ",
+          "time_entry_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "actor_person_id",
+            "person"
+          ],
+          [
+            "time_entry_id",
+            "time_entry"
+          ]
+        ],
+        "name": "time_entry_events",
+        "references": [
+          "person",
+          "time_entry"
+        ]
+      },
+      "timer": {
+        "columns": {
+          "id": "uuid",
+          "note": "text",
+          "person_id": "uuid",
+          "project_id": "uuid",
+          "started_at": "timestamptz"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "timer",
         "references": [
           "person",
           "project"
