@@ -113,6 +113,13 @@
       "table": "matter_page"
     },
     {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": "onboarding_jurisdiction",
+      "missing_table": null,
+      "table": "project"
+    },
+    {
       "extra_column": "entity_id",
       "extra_table": null,
       "missing_column": null,
@@ -381,6 +388,7 @@
         "deleted_commit_sha": "option<string>",
         "derived_from": "any",
         "description": "option<string>",
+        "evidence": "any",
         "filename": "option<string>",
         "id": "record",
         "inserted_at": "datetime",
@@ -1347,6 +1355,7 @@
         "internal_slack_channel_url": "option<string>",
         "jurisdiction_id": "option<record<jurisdiction>>",
         "name": "string",
+        "onboarding_jurisdiction": "option<string>",
         "private_notion_page_url": "option<string>",
         "repository_url": "option<string>",
         "shared_notion_page_url": "option<string>",
@@ -1736,6 +1745,7 @@
           "deleted_commit_sha": "TEXT",
           "derived_from": "JSONB",
           "description": "TEXT",
+          "evidence": "JSONB",
           "filename": "TEXT",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",

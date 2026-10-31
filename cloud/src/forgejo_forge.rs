@@ -591,6 +591,154 @@ mod tests {
             .is_err());
     }
 
+    #[tokio::test]
+    // The wiremock narrative reads best linearly: mount the seed and govern
+    // protocols in order, drive the flow, then assert the write ordering.
+    #[allow(clippy::too_many_lines)]
+    async fn provisioning_seeds_an_empty_repository_before_it_governs_main() {
+        use crate::forge::SOURCE_TREE_TRAILER;
+        use crate::forgejo_governance::{Policy, RepositoryGovernance, REQUIRED_CHECK_CONTEXT};
+        let server = MockServer::start().await;
+        let api = "/api/v1/repos/firm-a/matter-9";
+        let sha = "5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed";
+        let digest = "e".repeat(64);
+        let mut governed = Policy::repository();
+        governed["private"] = true.into();
+        governed["allow_manual_merge"] = false.into();
+        let main = Policy::new(REQUIRED_CHECK_CONTEXT).unwrap().branch();
+
+        // ensure: nothing there yet, then the Firm namespace creation, then
+        // the governance reads — drifted first, governed once written.
+        Mock::given(method("GET"))
+            .and(path(api.to_string()))
+            .respond_with(ResponseTemplate::new(404))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(api.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"private": true})))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(api))
+            .respond_with(ResponseTemplate::new(200).set_body_json(governed.clone()))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/orgs/firm-a/repos"))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(repo("firm-a", "matter-9", true)),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // Seed: an empty main takes the scaffold as a direct contents write.
+        Mock::given(method("GET"))
+            .and(path(format!("{api}/branches/main")))
+            .respond_with(ResponseTemplate::new(404))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{api}/branches/main")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "commit": { "id": sha, "timestamp": "2026-10-31T00:00:00Z" }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{api}/git/commits/{sha}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "commit": { "message": format!("Initialize project source\n\n{SOURCE_TREE_TRAILER} {digest}") }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{api}/contents")))
+            .and(body_partial_json(json!({ "branch": "main" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "commit": { "sha": sha }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // Govern: the same payloads the policy module's own tests pin.
+        Mock::given(method("GET"))
+            .and(path(format!("{api}/branch_protections")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{api}/branch_protections")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([main.clone()])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{api}/branch_protections/main")))
+            .respond_with(ResponseTemplate::new(404))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{api}/branch_protections/main")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(main.clone()))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("{api}/branch_protections")))
+            .and(body_partial_json(json!({
+                "rule_name": "main", "enable_push": false, "require_signed_commits": true,
+                "apply_to_admins": true, "status_check_contexts": ["gate / gate (pull_request)"],
+            })))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path(api))
+            .and(body_partial_json(
+                json!({"allow_squash_merge": true, "allow_merge_commits": false}),
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let forge = forge(&server, "firm-a");
+        let created = forge.ensure_repository("matter-9").await.unwrap();
+        assert_eq!(created.url, "https://forge.example.test/firm-a/matter-9");
+
+        let mut files = std::collections::BTreeMap::new();
+        files.insert("navigator.yaml".to_string(), "kind: project\n".to_string());
+        let head = forge
+            .initialize_source("matter-9", &files, &digest, "Initialize project source")
+            .await
+            .unwrap();
+        assert_eq!(head, sha);
+
+        let drift = forge.reconcile_governance("matter-9").await.unwrap();
+        assert!(drift.contains(&"main.enable_push".to_string()), "{drift:?}");
+
+        let requests = server.received_requests().await.expect("recorded requests");
+        let index_of = |verb: &str, route: &str| {
+            requests
+                .iter()
+                .position(|request| request.method.as_str() == verb && request.url.path() == route)
+                .unwrap_or_else(|| panic!("{verb} {route} was never received"))
+        };
+        assert!(
+            index_of("POST", &format!("{api}/contents"))
+                < index_of("POST", &format!("{api}/branch_protections")),
+            "the scaffold is written to main before the protection that would refuse a direct write to it"
+        );
+    }
+
     #[test]
     fn the_backend_defaults_to_github_and_rejects_unknown_names() {
         assert_eq!(

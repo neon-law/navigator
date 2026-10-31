@@ -1,0 +1,41 @@
+form_code = "ca__name_change_petition"
+
+# NC-100 (Rev. 7/1/2026) — Petition for Change of Name.
+#
+# Mapped: the petitioner's caption name (merged with the item-3 recital and
+# the item-3a current-name slot), the item-2 county recital, the filing
+# county, and the first petitioner slot (a) of the item-3 name change.
+#
+# Deliberately left unmapped (lawyer or clerk completes at review):
+# - `List2[0].LI1[0].lia[0].residence[0]` — the residency checkbox is a
+#   structural recital the lawyer verifies (the packet only fires when the
+#   intake county is the filing county); a literal pre-print would bake a
+#   checkbox into a text-validated literal path.
+# - `List3[0].LI1[0].lib/lic[0].*` — second and third petitioner slots; the
+#   wave covers single-petitioner packets.
+# - `List5/List6[0].*` — minors' items (count, and who asks for a minor);
+#   out of scope for adult petitions.
+# - `CheckBox9/CheckBox19[0]` — attachment-continuation flags.
+# - `Caption[0].AttyPartyInfo[0].*` and `CourtInfo[0].*` — firm identity and
+#   court branch details, completed per county at filing.
+# - `Caption[0].captionSub[0].CaseNumber[0].CaseNumber[0]` — clerk-assigned.
+
+[[field]]
+name = "NC-100[0].Page1[0].Caption[0].TitlePartyName[0].Petitioner[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-100[0].Page1[0].List1[0].PetitionerPresentName[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-100[0].Page1[0].List3[0].LI1[0].lia[0].PresentName1[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-100[0].Page1[0].List3[0].LI1[0].lia[0].ProposedName1[0]"
+question = "person__new_name.name"
+
+[[field]]
+name = "NC-100[0].Page1[0].Caption[0].CourtInfo[0].CrtCounty[0]"
+question = "custom_text__county_of_residence"

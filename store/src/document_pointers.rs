@@ -70,11 +70,26 @@ pub struct DocumentPointer {
     /// has none; a pleading's certificate of service is composed from it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub service: Vec<crate::project_service::ServiceRecord>,
+    /// The exhibit metadata the matter page's evidence index reads
+    /// (LAW-185): `{ dated_at, source, confidence, supports }` — the date
+    /// the exhibit itself bears, where it came from, how confidently it is
+    /// tied to what it supports, and the claim references it bears on.
+    /// Optional on every pointer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<crate::documents::Evidence>,
 }
 
-/// One of the five lawyer-facing folders a Project checkout's `documents/`
-/// holds a document's bytes in (LAW-189), named the way a case-management
-/// system names them. A pointer's `folder:` is one of these, spelled exactly.
+/// One of the lawyer-facing folders a Project checkout's `documents/`
+/// holds a document's bytes in (LAW-189, LAW-215), named the way a
+/// case-management system names them. A pointer's `folder:` is one of these,
+/// spelled exactly. The seven `Work Product` subfolders spell their whole
+/// path below `documents/`, so a folder name read out of context — a search
+/// result, an email attachment list — says which tree it came from and never
+/// collides with its served twin (`Correspondence (Work Product)` vs
+/// `Correspondence (Served)`). The bare `Discovery` folder predates
+/// LAW-215: [`Self::parse`] still reads it so older pointers and checkouts
+/// keep working, but [`Self::TREE`] — what a fresh checkout creates — leaves
+/// it out, and `project repository migrate-folders` refiles it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MatterFolder {
     /// What the client supplied: exhibits, records, and screenshots.
@@ -83,25 +98,88 @@ pub enum MatterFolder {
     /// Letters served on, or received from, another party.
     #[serde(rename = "Correspondence (Served)")]
     CorrespondenceServed,
-    /// Discovery requests and responses.
+    /// Discovery requests and responses. The folder a pre-LAW-215 checkout
+    /// holds; a fresh one creates `Discovery (Served)` instead.
     #[serde(rename = "Discovery")]
     Discovery,
+    /// Discovery actually served or received — the served twin of
+    /// [`Self::DiscoveryWorkProduct`], which holds the firm's own drafts.
+    #[serde(rename = "Discovery (Served)")]
+    DiscoveryServed,
     /// Court paper: pleadings, filings, orders, and docket ingest.
     #[serde(rename = "Docket Filings")]
     DocketFilings,
-    /// The firm's own work: memos, transcripts, drafts, and everything else.
+    /// The court's local rules and standing orders (LAW-215).
+    #[serde(rename = "Court Rules")]
+    CourtRules,
+    /// The letters that open and close the engagement (LAW-215).
+    #[serde(rename = "Engagement")]
+    Engagement,
+    /// The firm's own work: drafts, research, and everything else. Its seven
+    /// fixed subfolders below carry the `(Work Product)` suffix (LAW-215).
     #[serde(rename = "Work Product")]
     WorkProduct,
+    /// Call notes and transcripts.
+    #[serde(rename = "Work Product/Client Calls (Work Product)")]
+    ClientCallsWorkProduct,
+    /// Letters the firm drafted but did not serve.
+    #[serde(rename = "Work Product/Correspondence (Work Product)")]
+    CorrespondenceWorkProduct,
+    /// Discovery the firm is preparing — including `Evidence Summaries/`.
+    #[serde(rename = "Work Product/Discovery (Work Product)")]
+    DiscoveryWorkProduct,
+    /// One folder per motion, drafted or filed-adjacent.
+    #[serde(rename = "Work Product/Motions (Work Product)")]
+    MotionsWorkProduct,
+    /// Pleadings in draft, including `Answer/`.
+    #[serde(rename = "Work Product/Pleadings (Work Product)")]
+    PleadingsWorkProduct,
+    /// Memos and research.
+    #[serde(rename = "Work Product/Research (Work Product)")]
+    ResearchWorkProduct,
+    /// Stipulations in draft or awaiting signature.
+    #[serde(rename = "Work Product/Stipulations (Work Product)")]
+    StipulationsWorkProduct,
 }
 
 impl MatterFolder {
-    /// Every matter folder, in the order a Finder window lists them.
-    pub const ALL: [Self; 5] = [
+    /// Every matter folder, in the order a Finder window lists them,
+    /// including the bare `Discovery` folder older checkouts hold.
+    pub const ALL: [Self; 15] = [
         Self::ClientProduction,
         Self::CorrespondenceServed,
         Self::Discovery,
+        Self::DiscoveryServed,
         Self::DocketFilings,
+        Self::CourtRules,
+        Self::Engagement,
         Self::WorkProduct,
+        Self::ClientCallsWorkProduct,
+        Self::CorrespondenceWorkProduct,
+        Self::DiscoveryWorkProduct,
+        Self::MotionsWorkProduct,
+        Self::PleadingsWorkProduct,
+        Self::ResearchWorkProduct,
+        Self::StipulationsWorkProduct,
+    ];
+
+    /// The tree a fresh checkout creates (LAW-215): [`Self::ALL`] without
+    /// the bare `Discovery` folder, which only a migration refiles.
+    pub const TREE: [Self; 14] = [
+        Self::ClientProduction,
+        Self::CorrespondenceServed,
+        Self::DiscoveryServed,
+        Self::DocketFilings,
+        Self::CourtRules,
+        Self::Engagement,
+        Self::WorkProduct,
+        Self::ClientCallsWorkProduct,
+        Self::CorrespondenceWorkProduct,
+        Self::DiscoveryWorkProduct,
+        Self::MotionsWorkProduct,
+        Self::PleadingsWorkProduct,
+        Self::ResearchWorkProduct,
+        Self::StipulationsWorkProduct,
     ];
 
     /// The folder's name on disk and in a pointer's `folder:` key.
@@ -111,9 +189,36 @@ impl MatterFolder {
             Self::ClientProduction => "Client Production",
             Self::CorrespondenceServed => "Correspondence (Served)",
             Self::Discovery => "Discovery",
+            Self::DiscoveryServed => "Discovery (Served)",
             Self::DocketFilings => "Docket Filings",
+            Self::CourtRules => "Court Rules",
+            Self::Engagement => "Engagement",
             Self::WorkProduct => "Work Product",
+            Self::ClientCallsWorkProduct => "Work Product/Client Calls (Work Product)",
+            Self::CorrespondenceWorkProduct => "Work Product/Correspondence (Work Product)",
+            Self::DiscoveryWorkProduct => "Work Product/Discovery (Work Product)",
+            Self::MotionsWorkProduct => "Work Product/Motions (Work Product)",
+            Self::PleadingsWorkProduct => "Work Product/Pleadings (Work Product)",
+            Self::ResearchWorkProduct => "Work Product/Research (Work Product)",
+            Self::StipulationsWorkProduct => "Work Product/Stipulations (Work Product)",
         }
+    }
+
+    /// Whether this folder is one of the seven fixed subfolders below
+    /// `Work Product` (LAW-215). Their names span two path components, so a
+    /// path below `documents/` names one only after both are matched.
+    #[must_use]
+    pub const fn is_work_product_subfolder(self) -> bool {
+        matches!(
+            self,
+            Self::ClientCallsWorkProduct
+                | Self::CorrespondenceWorkProduct
+                | Self::DiscoveryWorkProduct
+                | Self::MotionsWorkProduct
+                | Self::PleadingsWorkProduct
+                | Self::ResearchWorkProduct
+                | Self::StipulationsWorkProduct
+        )
     }
 
     /// The folder named exactly `name`, or `None`.
@@ -123,8 +228,10 @@ impl MatterFolder {
     }
 
     /// The folder a document of `kind` lands in when its pointer names none.
-    /// No kind means discovery, so [`Self::Discovery`] is reached only by an
-    /// explicit `folder:`.
+    /// No kind means the bare `Discovery` folder or its served twin, so
+    /// [`Self::Discovery`] survives only on pointers that name it and
+    /// [`Self::DiscoveryServed`] only on pointers a migration refiled
+    /// (LAW-215).
     #[must_use]
     pub fn for_kind(kind: &str) -> Self {
         match kind {
@@ -133,19 +240,26 @@ impl MatterFolder {
             // A court's order is neither a pleading nor a filing, but it is
             // docket paper all the same (LAW-189).
             "pleading" | "filing" | "order" => Self::DocketFilings,
+            "memo" => Self::ResearchWorkProduct,
+            "transcript" => Self::ClientCallsWorkProduct,
+            "onboarding" => Self::Engagement,
             _ => Self::WorkProduct,
         }
     }
 
     /// The kind a file dropped into this folder is uploaded with when its
-    /// path names no more specific one.
+    /// path names no more specific one. The inverse of [`Self::for_kind`]
+    /// where a kind names exactly one folder; `unclassified` where none does.
     #[must_use]
     pub const fn default_kind(self) -> &'static str {
         match self {
             Self::ClientProduction => "exhibit",
             Self::CorrespondenceServed => "letter",
             Self::DocketFilings => "pleading",
-            Self::Discovery | Self::WorkProduct => "unclassified",
+            Self::ClientCallsWorkProduct => "transcript",
+            Self::ResearchWorkProduct => "memo",
+            Self::Engagement => "onboarding",
+            _ => "unclassified",
         }
     }
 }
@@ -157,7 +271,9 @@ pub const SIBLING_FOLDERS: &[&str] = &["onboarding", "offboarding", "invoices", 
 
 /// Where a document named `slug` sits below a checkout's `documents/`
 /// (LAW-189): at the slug itself when its first component is one of the
-/// [`SIBLING_FOLDERS`], else under `folder`.
+/// [`SIBLING_FOLDERS`], else under `folder` — a `Work Product` subfolder's
+/// name is its whole path below `documents/`, so its bytes nest
+/// `Work Product/Research (Work Product)/<slug>` (LAW-215).
 #[must_use]
 pub fn documents_path(slug: &str, folder: MatterFolder) -> String {
     let first = slug.split('/').next().unwrap_or_default();
@@ -220,6 +336,8 @@ pub enum PointerError {
     PreviousVersion,
     #[error(transparent)]
     Notarization(#[from] crate::documents::NotarizationError),
+    #[error(transparent)]
+    Evidence(#[from] crate::documents::EvidenceError),
 }
 
 impl DocumentPointer {
@@ -283,6 +401,9 @@ impl DocumentPointer {
         for notarization in &self.notarization {
             notarization.validate()?;
         }
+        if let Some(evidence) = &self.evidence {
+            evidence.validate()?;
+        }
         Ok(())
     }
 }
@@ -312,6 +433,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         }
     }
 
@@ -447,8 +569,10 @@ mod tests {
             ("pleading", MatterFolder::DocketFilings),
             ("filing", MatterFolder::DocketFilings),
             ("order", MatterFolder::DocketFilings),
-            ("memo", MatterFolder::WorkProduct),
-            ("transcript", MatterFolder::WorkProduct),
+            ("memo", MatterFolder::ResearchWorkProduct),
+            ("transcript", MatterFolder::ClientCallsWorkProduct),
+            ("onboarding", MatterFolder::Engagement),
+            ("agreement", MatterFolder::WorkProduct),
             ("unclassified", MatterFolder::WorkProduct),
         ] {
             assert_eq!(MatterFolder::for_kind(kind), folder, "{kind}");
@@ -629,6 +753,70 @@ mod tests {
         assert!(
             error.to_string().contains("unknown field"),
             "a typo'd key must fail to parse, not silently vanish: {error}"
+        );
+    }
+
+    /// LAW-215: a fresh checkout creates the fourteen-folder tree, which
+    /// keeps the bare `Discovery` folder out (a migration refiles it), while
+    /// `parse` still reads every name ever written.
+    #[test]
+    fn the_fresh_checkout_tree_has_fourteen_folders_and_keeps_bare_discovery_out() {
+        assert_eq!(MatterFolder::ALL.len(), 15);
+        assert_eq!(MatterFolder::TREE.len(), 14);
+        assert!(MatterFolder::ALL.contains(&MatterFolder::Discovery));
+        assert!(!MatterFolder::TREE.contains(&MatterFolder::Discovery));
+
+        // Every tree name is distinct and parses back to its folder.
+        let mut names: Vec<&str> = MatterFolder::TREE.iter().map(|f| f.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), 14);
+        for folder in MatterFolder::TREE {
+            assert_eq!(MatterFolder::parse(folder.as_str()), Some(folder));
+        }
+        assert_eq!(
+            MatterFolder::parse("Discovery"),
+            Some(MatterFolder::Discovery)
+        );
+        assert_eq!(MatterFolder::parse("Discoveries"), None);
+    }
+
+    /// LAW-215: the seven fixed `Work Product` subfolders nest below
+    /// `Work Product`, name their whole path below `documents/`, and hold
+    /// their bytes at the nested path.
+    #[test]
+    fn the_work_product_subfolders_nest_under_work_product() {
+        for folder in MatterFolder::ALL {
+            assert_eq!(
+                folder.is_work_product_subfolder(),
+                folder.as_str().starts_with("Work Product/"),
+                "{}",
+                folder.as_str()
+            );
+        }
+        assert!(!MatterFolder::WorkProduct.is_work_product_subfolder());
+
+        let research = MatterFolder::ResearchWorkProduct;
+        assert_eq!(research.as_str(), "Work Product/Research (Work Product)");
+        assert_eq!(
+            documents_path("memo.docx", research),
+            "Work Product/Research (Work Product)/memo.docx"
+        );
+        assert_eq!(
+            documents_path(
+                "Evidence Summaries/notes.md",
+                MatterFolder::DiscoveryWorkProduct
+            ),
+            "Work Product/Discovery (Work Product)/Evidence Summaries/notes.md"
+        );
+        // A lawyer-made subfolder inside a fixed one stays part of the slug;
+        // the fixed folder is the prefix documents_path prepends.
+        assert_eq!(
+            documents_path(
+                "Answer/motion_to_dismiss.pdf",
+                MatterFolder::PleadingsWorkProduct
+            ),
+            "Work Product/Pleadings (Work Product)/Answer/motion_to_dismiss.pdf"
         );
     }
 

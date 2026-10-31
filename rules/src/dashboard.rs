@@ -165,6 +165,9 @@ pub enum Section {
     DownloadList,
     /// The engagement agreement as a record.
     EngagementLetter,
+    /// The evidence index (LAW-185): exhibits grouped by the claim each
+    /// bears on, with dates and provenance. Lawyer-only.
+    EvidenceIndex,
     /// An issued invoice as a record.
     Invoice,
     /// Third-party Project costs and their receipt Documents.
@@ -268,6 +271,7 @@ impl Section {
         Section::PackageManifest,
         Section::DownloadList,
         Section::EngagementLetter,
+        Section::EvidenceIndex,
         Section::Invoice,
         Section::ProjectCosts,
         Section::PrebillReview,
@@ -330,6 +334,7 @@ impl Section {
             Section::PackageManifest => "package_manifest",
             Section::DownloadList => "download_list",
             Section::EngagementLetter => "engagement_letter",
+            Section::EvidenceIndex => "evidence_index",
             Section::Invoice => "invoice",
             Section::ProjectCosts => "project_costs",
             Section::PrebillReview => "prebill_review",
@@ -399,6 +404,9 @@ impl Section {
             Section::PackageManifest => "What the package includes, and what it excludes",
             Section::DownloadList => "The files a reader takes away",
             Section::EngagementLetter => "The engagement agreement as a record",
+            Section::EvidenceIndex => {
+                "The exhibits filed on the matter, grouped by the claim each bears on, with dates and provenance"
+            }
             Section::Invoice => "An issued invoice as a record",
             Section::ProjectCosts => "Receipt-backed costs recorded for this Project",
             Section::PrebillReview => "Prebill review with per-entry findings",
@@ -543,8 +551,9 @@ pub fn skeleton(kind: Kind) -> Option<Skeleton> {
                 S::NotationList,
                 S::NotationChecklist,
                 S::CapTable,
+                S::EvidenceIndex,
             ],
-            lawyer_only: &[],
+            lawyer_only: &[S::EvidenceIndex],
         },
         // The litigation board: the deadlines spine, with the case caption,
         // its fact strip, and the docket timeline beside it.
@@ -561,8 +570,9 @@ pub fn skeleton(kind: Kind) -> Option<Skeleton> {
                 S::EfilingReceipts,
                 S::RelationshipGraph,
                 S::AdministrationSteps,
+                S::EvidenceIndex,
             ],
-            lawyer_only: &[S::RelationshipGraph],
+            lawyer_only: &[S::RelationshipGraph, S::EvidenceIndex],
         },
         Kind::DocumentWorkbench => Skeleton {
             family: Family::Dashboard,

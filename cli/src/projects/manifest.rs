@@ -66,6 +66,7 @@ pub const ACCEPTED_KEYS: &[&str] = &[
 const PROJECT_KEYS: &[&str] = &[
     "calendar_id",
     "client_dri",
+    "drive_folder_id",
     "host",
     "lawyer_dri",
     "name",
@@ -85,6 +86,7 @@ const HANDLE_KEYS: &[&str] = &[
     "shared_notion_page",
     "xero_customer",
     "calendar_id",
+    "drive_folder_id",
 ];
 
 const REQUIRED_HANDLE_KEYS: &[&str] = &[
@@ -155,6 +157,10 @@ pub struct Manifest {
     /// setup` creates the calendar and `navigator project set --calendar`
     /// records it here.
     pub calendar_id: Option<String>,
+    /// The Project's Drive ingest folder id. Optional: `navigator project
+    /// setup` creates or adopts the folder and `navigator project set
+    /// --drive-folder` records it here.
+    pub drive_folder_id: Option<String>,
     pub no_live_row: Option<serde_yaml::Value>,
     pub allowed_hosts: BTreeMap<String, String>,
     pub allowed_links: BTreeMap<String, String>,
@@ -921,6 +927,7 @@ fn lint_handle(path: &Path, key: &str, value: &serde_yaml::Value) -> Vec<Manifes
         | "shared_notion_page" => is_https_url(&value),
         "xero_customer" => true,
         "calendar_id" => store::projects::is_valid_calendar_id(&value),
+        "drive_folder_id" => store::projects::is_valid_drive_folder_id(&value),
         _ => false,
     };
     if valid {
@@ -1039,6 +1046,7 @@ pub fn parse(contents: &str) -> Result<Manifest, String> {
         shared_notion_page: values("shared_notion_page")?,
         xero_customer: values("xero_customer")?,
         calendar_id: values("calendar_id")?,
+        drive_folder_id: values("drive_folder_id")?,
         no_live_row: mapping.get("no_live_row").cloned(),
         allowed_hosts: parse_reason_map(mapping, "allowed_hosts")?,
         allowed_links: parse_reason_map(mapping, "allowed_links")?,

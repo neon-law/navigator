@@ -126,9 +126,18 @@ folder even when it is empty:
 | --- | --- | --- |
 | `documents/Client Production/` | What the client supplied | `exhibit` |
 | `documents/Correspondence (Served)/` | Letters served or received | `letter` |
-| `documents/Discovery/` | Discovery requests and responses | none; a pointer names it with `folder:` |
+| `documents/Discovery (Served)/` | Discovery served or received | none; a pointer names it with `folder:` |
 | `documents/Docket Filings/` | Court paper and docket ingest | `pleading`, `filing` |
-| `documents/Work Product/` | Memos, transcripts, drafts | every other kind |
+| `documents/Court Rules/` | Local rules and standing orders | none |
+| `documents/Engagement/` | The letters that open and close the engagement | `onboarding` |
+| `documents/Work Product/` | Drafts, research, everything else | every other kind |
+
+`Work Product/` holds the same seven fixed subfolders in every checkout, each suffixed so it reads unambiguously out of
+context and never collides with a served twin (LAW-215): `Client Calls (Work Product)/` (`transcript`), `Correspondence
+(Work Product)/` (letters drafted, not served), `Discovery (Work Product)/` (discovery in preparation), `Motions (Work
+Product)/` (one folder per motion), `Pleadings (Work Product)/`, `Research (Work Product)/` (`memo`), and `Stipulations
+(Work Product)/`. A subfolder's name is its whole path below `documents/`, so a pointer's `folder:` can name it:
+`folder: "Work Product/Research (Work Product)"`.
 
 The slug is the path below the matter folder: `blobs/pleadings/motion.pdf.yaml` names `documents/Docket
 Filings/pleadings/motion.pdf`, and the pointer keeps the document's extension before `.yaml`. A pointer's optional
@@ -137,7 +146,10 @@ document to the same place. `onboarding/`, `offboarding/`, `invoices/`, `cases/`
 matter folders for this release, with their bytes at `documents/<slug>`; their folder rules below are keyed to that
 path. Bytes a checkout pulled down before the matter folders move into their folder on the next `project sync`, or with
 the offline `navigator project repository migrate-documents`; no pointer is rewritten, so every `sha256` and asset id is
-unchanged. Drop a local file into a matter folder and run:
+unchanged. A checkout still holding the bare `Discovery/` folder of the five-folder tree refiles with the offline
+`navigator project repository migrate-folders` (LAW-215): its `Discovery` pointers are rewritten onto `Discovery
+(Served)`, their bytes move beside them, and every asset id and checksum is unchanged. Drop a local file into a matter
+folder and run:
 
 ```bash
 navigator project sync

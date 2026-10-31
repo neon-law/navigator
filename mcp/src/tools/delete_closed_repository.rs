@@ -273,6 +273,7 @@ mod tests {
                 transcript_quality: None,
                 signing: None,
                 notarization: Vec::new(),
+                evidence: None,
             },
             b"a zip archive's bytes",
         )

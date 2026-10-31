@@ -3,9 +3,9 @@
 //! notices the court mails for each entry ([`ingest`]), which file the
 //! documents and record an entry per notice through the same door.
 
-#[allow(dead_code)] // the renderer has no caller until the docket verbs write the files
 pub mod case_timeline;
 pub mod entries;
 pub mod ingest;
 pub mod nef;
 pub mod renumber;
+pub mod timeline_write;

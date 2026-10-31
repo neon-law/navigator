@@ -87,6 +87,15 @@ DEFINE FIELD OVERWRITE firm_id ON project TYPE option<record<firm>>;
 -- counted by the nightly IOLTA mirror rather than being attached to the
 -- entity's or the firm's state.
 DEFINE FIELD OVERWRITE jurisdiction_id ON project TYPE option<record<jurisdiction>>;
+-- The jurisdiction an onboarding Notation's Clauses bind to — the state whose
+-- law and arbitration seat an engagement letter names. Distinct from
+-- `jurisdiction_id`: that one governs whose law the *matter* answers to (and
+-- derives the pooled IOLTA account); this one is the Firm's chosen drafting
+-- default for onboarding prose, set at or after matter-open, deliberately
+-- editable, and read live at render time by a Clause input bound to
+-- `project.onboarding_jurisdiction` (see `rules::clauses`). Optional: a
+-- historical row has none, and nothing infers one.
+DEFINE FIELD OVERWRITE onboarding_jurisdiction ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE description ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE drive_folder_id ON project TYPE option<string>;
 -- The full URL of the one source repository this Project's templates and
@@ -903,11 +912,11 @@ DEFINE INDEX OVERWRITE firm_slug ON firm FIELDS slug UNIQUE;
 DEFINE TABLE IF NOT EXISTS firm_integration_secret SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE firm_id ON firm_integration_secret TYPE record<firm>;
 DEFINE FIELD OVERWRITE provider ON firm_integration_secret TYPE string
-    ASSERT $value IN ['xero', 'slack', 'notion', 'github', 'mercury', 'forgejo'];
+    ASSERT $value IN ['xero', 'slack', 'notion', 'github', 'mercury', 'forgejo', 'court_portal'];
 DEFINE FIELD OVERWRITE kind ON firm_integration_secret TYPE string
     ASSERT $value IN ['xero_client_id', 'xero_client_secret', 'xero_refresh_token',
                       'slack_bot_token', 'notion_token', 'github_app_private_key', 'mercury_read_token', 'xero_tenant_id', 'xero_webhook_key',
-                      'forgejo_access_token'];
+                      'forgejo_access_token', 'portal_login'];
 DEFINE FIELD OVERWRITE version ON firm_integration_secret TYPE int;
 DEFINE FIELD OVERWRITE ciphertext ON firm_integration_secret TYPE string;
 DEFINE FIELD OVERWRITE wrapped_dek ON firm_integration_secret TYPE string;
@@ -1659,6 +1668,13 @@ DEFINE FIELD OVERWRITE signing ON asset TYPE any;
 -- commission number. Optional, so earlier rows read as an empty list;
 -- `store::documents::Notarization` is the shape, validated before the write.
 DEFINE FIELD OVERWRITE notarization ON asset TYPE any;
+-- The exhibit metadata the matter page's evidence index reads (LAW-185):
+-- `{ dated_at, source, confidence, supports }` — the date the exhibit
+-- itself bears, where it came from, how confidently it is tied to what it
+-- supports, and the claim references it bears on. Optional, so rows written
+-- before it read as unrecorded without a backfill;
+-- `store::documents::Evidence` is the shape, validated before the write.
+DEFINE FIELD OVERWRITE evidence ON asset TYPE any;
 -- Soft deletion (ENG-862). A lawyer-tier delete stamps `deleted_at` on every
 -- revision of the slug chain together, with `purge_after` 180 days later, the
 -- person who deleted it, and the source-repository commit that removed its

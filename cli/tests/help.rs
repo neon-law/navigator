@@ -156,7 +156,7 @@ fn notation_help_lists_the_notation_authoring_workbench() {
 
     assert_eq!(
         command_names(&output),
-        vec!["kinds", "pdf", "preview", "word", "help"]
+        vec!["import", "kinds", "pdf", "preview", "word", "help"]
     );
 }
 
@@ -243,6 +243,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
             "deadline",
             "docket",
             "doctor",
+            "documents",
             "drift",
             "drive-ingest",
             "efiling",

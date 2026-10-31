@@ -1,0 +1,130 @@
+form_code = "ca__gender_recognition_petition"
+
+# NC-300 (Rev. 7/1/2026, confidential) — Petition for Recognition of Adult's
+# Change of Gender and Sex Identifier, Name Change, and Issuance of New
+# Certificates.
+#
+# Mapped: the petitioner's caption name on all three pages, the item-1
+# request checkboxes (female "1" / male "2" / nonbinary "3"), the item-4
+# certificate-request checkboxes (birth "1", child's birth "1", marriage
+# "1"), the item-5 name-change block (current name, proposed name, date of
+# birth, place of birth), the item-5 birth-designation checkboxes (Male
+# "1" / Female "2"), and the petitioner's name in the page-2 and page-3
+# signature blocks.
+#
+# Deliberately left unmapped (lawyer, clerk, or court completes):
+# - `Identifier1CB[0]/[1]/[2]` — the page-2 penalty-of-perjury declaration
+#   ("...is to conform my legal gender and sex identifier to my gender
+#   identity and is not for any fraudulent purpose"); its radio answers
+#   would collide with the item-1 claim, and the lawyer checks it at the
+#   signing appointment.
+# - `FormTitle[0].CheckBoxRightCaption[0]/[1]` — the title checkboxes for
+#   whether the petition carries a name change and certificate requests;
+#   structural, verified by the lawyer.
+# - `List3[0].MultilineCheckBox[0]` — the already-obtained-decree
+#   attachment checkbox (conditional path).
+# - `List4[0].Item4[0].Li4a/Li4b/Li4c[0].CheckBoxRightCaption[0]` — the
+#   compound "and change of name" riders on the certificate requests.
+# - `Page2[0].List5[0].CheckBoxRightCaption[0]` — the item-5 applies-for-
+#   name-change checkbox; structural.
+# - `Reside1CB[0]` (resides in county "1" / does not reside "2") and the
+#   birth-certificate/marriage-license county recitals — residency
+#   recitals the lawyer verifies.
+# - `PetitionerStrAdd/City/State/Zip[0]` — the residence address, completed
+#   at review.
+# - `Page3[0].IamNot1CB/IamNot2CB[0]/[1]` — the Penal Code section 290
+#   registration declarations; lawyer discusses at review.
+# - `TextField[0]` (attachment count), `SigDate*` dates, `T14[1]` (attorney
+#   name), case numbers — firm, clerk, and signature-block details.
+
+[[field]]
+name = "NC-300[0].Page1[0].Caption[0].TitlePartyName[0].Petitioner[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-300[0].Page2[0].PxCaption[0].TitlePartyName[0].Petitioner[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-300[0].Page3[0].PxCaption[0].TitlePartyName[0].Petitioner[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-300[0].Page1[0].List1[0].FillText44[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-300[0].Page1[0].List1[0].Item1[0].Li1A[0].Checkbox1GS[0]"
+question = "custom_single_choice__sex_identifier"
+checked_when = "female"
+on_state = "1"
+
+[[field]]
+name = "NC-300[0].Page1[0].List1[0].Item1[0].Li1B[0].Checkbox1GS[0]"
+question = "custom_single_choice__sex_identifier"
+checked_when = "male"
+on_state = "2"
+
+[[field]]
+name = "NC-300[0].Page1[0].List1[0].Item1[0].Li1C[0].Checkbox1GS[0]"
+question = "custom_single_choice__sex_identifier"
+checked_when = "nonbinary"
+on_state = "3"
+
+[[field]]
+name = "NC-300[0].Page1[0].List4[0].Item4[0].Li4a[0].CheckBoxRightCaption[1]"
+question = "custom_single_choice__new_certificates"
+checked_when = "birth_certificate"
+on_state = "1"
+
+[[field]]
+name = "NC-300[0].Page1[0].List4[0].Item4[0].Li4b[0].MultilineCheckBox[0]"
+question = "custom_single_choice__new_certificates"
+checked_when = "childs_birth_certificate"
+on_state = "1"
+
+[[field]]
+name = "NC-300[0].Page1[0].List4[0].Item4[0].Li4c[0].MultilineCheckBox[0]"
+question = "custom_single_choice__new_certificates"
+checked_when = "marriage_license"
+on_state = "1"
+
+[[field]]
+name = "NC-300[0].Page2[0].List5[0].Item5[0].Li5a[0].Subli7b[0].Subli7b1[0].presentName[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-300[0].Page2[0].List5[0].Item5[0].Li5a[0].Subli7b[0].Subli7b2[0].PropName[0]"
+question = "person__new_name.name"
+
+[[field]]
+name = "NC-300[0].Page2[0].List5[0].Item5[0].Li5a[0].Subli7b[0].Subli7b3[0].petDOB[0]"
+question = "custom_datetime__date_of_birth"
+
+[[field]]
+name = "NC-300[0].Page2[0].List5[0].Item5[0].Li5a[0].Subli7b[0].Subli7b4[0].petPLaceOB[0]"
+question = "custom_text__place_of_birth"
+
+[[field]]
+name = "NC-300[0].Page2[0].List5[0].Item5[0].Li5a[0].Subli7b[0].SubLi7b5[0].Gender1CB[0]"
+question = "custom_single_choice__current_sex_designation"
+checked_when = "male"
+on_state = "1"
+
+[[field]]
+name = "NC-300[0].Page2[0].List5[0].Item5[0].Li5a[0].Subli7b[0].SubLi7b5[0].Gender1CB[1]"
+question = "custom_single_choice__current_sex_designation"
+checked_when = "female"
+on_state = "2"
+
+[[field]]
+name = "NC-300[0].Page2[0].T14[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-300[0].Page2[0].T1444[0]"
+question = "person__client.name"
+
+[[field]]
+name = "NC-300[0].Page3[0].T14[0]"
+question = "person__client.name"

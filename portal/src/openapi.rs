@@ -3562,6 +3562,67 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/mail/eml": {
+          "post": {
+            "summary": "File a raw .eml message as a matter Communication",
+            "description":
+              "Files one raw RFC 822 message the caller already holds (a saved copy, a downloaded export) as a matter \\\n               Communication, entirely server-side — no per-machine Gmail OAuth grant is involved. The message files \\\n               through the idempotent (channel, source_ref) ingest, so re-uploading the same message writes nothing \\\n               a second time. Each attachment files as a linked document under a deterministic slug \\\n               (mail/<message reference>/<index>). Authorization: lawyer or admin, and the caller must participate \\\n               in the matter (out-of-scope → 404). A missing or blank `kind` on a message with attachments is \\\n               `400 kind_required`; non-MIME bytes are `400 not_mime`; a message with no Date header, an \\\n               out-of-range one, or no text body is `400 no_date`, `400 bad_date`, or `400 no_body`. \\\n               `dry_run` lists the attachments and writes nothing.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": {
+              "required": true,
+              "content": { "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["raw_base64"],
+                  "properties": {
+                    "raw_base64": { "type": "string", "description": "The raw .eml message, base64-encoded" },
+                    "mailbox": { "type": "string", "description": "The firm mailbox filing the message; matching From marks it outbound" },
+                    "kind": {
+                      "type": "string",
+                      "description": "Required asset-lane document classification when the message carries attachments.",
+                      "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "onboarding", "offboarding", "memo", "resume", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "unclassified"]
+                    },
+                    "visibility": { "type": "string", "enum": ["client", "internal"] },
+                    "dry_run": { "type": "boolean", "default": false }
+                  }
+                }
+              } }
+            },
+            "responses": {
+              "200": { "description": "Dry run, or a replay of an already-filed message", "content": { "application/json": { "schema": {
+                "type": "object", "required": ["source_ref", "direction", "deduped", "attachments", "filed"], "properties": {
+                  "source_ref": { "type": "string" },
+                  "direction": { "type": "string", "enum": ["inbound", "outbound"] },
+                  "deduped": { "type": "boolean" },
+                  "communication_id": { "type": "string", "format": "uuid" },
+                  "attachments": { "type": "array", "items": { "type": "object", "required": ["filename", "content_type", "size_bytes"], "properties": {
+                    "filename": { "type": "string" },
+                    "content_type": { "type": "string" },
+                    "size_bytes": { "type": "integer" }
+                  } } },
+                  "filed": { "type": "array", "items": { "type": "object", "required": ["kind", "visibility", "current_version"] } }
+                }
+              } } } },
+              "201": { "description": "The message filed as a Communication, with one pointer per filed attachment", "content": { "application/json": { "schema": {
+                "type": "object", "required": ["source_ref", "direction", "deduped", "attachments", "filed"], "properties": {
+                  "source_ref": { "type": "string" },
+                  "direction": { "type": "string", "enum": ["inbound", "outbound"] },
+                  "deduped": { "type": "boolean" },
+                  "communication_id": { "type": "string", "format": "uuid" },
+                  "attachments": { "type": "array", "items": { "type": "object" } },
+                  "filed": { "type": "array", "items": { "type": "object", "required": ["kind", "visibility", "current_version"] } }
+                }
+              } } } },
+              "400": { "description": "Unparseable base64 (`not_base64`), unparseable MIME (`not_mime`), a Date problem (`no_date`/`bad_date`), no text body (`no_body`), or a missing `kind` on a message with attachments (`kind_required`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Authenticated caller is not Lawyer/admin", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such matter, or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "An attachment could not be filed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
         "/app/api/projects/{id}/documents/revisions": {
           "get": {
             "summary": "A document's revision chain",
@@ -4157,6 +4218,8 @@ fn canonical_document(base: &str) -> Value {
                                       "description": "The Project's shared Google Calendar id, or `null` before it is created." },
               "booking_url":        { "type": ["string", "null"],
                                       "description": "Where the client books time with the firm, or `null`. Cleared when the Project closes." },
+              "onboarding_jurisdiction": { "type": ["string", "null"],
+                                      "description": "The jurisdiction an onboarding Notation's Clauses bind to (the state whose law and arbitration seat an engagement letter names), or `null` before it is chosen." },
               "inserted_at":        { "type": "string" },
               "updated_at":         { "type": "string" }
             }
@@ -4269,8 +4332,13 @@ fn canonical_document(base: &str) -> Value {
                                "description": "The Notion page shared with the client. Omit to leave unchanged; a blank string clears it." },
               "calendar_id": { "type": "string",
                                "description": "The Project's shared Google Calendar id. Omit to leave unchanged; a blank string clears it." },
+              "drive_folder_id": { "type": "string",
+                               "description": "The Project's Drive ingest folder id, in the Firm's Projects shared drive. Omit to leave unchanged; a blank string clears it. Refused when another matter already records the folder." },
               "booking_url": { "type": "string",
-                               "description": "The client's booking page, an http(s) URL. Omit to leave unchanged; a blank string clears it." }
+                               "description": "The client's booking page, an http(s) URL. Omit to leave unchanged; a blank string clears it." },
+              "onboarding_jurisdiction": { "type": "string",
+                               "description": "The jurisdiction an onboarding Notation's Clauses bind to (the state whose law and \
+                                               arbitration seat an engagement letter names). Omit to leave unchanged; a blank string clears it." }
             },
             "additionalProperties": false,
             "example": {

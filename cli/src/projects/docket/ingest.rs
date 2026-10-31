@@ -809,6 +809,7 @@ async fn record_entries(
         let recorded = async {
             let row = super::entries::post_entry(&coordinates, entry).await?;
             super::renumber::name_linked_document(&coordinates, &row, root).await?;
+            super::timeline_write::write_after(root, &coordinates.project_code, &row)?;
             Ok::<_, anyhow::Error>(row)
         }
         .await;
@@ -1698,6 +1699,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         };
         crate::document_sync::write_uploaded_pointer(
             dir.path(),
@@ -1746,6 +1748,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         };
         crate::document_sync::write_uploaded_pointer(dir.path(), slug, &pointer).unwrap();
         let free_look = FakeFreeLook {
