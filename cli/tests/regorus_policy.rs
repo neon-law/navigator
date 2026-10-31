@@ -462,9 +462,19 @@ fn regorus_matches_every_checked_in_policy_decision() {
     //   each pinned so a narrowing of either prefix surfaces here rather
     //   than leaving a page unreachable in production.
     // 627 + 5 = 632.
+    //
+    // + 10 for the matter-task doors (GET/POST /app/api/projects/{id}/tasks and
+    //   POST .../tasks/{task_id}/{assign,transition}): Lawyer admitted on the
+    //   collection, Admin through the bypass; Clerk and Client denied on the
+    //   create door (the list read rides the matter-read-cluster boundary and
+    //   the handler's LawyerSession gate denies non-lawyers); anonymous denied
+    //   on both doors; and the method/path-shape boundary — DELETE on the
+    //   collection, a bare task read, an unknown verb segment, and a deeper
+    //   path are denied to Lawyer.
+    // 632 + 10 = 642.
     assert_eq!(
         test_names.len(),
-        632,
+        642,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

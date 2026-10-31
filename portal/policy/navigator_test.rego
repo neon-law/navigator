@@ -3076,3 +3076,66 @@ test_firm_graph_page_rides_the_workbench_prefix if {
     authz.allow with input as {"path": ["app", "lawyer", "firms", "firm-1", "graph"], "method": "GET", "session": lawyer_session}
     not authz.allow with input as {"path": ["app", "lawyer", "firms", "firm-1", "graph"], "method": "GET", "session": client_session}
 }
+
+
+# ---------- Matter tasks under /app/api/projects/{id}/tasks (lawyer tier) ----------
+
+# The Tasks tab's doors: the collection (GET list, POST create) and the two
+# task commands. Lawyer tier at route admission; the handler resolves
+# `matter_viewer` and answers 404 for a caller with no firm-side participation
+# row, so route admission must not answer the tenant question either.
+
+test_lawyer_can_list_and_create_tasks if {
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks"], "method": "GET", "session": lawyer_session}
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks"], "method": "POST", "session": lawyer_session}
+}
+
+test_admin_can_reach_the_task_collection_door if {
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks"], "method": "POST", "session": admin_session}
+}
+
+# Clerk and client are denied the create door at the boundary. The list read
+# (GET) rides the matter-read-cluster rule, which admits any authenticated
+# session to five-segment /app/api/projects sub-reads and leaves the tier
+# question to the handler — the costs routes ship the same way: the handler's
+# `LawyerSession` extractor answers a clerk or client 403 before the matter
+# question is ever asked.
+test_clerk_denied_the_task_collection_door if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks"], "method": "POST", "session": clerk_session}
+}
+
+test_client_denied_the_task_collection_door if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks"], "method": "POST", "session": client_session}
+}
+
+test_anonymous_denied_the_task_collection_door if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks"], "method": "GET", "session": null}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks"], "method": "POST", "session": null}
+}
+
+test_lawyer_can_assign_and_transition_a_task if {
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "assign"], "method": "POST", "session": lawyer_session}
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "transition"], "method": "POST", "session": lawyer_session}
+}
+
+test_clerk_denied_task_commands if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "assign"], "method": "POST", "session": clerk_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "transition"], "method": "POST", "session": clerk_session}
+}
+
+test_client_denied_task_commands if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "assign"], "method": "POST", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "transition"], "method": "POST", "session": client_session}
+}
+
+test_anonymous_denied_task_commands if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "assign"], "method": "POST", "session": null}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "transition"], "method": "POST", "session": null}
+}
+
+test_task_doors_are_shape_bound if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks"], "method": "DELETE", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1"], "method": "GET", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "delete"], "method": "POST", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "tasks", "t1", "assign", "extra"], "method": "POST", "session": lawyer_session}
+}
