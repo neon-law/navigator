@@ -99,6 +99,7 @@ pub fn document_with_base(base: &str) -> Value {
     add_draft_aliases(&mut document);
     add_journal_operations(&mut document);
     add_blog_operations(&mut document);
+    add_graph_operations(&mut document);
     document["paths"]["/app/api/projects/{id}/section-counts"] = serde_json::json!({
       "get": {
         "operationId": "getProjectSectionCounts", "tags": ["Projects"],
@@ -115,6 +116,81 @@ pub fn document_with_base(base: &str) -> Value {
       }
     });
     document
+}
+
+/// The three read-only relationship-graph doors (`portal/src/api.rs`
+/// `project_graph`/`lawyer_graph`/`firm_graph`): the AGE-backed neighborhood
+/// views. Lawyer-tier only; the project door scopes by matter visibility,
+/// the lawyer door by self-or-firm-directory, the firm door by
+/// `FirmCapability::ViewDirectory` — out-of-scope is always the bare `404`.
+fn add_graph_operations(document: &mut Value) {
+    let node_schema = json!({
+        "type":"object","additionalProperties":false,"required":["id","label","kind"],
+        "properties":{
+            "id":{"type":"string","description":"Canonical vertex id (the projected record's UUID)."},
+            "label":{"type":"string","enum":["Person","Entity","Project","Firm"]},
+            "kind":{"type":"string","description":"Renderer-facing vertex kind; equals the label today."},
+            "name":{"type":"string","description":"Display name, when the vertex carries one."}
+        }
+    });
+    let edge_schema = json!({
+        "type":"object","additionalProperties":false,"required":["source","target","type"],
+        "properties":{
+            "source":{"type":"string"},"target":{"type":"string"},
+            "type":{"type":"string","enum":["HAS_ROLE","RELATIONSHIP","WORKS_ON","MEMBER_OF","HANDLES"],"description":"AGE edge label."},
+            "kind":{"type":"string","description":"Open-ended relationship kind (adverse_to, related_party, …)."},
+            "role":{"type":"string","description":"Open-ended role value on HAS_ROLE and WORKS_ON edges."},
+            "confidence_pct":{"type":"integer","minimum":0,"maximum":100},
+            "source_kind":{"type":"string","description":"Edge provenance: manual, disclosure, relationship_log, or llm."}
+        }
+    });
+    let depth_parameter = |description: &str| {
+        json!({"name":"depth","in":"query","required":false,
+            "schema":{"type":"integer","minimum":1,"maximum":3,"default":2},
+            "description":description})
+    };
+    let seed_parameter = |description: &str| json!({"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"},"description":description});
+    for (path, operation_id, summary, description, depth) in [
+        (
+            "/app/api/graph/project/{id}", "getProjectGraph",
+            "A matter's relationship graph",
+            "The matter's parties, their entity roles, the adverse/related relationships, and the firms handling each side — the conflict check, made visible. Lawyer-tier and matter-scoped: a caller with no view of the matter gets 404. Read-only over the AGE projection; depth caps the frontier walk server-side.",
+            true,
+        ),
+        (
+            "/app/api/graph/lawyer/{id}", "getLawyerGraph",
+            "One person's working relationship graph",
+            "Matters worked on, entity roles, firm membership, and the client/adverse relationships around one person. Lawyer-tier; visible to the person themself or through firm directory authorization — anyone else gets 404.",
+            true,
+        ),
+        (
+            "/app/api/graph/firm/{id}", "getFirmGraph",
+            "A firm's aggregated relationship graph",
+            "Firm-to-firm ties aggregated up from person-level edges: adversary, co-counsel, of-counsel, client. Lawyer-tier and directory-gated (FirmCapability::ViewDirectory on the firm). The aggregation is a fixed three-hop read, so depth is validated for consistency and then ignored.",
+            false,
+        ),
+    ] {
+        let mut parameters = vec![seed_parameter("Seed vertex id.")];
+        if depth {
+            parameters.push(depth_parameter("Neighborhood depth in hops; capped server-side."));
+        }
+        document["paths"][path]["get"] = json!({
+            "operationId":operation_id,"tags":["Graph"],"summary":summary,
+            "description":description,
+            "parameters":parameters,
+            "responses":{
+                "200":{"description":"The {nodes, edges} neighborhood","content":{"application/json":{"schema":{
+                    "type":"object","additionalProperties":false,"required":["nodes","edges"],
+                    "properties":{"nodes":{"type":"array","items":node_schema},"edges":{"type":"array","items":edge_schema}}
+                }}}},
+                "400":{"description":"A depth outside 1–3 (or non-numeric)"},
+                "401":{"description":"Unauthenticated"},
+                "403":{"description":"Non-lawyer tier"},
+                "404":{"description":"Seed or neighborhood outside the caller's scope"},
+                "503":{"description":"The PostgreSQL graph store is not configured"}
+            }
+        });
+    }
 }
 
 fn record_post_schema() -> Value {

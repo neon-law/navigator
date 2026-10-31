@@ -1186,6 +1186,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261031010000_create_navigator_graph.sql"),
             ),
             (
+                "20261031020000_create_graph_view_readers.sql",
+                include_str!("../postgres/migrations/20261031020000_create_graph_view_readers.sql"),
+            ),
+            (
                 "20261031120000_add_project_onboarding_jurisdiction.sql",
                 include_str!("../postgres/migrations/20261031120000_add_project_onboarding_jurisdiction.sql"),
             ),

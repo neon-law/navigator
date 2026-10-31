@@ -657,6 +657,9 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "/app/api/projects/{id}/relationships/adverse",
             post(record_adversity),
         ),
+        ("GET", "/app/api/graph/project/{id}", get(project_graph)),
+        ("GET", "/app/api/graph/lawyer/{id}", get(lawyer_graph)),
+        ("GET", "/app/api/graph/firm/{id}", get(firm_graph)),
         (
             "PATCH",
             "/app/api/projects/{id}/participants/{role_id}",
@@ -3120,6 +3123,173 @@ async fn record_adversity(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(edge)).into_response())
+}
+
+/// Query for the `GET /app/api/graph/*` doors: the neighborhood depth.
+/// Defaults to 2; anything above the store's hop ceiling is refused before
+/// the graph is read — the cap is the server's, never the caller's.
+#[derive(Deserialize, Default)]
+struct GraphQuery {
+    #[serde(default)]
+    depth: Option<String>,
+}
+
+/// Parses the `depth` query parameter. `Err` carries the ready 400 response.
+fn graph_depth(query: &GraphQuery) -> Result<u8, Response> {
+    const DEFAULT_DEPTH: &str = "2";
+    let raw = query.depth.as_deref().unwrap_or(DEFAULT_DEPTH);
+    let depth: u8 = raw
+        .parse()
+        .map_err(|_| bad_request("invalid_depth", "depth must be a non-negative integer."))?;
+    if depth == 0 || depth > store::postgres_graph_views::MAX_GRAPH_DEPTH {
+        return Err(bad_request(
+            "depth_out_of_range",
+            "depth must be between 1 and 3.",
+        ));
+    }
+    Ok(depth)
+}
+
+/// The AGE graph pool. The graph views read only from the projection, so a
+/// deployment with no configured PostgreSQL host has nothing to serve — the
+/// door reports 503 rather than pretending the graph is empty.
+async fn graph_store() -> Result<store::postgres::PostgresDb, Response> {
+    store::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "api: graph store unavailable");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": "graph_requires_postgresql" })),
+            )
+                .into_response()
+        })
+}
+
+/// Whether the lawyer-tier caller may read the lawyer graph of `person_id`:
+/// the person themself, or a caller who holds
+/// [`store::firm_capability::FirmCapability::ViewDirectory`] on a Firm the
+/// target belongs to — the same directory signal the firm surface uses,
+/// never an inference from graph shape. Membership or resolution failures
+/// deny, and deny silently (the door answers `404` either way).
+async fn can_view_lawyer_graph(state: &ApiState, lawyer: &LawyerSession, person_id: Uuid) -> bool {
+    if lawyer.0.person_id.is_some_and(|viewer| viewer == person_id) {
+        return true;
+    }
+    let memberships = match store::firms::memberships_for_person(&state.surreal, person_id).await {
+        Ok(memberships) => memberships,
+        Err(error) => {
+            tracing::error!(%error, %person_id, "api: lawyer-graph membership read failed");
+            return false;
+        }
+    };
+    for membership in memberships {
+        let decision = store::firm_capability::FirmCapability::ViewDirectory
+            .resolve(
+                &state.surreal,
+                lawyer.0.role,
+                lawyer.0.person_id,
+                membership.firm_id,
+            )
+            .await;
+        if decision.is_ok_and(store::firm_capability::FirmCapabilityDecision::is_allowed) {
+            return true;
+        }
+    }
+    false
+}
+
+/// `GET /app/api/graph/project/{id}?depth=2` — the matter's neighborhood:
+/// its parties, their entity roles, the adverse/related relationships, and
+/// the firms handling each side — the conflict check, made visible.
+/// Lawyer-tier and matter-scoped like [`record_adversity`]: a caller with no
+/// view of the matter gets the same non-disclosing `404`. The neighborhood
+/// itself is a read-only AGE view (`store::postgres_graph_views`); depth is
+/// capped server-side.
+async fn project_graph(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Query(query): Query<GraphQuery>,
+) -> Result<Response, ApiError> {
+    let depth = match graph_depth(&query) {
+        Ok(depth) => depth,
+        Err(response) => return Ok(response),
+    };
+    let in_scope =
+        store::access::can_see_project(&state.surreal, lawyer.0.person_id, lawyer.0.role, id)
+            .await
+            .unwrap_or(false);
+    if !in_scope {
+        return Err(ApiError::NotFound);
+    }
+    let pg = match graph_store().await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    let view = store::postgres_graph_views::project_view(&pg, id, depth)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    Ok(Json(view).into_response())
+}
+
+/// `GET /app/api/graph/lawyer/{id}?depth=2` — one person's working
+/// neighborhood: matters worked on, entity roles, firm membership, and the
+/// client/adverse relationships around them. Lawyer-tier; visible to the
+/// person themself or to a caller authorized through the firm directory
+/// ([`can_view_lawyer_graph`]) — anyone else gets the non-disclosing `404`.
+async fn lawyer_graph(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Query(query): Query<GraphQuery>,
+) -> Result<Response, ApiError> {
+    let depth = match graph_depth(&query) {
+        Ok(depth) => depth,
+        Err(response) => return Ok(response),
+    };
+    if !can_view_lawyer_graph(&state, &lawyer, id).await {
+        return Err(ApiError::NotFound);
+    }
+    let pg = match graph_store().await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    let view = store::postgres_graph_views::lawyer_view(&pg, id, depth)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    Ok(Json(view).into_response())
+}
+
+/// `GET /app/api/graph/firm/{id}` — firm-to-firm ties aggregated up from
+/// person-level edges: adversary, co-counsel, of-counsel, client. Lawyer-tier
+/// and directory-gated (`FirmCapability::ViewDirectory` on the Firm itself);
+/// the aggregation is a fixed three-hop read, so it takes no meaningful
+/// `depth` — the parameter is validated for consistency and then ignored.
+async fn firm_graph(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Query(query): Query<GraphQuery>,
+) -> Result<Response, ApiError> {
+    if let Err(response) = graph_depth(&query) {
+        return Ok(response);
+    }
+    let allowed = store::firm_capability::FirmCapability::ViewDirectory
+        .resolve(&state.surreal, lawyer.0.role, lawyer.0.person_id, id)
+        .await
+        .is_ok_and(store::firm_capability::FirmCapabilityDecision::is_allowed);
+    if !allowed {
+        return Err(ApiError::NotFound);
+    }
+    let pg = match graph_store().await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    let view = store::postgres_graph_views::firm_view(&pg, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    Ok(Json(view).into_response())
 }
 
 /// Request body for `PATCH /app/api/projects/{id}/participants/{role_id}` — re-point
@@ -9020,6 +9190,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let session = crate::SessionData {
             person_id: Some(lawyer_person.id),
