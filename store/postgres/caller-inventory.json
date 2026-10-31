@@ -910,6 +910,7 @@
       "cli/src/postgres_mirror.rs",
       "cli/src/projects/scaffold.rs",
       "cli/src/remote.rs",
+      "cli/src/sas.rs",
       "mcp/src/tools/close_project.rs",
       "mcp/src/tools/create_project.rs",
       "portal/src/admin.rs",

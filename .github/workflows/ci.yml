@@ -161,7 +161,7 @@ jobs:
       rust: ${{ steps.scope.outputs.rust }}
       word_adapter: ${{ steps.scope.outputs.word_adapter }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
       - name: does this PR touch Rust
@@ -201,9 +201,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: set up the pinned .NET SDK
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
       - name: verify the locked restore in the release SDK image
@@ -217,15 +217,6 @@ jobs:
   # gate`; that is the cheap gate that lets the rust job stay skipped.
   gate:
     name: gate content
-    services:
-      presidio:
-        image: ghcr.io/data-privacy-stack/presidio-analyzer:2.2.364@sha256:ae8f6f111ac2f04e3fec552f7f80edd0dcbfa2dd69ee1b9e030475be31669885
-        env:
-          LOG_LEVEL: WARNING
-        ports:
-          - 3000:3000
-        # Analyzer errors can contain input text. Never upload its raw logs.
-        options: --log-driver none
     # This standard runner builds one debug `navigator` binary. A cold-cache
     # CLI build takes 36 minutes (run 41067171840), so the job needs a full
     # hour for the content, personal-data, secret, and integrity checks too.
@@ -240,8 +231,8 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.98.0
       - name: cache the Rust dependencies
@@ -252,8 +243,27 @@ jobs:
         run: cargo build -p cli --quiet
       - name: gate the content tree with navigator
         run: "${CARGO_TARGET_DIR:-target}/debug/navigator project gate --ci"
+      - name: start the local PII analyzer
+        run: |
+          # Start the analyzer as a plain docker step, not a job service: its
+          # lifetime then spans only the scan instead of the whole build. The
+          # analyzer is healthy in seconds after `docker run` but has been
+          # observed dying (or dropping its port mapping) ~8-11 minutes after
+          # startup, so jobs whose build reaches the old job-service poll later
+          # than that always failed (runs 41185810987, 41187088855 x3) while
+          # shorter builds passed the identical poll. Same pinned digest, port,
+          # env, and log suppression as the service it replaces. Analyzer
+          # errors can contain input text. Never upload its raw logs.
+          docker run --detach --name presidio-analyzer \
+            --env LOG_LEVEL=WARNING \
+            --publish 3000:3000 \
+            --log-driver none \
+            ghcr.io/data-privacy-stack/presidio-analyzer:2.2.364@sha256:ae8f6f111ac2f04e3fec552f7f80edd0dcbfa2dd69ee1b9e030475be31669885
       - name: wait for the local PII analyzer
-        run: curl --fail --silent --output /dev/null --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:3000/health
+        # --retry-all-errors, not just --retry-connrefused: docker's port proxy
+        # accepts the connection and the booting app resets it, which curl
+        # reports as exit 56 and would otherwise not retry at all.
+        run: curl --fail --silent --output /dev/null --retry 30 --retry-all-errors --retry-delay 2 http://127.0.0.1:3000/health
       - name: scan for personal data with Presidio
         run: '"${CARGO_TARGET_DIR:-target}/debug/navigator" pii --analyzer-url http://127.0.0.1:3000'
       - name: scan the working tree for secrets
@@ -445,10 +455,10 @@ jobs:
       # two commits is the whole history needed to compute it. The wasm scope
       # test below is the only consumer; nothing else in this job reads
       # history.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.98.0
           # `llvm-tools-preview` supplies `llvm-profdata`/`llvm-cov`, the
@@ -459,14 +469,14 @@ jobs:
       # installer silently picked up a new cargo-llvm-cov. 0.8.7 is the version
       # the floor below was measured with; bump both together, deliberately.
       - name: install cargo-llvm-cov
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-llvm-cov@0.8.7
       # Pinned to the same version `deploy.yml`'s browser gate pins, for the
       # same reason: the test runner must not change under the coverage floor
       # because an installer picked up a newer release.
       - name: install cargo-nextest
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2
+        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: nextest@0.9.140
       # Cache the compiled DEPENDENCIES, not just their sources.
@@ -964,13 +974,13 @@ jobs:
         run: docker rm -f test-postgres
       - name: upload nextest JUnit
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nextest-junit
           path: target/nextest/ci/junit.xml
       - name: upload workspace test log
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: workspace-test-log
           path: /tmp/navigator-workspace-tests.log
