@@ -34,7 +34,7 @@ use crate::persons::Role;
 use crate::postgres_mirror::MirrorKey;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
-const TABLE: &str = "brand";
+pub(crate) const TABLE: &str = "brand";
 const FIRM_TABLE: &str = "firm";
 const PROJECT_TABLE: &str = "project";
 const FIRM_BRAND_TABLE: &str = "firm_brand";
@@ -1845,9 +1845,15 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::firms::attach_brand(&db, firm.id, "worn-brand")
-            .await
-            .unwrap();
+        crate::firms::attach_brand(
+            &db,
+            crate::persons::Role::Owner,
+            None,
+            firm.id,
+            "worn-brand",
+        )
+        .await
+        .unwrap();
         let err = delete(&db, Role::Owner, None, worn.id).await.unwrap_err();
         assert!(matches!(err, BrandError::StillReferenced));
 

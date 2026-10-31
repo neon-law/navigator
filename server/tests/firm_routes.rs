@@ -217,7 +217,9 @@ async fn the_home_books_consultations_and_retires_business_and_disputes_pages() 
     assert!(body.contains("Common employment, NDA, sales, and privacy agreements."));
     assert!(body.contains("img/neon-home/neon-home-presentation.mp4"));
     assert!(body.contains("<video") && body.contains("video/mp4"));
-    assert!(body.contains("href=\"/notations\""));
+    // The footer no longer links the catalog; the home's own content links
+    // its template section directly.
+    assert!(body.contains("href=\"/notations#templates\""));
     assert!(!body.contains("Drafting, review, and litigation are priced separately."));
     assert!(body.contains("/public/ferris.svg"));
     assert!(!body.contains("Our family") && !body.contains("A practice of"));
@@ -304,61 +306,17 @@ async fn the_neon_home_lead_modal_reuses_the_contact_form_contract() {
 }
 
 #[tokio::test]
-async fn the_footer_carries_the_pages_the_header_does_not() {
-    // A non-home page proves the footer directory is shared.
-    const ROW: [&str; 11] = [
-        "/api",
-        "/blog",
-        "/contact",
-        "/glossary",
-        "/navigator",
-        "/notations",
-        "/presentations",
-        "/privacy",
-        "/team",
-        "/terms",
-        "/testimonials",
-    ];
-    let app = site_app().await;
-    let body = body_string(anon_get(&app, "/navigator").await).await;
-    let footer = body
-        .split_once(r#"aria-label="More pages""#)
-        .and_then(|(_, rest)| rest.split_once("</nav>"))
-        .map(|(row, _)| row)
-        .expect("the footer renders its link row as a labelled landmark");
-    // The row is alphabetized by label. The ordering is a product decision,
-    // asserted by position rather than left to the array literal.
-    let positions: Vec<usize> = ROW
-        .iter()
-        .map(|href| {
-            footer
-                .find(&format!(r#"href="{href}""#))
-                .unwrap_or_else(|| panic!("the footer links {href}: {footer}"))
-        })
-        .collect();
-    assert!(
-        positions.windows(2).all(|pair| pair[0] < pair[1]),
-        "the footer row is alphabetized by label: {footer}"
-    );
-    // Neither row links a page the site does not publish: the whole
-    // `/foundation` tree.
-    assert!(
-        !footer.contains(r#"href="/foundation""#),
-        "/foundation names no page, so the footer must not link it: {footer}"
-    );
-}
-
-#[tokio::test]
 async fn the_firm_footer_publishes_no_bar_number_and_no_qualified_office() {
     // The firm's regulated footer strip names the entity, the disclaimer, and
-    // the offices — and nothing about who is licensed under what number.
-    // `views::brand::FIRM_ATTORNEYS` is empty today, and the Team profile
-    // carries no per-attorney bar-credential disclosure.
+    // the trademark notice — and nothing about who is licensed under what
+    // number, and no office address at all. `views::brand::FIRM_ATTORNEYS` is
+    // empty today, and the Team profile carries no per-attorney bar-credential
+    // disclosure.
     //
-    // Both halves are the assertion. A bar number reappearing means
-    // `views::brand::FIRM_ATTORNEYS` was refilled; an office note reappearing
-    // means an address is being published with a qualification on it. Checked
-    // on `/disputes` because the footer is shared chrome.
+    // The absence list is the assertion. A bar number reappearing means
+    // `views::brand::FIRM_ATTORNEYS` was refilled; an office address
+    // reappearing means the old offices row crept back into the legal strip.
+    // Checked on `/navigator` because the footer is shared chrome.
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/navigator").await).await;
     for retired in [
@@ -366,75 +324,19 @@ async fn the_firm_footer_publishes_no_bar_number_and_no_qualified_office() {
         "Admitted in",
         r#"class="site-footer__licenses""#,
         r#"class="site-footer__office-note""#,
+        // The offices row is gone from the rendered footer outright: the
+        // legal strip is the copyright, the trademark notice, and the
+        // disclaimer. The addresses stay in `views::brand` for the surfaces
+        // that still read them.
+        "5150 Mae Anne Ave",
+        "Ste 405-9002",
+        "Reno, NV 89523",
     ] {
         assert!(
             !body.contains(retired),
             "the firm footer must not carry {retired:?}: {body}"
         );
     }
-    // The offices themselves still publish — the note went, not the address.
-    // Each is set line by line, so its parts are asserted as the separate lines
-    // the footer renders them as.
-    assert!(
-        body.contains("5150 Mae Anne Ave")
-            && body.contains("Ste 405-9002")
-            && body.contains("Reno, NV 89523"),
-        "the firm's office is published, unqualified: {body}"
-    );
-}
-
-/// Every published address has explicit street, optional unit, and city lines,
-/// rather than relying on wrapping in the narrow footer column.
-///
-/// Asserted at the route level as well as in the component because these are the
-/// firm's real addresses out of `views::brand`: the component's fixture could
-/// drift from them. The exact markup is pinned on the pure SSR path in
-/// `webapp::components::site_footer`; hydration comments split each span's text
-/// node here, so this asserts the breaks rather than the tags around them.
-///
-/// Scoped to the `site-footer__offices` grid rather than the whole page body, so
-/// this asserts the line breaks the grid renders rather than any run of the same
-/// street elsewhere on the page.
-#[tokio::test]
-async fn the_firm_footer_sets_each_office_over_explicit_lines() {
-    let app = site_app().await;
-    let full_body = body_string(anon_get(&app, "/navigator").await).await;
-    let body = full_body
-        .split(r#"<ul class="site-footer__offices""#)
-        .nth(1)
-        .and_then(|rest| rest.split("</ul>").next())
-        .expect("the offices grid renders");
-    for (street, unit, city) in [
-        ("5150 Mae Anne Ave", "Ste 405-9002", "Reno, NV 89523"),
-        ("12 E 49th St", "18th Floor", "New York, NY 10017"),
-        ("1111 Main St", "STE 201E", "Vancouver, WA 98660"),
-    ] {
-        // Every line publishes...
-        for line in [street, unit, city] {
-            assert!(body.contains(line), "{line} publishes: {body}");
-        }
-        // ...and each break is real, not a line the column happened to wrap.
-        assert!(
-            !body.contains(&format!("{street}, {unit}")),
-            "{street} breaks before {unit}: {body}"
-        );
-        assert!(
-            !body.contains(&format!("{unit}, {city}")),
-            "{unit} breaks before {city}: {body}"
-        );
-    }
-    for line in ["1515 20th Street", "Bakersfield, CA 93301"] {
-        assert!(body.contains(line), "{line} publishes: {body}");
-    }
-    assert!(
-        !body.contains("1515 20th Street, Bakersfield"),
-        "California's street and city have separate lines: {body}"
-    );
-    assert_eq!(
-        body.matches(r#"class="site-footer__office-line""#).count(),
-        11,
-        "two California lines and three each for Nevada, New York, and Washington: {body}"
-    );
 }
 
 #[tokio::test]
@@ -975,7 +877,10 @@ async fn home_presents_company_counsel_pricing_and_business_library() {
     assert!(body.contains(r#"id="pricing" class="company-pricing""#));
     assert!(body.contains(r#"src="/public/ferris.svg""#));
     assert!(body.contains(r#"href="/notations#templates""#));
-    assert!(body.contains("Neon Law is a trademark of Neon Law IP LLC."));
+    // The trademark notice is the kept ownership fact: the mark, its
+    // registration number, and the holder the register names.
+    assert!(body.contains("NEON LAW"));
+    assert!(body.contains("U.S. Reg. No. 6,325,650"));
     assert!(!body.contains("NEON LAW /"));
     assert!(!body.contains("Twelve business templates"));
     assert!(body.contains(r#"href="https://calendar.notion.so/meet/nick-shook/or15n4yy7""#));
@@ -1425,39 +1330,27 @@ async fn a_talk_wears_the_firm_footer() {
     }
 }
 
-/// Every public firm page links the catalog from its footer, so a reader who
-/// saw a talk at a conference finds it from anywhere on the site.
+/// The footer is the three-line legal strip: the only anchor it carries is
+/// the copyright's link to the firm's home. The talks catalog, Privacy
+/// Policy, and Terms of Service no longer ride it — the rows that carried
+/// them were part of the marketing surface the strip replaced. `/privacy`
+/// and `/terms` still serve by URL, and the catalog keeps its own page.
 #[tokio::test]
-async fn the_firm_footer_links_the_talks_catalog() {
+async fn the_public_footer_carries_no_navigation_rows() {
     let app = site_app_with_talks().await;
 
     for path in ["/", "/presentations"] {
         let body = body_string(anon_get(&app, path).await).await;
-        assert!(
-            body.contains("href=\"/presentations\""),
-            "{path} links the talks catalog from its footer: {body}"
-        );
-    }
-}
-
-/// Every public firm page links its own Privacy Policy and Terms of Service
-/// from the footer.
-///
-/// Both documents already served at `/privacy` and `/terms`, and neither was
-/// linked from the header or the legal strip — so before this row carried
-/// them, a reader could only reach either by typing the URL. They are checked
-/// on the same footing as the Blog and Contact because that is where they now
-/// sit: one row, alphabetized, on every page of both faces.
-#[tokio::test]
-async fn the_firm_footer_links_privacy_and_terms() {
-    let app = site_app_with_talks().await;
-
-    for path in ["/", "/presentations"] {
-        let body = body_string(anon_get(&app, path).await).await;
-        for href in ["/privacy", "/terms"] {
+        let footer = body.split("<footer").nth(1).expect("footer");
+        for retired in [
+            r#"href="/presentations""#,
+            r#"href="/privacy""#,
+            r#"href="/terms""#,
+            r#"<p class="site-footer__powered">"#,
+        ] {
             assert!(
-                body.contains(&format!("href=\"{href}\"")),
-                "{path} links {href} from its footer: {body}"
+                !footer.contains(retired),
+                "{path}'s footer still carries {retired:?}: {footer}"
             );
         }
     }
@@ -1762,11 +1655,6 @@ async fn each_brand_keeps_its_own_blog() {
     let vesta = body_string(vesta_index).await;
     assert!(vesta.contains("Trust terms") && vesta.contains("Estate basics"));
     assert!(!vesta.contains("Thanks, Apple") && !vesta.contains("Fresh news"));
-    let footer = vesta.split("<footer").nth(1).expect("footer");
-    assert!(
-        footer.contains("href=\"/blog\""),
-        "the Brand footer routes to its own blog"
-    );
     let article = on_vesta_host("/blog/estate-basics").await.unwrap();
     assert_eq!(article.status(), StatusCode::OK);
     assert!(body_string(article).await.contains("Vesta body."));
@@ -2154,40 +2042,6 @@ async fn contact_returns_contact_page_html() {
     );
 }
 
-/// The shared footer names and links Navigator on every public page, on both
-/// faces of the site.
-///
-/// The component and chrome tests prove the line renders from the right props;
-/// this proves the props actually reach a served page — the wiring through
-/// `chrome_for` and the two `inject_*_chrome` layers, which no unit test sees.
-#[tokio::test]
-async fn every_public_page_names_and_links_navigator() {
-    let app = site_router(site_state().await);
-    for uri in ["/", "/notations", "/navigator"] {
-        let resp = app
-            .clone()
-            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "{uri}");
-        let body = body_string(resp).await;
-        let attribution = body
-            .split(r#"<p class="site-footer__powered">"#)
-            .nth(1)
-            .and_then(|rest| rest.split("</p>").next())
-            .expect("the Navigator attribution renders");
-        assert!(
-            attribution.contains(r#"href="https://github.com/neon-law/navigator""#),
-            "{uri} links the Navigator repository: {attribution}"
-        );
-        assert_eq!(
-            attribution.matches("<a ").count(),
-            1,
-            "{uri} has one attribution link: {attribution}"
-        );
-    }
-}
-
 /// The public directory is a short link to Nick's separate profile. The public
 /// team copy is static and never queries person records.
 #[tokio::test]
@@ -2299,21 +2153,9 @@ async fn a_mounted_brand_bundle_rebrands_the_firm_home() {
         "the statement names no firm, so a rebrand cannot leak one: {html}"
     );
 
-    // The public catalog and footer render the bundle's support email.
-    let notations = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/notations")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(notations.status(), StatusCode::OK);
-    assert!(body_string(notations).await.contains("help@acme.example"));
-
-    // The contact page renders the bundle's support email.
+    // The contact page renders the bundle's support email. The footer no
+    // longer carries a contact band, so the page itself is the only face
+    // that shows it.
     let contact = app
         .oneshot(
             Request::builder()
@@ -2327,22 +2169,14 @@ async fn a_mounted_brand_bundle_rebrands_the_firm_home() {
     assert!(body_string(contact).await.contains("help@acme.example"));
 }
 
-/// The footer closes on the platform line, publishing neither organization's
-/// registered address under it.
+/// The footer publishes neither organization's registered address — not the
+/// retired Reno box and not the Nevada one the contact band used to carry.
 ///
-/// The firm's Reno box is already the Nevada tile in the contact band above, so
-/// a second copy of the same street, suite, and city at the very bottom told a
-/// reader nothing the band had not. It went.
-///
-/// Asserted here rather than in the component, because the addresses were the
-/// firm's real ones out of `views::brand` — a component fixture that simply
-/// stops passing them would pass whether or not the row still renders.
-/// `405-9999` is the sharpest half: that suffix reached no other surface, so its
-/// absence is specific to this row rather than to the page happening not to say
-/// it. It is a retired box now — the nonprofit that held it is gone from the
-/// seed — which makes the marker no weaker for this purpose and is why the
-/// assertion stays. The Nevada office is asserted in the same test so the
-/// removal cannot be satisfied by dropping the address the firm does publish.
+/// The band itself is gone with the rest of the marketing surface, so both
+/// addresses are now asserted absent: `405-9999` is the sharpest half (that
+/// suffix reached no other surface, so its absence is specific to this row),
+/// and `Ste 405-9002` was the band's tile — the removal cannot be satisfied
+/// by quietly rehoming it elsewhere on the page.
 #[tokio::test]
 async fn the_firm_footer_publishes_no_registered_address_row() {
     let app = site_app().await;
@@ -2351,16 +2185,13 @@ async fn the_firm_footer_publishes_no_registered_address_row() {
         "site-footer__legal-addresses",
         r#"class="site-footer__legal-address""#,
         "405-9999",
+        "Ste 405-9002",
     ] {
         assert!(
             !body.contains(retired),
             "the footer must not carry {retired:?}: {body}"
         );
     }
-    assert!(
-        body.contains("Ste 405-9002"),
-        "the office the band publishes is untouched: {body}"
-    );
 }
 
 /// No page leaks an unresolved reference. A `{shared:…}` that reached the

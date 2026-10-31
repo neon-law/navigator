@@ -127,6 +127,20 @@ pub const ENTITY_SEED_YAML: &str = canonical::ENTITY;
 /// that column and not the name.
 pub const FIRM_ENTITY_NAME: &str = "Guieb & Shook PC";
 
+/// The second firm Entity the canonical seed ships. `Lex Tecnica LLP`
+/// anchors the `Lex` firm, which wears only the `iep-defenders` brand —
+/// brand mobility's proof that a brand can belong to a different firm.
+/// Its row joins [`FIRM_ENTITY_NAME`]'s anchor-key discipline, so the
+/// delete guard protects it identically.
+pub const LEX_FIRM_ENTITY_NAME: &str = "Lex Tecnica LLP";
+/// The firm row's wordmark, distinct from the legal entity it wears.
+pub const LEX_FIRM_NAME: &str = "Lex";
+
+/// Every firm-anchor Entity the canonical seed ships, in seed order.
+/// `seed_entities` and `is_firm_anchor` read this list, so a second firm
+/// is a one-line extension rather than a second hand-rolled guard.
+pub const FIRM_ENTITY_NAMES: &[&str] = &[FIRM_ENTITY_NAME, LEX_FIRM_ENTITY_NAME];
+
 /// The seeded practice's first Admin DRI (ENG-499). `User.yaml` carries the
 /// canonical `role: admin` assignment for this email; [`seed_practice`]
 /// resolves the row by it, so the two agree on which person opens the
@@ -2490,9 +2504,10 @@ async fn ensure_dev_entity(
 /// literal: it must carry `firm_anchor_key`, or the seeded firm would be
 /// forkable through `entity_commands` — the guard reads the key, and a
 /// row seeded without one leaves the `entity_firm_anchor` index free.
-/// The shipped default stands in for the configured anchor here because
-/// `is_firm_anchor` protects it under every configuration, and the
-/// canonical seed ships no other firm.
+/// The shipped defaults stand in for the configured anchor here because
+/// `is_firm_anchor` protects them under every configuration, and the
+/// canonical seed ships exactly the firm anchors [`FIRM_ENTITY_NAMES`]
+/// names.
 fn new_entity(
     name: &str,
     entity_type_id: Uuid,
@@ -2505,7 +2520,9 @@ fn new_entity(
         phone: None,
         url: None,
         xero_id: None,
-        firm_anchor_key: crate::entity_commands::firm_anchor_key(FIRM_ENTITY_NAME, name),
+        firm_anchor_key: FIRM_ENTITY_NAMES
+            .iter()
+            .find_map(|configured| crate::entity_commands::firm_anchor_key(configured, name)),
     }
 }
 
@@ -3002,7 +3019,7 @@ async fn seed_entities(
     report: &mut SeedReport,
 ) -> anyhow::Result<()> {
     // Rows the seed already owns whose `firm_anchor_key` disagrees with
-    // the name [`FIRM_ENTITY_NAME`] now carries. Setting is deferred to a
+    // the firm-anchor names the seed now ships. Setting is deferred to a
     // second pass so every stale key is surrendered before the new one is
     // claimed: the `entity_firm_anchor` index is UNIQUE, and a rename
     // between two names the seed both ships would otherwise be refused by
@@ -3037,7 +3054,9 @@ async fn seed_entities(
             // outgoing firm and never mint it on the incoming one — and
             // that column, not the name, is what `delete_unless_firm_anchor`
             // reads. Reconcile the row to the name it should carry now.
-            let expected = crate::entity_commands::firm_anchor_key(FIRM_ENTITY_NAME, &rec.name);
+            let expected = FIRM_ENTITY_NAMES.iter().find_map(|configured| {
+                crate::entity_commands::firm_anchor_key(configured, &rec.name)
+            });
             if row.firm_anchor_key != expected {
                 match expected {
                     Some(key) => claim_anchor.push((row.id, key)),
@@ -3274,6 +3293,21 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
     },
 ];
 
+/// The second firm's compiled brands: Lex wears only `iep-defenders`,
+/// whose row is firm-scoped to Lex from the moment it is first seeded.
+/// The key joins [`crate::firms::CLOSED_BRAND_KEYS`] for registry-ordered
+/// footer display and the website-URL backfill, but no practice-firm
+/// attachment — the brand belongs to Lex Tecnica LLP alone. Its row copies
+/// the compiled presentation: `BrandKey::IepDefenders`
+/// `default_typeface` and `default_palette().light.primary`.
+const LEX_COMPILED_BRANDS: &[CompiledBrand] = &[CompiledBrand {
+    key: "iep-defenders",
+    website_url: "https://www.iepdefenders.com",
+    name: "IEP Defenders",
+    typeface: "source-sans-3",
+    primary_hex: "#5B21B6",
+}];
+
 /// The website URL [`COMPILED_BRANDS`] seeds for `key`, if it names a
 /// compiled brand. Public for the same reason as [`compiled_brand_name`]: a
 /// crate that sees `views` holds it against `BrandKey::canonical_host`.
@@ -3281,6 +3315,7 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
 pub fn compiled_brand_website_url(key: &str) -> Option<&'static str> {
     COMPILED_BRANDS
         .iter()
+        .chain(LEX_COMPILED_BRANDS)
         .find(|brand| brand.key == key)
         .map(|brand| brand.website_url)
 }
@@ -3293,6 +3328,7 @@ pub fn compiled_brand_website_url(key: &str) -> Option<&'static str> {
 pub fn compiled_brand_name(key: &str) -> Option<&'static str> {
     COMPILED_BRANDS
         .iter()
+        .chain(LEX_COMPILED_BRANDS)
         .find(|brand| brand.key == key)
         .map(|brand| brand.name)
 }
@@ -3320,8 +3356,12 @@ pub fn compiled_brand_name(key: &str) -> Option<&'static str> {
 /// which the authorized pair would correctly refuse to let this Firm's own
 /// Admin DRI edit. Idempotent: an existing name or key is this migration
 /// having already run, and only its typeface/colour are refreshed.
-async fn seed_brands(surreal: &SurrealDb, firm: &crate::firms::Firm) -> anyhow::Result<()> {
-    for brand in COMPILED_BRANDS {
+async fn seed_brands(
+    surreal: &SurrealDb,
+    firm: &crate::firms::Firm,
+    brands: &[CompiledBrand],
+) -> anyhow::Result<()> {
+    for brand in brands {
         crate::brands::seed_upsert(
             surreal,
             &crate::brands::NewBrand {
@@ -3379,16 +3419,81 @@ async fn ensure_practice_firm(surreal: &SurrealDb) -> anyhow::Result<crate::firm
     }
 }
 
+/// Find or create the deployment's second firm: the `Lex Tecnica LLP`
+/// entity's Firm, wearing only the `iep-defenders` brand. Idempotent on
+/// the same terms as [`ensure_practice_firm`] — an existing Firm on this
+/// Entity is left exactly as it is. Its Admin DRI is the same primary
+/// admin: the canonical seed ships exactly one person of record, and
+/// both firms' administration starts there.
+async fn ensure_lex_firm(surreal: &SurrealDb) -> anyhow::Result<crate::firms::Firm> {
+    let entity = crate::entities::find_by_name(surreal, LEX_FIRM_ENTITY_NAME)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("canonical seed is missing {LEX_FIRM_ENTITY_NAME}"))?;
+    let admin_dri = crate::persons::find_by_email_ci(surreal, PRIMARY_ADMIN_EMAIL)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!("canonical seed is missing the primary admin {PRIMARY_ADMIN_EMAIL}")
+        })?
+        .id;
+    match crate::firms::find_by_entity_id(surreal, entity.id).await? {
+        Some(firm) => Ok(firm),
+        None => match crate::firms::create(
+            surreal,
+            &crate::firms::NewFirm {
+                name: LEX_FIRM_NAME.to_string(),
+                status: "active".to_string(),
+                entity_id: entity.id,
+                admin_dri_person_id: admin_dri,
+            },
+        )
+        .await
+        {
+            Ok(firm) => Ok(firm),
+            Err(crate::firms::FirmError::DuplicateEntity) => {
+                crate::firms::find_by_entity_id(surreal, entity.id)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("firm for {LEX_FIRM_ENTITY_NAME} exists but did not read")
+                    })
+            }
+            Err(error) => Err(error.into()),
+        },
+    }
+}
+
+/// The compiled brand keys the canonical practice firm wears: every closed
+/// key except the ones the Lex firm owns. `seed_practice` attaches exactly
+/// this set to the practice firm, and the seed tests assert against it
+/// rather than re-deriving the two-firm split.
+#[must_use]
+pub fn practice_worn_brand_keys() -> Vec<&'static str> {
+    crate::firms::CLOSED_BRAND_KEYS
+        .iter()
+        .copied()
+        .filter(|key| !LEX_COMPILED_BRANDS.iter().any(|brand| brand.key == *key))
+        .collect()
+}
+
 /// The one practice this deployment already is, wearing every registered
-/// house-brand key. Resolves or creates the Firm first (ENG-659: every
-/// compiled brand must be created *as* that Firm's own row, so the Firm has
-/// to exist before [`seed_brands`] runs), then attaches each key through
-/// `firm_brand`.
+/// house-brand key the Lex firm does not own. Resolves or creates the Firm
+/// first (ENG-659: every compiled brand must be created *as* that Firm's
+/// own row, so the Firm has to exist before [`seed_brands`] runs), then
+/// attaches each key through `firm_brand`.
 async fn seed_practice(surreal: &SurrealDb) -> anyhow::Result<()> {
     let firm = ensure_practice_firm(surreal).await?;
-    seed_brands(surreal, &firm).await?;
-    for key in crate::firms::CLOSED_BRAND_KEYS {
+    seed_brands(surreal, &firm, COMPILED_BRANDS).await?;
+    for key in practice_worn_brand_keys() {
         match crate::firms::ensure_brand(surreal, firm.id, key).await {
+            Ok(()) | Err(crate::firms::FirmError::DuplicateBrand) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    // The whole point of brand mobility is that the same key could wear
+    // either firm at runtime, so the seed proves both shapes exist.
+    let lex = ensure_lex_firm(surreal).await?;
+    seed_brands(surreal, &lex, LEX_COMPILED_BRANDS).await?;
+    for brand in LEX_COMPILED_BRANDS {
+        match crate::firms::ensure_brand(surreal, lex.id, brand.key).await {
             Ok(()) | Err(crate::firms::FirmError::DuplicateBrand) => {}
             Err(error) => return Err(error.into()),
         }
@@ -6088,11 +6193,11 @@ records:
         assert_eq!(holders, 1, "one box, one holder");
     }
 
-    /// No entity beyond the firm anchor seeds in either layer. A further
-    /// corporation, a trust, or a personal entity has no verified public source
-    /// in this repository, so it is supplied to a deployment privately.
+    /// No entity beyond the two firm anchors seeds in either layer. A
+    /// further corporation, a trust, or a personal entity has no verified public
+    /// source in this repository, so it is supplied to a deployment privately.
     #[tokio::test]
-    async fn only_the_firm_anchor_seeds_as_an_entity() {
+    async fn only_the_firm_anchors_seed_as_entities() {
         let surreal = mem_surreal().await;
 
         seed_canonical(&surreal, &fs_storage().await)
@@ -6102,13 +6207,19 @@ records:
             .await
             .expect("brand seed");
 
-        let names: Vec<String> = crate::entities::all(&surreal)
+        let mut names: Vec<String> = crate::entities::all(&surreal)
             .await
             .unwrap()
             .into_iter()
             .map(|e| e.name)
             .collect();
-        assert_eq!(names, vec![super::FIRM_ENTITY_NAME.to_string()]);
+        names.sort();
+        let mut expected = super::FIRM_ENTITY_NAMES
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(names, expected);
     }
 
     /// A Florida P.A. is a distinct designation under Ch. 621, Fla. Stat.,
@@ -6795,6 +6906,101 @@ records:
             .expect("delete-your-data brand");
         assert_eq!(dyd.typeface.as_deref(), Some("plus-jakarta-sans"));
         assert_eq!(dyd.primary_color.as_deref(), Some("#b91c1c"));
+    }
+
+    #[tokio::test]
+    async fn seeds_two_firms_with_iep_defenders_at_lex() {
+        let surreal = mem_surreal().await;
+        seed_canonical(&surreal, &fs_storage().await)
+            .await
+            .expect("seed");
+
+        // Two firm-anchor entities, each delete-guarded by its own
+        // anchor key.
+        for name in super::FIRM_ENTITY_NAMES {
+            let entity = crate::entities::find_by_name(&surreal, name)
+                .await
+                .unwrap()
+                .unwrap_or_else(|| panic!("canonical seed is missing entity {name}"));
+            assert_eq!(
+                entity.firm_anchor_key.as_deref(),
+                Some(name.trim().to_lowercase()).as_deref(),
+                "{name} must carry its own anchor key"
+            );
+        }
+
+        // Two firm rows, one per firm-anchor entity.
+        let firms = crate::firms::all(&surreal).await.unwrap();
+        assert_eq!(firms.len(), 2, "the seed ships exactly two firms");
+        let neon_entity = crate::entities::find_by_name(&surreal, super::FIRM_ENTITY_NAME)
+            .await
+            .unwrap()
+            .expect("practice entity");
+        let lex_entity = crate::entities::find_by_name(&surreal, super::LEX_FIRM_ENTITY_NAME)
+            .await
+            .unwrap()
+            .expect("lex entity");
+        let neon = crate::firms::find_by_entity_id(&surreal, neon_entity.id)
+            .await
+            .unwrap()
+            .expect("practice firm");
+        let lex = crate::firms::find_by_entity_id(&surreal, lex_entity.id)
+            .await
+            .unwrap()
+            .expect("lex firm");
+        assert_ne!(neon.id, lex.id);
+
+        // The practice firm wears every closed house brand; Lex wears
+        // only IEP Defenders.
+        let mut neon_keys = crate::firms::brand_keys_for_firm(&surreal, neon.id)
+            .await
+            .unwrap();
+        neon_keys.sort();
+        let mut closed = crate::firms::CLOSED_BRAND_KEYS
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>();
+        closed.sort();
+        assert_eq!(neon_keys, closed);
+        let lex_keys = crate::firms::brand_keys_for_firm(&surreal, lex.id)
+            .await
+            .unwrap();
+        assert_eq!(lex_keys, vec!["iep-defenders".to_string()]);
+
+        // The Lex key resolves to the Lex firm and to nothing else.
+        assert_eq!(
+            crate::firms::firm_id_for_brand_key(&surreal, "iep-defenders")
+                .await
+                .unwrap(),
+            Some(lex.id)
+        );
+        let iep = crate::brands::find_by_key(&surreal, "iep-defenders")
+            .await
+            .unwrap()
+            .expect("iep-defenders brand");
+        assert_eq!(iep.firm_id, Some(lex.id));
+        assert_eq!(iep.name, "IEP Defenders");
+        assert_eq!(iep.typeface.as_deref(), Some("source-sans-3"));
+        assert_eq!(iep.primary_color.as_deref(), Some("#5B21B6"));
+        assert_eq!(
+            iep.website_url.as_deref(),
+            Some("https://www.iepdefenders.com")
+        );
+
+        // A second pass changes nothing: the two firms and their brand
+        // associations are already exactly as seeded.
+        let second = seed_canonical(&surreal, &fs_storage().await)
+            .await
+            .expect("reseed");
+        assert_eq!(second.entities_inserted, 0);
+        let firms_after = crate::firms::all(&surreal).await.unwrap();
+        assert_eq!(firms_after.len(), 2);
+        assert_eq!(
+            crate::firms::firm_id_for_brand_key(&surreal, "iep")
+                .await
+                .unwrap(),
+            Some(lex.id)
+        );
     }
 
     #[tokio::test]

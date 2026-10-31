@@ -14,13 +14,18 @@
 
 [[allow]]
 class = "email"
-match = '''(?i)[^@]+@(?:[a-z0-9-]+\.)*(?:neonlaw\.com|neonlaw\.org|lawyershook\.com|guiebandshook\.com|cyberinjurylaw\.com|deleteyourdata\.com|deleteyourdebt\.com|daybridgedivorce\.com|vestaestateplanning\.com|summonsdefense\.nyc|misericordialaw\.com|deathanddivorcelaw\.com|abhayaimmigration\.com)'''
+match = '''(?i)[^@]+@(?:[a-z0-9-]+\.)*(?:neonlaw\.com|neonlaw\.org|lawyershook\.com|guiebandshook\.com|cyberinjurylaw\.com|deleteyourdata\.com|deleteyourdebt\.com|daybridgedivorce\.com|vestaestateplanning\.com|lextecnica\.com|summonsdefense\.nyc|misericordialaw\.com|deathanddivorcelaw\.com|abhayaimmigration\.com)'''
 reason = "The firm's own domains and its brands' public contact domains. Published contacts and synthetic fixture users on a firm domain reach no third party."
 
 [[allow]]
 class = "phone"
 match = "5108002090"
 reason = "The firm's published voice line, printed in neon/content/privacy.md and neon/content/terms.md."
+
+[[allow]]
+class = "phone"
+match = "7252398413"
+reason = "Lex Tecnica LLP's published voice line (lextecnica.com/contact and its court filings), carried by the held-out IEP brand."
 
 # --- Third-party attributions and machine identities ------------------------
 

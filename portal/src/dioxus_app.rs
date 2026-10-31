@@ -616,7 +616,6 @@ pub fn font_head(key: views::brand::BrandKey) -> &'static str {
         views::brand::BrandKey::LawyerShook => &LAWYER_SHOOK_HEAD,
         views::brand::BrandKey::GuiebShook => &GUIEB_SHOOK_HEAD,
         views::brand::BrandKey::Vesta => &VESTA_HEAD,
-        views::brand::BrandKey::Misericordia => &MISERICORDIA_HEAD,
         views::brand::BrandKey::Abhaya => &ABHAYA_HEAD,
         views::brand::BrandKey::DeleteYourDebt => &DELETE_YOUR_DEBT_HEAD,
         views::brand::BrandKey::Summons => &SUMMONS_HEAD,
@@ -624,6 +623,11 @@ pub fn font_head(key: views::brand::BrandKey) -> &'static str {
         views::brand::BrandKey::DeathAndDivorce => &DEATH_AND_DIVORCE_HEAD,
         views::brand::BrandKey::Aegis | views::brand::BrandKey::CyberInjuryLaw => {
             &CYBER_INJURY_HEAD
+        }
+        // IEP Defenders pairs the same serif display / sans body faces as
+        // Misericordia, so the brand shares Misericordia's head fragment.
+        views::brand::BrandKey::Misericordia | views::brand::BrandKey::IepDefenders => {
+            &MISERICORDIA_HEAD
         }
     }
 }
@@ -1032,18 +1036,12 @@ async fn inject_public_utility(mut req: Request, next: Next) -> Response {
         .extensions()
         .get::<webapp::firm_footer::FirmFooterModel>()
     {
+        // The live Firm→Entity resolution wins over the compiled fallback:
+        // the copyright names the entity the store answers for, and links the
+        // Firm's own home (empty when it wears no firm brand — the name then
+        // renders unlinked).
         chrome.legal_entity.clone_from(&model.legal_entity);
-        chrome.brands = model
-            .brands
-            .iter()
-            .map(|brand| webapp::public_chrome::ChromeBrand {
-                label: brand.label.clone(),
-                href: brand.href.clone(),
-                current: brand.current,
-                logo_href: brand.logo_href.clone(),
-                byline: brand.byline.clone(),
-            })
-            .collect();
+        chrome.firm_home_href.clone_from(&model.firm_home_href);
     }
     req.extensions_mut().insert(chrome);
     req.extensions_mut()
@@ -5047,6 +5045,14 @@ pub fn firm_show_router(
 /// `#[server]` loader as defense in depth.
 pub const APP_OWNER_FIRM_NEW_PATH: &str = "/app/owner/firms/new";
 
+/// The Owner's move-brand control — brand mobility between firms. Under
+/// `/app/owner` for the same reason as [`APP_OWNER_FIRM_NEW_PATH`]: embedded
+/// Rego's `owner_only_path` rule admits no other tier, and
+/// `webapp::firm_move::get_move_brand_form` re-checks the tier as defense in
+/// depth. The `POST` on this same path (the move itself) stays on the admin
+/// router; axum merges the same-path methods.
+pub const APP_OWNER_FIRM_MOVE_PATH: &str = "/app/owner/firms/move-brand";
+
 /// The Firm edit form (ENG-585). Lives under `/app/admin`, exactly like
 /// [`FIRM_SHOW_PATH`] it extends: Owner and Admin both pass the Rego route
 /// bypass, and the fine-grained
@@ -5526,12 +5532,13 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        // And the footer names the firm's own regulated detail.
+        // And the footer names the firm's own legal person, with the
+        // compiled fallback home for the practice pages' copyright link.
         assert!(!chrome.legal_entity.is_empty(), "the firm names its own");
-        assert!(!chrome.offices.is_empty(), "the firm publishes its offices");
-        assert!(
-            !chrome.firm_email.is_empty(),
-            "the band has something to show"
+        assert_eq!(
+            chrome.firm_home_href,
+            views::brand::BrandKey::GuiebShook.public_home_href(),
+            "the compiled fallback resolves the firm's production home"
         );
     }
 

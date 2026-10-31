@@ -124,6 +124,7 @@ fn dioxus_app_pages() -> Vec<String> {
         pages::APP_PROFILE_PATH,
         pages::FIRM_SHOW_PATH,
         pages::APP_OWNER_FIRM_NEW_PATH,
+        pages::APP_OWNER_FIRM_MOVE_PATH,
         pages::FIRM_EDIT_PATH,
         pages::APP_BRAND_NEW_PATH,
     ]
@@ -158,6 +159,8 @@ fn admin_registration_sample() -> Vec<String> {
         "/app/owner/firms",
         "/app/owner/firms/new/entity",
         "/app/owner/firms/new/admin",
+        // Brand mobility: the Owner-only move-brand control.
+        "/app/owner/firms/move-brand",
         // ENG-586: brand logo/font uploads (/app/admin/brands/{key}/...).
         "/app/admin/brands/x/logo",
         "/app/admin/brands/x/font",

@@ -58,6 +58,7 @@ pub const CLOSED_BRAND_KEYS: &[&str] = &[
     "aegis",
     "groundwork",
     "guieb-shook",
+    "iep-defenders",
 ];
 
 /// Whether a `brand` row exists carrying this key — the live check
@@ -585,6 +586,27 @@ async fn authorize_manage_firm(
     }
 }
 
+/// Gate an Owner-only brand-seat write through the capability resolver —
+/// the audit point every Firm-scoped allow/deny decision routes through.
+/// `MoveBrand` admits no membership tier: moving a Brand to another Firm
+/// re-points whose legal entity the public site's copyright names, an
+/// ownership decision only Owner makes, where `authorize_manage_firm`
+/// stays the gate for a Firm's own brand administration.
+async fn authorize_brand_ownership(
+    surreal: &SurrealDb,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    firm_id: Uuid,
+    capability: crate::firm_capability::FirmCapability,
+) -> Result<(), FirmError> {
+    use crate::firm_capability::{resolve, FirmCapabilityDecision};
+    match resolve(surreal, actor_role, actor_person_id, firm_id, capability).await? {
+        FirmCapabilityDecision::Allowed => Ok(()),
+        FirmCapabilityDecision::FirmNotFound => Err(FirmError::NoSuchFirm(firm_id)),
+        FirmCapabilityDecision::Forbidden => Err(FirmError::NotAuthorized),
+    }
+}
+
 /// Edit a Firm's own fields. Owner, or that Firm's own Admin membership,
 /// only (`authorize_manage_firm`). Refuses an `entity_id` that does not
 /// resolve, the same guarantee [`create`] gives; leaves the Admin DRI and
@@ -998,15 +1020,46 @@ pub async fn visible_person_ids(
     Ok(ids.into_iter().collect())
 }
 
-/// Attach a closed house-brand key to a firm.
+/// Attach one of the deployment's closed house-brand keys to a Firm.
+/// Owner only (`authorize_brand_ownership`): pointing the brand seat at a
+/// firm is the same ownership decision moving it is — an Admin-DRI may
+/// detach ([`detach_brand`]) but never attach, and an attach that carries
+/// no authority is the same privilege hole a move would be. Crate-internal
+/// flows that already hold the brand seat — the seed bootstrap and
+/// [`ensure_brand`] — write through [`attach_brand_row`].
 pub async fn attach_brand(
     surreal: &SurrealDb,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
     firm_id: Uuid,
     brand_key: &str,
 ) -> Result<(), FirmError> {
     if crate::postgres::tenancy::enabled()? {
+        if actor_role != Role::Owner {
+            return Err(FirmError::NotAuthorized);
+        }
         return Box::pin(crate::postgres::tenancy::attach_brand(firm_id, brand_key)).await;
     }
+    authorize_brand_ownership(
+        surreal,
+        actor_role,
+        actor_person_id,
+        firm_id,
+        crate::firm_capability::FirmCapability::AttachBrand,
+    )
+    .await?;
+    attach_brand_row(surreal, firm_id, brand_key).await
+}
+
+/// The raw brand-seat write `attach_brand` gates: validates the brand key
+/// and the firm, then creates the `firm_brand` row. Crate-internal — the
+/// seed bootstrap and flows like [`ensure_brand`] that already hold the
+/// brand seat attach through this without re-walking Owner authority.
+pub(crate) async fn attach_brand_row(
+    surreal: &SurrealDb,
+    firm_id: Uuid,
+    brand_key: &str,
+) -> Result<(), FirmError> {
     if !brand_key_exists(surreal, brand_key).await? {
         return Err(FirmError::UnknownBrand(brand_key.to_string()));
     }
@@ -1048,7 +1101,7 @@ pub async fn ensure_brand(
     if existing.iter().any(|key| key == brand_key) {
         return Ok(());
     }
-    match attach_brand(surreal, firm_id, brand_key).await {
+    match attach_brand_row(surreal, firm_id, brand_key).await {
         Ok(()) => Ok(()),
         Err(FirmError::DuplicateBrand) => {
             let keys = brand_keys_for_firm(surreal, firm_id).await?;
@@ -1285,6 +1338,81 @@ pub async fn detach_brand(
             ))
             .bind(("firm_id", record_id(TABLE, firm_id)))
             .bind(("brand_key", brand_key.to_string()))
+    })
+    .await?;
+    crate::postgres_mirror::after_write(
+        surreal,
+        MirrorKey::FirmBrand {
+            brand_key: brand_key.to_string(),
+        },
+    )
+    .await;
+    Ok(())
+}
+
+/// Move one Brand's seat to another Firm. Owner only, through the
+/// capability resolver — `MoveBrand` admits no membership tier, because
+/// moving a Brand changes whose legal entity the public site's copyright
+/// names: an ownership decision only Owner makes, where an Admin-DRI may
+/// still detach ([`detach_brand`]). One transaction removes the old
+/// `firm_brand` row, re-points the `brand` row's owning Firm, and creates
+/// the target Firm's row together, so a partial failure leaves the old
+/// association intact and the UNIQUE index on `firm_brand.brand_key`
+/// never trips on a half-state. The decision anchors to the target Firm —
+/// a move completes only when the target exists — and unknown brand keys
+/// are typed errors before any write runs. A move to the Firm that
+/// already wears the brand, with the `brand` row already naming it, is a
+/// no-op success.
+pub async fn move_brand(
+    surreal: &SurrealDb,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    brand_key: &str,
+    target_firm_id: Uuid,
+) -> Result<(), FirmError> {
+    if crate::postgres::tenancy::enabled()? {
+        if actor_role != Role::Owner {
+            return Err(FirmError::NotAuthorized);
+        }
+        return Box::pin(crate::postgres::tenancy::move_brand(
+            brand_key,
+            target_firm_id,
+        ))
+        .await;
+    }
+    let brand = crate::brands::find_by_key(surreal, brand_key)
+        .await
+        .map_err(|error| FirmError::Brand(Box::new(error)))?
+        .ok_or_else(|| FirmError::UnknownBrand(brand_key.to_string()))?;
+    if find_by_id(surreal, target_firm_id).await?.is_none() {
+        return Err(FirmError::NoSuchFirm(target_firm_id));
+    }
+    authorize_brand_ownership(
+        surreal,
+        actor_role,
+        actor_person_id,
+        target_firm_id,
+        crate::firm_capability::FirmCapability::MoveBrand,
+    )
+    .await?;
+    let worn_by = firm_id_for_brand_key(surreal, brand_key).await?;
+    if worn_by == Some(target_firm_id) && brand.firm_id == Some(target_firm_id) {
+        return Ok(()); // a move to the current firm is a no-op, not an error
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    retry::writing(|| {
+        surreal
+            .query(format!("DELETE {BRAND_TABLE} WHERE brand_key = $brand_key"))
+            .bind(("brand_key", brand_key.to_string()))
+            .query("UPDATE $brand SET firm_id = $firm_id, updated_at = $now")
+            .bind(("brand", record_id(crate::brands::TABLE, brand.id)))
+            .bind(("firm_id", record_id(TABLE, target_firm_id)))
+            .bind(("now", now.clone()))
+            .query(
+                "CREATE $seat SET firm_id = $firm_id, brand_key = $brand_key, \
+                 inserted_at = $now, updated_at = $now",
+            )
+            .bind(("seat", record_id(BRAND_TABLE, Uuid::now_v7())))
     })
     .await?;
     crate::postgres_mirror::after_write(
@@ -2527,23 +2655,146 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn moves_a_brand_between_firms_and_names_the_new_owner() {
+        let db = mem_surreal().await;
+        let from = practice(&db, "Moving Out").await;
+        let to = practice(&db, "Moving In").await;
+        attach_brand(&db, Role::Owner, None, from.id, "neon")
+            .await
+            .unwrap();
+
+        move_brand(&db, Role::Owner, None, "neon", to.id)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            firm_id_for_brand_key(&db, "neon").await.unwrap(),
+            Some(to.id)
+        );
+        assert_eq!(
+            brand_keys_for_firm(&db, to.id).await.unwrap(),
+            vec!["neon".to_string()]
+        );
+        assert!(brand_keys_for_firm(&db, from.id).await.unwrap().is_empty());
+        // The brand row's owning firm re-pointed with the seat, so the
+        // live Firm→Entity resolution follows the move too.
+        let brand = crate::brands::find_by_key(&db, "neon")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(brand.firm_id, Some(to.id));
+    }
+
+    #[tokio::test]
+    async fn only_owner_moves_or_attaches() {
+        let db = mem_surreal().await;
+        let admin = admin_dri_person(&db).await;
+        let firm = practice_with_admin(&db, "Admin DRI Practice", admin).await;
+        let wearer = practice(&db, "Wearer").await;
+        attach_brand(&db, Role::Owner, None, wearer.id, "neon")
+            .await
+            .unwrap();
+
+        // An Admin-DRI may detach a brand but never repoint the seat: a
+        // move changes whose legal entity the public copyright names.
+        let refused = move_brand(&db, Role::Admin, Some(admin), "neon", firm.id)
+            .await
+            .unwrap_err();
+        assert!(matches!(refused, FirmError::NotAuthorized));
+        // An attach without an Owner behind it is the same hole, refused.
+        let refused = attach_brand(&db, Role::Admin, Some(admin), firm.id, "delete-your-data")
+            .await
+            .unwrap_err();
+        assert!(matches!(refused, FirmError::NotAuthorized));
+        // A non-Owner role with no person behind it is refused outright.
+        let refused = move_brand(&db, Role::Client, None, "neon", firm.id)
+            .await
+            .unwrap_err();
+        assert!(matches!(refused, FirmError::NotAuthorized));
+        // No refusal wrote anything: the seat still names the old firm.
+        assert_eq!(
+            firm_id_for_brand_key(&db, "neon").await.unwrap(),
+            Some(wearer.id)
+        );
+    }
+
+    #[tokio::test]
+    async fn move_noops_retry_and_refuses_unknowns_without_losing_the_seat() {
+        let db = mem_surreal().await;
+        let from = practice(&db, "Wearer").await;
+        let to = practice(&db, "Target").await;
+        attach_brand(&db, Role::Owner, None, from.id, "neon")
+            .await
+            .unwrap();
+
+        // A move to the firm already wearing the brand is a no-op success.
+        move_brand(&db, Role::Owner, None, "neon", from.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            firm_id_for_brand_key(&db, "neon").await.unwrap(),
+            Some(from.id)
+        );
+
+        // An unknown target firm is a typed error before any write runs —
+        // the retried-or-failed move leaves the old association intact.
+        let unknown_firm = move_brand(&db, Role::Owner, None, "neon", Uuid::now_v7())
+            .await
+            .unwrap_err();
+        assert!(matches!(unknown_firm, FirmError::NoSuchFirm(_)));
+        let unknown_brand = move_brand(&db, Role::Owner, None, "not-a-brand", to.id)
+            .await
+            .unwrap_err();
+        assert!(matches!(unknown_brand, FirmError::UnknownBrand(key) if key == "not-a-brand"));
+        assert_eq!(
+            firm_id_for_brand_key(&db, "neon").await.unwrap(),
+            Some(from.id)
+        );
+
+        move_brand(&db, Role::Owner, None, "neon", to.id)
+            .await
+            .unwrap();
+        // Retrying the completed move is a no-op success, and the seat
+        // still resolves to exactly one firm.
+        move_brand(&db, Role::Owner, None, "neon", to.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            firm_id_for_brand_key(&db, "neon").await.unwrap(),
+            Some(to.id)
+        );
+    }
+
+    #[tokio::test]
     async fn attaches_closed_brand_keys_and_refuses_an_unknown_or_taken_key() {
         let db = mem_surreal().await;
         let firm = practice(&db, "Brand Holder").await;
         // `mem_surreal` already seeds every `CLOSED_BRAND_KEYS` entry as a
         // system-wide brand row, so "neon" exists before this test creates
         // anything.
-        attach_brand(&db, firm.id, "neon").await.unwrap();
+        attach_brand(&db, crate::persons::Role::Owner, None, firm.id, "neon")
+            .await
+            .unwrap();
         assert_eq!(
             brand_keys_for_firm(&db, firm.id).await.unwrap(),
             vec!["neon".to_string()]
         );
         ensure_brand(&db, firm.id, "neon").await.unwrap();
-        let unknown = attach_brand(&db, firm.id, "not-a-brand").await.unwrap_err();
+        let unknown = attach_brand(
+            &db,
+            crate::persons::Role::Owner,
+            None,
+            firm.id,
+            "not-a-brand",
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(unknown, FirmError::UnknownBrand(key) if key == "not-a-brand"));
 
         let other = practice(&db, "Other Practice").await;
-        let taken = attach_brand(&db, other.id, "neon").await.unwrap_err();
+        let taken = attach_brand(&db, crate::persons::Role::Owner, None, other.id, "neon")
+            .await
+            .unwrap_err();
         assert!(matches!(taken, FirmError::DuplicateBrand));
 
         detach_brand(&db, Role::Owner, None, firm.id, "neon")
@@ -2564,11 +2815,27 @@ mod tests {
         // "lawyer-shook" all exist before this test attaches any of them.
         let firm_a = practice(&db, "Practice A").await;
         let firm_b = practice(&db, "Practice B").await;
-        attach_brand(&db, firm_a.id, "neon").await.unwrap();
-        attach_brand(&db, firm_a.id, "delete-your-data")
+        attach_brand(&db, crate::persons::Role::Owner, None, firm_a.id, "neon")
             .await
             .unwrap();
-        attach_brand(&db, firm_b.id, "lawyer-shook").await.unwrap();
+        attach_brand(
+            &db,
+            crate::persons::Role::Owner,
+            None,
+            firm_a.id,
+            "delete-your-data",
+        )
+        .await
+        .unwrap();
+        attach_brand(
+            &db,
+            crate::persons::Role::Owner,
+            None,
+            firm_b.id,
+            "lawyer-shook",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             firm_id_for_brand_key(&db, "neon").await.unwrap(),
@@ -2611,7 +2878,15 @@ mod tests {
         .await
         .unwrap();
 
-        attach_brand(&db, firm.id, "runtime-brand").await.unwrap();
+        attach_brand(
+            &db,
+            crate::persons::Role::Owner,
+            None,
+            firm.id,
+            "runtime-brand",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             brand_keys_for_firm(&db, firm.id).await.unwrap(),
@@ -2752,7 +3027,9 @@ mod tests {
         let firm = practice_with_admin(&db, "Deletable Practice", admin).await;
         // `mem_surreal` already seeds every `CLOSED_BRAND_KEYS` entry as a
         // system-wide brand row, so "neon" exists before this test attaches it.
-        attach_brand(&db, firm.id, "neon").await.unwrap();
+        attach_brand(&db, crate::persons::Role::Owner, None, firm.id, "neon")
+            .await
+            .unwrap();
 
         let entity_id = seed_entity(&db).await;
         let project = projects::create(

@@ -87,6 +87,12 @@ const COMPILED_SITES: &[CompiledSite] = &[
         www: "www.guiebandshook.com",
         live: true,
     },
+    // Live: the special-education practice serves its own production host.
+    CompiledSite {
+        key: "iep-defenders",
+        www: "www.iepdefenders.com",
+        live: true,
+    },
 ];
 
 /// One brand key as `/app` listings should print it.

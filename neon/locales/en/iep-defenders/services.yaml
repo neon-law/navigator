@@ -1,0 +1,115 @@
+head_title: "{site_name} | Special education matters"
+meta_description: >-
+  Special education matters from IEP Defenders, a practice of Lex Tecnica
+  LLP. Evaluations, eligibility, IEP implementation, placement, school
+  discipline, state complaints, mediation, and due process. Attorney
+  advertisement.
+title: Special education matters
+hero_mark: scales
+tagline: Start with what your child is missing
+hero_lines:
+  - text: Call +1 725 239 8413
+    accent_words: 1
+  - text: Tell us where things broke down
+    accent_words: 0
+hero_lead: >-
+  We handle legal matters involving evaluations, eligibility, services,
+  placement, discipline, and special education due process. Whether the
+  matter fits the legal work we handle is determined from the record: the
+  IEP, the timeline, and the requests you have already made.
+hero_cta:
+  href: "tel:+17252398413"
+  label: Call now
+skin: practice
+bands:
+  - kind: cards
+    anchor: cases
+    overline: What we review
+    heading: The legal work we handle
+    description: >-
+      This is an attorney advertisement.
+    items:
+      - title: Evaluations
+        body:
+          - - text: >-
+                When the school delays, denies, or stalls an evaluation,
+                the record of what you asked for and what the school said
+                matters. We review what happened and what the law requires.
+      - title: Eligibility
+        body:
+          - - text: >-
+                A child found ineligible may still have a right to be
+                evaluated again as needs change. We review eligibility
+                decisions against the record.
+      - title: IEP implementation
+        body:
+          - - text: >-
+                Services, accommodations, and specialized instruction
+                written into the plan have to actually happen. When they do
+                not, the gap between the plan and the school day is the
+                starting point of the review.
+      - title: Placement
+        body:
+          - - text: >-
+                A proposed placement has to match what your child needs.
+                We review proposed changes against the record of what the
+                school knows about your child.
+      - title: School discipline
+        body:
+          - - text: >-
+                Suspensions, shortened days, and removals can be the way a
+                school manages a disability-related behavior. Discipline
+                that follows from unmet IEP needs deserves a closer look.
+      - title: State complaints
+        body:
+          - - text: >-
+                Some disputes belong in a state complaint rather than a
+                courtroom. We review which route fits the problem and the
+                state involved.
+      - title: Mediation
+        body:
+          - - text: >-
+                Mediation can resolve a disagreement without a hearing. We
+                review whether it fits, and what an agreement should say.
+      - title: Due process
+        body:
+          - - text: >-
+                Due process is a formal dispute-resolution process under
+                the IDEA for certain disagreements involving
+                identification, evaluation, educational placement, or a
+                child's right to a free appropriate public education.
+                Whether it is appropriate depends on the facts and the
+                record.
+  - kind: cards
+    anchor: fees
+    overline: Fees
+    heading: How fees are handled
+    description: >-
+      Do not rule out legal help because you assume you cannot afford it.
+      How attorney's fees are handled depends on the type of case and
+      applicable law.
+    items:
+      - title: Qualifying due process matters
+        body:
+          - - text: >-
+                In many qualifying due process matters, families may not
+                need to pay attorney's fees upfront.
+      - title: Other matters
+        body:
+          - - text: >-
+                Other matters, including some tuition-reimbursement cases,
+                can involve different fee arrangements. We review how fees
+                would be handled as part of the case evaluation.
+      - title: Before you decide
+        body:
+          - - text: >-
+                We explain the scope of representation and fee arrangement
+                before you move forward.
+  - kind: cta
+    heading: Tell us what's happening
+    body: >-
+      You do not need the right legal words. Tell us what your child is
+      missing, what the school has said, and what you have already tried.
+      We will start there. We do not represent families directly at IEP
+      meetings.
+    email: "{firm_email}"

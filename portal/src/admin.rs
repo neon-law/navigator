@@ -289,7 +289,10 @@ pub fn routes(
         )
         .route("/app/owner/firms", post(firms_create))
         .route("/app/owner/firms/new/entity", post(firms_new_entity_inline))
-        .route("/app/owner/firms/new/admin", post(firms_new_admin_inline));
+        .route("/app/owner/firms/new/admin", post(firms_new_admin_inline))
+        // Brand mobility: the Owner-only move-brand control (`webapp::firm_move`
+        // renders the form; axum merges the Dioxus GET with this POST).
+        .route("/app/owner/firms/move-brand", post(firms_move_brand));
     r = register_firm_matter_routes(r, "/app/lawyer");
     r = register_firm_admin_routes(r, "/app/admin");
     // Firm brand fonts — the licensed GORP Serif desktop family, served as one
@@ -2796,6 +2799,101 @@ async fn appoint_admin_dri_if_changed(
         .await?;
     }
     Ok(())
+}
+
+// ---- Brand mobility (the Owner's move-brand control) ----
+
+/// The move-brand control's path — the page every refusal on this cluster
+/// redirects back to (post/redirect/get). The form itself renders through
+/// Dioxus (`dioxus_app::csrf_page_router` over `webapp::firm_move`).
+const FIRM_MOVE_BRAND_PATH: &str = "/app/owner/firms/move-brand";
+
+/// Redirect back to the move-brand control with `query` (already encoded).
+fn back_to_firm_move_form(query: &str) -> Response {
+    if query.is_empty() {
+        Redirect::to(FIRM_MOVE_BRAND_PATH).into_response()
+    } else {
+        Redirect::to(&format!("{FIRM_MOVE_BRAND_PATH}?{query}")).into_response()
+    }
+}
+
+#[derive(Deserialize)]
+struct FirmMoveBrandInput {
+    #[serde(default)]
+    brand_key: String,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    target_firm_id: Option<Uuid>,
+    #[serde(default)]
+    confirm: Option<String>,
+}
+
+/// `POST /app/owner/firms/move-brand` — the portal door over
+/// `store::firms::move_brand`. Moving a brand changes whose legal entity the
+/// public site's copyright names — an ownership decision — so the check
+/// exists at both layers: this handler refuses any session that is not the
+/// Owner with the same not-found every other admin route returns, and the
+/// store operation re-enforces Owner beneath it. Every validation refusal
+/// redirects back to the control with `?error=` naming the rule and the
+/// submitted fields echoed, so nothing is retyped; success reports the new
+/// attribution the brand's public pages will render.
+async fn firms_move_brand(
+    State(state): State<AdminState>,
+    session: Option<Extension<SessionData>>,
+    Form(input): Form<FirmMoveBrandInput>,
+) -> Response {
+    let Some(Extension(session_data)) = session else {
+        return not_found_response();
+    };
+    if !session_data.role.is_owner() {
+        return not_found_response();
+    }
+    let refuse = |message: &str| {
+        let mut query = String::new();
+        push_query(&mut query, "error", message);
+        push_query(&mut query, "brand_key", &input.brand_key);
+        push_query(
+            &mut query,
+            "target_firm_id",
+            &input
+                .target_firm_id
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+        );
+        back_to_firm_move_form(&query)
+    };
+    if input.confirm.as_deref() != Some("on") {
+        return refuse(
+            "Confirm the move — it changes which firm's legal entity the brand's public pages name.",
+        );
+    }
+    let brand_key = input.brand_key.trim();
+    if brand_key.is_empty() {
+        return refuse("Pick the brand to move.");
+    }
+    let Some(target_firm_id) = input.target_firm_id else {
+        return refuse("Pick the firm the brand moves to.");
+    };
+
+    match store::firms::move_brand(
+        &state.surreal,
+        session_data.role,
+        session_data.person_id,
+        brand_key,
+        target_firm_id,
+    )
+    .await
+    {
+        Ok(()) => {
+            let mut query = String::new();
+            push_query(&mut query, "moved", brand_key);
+            if let Ok(Some(target)) = store::firms::find_by_id(&state.surreal, target_firm_id).await
+            {
+                push_query(&mut query, "firm", &target.name);
+            }
+            back_to_firm_move_form(&query)
+        }
+        Err(e) => refuse(&e.user_message()),
+    }
 }
 
 // ---- Firm integration secrets (ENG-491) ----

@@ -1113,6 +1113,17 @@ pub fn bootstrap_with_forgejo_oidc(
         state.policy.clone(),
         state.auth.clone(),
     );
+    // Brand mobility: the Owner's move-brand control, on the shared `FormCard`
+    // + CSRF page router. It posts to the unchanged
+    // `POST /app/owner/firms/move-brand` handler.
+    let dioxus_firm_move = dioxus_app::csrf_page_router(
+        dioxus_app::APP_OWNER_FIRM_MOVE_PATH,
+        webapp::firm_move::MoveBrand,
+        state.surreal.clone(),
+        state.sessions.clone(),
+        state.policy.clone(),
+        state.auth.clone(),
+    );
     // #956 Phase 4: the template gallery renders through Dioxus at /templates
     // and /templates/{*path}. The detail pre-layer keeps owning the alias and
     // kebab redirects, the `/download` raw markdown, and the not-curated 404.
@@ -2032,6 +2043,7 @@ pub fn bootstrap_with_forgejo_oidc(
         dioxus_firm_show,
         dioxus_firm_new,
         dioxus_firm_edit,
+        dioxus_firm_move,
         dioxus_brand_new,
         dioxus_brand_blog,
         dioxus_social_dashboard,

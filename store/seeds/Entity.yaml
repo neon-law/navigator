@@ -9,3 +9,12 @@ records:
       name: Professional Corporation
       jurisdiction:
         name: California
+  # Lex Tecnica LLP anchors the deployment's second firm (`Lex`), which
+  # wears only the held-out `iep` brand. It joins the professional
+  # corporation's anchor-key discipline: the delete guard protects it
+  # identically, by `entities.firm_anchor_key`.
+  - name: Lex Tecnica LLP
+    entity_type:
+      name: Limited Liability Partnership
+      jurisdiction:
+        name: Nevada
