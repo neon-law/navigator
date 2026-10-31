@@ -118,11 +118,6 @@ pub async fn get_move_brand_form() -> Result<MoveBrandView, ServerFnError> {
     })
 }
 
-/// Prefer a non-empty echoed value, else the empty string.
-fn echoed(value: Option<&String>) -> String {
-    value.cloned().unwrap_or_default()
-}
-
 /// Build a picker's options from `choices`, leading with `blank`.
 fn picker_options(blank: &str, choices: &[IdChoice]) -> Vec<Choice> {
     let mut options = vec![Choice::new("", blank)];
@@ -291,7 +286,9 @@ mod tests {
             ..FirmMoveQuery::default()
         }));
         assert!(
-            html.contains("Confirm the move — it changes which firm's legal entity the brand's public pages name."),
+            // Server-side rendering escapes the apostrophes (`&#39;`), so the
+            // needle does too.
+            html.contains("Confirm the move — it changes which firm&#39;s legal entity the brand&#39;s public pages name."),
             "{html}"
         );
         assert!(
@@ -312,7 +309,8 @@ mod tests {
             ..FirmMoveQuery::default()
         }));
         assert!(
-            html.contains("Moved iep. Its public pages now name Lex Tecnica LLP's legal entity."),
+            // Server-side rendering escapes the apostrophe (`&#39;`).
+            html.contains("Moved iep. Its public pages now name Lex Tecnica LLP&#39;s legal entity."),
             "{html}"
         );
     }
