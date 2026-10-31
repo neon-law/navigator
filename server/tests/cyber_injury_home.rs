@@ -88,12 +88,12 @@ async fn public_pages_emit_complete_open_graph_and_canonical_metadata() {
         for (path, title, description_marker) in [
             (
                 "/",
-                "Cyber Injury Law | We use AI to put more money in your pocket",
+                "CyberInjuryLaw | We use AI to put more money in your pocket",
                 "We investigate, preserve evidence",
             ),
             (
                 "/services",
-                "Cyber Injury Law | Injury and cybercrime claims",
+                "CyberInjuryLaw | Injury and cybercrime claims",
                 "a lawyer reviews the facts before any engagement",
             ),
         ] {
@@ -102,8 +102,8 @@ async fn public_pages_emit_complete_open_graph_and_canonical_metadata() {
             let url = format!("{origin}{path}");
             for tag in [
                 format!(r#"content="{title}" property="og:title""#),
-                format!(r#"content="Cyber Injury Law" property="og:site_name""#),
-                format!(r#"content="{description_marker} property="og:description""#),
+                format!(r#"content="CyberInjuryLaw" property="og:site_name""#),
+                format!(r#"content="{description_marker}" property="og:description""#),
                 format!(r#"content="{url}" property="og:url""#),
                 r#"property="og:image" content="https://"#.to_string(),
                 r#"property="og:image:alt""#.to_string(),
