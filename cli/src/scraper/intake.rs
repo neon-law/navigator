@@ -32,6 +32,12 @@ pub(crate) enum IntakeError {
 pub(crate) struct ScrapedDocument {
     pub(crate) site: crate::scraper::adapter::SiteKey,
     pub(crate) docket: String,
+    /// The entry number as the site printed it, for the filing path that
+    /// derives the DKT name itself.
+    pub(crate) entry_number: String,
+    /// The entry's title, verbatim as the docket prints it.
+    pub(crate) title: String,
+    pub(crate) extension: String,
     /// The `DKT NNNN[-att] - <title>.<ext>` name Navigator prescribes.
     pub(crate) filename: String,
     pub(crate) sha256: String,
@@ -57,6 +63,9 @@ impl ScrapedDocument {
         Ok(Self {
             site,
             docket: docket.to_owned(),
+            entry_number: notice.entry_number.clone(),
+            title: notice.title.clone(),
+            extension: notice.extension.clone(),
             filename,
             sha256,
             bytes,
