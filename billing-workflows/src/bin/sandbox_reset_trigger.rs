@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
     let _telemetry = telemetry::init("navigator-sandbox-credit-reset-trigger");
 
     let now = chrono::Utc::now();
-    let run_id = store::sandbox_usage::billing_period(now.year(), now.month() as u8);
+    let run_id = store::sandbox_usage::billing_period(now.year(), now.month());
     let target =
         workflows::trigger::trigger_target("NAVIGATOR_DBOS_SANDBOX_CREDIT_RESET_ENABLED", |name| {
             std::env::var(name).ok()

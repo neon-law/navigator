@@ -95,7 +95,7 @@ async fn fixture_with(pg: store::postgres::PostgresDb, auth: portal::AuthConfig)
 async fn seed_subscriber(surreal: &SurrealDb, email: &str) -> (Uuid, String) {
     let person = store::persons::create(
         surreal,
-        &NewPerson::with_role("Pat Subscriber", email, Role::Client),
+        &NewPerson::with_role("Pat Sample", email, Role::Client),
     )
     .await
     .unwrap();

@@ -148,7 +148,7 @@ pub enum SandboxUsageError {
 /// stray format can never fork a subscriber's credit across two spellings
 /// of one month. The ledger's entry points refuse anything else.
 #[must_use]
-pub fn billing_period(year: i32, month: u8) -> String {
+pub fn billing_period(year: i32, month: u32) -> String {
     format!("{year:04}-{month:02}")
 }
 

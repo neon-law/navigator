@@ -88,8 +88,8 @@ impl SandboxCreditResetService {
                     1 => (now.year() - 1, 12_u32),
                     m => (now.year(), m - 1),
                 };
-                let closed_period = sandbox_usage::billing_period(year, month as u8);
-                let new_period = sandbox_usage::billing_period(now.year(), now.month() as u8);
+                let closed_period = sandbox_usage::billing_period(year, month);
+                let new_period = sandbox_usage::billing_period(now.year(), now.month());
 
                 let pg = PostgresDb::from_env()
                     .await
@@ -244,10 +244,7 @@ async fn invoice_closed_overage(
             contact_email: person.email.clone(),
             reference: format!("Nautilus sandbox usage {closed_period}"),
             line_items: vec![InvoiceLine {
-                description: format!(
-                    "Legal Sandbox model usage beyond the included $5.00, {}",
-                    closed_period
-                ),
+                description: format!("Legal Sandbox model usage beyond the included $5.00, {closed_period}"),
                 quantity: 1,
                 unit_amount_cents: overage_cents,
                 account_code: purchase.account_code.clone(),
@@ -397,7 +394,7 @@ mod tests {
     ) -> uuid::Uuid {
         let person = store::test_support::ensure_person(
             surreal,
-            &store::persons::NewPerson::new("Ada Lovelace", "ada@example.com"),
+            &store::persons::NewPerson::new("Ada Sample", "ada@example.com"),
         )
         .await;
         store::purchases::open(pg, &plan(person.id), chrono::Utc::now())
@@ -430,7 +427,7 @@ mod tests {
         assert_eq!(report.overage_skipped, 0);
 
         let call = &stub.calls()[0];
-        assert_eq!(call.request.contact_name, "Ada Lovelace");
+        assert_eq!(call.request.contact_name, "Ada Sample");
         assert_eq!(call.request.contact_email, "ada@example.com");
         assert_eq!(call.request.line_items.len(), 1);
         assert_eq!(call.request.line_items[0].unit_amount_cents, 125);
