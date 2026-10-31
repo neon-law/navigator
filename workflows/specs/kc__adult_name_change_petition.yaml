@@ -1,0 +1,50 @@
+questionnaire:
+  BEGIN:
+    _: person__client
+  person__client:
+    _: person__new_name
+  person__new_name:
+    _: custom_yes_no__sex_offender_registration
+  custom_yes_no__sex_offender_registration:
+    _: custom_yes_no__doc_jurisdiction
+  custom_yes_no__doc_jurisdiction:
+    _: custom_yes_no__prior_name_change
+  custom_yes_no__prior_name_change:
+    _: custom_text__reason_for_change
+  custom_text__reason_for_change:
+    _: custom_yes_no__not_detrimental
+  custom_yes_no__not_detrimental:
+    _: custom_yes_no__open_protection_order
+  custom_yes_no__open_protection_order:
+    _: END
+  END: {}
+prompts:
+  client_name: What is your current full legal name, as it appears on your identification?
+  new_name: >-
+    What new name are you asking the court for? Spell it exactly as you want it to read on the decree
+    (first, middle, and last — leave the middle name out if there is none).
+  sex_offender_registration: >-
+    Are you required to register as a sex offender? (If yes, the petitioner must notify the King County
+    Sheriff and Washington State Patrol of this change; failing to do so is a crime.)
+  doc_jurisdiction: >-
+    Are you under the jurisdiction of the Department of Corrections? (If yes, DOC must be notified of
+    this change; failing to do so is a crime.)
+  prior_name_change: Have you had a name change before this petition?
+  reason_for_change: Briefly, why are you asking for the change? (The court accepts any honest reason.)
+  not_detrimental: >-
+    Do you state that the name change is not detrimental to the interests of anyone else?
+  open_protection_order: >-
+    Are you the defendant or respondent to any open or pending protection order?
+workflow:
+  BEGIN:
+    intake_submitted: intake_persisted__client
+  intake_persisted__client:
+    petition_rendered: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__adult_name_change_petition_pdf
+    rejected: END
+  generate_pdf__adult_name_change_petition_pdf:
+    pdf_persisted: filing__king_county_district_court
+  filing__king_county_district_court:
+    filed: END
+  END: {}

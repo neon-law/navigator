@@ -122,6 +122,12 @@ const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
             "../../templates/notations/forms/united_states/nevada/nevada_supreme_court/nv__dv_protection_order_application.fields"
         ),
     ),
+    (
+        "kc__adult_name_change_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/washington/king_county/kc__adult_name_change_petition.fields"
+        ),
+    ),
 ];
 
 /// The re-authored field manifest for one form, or `None` when the form

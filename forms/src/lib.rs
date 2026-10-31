@@ -365,6 +365,21 @@ const BUNDLED: &[FormMeta] = &[
         }),
         fee_waiver_code: None,
     },
+    FormMeta {
+        code: "kc__adult_name_change_petition",
+        jurisdiction: "WA",
+        title: "Petition for Name Change (Individual)",
+        origin_url: "https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-individual-july_2026.pdf",
+        object_path: "forms/united_states/washington/king_county/kc__adult_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/washington/king_county/kc__adult_name_change_petition.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "98.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
 ];
 
 /// Return the bundled form registry.

@@ -1,0 +1,124 @@
+form_code = "kc__adult_name_change_petition"
+
+# King County District Court local form — Petition for Name Change,
+# Individual (KCDC July 2026, 2 pages, 38 fields).
+#
+# Mapped: the caption's "In re the Petition of" name, the CURRENT NAME and
+# REQUESTED NEW NAME first/middle/last parts, the reason box, and the five
+# Yes/No statement pairs (sex-offender registration, DOC jurisdiction,
+# prior name change, not-detrimental, open protection order) as one radio
+# each (both widgets export /Yes; the final export values are the answers).
+#
+# Deliberately left unmapped (decision recorded, firm or clerk completes):
+# - `No` — the clerk's case-number box.
+# - `undefined` — an unnamed caption-area box (clerk's action line).
+# - `SUFFIXRow1` / `SUFFIXRow1_2` — the name suffix boxes; the person
+#   record carries no suffix part, and most petitioners have none.
+# - `Text13`-`Text16` — the prior name change's date, location, court, and
+#   case number (compound on a "yes" answer); the lawyer verifies the
+#   prior decree's details at review.
+# - `City` / `Date` / `Petitioners Signature` — the signed-at city, the
+#   signature date, and the wet signature, completed at the review
+#   appointment.
+# - `Text9`-`Text12` — the petitioner's street, city/state/zip, phone, and
+#   email block; the firm confirms the mailing address with the petitioner
+#   at review (the court mails hearing notices to it).
+# - `I would like to request an interpreter` / `Text17` and
+#   `I would like to use these pronouns at` / `Text18` — hearing
+#   accommodations and pronouns, confirmed with the petitioner at review.
+# - `petdiv` — the clerk's division dropdown.
+# - `Check Box7`/`Check Box8.0.0` and `Check Box8.0.1`/`Check Box8.1.1`
+#   are the mapped statement-7 and statement-8 pairs (see above); the
+#   `Check Box8`/`Check Box8.0`/`Check Box8.1` parents carry no widgets.
+
+[[field]]
+name = "In re the Petition of Current Name"
+question = "person__client.name"
+
+[[field]]
+name = "FIRST NAMERow1"
+question = "person__client.given"
+
+[[field]]
+name = "MIDDLE NAMERow1"
+question = "person__client.middle"
+
+[[field]]
+name = "LAST NAMERow1"
+question = "person__client.family"
+
+[[field]]
+name = "FIRST NAMERow1_2"
+question = "person__new_name.given"
+
+[[field]]
+name = "MIDDLE NAMERow1_2"
+question = "person__new_name.middle"
+
+[[field]]
+name = "LAST NAMERow1_2"
+question = "person__new_name.family"
+
+[[field]]
+name = "Text19"
+question = "custom_text__reason_for_change"
+
+[[field]]
+name = "Check Box1"
+question = "custom_yes_no__sex_offender_registration"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box2"
+question = "custom_yes_no__sex_offender_registration"
+checked_when = "no"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box3"
+question = "custom_yes_no__doc_jurisdiction"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box4"
+question = "custom_yes_no__doc_jurisdiction"
+checked_when = "no"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box5"
+question = "custom_yes_no__prior_name_change"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box6"
+question = "custom_yes_no__prior_name_change"
+checked_when = "no"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box7"
+question = "custom_yes_no__not_detrimental"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box8.0.0"
+question = "custom_yes_no__not_detrimental"
+checked_when = "no"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box8.0.1"
+question = "custom_yes_no__open_protection_order"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box8.1.1"
+question = "custom_yes_no__open_protection_order"
+checked_when = "no"
+on_state = "Yes"
