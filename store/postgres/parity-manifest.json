@@ -191,13 +191,6 @@
     },
     {
       "extra_column": null,
-      "extra_table": "inbox_message_asset",
-      "missing_column": null,
-      "missing_table": null,
-      "table": null
-    },
-    {
-      "extra_column": null,
       "extra_table": "journal_entry_source",
       "missing_column": null,
       "missing_table": null,
@@ -353,7 +346,7 @@
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 106,
+    "table_count": 107,
     "tables": {
       "address": {
         "city": "string",
@@ -932,6 +925,16 @@
         "message_id": "record<message>",
         "provider_account": "string",
         "provider_message_id": "string"
+      },
+      "inbox_message_asset": {
+        "asset_id": "record<asset>",
+        "filename": "string",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "message_id": "record<message>",
+        "position": "int",
+        "sha256": "string"
       },
       "iolta_account": {
         "balance_cents": "int",
