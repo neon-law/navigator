@@ -23,6 +23,7 @@ mod document_sync;
 mod firms_doctor;
 mod forms_sync;
 mod glossary;
+mod inbox;
 #[allow(dead_code)]
 mod intake;
 mod journal;
@@ -61,6 +62,7 @@ mod video_prepare;
 use cli::import;
 use devx::brand::BrandCmd;
 use devx::{DnsCmd, GcpCmd, RestateCmd, StagingAction, WorktreeEnvCmd};
+use inbox::InboxCmd;
 use projects::pinned_gate::GateMode;
 use projects::repository::is_project_repository;
 
@@ -830,6 +832,13 @@ enum Command {
         #[command(subcommand)]
         action: mail::MailAction,
     },
+    /// Import a lawyer's own correspondence into the Firm Inbox, without
+    /// sending anything.
+    Inbox {
+        #[command(subcommand)]
+        action: inbox::InboxCmd,
+    },
+
     // ─────────────── Authoring a notation locally ───────────────
     // The notation author's workbench: everything here runs offline (or
     // against a local store), no live site required.
@@ -4505,6 +4514,26 @@ fn run() -> ExitCode {
             runtime().block_on(journal::run(firm, host, action))
         }
         Command::Mail { action } => runtime().block_on(mail::run(action)),
+        Command::Inbox { action } => runtime().block_on(inbox::run(match action {
+            InboxCmd::Import {
+                source,
+                mailbox,
+                file,
+                dir,
+                project,
+                dry_run,
+                host,
+            } => inbox::NewInboxImport {
+                source,
+                mailbox,
+                files: file,
+                dir,
+                project,
+                dry_run,
+                host: host.host,
+            },
+        })),
+
         Command::Projects { action } => runtime().block_on(run_projects(action)),
         // The docs reference helpers need no cluster, so they are handled
         // here rather than routed into the KIND dispatcher with the rest
