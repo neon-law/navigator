@@ -25,7 +25,7 @@ use super::manifest;
 /// How often the lane re-reads the required check while it runs.
 pub(crate) const CHECK_POLL: Duration = Duration::from_secs(15);
 /// How long the lane waits for the required check and the merge to happen.
-pub(crate) const CHECK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+pub(crate) const CHECK_TIMEOUT: Duration = Duration::from_mins(30);
 
 /// What the lane did, as the structured report renders it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,7 +61,10 @@ pub(crate) async fn dispatch(
 
 /// The landing lane. The `sleep` injection is what keeps the watch loop
 /// testable: production passes `tokio::time::sleep`, tests pass an instant
-/// no-op and drive the loop with a mocked forge.
+/// no-op and drive the loop with a mocked forge. The parameters mirror the
+/// verb's CLI surface plus the two test injections (the forge and the
+/// sleep), so the count is intentional.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run<S, Fut>(
     dir: &Path,
     base: &str,
@@ -89,19 +92,19 @@ where
     println!("  the push remote answers");
     check_signing(dir)?;
     println!("  commit signing is on");
-    let pin = require_manifest(dir)
-        .and_then(|pinned| check_version_pin(pinned.as_deref(), env!("CARGO_PKG_VERSION")))?;
+    let pin = check_version_pin(require_manifest(dir).as_deref(), env!("CARGO_PKG_VERSION"))?;
     println!("  {pin}");
 
-    let target = branch
-        .map(str::to_string)
-        .unwrap_or_else(|| branch_slug(title, Utc::now().date_naive()));
+    let target = branch.map_or_else(
+        || branch_slug(title, Utc::now().date_naive()),
+        str::to_string,
+    );
     if dry_run {
         println!(
-            "dry run: would branch {target}, commit the change signed, push it to origin, open \
-             a review request against {base} ready for review, arm merge-when-green and read \
-             the arm back, watch the required check to a verdict, and follow the merge commit \
-             through the deployment run."
+            "dry run: would branch a fresh push/<date>-<slug> branch, commit the change signed, \
+             push it to origin, open a review request ready for review, arm merge-when-green and \
+             read the arm back, watch the required check to a verdict, and follow the merge \
+             commit through the deployment run."
         );
         bail!("dry run: nothing was pushed");
     }
@@ -110,7 +113,9 @@ where
     // clobbered: re-running the verb after a named stall continues the same
     // change.
     let current = git_text(dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    if current != target {
+    if current == target {
+        println!("branch: already on the push branch");
+    } else {
         let exists = git(
             dir,
             &["rev-parse", "--verify", &format!("refs/heads/{target}")],
@@ -118,15 +123,11 @@ where
         .status
         .success();
         if exists {
-            git_text(dir, &["checkout", &target])
-                .with_context(|| format!("check out the existing branch {target}"))?;
+            git_text(dir, &["checkout", &target]).context("check out the existing push branch")?;
         } else {
-            git_text(dir, &["checkout", "-b", &target])
-                .with_context(|| format!("create the branch {target}"))?;
+            git_text(dir, &["checkout", "-b", &target]).context("create the push branch")?;
         }
-        println!("branch: {target}");
-    } else {
-        println!("branch: already on {target}");
+        println!("branch: the push branch is checked out");
     }
 
     git_text(dir, &["add", "-A"]).context("stage the change")?;
@@ -144,7 +145,7 @@ where
             String::from_utf8_lossy(&pushed.stderr).trim()
         );
     }
-    println!("push: {target} on origin");
+    println!("push: the push branch is on origin");
 
     // Review request, ready for review — never a draft (LAW-220 step 2).
     let review = forge
@@ -179,12 +180,12 @@ where
 /// Read the manifest's CLI version pin. The verb runs from a Project
 /// repository, so the manifest is not optional; one without a pin is
 /// reported, not refused.
-fn require_manifest(dir: &Path) -> Result<Option<String>> {
+fn require_manifest(dir: &Path) -> Option<String> {
     let pinned = manifest::read(dir).unwrap_or_default().version;
     if pinned.is_none() {
         println!("  the manifest carries no CLI version pin");
     }
-    Ok(pinned)
+    pinned
 }
 
 /// Commit signing is a preflight question, not a hope: the lane's commits

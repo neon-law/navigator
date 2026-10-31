@@ -44,14 +44,12 @@ impl GitHubForge {
             ACCEPT,
             "application/vnd.github+json"
                 .parse()
-                .ok()
                 .expect("invariant: a literal header value parses"),
         );
         headers.insert(
             reqwest::header::HeaderName::from_static("x-github-api-version"),
             API_VERSION
                 .parse()
-                .ok()
                 .expect("invariant: a literal version parses"),
         );
         headers.insert(
@@ -238,14 +236,17 @@ impl Forge for GitHubForge {
                 self.owner, request.head_branch
             )))
             .await?;
-        for pull in existing {
-            if pull.base.git_ref == request.base_branch {
-                return Ok(ReviewRef {
-                    number: pull.number,
-                    head_sha: pull.head.sha,
-                    url: pull.html_url,
-                });
-            }
+        if let Some(pull) = existing
+            .iter()
+            .find(|pull| pull.base.git_ref == request.base_branch)
+        {
+            return Ok(ReviewRef {
+                number: pull.number,
+                head_sha: pull.head.sha.clone(),
+                url: pull.html_url.clone(),
+            });
+        }
+        if let Some(pull) = existing.first() {
             bail!(
                 "an open review request for {} targets {} instead of {}; close it or pass --base {}",
                 request.head_branch,
