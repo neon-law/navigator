@@ -195,7 +195,7 @@ async fn sites_listing(firm_id: Uuid) -> ExitCode {
     {
         return exit_failure("resolving the Firm's portal login secret", error);
     }
-    print!("{}", render_sites(&config, resolved.ok().as_ref()));
+    print!("{}", render_sites(&config, resolved.as_ref().ok()));
     if let Err(error) = &resolved {
         eprintln!("navigator scraper: {error}");
     }
