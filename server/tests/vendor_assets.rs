@@ -1102,3 +1102,64 @@ fn marketing_headings_use_the_brands_display_face() {
         );
     }
 }
+
+/// The hex a token module declares for `name`, preferring the dark-scheme
+/// block when `dark` is set and falling back to the `:root` default — the
+/// value the browser resolves when the block does not override it.
+fn token_hex(tokens: &str, name: &str, dark: bool) -> String {
+    let (light, dark_block) = tokens
+        .split_once("@media (prefers-color-scheme: dark)")
+        .expect("token module must carry a dark-scheme block");
+    let needle = format!("{name}: #");
+    let find = |block: &str| {
+        block.split_once(&needle).map(|(_, rest)| {
+            rest.chars()
+                .take_while(char::is_ascii_hexdigit)
+                .collect::<String>()
+        })
+    };
+    let found = if dark { find(dark_block) } else { None };
+    found
+        .or_else(|| find(light))
+        .unwrap_or_else(|| panic!("{name} has no hex value"))
+}
+
+fn relative_luminance(hex: &str) -> f64 {
+    let channel = |i: usize| {
+        let c = f64::from(u8::from_str_radix(&hex[i..i + 2], 16).expect("hex channel")) / 255.0;
+        if c <= 0.039_28 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4)
+}
+
+/// A status ink (`.nav-chart__delta--up`, a form error) is set as text on
+/// every dark ground, so it must clear 4.5:1 on each of them. The browser
+/// accessibility gate runs only on release commits; it found danger first and
+/// then success (`/design`, dark, deploy run 41204389352), each a release late.
+#[test]
+fn dark_status_inks_meet_aa_on_every_dark_surface() {
+    for module in ["css/tokens.css", "css/brand-cyber-injury-law-tokens.css"] {
+        let tokens = std::fs::read_to_string(public_dir().join(module))
+            .unwrap_or_else(|e| panic!("read {module}: {e}"));
+        for ink in ["--nav-color-success", "--nav-color-danger"] {
+            let fg = token_hex(&tokens, ink, true);
+            for ground in [
+                "--nav-color-bg",
+                "--nav-color-surface",
+                "--nav-color-surface-raised",
+            ] {
+                let bg = token_hex(&tokens, ground, true);
+                let (a, b) = (relative_luminance(&fg), relative_luminance(&bg));
+                let ratio = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+                assert!(
+                    ratio >= 4.5,
+                    "{module}: dark {ink} #{fg} on {ground} #{bg} is {ratio:.2}:1, under 4.5:1"
+                );
+            }
+        }
+    }
+}
