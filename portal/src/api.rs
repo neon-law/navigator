@@ -1539,6 +1539,9 @@ fn surface_error(error: store::project_surfaces::SurfaceError) -> ApiError {
     match error {
         store::project_surfaces::SurfaceError::NotFound => ApiError::NotFound,
         store::project_surfaces::SurfaceError::Command(error) => ApiError::Project(error),
+        store::project_surfaces::SurfaceError::ForgejoUnavailable(missing) => {
+            ApiError::ForgejoUnavailable(missing)
+        }
         other => ApiError::Db(other.to_string()),
     }
 }
@@ -7032,6 +7035,11 @@ pub enum ApiError {
     /// A `pages:` set the gate refuses: a `Y021` shape problem or a D-family
     /// composition finding, one per `;`.
     PagesInvalid(String),
+    /// A Project surface reconcile could not run because the Project's Firm
+    /// is missing a Forgejo coordinate — the message names each piece. An
+    /// expected outcome of a fleet-wide backfill sweep, reported per Project
+    /// rather than a bare internal fault.
+    ForgejoUnavailable(String),
 }
 
 impl From<store::persons::PersonError> for ApiError {
@@ -8124,6 +8132,20 @@ impl IntoResponse for ApiError {
                 tracing::error!(error = %e, "api: asset error");
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "internal" }))).into_response()
             }
+            // An unconfigured Firm's Forgejo is operator configuration, not
+            // an internal fault: the door answers a classifiable 422 whose
+            // message names the missing coordinates, so a fleet-wide
+            // backfill sweep can record the skip per Project and continue.
+            Self::ForgejoUnavailable(missing) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "forgejo_unavailable",
+                    "message": format!(
+                        "Project surface reconciliation is unavailable until Forgejo is configured: {missing}."
+                    )
+                })),
+            )
+                .into_response(),
         }
     }
 }
@@ -8808,6 +8830,34 @@ mod tests {
         let response =
             ApiError::OpenMatter(store::projects::OpenMatterError::CodeConflict).into_response();
         assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+    }
+
+    /// An unconfigured Firm's Forgejo is operator configuration, not an
+    /// internal fault: the door answers a classifiable `422
+    /// forgejo_unavailable` whose message names every missing piece, so a
+    /// fleet-wide backfill sweep can report it per Project and continue.
+    #[tokio::test]
+    async fn a_firm_missing_its_forgejo_coordinates_is_422_forgejo_unavailable() {
+        let response = ApiError::ForgejoUnavailable(
+            "NAVIGATOR_FORGEJO_ROOT_URL_ENV, the Firm's forgejo_access_token integration secret"
+                .to_string(),
+        )
+        .into_response();
+
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("the 422 response body should be readable");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("the 422 response should be JSON");
+        assert_eq!(json["error"], "forgejo_unavailable");
+        assert!(json["message"]
+            .as_str()
+            .expect("the message names the missing pieces")
+            .contains("forgejo_access_token"));
     }
 
     #[tokio::test]

@@ -522,7 +522,7 @@ where
             tracing::error!(
                 %error,
                 project_id = %project_id,
-                "could not seed the Project repository with the canonical scaffold; retry with projects surfaces reconcile"
+                "could not seed the Project repository with the canonical scaffold; retry with `navigator projects surfaces reconcile`"
             );
         }
     }
@@ -537,7 +537,7 @@ where
         Err(error) => tracing::error!(
             %error,
             project_id = %project_id,
-            "could not govern the Project repository after provisioning; retry with projects surfaces reconcile"
+            "could not govern the Project repository after provisioning; retry with `navigator projects surfaces reconcile`"
         ),
     }
     Ok(surfaces)
@@ -734,7 +734,7 @@ pub async fn reconcile_after_open(surreal: &SurrealDb, project_id: Uuid) {
         tracing::error!(
             %error,
             project_id = %project_id,
-            "Project surface reconcile failed; retry with projects surfaces reconcile"
+            "Project surface reconcile failed; retry with `navigator projects surfaces reconcile`"
         );
     }
 }
@@ -1676,6 +1676,78 @@ mod tests {
                 .expect("read"),
             Some("hand-written".to_string()),
             "the existing source is preserved, never replaced"
+        );
+    }
+
+    /// A governed repository swept again is not re-protected unnecessarily:
+    /// the second pass re-locks governance (finding no drift to repair),
+    /// re-derives the scaffold digest and writes nothing, and never ensures
+    /// a second repository — the whole point of a repeated backfill run.
+    #[tokio::test]
+    async fn an_already_governed_repository_is_not_reprotected_on_the_next_pass() {
+        let surreal = mem_surreal().await;
+        let project = open_acme(&surreal).await;
+        let drive = FakeDrive::default();
+        let forge = FakeForge::default();
+
+        let first = reconcile_forgejo(
+            &surreal,
+            project.id,
+            Some(&drive),
+            &forge,
+            forge_site(),
+            &seed_inputs(),
+        )
+        .await
+        .expect("first pass");
+        assert_eq!(first.repository_status, SurfaceStatus::Created);
+
+        let second = reconcile_forgejo(
+            &surreal,
+            project.id,
+            Some(&drive),
+            &forge,
+            forge_site(),
+            &seed_inputs(),
+        )
+        .await
+        .expect("second pass");
+
+        assert_eq!(second.repository_status, SurfaceStatus::Present);
+        assert_eq!(
+            second.repository_url, first.repository_url,
+            "the URL never moves"
+        );
+        assert_eq!(
+            forge.repository_count(),
+            1,
+            "no second repository is invented"
+        );
+        assert_eq!(
+            forge.ensure_calls(),
+            1,
+            "a recorded repository is not re-ensured"
+        );
+        assert_eq!(
+            forge.initialize_writes(),
+            1,
+            "the scaffold is not rewritten: the head already binds the digest"
+        );
+        assert_eq!(
+            forge.governance_reconciles(),
+            2,
+            "governance is re-locked on every pass"
+        );
+        assert_eq!(
+            forge.call_log(),
+            vec![
+                ("ensure", project.code.clone()),
+                ("initialize", project.code.clone()),
+                ("govern", project.code.clone()),
+                ("initialize", project.code.clone()),
+                ("govern", project.code.clone()),
+            ],
+            "the second pass re-derives the digest and re-locks governance, but writes nothing"
         );
     }
 }
