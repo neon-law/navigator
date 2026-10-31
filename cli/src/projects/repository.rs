@@ -1979,7 +1979,7 @@ fn validate_templates(
 fn templates_rule_set(engagement_executed: bool) -> Vec<Box<dyn rules::Rule>> {
     let mut rules = rules::navigator_default_rules_with_codes(&rules::canonical_question_codes());
     if engagement_executed {
-        for rule in rules.iter_mut() {
+        for rule in &mut rules {
             if rule.code() == "N132" {
                 *rule = Box::new(rules::clauses::ClauseReferences::executed(true));
             }
@@ -3052,12 +3052,12 @@ mod tests {
 
     use super::{
         blueprint_selection, california_law_firm_entity_claims, cd_workflow, cd_workflow_for,
-        emit_scaffold, engagement_executed, firm_trade_name_claims, gate_workflow_prefix,
-        is_release_tag, lint_project_template, misnamed_firm_entities,
-        missing_root_gitignore_lines, publish_workflow_prefix, repair_root_gitignore,
-        repair_skills, repository_name, retired_workflow_refused, validate_agent_contract,
-        validate_cd_workflow, validate_client_visibility, validate_documents_gitignore,
-        validate_gate, validate_github_path, validate_layout, validate_skills, validate_templates,
+        emit_scaffold, firm_trade_name_claims, gate_workflow_prefix, is_release_tag,
+        lint_project_template, misnamed_firm_entities, missing_root_gitignore_lines,
+        publish_workflow_prefix, repair_root_gitignore, repair_skills, repository_name,
+        retired_workflow_refused, validate_agent_contract, validate_cd_workflow,
+        validate_client_visibility, validate_documents_gitignore, validate_gate,
+        validate_github_path, validate_layout, validate_skills, validate_templates,
         validate_workflow, workflow, workflow_for, Finding, LayoutOutcome, AGENT_CONTRACT_BASE,
         ALLOWED_ROOTS, AUTOMERGE_WORKFLOW_CONTENTS, CD_WORKFLOW, CLAUDE_SETTINGS,
         CLAUDE_SETTINGS_CONTENTS, DEFAULT_WORKFLOW_HOME, DRAFT_DIRECTORY, ENTITY_CODE,
