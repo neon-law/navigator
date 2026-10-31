@@ -21,7 +21,15 @@ use store::surreal::SurrealDb;
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CredentialsError {
     #[error("the Firm's portal login secret could not be read")]
-    Store(#[from] SecretStoreError),
+    StoreUnavailable,
+    #[error(
+        "the {provider} {kind} credential is not configured; a Firm administrator \
+             with the ManageIntegrationSecrets capability must store one first"
+    )]
+    NotConfigured {
+        provider: &'static str,
+        kind: &'static str,
+    },
     #[error("the Firm's portal login secret is not shaped as a portal login payload: {detail}")]
     InvalidPayload { detail: String },
     #[error("the Firm's portal login secret has no `{key}` entry; ask someone with the ManageIntegrationSecrets capability to add one with a `username` and `password`")]
@@ -182,14 +190,25 @@ pub(crate) async fn resolve_portal_logins(
     firm_id: uuid::Uuid,
     kms: &dyn RuntimeKms,
 ) -> Result<PortalLogins, CredentialsError> {
-    let resolved = resolve_firm_credential(
+    // The store guarantees its errors never carry secret bytes, but the
+    // repository's CodeQL gate rejects any value typed with a Secrets-path
+    // reaching a log, so the store error is projected to typed, redacted
+    // reasons here and never embedded or displayed verbatim.
+    let resolved = match resolve_firm_credential(
         surreal,
         firm_id,
         IntegrationProvider::CourtPortal,
         IntegrationSecretKind::PortalLogin,
         kms,
     )
-    .await?;
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(SecretStoreError::NotConfigured { provider, kind }) => {
+            return Err(CredentialsError::NotConfigured { provider, kind });
+        }
+        Err(_) => return Err(CredentialsError::StoreUnavailable),
+    };
     // The resolved credential hands its bytes over only through the
     // explicit `expose_for_provider_call` accessor — never by field.
     let payload: serde_json::Value = serde_json::from_str(resolved.expose_for_provider_call())
@@ -202,7 +221,6 @@ pub(crate) async fn resolve_portal_logins(
 #[cfg(test)]
 mod tests {
     use super::{parse_portal_logins, CredentialsError};
-    use store::firm_secrets::SecretStoreError;
 
     const LA_SUPERIOR: &str = r#"{
         "la-superior": {"username": "firm@example.com", "password": "correct horse battery staple"}
@@ -293,16 +311,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_missing_store_row_hard_stops_with_the_store_error() {
+    async fn a_missing_store_row_hard_stops_with_provisioning_guidance() {
         let surreal = store::test_support::mem_surreal().await;
         let firm_id = seeded_firm(&surreal, None).await;
         let error =
             super::resolve_portal_logins(&surreal, firm_id, &cloud::FakeKms::new("scraper-test"))
                 .await
                 .expect_err("nothing provisioned");
-        assert!(matches!(
-            error,
-            CredentialsError::Store(SecretStoreError::NotConfigured { .. })
-        ));
+        assert!(matches!(error, CredentialsError::NotConfigured { .. }));
+        // The message names the capability and credential kind so whoever
+        // provisions the row can act on it without the store's raw error.
+        assert!(error
+            .to_string()
+            .contains("ManageIntegrationSecrets capability must store one first"));
     }
 }
