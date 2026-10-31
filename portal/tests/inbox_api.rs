@@ -151,7 +151,7 @@ async fn request(
 const NEF_ADDRESS: &str = "United States Bankruptcy Court, N.D. Cal. <ECF_Reply@uscourts.gov>";
 const NEF_SUBJECT: &str = "Notice of Electronic Filing";
 const NEF_BODY: &str = "This is an automatic email message from the CM/ECF system.";
-const CLAIMS_AGENT_ADDRESS: &str = "Dawn Branch <notices@kroll.com>";
+const CLAIMS_AGENT_ADDRESS: &str = "Dawn Branch <no-reply@kroll.com>";
 const OTHER_ADDRESS: &str = "Jordan Field <jordan@example.com>";
 
 #[tokio::test]

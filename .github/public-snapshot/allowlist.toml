@@ -122,13 +122,13 @@ reason = "Invented cloud coordinates each `gcp` detector must refuse; no such pr
 [[allow]]
 class = "email"
 match = '''[A-Za-z0-9._-]+@(?:[a-z0-9-]+\.)*uscourts\.gov'''
-paths = ["portal/src/inbound_email.rs"]
+paths = ["portal/src/inbound_email.rs", "portal/tests/inbox_api.rs"]
 reason = "The court noticing and chambers domains are the behaviour under test in the inbox classifier; the mailboxes are invented."
 
 [[allow]]
 class = "email"
 match = '''(?:no-reply@(?:claims\.)?kroll\.com|no-reply@notkroll\.com)'''
-paths = ["portal/src/inbound_email.rs"]
+paths = ["portal/src/inbound_email.rs", "portal/tests/inbox_api.rs"]
 reason = "The claims-agent noticing vendor domain and its lookalike are the behaviour under test in the inbox classifier; the mailboxes are invented."
 
 [[allow]]
