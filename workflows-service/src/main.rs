@@ -25,6 +25,7 @@ use workflows_service::engine::Engine;
 use workflows_service::finance_aggregate::FinanceAggregateService;
 use workflows_service::general_nag::GeneralNagService;
 use workflows_service::inbound_message_alert::InboundMessageAlertService;
+use workflows_service::inbound_triage::{InboundTriageService, TriageProviders};
 use workflows_service::nightly_project_update::{
     membership::MembershipTagService,
     repository::{EnvFirmForges, RepositoryForge, RepositoryTagService},
@@ -40,7 +41,7 @@ use workflows_service::{
 };
 
 macro_rules! bind_common_services {
-    ($endpoint:expr, $surreal:expr, $email:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $forge:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
+    ($endpoint:expr, $surreal:expr, $email:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $inbound_triage:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $forge:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
         $endpoint
             .bind(NotationService::new(
                 $surreal.clone(),
@@ -63,6 +64,7 @@ macro_rules! bind_common_services {
                 $assets_storage,
             ))
             .bind($email_summary)
+            .bind($inbound_triage)
             .bind(InboundMessageAlertService::new(
                 $surreal.clone(),
                 $slack_bot.clone(),
@@ -574,6 +576,10 @@ async fn main() -> anyhow::Result<()> {
     let dbos_alert_messages_channel = messages_channel.clone();
     let dbos_alert_staging_messages_channel = staging_messages_channel.clone();
     let dbos_alert_portal_origin = portal_origin.clone();
+    // Rules-only when `NAVIGATOR_TRIAGE_ENABLED` is unset: the service stays
+    // registered and every message still gets a triage row, from rules alone.
+    let triage_providers = TriageProviders::from_env().context("configure triage providers")?;
+    let inbound_triage = InboundTriageService::new(surreal.clone(), triage_providers);
 
     let listen: SocketAddr = std::env::var("WORKFLOWS_SERVICE_LISTEN")
         .unwrap_or_else(|_| "0.0.0.0:9080".into())
@@ -602,6 +608,7 @@ async fn main() -> anyhow::Result<()> {
             assets_storage,
             kms,
             email_summary,
+            inbound_triage,
             notifier,
             ops_delivery,
             slack_bot,
