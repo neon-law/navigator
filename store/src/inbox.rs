@@ -1946,6 +1946,7 @@ pub(crate) fn is_social_channel(channel_name: &str) -> bool {
             | channel::THREADS
             | channel::YOUTUBE
             | channel::TIKTOK
+            | channel::X
     )
 }
 
