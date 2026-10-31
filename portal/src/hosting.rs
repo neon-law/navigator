@@ -871,7 +871,7 @@ async fn dbos_schedules(
         None
     };
     let deadline_mirror = if should_host_deadline_mirror(host_dbos, lookup)? {
-        Some(deadline_mirror_context(rt).context("configure DBOS DeadlineMirror")?)
+        Some(deadline_mirror_context(rt))
     } else {
         None
     };
@@ -1041,15 +1041,13 @@ fn should_host_deadline_mirror(
 
 /// The nightly mirror's source: the store, the deployment's Workspace
 /// calendar provider, and the canonical host for matter-page links.
-fn deadline_mirror_context(
-    rt: &HostRuntime,
-) -> anyhow::Result<workflows::dbos_engine::deadline_mirror::Context> {
-    Ok(workflows::dbos_engine::deadline_mirror::Context::new(
-        Arc::new(crate::calendar_mirror::ScheduledMirror {
+fn deadline_mirror_context(rt: &HostRuntime) -> workflows::dbos_engine::deadline_mirror::Context {
+    workflows::dbos_engine::deadline_mirror::Context::new(Arc::new(
+        crate::calendar_mirror::ScheduledMirror {
             surreal: rt.state.surreal.clone(),
             providers: Arc::clone(&rt.state.integration_providers),
             base_url: rt.state.canonical_host.host().map(str::to_string),
-        }),
+        },
     ))
 }
 
