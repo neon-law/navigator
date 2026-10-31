@@ -851,6 +851,46 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         "/business",
         resolve_transactional_content(branding),
     ));
+    // The free court-form catalog: the registry's public surface. One
+    // branded index, one branded page per jurisdiction the registry
+    // covers, and the unbranded JSON twin of the same rows. Brands with
+    // no `free-resources` catalog mount neither branded page.
+    let free_courts = dioxus_app::embedded()
+        .expect("invariant: the shipped court registry parses; the store's tests are the gate");
+    if let Some(free_copy) = locales::free_resources(branding) {
+        routers.push(with_branded(
+            dioxus_app::free_resources_index_router(dioxus_app::free_resources_index_content(
+                &free_copy,
+                &free_courts,
+            )),
+            branded_optional_map(branding, |resolved| {
+                locales::free_resources(resolved).map(|copy| {
+                    webapp::free_resources::InjectedFreeResourcesIndex(
+                        dioxus_app::free_resources_index_content(&copy, &free_courts),
+                    )
+                })
+            }),
+        ));
+        for group in dioxus_app::jurisdiction_groups(&free_courts) {
+            let path = dioxus_app::free_resources_jurisdiction_path(
+                &dioxus_app::jurisdiction_slug(&group.name),
+            );
+            routers.push(with_branded(
+                dioxus_app::free_resources_jurisdiction_router(
+                    &path,
+                    dioxus_app::free_resources_jurisdiction_content(&free_copy, &group),
+                ),
+                branded_optional_map(branding, |resolved| {
+                    locales::free_resources(resolved).map(|copy| {
+                        webapp::free_resources::InjectedFreeResourcesJurisdiction(
+                            dioxus_app::free_resources_jurisdiction_content(&copy, &group),
+                        )
+                    })
+                }),
+            ));
+        }
+    }
+    routers.push(dioxus_app::free_resources_json_router());
     // The platform page. It carries a commercial offer, so it sits with the
     // firm's own pages.
     // The retired consumer plan. The firm speaks to emerging technology
@@ -1098,6 +1138,23 @@ fn branded_map<T>(
         .iter()
         .copied()
         .map(|key| (key, build(key.resolve_branding(default))))
+        .collect()
+}
+
+/// Like [`branded_map`], but skips brands whose `build` yields `None` —
+/// a brand without, say, the free-resources catalog carries no entry, and
+/// [`inject_branded`] passes such requests through uninjected.
+fn branded_optional_map<T>(
+    default: &'static views::brand::Branding,
+    build: impl Fn(&views::brand::Branding) -> Option<T>,
+) -> HashMap<BrandKey, T> {
+    BrandKey::ALL
+        .iter()
+        .copied()
+        .filter_map(|key| {
+            let value = build(key.resolve_branding(default))?;
+            Some((key, value))
+        })
         .collect()
 }
 
@@ -2043,5 +2100,89 @@ mod notation_catalog_tests {
             .collect();
         assert!(names.contains("lawyer_review"), "{names:?}");
         assert!(names.contains("BEGIN"), "{names:?}");
+    }
+}
+
+#[cfg(test)]
+mod catalog_projection_tests {
+    use super::*;
+
+    #[test]
+    fn a_notation_card_projects_its_declared_kind_and_slug() {
+        let src = "---\nkind: letter\n---\n\nA letter body.\n";
+        let card = notation_card(
+            "Estate planning",
+            "Signing preparation",
+            "estate-signing-preparation",
+            "What to bring to a signing.",
+            src,
+        );
+        assert_eq!(card.href, "/notations/estate-signing-preparation");
+        assert_eq!(card.eyebrow, "Estate planning");
+        assert_eq!(card.title, "Signing preparation");
+        assert_eq!(card.summary, "What to bring to a signing.");
+        assert_eq!(card.kind, "letter");
+        assert_eq!(card.kind_label, "Letter");
+        assert!(!card.category.is_empty());
+        assert!(!card.category_slug.is_empty());
+    }
+
+    #[test]
+    fn a_card_without_a_declared_kind_is_blank_kind_and_label() {
+        let card = notation_card(
+            "Estate planning",
+            "Signing preparation",
+            "estate-signing-preparation",
+            "What to bring to a signing.",
+            "No frontmatter here.\n",
+        );
+        assert_eq!(card.kind, "");
+        assert_eq!(card.kind_label, "");
+        assert_eq!(card.category, "");
+        assert_eq!(card.category_slug, "");
+        assert_eq!(card.href, "/notations/estate-signing-preparation");
+    }
+
+    #[test]
+    fn the_portfolio_names_practices_from_the_catalog_or_the_family_byline() {
+        let described = views::brand::BrandKey::ALL
+            .iter()
+            .copied()
+            .find(|key| {
+                !matches!(
+                    key,
+                    views::brand::BrandKey::LawyerShook | views::brand::BrandKey::GuiebShook
+                )
+            })
+            .expect("a third brand exists in the portfolio");
+        let href = described.public_home_href();
+        let practices = portfolio_practices(vec![webapp::home::PracticeLink {
+            mark: webapp::components::PracticeMark::Scales,
+            heading: "Whatever".into(),
+            body: "Authored description from the brand's own home.".into(),
+            href: href.clone(),
+            logo_href: String::new(),
+            font_family: String::new(),
+            primary_color: String::new(),
+        }]);
+
+        assert!(!practices.is_empty());
+        // The authored description reaches the practice whose href it names;
+        // every other practice keeps its family byline.
+        assert!(practices.iter().any(|practice| practice.href == href
+            && practice.body == "Authored description from the brand's own home."));
+        assert!(practices
+            .iter()
+            .filter(|practice| practice.href != href)
+            .all(|practice| !practice.body.is_empty()));
+        // The holding brands never appear in the portfolio.
+        assert!(!practices.iter().any(
+            |practice| practice.href == views::brand::BrandKey::LawyerShook.public_home_href()
+        ));
+        // Sorted by heading, so the catalog order is presentation-stable.
+        let headings: Vec<&str> = practices.iter().map(|p| p.heading.as_str()).collect();
+        let mut sorted = headings.clone();
+        sorted.sort_unstable();
+        assert_eq!(headings, sorted);
     }
 }

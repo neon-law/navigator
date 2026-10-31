@@ -119,6 +119,27 @@ pub enum MailAction {
         #[arg(long)]
         name: Option<String>,
     },
+    /// File a saved RFC 5322 message (.eml) into the matter inbox through
+    /// the Navigator ingest door. Ingest-only: nothing is sent, and no
+    /// Gmail OAuth setup is required. Re-running is safe — the door
+    /// dedupes on the provider Message-ID (falling back to a raw-content
+    /// hash).
+    Ingest {
+        /// Path to the raw RFC 5322 message to file.
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+        /// Matter code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        /// Navigator host. Defaults to host in navigator.yaml.
+        #[arg(long)]
+        host: Option<String>,
+        /// Provider account the message was read from (for example the
+        /// Gmail address). Ingress dedup keys on it. Defaults to
+        /// cli-ingest.
+        #[arg(long)]
+        provider_account: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1324,6 +1345,20 @@ async fn run_inner(action: MailAction) -> Result<()> {
             dir,
             name,
         } => save_message_command(&reference, dir.as_deref(), name.as_deref()).await,
+        MailAction::Ingest {
+            path,
+            project,
+            host,
+            provider_account,
+        } => {
+            ingest_provider_message(
+                &path,
+                project.as_deref(),
+                host.as_deref(),
+                provider_account.as_deref(),
+            )
+            .await
+        }
     }
 }
 
@@ -1451,6 +1486,53 @@ fn print_thread(thread: &GmailThread) {
             println!("[No supported message body was returned.]\n");
         }
     }
+}
+
+/// Files one saved RFC 5322 message into the matter inbox through the
+/// Navigator ingest door (`POST /app/api/projects/{id}/inbox-ingest`).
+/// Ingest-only: the door stores the message as an Inbox conversation
+/// attributed to the Project and never sends anything. The raw bytes travel
+/// as base64 and the server re-parses them, so the CLI cannot claim fields
+/// the message does not carry.
+async fn ingest_provider_message(
+    path: &Path,
+    project_code: Option<&str>,
+    host: Option<&str>,
+    provider_account: Option<&str>,
+) -> Result<()> {
+    let raw = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let local = crate::projects::manifest::read(Path::new("."));
+    let project_code = project_code
+        .or_else(|| {
+            local
+                .as_ref()
+                .and_then(|manifest| manifest.project.as_deref())
+        })
+        .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
+    let host = host.or_else(|| local.as_ref().and_then(|manifest| manifest.host.as_deref()));
+    let (base, navigator_token) = crate::remote::resolve(host)?;
+    let project_id =
+        crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
+            .await?;
+    let body = json!({
+        "raw": base64::engine::general_purpose::STANDARD.encode(&raw),
+        "provider_account": provider_account,
+    });
+    let response = reqwest::Client::new()
+        .post(format!("{base}/app/api/projects/{project_id}/inbox-ingest"))
+        .bearer_auth(navigator_token)
+        .timeout(std::time::Duration::from_secs(30))
+        .json(&body)
+        .send()
+        .await
+        .context("ingest provider message")?;
+    let status = response.status();
+    let text = response.text().await.context("read ingest response")?;
+    if !status.is_success() {
+        return Err(anyhow!("ingest refused: {status} {text}"));
+    }
+    println!("{text}");
+    Ok(())
 }
 
 async fn file_thread(
@@ -2935,5 +3017,322 @@ mod tests {
         let body = body.split("async fn client()").next().unwrap();
         assert!(body.contains("print!(\"{}\", report.text)"));
         assert!(!body.contains("eprintln!") && !body.contains("println!(\"{account"));
+    }
+
+    fn message_with_body(mime_type: &str, body_data: &str) -> GmailMessage {
+        GmailMessage {
+            id: "message-1".into(),
+            internal_date: None,
+            payload: Some(MessagePart {
+                mime_type: Some(mime_type.into()),
+                headers: Some(vec![MessageHeader {
+                    name: "From".into(),
+                    value: "Client <client@example.test>".into(),
+                }]),
+                body: Some(MessageBody {
+                    data: Some(body_data.into()),
+                    attachment_id: None,
+                }),
+                parts: None,
+                filename: None,
+            }),
+        }
+    }
+
+    fn encoded(data: &[u8]) -> String {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
+    }
+
+    #[test]
+    fn thread_printing_survives_missing_bodies_and_names_attachments() {
+        let text = message_with_body("text/plain", &encoded(b"Can I sign electronically?"));
+        let html_only = message_with_body("text/html", &encoded(b"<p>Confirmed</p>"));
+        let no_payload = GmailMessage {
+            id: "message-3".into(),
+            internal_date: None,
+            payload: None,
+        };
+        let with_attachment = GmailMessage {
+            id: "message-4".into(),
+            internal_date: None,
+            payload: Some(MessagePart {
+                mime_type: Some("multipart/mixed".into()),
+                headers: Some(vec![MessageHeader {
+                    name: "Subject".into(),
+                    value: "Signed retainer".into(),
+                }]),
+                body: None,
+                parts: Some(vec![MessagePart {
+                    mime_type: Some("application/pdf".into()),
+                    headers: None,
+                    body: Some(MessageBody {
+                        data: None,
+                        attachment_id: Some("att-1".into()),
+                    }),
+                    parts: None,
+                    filename: Some("contract.pdf".into()),
+                }]),
+                filename: None,
+            }),
+        };
+        print_thread(&GmailThread {
+            id: "thread-1".into(),
+            messages: vec![text, html_only, no_payload, with_attachment],
+        });
+    }
+
+    #[test]
+    fn the_thread_timestamp_comes_from_gmails_internal_date() {
+        let mut message = synthetic_message(&[("From", "client@example.test")]);
+        message.internal_date = Some("1760000000000".into());
+        let at = now_or_message_date(&message).unwrap();
+        assert!(at.starts_with("2025-10-09T"), "{at}");
+
+        message.internal_date = None;
+        assert!(now_or_message_date(&message)
+            .unwrap_err()
+            .to_string()
+            .contains("no timestamp"));
+
+        message.internal_date = Some("not-a-number".into());
+        assert!(now_or_message_date(&message).is_err());
+
+        message.internal_date = Some("99999999999999999999".into());
+        assert!(now_or_message_date(&message).is_err());
+    }
+
+    #[test]
+    fn attachment_mime_types_follow_the_extension_caselessly() {
+        assert_eq!(mime_type_for(Path::new("report.PDF")), "application/pdf");
+        assert_eq!(mime_type_for(Path::new("notes.txt")), "text/plain");
+        assert_eq!(mime_type_for(Path::new("calendar.ICS")), "text/calendar");
+        assert_eq!(mime_type_for(Path::new("photo.heic")), "image/heic");
+        assert_eq!(
+            mime_type_for(Path::new("archive.unknownext")),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            mime_type_for(Path::new("noextension")),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn encoded_attachment_size_is_base64_plus_line_breaks() {
+        assert_eq!(base64_encoded_len(0), 0);
+        assert_eq!(base64_encoded_len(1), 6);
+        assert_eq!(base64_encoded_len(3), 6);
+        assert_eq!(base64_encoded_len(57), 78);
+    }
+
+    #[test]
+    fn attachment_names_must_be_utf8_and_printable() {
+        assert_eq!(
+            attachment_filename(Path::new("signed retainer.pdf")).unwrap(),
+            "signed retainer.pdf"
+        );
+
+        let control = std::env::temp_dir().join("bad\u{0007}name.pdf");
+        assert!(attachment_filename(&control).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let non_utf8 = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/attachment-\xff.pdf"));
+            assert!(attachment_filename(non_utf8).is_err());
+        }
+    }
+
+    #[test]
+    fn attachments_are_read_whole_and_refused_over_gmails_limit() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let Err(missing) = load_attachments(&[directory.path().join("absent.pdf")], "body") else {
+            panic!("a missing attachment must be refused");
+        };
+        assert!(missing.to_string().contains("absent.pdf"));
+
+        let Err(directory_attachment) = load_attachments(&[directory.path().to_path_buf()], "body")
+        else {
+            panic!("a directory must not load as an attachment");
+        };
+        assert!(directory_attachment.to_string().contains("is not a file"));
+
+        let oversized = directory.path().join("huge.bin");
+        let file = std::fs::File::create(&oversized).unwrap();
+        file.set_len(30_000_000).unwrap();
+        let Err(error) = load_attachments(&[oversized], "body") else {
+            panic!("a 30MB attachment must be refused");
+        };
+        assert!(error.to_string().contains("once encoded, over Gmail's"));
+
+        let first = directory.path().join("first.bin");
+        let second = directory.path().join("second.bin");
+        std::fs::File::create(&first)
+            .unwrap()
+            .set_len(13_000_000)
+            .unwrap();
+        std::fs::File::create(&second)
+            .unwrap()
+            .set_len(13_000_000)
+            .unwrap();
+        let Err(total) = load_attachments(&[first, second], "body") else {
+            panic!("two 13MB attachments must be refused together");
+        };
+        assert!(total.to_string().contains("the draft with 2 attachments"));
+
+        let small = directory.path().join("exhibit.txt");
+        std::fs::write(&small, b"exhibit text").unwrap();
+        let loaded = load_attachments(std::slice::from_ref(&small), "body").unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].filename, "exhibit.txt");
+        assert_eq!(loaded[0].mime_type, "text/plain");
+        assert_eq!(loaded[0].bytes, b"exhibit text");
+    }
+
+    #[test]
+    fn encoded_words_and_filename_parameters_stay_rfc_compliant() {
+        let encoded_subject = encoded_word("Retainer — questions");
+        let (marker, remainder) = encoded_subject.split_once("?B?").unwrap();
+        assert_eq!(marker, "=?UTF-8");
+        let payload = remainder.strip_suffix("?=").unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .unwrap();
+        assert_eq!(String::from_utf8(decoded).unwrap(), "Retainer — questions");
+
+        let (name, filename) = filename_parameters("signed \"final\" copy.pdf");
+        assert_eq!(name, "name=\"signed \\\"final\\\" copy.pdf\"");
+        assert_eq!(filename, "filename=\"signed \\\"final\\\" copy.pdf\"");
+
+        let (name, filename) = filename_parameters("café.txt");
+        assert!(name.starts_with("name=\"=?UTF-8?B?"), "{name}");
+        assert_eq!(filename, "filename*=UTF-8''caf%C3%A9.txt");
+    }
+
+    #[test]
+    fn header_values_refuse_line_breaks_and_blank_recipients_are_dropped() {
+        assert!(safe_header("Subject\r\nBcc: x", "subject").is_err());
+        assert_eq!(safe_header("  padded  ", "subject").unwrap(), "padded");
+
+        let joined = address_list(
+            &["a@x.test".into(), "   ".into(), " b@y.test ".into()],
+            "recipient",
+        )
+        .unwrap();
+        assert_eq!(joined, "a@x.test, b@y.test");
+        assert!(address_list(&["bad\nvalue".into()], "recipient").is_err());
+    }
+
+    #[test]
+    fn addresses_are_extracted_from_display_names_and_lowercased() {
+        let collected: Vec<String> =
+            addresses("Ms. Client <Client@Example.test>; other@y.test, junk").collect();
+        assert_eq!(collected, vec!["client@example.test", "other@y.test"]);
+
+        assert_eq!(
+            email_from_address("Lawyer <lawyer@neonlaw.test>").as_deref(),
+            Some("lawyer@neonlaw.test")
+        );
+        assert_eq!(email_from_address("not-an-address"), None);
+    }
+
+    #[test]
+    fn a_scoped_query_only_scopes_when_the_manifest_names_a_contact() {
+        assert_eq!(scoped_query("retainer", None), "retainer");
+    }
+
+    #[tokio::test]
+    async fn an_empty_or_missing_draft_body_is_refused_before_connecting() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let missing = save_draft_command(
+            DraftRequest {
+                to: vec!["a@x.test".into()],
+                cc: vec![],
+                bcc: vec![],
+                subject: Some("s".into()),
+                body_file: directory.path().join("absent.txt"),
+                thread: None,
+                draft_id: None,
+                attach: vec![],
+            },
+            || async { Err(anyhow!("must not connect")) },
+        )
+        .await;
+        let Err(missing) = missing else {
+            panic!("a missing draft body must be refused");
+        };
+        assert!(missing.to_string().contains("read draft body"));
+
+        let body_file = directory.path().join("body.txt");
+        std::fs::write(&body_file, "   \n").unwrap();
+        let empty = save_draft_command(
+            DraftRequest {
+                to: vec!["a@x.test".into()],
+                cc: vec![],
+                bcc: vec![],
+                subject: Some("s".into()),
+                body_file,
+                thread: None,
+                draft_id: None,
+                attach: vec![],
+            },
+            || async { Err(anyhow!("must not connect")) },
+        )
+        .await;
+        let Err(empty) = empty else {
+            panic!("an empty draft body must be refused");
+        };
+        assert!(empty.to_string().contains("draft body is empty"));
+    }
+
+    #[tokio::test]
+    async fn parse_save_and_file_references_are_named_when_unusable() {
+        let error = parse_command("definitely-absent-reference.txt", Some("p"), None, None)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("neither an existing file, a Gmail web URL, nor a Gmail message id"),
+            "{error}"
+        );
+
+        let error = save_message_command("definitely-absent-reference.txt", None, None)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("neither a Gmail web URL nor a Gmail message id"),
+            "{error}"
+        );
+
+        let error = file_thread("thread-1", None, None).await.unwrap_err();
+        assert!(error.to_string().contains("pass --project"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn filing_a_communication_to_a_dead_endpoint_names_the_failure() {
+        let target = FileTarget {
+            base: "http://127.0.0.1:1",
+            navigator_token: "token",
+            project_id: uuid::Uuid::nil(),
+            mailbox: "lawyer@neonlaw.test",
+        };
+        let error = post_communication(&target, &serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("file email Communication"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn finish_maps_result_to_exit_code() {
+        assert_eq!(finish(Ok(())), ExitCode::SUCCESS);
+        assert_eq!(finish(Err(anyhow!("boom"))), ExitCode::FAILURE);
     }
 }

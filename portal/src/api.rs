@@ -118,6 +118,9 @@ pub struct ApiState {
     /// stored credential, for the `/app/api/integrations/*` doors. Refuses on
     /// a deployment with no runtime KMS key — see [`crate::integrations`].
     pub integration_providers: Arc<dyn crate::integrations::IntegrationProviders>,
+    /// The deployment's canonical host, for links rendered beside stored
+    /// rows — the Deadline mirror's matter-page line. `None` locally.
+    pub canonical_base_url: Option<String>,
 }
 
 impl FromRef<ApiState> for store::surreal::SurrealDb {
@@ -305,6 +308,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "POST",
             "/app/api/integrations/calendar/ensure",
             post(crate::integrations_api::calendar_ensure_door),
+        ),
+        (
+            "POST",
+            "/app/api/integrations/calendar/deadline-mirror",
+            post(crate::integrations_api::calendar_deadline_mirror_door),
         ),
         (
             "POST",
@@ -654,6 +662,9 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "/app/api/projects/{id}/relationships/adverse",
             post(record_adversity),
         ),
+        ("GET", "/app/api/graph/project/{id}", get(project_graph)),
+        ("GET", "/app/api/graph/lawyer/{id}", get(lawyer_graph)),
+        ("GET", "/app/api/graph/firm/{id}", get(firm_graph)),
         (
             "PATCH",
             "/app/api/projects/{id}/participants/{role_id}",
@@ -742,6 +753,16 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             // from the decoded document limit rather than applied globally.
             post(upload_document_door).layer(DefaultBodyLimit::max(
                 store::documents::MAX_DOCUMENT_UPLOAD_REQUEST_BYTES,
+            )),
+        ),
+        (
+            "POST",
+            "/app/api/projects/{id}/inbox-ingest",
+            // This route carries base64 JSON like the document upload door,
+            // so its request cap admits the base64 inflation of a max-size
+            // raw message; the door re-checks the decoded size itself.
+            post(ingest_provider_message_door).layer(DefaultBodyLimit::max(
+                crate::inbound_email::MAX_INBOUND_MESSAGE_BYTES / 3 * 4 + 65_536,
             )),
         ),
         (
@@ -2093,10 +2114,13 @@ async fn notation_inventory_door(
         return Err(ApiError::NotFound);
     }
 
-    let rows =
-        webapp::lawyer_project_detail::project_notation_board(&state.surreal, &state.storage, id)
-            .await
-            .map_err(ApiError::Db)?;
+    let rows = webapp::lawyer_project_notations::project_notation_board(
+        &state.surreal,
+        &state.storage,
+        id,
+    )
+    .await
+    .map_err(ApiError::Db)?;
     Ok((StatusCode::OK, Json(rows)).into_response())
 }
 
@@ -3117,6 +3141,173 @@ async fn record_adversity(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(edge)).into_response())
+}
+
+/// Query for the `GET /app/api/graph/*` doors: the neighborhood depth.
+/// Defaults to 2; anything above the store's hop ceiling is refused before
+/// the graph is read — the cap is the server's, never the caller's.
+#[derive(Deserialize, Default)]
+struct GraphQuery {
+    #[serde(default)]
+    depth: Option<String>,
+}
+
+/// Parses the `depth` query parameter. `Err` carries the ready 400 response.
+fn graph_depth(query: &GraphQuery) -> Result<u8, Response> {
+    const DEFAULT_DEPTH: &str = "2";
+    let raw = query.depth.as_deref().unwrap_or(DEFAULT_DEPTH);
+    let depth: u8 = raw
+        .parse()
+        .map_err(|_| bad_request("invalid_depth", "depth must be a non-negative integer."))?;
+    if depth == 0 || depth > store::postgres_graph_views::MAX_GRAPH_DEPTH {
+        return Err(bad_request(
+            "depth_out_of_range",
+            "depth must be between 1 and 3.",
+        ));
+    }
+    Ok(depth)
+}
+
+/// The AGE graph pool. The graph views read only from the projection, so a
+/// deployment with no configured PostgreSQL host has nothing to serve — the
+/// door reports 503 rather than pretending the graph is empty.
+async fn graph_store() -> Result<store::postgres::PostgresDb, Response> {
+    store::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "api: graph store unavailable");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": "graph_requires_postgresql" })),
+            )
+                .into_response()
+        })
+}
+
+/// Whether the lawyer-tier caller may read the lawyer graph of `person_id`:
+/// the person themself, or a caller who holds
+/// [`store::firm_capability::FirmCapability::ViewDirectory`] on a Firm the
+/// target belongs to — the same directory signal the firm surface uses,
+/// never an inference from graph shape. Membership or resolution failures
+/// deny, and deny silently (the door answers `404` either way).
+async fn can_view_lawyer_graph(state: &ApiState, lawyer: &LawyerSession, person_id: Uuid) -> bool {
+    if lawyer.0.person_id.is_some_and(|viewer| viewer == person_id) {
+        return true;
+    }
+    let memberships = match store::firms::memberships_for_person(&state.surreal, person_id).await {
+        Ok(memberships) => memberships,
+        Err(error) => {
+            tracing::error!(%error, %person_id, "api: lawyer-graph membership read failed");
+            return false;
+        }
+    };
+    for membership in memberships {
+        let decision = store::firm_capability::FirmCapability::ViewDirectory
+            .resolve(
+                &state.surreal,
+                lawyer.0.role,
+                lawyer.0.person_id,
+                membership.firm_id,
+            )
+            .await;
+        if decision.is_ok_and(store::firm_capability::FirmCapabilityDecision::is_allowed) {
+            return true;
+        }
+    }
+    false
+}
+
+/// `GET /app/api/graph/project/{id}?depth=2` — the matter's neighborhood:
+/// its parties, their entity roles, the adverse/related relationships, and
+/// the firms handling each side — the conflict check, made visible.
+/// Lawyer-tier and matter-scoped like [`record_adversity`]: a caller with no
+/// view of the matter gets the same non-disclosing `404`. The neighborhood
+/// itself is a read-only AGE view (`store::postgres_graph_views`); depth is
+/// capped server-side.
+async fn project_graph(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Query(query): Query<GraphQuery>,
+) -> Result<Response, ApiError> {
+    let depth = match graph_depth(&query) {
+        Ok(depth) => depth,
+        Err(response) => return Ok(response),
+    };
+    let in_scope =
+        store::access::can_see_project(&state.surreal, lawyer.0.person_id, lawyer.0.role, id)
+            .await
+            .unwrap_or(false);
+    if !in_scope {
+        return Err(ApiError::NotFound);
+    }
+    let pg = match graph_store().await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    let view = store::postgres_graph_views::project_view(&pg, id, depth)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    Ok(Json(view).into_response())
+}
+
+/// `GET /app/api/graph/lawyer/{id}?depth=2` — one person's working
+/// neighborhood: matters worked on, entity roles, firm membership, and the
+/// client/adverse relationships around them. Lawyer-tier; visible to the
+/// person themself or to a caller authorized through the firm directory
+/// ([`can_view_lawyer_graph`]) — anyone else gets the non-disclosing `404`.
+async fn lawyer_graph(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Query(query): Query<GraphQuery>,
+) -> Result<Response, ApiError> {
+    let depth = match graph_depth(&query) {
+        Ok(depth) => depth,
+        Err(response) => return Ok(response),
+    };
+    if !can_view_lawyer_graph(&state, &lawyer, id).await {
+        return Err(ApiError::NotFound);
+    }
+    let pg = match graph_store().await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    let view = store::postgres_graph_views::lawyer_view(&pg, id, depth)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    Ok(Json(view).into_response())
+}
+
+/// `GET /app/api/graph/firm/{id}` — firm-to-firm ties aggregated up from
+/// person-level edges: adversary, co-counsel, of-counsel, client. Lawyer-tier
+/// and directory-gated (`FirmCapability::ViewDirectory` on the Firm itself);
+/// the aggregation is a fixed three-hop read, so it takes no meaningful
+/// `depth` — the parameter is validated for consistency and then ignored.
+async fn firm_graph(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Query(query): Query<GraphQuery>,
+) -> Result<Response, ApiError> {
+    if let Err(response) = graph_depth(&query) {
+        return Ok(response);
+    }
+    let allowed = store::firm_capability::FirmCapability::ViewDirectory
+        .resolve(&state.surreal, lawyer.0.role, lawyer.0.person_id, id)
+        .await
+        .is_ok_and(store::firm_capability::FirmCapabilityDecision::is_allowed);
+    if !allowed {
+        return Err(ApiError::NotFound);
+    }
+    let pg = match graph_store().await {
+        Ok(pg) => pg,
+        Err(response) => return Ok(response),
+    };
+    let view = store::postgres_graph_views::firm_view(&pg, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    Ok(Json(view).into_response())
 }
 
 /// Request body for `PATCH /app/api/projects/{id}/participants/{role_id}` — re-point
@@ -4482,6 +4673,126 @@ fn invalid_document_slug_response(filename: &str, slug: &str) -> Option<Response
     store::documents::validate_document_slug(filename, slug)
         .err()
         .map(|error| bad_request("invalid_slug", &error.to_string()))
+}
+
+/// The body of `POST /app/api/projects/{id}/inbox-ingest`.
+#[derive(Debug, Deserialize)]
+struct IngestProviderMessageRequest {
+    /// The raw RFC 5322 message bytes, base64-encoded, exactly as the
+    /// provider holds them.
+    raw: String,
+    /// The provider account the message was read from (for example the
+    /// Gmail address the CLI fetched it with). Ingress dedup keys on it,
+    /// so a caller should keep one value per mailbox. Defaults to
+    /// `cli-ingest`.
+    provider_account: Option<String>,
+}
+
+/// `POST /app/api/projects/{id}/inbox-ingest` — file a provider message the
+/// CLI already read (the lawyer's Gmail, a saved `.eml`) into the Firm inbox,
+/// attributed to this Project. Ingest-only: nothing is sent, and the
+/// conversation stays in the Inbox workflow where an Owner can reassign it.
+/// Re-running the verb is safe: the message dedupes on Firm, channel,
+/// provider account, and message id.
+async fn ingest_provider_message_door(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Json(input): Json<IngestProviderMessageRequest>,
+) -> Result<Response, ApiError> {
+    use base64::Engine as _;
+    let in_scope = store::access::can_see_project_as_lawyer(
+        &state.surreal,
+        lawyer.0.person_id,
+        lawyer.0.role,
+        id,
+    )
+    .await
+    .unwrap_or(false);
+    if !in_scope {
+        return Err(ApiError::NotFound);
+    }
+    let Some(project) = store::projects::find_by_id(&state.surreal, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+    else {
+        return Err(ApiError::NotFound);
+    };
+    let Some(firm_id) = project.firm_id else {
+        return Ok(bad_request(
+            "project_has_no_firm",
+            "The matter has no owning Firm, so it has no inbox to file into.",
+        ));
+    };
+    let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(input.raw.as_bytes()) else {
+        return Ok(bad_request("invalid_base64", "raw is not valid base64."));
+    };
+    if raw.len() > crate::inbound_email::MAX_INBOUND_MESSAGE_BYTES {
+        return Ok(bad_request(
+            "message_too_large",
+            "The message exceeds the inbound mail size cap.",
+        ));
+    }
+    let Some(email) = crate::inbound_email::parse_raw_eml(&raw) else {
+        return Ok(bad_request(
+            "unparseable_message",
+            "The message could not be parsed as RFC 5322 mail.",
+        ));
+    };
+    let provider_account = input
+        .provider_account
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("cli-ingest")
+        .to_string();
+    let attachments = crate::inbox::ingest_attachments(&state.surreal, &state.storage, &email)
+        .await
+        .map_err(ApiError::Db)?;
+    let provider_message_id = email
+        .message_id
+        .clone()
+        .unwrap_or_else(|| format!("raw-{}", store::assets::sha256_hex(&raw)));
+    let occurred_at = crate::inbound_email::date_from_raw(&raw)
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let ingested = store::inbox::ingest_inbound(
+        &state.surreal,
+        &store::inbox::IngestInbound {
+            firm_id,
+            project_id: Some(id),
+            brand_key: None,
+            interaction_type: Some("message"),
+            provider_post_id: None,
+            parent_provider_message_id: None,
+            visibility: None,
+            channel: store::inbox::channel::EMAIL,
+            provider_account: &provider_account,
+            provider_message_id: &provider_message_id,
+            provider_thread_ref: None,
+            external_address: &email.from,
+            external_name: None,
+            subject: Some(email.subject.as_str()),
+            body: email.text.as_str(),
+            source_page: None,
+            source_channel: Some(store::inbox::channel::EMAIL),
+            matter_consent: true,
+            promotional_opt_in: false,
+            email_conversation_id: None,
+            attachments,
+            occurred_at: &occurred_at,
+        },
+    )
+    .await
+    .map_err(|error| ApiError::Db(error.to_string()))?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "conversation_id": ingested.conversation_id,
+            "message_id": ingested.message_id,
+            "deduped": ingested.deduped,
+        })),
+    )
+        .into_response())
 }
 
 /// `POST /app/api/projects/{id}/documents` — file a document into a matter, the
@@ -7919,6 +8230,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let client = |person_id| {
             AuthedSession(crate::SessionData {
@@ -8295,6 +8607,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let lawyer = integrity_participant(
             &db,
@@ -8614,6 +8927,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let session = crate::SessionData {
             person_id: Some(mixed_role_person.id),
@@ -8671,6 +8985,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         // Owner/Admin bypass project-scoping only at route admission; a
         // matter-content route like this one still applies the participation
@@ -8816,6 +9131,7 @@ filename*=UTF-8''signed%20intake.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let session = crate::SessionData {
             person_id: Some(lawyer_person.id),
@@ -8903,6 +9219,7 @@ filename*=UTF-8''signed%20intake.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let session = crate::SessionData {
             person_id: Some(lawyer_person.id),
@@ -9011,6 +9328,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let session = crate::SessionData {
             person_id: Some(lawyer_person.id),

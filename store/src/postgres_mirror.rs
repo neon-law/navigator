@@ -195,6 +195,7 @@ pub enum MirrorKey {
     InboxConversation(Uuid),
     InboxMessage(Uuid),
     InboxIngress(Uuid),
+    InboxMessageAsset(Uuid),
     InboxAssignment(Uuid),
     InboxDeliveryAttempt(Uuid),
     Mailroom(Uuid),
@@ -324,6 +325,7 @@ impl MirrorKey {
             Self::InboxConversation(_) => "inbox_conversation",
             Self::InboxMessage(_) => "message",
             Self::InboxIngress(_) => "inbox_ingress",
+            Self::InboxMessageAsset(_) => "inbox_message_asset",
             Self::InboxAssignment(_) => "inbox_assignment",
             Self::InboxDeliveryAttempt(_) => "inbox_delivery_attempt",
             Self::Mailroom(_) => "mailroom",
@@ -416,6 +418,7 @@ impl std::fmt::Display for MirrorKey {
             Self::InboxConversation(id) => write!(f, "inbox_conversation:{id}"),
             Self::InboxMessage(id) => write!(f, "message:{id}"),
             Self::InboxIngress(id) => write!(f, "inbox_ingress:{id}"),
+            Self::InboxMessageAsset(id) => write!(f, "inbox_message_asset:{id}"),
             Self::InboxAssignment(id) => write!(f, "inbox_assignment:{id}"),
             Self::InboxDeliveryAttempt(id) => write!(f, "inbox_delivery_attempt:{id}"),
             Self::Mailroom(id) => write!(f, "mailroom:{id}"),
@@ -590,6 +593,7 @@ pub async fn mirror(
         key @ (MirrorKey::InboxConversation(_)
         | MirrorKey::InboxMessage(_)
         | MirrorKey::InboxIngress(_)
+        | MirrorKey::InboxMessageAsset(_)
         | MirrorKey::InboxAssignment(_)
         | MirrorKey::InboxDeliveryAttempt(_)) => inbox::mirror(surreal, pg, key).await,
         MirrorKey::SocialAccount(key) => social_accounts::mirror(surreal, pg, key).await,
@@ -1576,6 +1580,7 @@ fn row_id(key: &MirrorKey) -> Option<Uuid> {
         | MirrorKey::InboxConversation(id)
         | MirrorKey::InboxMessage(id)
         | MirrorKey::InboxIngress(id)
+        | MirrorKey::InboxMessageAsset(id)
         | MirrorKey::InboxAssignment(id)
         | MirrorKey::InboxDeliveryAttempt(id)
         | MirrorKey::Mailroom(id)

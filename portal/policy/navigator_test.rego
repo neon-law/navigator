@@ -3015,3 +3015,28 @@ test_ci_section_counts_only_own_get if {
         }
     }
 }
+
+# Relationship-graph views: lawyer tier at route admission — the handler owns
+# the tenant question (matter scoping, self-or-directory, ViewDirectory), so
+# route admission must not answer it. GET only, one view segment, no depth of
+# path beyond the seed id.
+test_lawyer_can_read_graph_views if {
+    every view in ["project", "lawyer", "firm"] {
+        authz.allow with input as {"path": ["app", "api", "graph", view, "seed-1"], "method": "GET", "session": lawyer_session}
+    }
+}
+
+test_non_lawyer_denied_graph_views if {
+    every session in [client_session, clerk_session, null] {
+        every view in ["project", "lawyer", "firm"] {
+            not authz.allow with input as {"path": ["app", "api", "graph", view, "seed-1"], "method": "GET", "session": session}
+        }
+    }
+}
+
+test_graph_views_are_read_only_and_shape_bound if {
+    not authz.allow with input as {"path": ["app", "api", "graph", "project", "seed-1"], "method": "POST", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "api", "graph", "project"], "method": "GET", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "api", "graph", "project", "seed-1", "extra"], "method": "GET", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "api", "graph", "matter", "seed-1"], "method": "GET", "session": lawyer_session}
+}

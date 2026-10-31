@@ -98,6 +98,7 @@ mod dev_reload;
 pub(crate) mod docket_api;
 pub(crate) mod efilings_api;
 pub(crate) mod handoffs_api;
+pub(crate) mod lawyer_mailbox;
 pub(crate) mod matter_caption_api;
 pub(crate) mod module_records_api;
 pub(crate) mod pages_api;
@@ -113,6 +114,8 @@ pub use billing;
 pub use billing::xero_auth;
 pub mod admin_contract_reviews;
 pub mod admin_playbooks;
+/// The nightly Deadline mirror's host-side source.
+pub(crate) mod calendar_mirror;
 pub mod canonical_host;
 pub mod ci_auth;
 pub mod clauses;
@@ -893,6 +896,7 @@ pub fn bootstrap_with_forgejo_oidc(
                 signature_provider: state.signature_provider.clone(),
                 contract_reviewer: state.contract_reviewer.clone(),
                 integration_providers: state.integration_providers.clone(),
+                canonical_base_url: state.canonical_host.host().map(str::to_string),
             })
             .layer(axum::middleware::from_fn_with_state(
                 (state.sessions.clone(), crate::csrf::CsrfMode::Strict),

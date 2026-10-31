@@ -17477,7 +17477,7 @@ async fn project_detail_page_renders_documents_and_upload_form() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}"))
+                .uri(format!("/app/projects/{project_code}?tab=documents"))
                 .header(
                     "cookie",
                     &admin_cookie_on_project(&surreal, project_id).await,
@@ -17843,7 +17843,7 @@ async fn project_detail_page_renders_empty_state_when_project_has_no_documents()
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/app/projects/{project_code}"))
+                .uri(format!("/app/projects/{project_code}?tab=documents"))
                 .header(
                     "cookie",
                     &admin_cookie_on_project(&surreal, project_id).await,
@@ -18064,9 +18064,15 @@ async fn lawyer_project_documents_render_grouped_history_and_one_offs() {
     .await;
 
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-    let body =
-        body_string(get_with_cookie(app, &format!("/app/projects/{project_code}"), &cookie).await)
-            .await;
+    let body = body_string(
+        get_with_cookie(
+            app,
+            &format!("/app/projects/{project_code}?tab=documents"),
+            &cookie,
+        )
+        .await,
+    )
+    .await;
 
     assert!(
         body.contains("documents/Work Product/") && body.contains(">agreement<"),

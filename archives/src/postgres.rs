@@ -118,6 +118,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "inbox_ingress",
     "inbox_assignment",
     "inbox_delivery_attempt",
+    "inbox_message_asset",
     "sent_email",
     "email_receipt",
     "email_delivery",
