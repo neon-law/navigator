@@ -780,6 +780,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             post(mail_file_door),
         ),
         (
+            "POST",
+            "/app/api/projects/{id}/mail/eml",
+            post(eml_upload_door),
+        ),
+        (
             "PATCH",
             "/app/api/notations/{id}/clauses/{clause_id}",
             patch(edit_clause),
@@ -4873,8 +4878,12 @@ async fn mail_file_door(
         id,
         kind,
         visibility,
-        &input.message_id,
-        &message,
+        &MailAttachmentSource {
+            message_id: &input.message_id.to_string(),
+            sender: &message.from_addr,
+            received_at: &message.inserted_at.to_rfc3339(),
+            subject: &message.subject,
+        },
         &attachments,
     )
     .await?;
@@ -4891,6 +4900,19 @@ async fn mail_file_door(
         .into_response())
 }
 
+/// The message-identity half of attachment filing: what the deterministic
+/// slug and the stamped [`store::documents::MailProvenance`] derive from,
+/// shared by both filing doors — a stored inbound hop (`mail_file_door`) and
+/// a raw `.eml` upload (`eml_upload_door`).
+struct MailAttachmentSource<'a> {
+    /// Slug component. A UUID for a stored message; a sanitized `.eml`
+    /// message reference for an upload.
+    message_id: &'a str,
+    sender: &'a str,
+    received_at: &'a str,
+    subject: &'a str,
+}
+
 /// File every parsed attachment as its own slugged revision
 /// (`mail/<message_id>/<index>`), stamping [`store::documents::MailProvenance`]
 /// onto each, and return one pointer per attachment in message-part order.
@@ -4902,12 +4924,11 @@ async fn file_mail_attachments(
     project_id: Uuid,
     kind: &str,
     visibility: &str,
-    message_id: &Uuid,
-    message: &store::email_conversations::EmailConversationMessage,
+    source: &MailAttachmentSource<'_>,
     attachments: &[crate::inbound_email::InboundAttachment],
 ) -> Result<Vec<store::document_pointers::DocumentPointer>, ApiError> {
-    let message_id_str = message_id.to_string();
-    let received_at = message.inserted_at.to_rfc3339();
+    let message_id_str = source.message_id.to_string();
+    let received_at = source.received_at.to_string();
     let mut filed = Vec::with_capacity(attachments.len());
     for (index, attachment) in attachments.iter().enumerate() {
         let slug = format!("mail/{message_id_str}/{index}");
@@ -4932,9 +4953,9 @@ async fn file_mail_attachments(
         };
         let provenance = store::documents::MailProvenance {
             message_id: &message_id_str,
-            sender: &message.from_addr,
+            sender: source.sender,
             received_at: &received_at,
-            subject: &message.subject,
+            subject: source.subject,
         };
         store::assets::file_revision_with_provenance(
             &state.surreal,
@@ -4949,6 +4970,236 @@ async fn file_mail_attachments(
         filed.push(document_pointer(&state.surreal, project_id, &slug, kind).await?);
     }
     Ok(filed)
+}
+
+/// Request body for `POST /app/api/projects/{id}/mail/eml`.
+#[derive(Deserialize)]
+struct EmlUploadRequest {
+    /// The raw RFC 822 message, base64-encoded: bytes the caller already
+    /// holds (a saved copy, a downloaded export), so no per-machine Gmail
+    /// OAuth grant is involved in filing.
+    raw_base64: String,
+    /// The firm mailbox the filing lawyer files from. When it matches the
+    /// message's `From`, the message files as outbound; without it, inbound.
+    mailbox: Option<String>,
+    /// Required asset-lane kind when the message carries attachments — a
+    /// decision, never a default, matching `POST .../documents`.
+    kind: Option<String>,
+    /// `"client"` makes every filed attachment client-visible; anything else
+    /// (the default) files them as internal work product.
+    visibility: Option<String>,
+    /// List what would file, writing nothing.
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// One attachment as the .eml door reports it, filed or not.
+#[derive(Serialize)]
+struct EmlUploadAttachment {
+    filename: String,
+    content_type: String,
+    size_bytes: usize,
+}
+
+#[derive(Serialize)]
+struct EmlUploadResponse {
+    /// The external id the message deduped on (`eml:<Message-ID or digest>`).
+    source_ref: String,
+    /// `inbound` or `outbound`, decided by the optional mailbox match.
+    direction: String,
+    /// `true` when a message with this `(channel, source_ref)` was already
+    /// filed on this matter — nothing was written a second time.
+    deduped: bool,
+    /// The filed Communication, absent on a dry run.
+    communication_id: Option<Uuid>,
+    attachments: Vec<EmlUploadAttachment>,
+    /// One pointer per filed attachment, in message-part order. Empty when
+    /// `dry_run`, or when the message carried no attachments.
+    filed: Vec<store::document_pointers::DocumentPointer>,
+}
+
+/// The `400` error code a filing refusal names.
+fn eml_parse_error_code(error: &crate::eml_filing::EmlParseError) -> &'static str {
+    match error {
+        crate::eml_filing::EmlParseError::NotMime => "not_mime",
+        crate::eml_filing::EmlParseError::NoDate => "no_date",
+        crate::eml_filing::EmlParseError::BadDate => "bad_date",
+        crate::eml_filing::EmlParseError::NoBody => "no_body",
+    }
+}
+
+/// `POST /app/api/projects/{id}/mail/eml` — file a raw `.eml` the caller
+/// already holds as a matter Communication, each attachment filing as a
+/// linked document. No Gmail OAuth grant is involved anywhere: the MIME is
+/// parsed here, and the message files through the same idempotent
+/// `(channel, source_ref)` ingest every email Communication uses, so
+/// re-uploading the same message writes nothing a second time.
+///
+/// Lawyer-tier and matter-scoped, same as the sibling doors (out-of-scope →
+/// 404). Attachments require a `kind` (`400 kind_required`) and file under
+/// deterministic slugs (`mail/<message reference>/<index>`). `dry_run` lists
+/// the attachments and writes nothing.
+async fn eml_upload_door(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Json(input): Json<EmlUploadRequest>,
+) -> Result<Response, ApiError> {
+    let in_scope = store::access::can_see_project_as_lawyer(
+        &state.surreal,
+        lawyer.0.person_id,
+        lawyer.0.role,
+        id,
+    )
+    .await
+    .unwrap_or(false);
+    if !in_scope {
+        return Err(ApiError::NotFound);
+    }
+    use base64::Engine as _;
+    let raw = match base64::engine::general_purpose::STANDARD.decode(input.raw_base64.trim()) {
+        Ok(raw) => raw,
+        Err(_) => {
+            return Ok(bad_request(
+                "not_base64",
+                "raw_base64 must be the raw .eml message, base64-encoded.",
+            ));
+        }
+    };
+    let parsed = match crate::eml_filing::parse_eml(&raw, input.mailbox.as_deref()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return Ok(bad_request(
+                eml_parse_error_code(&error),
+                &error.to_string(),
+            ));
+        }
+    };
+    let has_attachments = !parsed.attachments.is_empty();
+    let kind = input
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if !input.dry_run && has_attachments && kind.is_none() {
+        return Ok(bad_request(
+            "kind_required",
+            &format!(
+                "A document kind is required when the message carries attachments. Accepted values are: {}.",
+                accepted_asset_kinds().join(", ")
+            ),
+        ));
+    }
+    let visibility = if input.visibility.as_deref() == Some(store::documents::visibility::CLIENT) {
+        store::documents::visibility::CLIENT
+    } else {
+        store::documents::visibility::INTERNAL
+    };
+    let attachments: Vec<EmlUploadAttachment> = parsed
+        .attachments
+        .iter()
+        .map(|attachment| EmlUploadAttachment {
+            filename: attachment.filename.clone(),
+            content_type: attachment.content_type.clone(),
+            size_bytes: attachment.bytes.len(),
+        })
+        .collect();
+    if input.dry_run {
+        return Ok((
+            StatusCode::OK,
+            Json(EmlUploadResponse {
+                source_ref: parsed.source_ref,
+                direction: parsed.direction.to_string(),
+                deduped: false,
+                communication_id: None,
+                attachments,
+                filed: Vec::new(),
+            }),
+        )
+            .into_response());
+    }
+    let (channel, direction) = if parsed.direction == "outbound" {
+        (
+            store::communications::channel::EMAIL_OUTBOUND,
+            store::communications::direction::OUTBOUND,
+        )
+    } else {
+        (
+            store::communications::channel::EMAIL_INBOUND,
+            store::communications::direction::INBOUND,
+        )
+    };
+    let counterparty = if parsed.direction == "outbound" {
+        &parsed.to
+    } else {
+        &parsed.from
+    };
+    let author_person_id = lawyer.0.person_id.ok_or(ApiError::NotFound)?;
+    let ingested = store::communications::ingest_email(
+        &state.surreal,
+        &store::communications::IngestArgs {
+            project_id: id,
+            channel,
+            direction,
+            author_person_id: Some(author_person_id),
+            counterparty: Some(counterparty),
+            subject: parsed.subject.as_deref(),
+            body: &parsed.body,
+            source_ref: Some(&parsed.source_ref),
+            asset_id: None,
+            occurred_at: &parsed.at,
+        },
+        store::communications::EmailDetails::default(),
+    )
+    .await
+    .map_err(crate::communications_api::map_communication)?;
+    let filed = if has_attachments {
+        let message_id_slug: String = parsed
+            .message_ref
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let kind = kind.expect("invariant: kind_required returned early without one");
+        file_mail_attachments(
+            &state,
+            id,
+            kind,
+            visibility,
+            &MailAttachmentSource {
+                message_id: &message_id_slug,
+                sender: &parsed.from,
+                received_at: &parsed.at,
+                subject: parsed.subject.as_deref().unwrap_or(""),
+            },
+            &parsed.attachments,
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
+    let status = if ingested.deduped {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((
+        status,
+        Json(EmlUploadResponse {
+            source_ref: parsed.source_ref,
+            direction: parsed.direction.to_string(),
+            deduped: ingested.deduped,
+            communication_id: Some(ingested.communication_id),
+            attachments,
+            filed,
+        }),
+    )
+        .into_response())
 }
 
 /// `GET /app/api/projects/{id}/documents/revisions?slug=`, the query, not a
@@ -7588,14 +7839,16 @@ mod tests {
     use super::NotationStepResponse;
     use super::{
         api_operation_table, can_see, document_integrity_door, documented_api_operations,
-        get_notation_door, integrity_chains, list_document_revisions_door, list_firms,
-        list_notations_door, mail_file_door, routes, ApiError, ApiState, AuthedSession,
-        IntegrityQuery, LawyerSession, MailFileRequest, RevisionsQuery,
+        eml_upload_door, get_notation_door, integrity_chains, list_document_revisions_door,
+        list_firms, list_notations_door, mail_file_door, routes, ApiError, ApiState, AuthedSession,
+        EmlUploadRequest, IntegrityQuery, LawyerSession, MailFileRequest, RevisionsQuery,
     };
     use axum::extract::{Path, Query, State};
+    use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use axum::Json;
     use std::collections::BTreeSet;
+    use uuid::Uuid;
 
     #[test]
     fn client_notation_list_and_id_visibility_keep_only_client_visible_kinds() {
@@ -8659,6 +8912,314 @@ filename*=UTF-8''signed%20intake.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\
                 .is_empty(),
             "a dry run writes no asset row"
         );
+    }
+
+    const EML_PLAIN: &str = "Message-ID: <abc-123@example.test>\r\n\
+From: Client <client@example.test>\r\n\
+To: lawyer@neonlaw.test\r\n\
+Subject: Retainer questions\r\n\
+Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+Can I sign electronically?\r\n";
+
+    const EML_WITH_ATTACHMENT: &str = "Message-ID: <order-1@example.test>\r\n\
+From: client@example.test\r\n\
+To: lawyer@neonlaw.test\r\n\
+Subject: The signed order\r\n\
+Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"BOUND\"\r\n\
+\r\n\
+--BOUND\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+See the attached order.\r\n\
+--BOUND\r\n\
+Content-Type: application/pdf\r\n\
+Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
+\r\n\
+%PDF-1.4\r\n\
+--BOUND--\r\n";
+
+    /// A lawyer participating in the seeded matter, plus that matter's
+    /// `ApiState` — the .eml door's test rig.
+    async fn eml_lawyer_state(
+        db: &store::surreal::SurrealDb,
+        project_id: Uuid,
+        email: &str,
+    ) -> (ApiState, crate::SessionData) {
+        let app = crate::test_support::app_state(db.clone()).await;
+        let lawyer_person = store::test_support::ensure_person(
+            db,
+            &store::persons::NewPerson {
+                email: email.to_string(),
+                name: "Aries Attorney".to_string(),
+                role: store::persons::Role::Lawyer,
+                ..Default::default()
+            },
+        )
+        .await;
+        store::projects::designate_dri_in_surreal(
+            db,
+            project_id,
+            lawyer_person.id,
+            store::projects::DriSide::Lawyer,
+        )
+        .await
+        .expect("seed the lawyer's participation row");
+        let state = ApiState {
+            surreal: app.surreal.clone(),
+            email: app.email.clone(),
+            bootstrap_owner_email: app.bootstrap_owner_email.clone(),
+            bootstrap_company: "Test Firm".to_string(),
+            questionnaire_runtime: app.questionnaire_runtime.clone(),
+            storage: app.storage.clone(),
+            workflow_runtime: app.workflow_runtime.clone(),
+            assets_storage: app.assets_storage.clone(),
+            forms_registry: app.forms_registry.clone(),
+            signature_provider: app.signature_provider.clone(),
+            contract_reviewer: app.contract_reviewer.clone(),
+            integration_providers: app.integration_providers.clone(),
+        };
+        let session = crate::SessionData {
+            person_id: Some(lawyer_person.id),
+            ..crate::SessionData::fresh("lawyer-sub", store::persons::Role::Lawyer)
+        };
+        (state, session)
+    }
+
+    fn eml_request(
+        raw: &[u8],
+        mailbox: Option<String>,
+        kind: Option<String>,
+        dry_run: bool,
+    ) -> EmlUploadRequest {
+        EmlUploadRequest {
+            raw_base64: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, raw),
+            mailbox,
+            kind,
+            visibility: None,
+            dry_run,
+        }
+    }
+
+    #[tokio::test]
+    async fn eml_door_files_raw_eml_without_any_gmail_grant() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        // The request carries only bytes and a session — no Gmail OAuth
+        // account, client id, or Keychain refresh token anywhere in the
+        // flow, which is the point of the door.
+        let response = eml_upload_door(
+            State(state),
+            LawyerSession(session),
+            Path(project_id),
+            Json(eml_request(EML_PLAIN.as_bytes(), None, None, false)),
+        )
+        .await
+        .expect("a lawyer on the matter can file a raw .eml");
+
+        assert_eq!(response.status(), StatusCode::CREATED, "{response:?}");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["source_ref"], "eml:abc-123@example.test", "{json}");
+        assert_eq!(json["direction"], "inbound", "{json}");
+        assert_eq!(json["deduped"], false, "{json}");
+        assert!(json["communication_id"].is_string(), "{json}");
+        let filed = store::communications::for_project(&db, project_id)
+            .await
+            .unwrap();
+        assert_eq!(filed.len(), 1, "{filed:?}");
+        assert_eq!(
+            filed[0].source_ref.as_deref(),
+            Some("eml:abc-123@example.test")
+        );
+        assert_eq!(
+            filed[0].channel,
+            store::communications::channel::EMAIL_INBOUND
+        );
+    }
+
+    #[tokio::test]
+    async fn eml_door_replay_dedupes_on_channel_and_source_ref() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-dup").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        for expected_status in [StatusCode::CREATED, StatusCode::OK] {
+            let response = eml_upload_door(
+                State(state.clone()),
+                LawyerSession(session.clone()),
+                Path(project_id),
+                Json(eml_request(EML_PLAIN.as_bytes(), None, None, false)),
+            )
+            .await
+            .expect("each upload of the same message succeeds");
+            assert_eq!(response.status(), expected_status, "{response:?}");
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                json["deduped"],
+                expected_status == StatusCode::OK,
+                "the replay is the deduped one: {json}"
+            );
+        }
+        let filed = store::communications::for_project(&db, project_id)
+            .await
+            .unwrap();
+        assert_eq!(filed.len(), 1, "the replay wrote no second row: {filed:?}");
+    }
+
+    #[tokio::test]
+    async fn eml_door_files_attachments_as_linked_documents_and_replays_without_duplicates() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-att").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        let raw = EML_WITH_ATTACHMENT.as_bytes();
+        let mut first = None;
+        for round in 0..2 {
+            let response = eml_upload_door(
+                State(state.clone()),
+                LawyerSession(session.clone()),
+                Path(project_id),
+                Json(eml_request(raw, None, Some("exhibit".to_string()), false)),
+            )
+            .await
+            .expect("an attachment-bearing .eml files");
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            let filed = json["filed"].as_array().expect("filed array");
+            assert_eq!(filed.len(), 1, "one pointer per attachment: {json}");
+            assert_eq!(
+                filed[0]["current_version"]["version"], 1,
+                "the replay filed no second revision: {json}"
+            );
+            assert_eq!(json["attachments"][0]["filename"], "order.pdf", "{json}");
+            if round == 0 {
+                assert_eq!(status, StatusCode::CREATED, "{json}");
+                first = Some(filed[0]["current_version"]["asset_id"].clone());
+            } else {
+                assert_eq!(status, StatusCode::OK, "{json}");
+                assert_eq!(
+                    json["deduped"], true,
+                    "the replay dedupes the communication: {json}"
+                );
+                assert_eq!(
+                    filed[0]["current_version"]["asset_id"],
+                    first.clone().expect("the first round filed an asset"),
+                    "the replay reads back the same asset"
+                );
+            }
+        }
+        let filed = store::communications::for_project(&db, project_id)
+            .await
+            .unwrap();
+        assert_eq!(filed.len(), 1, "the replay wrote no second row: {filed:?}");
+    }
+
+    #[tokio::test]
+    async fn eml_door_dry_run_lists_attachments_without_writing() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-dry").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        let response = eml_upload_door(
+            State(state),
+            LawyerSession(session),
+            Path(project_id),
+            Json(eml_request(
+                EML_WITH_ATTACHMENT.as_bytes(),
+                None,
+                None,
+                true,
+            )),
+        )
+        .await
+        .expect("a dry run succeeds");
+
+        assert_eq!(response.status(), StatusCode::OK, "{response:?}");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["communication_id"], serde_json::Value::Null, "{json}");
+        assert_eq!(json["attachments"][0]["filename"], "order.pdf", "{json}");
+        assert!(
+            json["filed"].as_array().unwrap().is_empty(),
+            "a dry run files nothing: {json}"
+        );
+        assert!(
+            store::communications::for_project(&db, project_id)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a dry run writes no communication"
+        );
+        assert!(
+            store::assets::for_project(&db, project_id)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a dry run writes no asset row"
+        );
+    }
+
+    #[tokio::test]
+    async fn eml_door_requires_a_kind_to_file_attachments() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-kind").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        let response = eml_upload_door(
+            State(state),
+            LawyerSession(session),
+            Path(project_id),
+            Json(eml_request(
+                EML_WITH_ATTACHMENT.as_bytes(),
+                None,
+                None,
+                false,
+            )),
+        )
+        .await
+        .expect("the request is well-formed; the refusal is the body");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{response:?}");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "kind_required", "{json}");
+    }
+
+    #[tokio::test]
+    async fn eml_door_refuses_out_of_scope_lawyers() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-scope").await;
+        // A lawyer with no participation row on this matter.
+        let (state, session) = eml_lawyer_state(&db, project_id, "outside@neonlaw.com").await;
+        let other = store::test_support::seed_project_surreal(&db, "eml-door-other").await;
+
+        let response = eml_upload_door(
+            State(state),
+            LawyerSession(session),
+            Path(other),
+            Json(eml_request(EML_PLAIN.as_bytes(), None, None, false)),
+        )
+        .await;
+
+        assert!(matches!(response, Err(ApiError::NotFound)), "{response:?}");
     }
 
     #[test]

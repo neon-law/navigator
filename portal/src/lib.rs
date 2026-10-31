@@ -132,6 +132,7 @@ mod email_acknowledgment;
 pub mod email_confirm;
 pub mod email_events;
 pub mod email_threads;
+pub mod eml_filing;
 pub mod esign_view;
 pub mod esignature_webhook;
 pub mod expunge;
