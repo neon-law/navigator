@@ -194,7 +194,7 @@ records:
         fee_note: First-paper filing fee varies by county (the published statewide range is $435-$450); the accepted fee-waiver paperwork is FW-001 with the FW-003 order, which has no template code on the forms shelf yet.
         fillability: fillable
       - key: nc500info
-        title: Information Sheet: Petition for Recognition of Minor's Change of Gender and Sex Identifier
+        title: "Information Sheet: Petition for Recognition of Minor's Change of Gender and Sex Identifier"
         form_number: NC-500-INFO
         source_url: https://www.courts.ca.gov/documents/NC500INFO.pdf
         sha256: 29c1e9d7a4ecc54c7af1700b30a966edc77e22cf0f9021aafbd05769cdcc11d8
@@ -329,7 +329,7 @@ records:
         source_url: https://www.courts.ca.gov/documents/SC100.pdf
         sha256: ef3421b14ebf64dbf884566ff659b39776035ec5b6e6500be0af91e3cc15533c
         filing_office: Superior Court Clerk's Office, small claims division, in the plaintiff's county
-        fee_note: Filing fee is tiered by claim amount (Statewide Civil Fee Schedule eff. 1/1/2026): $30 up to $1,500; $50 for $1,501-$5,000; $75 for $5,001-$12,500; $100 for a 13th-or-later claim in 12 months; $75 notice of appeal. Jurisdiction: $12,500 individuals / $6,250 businesses.
+        fee_note: "Filing fee is tiered by claim amount (Statewide Civil Fee Schedule eff. 1/1/2026): $30 up to $1,500; $50 for $1,501-$5,000; $75 for $5,001-$12,500; $100 for a 13th-or-later claim in 12 months; $75 notice of appeal. Jurisdiction: $12,500 individuals / $6,250 businesses."
         fillability: fillable
       - key: sc100a
         title: Other Plaintiffs or Defendants (attachment)
@@ -865,7 +865,7 @@ records:
         form_number: null
         source_url: https://www.familylawselfhelpcenter.org/images/forms/tpo/tpo-packet-nonconfidential-pdf-fillable.pdf
         sha256: 93e1c7f88afc00f27d999ed379775bcaeadab51f3186b85ed3aa9bea72c6b273
-        filing_office: Family Division Clerk's Office or the Protection Order Help Center, Family Division, 1 S. Sierra St equivalent — Las Vegas: 601 N. Pecos Rd
+        filing_office: "Family Division Clerk's Office or the Protection Order Help Center, Family Division, 1 S. Sierra St equivalent — Las Vegas: 601 N. Pecos Rd"
         fee_note: Clark-wrapped copy of the statewide DV TPO packet; no filing fee.
         fillability: unverified
       - key: TPOAPP
@@ -981,7 +981,7 @@ records:
         source_url: https://www.civillawselfhelpcenter.org/images/small-claims/complaints/complaint---small-claims.pdf
         sha256: 44f5e7196a6e6f2d1e227ec3d43162345d2d343d77b5a9abc1dad79cf65df730
         filing_office: Las Vegas Justice Court clerk, small claims division
-        fee_note: Filing fee tiered by claim (NRS 4.060 schedule, eff. 2/8/2024): $66 up to $1,000; $86 for $1,000.01-$2,500; $106 for $2,500.01-$5,000; $146 for $5,000.01-$7,500; $196 for $7,500.01-$10,000. No fee may be charged to a defendant appearing. Waiver: the justice-court fee-waiver form (below) or the statewide application.
+        fee_note: "Filing fee tiered by claim (NRS 4.060 schedule, eff. 2/8/2024): $66 up to $1,000; $86 for $1,000.01-$2,500; $106 for $2,500.01-$5,000; $146 for $5,000.01-$7,500; $196 for $7,500.01-$10,000. No fee may be charged to a defendant appearing. Waiver: the justice-court fee-waiver form (below) or the statewide application."
         fillability: fillable
       - key: LVCSCOUNTER
         title: Counterclaim — Small Claims (Las Vegas Township)
@@ -1019,7 +1019,7 @@ records:
         source_url: https://washoecounty.gov/rjc/files/forms/form_civil_sc-declaration_of_small_claims_complaint.pdf
         sha256: 347301146ed85d8992db7b431df347d4ad5710821c6e69799e406ed65a631084
         filing_office: Reno Justice Court clerk, civil division
-        fee_note: Filing fee tiered by claim (NRS 4.060/73; 'Civil Fees as of 04-2026'): $66 up to $1,000; $86 to $2,500; $106 to $5,000; $146 to $7,500; $196 to $10,000; each includes the $21 NRS ch. 4 fee. Transfer to justice court $125; abstract of judgment $25.
+        fee_note: "Filing fee tiered by claim (NRS 4.060/73; 'Civil Fees as of 04-2026'): $66 up to $1,000; $86 to $2,500; $106 to $5,000; $146 to $7,500; $196 to $10,000; each includes the $21 NRS ch. 4 fee. Transfer to justice court $125; abstract of judgment $25."
         fillability: fillable
       - key: RJCSCANSWER
         title: Small Claims Answer
@@ -1069,7 +1069,7 @@ records:
         source_url: https://www.courts.wa.gov/forms/documents/PO%20001%20Petition%20for%20Protection%20Order_06_2026.pdf
         sha256: ffcf053c303e3019cf76236929f256a14b32398dbb88bdc3bd3a747484026d12
         filing_office: Superior Court Clerk's Office or district court clerk (either accepts protection-order petitions); many counties also staff a protection-order office
-        fee_note: One unified petition covers all five RCW ch. 7.105 order types (DV, sexual assault, stalking, vulnerable adult, anti-harassment). The published PDF has zero AcroForm fields — overlay fields or route through the official Guide & File. Anti-harassment is the only type the petition flags '(fee may be required)' (Pierce: $53 Superior / $83 District); DV/SA/stalking petitions have no fee line in county schedules; vulnerable-adult filing is 'None (7.105)'. Fee waiver: PO 012/PO 014 (harassment) or GR 34.
+        fee_note: "One unified petition covers all five RCW ch. 7.105 order types (DV, sexual assault, stalking, vulnerable adult, anti-harassment). The published PDF has zero AcroForm fields — overlay fields or route through the official Guide & File. Anti-harassment is the only type the petition flags '(fee may be required)' (Pierce: $53 Superior / $83 District); DV/SA/stalking petitions have no fee line in county schedules; vulnerable-adult filing is 'None (7.105)'. Fee waiver: PO 012/PO 014 (harassment) or GR 34."
         fillability: unfillable_source
       - key: POI001
         title: Instructions for Petition for Protection Order
@@ -1170,7 +1170,7 @@ records:
         source_url: https://www.courts.wa.gov/forms/documents/MISC%2005%200100%20Notice%20of%20Small%20Claim%202025%2001.pdf
         sha256: ed0d0baf7eb073c2f8aa342852611dfee05dced4aacf82fd372f2199d9bc6418
         filing_office: District Court clerk, small claims division
-        fee_note: Filed in district court (limits: $10,000 natural person / $5,000 entity). The statewide pattern PDF is not AcroForm-fillable; counties host local fillable copies (e.g. King County). Filing fee is set per county ($50 in King, Pierce, and Clark districts).
+        fee_note: "Filed in district court (limits: $10,000 natural person / $5,000 entity). The statewide pattern PDF is not AcroForm-fillable; counties host local fillable copies (e.g. King County). Filing fee is set per county ($50 in King, Pierce, and Clark districts)."
         fillability: unfillable_source
       - key: MISC050200
         title: Certificate of Service (small claims)
@@ -1241,7 +1241,7 @@ records:
         source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-individual-july_2026.pdf
         sha256: 362c90497ebf8f978ea747a5ddb252b66e20211b74e109c3d0786943882680f4
         filing_office: King County District Court clerk
-        fee_note: Filing fee $98 per application (includes 1 certified copy; additional copies $5) plus a separate King County Recorder fee: $203.50 individual; $204.50 first family member + $203.50 each additional. Waiver: the local GR 34 motion (below) or the statewide GR 34 set. Sealed name changes (gender expression/identity, refugee/asylum, DV victim, emancipated minor) go to Superior Court instead.
+        fee_note: "Filing fee $98 per application (includes 1 certified copy; additional copies $5) plus a separate King County Recorder fee: $203.50 individual; $204.50 first family member + $203.50 each additional. Waiver: the local GR 34 motion (below) or the statewide GR 34 set. Sealed name changes (gender expression/identity, refugee/asylum, DV victim, emancipated minor) go to Superior Court instead."
         fillability: fillable
       - key: KCPETMINOR
         title: Petition for Minor Child Name Change
@@ -1265,7 +1265,7 @@ records:
         source_url: https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/forms_sc/notice-of-small-claim-september-2025.pdf
         sha256: 5bc191bc445d6da232815580bff270a7e344b523c6bf51c5b3346425f73c80f9
         filing_office: King County District Court clerk, small claims division
-        fee_note: Filing fee $50; limits $10,000 natural person / $5,000 other. Appeal to Superior: $280 cashier's check to the Superior Court Clerk + $40 district appeal-processing fee. A guided e-file interview generates this notice.
+        fee_note: "Filing fee $50; limits $10,000 natural person / $5,000 other. Appeal to Superior: $280 cashier's check to the Superior Court Clerk + $40 district appeal-processing fee. A guided e-file interview generates this notice."
         fillability: fillable
       - key: KCSCPACKET
         title: Small Claims Packet — Plaintiff
@@ -1293,7 +1293,7 @@ records:
         source_url: https://cdn.kingcounty.gov/-/media/king-county/depts/dja/forms/will-repository-coversheet-pdf.pdf
         sha256: 0f1106e8d783508d0fd91ed11cb801e02e320779e63268eff7937a7ef9b72b9e
         filing_office: King County Superior Court Clerk's Office
-        fee_note: Will Repository $20.00; Will Filing only (no probate) $20.00; Probate Filing $290.00; Civil Action $290.00 (Superior Court and Clerk's fee schedule, eff. 10/1/2026). Fee waiver: statewide GR 34.
+        fee_note: "Will Repository $20.00; Will Filing only (no probate) $20.00; Probate Filing $290.00; Civil Action $290.00 (Superior Court and Clerk's fee schedule, eff. 10/1/2026). Fee waiver: statewide GR 34."
         fillability: unverified
       - key: KCWILLWITHDRAW
         title: Motion and Declaration to Withdraw Will from Repository
@@ -1319,7 +1319,7 @@ records:
         source_url: https://www.piercecountywa.gov/DocumentCenter/View/134269/NC_Name-Change-Information-Adult
         sha256: 8febe8c4d12333c83a9a28af450f03b9060e03614fc0aabe9cec6c3643815f20
         filing_office: Pierce County District Court clerk, Room 239, County-City Building, 930 Tacoma Ave S
-        fee_note: Name-change fee $308.50 (each additional family member $218.50) per the District Court fee schedule eff. 12/08/2025. Petition completed online (district court portal) or via the county Find-a-Form page — no stable static petition PDF was captured by the survey (the site sits behind a bot challenge). Sealed name changes must be heard in Superior Court. Waiver: Financial Declaration/Motion and Order to Waive Fees fillable online; statewide GR 34 for Superior filings.
+        fee_note: "Name-change fee $308.50 (each additional family member $218.50) per the District Court fee schedule eff. 12/08/2025. Petition completed online (district court portal) or via the county Find-a-Form page — no stable static petition PDF was captured by the survey (the site sits behind a bot challenge). Sealed name changes must be heard in Superior Court. Waiver: Financial Declaration/Motion and Order to Waive Fees fillable online; statewide GR 34 for Superior filings."
         fillability: unverified
   - key: pierce_county_superior_court
     name: Pierce County Superior Court
@@ -1338,7 +1338,7 @@ records:
         source_url: https://www.piercecountywa.gov/DocumentCenter/View/115550/Petition-and-LECIF?bidId=
         sha256: 3c92ff61aea03a79065e4420d079f1c819974e7e05334a4fb53be65fd29b0218
         filing_office: Civil Orders for Protection desk, County-City Building Room 110, 930 Tacoma Ave S
-        fee_note: County wrapper of the statewide PO 001 + PO 003/003A packet (RCW 7.105.115 Mandatory, 03/2026); deliver by 2:30 p.m. for same-day commissioner review; only one order type may be checked. Fees per the Clerk's fee schedule eff. 6/11/2026: anti-harassment petition $53.00; protection of vulnerable adults — no filing fee; DV/SA/stalking petitions have no fee line.
+        fee_note: "County wrapper of the statewide PO 001 + PO 003/003A packet (RCW 7.105.115 Mandatory, 03/2026); deliver by 2:30 p.m. for same-day commissioner review; only one order type may be checked. Fees per the Clerk's fee schedule eff. 6/11/2026: anti-harassment petition $53.00; protection of vulnerable adults — no filing fee; DV/SA/stalking petitions have no fee line."
         fillability: unverified
   - key: clark_county_district_court
     name: Clark County District Court (Washington)
@@ -1355,7 +1355,7 @@ records:
         source_url: https://clark.wa.gov/media/document/95066
         sha256: e0c21d4ca3455ede2a4eeb4bc09d28906dc2382567fd8a14caddc0be07df4084
         filing_office: Clark County District Court clerk, 1200 Franklin St, Vancouver
-        fee_note: Filing fees due at filing, non-refundable: $296.50 individual adult; $298.50 family or minor. Petitions filed in person; hearings virtual by default; additional certified copies $5. GR 34 fee waiver available upon request. Sealed name changes go to the Superior Court Clerk's Office (564-397-2292).
+        fee_note: "Filing fees due at filing, non-refundable: $296.50 individual adult; $298.50 family or minor. Petitions filed in person; hearings virtual by default; additional certified copies $5. GR 34 fee waiver available upon request. Sealed name changes go to the Superior Court Clerk's Office (564-397-2292)."
         fillability: unverified
       - key: CLARKWAPETMINOR
         title: Petition for Minor Name Change
@@ -1423,7 +1423,7 @@ records:
         filing_fee:
           amount: "210.00"
           currency: USD
-        fee_note: Filed in Supreme Court or County Court of the county of residence (or any NYC Civil Court — see that court's record; Civil Court costs less). Supreme/County Court fee $210.00; a minor 14+ signs a notarized consent on the minor route. The same UCS-NC forms carry sex-designation changes (no separate petition form exists); the birth-certificate step runs through the NYC Health Attestation Form (born in NYC) or the NYS DOH Application for Correction of Certificate of Birth for Gender Designation (born in NYS outside NYC). Fee waiver: poor person relief by motion with a sworn financial affidavit — no official statewide form. sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge to plain clients).
+        fee_note: "Filed in Supreme Court or County Court of the county of residence (or any NYC Civil Court — see that court's record; Civil Court costs less). Supreme/County Court fee $210.00; a minor 14+ signs a notarized consent on the minor route. The same UCS-NC forms carry sex-designation changes (no separate petition form exists); the birth-certificate step runs through the NYC Health Attestation Form (born in NYC) or the NYS DOH Application for Correction of Certificate of Birth for Gender Designation (born in NYS outside NYC). Fee waiver: poor person relief by motion with a sworn financial affidavit — no official statewide form. sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge to plain clients)."
         fillability: fillable
       - key: NCO1
         title: Order Granting Name Change and/or Sex Designation Change, Individual Adult
@@ -1591,7 +1591,7 @@ records:
         source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Probate.pdf
         sha256: 8b31d7d781309658a9522e6893a69985c07dc486a1f1ad3d5efab6d721bd0b97
         filing_office: Surrogate's Court of the county where the decedent lived
-        fee_note: Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge). The flagship self-help packet: 22 pages, 776 AcroForm fields.
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge). The flagship self-help packet: 22 pages, 776 AcroForm fields."
         fillability: fillable
       - key: ANCPROB
         title: Petition for Ancillary Probate
@@ -1599,7 +1599,7 @@ records:
         source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/ancprob.pdf
         sha256: 4da52253c839f5e417eaaf90446c4ddd56fe426c69336598bdb55352cd48f864
         filing_office: Surrogate's Court of the county where the decedent lived
-        fee_note: Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge).
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
         fillability: fillable
       - key: PROBCTA
         title: Petition for Letters of Administration c.t.a. (after Probate)
@@ -1607,7 +1607,7 @@ records:
         source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/probcta.pdf
         sha256: 8d1c21f6213b700a2b5ff2b0e3b34bae8d6d3e29a4e9cb831a7662e0071b48c0
         filing_office: Surrogate's Court of the county where the decedent lived
-        fee_note: Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge).
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
         fillability: fillable
       - key: SUCTEST
         title: Petition for Successor Letters Testamentary
@@ -1615,7 +1615,7 @@ records:
         source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/PDF%20Fillable%20SuccessorTest.pdf
         sha256: 994abda0aff238567d845910ee07ca5eb02f42046fa80c818444b616e0089144
         filing_office: Surrogate's Court of the county where the decedent lived
-        fee_note: Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge).
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
         fillability: fillable
       - key: ADM
         title: Administration Proceeding, Petition for Letters of Administration / Limited Administration
@@ -1623,7 +1623,7 @@ records:
         source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/ADM.pdf
         sha256: 234f4b95a22c31c3c01de48600356541a224b4b954ac6580044a8770d7a1759e
         filing_office: Surrogate's Court of the county where the decedent lived
-        fee_note: Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge).
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
         fillability: fillable
       - key: ADMDBN
         title: Petition for Letters of Administration d.b.n. (SCPA 1007)
@@ -1631,7 +1631,7 @@ records:
         source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/ADMdbn.pdf
         sha256: 61d53e62b012dc98058cae69a4a8e0840abc044d470c0a1483e439e2020c8acd
         filing_office: Surrogate's Court of the county where the decedent lived
-        fee_note: Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge).
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
         fillability: unfillable_source
       - key: SURRP14
         title: Petition for Successor Letters Testamentary (legacy version)
@@ -1639,7 +1639,7 @@ records:
         source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Surrogate-P14.pdf
         sha256: d774e5e614aa96c85a3f008d3dc9a34835684ed33a51c351242fe35f9f941136
         filing_office: Surrogate's Court of the county where the decedent lived
-        fee_note: Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge).
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
         fillability: unfillable_source
       - key: SURRP15
         title: Renunciation of Successor Letters Testamentary and Waiver of Process (Individual)
@@ -1647,7 +1647,7 @@ records:
         source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Surrogate-P15.pdf
         sha256: 04102d6e7c075f9782ff784cf54665acd981dd9be96e6db1375edfe2a73a1f79
         filing_office: Surrogate's Court of the county where the decedent lived
-        fee_note: Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge).
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
         fillability: unfillable_source
       - key: SURRP16
         title: Renunciation of Successor Letters Testamentary and Waiver of Process (Corporation)
@@ -1655,7 +1655,7 @@ records:
         source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Surrogate-P16.pdf
         sha256: 444f121b3a88ebb8059b9a7e750054b971a8d03bbb64a4d8b469ff25f2d75fa6
         filing_office: Surrogate's Court of the county where the decedent lived
-        fee_note: Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge).
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
         fillability: unfillable_source
       - key: SURRP17
         title: Notice of Petition for Appointment of Successor Executor
@@ -1663,7 +1663,7 @@ records:
         source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Surrogate-P17.pdf
         sha256: bbc8c2f09f0c94878ffbd138fc565a7b56d4dd541a1b0e5906f79bae0027a82d
         filing_office: Surrogate's Court of the county where the decedent lived
-        fee_note: Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge).
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). sha256 pins a Wayback-archived copy of the blank (the live nycourts.gov URL serves a Cloudflare bot challenge)."
         fillability: unfillable_source
   - key: new_york_family_court
     name: New York Family Court
