@@ -786,6 +786,36 @@ mod tests {
             "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc3_lip_name_change_petition.fields"
         ),
     ),
+    (
+        "ny__civ_sc50_statement_of_claim",
+        include_str!(
+            "../../templates/notations/forms/united_states/new_york/nyc_civil_court/ny__civ_sc50_statement_of_claim.fields"
+        ),
+    ),
+    (
+        "ny__nc2_minor_name_change_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc2_minor_name_change_petition.fields"
+        ),
+    ),
+    (
+        "ny__nc4_family_name_change_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc4_family_name_change_petition.fields"
+        ),
+    ),
+    (
+        "ny__nc5_family_name_change_supplement",
+        include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc5_family_name_change_supplement.fields"
+        ),
+    ),
+    (
+        "ny__probate_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_surrogates_court/ny__probate_petition.fields"
+        ),
+    ),
 ];
         let err = plan(&map, &names, &llc_states()).expect_err("must refuse");
         assert!(
