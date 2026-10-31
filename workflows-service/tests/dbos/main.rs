@@ -7,6 +7,8 @@
 mod archives;
 mod billing_canary;
 mod billing_digest;
+/// The nightly Deadline-mirror reconcile schedule.
+mod deadline_mirror;
 mod dri_digest;
 mod effects;
 mod executors;

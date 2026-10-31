@@ -91,6 +91,8 @@ pub mod conflicts;
 pub mod contract_reviews;
 pub mod courts;
 pub mod credentials;
+/// The Deadline mirror onto a Project's shared Google Calendar.
+pub mod deadline_calendar;
 pub mod delegations;
 pub mod deployment;
 pub mod deployment_secret_changes;

@@ -118,6 +118,9 @@ pub struct ApiState {
     /// stored credential, for the `/app/api/integrations/*` doors. Refuses on
     /// a deployment with no runtime KMS key — see [`crate::integrations`].
     pub integration_providers: Arc<dyn crate::integrations::IntegrationProviders>,
+    /// The deployment's canonical host, for links rendered beside stored
+    /// rows — the Deadline mirror's matter-page line. `None` locally.
+    pub canonical_base_url: Option<String>,
 }
 
 impl FromRef<ApiState> for store::surreal::SurrealDb {
@@ -300,6 +303,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "POST",
             "/app/api/integrations/calendar/ensure",
             post(crate::integrations_api::calendar_ensure_door),
+        ),
+        (
+            "POST",
+            "/app/api/integrations/calendar/deadline-mirror",
+            post(crate::integrations_api::calendar_deadline_mirror_door),
         ),
         (
             "POST",
@@ -7914,6 +7922,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let client = |person_id| {
             AuthedSession(crate::SessionData {
@@ -8290,6 +8299,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let lawyer = integrity_participant(
             &db,
@@ -8609,6 +8619,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let session = crate::SessionData {
             person_id: Some(mixed_role_person.id),
@@ -8666,6 +8677,7 @@ mod tests {
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         // Owner/Admin bypass project-scoping only at route admission; a
         // matter-content route like this one still applies the participation
@@ -8811,6 +8823,7 @@ filename*=UTF-8''signed%20intake.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let session = crate::SessionData {
             person_id: Some(lawyer_person.id),
@@ -8898,6 +8911,7 @@ filename*=UTF-8''signed%20intake.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\
             signature_provider: app.signature_provider.clone(),
             contract_reviewer: app.contract_reviewer.clone(),
             integration_providers: app.integration_providers.clone(),
+            canonical_base_url: None,
         };
         let session = crate::SessionData {
             person_id: Some(lawyer_person.id),
