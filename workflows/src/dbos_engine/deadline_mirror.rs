@@ -99,6 +99,21 @@ pub fn system_clock() -> Clock {
     Arc::new(Utc::now)
 }
 
+/// One matter's contribution to the run report: the pass line on success,
+/// a `failed:` line when the reconcile itself broke. Extracted beside the
+/// workflow step so the mapping is testable without a DBOS runtime.
+async fn reconcile_line(
+    source: &Arc<dyn MirrorSource>,
+    project_id: Uuid,
+    dry_run: bool,
+    now: DateTime<Utc>,
+) -> String {
+    match source.reconcile(project_id, dry_run, now).await {
+        Ok(pass) => store::deadline_calendar::report_line(&pass),
+        Err(error) => format!("failed: {error}"),
+    }
+}
+
 /// The day's slot: 04:03 UTC.
 #[must_use]
 pub fn slot(now: DateTime<Utc>) -> DateTime<Utc> {
@@ -148,10 +163,7 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<DeadlineMirrorWor
                     let source = Arc::clone(&source);
                     async move {
                         dbos::Result::<_, MirrorQueueError>::Ok(
-                            match source.reconcile(project_id, dry_run, now).await {
-                                Ok(pass) => store::deadline_calendar::report_line(&pass),
-                                Err(error) => format!("failed: {error}"),
-                            },
+                            reconcile_line(&source, project_id, dry_run, now).await,
                         )
                     }
                 })
@@ -205,9 +217,13 @@ pub async fn schedule(workflow: DeadlineMirrorWorkflow, clock: Clock, stop: Canc
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{enabled, slot, slot_of, workflow_id, ENABLED_ENV};
     use crate::dbos_engine::SettingsError;
-    use chrono::{TimeZone, Utc};
+    use chrono::{DateTime, TimeZone, Utc};
+    use store::deadline_calendar::MirrorReport;
+    use uuid::Uuid;
 
     #[test]
     fn a_day_has_one_slot_and_its_id_names_the_instant_every_step_judges() {
@@ -239,5 +255,71 @@ mod tests {
                 "{malformed}"
             );
         }
+    }
+
+    struct StubSource {
+        report: Result<MirrorReport, String>,
+    }
+
+    #[async_trait::async_trait]
+    impl super::MirrorSource for StubSource {
+        async fn open_projects(
+            &self,
+            _now: DateTime<Utc>,
+        ) -> Result<Vec<(Uuid, String)>, super::MirrorQueueError> {
+            Ok(Vec::new())
+        }
+
+        async fn reconcile(
+            &self,
+            _project_id: Uuid,
+            _dry_run: bool,
+            _now: DateTime<Utc>,
+        ) -> Result<MirrorReport, String> {
+            self.report.clone()
+        }
+    }
+
+    fn report() -> MirrorReport {
+        MirrorReport {
+            outcome: store::deadline_calendar::MirrorOutcome::Mirrored,
+            dry_run: false,
+            creates_calendar: false,
+            upserted: vec![Uuid::now_v7()],
+            deleted: Vec::new(),
+            in_sync: 1,
+            failures: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_passing_reconcile_becomes_the_report_line() {
+        let source: Arc<dyn super::MirrorSource> = Arc::new(StubSource {
+            report: Ok(report()),
+        });
+        let line = super::reconcile_line(&source, Uuid::now_v7(), false, Utc::now()).await;
+        assert_eq!(line, "mirrored upserted=1 in_sync=1 deleted=0");
+    }
+
+    #[tokio::test]
+    async fn a_broken_reconcile_is_an_outcome_line_not_a_failed_run() {
+        let source: Arc<dyn super::MirrorSource> = Arc::new(StubSource {
+            report: Err("google is unreachable".into()),
+        });
+        let line = super::reconcile_line(&source, Uuid::now_v7(), false, Utc::now()).await;
+        assert_eq!(line, "failed: google is unreachable");
+    }
+
+    #[tokio::test]
+    async fn a_planned_pass_says_so_in_its_line() {
+        let mut planned = report();
+        planned.dry_run = true;
+        planned.upserted.clear();
+        planned.in_sync = 0;
+        let source: Arc<dyn super::MirrorSource> = Arc::new(StubSource {
+            report: Ok(planned),
+        });
+        let line = super::reconcile_line(&source, Uuid::now_v7(), true, Utc::now()).await;
+        assert_eq!(line, "mirrored upserted=0 in_sync=0 deleted=0 (dry run)");
     }
 }
