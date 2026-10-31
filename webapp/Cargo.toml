@@ -40,6 +40,11 @@ percent-encoding = { workspace = true }
 # consumes precomputed line-engine polylines and performs no astronomy itself.
 # Pure Rust, so the wasm client build carries it without a browser boundary.
 ephemeris = { workspace = true }
+# Server-only: the `#[server]` function bodies resolve birth places and
+# historical UTC offsets through the offline `geotime` index. Gated behind the
+# `server` feature so the wasm client build never carries the tzdata or the
+# GeoNames index.
+geotime = { workspace = true, optional = true }
 # Server-only: the `#[server]` function bodies query the store through the
 # shared `store` crate. It is gated behind the `server` feature so the wasm
 # client build (the `web` feature, selected by `dx`) never pulls it.
@@ -182,7 +187,7 @@ web = ["dioxus/web", "dep:dioxus-fullstack-core"]
 # Selected transitively by `web`; pulls the server-side renderer so
 # `dioxus-server`'s `render_handler` can SSR `App`, plus the `store` query
 # layer the server functions run against and the request-extraction helper.
-server = ["dioxus/server", "dep:store", "dep:dioxus-fullstack-core", "dep:axum", "dep:views", "dep:cloud", "dep:tracing", "dep:dioxus-ssr", "dep:reqwest", "dep:tokio", "dep:rules", "dep:workflows", "dep:futures", "dep:word", "dep:serde_yaml", "dep:base64", "dep:hmac", "dep:sha2", "dep:repos"]
+server = ["dioxus/server", "dep:store", "dep:dioxus-fullstack-core", "dep:axum", "dep:views", "dep:cloud", "dep:tracing", "dep:dioxus-ssr", "dep:reqwest", "dep:tokio", "dep:rules", "dep:workflows", "dep:futures", "dep:word", "dep:serde_yaml", "dep:base64", "dep:hmac", "dep:sha2", "dep:repos", "dep:geotime"]
 
 [lints]
 workspace = true
