@@ -32,7 +32,9 @@ pub(crate) enum CredentialsError {
     },
     #[error("the Firm's portal login secret is not shaped as a portal login payload: {detail}")]
     InvalidPayload { detail: String },
-    #[error("the Firm's portal login secret has no `{key}` entry; ask someone with the ManageIntegrationSecrets capability to add one with a `username` and `password`")]
+    #[error(
+        "the Firm's `court_portal` `portal_login` secret has no `{key}` entry; ask someone with the ManageIntegrationSecrets capability to add one with a `username` and `password`"
+    )]
     NotProvisioned { key: String },
     #[error("the `{key}` portal login entry has an empty {field}; ask someone with the ManageIntegrationSecrets capability to fill it in")]
     IncompleteProvisioning { key: String, field: String },
@@ -127,6 +129,32 @@ impl PortalLogins {
                 key: key.to_owned(),
             })
     }
+
+    /// Whether `key` has a usable login provisioned: an entry exists and
+    /// carries a non-empty username and password. The `scraper sites`
+    /// status column reads this; a site without one renders disabled.
+    #[must_use]
+    pub(crate) fn presence(&self, key: &str) -> LoginPresence {
+        match self.0.get(key) {
+            None => LoginPresence::Absent,
+            Some(login) if login.ensure_complete(key).is_ok() => LoginPresence::Complete,
+            Some(_) => LoginPresence::Incomplete,
+        }
+    }
+}
+
+/// Whether one site has a provisioned portal login, as the sites listing
+/// reports it. `Absent` covers the no-credential-row-at-all state: until
+/// the Firm's `court_portal` `portal_login` secret exists, every site is
+/// greyed out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoginPresence {
+    /// A complete username/password pair is stored: the site can run.
+    Complete,
+    /// An entry exists but is empty or half-filled.
+    Incomplete,
+    /// No entry for this site.
+    Absent,
 }
 
 /// Parse the resolved secret's value into per-site logins.
@@ -258,6 +286,25 @@ mod tests {
         let error = logins.login_for("pacer").expect_err("no pacer entry");
         assert!(matches!(error, CredentialsError::NotProvisioned { ref key } if key == "pacer"));
         assert!(error.to_string().contains("`pacer`"));
+        // The refusal names the provider/kind to provision (Nick,
+        // 2026-10-31), not just the missing key.
+        assert!(error.to_string().contains("court_portal"));
+        assert!(error.to_string().contains("portal_login"));
+    }
+
+    #[test]
+    fn presence_reports_complete_incomplete_and_absent_entries() {
+        let payload = serde_json::json!({
+            "la-superior": {"username": "firm@example.com", "password": "staple"},
+            "pacer": {"username": "firm@example.com", "password": ""}
+        });
+        let logins = parse_portal_logins(&payload).expect("a valid payload");
+        assert_eq!(
+            logins.presence("la-superior"),
+            super::LoginPresence::Complete
+        );
+        assert_eq!(logins.presence("pacer"), super::LoginPresence::Incomplete);
+        assert_eq!(logins.presence("nysaf"), super::LoginPresence::Absent);
     }
 
     #[test]
