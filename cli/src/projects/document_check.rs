@@ -30,6 +30,33 @@ const REWRITE: &str = "rewrite the drifted pointer";
 const WRITE_POINTER: &str = "write the missing pointer";
 const MOVE_LEGACY_POINTERS: &str = "move the legacy pointers from documents/ to blobs/";
 
+/// The Case Timeline drift gate: every record file in
+/// `documents/Case Timeline/` must be exactly the rendering of its Docket
+/// Entry row. The records are renderings the store owns — the canonical
+/// `case-timeline` skill keeps the docket in Navigator, never a hand-edited
+/// memo — so a hand-edited record, and a record whose entry the store no
+/// longer carries, are drift; `navigator project sync` repairs the checkout.
+pub(crate) fn check_timeline_records(dir: &Path, rows: &[serde_json::Value]) -> Result<()> {
+    let timeline = crate::projects::docket::timeline_write::plan(dir, rows)?;
+    let mut drift: Vec<String> = timeline
+        .writes
+        .iter()
+        .filter(|write| write.stale)
+        .map(|write| format!("{} disagrees with its Docket Entry", write.relative))
+        .collect();
+    drift.extend(
+        timeline
+            .removals
+            .iter()
+            .map(|relative| format!("{relative} names no Docket Entry")),
+    );
+    if drift.is_empty() {
+        return Ok(());
+    }
+    drift.push("run `navigator project sync` to reconcile the records".to_string());
+    Err(anyhow!("{}", drift.join("\n")))
+}
+
 /// One live-record failure. `location` is the pointer path, or the asset id
 /// when the row has no slug.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -992,6 +1019,78 @@ mod tests {
     const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const OTHER_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const BODY: &str = "Synthetic fixture bytes.\n";
+
+    /// A row the way the docket doors return one, with a linked document.
+    fn timeline_row() -> serde_json::Value {
+        serde_json::json!({
+            "id": "0190c2a0-0000-7000-8000-000000000009",
+            "entry_number": "4",
+            "kind": "hearing",
+            "title": "Notice of Hearing",
+            "party": "Court",
+            "filed_or_served_on": "2026-03-05",
+            "scheduled_on": "2026-04-01T16:00:00Z",
+            "supersedes": null,
+            "document_asset_id": "0190c2a0-0000-7000-8000-000000000001"
+        })
+    }
+
+    fn timeline_checkout() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("navigator.yaml"),
+            "host: h.example.com\nproject: acme\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_timeline_gate_accepts_records_that_match_their_docket_entries() {
+        let dir = timeline_checkout();
+        crate::projects::docket::timeline_write::write_after(dir.path(), "acme", &timeline_row())
+            .unwrap();
+        check_timeline_records(dir.path(), &[timeline_row()]).unwrap();
+    }
+
+    #[test]
+    fn the_timeline_gate_refuses_a_hand_edited_record() {
+        let dir = timeline_checkout();
+        crate::projects::docket::timeline_write::write_after(dir.path(), "acme", &timeline_row())
+            .unwrap();
+        let record = dir
+            .path()
+            .join("documents/Case Timeline/DKT 0004 - Notice of Hearing.yaml");
+        std::fs::write(&record, "number: '4'\ntitle: Hand-edited\n").unwrap();
+        let error = check_timeline_records(dir.path(), &[timeline_row()]).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("disagrees with its Docket Entry"),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("navigator project sync"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_timeline_gate_refuses_a_record_no_entry_names() {
+        let dir = timeline_checkout();
+        std::fs::create_dir_all(dir.path().join("documents/Case Timeline")).unwrap();
+        std::fs::write(
+            dir.path()
+                .join("documents/Case Timeline/DKT 0009 - Ghost.yaml"),
+            "number: '9'\n",
+        )
+        .unwrap();
+        let error = check_timeline_records(dir.path(), &[]).unwrap_err();
+        assert!(
+            error.to_string().contains("names no Docket Entry"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn transcript_gate_rejects_a_source_revision_that_is_no_longer_operative() {

@@ -622,6 +622,16 @@ erDiagram
         string provider_account
         string provider_message_id
     }
+    inbox_message_asset {
+        uuid asset_id
+        string filename
+        uuid firm_id
+        uuid id
+        datetime inserted_at
+        uuid message_id
+        int position
+        string sha256
+    }
     iolta_account {
         int balance_cents
         string currency
@@ -1118,6 +1128,7 @@ erDiagram
         string internal_slack_channel_url
         uuid jurisdiction_id
         string name
+        string onboarding_jurisdiction
         string private_notion_page_url
         string repository_url
         string shared_notion_page_url
@@ -1602,6 +1613,9 @@ erDiagram
     message }o--|| inbox_delivery_attempt : references
     firm }o--|| inbox_ingress : references
     message }o--|| inbox_ingress : references
+    asset }o--|| inbox_message_asset : references
+    firm }o--|| inbox_message_asset : references
+    message }o--|| inbox_message_asset : references
     firm }o--|| journal_entry : references
     journal_entry }o--|| journal_entry : references
     journal_entry }o--|| journal_entry_source : references

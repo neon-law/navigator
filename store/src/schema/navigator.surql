@@ -2609,6 +2609,23 @@ DEFINE FIELD OVERWRITE inserted_at ON inbox_ingress TYPE datetime DEFAULT time::
 DEFINE INDEX OVERWRITE inbox_ingress_key ON inbox_ingress
     FIELDS firm_id, channel, provider_account, provider_message_id UNIQUE;
 
+-- `inbox_message_asset`: one attachment on an ingested Inbox Message, stored
+-- as a content-addressed Asset through the bare-blob ingest lane. Ordering
+-- follows the provider's attachment order; the first row is the Message's
+-- primary attachment. Re-ingesting the same attachment bytes on a message
+-- reuses the link, so a retried ingest cannot duplicate one.
+DEFINE TABLE IF NOT EXISTS inbox_message_asset SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD OVERWRITE firm_id ON inbox_message_asset TYPE record<firm>;
+DEFINE FIELD OVERWRITE message_id ON inbox_message_asset TYPE record<message>;
+DEFINE FIELD OVERWRITE asset_id ON inbox_message_asset TYPE record<asset>;
+DEFINE FIELD OVERWRITE filename ON inbox_message_asset TYPE string;
+DEFINE FIELD OVERWRITE position ON inbox_message_asset TYPE int;
+DEFINE FIELD OVERWRITE sha256 ON inbox_message_asset TYPE string;
+DEFINE FIELD OVERWRITE inserted_at ON inbox_message_asset TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE inbox_message_asset_message ON inbox_message_asset FIELDS message_id;
+DEFINE INDEX OVERWRITE inbox_message_asset_key ON inbox_message_asset
+    FIELDS message_id, sha256 UNIQUE;
+
 -- `inbox_assignment`: one audited move onto a Project. Reassignment appends
 -- another row; it does not rewrite the earlier one.
 DEFINE TABLE IF NOT EXISTS inbox_assignment SCHEMAFULL PERMISSIONS NONE;

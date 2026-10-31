@@ -11,7 +11,7 @@
 //! participant to a brand-new matter, or reassigning one on an existing
 //! matter, would otherwise require already being on it. It discloses the
 //! matter's name/code/status/entity and the participation ledger — the same
-//! [`crate::lawyer_project_detail::ParticipationTable`] the workbench renders
+//! [`crate::lawyer_project_participation::ParticipationTable`] the workbench renders
 //! — and nothing else: no document, no notation, no resource link, no
 //! calendar, no "Edit project" link (that form's own gate is
 //! `store::access::can_see_project`, the same ENG-81 rule, so it would just
@@ -28,7 +28,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::lawyer_project_detail::ParticipationRow;
+use crate::lawyer_project_participation::ParticipationRow;
 use crate::people::ViewerRole;
 
 /// The rendered participation-only view.
@@ -144,7 +144,7 @@ pub async fn get_admin_unassigned_project_detail() -> Result<AdminUnassignedView
     let entity_name = entity.map(|entity| entity.name);
 
     let participations =
-        crate::lawyer_project_detail::participation_rows_for(&surreal, project.id).await?;
+        crate::lawyer_project_participation::participation_rows_for(&surreal, project.id).await?;
 
     Ok(AdminUnassignedView {
         found: true,
@@ -214,7 +214,7 @@ pub fn AdminUnassignedProjectDetail() -> Element {
                 }
             }
 
-            crate::lawyer_project_detail::ParticipationTable {
+            crate::lawyer_project_participation::ParticipationTable {
                 code: view.code.clone(),
                 csrf: view.csrf_token.clone(),
                 participations: view.participations.clone(),

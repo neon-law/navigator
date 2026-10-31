@@ -4243,6 +4243,9 @@ async fn projects_update_lawyer_only(
         calendar_id: None,
         booking_url: None,
         onboarding_jurisdiction: None,
+        // Set with `navigator project set --drive-folder`; the form does not
+        // carry it, so it leaves the column alone.
+        drive_folder_id: None,
     };
     match store::projects::update_project(&surreal, project_id, &command).await {
         Ok(_) => Redirect::to("/app/projects").into_response(),

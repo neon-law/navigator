@@ -67,6 +67,38 @@ pub(crate) async fn post_reconcile(
     token: &str,
     project_id: Uuid,
 ) -> Result<ProjectSurfaces> {
+    post_reconcile_classified(base, token, project_id)
+        .await
+        .map_err(|failure| match failure {
+            ReconcileDoorError::Unavailable(reason) => {
+                anyhow!("surfaces reconcile failed: 422 Unprocessable Entity: {reason}")
+            }
+            ReconcileDoorError::Failed(message) => anyhow!("{message}"),
+        })
+}
+
+/// Why a reconcile-door call returned no [`ProjectSurfaces`]. The
+/// classification is by the door's typed `error` field — never by matching
+/// message text — so a fleet-wide sweep can report an unconfigured Firm as
+/// its own expected outcome instead of a fault.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReconcileDoorError {
+    /// The deployment's Forgejo is missing a coordinate for the Project's
+    /// Firm; the message names every missing piece (the Forgejo root URL,
+    /// the Firm's `forgejo_access_token` integration secret).
+    Unavailable(String),
+    /// Any other fault — the transport, the tier, the store.
+    Failed(String),
+}
+
+/// [`post_reconcile`] with the door's errors left classified: a `422
+/// forgejo_unavailable` becomes [`ReconcileDoorError::Unavailable`] with the
+/// door's own sentence, everything else [`ReconcileDoorError::Failed`].
+pub(crate) async fn post_reconcile_classified(
+    base: &str,
+    token: &str,
+    project_id: Uuid,
+) -> Result<ProjectSurfaces, ReconcileDoorError> {
     let url = format!("{base}/app/api/project-surfaces/{project_id}");
     let response = reqwest::Client::new()
         .post(&url)
@@ -75,16 +107,29 @@ pub(crate) async fn post_reconcile(
         .body(Vec::<u8>::new())
         .send()
         .await
-        .with_context(|| format!("POST {url}"))?;
+        .map_err(|error| ReconcileDoorError::Failed(format!("POST {url}: {error:#}")))?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
+    if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+            if parsed["error"] == "forgejo_unavailable" {
+                return Err(ReconcileDoorError::Unavailable(
+                    parsed["message"].as_str().unwrap_or_default().to_string(),
+                ));
+            }
+        }
+    }
     if !status.is_success() {
-        return Err(anyhow!(
+        return Err(ReconcileDoorError::Failed(format!(
             "surfaces reconcile failed: {status}: {}",
             first_line(&body)
-        ));
+        )));
     }
-    serde_json::from_str(&body).context("parse POST /app/api/project-surfaces/{id}")
+    serde_json::from_str(&body).map_err(|error| {
+        ReconcileDoorError::Failed(format!(
+            "parse POST /app/api/project-surfaces/{{id}}: {error}"
+        ))
+    })
 }
 
 /// Read one Project's nonsecret manifest coordinates through the authenticated

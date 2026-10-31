@@ -313,6 +313,7 @@ async fn cli_api_round_trip_cancels_refuses_replay_and_reopens_the_same_row() {
             signature_provider: state.signature_provider,
             contract_reviewer: state.contract_reviewer,
             integration_providers: state.integration_providers,
+            canonical_base_url: None,
         })
         .layer(axum::Extension(portal::SessionData {
             person_id: Some(person.id),
@@ -409,4 +410,165 @@ async fn cli_api_round_trip_cancels_refuses_replay_and_reopens_the_same_row() {
         1
     );
     server.abort();
+}
+
+fn credentials(root: &std::path::Path, host: &str) -> std::path::PathBuf {
+    let credentials = root.join("credentials.json");
+    std::fs::write(
+        &credentials,
+        serde_json::json!({"hosts":{(host):{
+            "token":"test-token", "person_email":"lawyer@example.com", "role":"lawyer",
+            "expires_at":i64::MAX
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+    credentials
+}
+
+async fn mount_projects(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/app/api/projects"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"id": Uuid::now_v7(), "code": "acme"}
+        ])))
+        .mount(server)
+        .await;
+}
+
+async fn mount_mirror(server: &MockServer, body: Value, status: u16) {
+    Mock::given(method("POST"))
+        .and(path("/app/api/integrations/calendar/deadline-mirror"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(status).set_body_json(body))
+        .mount(server)
+        .await;
+}
+
+/// `sync` prints one line per matter the door reports, with the detail
+/// sentence where the door supplied one.
+#[tokio::test]
+async fn deadline_sync_prints_one_line_per_reported_matter() {
+    let server = MockServer::start().await;
+    let root = TempDir::new().unwrap();
+    let host = server.uri();
+    let credentials = credentials(root.path(), &host);
+    mount_projects(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/app/api/integrations/calendar/deadline-mirror"))
+        .and(header("authorization", "Bearer test-token"))
+        .and(body_json(json!({
+            "project_code": "acme",
+            "all": false,
+            "dry_run": false
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [
+                {"project_code": "acme", "outcome": "mirrored",
+                 "detail": "3 events upserted, 1 deleted"},
+                {"project_code": "acme", "outcome": "planned"}
+            ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let stdout = Command::cargo_bin("navigator")
+        .unwrap()
+        .current_dir(root.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+        .args([
+            "project",
+            "deadline",
+            "sync",
+            "--project",
+            "acme",
+            "--host",
+            &host,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(stdout).unwrap();
+    assert!(
+        stdout.contains("acme: mirrored — 3 events upserted, 1 deleted"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("acme: planned"), "{stdout}");
+    server.verify().await;
+}
+
+/// A planned pass tells the door `dry_run: true` — nothing writes.
+#[tokio::test]
+async fn deadline_sync_dry_run_tells_the_door() {
+    let server = MockServer::start().await;
+    let root = TempDir::new().unwrap();
+    let host = server.uri();
+    let credentials = credentials(root.path(), &host);
+    mount_projects(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/app/api/integrations/calendar/deadline-mirror"))
+        .and(header("authorization", "Bearer test-token"))
+        .and(body_json(json!({
+            "project_code": "acme",
+            "all": false,
+            "dry_run": true
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"project_code": "acme", "outcome": "planned"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Command::cargo_bin("navigator")
+        .unwrap()
+        .current_dir(root.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+        .args([
+            "project",
+            "deadline",
+            "sync",
+            "--dry-run",
+            "--project",
+            "acme",
+            "--host",
+            &host,
+        ])
+        .assert()
+        .success();
+    server.verify().await;
+}
+
+/// A door answer without its results array is a failure, not a silent pass.
+#[tokio::test]
+async fn deadline_sync_fails_when_the_report_is_not_an_array() {
+    let server = MockServer::start().await;
+    let root = TempDir::new().unwrap();
+    let host = server.uri();
+    let credentials = credentials(root.path(), &host);
+    mount_projects(&server).await;
+    mount_mirror(&server, json!({"results": "no"}), 200).await;
+
+    Command::cargo_bin("navigator")
+        .unwrap()
+        .current_dir(root.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+        .args([
+            "project",
+            "deadline",
+            "sync",
+            "--project",
+            "acme",
+            "--host",
+            &host,
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("mirror report is not an array"));
+    server.verify().await;
 }

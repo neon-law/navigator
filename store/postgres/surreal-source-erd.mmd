@@ -577,6 +577,16 @@ erDiagram
         string provider_account
         string provider_message_id
     }
+    inbox_message_asset {
+        string id
+        uuid asset_id
+        string filename
+        uuid firm_id
+        datetime inserted_at
+        uuid message_id
+        number position
+        string sha256
+    }
     iolta_account {
         string id
         number balance_cents
@@ -1378,6 +1388,9 @@ erDiagram
     message }o--|| inbox_delivery_attempt : message_id
     firm }o--|| inbox_ingress : firm_id
     message }o--|| inbox_ingress : message_id
+    asset }o--|| inbox_message_asset : asset_id
+    firm }o--|| inbox_message_asset : firm_id
+    message }o--|| inbox_message_asset : message_id
     jurisdiction }o--|| iolta_account : jurisdiction_id
     project }o--|| iolta_allocation : project_id
     jurisdiction }o--|| iolta_withdrawal : jurisdiction_id

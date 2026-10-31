@@ -136,6 +136,53 @@ pub async fn ics(host: Option<&str>, project: Option<&str>) -> ExitCode {
     }
 }
 
+/// Reconcile the Project's mirrored Google Calendar events to its Deadline
+/// rows through the portal door — the portal owns the Firm's calendar
+/// credential. `dry_run` plans the same writes without making them.
+pub async fn sync(host: Option<&str>, project: Option<&str>, dry_run: bool) -> ExitCode {
+    let mirrored: anyhow::Result<()> = async {
+        let (base, token, _, code) = coordinates_with_code(host, project).await?;
+        let report = call(
+            reqwest::Client::new()
+                .post(format!(
+                    "{base}/app/api/integrations/calendar/deadline-mirror"
+                ))
+                .bearer_auth(token)
+                .json(&json!({
+                    "project_code": code,
+                    "all": false,
+                    "dry_run": dry_run,
+                })),
+            "sync",
+        )
+        .await?;
+        let results = report["results"]
+            .as_array()
+            .ok_or_else(|| anyhow!("mirror report is not an array"))?;
+        for result in results {
+            let line = match result["detail"].as_str() {
+                Some(detail) => format!(" — {detail}"),
+                None => String::new(),
+            };
+            println!(
+                "{}: {}{}",
+                result["project_code"].as_str().unwrap_or("?"),
+                result["outcome"].as_str().unwrap_or("?"),
+                line
+            );
+        }
+        Ok(())
+    }
+    .await;
+    match mirrored {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("navigator project deadline: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn apply_visibility(
     object: &mut serde_json::Map<String, Value>,
     visibility: Option<&str>,

@@ -296,6 +296,7 @@ pub async fn add(host: Option<&str>, project: Option<&str>, new: NewEntry, dry: 
             let c = coordinates(host, project).await?;
             let row = post_entry(&c, &body).await?;
             super::renumber::name_linked_document(&c, &row, Path::new(".")).await?;
+            super::timeline_write::write_after(Path::new("."), &c.project_code, &row)?;
             Ok(row)
         }
         .await,
@@ -329,6 +330,7 @@ pub async fn link_document(
             let c = coordinates(host, project).await?;
             let row = post_link(&c, entry, &body).await?;
             super::renumber::name_linked_document(&c, &row, Path::new(".")).await?;
+            super::timeline_write::write_after(Path::new("."), &c.project_code, &row)?;
             Ok(row)
         }
         .await,
@@ -378,7 +380,7 @@ pub async fn supersede(
                 return Ok(dry_run("supersede", &body));
             }
             let c = coordinates(host, project).await?;
-            call(
+            let row = call(
                 reqwest::Client::new()
                     .post(format!(
                         "{}/app/api/projects/{}/docket/{entry}/supersede",
@@ -388,7 +390,9 @@ pub async fn supersede(
                     .json(&body),
                 "supersede",
             )
-            .await
+            .await?;
+            super::timeline_write::write_after(Path::new("."), &c.project_code, &row)?;
+            Ok(row)
         }
         .await,
     )

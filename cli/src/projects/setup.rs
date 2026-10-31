@@ -66,6 +66,7 @@ fn surface_outcome(
 ) -> ResourceOutcome {
     match status {
         store::project_surfaces::SurfaceStatus::Created => resource("created"),
+        store::project_surfaces::SurfaceStatus::Adopted => resource("adopted"),
         store::project_surfaces::SurfaceStatus::Present => resource("present"),
         store::project_surfaces::SurfaceStatus::Skipped => resource_with_detail(
             "skipped",

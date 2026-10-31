@@ -33,7 +33,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The registry YAML embedded at compile time — the file this module types.
 /// Public so cross-crate tests reconcile the exact bytes the binary ships.
@@ -42,7 +42,7 @@ pub const COURT_SEED_YAML: &str = include_str!("../seeds/Court.yaml");
 /// One court, or the court that approves a statewide form set. A
 /// county-specific court names its county; a city or township court names
 /// its city too.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Court {
     /// Stable slug (`eighth_judicial_district_court`). It is also the
@@ -60,11 +60,61 @@ pub struct Court {
     pub level: CourtLevel,
     /// The forms this court's filing offices accept.
     pub forms: Vec<CourtForm>,
+    /// Surveyed forms the court accepts that are not yet vendored as
+    /// templates: registry data only, with the same provenance fields, so
+    /// the catalog can show the full surveyed inventory before a form has
+    /// a guided workflow. Unlike [`Court::forms`], these entries carry no
+    /// forms-shelf template and no template-resolution obligation.
+    #[serde(default)]
+    pub surveyed_forms: Vec<SurveyedForm>,
+}
+
+/// A surveyed form a court's filing office accepts that has no forms-shelf
+/// template yet — registry data only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurveyedForm {
+    /// Stable slug within the court's record (`nc_100_info`).
+    pub key: String,
+    /// Human title, as the filing office publishes it.
+    pub title: String,
+    /// The form number the filing office publishes, when it publishes one.
+    pub form_number: Option<String>,
+    /// Official page where the blank is published.
+    pub source_url: String,
+    /// Lowercase sha-256 hex digest of the official blank PDF — the blank
+    /// itself is never checked in.
+    pub sha256: String,
+    /// The office within the court that accepts the filing.
+    pub filing_office: String,
+    /// The filing fee, when the office publishes a flat one.
+    pub filing_fee: Option<FilingFee>,
+    /// Prose for tiered, county-varying, or unverified fee schedules —
+    /// including the fee-waiver form the office accepts when that waiver
+    /// form has no template code to point at.
+    pub fee_note: Option<String>,
+    /// How the blank's fillability was verified.
+    pub fillability: Option<Fillability>,
+}
+
+/// The verified fillability of an official blank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fillability {
+    /// The blank's AcroForm field dictionary carries widgets — a program
+    /// can fill it in place.
+    Fillable,
+    /// The official source publishes a flat, print-only PDF: no AcroForm
+    /// fields, whatever the filename claims.
+    UnfillableSource,
+    /// Fillability is not established — the blank could not be
+    /// binary-checked (bot challenge, no archive copy, or not downloaded).
+    Unverified,
 }
 
 /// The class of court a form is filed in. Closed: a new class is an edit
 /// here plus a seed row, reviewed together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CourtLevel {
     /// A court of last resort. A statewide self-help form set is registered
@@ -87,11 +137,13 @@ pub enum CourtLevel {
     Surrogate,
     /// A city court outside the municipal-court name (New York).
     City,
+    /// A family court handling domestic-relations matters (New York).
+    Family,
 }
 
 /// One form a court's filing office accepts, keyed to a forms-shelf
 /// template code.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CourtForm {
     /// Forms-shelf template code (`nv__adult_name_change_petition`) — the
@@ -124,7 +176,7 @@ pub struct CourtForm {
 
 /// A filing fee as the filing office publishes it: a decimal amount and an
 /// ISO 4217 currency code.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FilingFee {
     /// Decimal amount (`"270.00"`, `"0.00"`).
@@ -213,6 +265,27 @@ fn seeded_jurisdiction_codes() -> BTreeSet<String> {
         .collect()
 }
 
+/// The jurisdiction's display name as `store/seeds/Jurisdiction.yaml`
+/// seeds it (`NV` → `Nevada`), or `None` for a code the seed does not carry.
+#[must_use]
+pub fn jurisdiction_name(code: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Seed {
+        records: Vec<Record>,
+    }
+    #[derive(Deserialize)]
+    struct Record {
+        name: String,
+        code: String,
+    }
+    serde_yaml::from_str::<Seed>(crate::seed::JURISDICTION_SEED_YAML)
+        .expect("Jurisdiction.yaml parses against its seed shape")
+        .records
+        .into_iter()
+        .find(|record| record.code == code)
+        .map(|record| record.name)
+}
+
 fn validate(courts: &[Court]) -> Result<(), RegistryError> {
     let jurisdiction_codes = seeded_jurisdiction_codes();
     let mut court_keys = BTreeSet::new();
@@ -237,6 +310,57 @@ fn validate(courts: &[Court]) -> Result<(), RegistryError> {
             }
             form_courts.insert(&form.code, &court.key);
             validate_form(court, form)?;
+        }
+        for surveyed in &court.surveyed_forms {
+            validate_surveyed_form(court, surveyed)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_surveyed_form(court: &Court, surveyed: &SurveyedForm) -> Result<(), RegistryError> {
+    let court_key = court.key.as_str();
+    let key = surveyed.key.as_str();
+    if surveyed.title.trim().is_empty() {
+        return Err(RegistryError::BlankField(
+            court_key.to_string(),
+            key.to_string(),
+            "title",
+        ));
+    }
+    if surveyed.filing_office.trim().is_empty() {
+        return Err(RegistryError::BlankField(
+            court_key.to_string(),
+            key.to_string(),
+            "filing_office",
+        ));
+    }
+    if !surveyed.source_url.starts_with("https://") {
+        return Err(RegistryError::InsecureSourceUrl(
+            court_key.to_string(),
+            key.to_string(),
+        ));
+    }
+    if !is_sha256_pin(&surveyed.sha256) {
+        return Err(RegistryError::BadSha256(
+            court_key.to_string(),
+            key.to_string(),
+        ));
+    }
+    if let Some(fee) = &surveyed.filing_fee {
+        if !is_iso_4217(&fee.currency) {
+            return Err(RegistryError::BadFeeCurrency(
+                court_key.to_string(),
+                key.to_string(),
+                fee.currency.clone(),
+            ));
+        }
+        if !is_decimal_amount(&fee.amount) {
+            return Err(RegistryError::BadFeeAmount(
+                court_key.to_string(),
+                key.to_string(),
+                fee.amount.clone(),
+            ));
         }
     }
     Ok(())
@@ -322,7 +446,9 @@ fn is_decimal_amount(amount: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{embedded, is_decimal_amount, is_sha256_pin, parse, RegistryError};
+    use super::{
+        embedded, is_decimal_amount, is_sha256_pin, jurisdiction_name, parse, Court, RegistryError,
+    };
 
     /// Wrap one or more full court records (already YAML-indented) in the
     /// seed envelope, so each fixture reads as the document it parses.
@@ -340,6 +466,30 @@ mod tests {
         sha256: {VALID_SHA256}
         filing_office: Family Division Clerk's Office"
         )
+    }
+
+    #[test]
+    fn jurisdiction_name_reads_the_seed_display_name() {
+        assert_eq!(
+            jurisdiction_name("NV").as_deref(),
+            Some("Nevada"),
+            "`NV` is seeded as Nevada"
+        );
+        assert_eq!(
+            jurisdiction_name("ZZ"),
+            None,
+            "a code Jurisdiction.yaml does not seed names nothing"
+        );
+    }
+
+    #[test]
+    fn the_registry_serializes_back_to_its_own_shape() {
+        // The public JSON endpoint serves the registry as JSON; the round
+        // trip must not invent or drop a field.
+        let courts = embedded().expect("shipped court registry must parse and validate");
+        let json = serde_json::to_string(&courts).expect("registry serializes");
+        let round: Vec<Court> = serde_json::from_str(&json).expect("registry round-trips");
+        assert_eq!(round, courts);
     }
 
     #[test]

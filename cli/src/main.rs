@@ -53,6 +53,7 @@ mod release_version;
 #[allow(dead_code)]
 mod remote;
 mod sas;
+mod scraper;
 mod sendgrid_openapi;
 mod site_asset;
 mod surreal_archive;
@@ -891,6 +892,13 @@ enum Command {
         #[command(subcommand)]
         action: ProjectsCmd,
     },
+    /// Scrape court and program portals into the omnichannel inbox. Site
+    /// adapters run on the shared framework base: pinned-Chrome sessions,
+    /// Firm-store portal logins, resumable downloads, inbox intake.
+    Scraper {
+        #[command(subcommand)]
+        action: scraper::ScraperCmd,
+    },
     /// The notation author's workbench: a Project repository's
     /// `templates/<stem>.md` (the fleet layout), or Navigator's own bundled
     /// catalog under `templates/notations/`.
@@ -1072,6 +1080,17 @@ enum ProjectsCmd {
         /// both. `navigator project setup` creates the calendar.
         #[arg(long = "calendar", value_name = "ID")]
         calendar: Option<String>,
+        /// The Project's Drive ingest folder id, in the Firm's Projects
+        /// shared drive. Written to `project.drive_folder_id` and the live
+        /// Project; an empty value clears both. `navigator project setup`
+        /// creates the folder, or adopts one named for the code that
+        /// already exists.
+        #[arg(long = "drive-folder", value_name = "ID")]
+        drive_folder: Option<String>,
+        /// Preview every change without writing navigator.yaml or the live
+        /// Project row.
+        #[arg(long)]
+        dry_run: bool,
         /// The client's booking page: the address of an appointment schedule
         /// made on the Project calendar in Google Calendar. Written to the
         /// live Project only and shown to the client; an empty value clears it.
@@ -1432,6 +1451,38 @@ enum ProjectsCmd {
         /// Restrict results to a record class, currently `court`.
         #[arg(long)]
         record: Option<String>,
+    },
+    /// Create or adopt a Project's external surfaces through the live
+    /// site's admin reconcile door.
+    ///
+    /// `reconcile` is the idempotent backfill: for every Project visible to
+    /// this login (or one `--project` code) it runs the same pass matter-open
+    /// runs best-effort, so a matter opened while the forge was down gains
+    /// its governed, seeded repository on the next run, and re-running
+    /// changes nothing. Each Project reports its own outcome — a Firm whose
+    /// Forgejo is unconfigured is skipped with the missing coordinate
+    /// named, never a failed run.
+    Surfaces {
+        #[command(subcommand)]
+        action: SurfacesCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum SurfacesCmd {
+    /// Create or adopt each Project's source repository — seeded and
+    /// governed when the forge is Forgejo — through
+    /// `POST /app/api/project-surfaces/{id}`.
+    Reconcile {
+        /// Project code, e.g. `acme`. Omit to reconcile every Project
+        /// visible to this login.
+        #[arg(long)]
+        project: Option<String>,
+        /// Emit the per-Project outcomes as JSON.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        host: HostOpt,
     },
 }
 
@@ -1976,6 +2027,20 @@ enum DeadlineCmd {
     },
     /// Print every deadline on the Project as one RFC 5545 calendar.
     Ics {
+        /// Project code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Mirror the Project's deadlines into its shared matter calendar
+    /// through the portal, repairing drift. Requires the Firm's calendar
+    /// integration; `--dry-run` plans without writing.
+    Sync {
+        /// Plan the mirror without writing — the door answers what it
+        /// would insert, patch, and delete.
+        #[arg(long)]
+        dry_run: bool,
         /// Project code. Defaults to project.name in navigator.yaml.
         #[arg(long)]
         project: Option<String>,
@@ -4670,6 +4735,7 @@ fn run() -> ExitCode {
         }
         Command::Mail { action } => runtime().block_on(mail::run(action)),
         Command::Projects { action } => runtime().block_on(run_projects(action)),
+        Command::Scraper { action } => runtime().block_on(scraper::run(action)),
         // The docs reference helpers need no cluster, so they are handled
         // here rather than routed into the KIND dispatcher with the rest
         // of `dev`.
@@ -5453,6 +5519,11 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             DeadlineCmd::Ics { host, project } => {
                 projects::deadline::ics(host.host.as_deref(), project.as_deref()).await
             }
+            DeadlineCmd::Sync {
+                host,
+                project,
+                dry_run,
+            } => projects::deadline::sync(host.host.as_deref(), project.as_deref(), dry_run).await,
             DeadlineCmd::Reopen { host, project, id } => {
                 projects::deadline::reopen(host.host.as_deref(), project.as_deref(), id).await
             }
@@ -5576,28 +5647,32 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             calendar,
             booking_url,
             jurisdiction,
+            drive_folder,
+            dry_run,
             firm,
             brand,
             host,
         } => {
-            projects::set::run(
-                host.host.as_deref(),
-                project_code.as_deref(),
+            projects::set::run(projects::set::SetRequest {
+                host_override: host.host.as_deref(),
+                project_override: project_code.as_deref(),
                 from_live,
-                [
+                supplied: [
                     lawyer_dri.as_deref(),
                     client_dri.as_deref(),
                     private_slack_channel.as_deref(),
                     private_notion_page.as_deref(),
                 ],
-                projects::set::LiveFields {
+                live_fields: projects::set::LiveFields {
                     calendar_id: calendar.as_deref(),
+                    drive_folder_id: drive_folder.as_deref(),
                     booking_url: booking_url.as_deref(),
                     jurisdiction: jurisdiction.as_deref(),
                 },
-                firm.as_deref(),
-                brand.as_deref(),
-            )
+                firm: firm.as_deref(),
+                brand: brand.as_deref(),
+                dry_run,
+            })
             .await
         }
         ProjectsCmd::Sync {
@@ -5710,6 +5785,16 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             ci, check, deep, ..
         } => projects::pinned_gate::dispatch(GateMode::Content { ci, check, deep }).await,
         ProjectsCmd::Preview { port } => projects::preview::run(port).await,
+        ProjectsCmd::Surfaces { action } => match action {
+            SurfacesCmd::Reconcile {
+                project,
+                json,
+                host,
+            } => {
+                projects::surfaces_reconcile::run(host.host.as_deref(), project.as_deref(), json)
+                    .await
+            }
+        },
         ProjectsCmd::Pages { action } => projects::pages_init::run(action).await,
         ProjectsCmd::Setup {
             project_code,

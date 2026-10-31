@@ -1490,7 +1490,69 @@ async fn project_sync(
         return Ok(());
     }
     sync_pages(&root, &client, dry_run).await?;
-    sync_matter(&root, &client, dry_run).await
+    sync_matter(&root, &client, dry_run).await?;
+    sync_case_timeline(&root, &client, &project, dry_run, yes_delete).await
+}
+
+/// Reconcile the checkout's Case Timeline records with the live docket:
+/// every Docket Entry renders its `DKT NNNN - <title>.yaml` record, a
+/// missing or stale record is rewritten from its entry, and a record no
+/// entry names any more is removed. A removal asks first — `--yes-delete`
+/// answers it — because a record is a file in the lawyer's checkout even
+/// though the store owns its truth.
+async fn sync_case_timeline(
+    root: &Path,
+    client: &DocumentClient,
+    project: &str,
+    dry_run: bool,
+    yes_delete: bool,
+) -> Result<()> {
+    let coordinates = crate::projects::docket::entries::Coordinates {
+        base: client.base().to_string(),
+        token: client.token().to_string(),
+        project_id: client.project_id(),
+        project_code: project.to_string(),
+    };
+    // A refused docket read keeps every existing record rather than
+    // failing the whole sync — the same grace `list_service` gets.
+    let rows = match crate::projects::docket::entries::list_rows(&coordinates).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!(
+                "could not read the live docket entries; Case Timeline records are kept: {error:#}"
+            );
+            return Ok(());
+        }
+    };
+    let timeline = crate::projects::docket::timeline_write::plan(root, &rows)?;
+    for write in &timeline.writes {
+        if dry_run {
+            println!("would write {}", write.relative);
+        } else {
+            write_pointer_atomically(&root.join(&write.relative), &write.yaml)
+                .with_context(|| format!("write {}", write.relative))?;
+            println!("wrote {}", write.relative);
+        }
+    }
+    if timeline.removals.is_empty() {
+        return Ok(());
+    }
+    if dry_run {
+        for relative in &timeline.removals {
+            println!("would remove {relative}");
+        }
+    } else if yes_delete {
+        for relative in &timeline.removals {
+            std::fs::remove_file(root.join(relative))
+                .with_context(|| format!("remove {relative}"))?;
+            println!("removed {relative}");
+        }
+    } else {
+        for relative in &timeline.removals {
+            println!("cannot remove {relative}: no Docket Entry names it any more; rerun with --yes-delete");
+        }
+    }
+    Ok(())
 }
 
 /// Store the manifest's `pages:` with the Project, so the matter page renders

@@ -2349,6 +2349,96 @@ pub fn entity_types_router(
 /// authorize/deny mutations keep their own `POST` routes.
 pub const LAWYER_EXPUNGE_QUEUE_PATH: &str = "/app/lawyer/expunge-requests";
 
+/// The matter graph page path — `{code}` is the project code the matter
+/// surface is addressed by, resolved to the internal id the REST door reads.
+pub const PROJECT_GRAPH_PATH: &str = "/app/projects/{code}/graph";
+
+/// The lawyer graph page path. Not under `/app/admin`: the endpoint admits
+/// the person themself at any firm tier, so the page sits outside the admin
+/// cluster with its own lawyer-tier Rego rule.
+pub const LAWYER_GRAPH_PATH: &str = "/app/people/{id}/graph";
+
+/// The firm graph page path. The lawyer workbench, not `/app/admin`: the
+/// firm-administration pages are Owner/Admin by policy ("firms" is
+/// deliberately absent from `admin_lawyer_resources`), while the firm graph
+/// door admits a Lawyer holding `FirmCapability::ViewDirectory`. The
+/// `/app/lawyer` prefix rule already admits the lawyer tier, so this route
+/// needs no rule of its own; the directory-capability check stays with the
+/// endpoint the island fetches.
+pub const FIRM_GRAPH_PATH: &str = "/app/lawyer/firms/{id}/graph";
+
+/// The three relationship-graph pages (project, lawyer, firm), rendered
+/// through Dioxus with a first-party Sigma.js island. Read-only: the pages
+/// carry no forms, so no CSRF layer is needed. Every route rides the same
+/// authentication + embedded Rego policy gate; the project page additionally
+/// scopes by the participation ledger in its loader (matching the REST
+/// door), and the islands fetch only the already-gated `GET /app/api/graph/*`
+/// endpoints.
+pub fn graph_views_router(
+    surreal: store::surreal::SurrealDb,
+    sessions: crate::session::SessionStore,
+    policy: crate::policy::PolicyClient,
+    auth: crate::auth::AuthConfig,
+) -> Router {
+    // One context provider shared by all three: the project page's loader
+    // reads the store (matter code → internal id, participation scope); the
+    // lawyer and firm loaders run store-free.
+    let context = std::sync::Arc::new(vec![Box::new(move || {
+        Box::new(surreal.clone()) as Box<dyn std::any::Any>
+    })
+        as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]);
+    // Each page renders through its own `FullstackState` (one component per
+    // state), so the three are built separately and merged; the
+    // authentication + embedded Rego policy gates then wrap the merge.
+    let project: Router<()> = Router::<FullstackState>::new()
+        .route(
+            PROJECT_GRAPH_PATH,
+            get(render_handler)
+                .layer(from_fn(inject_person_id))
+                .layer(from_fn(inject_viewer_role))
+                .layer(from_fn(inject_app_brand_mark))
+                .layer(from_fn(dioxus_document_head)),
+        )
+        .with_state(FullstackState::new(
+            ServeConfig::new().context_providers(context.clone()),
+            webapp::graph_views::ProjectGraphPage,
+        ));
+    let lawyer: Router<()> = Router::<FullstackState>::new()
+        .route(
+            LAWYER_GRAPH_PATH,
+            get(render_handler)
+                .layer(from_fn(inject_person_id))
+                .layer(from_fn(inject_viewer_role))
+                .layer(from_fn(inject_app_brand_mark))
+                .layer(from_fn(dioxus_document_head)),
+        )
+        .with_state(FullstackState::new(
+            ServeConfig::new().context_providers(context.clone()),
+            webapp::graph_views::LawyerGraphPage,
+        ));
+    let firm: Router<()> = Router::<FullstackState>::new()
+        .route(
+            FIRM_GRAPH_PATH,
+            get(render_handler)
+                .layer(from_fn(inject_viewer_role))
+                .layer(from_fn(inject_app_brand_mark))
+                .layer(from_fn(dioxus_document_head)),
+        )
+        .with_state(FullstackState::new(
+            ServeConfig::new().context_providers(context),
+            webapp::graph_views::FirmGraphPage,
+        ));
+
+    project
+        .merge(lawyer)
+        .merge(firm)
+        .route_layer(from_fn_with_state(
+            (sessions, policy),
+            crate::policy::require_policy,
+        ))
+        .route_layer(from_fn_with_state(auth, crate::auth::require_auth))
+}
+
 /// The gated Dioxus lawyer expunge-request queue (#641 Phase 3) — the first
 /// row-action page. Its rows post to the existing authorize/deny handlers
 /// through native forms, so the render carries the session CSRF token via the
@@ -3461,6 +3551,408 @@ async fn inject_catalog_index(
     req.extensions_mut()
         .insert(webapp::catalog_index::InjectedCatalogIndex(content));
     next.run(req).await
+}
+
+// ─── The free court-form catalog ─────────────────────────────────────────────
+//
+// The public surface of `store/seeds/Court.yaml` (PR 163's registry): one
+// page per jurisdiction listing each court's forms with filing office,
+// fee, fee waiver, and the official source, plus a machine-readable JSON
+// twin. Both firms host it; the copy carries each brand's free-of-charge
+// promises and the rows carry only what the registry seeds.
+
+/// The free court-form catalog's index path — every jurisdiction the
+/// registry covers, one summary row each.
+pub const FREE_RESOURCES_PATH: &str = "/free-legal-resources";
+
+/// The machine-readable twin of the free court-form catalog: the registry
+/// itself, as pretty-printed JSON. Unbranded — the data has no voice.
+pub const FREE_RESOURCES_JSON_PATH: &str = "/free-legal-resources/index.json";
+
+/// A jurisdiction page's URL slug: the seeded display name lowercased with
+/// spaces to underscores (`District of Columbia` → `district_of_columbia`).
+#[must_use]
+pub fn jurisdiction_slug(name: &str) -> String {
+    name.to_lowercase().replace(' ', "_")
+}
+
+/// One jurisdiction page's mount path for a slug.
+#[must_use]
+pub fn free_resources_jurisdiction_path(slug: &str) -> String {
+    format!("{FREE_RESOURCES_PATH}/{slug}")
+}
+
+/// A filing fee as the office publishes it: `$270.00` for dollars, the
+/// amount then the code for any other currency.
+#[must_use]
+pub fn fee_display(fee: &store::courts::FilingFee) -> String {
+    if fee.currency == "USD" {
+        format!("${}", fee.amount)
+    } else {
+        format!("{} {}", fee.amount, fee.currency)
+    }
+}
+
+/// The class a court sits in, as a jurisdiction page's row heading shows it.
+fn court_level_label(level: store::courts::CourtLevel) -> &'static str {
+    use store::courts::CourtLevel as Level;
+    match level {
+        Level::Supreme => "Supreme Court",
+        Level::Appellate => "Appellate Court",
+        Level::Superior => "Superior Court",
+        Level::District => "District Court",
+        Level::Justice => "Justice Court",
+        Level::Municipal => "Municipal Court",
+        Level::Surrogate => "Surrogate's Court",
+        Level::City => "City Court",
+        Level::Family => "Family Court",
+    }
+}
+
+/// Where a court sits: its county or city when the seed names one,
+/// statewide otherwise, beside its class.
+#[must_use]
+fn court_subtitle(court: &store::courts::Court) -> String {
+    let place = court
+        .county
+        .as_deref()
+        .or(court.city.as_deref())
+        .unwrap_or("Statewide");
+    format!("{place} · {}", court_level_label(court.level))
+}
+
+/// One jurisdiction's share of the registry, in first-seen order — the seed
+/// author's order, not an alphabetical accident.
+pub struct JurisdictionCourts {
+    /// The registry's jurisdiction code (`united_states/nevada`).
+    pub code: String,
+    /// The jurisdiction's display name from the seed, falling back to the
+    /// code when no seed names it.
+    pub name: String,
+    /// The jurisdiction's courts, in registry order.
+    pub courts: Vec<store::courts::Court>,
+}
+
+/// The shipped court registry, re-exported so the brand crates can build
+/// the public catalog's pages without depending on the domain layer.
+pub use store::courts::embedded;
+
+/// Group the registry's courts by jurisdiction, in first-seen order.
+#[must_use]
+pub fn jurisdiction_groups(courts: &[store::courts::Court]) -> Vec<JurisdictionCourts> {
+    let mut groups: Vec<JurisdictionCourts> = Vec::new();
+    for court in courts {
+        match groups
+            .iter_mut()
+            .find(|group| group.code == court.jurisdiction)
+        {
+            Some(group) => group.courts.push(court.clone()),
+            None => groups.push(JurisdictionCourts {
+                name: store::courts::jurisdiction_name(&court.jurisdiction)
+                    .unwrap_or_else(|| court.jurisdiction.clone()),
+                code: court.jurisdiction.clone(),
+                courts: vec![court.clone()],
+            }),
+        }
+    }
+    groups
+}
+
+/// One registry entry's row: the fee as the office publishes it, the fee
+/// waiver named by its sibling row's title, and the blank pointed at the
+/// public assets bucket — never a repository file.
+#[must_use]
+fn free_resources_form_row(
+    court: &store::courts::Court,
+    jurisdiction_slug: &str,
+    form: &store::courts::CourtForm,
+) -> webapp::free_resources::FreeResourceFormRow {
+    let fee_waiver = form.fee_waiver_code.as_ref().map(|code| {
+        court
+            .forms
+            .iter()
+            .find(|sibling| &sibling.code == code)
+            .map_or_else(|| code.clone(), |sibling| sibling.title.clone())
+    });
+    webapp::free_resources::FreeResourceFormRow {
+        title: form.title.clone(),
+        form_number: form.form_number.clone(),
+        filing_office: form.filing_office.clone(),
+        fee: form
+            .fee_note
+            .clone()
+            .or_else(|| form.filing_fee.as_ref().map(fee_display)),
+        fee_waiver,
+        source_url: form.source_url.clone(),
+        blank_url: views::assets::bucket_asset_url(&format!(
+            "forms/{jurisdiction_slug}/{}/{}.pdf",
+            court.key, form.code
+        )),
+    }
+}
+
+/// Build the free-resources index content: the copy's promises around one
+/// summary row per jurisdiction the registry covers.
+#[must_use]
+pub fn free_resources_index_content(
+    copy: &views::locales::FreeResourcesCopy,
+    courts: &[store::courts::Court],
+) -> webapp::free_resources::FreeResourcesIndexContent {
+    webapp::free_resources::FreeResourcesIndexContent {
+        head_title: copy.head_title.clone(),
+        meta_description: copy.lede.clone(),
+        title: copy.title.clone(),
+        lede: copy.lede.clone(),
+        free_statement: copy.free_statement.clone(),
+        no_outcome: copy.no_outcome.clone(),
+        jurisdictions: jurisdiction_groups(courts)
+            .iter()
+            .map(|group| {
+                let form_count: usize = group.courts.iter().map(|court| court.forms.len()).sum();
+                webapp::free_resources::FreeResourceJurisdictionSummary {
+                    href: free_resources_jurisdiction_path(&jurisdiction_slug(&group.name)),
+                    name: group.name.clone(),
+                    court_count: group.courts.len(),
+                    form_count,
+                }
+            })
+            .collect(),
+        footnote: copy.footnote.clone(),
+        json_label: copy.json_label.clone(),
+        json_href: FREE_RESOURCES_JSON_PATH.to_string(),
+    }
+}
+
+/// Build one jurisdiction page's content: the copy with `{jurisdiction}`
+/// filled, over this jurisdiction's registry courts and rows.
+#[must_use]
+pub fn free_resources_jurisdiction_content(
+    copy: &views::locales::FreeResourcesCopy,
+    group: &JurisdictionCourts,
+) -> webapp::free_resources::FreeResourcesJurisdictionContent {
+    let slug = jurisdiction_slug(&group.name);
+    webapp::free_resources::FreeResourcesJurisdictionContent {
+        head_title: copy.head_title.clone(),
+        meta_description: copy.meta_description.clone(),
+        title: copy.title.clone(),
+        lede: copy.lede.clone(),
+        free_statement: copy.free_statement.clone(),
+        no_outcome: copy.no_outcome.clone(),
+        jurisdiction_name: group.name.clone(),
+        // Page catalogs only accept brand placeholders, so the jurisdiction
+        // name is composed here from the copy's generic heading.
+        courts_heading: format!("{} in {}", copy.courts_heading, group.name),
+        courts: group
+            .courts
+            .iter()
+            .map(|court| webapp::free_resources::FreeResourceCourt {
+                name: court.name.clone(),
+                subtitle: court_subtitle(court),
+                forms: court
+                    .forms
+                    .iter()
+                    .map(|form| free_resources_form_row(court, &slug, form))
+                    .collect(),
+            })
+            .collect(),
+        filing_office_label: copy.filing_office_label.clone(),
+        fee_label: copy.fee_label.clone(),
+        fee_waiver_label: copy.fee_waiver_label.clone(),
+        source_label: copy.source_label.clone(),
+        blank_label: copy.blank_label.clone(),
+        empty_court: copy.empty_court.clone(),
+        empty_jurisdiction: copy.empty_jurisdiction.clone(),
+        footnote: copy.footnote.clone(),
+    }
+}
+
+/// The free court-form catalog's index page. The content baked here is the
+/// mounted brand's fallback; `with_branded` in `neon` overrides it per
+/// request, exactly as `/contact` does.
+pub fn free_resources_index_router(
+    content: webapp::free_resources::FreeResourcesIndexContent,
+) -> Router {
+    let injected = webapp::free_resources::InjectedFreeResourcesIndex(content);
+    let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(move || {
+        Box::new(injected.clone()) as Box<dyn std::any::Any>
+    })
+        as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]));
+
+    Router::<FullstackState>::new()
+        .route(
+            FREE_RESOURCES_PATH,
+            get(render_handler)
+                .layer(from_fn(dioxus_document_head))
+                .layer(from_fn(inject_public_utility)),
+        )
+        .with_state(FullstackState::new(
+            cfg,
+            webapp::free_resources::FreeResourcesIndexEntry,
+        ))
+}
+
+/// One jurisdiction's page under [`free_resources_jurisdiction_path`] — a
+/// distinct mount per jurisdiction, content baked at construction, like
+/// every other static catalog surface here.
+pub fn free_resources_jurisdiction_router(
+    path: &str,
+    content: webapp::free_resources::FreeResourcesJurisdictionContent,
+) -> Router {
+    let injected = webapp::free_resources::InjectedFreeResourcesJurisdiction(content);
+    let cfg = ServeConfig::new().context_providers(std::sync::Arc::new(vec![Box::new(move || {
+        Box::new(injected.clone()) as Box<dyn std::any::Any>
+    })
+        as Box<dyn Fn() -> Box<dyn std::any::Any> + Send + Sync>]));
+
+    Router::<FullstackState>::new()
+        .route(
+            path,
+            get(render_handler)
+                .layer(from_fn(dioxus_document_head))
+                .layer(from_fn(inject_public_utility)),
+        )
+        .with_state(FullstackState::new(
+            cfg,
+            webapp::free_resources::FreeResourcesJurisdictionEntry,
+        ))
+}
+
+/// The registry as pretty-printed JSON — the bytes
+/// [`FREE_RESOURCES_JSON_PATH`] serves, identical to what the pages render.
+///
+/// # Errors
+///
+/// The shipped registry failing its own schema, or serialization —
+/// unreachable for these types, but surfaced rather than unwrapped in the
+/// handler.
+pub fn free_resources_json_body() -> Result<Vec<u8>, String> {
+    let courts = store::courts::embedded().map_err(|error| error.to_string())?;
+    serde_json::to_vec_pretty(&courts).map_err(|error| error.to_string())
+}
+
+/// The JSON twin's router. Unbranded and one mount — the registry has no
+/// brand voice, and both firms serve the same bytes.
+pub fn free_resources_json_router() -> Router {
+    Router::new().route(
+        FREE_RESOURCES_JSON_PATH,
+        get(|| async {
+            match free_resources_json_body() {
+                Ok(body) => (
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        axum::http::HeaderValue::from_static("application/json"),
+                    )],
+                    body,
+                )
+                    .into_response(),
+                Err(error) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("the court-form registry failed to serialize: {error}"),
+                )
+                    .into_response(),
+            }
+        }),
+    )
+}
+
+/// The catalog's match-the-data guards: the index, the jurisdiction pages,
+/// and the JSON twin render exactly the registry's rows, whatever size the
+/// registry is.
+#[cfg(test)]
+mod free_resources_guards {
+    use super::*;
+
+    /// The registry, once. Every guard iterates it, so a registry that
+    /// grows or shrinks never stale-dates a test.
+    fn registry() -> Vec<store::courts::Court> {
+        store::courts::embedded()
+            .expect("invariant: the shipped court registry parses; the store's tests are the gate")
+    }
+
+    /// The catalog copy, any valid instance — the guards are about which
+    /// rows render, not how the copy words them.
+    fn copy() -> views::locales::FreeResourcesCopy {
+        views::locales::FreeResourcesCopy {
+            head_title: "Free Legal Resources".to_string(),
+            meta_description: "Free court self-help forms.".to_string(),
+            title: "Free Legal Resources".to_string(),
+            lede: "The practical facts around every form.".to_string(),
+            free_statement: "Everything on these pages is free of charge.".to_string(),
+            no_outcome: "These pages promise no outcome.".to_string(),
+            courts_heading: "Courts and forms".to_string(),
+            filing_office_label: "Filing office".to_string(),
+            fee_label: "Filing fee".to_string(),
+            fee_waiver_label: "Fee waiver".to_string(),
+            source_label: "Official source".to_string(),
+            blank_label: "Download blank".to_string(),
+            empty_court: "No forms yet.".to_string(),
+            empty_jurisdiction: "No forms yet.".to_string(),
+            footnote: "Links point to each court's official source.".to_string(),
+            json_label: "Machine-readable JSON".to_string(),
+        }
+    }
+
+    /// The JSON twin parses back to exactly the registry's courts.
+    #[test]
+    fn json_body_is_the_registry() {
+        let courts = registry();
+        let body = free_resources_json_body()
+            .expect("invariant: the registry serializes; its types derive Serialize");
+        let parsed: Vec<store::courts::Court> = serde_json::from_slice(&body)
+            .expect("the JSON twin parses back to the registry's courts");
+        assert_eq!(parsed, courts);
+    }
+
+    /// The index summarizes exactly the jurisdictions the registry covers,
+    /// with true court and form counts.
+    #[test]
+    fn index_summarizes_the_registry() {
+        let courts = registry();
+        let content = free_resources_index_content(&copy(), &courts);
+        let groups = jurisdiction_groups(&courts);
+        assert_eq!(content.jurisdictions.len(), groups.len());
+        for (summary, group) in content.jurisdictions.iter().zip(&groups) {
+            let form_count: usize = group.courts.iter().map(|court| court.forms.len()).sum();
+            assert_eq!(summary.name, group.name);
+            assert_eq!(summary.court_count, group.courts.len());
+            assert_eq!(summary.form_count, form_count);
+        }
+    }
+
+    /// Every jurisdiction page renders exactly the registry's rows: one row
+    /// per registry form, in registry order, with the fee the office
+    /// publishes, and the blank on the public assets bucket — never a
+    /// repository file.
+    #[test]
+    fn jurisdiction_pages_render_the_registry_rows() {
+        let courts = registry();
+        let copy = copy();
+        for group in jurisdiction_groups(&courts) {
+            let content = free_resources_jurisdiction_content(&copy, &group);
+            assert_eq!(content.courts.len(), group.courts.len());
+            for (page_court, registry_court) in content.courts.iter().zip(&group.courts) {
+                assert_eq!(page_court.name, registry_court.name);
+                assert_eq!(page_court.forms.len(), registry_court.forms.len());
+                for (row, form) in page_court.forms.iter().zip(&registry_court.forms) {
+                    assert_eq!(row.title, form.title);
+                    assert_eq!(row.filing_office, form.filing_office);
+                    assert_eq!(row.source_url, form.source_url);
+                    assert_eq!(
+                        row.fee,
+                        form.fee_note
+                            .clone()
+                            .or_else(|| form.filing_fee.as_ref().map(fee_display))
+                    );
+                    assert!(
+                        !row.blank_url.starts_with("/public")
+                            && !row.blank_url.contains("github.com"),
+                        "the blank points at the public assets bucket, never a repository file: {}",
+                        row.blank_url
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// The public show page for one bundled notation — the `/notations`

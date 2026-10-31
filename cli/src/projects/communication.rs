@@ -244,7 +244,9 @@ pub async fn note(
 
 #[cfg(test)]
 mod tests {
-    use super::{create_body, note_body, NewCommunication, NewNote};
+    use super::{call, create_body, finish, note_body, NewCommunication, NewNote};
+    use anyhow::anyhow;
+    use std::process::ExitCode;
 
     #[test]
     fn a_call_carries_its_structure_and_an_email_carries_what_it_confirms() {
@@ -342,5 +344,161 @@ mod tests {
         assert_eq!(email["role"], "opposing_counsel");
         assert_eq!(email["source_ref"], "gmail:synthetic/receipt");
         assert_eq!(email["acknowledges"], target.to_string());
+    }
+
+    #[test]
+    fn a_call_report_carries_its_duration_agreements_and_visibility() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = dir.path().join("notes.md");
+        std::fs::write(&body, "Discussed the meet and confer.").unwrap();
+        let call = create_body(&NewCommunication {
+            channel: "call".into(),
+            direction: "outbound".into(),
+            counterparty: "Opposing counsel".into(),
+            role: Some("opposing_counsel".into()),
+            at: "2026-10-30T15:00:00+00:00".into(),
+            duration: Some(45),
+            body_file: body,
+            recorded: "no".into(),
+            meet_and_confer: Some("VR-2026-000123".into()),
+            agreements: vec!["Extend the deadline one week".into()],
+            client_visible: true,
+            subject: Some("Meet and confer held".into()),
+            ..NewCommunication::default()
+        })
+        .unwrap();
+        assert_eq!(call["role"], "opposing_counsel");
+        assert_eq!(call["recorded"], "no");
+        assert_eq!(call["duration_minutes"], 45);
+        assert_eq!(call["meet_and_confer"], "VR-2026-000123");
+        assert_eq!(call["agreements"][0], "Extend the deadline one week");
+        assert_eq!(call["client_visible"], true);
+        assert_eq!(call["subject"], "Meet and confer held");
+        // A call never names a receipt relation.
+        assert!(call.get("confirms").is_none());
+        assert!(call.get("acknowledges").is_none());
+    }
+
+    #[test]
+    fn an_email_receipt_carries_its_confirms_relation() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = dir.path().join("email.md");
+        std::fs::write(&body, "The executed filing is attached.").unwrap();
+        let confirmed = uuid::Uuid::now_v7();
+        let email = create_body(&NewCommunication {
+            channel: "email_outbound".into(),
+            direction: "outbound".into(),
+            counterparty: "Clerk".into(),
+            at: "2026-10-30T16:00:00+00:00".into(),
+            body_file: body,
+            confirms: Some(confirmed),
+            ..NewCommunication::default()
+        })
+        .unwrap();
+        assert_eq!(email["confirms"], confirmed.to_string());
+        // A call-only field stays off an email.
+        assert!(email.get("duration_minutes").is_none());
+        assert!(email.get("client_visible").is_none());
+    }
+
+    #[test]
+    fn an_empty_or_missing_body_file_is_refused_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let blank = dir.path().join("blank.md");
+        std::fs::write(&blank, "  \n").unwrap();
+        let empty = create_body(&NewCommunication {
+            body_file: blank.clone(),
+            ..NewCommunication::default()
+        })
+        .unwrap_err();
+        assert!(empty
+            .to_string()
+            .contains(blank.display().to_string().as_str()));
+
+        let absent = create_body(&NewCommunication {
+            body_file: dir.path().join("absent.md"),
+            ..NewCommunication::default()
+        })
+        .unwrap_err();
+        assert!(absent.to_string().contains("absent.md"));
+    }
+
+    #[test]
+    fn a_note_optionally_names_its_subject() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = dir.path().join("note.md");
+        std::fs::write(&body, "Called the client back; she will review the draft.").unwrap();
+        let note = note_body(
+            &NewNote {
+                body_file: body,
+                subject: Some("Client call-back".into()),
+            },
+            "2026-10-30T16:30:00+00:00",
+        )
+        .unwrap();
+        assert_eq!(note["channel"], "note");
+        assert_eq!(note["direction"], "internal");
+        assert_eq!(note["subject"], "Client call-back");
+
+        let plain = dir.path().join("plain.md");
+        std::fs::write(&plain, "").unwrap();
+        let error = note_body(
+            &NewNote {
+                body_file: plain,
+                subject: None,
+            },
+            "2026-10-30T16:30:00+00:00",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("is empty"));
+    }
+
+    #[test]
+    fn finish_maps_the_result_to_an_exit_code() {
+        assert_eq!(
+            finish(Ok(serde_json::json!({"channel": "note"}))),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(finish(Err(anyhow!("boom"))), ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn a_failed_or_refused_call_names_its_action() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/app/api/projects/00000000-0000-0000-0000-000000000000/communications",
+            ))
+            .respond_with(ResponseTemplate::new(500).set_body_string("no such matter"))
+            .mount(&server)
+            .await;
+        let error = call(
+            reqwest::Client::new().get(format!(
+                "{}/app/api/projects/00000000-0000-0000-0000-000000000000/communications",
+                server.uri()
+            )),
+            "list",
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("communication list refused"),
+            "{error}"
+        );
+
+        // A connection failure is also named, not swallowed.
+        let unreachable = call(
+            reqwest::Client::new().get("http://127.0.0.1:1/app/api/projects/x/communications"),
+            "list",
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            unreachable.to_string().contains("list communication"),
+            "{unreachable}"
+        );
     }
 }

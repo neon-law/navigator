@@ -1178,12 +1178,20 @@ mod tests {
                 include_str!("../postgres/migrations/20261030020000_add_asset_evidence.sql"),
             ),
             (
+                "20261030030000_create_inbox_message_asset.sql",
+                include_str!("../postgres/migrations/20261030030000_create_inbox_message_asset.sql"),
+            ),
+            (
                 "20261030120000_create_project_task.sql",
                 include_str!("../postgres/migrations/20261030120000_create_project_task.sql"),
             ),
             (
                 "20261031010000_create_navigator_graph.sql",
                 include_str!("../postgres/migrations/20261031010000_create_navigator_graph.sql"),
+            ),
+            (
+                "20261031020000_create_graph_view_readers.sql",
+                include_str!("../postgres/migrations/20261031020000_create_graph_view_readers.sql"),
             ),
             (
                 "20261031120000_add_project_onboarding_jurisdiction.sql",
