@@ -486,8 +486,9 @@ impl YoutubeCommentsPollerService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
-    use store::posts::{AccountAlias, SourceCaptions, SourcePost};
+    use store::brands::NewBrand;
+    use store::firms::NewFirm;
+    use store::persons::NewPerson;
     use store::social_accounts::ConnectSocialAccount;
     use store::test_support::mem_surreal;
     use store::{persons::Role, posts, social_publications};
@@ -557,11 +558,42 @@ mod tests {
     }
 
     async fn seed_target(db: &SurrealDb) {
-        // mem_surreal pre-seeds every compiled Brand row, `neon` included;
-        // seed_firm_with_brand attaches a synthetic Firm to it the way
-        // production matter-open does.
-        let firm = store::test_support::seed_firm_with_brand(db, "neon").await;
-        let firm = store::firms::find_by_id(db, firm).await.unwrap().unwrap();
+        // The social-publisher test fixture's shape: a real Firm with its
+        // Admin DRI (whose membership `firms::create` records), a brand row
+        // owned by that Firm, and a raw post row — `seed_post` would refuse
+        // an uncompiled Brand key.
+        let admin = store::persons::create(
+            db,
+            &NewPerson::with_role("Synthetic Admin", "youtube-test@example.com", Role::Admin),
+        )
+        .await
+        .unwrap();
+        let firm = store::firms::create(
+            db,
+            &NewFirm {
+                name: "Synthetic Firm".into(),
+                status: "active".into(),
+                entity_id: store::test_support::seed_entity(db).await,
+                admin_dri_person_id: admin.id,
+            },
+        )
+        .await
+        .unwrap();
+        store::brands::create(
+            db,
+            Role::Admin,
+            Some(admin.id),
+            &NewBrand {
+                name: "Synthetic Brand".into(),
+                key: "synthetic-brand".into(),
+                firm_id: Some(firm.id),
+                primary_color: None,
+                accent_color: None,
+                typeface: None,
+            },
+        )
+        .await
+        .unwrap();
         let scopes = SocialProvider::Youtube
             .required_scopes()
             .iter()
@@ -571,8 +603,8 @@ mod tests {
             db,
             ConnectSocialAccount {
                 actor_role: Role::Admin,
-                actor_person_id: firm.admin_dri_person_id,
-                brand_key: "neon",
+                actor_person_id: admin.id,
+                brand_key: "synthetic-brand",
                 provider: SocialProvider::Youtube,
                 provider_account_id: ACCOUNT_ID,
                 display_name: None,
@@ -585,36 +617,38 @@ mod tests {
         )
         .await
         .unwrap();
-        posts::seed_post(
-            db,
-            &SourcePost {
-                brand_key: "neon",
-                slug: "youtube-comments-test",
-                title: "A published Post",
-                description: "A test Post.",
-                body_html: "<p>A test Post.</p>",
-                body_markdown: None,
-                status: "published",
-                publish_at: Utc.timestamp_opt(1_781_388_000, 0).unwrap(),
-                video_asset: None,
-                vertical_video: None,
-                tiktok_ai_generated: None,
-                captions: SourceCaptions::default(),
-                accounts: &[AccountAlias {
-                    provider: "youtube".into(),
-                    provider_account_id: ACCOUNT_ID.into(),
-                }],
-                social_links: &[],
-            },
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-        let post = posts::find_by_brand_slug(db, "neon", "youtube-comments-test")
+        let post_id = Uuid::now_v7();
+        db.query("CREATE $id SET brand_key = 'synthetic-brand', slug = $slug, title = 'Synthetic', description = '', body_html = '', status = 'scheduled', inserted_at = time::now(), updated_at = time::now()")
+            .bind(("id", store::surreal::record_id("post", post_id)))
+            .bind(("slug", "youtube-comments-test"))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let post = posts::find_by_brand_slug(db, "synthetic-brand", "youtube-comments-test")
             .await
             .unwrap()
             .unwrap();
         let post_id = post.id;
+        // The publisher records the post's intended destinations as
+        // `social_account` record keys; the poller resolves targets through
+        // that selection, so the fixture stamps the connected account on.
+        let account = store::social_accounts::connected_account(
+            db,
+            "synthetic-brand",
+            SocialProvider::Youtube,
+            ACCOUNT_ID,
+        )
+        .await
+        .unwrap()
+        .expect("connected youtube account");
+        db.query("UPDATE $id SET selected_social_accounts = $accounts")
+            .bind(("id", store::surreal::record_id("post", post_id)))
+            .bind(("accounts", vec![account.id]))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
         assert!(matches!(
             social_publications::admit(db, post_id, "youtube")
                 .await
