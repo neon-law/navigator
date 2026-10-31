@@ -1500,6 +1500,16 @@ records:
           currency: USD
         fee_note: "Brought by the person's guardian, committee, or parent as petitioner (the intake captures both names). Same dual-route fees as NC1: NYC Civil Court $65.00 or Supreme/County Court $210.00. Fee waiver: poor person relief by motion — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the NC3 surveyed_forms entry."
         fee_waiver_code: null
+      - code: ny__nc2_minor_name_change_petition
+        title: Name Change and/or Sex Designation Change Petition for an Individual Minor (under 18)
+        source_url: https://www.nycourts.gov/forms/Name-SexDesignationChange/MinorName-SexDesignationChangePetition-fillable.pdf
+        sha256: dcd747ecd7e53ab7964490644dc88c9874363d5f51f0ada4953e7e23829dd9a7
+        filing_office: Supreme Court County Clerk's Office in the county of residence
+        filing_fee:
+          amount: "210.00"
+          currency: USD
+        fee_note: "Brought by a parent or legal guardian for a child under 18; a child 14 or older signs a notarized consent, and a non-petitioning parent or guardian consents or is given notice. Same dual-route fees as NC1: NYC Civil Court $65.00 or Supreme/County Court $210.00. Fee waiver: poor person relief by motion — no official statewide form. Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the NC2 surveyed_forms entry."
+        fee_waiver_code: null
     surveyed_forms:
       - key: NC1
         title: Name Change and/or Sex Designation Change Petition for Individual Adult (18+)
