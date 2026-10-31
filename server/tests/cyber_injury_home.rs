@@ -110,16 +110,21 @@ async fn public_pages_emit_complete_open_graph_and_canonical_metadata() {
                 ),
                 r#"property="og:image:alt""#.to_string(),
                 format!(r#"rel="canonical" href="{url}""#),
-                r#"content="summary" name="twitter:card""#.to_string(),
-                format!(r#"content="{title}" name="twitter:title""#),
+                r#"name="twitter:card" content="summary""#.to_string(),
+                format!(r#"name="twitter:title" content="{title}""#),
                 r#"name="twitter:description""#.to_string(),
                 format!(
-                    r#"content="{origin}/assets/img/cyber-injury-law/canal-street-ad-f9faa356.png" name="twitter:image""#
+                    r#"name="twitter:image" content="{origin}/assets/img/cyber-injury-law/canal-street-ad-f9faa356.png""#
                 ),
             ] {
                 assert!(
                     html.contains(&tag),
-                    "{host}{path}: missing social head fragment {tag}"
+                    "{host}{path}: missing social head fragment {tag}; emitted social metas: {}",
+                    html
+                        .split("<meta")
+                        .filter(|m| m.contains("twitter") || m.contains("og:"))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
                 );
             }
         }
