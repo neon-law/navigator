@@ -1707,7 +1707,14 @@ records:
     # was extracted in the survey, but its fillability could NOT be verified
     # (Cloudflare + no Wayback binary), so it carries no entry here rather
     # than a guessed one. Probate fees vary by estate under SCPA 2402.
-    forms: []
+    forms:
+      - code: ny__probate_petition
+        title: Petition for Probate and Letters Testamentary / Trusteeship
+        source_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Probate.pdf
+        sha256: 41e297f070ae213b0e4ae5f2306936df65d9e8b9aa0693a21ca677d61210d286
+        filing_office: Surrogate's Court of the county where the decedent lived
+        fee_note: "Filing fees vary by proceeding and estate size under SCPA 2402; the UCS does not publish the table on its fee page. Fee waiver: poor person relief by motion (no official form). Registry sha256 pins the re-authored canonical blank; the official blank's pin lives in the PROBATE surveyed_forms entry."
+        fee_waiver_code: null
     surveyed_forms:
       - key: PROBATE
         title: Petition for Probate and Letters Testamentary / Trusteeship

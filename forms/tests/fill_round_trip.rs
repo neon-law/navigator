@@ -1342,7 +1342,7 @@ fn wave_two_answers(form_code: &str) -> Vec<(&'static str, String)> {
             ("person__client.name", "Jordan Avery Blake".to_string()),
             ("person__client.phone", "702-555-0100".to_string()),
         ],
-        "ny__surrogates_probate_petition" => vec![
+        "ny__probate_petition" => vec![
             ("custom_datetime__codicil_date", "2010-03-02".to_string()),
             ("custom_datetime__codicil_date_2", "2015-09-14".to_string()),
             (

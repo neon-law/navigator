@@ -1,4 +1,4 @@
-form_code = "ny__surrogates_probate_petition"
+form_code = "ny__probate_petition"
 # New York Surrogate's Court — Petition for Probate and Letters Testamentary
 # / Trusteeship. The parser reports 775 named widgets (752 text, 7 choice,
 # 16 signature) across 22 pages; the survey counted 776 in the AcroForm tree
@@ -89,47 +89,14 @@ question = "custom_text__petitioner_mailing_address"
 name = "Citizen of"
 question = "custom_text__petitioner_citizenship"
 
-[[field]]
-name = "Executor s named in decedents Will"
-question = "custom_yes_no__petitioner_is_named_executor"
-checked_when = "yes"
-on_state = "X"
-
-[[field]]
-name = "is"
-question = "custom_yes_no__executor_is_attorney"
-checked_when = "yes"
-on_state = "X"
-
-[[field]]
-name = "is not an attorney"
-question = "custom_yes_no__executor_is_attorney"
-checked_when = "no"
-on_state = "X"
-
-[[field]]
-name = "is_2"
-question = "custom_yes_no__executor_is_draftsperson"
-checked_when = "yes"
-on_state = "X"
-
-[[field]]
-name = "is not the attorneydraftsperson a thenaffiliated attorney"
-question = "custom_yes_no__executor_is_draftsperson"
-checked_when = "no"
-on_state = "X"
-
-[[field]]
-name = "is_25667"
-question = "custom_yes_no__executor_is_convicted_felon"
-checked_when = "yes"
-on_state = "X"
-
-[[field]]
-name = "is_25667 sdffsdfs"
-question = "custom_yes_no__executor_is_convicted_felon"
-checked_when = "no"
-on_state = "X"
+# The petitioner/executor eligibility sentences (named in the Will; is / is
+# not an attorney; is / is not the attorney-draftsperson; has / has not
+# been convicted) are PAIRS of small TEXT boxes, one per option, where the
+# filer writes X. Per-answer targeting of a text-box pair exceeds the
+# transform (the checkbox-merge needs /Btn widgets and `value_map` cannot
+# become a /T name), so every box in these four pairs is deliberately
+# UNMAPPED for lawyer review — the client's yes/no answers reach the
+# lawyer through intake and the lawyer marks the form.
 
 [[field]]
 name = "a Name"
@@ -247,23 +214,13 @@ question = "custom_text__other_testamentary_assets"
 name = "1_13"
 question = "custom_text__other_petition_details"
 
+# The three letter-type boxes are TEXT widgets, not checkboxes (the filer
+# writes the choice beside the printed option), so the checkbox-merge path
+# is unavailable; the petition box carries the chosen letters type and the
+# trusteeship / administration c.t.a. boxes stay for lawyer review.
 [[field]]
 name = "requested"
 question = "custom_single_choice__letters_requested"
-checked_when = "testamentary"
-on_state = "X"
-
-[[field]]
-name = "undefined_7"
-question = "custom_single_choice__letters_requested"
-checked_when = "trusteeship"
-on_state = "X"
-
-[[field]]
-name = "undefined_8"
-question = "custom_single_choice__letters_requested"
-checked_when = "administration_cta"
-on_state = "X"
 
 [[field]]
 name = "Letters Testamentary to 1"

@@ -568,13 +568,13 @@ const BUNDLED: &[FormMeta] = &[
         fee_waiver_code: None,
     },
     FormMeta {
-        code: "ny__surrogates_probate_petition",
+        code: "ny__probate_petition",
         jurisdiction: "NY",
         title: "Petition for Probate and Letters Testamentary / Trusteeship",
         origin_url: "https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Probate.pdf",
-        object_path: "forms/united_states/new_york/new_york_surrogates_court/ny__surrogates_probate_petition.pdf",
+        object_path: "forms/united_states/new_york/new_york_surrogates_court/ny__probate_petition.pdf",
         sha256_pin: include_str!(
-            "../../templates/notations/forms/united_states/new_york/new_york_surrogates_court/ny__surrogates_probate_petition.sha256"
+            "../../templates/notations/forms/united_states/new_york/new_york_surrogates_court/ny__probate_petition.sha256"
         ),
         // Filing fees vary by proceeding and estate size under SCPA 2402 and
         // the UCS publishes no flat table; the registry fee_note carries the

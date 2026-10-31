@@ -1,0 +1,775 @@
+custom_datetime__codicil_date
+custom_datetime__codicil_date_2
+custom_datetime__decedent_date_of_death
+custom_datetime__petition_date
+custom_datetime__will_date
+custom_single_choice__distributee_class_aunts_uncles
+custom_single_choice__distributee_class_children
+custom_single_choice__distributee_class_cousins_once_removed
+custom_single_choice__distributee_class_grandparents
+custom_single_choice__distributee_class_parents
+custom_single_choice__distributee_class_siblings
+custom_single_choice__distributee_class_spouse
+custom_single_choice__letters_requested
+custom_text__codicil_witnesses
+custom_text__codicil_witnesses_2
+custom_text__decedent_aka
+custom_text__decedent_citizenship
+custom_text__decedent_county
+custom_text__decedent_place_of_death
+custom_text__filing_county
+custom_text__letters_to_name
+custom_text__no_later_instruments
+custom_text__other_petition_details
+custom_text__other_testamentary_assets
+custom_text__petitioner_citizenship
+custom_text__petitioner_mailing_address
+custom_text__will_witnesses
+custom_usd__gross_rents_18_months
+custom_usd__improved_real_property_less_than
+custom_usd__improved_real_property_value
+custom_usd__unimproved_real_property_less_than
+custom_usd__unimproved_real_property_value
+person__client.city
+person__client.name
+person__client.state
+person__client.street
+person__client.zip
+person__decedent.city
+person__decedent.name
+person__decedent.state
+person__decedent.street
+unmapped__1
+unmapped__18 months rent if applicable 1
+unmapped__18 months rent if applicable 2
+unmapped__18 months rent if applicable 3
+unmapped__1_10
+unmapped__1_11
+unmapped__1_12
+unmapped__1_14
+unmapped__1_2
+unmapped__1_3
+unmapped__1_4
+unmapped__1_5
+unmapped__1_6
+unmapped__1_7
+unmapped__1_8
+unmapped__1_9
+unmapped__2
+unmapped__20
+unmapped__20_10
+unmapped__20_11
+unmapped__20_12
+unmapped__20_13
+unmapped__20_14
+unmapped__20_15
+unmapped__20_16
+unmapped__20_17
+unmapped__20_18
+unmapped__20_19
+unmapped__20_2
+unmapped__20_20
+unmapped__20_21
+unmapped__20_22
+unmapped__20_23
+unmapped__20_24
+unmapped__20_25
+unmapped__20_26
+unmapped__20_27
+unmapped__20_28
+unmapped__20_3
+unmapped__20_4
+unmapped__20_5
+unmapped__20_6
+unmapped__20_7
+unmapped__20_8
+unmapped__20_9
+unmapped__2_10
+unmapped__2_11
+unmapped__2_12
+unmapped__2_13
+unmapped__2_14
+unmapped__2_15
+unmapped__2_2
+unmapped__2_3
+unmapped__2_4
+unmapped__2_5
+unmapped__2_6
+unmapped__2_7
+unmapped__2_8
+unmapped__2_9
+unmapped__3
+unmapped__3_10
+unmapped__3_2
+unmapped__3_3
+unmapped__3_4
+unmapped__3_5
+unmapped__3_6
+unmapped__3_7
+unmapped__3_8
+unmapped__4
+unmapped__4_2
+unmapped__4_3
+unmapped__4_4
+unmapped__4_5
+unmapped__4_6
+unmapped__4_7
+unmapped__4_8
+unmapped__4_9
+unmapped__5
+unmapped__5_2
+unmapped__5_3
+unmapped__5_4
+unmapped__5_5
+unmapped__5_6
+unmapped__5_7
+unmapped__5_8
+unmapped__6
+unmapped__6_2
+unmapped__6_3
+unmapped__6_4
+unmapped__6_5
+unmapped__6_6
+unmapped__6_7
+unmapped__6_8
+unmapped__7
+unmapped__7_2
+unmapped__7_3
+unmapped__7_4
+unmapped__7_5
+unmapped__7_6
+unmapped__8
+unmapped__8_2
+unmapped__8_3
+unmapped__A petition having been duly filed by
+unmapped__ADDRESS
+unmapped__ADDRESS_2
+unmapped__ADDRESS_3
+unmapped__ADMINISTRATOR cta
+unmapped__AMOUNT
+unmapped__AMOUNT_2
+unmapped__AMOUNT_3
+unmapped__Address of Attorney
+unmapped__Address of Attorney_10
+unmapped__Address of Attorney_11
+unmapped__Address of Attorney_12
+unmapped__Address of Attorney_13
+unmapped__Address of Attorney_2
+unmapped__Address of Attorney_3
+unmapped__Address of Attorney_4
+unmapped__Address of Attorney_5
+unmapped__Address of Attorney_6
+unmapped__Address of Attorney_7
+unmapped__Address of Attorney_8
+unmapped__Address of Attorney_9
+unmapped__Administrator cta
+unmapped__Applicant
+unmapped__Applicant_2
+unmapped__Attorney for Petitioner
+unmapped__BY
+unmapped__BY_2
+unmapped__Bond Fee
+unmapped__COUNTY OF
+unmapped__COUNTY OF 1
+unmapped__COUNTY OF 1_2
+unmapped__COUNTY OF 2
+unmapped__COUNTY OF 2_2
+unmapped__COUNTY OF_10
+unmapped__COUNTY OF_11
+unmapped__COUNTY OF_12
+unmapped__COUNTY OF_13
+unmapped__COUNTY OF_14
+unmapped__COUNTY OF_15
+unmapped__COUNTY OF_16
+unmapped__COUNTY OF_17
+unmapped__COUNTY OF_18
+unmapped__COUNTY OF_19
+unmapped__COUNTY OF_2
+unmapped__COUNTY OF_20
+unmapped__COUNTY OF_21
+unmapped__COUNTY OF_22
+unmapped__COUNTY OF_23
+unmapped__COUNTY OF_24
+unmapped__COUNTY OF_25
+unmapped__COUNTY OF_3
+unmapped__COUNTY OF_4
+unmapped__COUNTY OF_5
+unmapped__COUNTY OF_6
+unmapped__COUNTY OF_7
+unmapped__COUNTY OF_8
+unmapped__COUNTY OF_9
+unmapped__Certs
+unmapped__Certs_2
+unmapped__Chief Clerk
+unmapped__Commission Expires
+unmapped__Commission Expires_10
+unmapped__Commission Expires_11
+unmapped__Commission Expires_12
+unmapped__Commission Expires_13
+unmapped__Commission Expires_14
+unmapped__Commission Expires_2
+unmapped__Commission Expires_3
+unmapped__Commission Expires_4
+unmapped__Commission Expires_5
+unmapped__Commission Expires_6
+unmapped__Commission Expires_7
+unmapped__Commission Expires_8
+unmapped__Commission Expires_9
+unmapped__Consents that Letters of Administration cta be granted by the Court to
+unmapped__County of
+unmapped__Date
+unmapped__Dated Attested and Sealed
+unmapped__Dated_2
+unmapped__Dated_3
+unmapped__Dated_4
+unmapped__Dated_5
+unmapped__Deceased
+unmapped__Deceased_2
+unmapped__Deceased_3
+unmapped__Deceased_4
+unmapped__Deceased_5
+unmapped__Deceased_6
+unmapped__Deceased_7
+unmapped__Deceased_8
+unmapped__Deceased_9
+unmapped__EXECUTOR
+unmapped__Email
+unmapped__Email_2
+unmapped__Email_3
+unmapped__Email_4
+unmapped__Email_5
+unmapped__Email_6
+unmapped__Email_7
+unmapped__Enter NONE or specify name and interest
+unmapped__Executor
+unmapped__Executor s named in decedents Will
+unmapped__Explain in detail and add additional affidavit if necessary 1
+unmapped__Explain in detail and add additional affidavit if necessary 2
+unmapped__Explain in detail and add additional affidavit if necessary 3
+unmapped__Explain in detail and add additional affidavit if necessary 4
+unmapped__Explain in detail and add additional affidavit if necessary 5
+unmapped__File
+unmapped__File No
+unmapped__File No_2
+unmapped__File No_3
+unmapped__File No_4
+unmapped__File No_5
+unmapped__File No_6
+unmapped__File No_7
+unmapped__File No_8
+unmapped__File No_9
+unmapped__File_2
+unmapped__File_3
+unmapped__File_4
+unmapped__File_5
+unmapped__Firm Name
+unmapped__Firm Name_2
+unmapped__Firm Name_3
+unmapped__Firm Name_4
+unmapped__Firm Name_5
+unmapped__Firm Name_6
+unmapped__Firm Name_7
+unmapped__Hon
+unmapped__I
+unmapped__I am making this affidavit at the request of 1
+unmapped__I am making this affidavit at the request of 2
+unmapped__I have been shown check one
+unmapped__I the undersigned
+unmapped__I the undersigned a
+unmapped__I the undersigned a_2
+unmapped__IWe
+unmapped__If none write NONE
+unmapped__Interest or Nature of Fiduciary Status 1
+unmapped__Interest or Nature of Fiduciary Status 1_2
+unmapped__Interest or Nature of Fiduciary Status 1_3
+unmapped__Interest or Nature of Fiduciary Status 1_4
+unmapped__Interest or Nature of Fiduciary Status 2
+unmapped__Interest or Nature of Fiduciary Status 2_2
+unmapped__Interest or Nature of Fiduciary Status 2_3
+unmapped__Interest or Nature of Fiduciary Status 2_4
+unmapped__Interest or Nature of Fiduciary Status 3
+unmapped__Interest or Nature of Fiduciary Status 3_2
+unmapped__Interest or Nature of Fiduciary Status 3_3
+unmapped__Interest or Nature of Fiduciary Status 3_4
+unmapped__Interest or Nature of Fiduciary Status 4
+unmapped__Interest or Nature of Fiduciary Status 4_2
+unmapped__Interest or Nature of Fiduciary Status 4_3
+unmapped__Interest or Nature of Fiduciary Status 4_4
+unmapped__Interest or Nature of Fiduciary Status 5
+unmapped__Interest or Nature of Fiduciary Status 5_2
+unmapped__Interest or Nature of Fiduciary Status 5_3
+unmapped__Interest or Nature of Fiduciary Status 5_4
+unmapped__Interest or Nature of Fiduciary Status 6
+unmapped__Interest or Nature of Fiduciary Status 6_2
+unmapped__Interest or Nature of Fiduciary Status 6_3
+unmapped__Interest or Nature of Fiduciary Status 6_4
+unmapped__Interest or Nature of Fiduciary Status 7
+unmapped__Interest or Nature of Fiduciary Status 7_2
+unmapped__Interest or Nature of Fiduciary Status 7_3
+unmapped__Interest or Nature of Fiduciary Status 8
+unmapped__Interest or Nature of Fiduciary Status 8_2
+unmapped__Interest or Nature of Fiduciary Status 8_3
+unmapped__Letters Testamentary
+unmapped__Letters Testamentary issue to
+unmapped__Letters Testamentary issue to 1
+unmapped__Letters Testamentary issue to 2
+unmapped__Letters Testamentary issue to 3
+unmapped__Letters Testamentary issue to 4
+unmapped__Letters Testamentary to 2
+unmapped__Letters of Administration cta
+unmapped__Letters of Administration cta issue to
+unmapped__Letters of Administration cta to
+unmapped__Letters of Trusteeship
+unmapped__Letters of Trusteeship issue to
+unmapped__Letters of Trusteeship issue to_2
+unmapped__Letters of Trusteeship to 1
+unmapped__Letters of Trusteeship to 2
+unmapped__Letters of Trusteeship to 3
+unmapped__MAILING ADDRESS 1
+unmapped__MAILING ADDRESS 2
+unmapped__MAILING ADDRESS 3
+unmapped__MAILING ADDRESS 4
+unmapped__MAILING ADDRESS 5
+unmapped__MAILING ADDRESS 6
+unmapped__MAILING ADDRESS 7
+unmapped__MAILING ADDRESS 8
+unmapped__My address is
+unmapped__My domicile is
+unmapped__My domicile is_2
+unmapped__NAME
+unmapped__NAME 1
+unmapped__NAME 2
+unmapped__NAME 3
+unmapped__NAME 4
+unmapped__NAME 5
+unmapped__NAME 6
+unmapped__NAME 7
+unmapped__NAME 8
+unmapped__NAME_2
+unmapped__NAME_3
+unmapped__NATURE OF CLAIM
+unmapped__NATURE OF CLAIM_2
+unmapped__NATURE OF CLAIM_3
+unmapped__NATURE OF INTEREST OR STATUS 1
+unmapped__NATURE OF INTEREST OR STATUS 2
+unmapped__NATURE OF INTEREST OR STATUS 3
+unmapped__NATURE OF INTEREST OR STATUS 4
+unmapped__NATURE OF INTEREST OR STATUS 5
+unmapped__NATURE OF INTEREST OR STATUS 6
+unmapped__NATURE OF INTEREST OR STATUS 7
+unmapped__NATURE OF INTEREST OR STATUS 8
+unmapped__NOTE In the case of each infant state a name birth date relationship to decedent domicile and residence address
+unmapped__Name of Attorney
+unmapped__Name of Attorney_2
+unmapped__Name of Attorney_3
+unmapped__Name of Attorney_4
+unmapped__Name of Attorney_5
+unmapped__Name of Attorney_6
+unmapped__Name of Bank or Trust Company
+unmapped__Name of Bank or Trust Company_2
+unmapped__Name of Bank or Trust Company_3
+unmapped__Name of Bank or Trust Company_4
+unmapped__Name of Corportation
+unmapped__Name of Officer
+unmapped__New York has beenwill be offered for probate in the Surrogates Court for
+unmapped__New York on
+unmapped__No
+unmapped__Notary Public
+unmapped__Notary Public_10
+unmapped__Notary Public_11
+unmapped__Notary Public_12
+unmapped__Notary Public_13
+unmapped__Notary Public_14
+unmapped__Notary Public_2
+unmapped__Notary Public_3
+unmapped__Notary Public_4
+unmapped__Notary Public_5
+unmapped__Notary Public_6
+unmapped__Notary Public_7
+unmapped__Notary Public_8
+unmapped__Notary Public_9
+unmapped__OATH OF
+unmapped__ORDERED that the testimony of
+unmapped__On
+unmapped__On 1
+unmapped__On 2
+unmapped__On_2
+unmapped__On_3
+unmapped__On_4
+unmapped__On_5
+unmapped__On_6
+unmapped__Other Specify
+unmapped__PROBATE CITATION
+unmapped__PROBATE PROCEEDING
+unmapped__PROBATE PROCEEDING 1
+unmapped__PROBATE PROCEEDING 2
+unmapped__PROBATE PROCEEDING_10
+unmapped__PROBATE PROCEEDING_11
+unmapped__PROBATE PROCEEDING_12
+unmapped__PROBATE PROCEEDING_2
+unmapped__PROBATE PROCEEDING_3
+unmapped__PROBATE PROCEEDING_4
+unmapped__PROBATE PROCEEDING_5
+unmapped__PROBATE PROCEEDING_6
+unmapped__PROBATE PROCEEDING_7
+unmapped__PROBATE PROCEEDING_8
+unmapped__PROBATE PROCEEDING_9
+unmapped__Personal Property 1
+unmapped__Personal Property 2
+unmapped__Personal Property 3
+unmapped__Preliminary letters are requested for the following reasons 1
+unmapped__Preliminary letters are requested for the following reasons 2
+unmapped__Preliminary letters are requested for the following reasons 3
+unmapped__Print Name
+unmapped__Print Name and Title
+unmapped__Print Name and Title of Officer
+unmapped__Print Name_10
+unmapped__Print Name_11
+unmapped__Print Name_12
+unmapped__Print Name_13
+unmapped__Print Name_14
+unmapped__Print Name_15
+unmapped__Print Name_16
+unmapped__Print Name_17
+unmapped__Print Name_18
+unmapped__Print Name_19
+unmapped__Print Name_2
+unmapped__Print Name_3
+unmapped__Print Name_4
+unmapped__Print Name_5
+unmapped__Print Name_6
+unmapped__Print Name_7
+unmapped__Print Name_8
+unmapped__Print Name_9
+unmapped__Real Property 1
+unmapped__Real Property 2
+unmapped__Real Property 3
+unmapped__Receipt No
+unmapped__Relationship
+unmapped__Relationship_2
+unmapped__STATE OF NEW YORK
+unmapped__STATE OF NEW YORK_10
+unmapped__STATE OF NEW YORK_11
+unmapped__STATE OF NEW YORK_12
+unmapped__STATE OF NEW YORK_13
+unmapped__STATE OF NEW YORK_14
+unmapped__STATE OF NEW YORK_2
+unmapped__STATE OF NEW YORK_3
+unmapped__STATE OF NEW YORK_4
+unmapped__STATE OF NEW YORK_5
+unmapped__STATE OF NEW YORK_6
+unmapped__STATE OF NEW YORK_7
+unmapped__STATE OF NEW YORK_8
+unmapped__STATE OF NEW YORK_9
+unmapped__SURROGATES COURT
+unmapped__SURROGATES COURT OF THE STATE OF NEW YORK
+unmapped__SURROGATES COURT OF THE STATE OF NEW YORK_2
+unmapped__Signature
+unmapped__Signature of Attorney
+unmapped__Signature of Attorney_2
+unmapped__Signature of Attorney_3
+unmapped__Signature of Attorney_4
+unmapped__Signature of Attorney_5
+unmapped__Signature of Attorney_6
+unmapped__Signature of Attorney_7
+unmapped__Signature of Officer
+unmapped__Signature of Petitioner
+unmapped__Signature_2
+unmapped__Signature_3
+unmapped__Signature_4
+unmapped__Signature_5
+unmapped__Signature_6
+unmapped__State any further relief requested 1
+unmapped__State any further relief requested 2
+unmapped__State any further relief requested 3
+unmapped__State any further relief requested 4
+unmapped__State of
+unmapped__State of New York a copy of the foregoing Notice of Probate contained in a securely closed postpaid
+unmapped__Street Address
+unmapped__Street Address_2
+unmapped__Street Address_3
+unmapped__Street Address_4
+unmapped__Surrogate
+unmapped__Surrogates Court of
+unmapped__Surrogates Court of_2
+unmapped__Surrogates Court of_3
+unmapped__Surrogates Court of_4
+unmapped__Surrogates Court of_5
+unmapped__Sworn before me this
+unmapped__Sworn to before me this
+unmapped__Sworn to before me this 1
+unmapped__Sworn to before me this 2
+unmapped__Sworn to before me this_2
+unmapped__Sworn to before me this_3
+unmapped__Sworn to before me this_4
+unmapped__Sworn to before me this_5
+unmapped__TO 1
+unmapped__TO 2
+unmapped__TO 3
+unmapped__Tel No
+unmapped__Tel No_10
+unmapped__Tel No_11
+unmapped__Tel No_12
+unmapped__Tel No_2
+unmapped__Tel No_3
+unmapped__Tel No_4
+unmapped__Tel No_5
+unmapped__Tel No_6
+unmapped__Tel No_7
+unmapped__Tel No_8
+unmapped__Tel No_9
+unmapped__Telephone Number
+unmapped__Telephone Number_2
+unmapped__Temporary Administration
+unmapped__The Will dated
+unmapped__The liabilities of this estate are 1
+unmapped__The liabilities of this estate are 2
+unmapped__The liabilities of this estate are 3
+unmapped__The proposed preliminary executor s isare
+unmapped__The testimony of
+unmapped__The undersigned
+unmapped__To the Surrogates Court County of_2
+unmapped__Total of 18 months rent
+unmapped__TownStateZip
+unmapped__TownStateZip_2
+unmapped__TownStateZip_3
+unmapped__Trustee under
+unmapped__USE ADDITIONAL SHEETS IF NECESSARY
+unmapped__WILL OF 1
+unmapped__WILL OF 1_10
+unmapped__WILL OF 1_2
+unmapped__WILL OF 1_3
+unmapped__WILL OF 1_4
+unmapped__WILL OF 1_5
+unmapped__WILL OF 1_6
+unmapped__WILL OF 1_7
+unmapped__WILL OF 1_8
+unmapped__WILL OF 1_9
+unmapped__WILL OF 2
+unmapped__WILL OF 2_10
+unmapped__WILL OF 2_2
+unmapped__WILL OF 2_3
+unmapped__WILL OF 2_4
+unmapped__WILL OF 2_5
+unmapped__WILL OF 2_6
+unmapped__WILL OF 2_7
+unmapped__WILL OF 2_8
+unmapped__WILL OF 2_9
+unmapped__WILL OF_2
+unmapped__WILL OF_3
+unmapped__X
+unmapped__X_10
+unmapped__X_11
+unmapped__X_12
+unmapped__X_13
+unmapped__X_14
+unmapped__X_15
+unmapped__X_16
+unmapped__X_17
+unmapped__X_18
+unmapped__X_19
+unmapped__X_2
+unmapped__X_20
+unmapped__X_21
+unmapped__X_22
+unmapped__X_3
+unmapped__X_4
+unmapped__X_5
+unmapped__X_6
+unmapped__X_7
+unmapped__X_8
+unmapped__X_9
+unmapped__YOU ARE HEREBY CITED TO SHOW CAUSE before the Surrogates Court
+unmapped__Your applicant s respectfully request the issuance to
+unmapped__a Codicil dated
+unmapped__a Codicil dated_2
+unmapped__a copy of which has been received by the undersigned be forthwith admitted to probate I hereby consent
+unmapped__a copy of which is attached as the Will of
+unmapped__a courtcertified photographic reproduction of the original instrument dated
+unmapped__absence
+unmapped__acknowledged the execution thereof CORPORATION
+unmapped__admitting to probate a Will dated
+unmapped__aka 1
+unmapped__aka 1_2
+unmapped__aka 1_3
+unmapped__aka 1_4
+unmapped__aka 2
+unmapped__aka 2_2
+unmapped__aka 2_3
+unmapped__aka 2_4
+unmapped__aka 3
+unmapped__aka_10
+unmapped__aka_2
+unmapped__aka_3
+unmapped__aka_4
+unmapped__aka_5
+unmapped__aka_6
+unmapped__aka_7
+unmapped__aka_8
+unmapped__aka_9
+unmapped__an attesting witness to the testators WillCodicil
+unmapped__and Codicil dated
+unmapped__and Codicil dated dated
+unmapped__and Codicil dated_2
+unmapped__and Codicil dated_3
+unmapped__and I saw the other witness es
+unmapped__and codicils if any dated
+unmapped__and isare designated as executor s in the Will
+unmapped__and that heshe is a
+unmapped__and that heshe is a_2
+unmapped__and the original Codicil dated the
+unmapped__approximate age
+unmapped__approximate age_2
+unmapped__approximate age_3
+unmapped__at
+unmapped__at 1
+unmapped__at 1_2
+unmapped__at 2
+unmapped__at 2_2
+unmapped__at_2
+unmapped__b  All such legatees devisees and other beneficiaries who are persons under disability are as follows
+unmapped__b All persons so interested who are persons under disability are as follows
+unmapped__b No other testamentary assets exist in New York State nor does any cause of action exist on behalf of
+unmapped__before me personally appeared
+unmapped__before me personally appeared_2
+unmapped__before me personally came
+unmapped__before me personally came_2
+unmapped__before me personally came_3
+unmapped__being duly sworn deposes and says
+unmapped__being duly sworn deposes and says_2
+unmapped__being duly sworn deposes and says_3
+unmapped__being duly sworn says that heshe is over the age of 18 years that on the
+unmapped__color of hair
+unmapped__color of hair_2
+unmapped__color of hair_3
+unmapped__color of skin
+unmapped__color of skin_2
+unmapped__color of skin_3
+unmapped__dated
+unmapped__dated_2
+unmapped__day of
+unmapped__day of_2
+unmapped__day of_3
+unmapped__day of_4
+unmapped__day of_5
+unmapped__day of_6
+unmapped__day of_7
+unmapped__day of_8
+unmapped__day of_9
+unmapped__death
+unmapped__deceased relating to real and personal property and directing that
+unmapped__description sex
+unmapped__description sex_2
+unmapped__description sex_3
+unmapped__disability
+unmapped__domiciled at
+unmapped__domiciled at or in the case of a bank or trust company its principal office
+unmapped__estate of
+unmapped__fbo
+unmapped__fbo_2
+unmapped__fbo_3
+unmapped__follows Enter NONE or specify 2
+unmapped__follows Enter NONE or specify 4
+unmapped__government of the United States in the
+unmapped__height
+unmapped__height_2
+unmapped__height_3
+unmapped__herein dated
+unmapped__herein to which this affidavit is annexed with the original Will dated the
+unmapped__in the County of
+unmapped__inability to locate
+unmapped__instrument and that heshe signed hisher name thereto by order of the Board of Directors of the corporation
+unmapped__instrument and who did say that heshe resides at
+unmapped__instrument and who did say that heshe resides at_2
+unmapped__is
+unmapped__is not an attorney
+unmapped__is not expected
+unmapped__is not the attorneydraftsperson a thenaffiliated attorney
+unmapped__is_2
+unmapped__is_25667
+unmapped__is_25667 sdffsdfs
+unmapped__is_3
+unmapped__known who duly swore to the foregoing instrument and who did say that heshe resides at
+unmapped__late of
+unmapped__lately domiciled at
+unmapped__m on the day of
+unmapped__m on the day of_2
+unmapped__m on the day of_3
+unmapped__months will not exceed the sum of
+unmapped__nominated as an executor andor trustee in the Will Codicil of
+unmapped__oclock
+unmapped__oclock in the
+unmapped__oclock_2
+unmapped__oclock_3
+unmapped__of
+unmapped__of Administration cta
+unmapped__of Trusteeship issue to
+unmapped__of preliminary letters testamentary upon qualifying
+unmapped__of the above named decedent dated
+unmapped__of the following trusts 1
+unmapped__of the following trusts 2
+unmapped__of the following trusts 3
+unmapped__of the following trusts 4
+unmapped__of_2
+unmapped__of_3
+unmapped__of_4
+unmapped__parent or guardian
+unmapped__personally a true copy of said citation and WillCodicil as follows
+unmapped__purporting to be the last Will and TestamentCodicil of the abovenamed decedent
+unmapped__residing at
+unmapped__ss
+unmapped__testamentary instrument had been received by me and that
+unmapped__that heshe resides at
+unmapped__that the court admit to probate the decedents Last Will and Testament dated
+unmapped__the nature of the confidential relationship 1
+unmapped__the nature of the confidential relationship 2
+unmapped__the original instrument dated
+unmapped__the testator
+unmapped__the testators Last Will and Testament  dated
+unmapped__to me
+unmapped__to me known and known to me to be the person described in and who executed the foregoing renunciation and duly
+unmapped__to me known and known to me to be the person described in and who executed the foregoing waiver and consent and
+unmapped__to me known and known to me to be the person described in and who executed the foregoing waiver and consent and_2
+unmapped__to me known to be the person described in and
+unmapped__to me known who duly swore to the foregoing
+unmapped__to me known who duly swore to the foregoing_2
+unmapped__undefined
+unmapped__undefined_10
+unmapped__undefined_11
+unmapped__undefined_12
+unmapped__undefined_13
+unmapped__undefined_14
+unmapped__undefined_15
+unmapped__undefined_16
+unmapped__undefined_17
+unmapped__undefined_18
+unmapped__undefined_19
+unmapped__undefined_2
+unmapped__undefined_20
+unmapped__undefined_21
+unmapped__undefined_22
+unmapped__undefined_23
+unmapped__undefined_24
+unmapped__undefined_25
+unmapped__undefined_26
+unmapped__undefined_27
+unmapped__undefined_28
+unmapped__undefined_29
+unmapped__undefined_3
+unmapped__undefined_30
+unmapped__undefined_31
+unmapped__undefined_32
+unmapped__undefined_33
+unmapped__undefined_34
+unmapped__undefined_35
+unmapped__undefined_4
+unmapped__undefined_5
+unmapped__undefined_7
+unmapped__undefined_8
+unmapped__undefined_9
+unmapped__weight
+unmapped__weight_2
+unmapped__weight_3
+unmapped__whose addresses isare 1
+unmapped__whose addresses isare 2
+unmapped__without the necessity of furnishing a bond If a bond is furnished I hereby waive and release all right to make any claim on

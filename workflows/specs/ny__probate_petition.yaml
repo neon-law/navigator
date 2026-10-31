@@ -1,12 +1,3 @@
----
-kind: filing
-title: Petition for Probate and Letters Testamentary (New York)
-respondent_type: person
-jurisdiction: NY
-origin_url: https://www.nycourts.gov/LegacyPDFS/FORMS/surrogates/pdfs/Probate.pdf
-confidential: true
-output: form
-form: ny__surrogates_probate_petition
 questionnaire:
   BEGIN:
     _: person__client
@@ -277,76 +268,10 @@ workflow:
   intake_persisted__client:
     petition_rendered: lawyer_review
   lawyer_review:
-    approved: generate_pdf__ny__surrogates_probate_petition_pdf
+    approved: generate_pdf__ny__probate_petition_pdf
     rejected: END
-  generate_pdf__ny__surrogates_probate_petition_pdf:
+  generate_pdf__ny__probate_petition_pdf:
     pdf_persisted: filing__new_york_surrogates_court
   filing__new_york_surrogates_court:
     filed: END
   END: {}
----
-
-# Petition for Probate and Letters Testamentary (Surrogate's Court, New York)
-
-This workflow fills the New York Surrogate's Court's Petition for Probate and
-Letters Testamentary / Trusteeship — the 22-page flagship self-help packet the
-Surrogate's Court forms page publishes as a fillable PDF (776 AcroForm fields).
-It asks the Surrogate's Court of the county where the decedent lived to admit
-the will to probate and issue letters to the executor. Filing fees vary by
-proceeding and estate size under SCPA 2402 (the registry's fee_note; no flat
-fee is encoded). The workflow runs every filing through lawyer review before
-the PDF is generated and filed.
-
-## Who this petition serves
-
-An executor named in a will (or another interested petitioner) asks the court
-to probate the will. The petition identifies the petitioner and their interest
-(paragraph 1), the decedent and the will (paragraphs 2 and 3), the distributees
-the EPTL 4-1.1 classes classify (paragraph 5), the New York assets (paragraph
-9), and the letters requested (the prayer). The original will, a certified
-death certificate, and the petition are filed together.
-
-## What the intake asks
-
-The questionnaire gathers, in grouped sections that follow the petition's own
-paragraphs: the petitioner's identity, mailing address, citizenship, and
-interest; the three proposed-executor disclosures (attorney, attorney-
-draftsperson, convicted felon — each an is / is-not pair the form prints);
-the decedent's identity, domicile, death, and citizenship; the filing county
-(the caption and the verification designation repeat it); the will's date and
-witnesses with up to two codicils; the paragraph 4 "no later instruments"
-sworn line; the seven paragraph 5 distributee-class counts (the form's own
-dropdown vocabulary — counts, "No", or the later-class "X" mark); the
-paragraph 9 asset estimates; the paragraph 10 exceptions line; and the
-prayer's letters request, nominee, and date.
-
-This intake deliberately exceeds the usual five-to-eight question range: the
-probate packet is the survey's flagship exception, and the brief for it
-directs grouped intake sections with the minimization target not applying.
-Thirty-plus states cover the whole client-answerable petition core, organized
-by the packet's own paragraph numbers.
-
-## What the lawyer or clerk completes at review
-
-The transform records, but does not answer, the fields that need a human:
-
-- the clerk's stamp block (fees paid, certificates, bond fee, receipt and file
-  numbers) — the court's own entries;
-- the caption continuations (the second probate-proceeding line and the extra
-  "a/k/a" lines) — skip-when-empty duplicates the lawyer trims at review;
-- the paragraph 6 distributee tables and the paragraph 7 beneficiary tables,
-  including the persons-under-disability rows — who must receive notice is
-  the legally sensitive core of a probate petition, and the row cells cannot
-  carry the structured people-row parts (one combined address cell, a custom
-  interest column), so the tables are completed from the lawyer's distributee
-  workpaper at review;
-- the paragraph 8 confidential-relationship disclosure — a lawyer
-  determination under SCPA 2307-a;
-- the prayer's secondary lines (the second letters-testamentary nominee, the
-  trusteeship and administration c.t.a. nominee lines with their f/b/o
-  beneficiaries) — the letters actually requested are the lawyer's call once
-  the distributee work is done;
-- the verification, oath, and designation page and the attorney block — sworn
-  before the notary and signed at review, with the notary completing the
-  dates; and
-- the signatures throughout — wet-signed at the review appointment.
