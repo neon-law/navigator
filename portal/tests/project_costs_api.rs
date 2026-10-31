@@ -451,7 +451,8 @@ fn payload() -> Value {
         "currency": "USD",
         "amount_status": "estimated",
         "receipt_document_id": Uuid::new_v4(),
-        "idempotency_key": "synthetic-api-cost"
+        "idempotency_key": "synthetic-api-cost",
+        "source_reference": format!("mercury::{}", Uuid::new_v4())
     })
 }
 
