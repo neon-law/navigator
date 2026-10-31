@@ -242,17 +242,27 @@ DECLARE
     frontier jsonb := anchors::jsonb;
     round_edges jsonb;
     all_edges jsonb := '[]'::jsonb;
+    visited jsonb := anchors::jsonb;
 BEGIN
     FOR hop IN 1..3 LOOP
         EXIT WHEN jsonb_array_length(frontier) = 0;
-        SELECT coalesce(jsonb_agg(edge_obj), '[]'::jsonb)
+        SELECT coalesce(jsonb_agg(DISTINCT edge), '[]'::jsonb)
         INTO round_edges
         FROM (
-            SELECT (edge::text)::jsonb AS edge_obj
+            SELECT (edge::text)::jsonb AS edge
             FROM graph_conflict_frontier('{"frontier": ' || frontier::text || '}') AS edge
         ) rounds;
         all_edges := all_edges || round_edges;
-        SELECT jsonb_agg(DISTINCT endpoint)
+        -- An edge matched in an earlier hop can be matched again from its
+        -- far side in a later hop (the frontier matcher is undirected), so
+        -- dedup the accumulator, not just each round.
+        SELECT coalesce(jsonb_agg(DISTINCT edge), '[]'::jsonb)
+        INTO all_edges
+        FROM jsonb_array_elements(all_edges) AS edge;
+        -- Expand only unvisited endpoints: re-seeding the frontier with
+        -- both endpoints of every found edge re-matched the same edge
+        -- from its far side and accumulated duplicate rows per hop.
+        SELECT coalesce(jsonb_agg(DISTINCT endpoint), '[]'::jsonb)
         INTO frontier
         FROM (
             SELECT edge->>'from_id' AS endpoint
@@ -260,7 +270,9 @@ BEGIN
             UNION
             SELECT edge->>'to_id'
             FROM jsonb_array_elements(round_edges) AS edge
-        ) endpoints;
+        ) endpoints
+        WHERE NOT visited ? endpoint;
+        visited := visited || frontier;
     END LOOP;
     RETURN QUERY
     SELECT (edge::text)::agtype
