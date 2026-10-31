@@ -1298,6 +1298,252 @@ mod tests {
         }
         assert!(payment_quantity("UNKNOWN", "123").is_err());
     }
+
+    // --- bulk Mercury import ---
+
+    /// One listed transaction, with optional JSON-field overrides; a `null`
+    /// override removes the field. `amount` stays a raw JSON numeral because
+    /// the import must read the provider's exact decimal text.
+    fn mercury_tx(id: Uuid, overrides: serde_json::Value) -> cloud::mercury::Transaction {
+        let mut base = serde_json::json!({
+            "id": id,
+            "accountId": Uuid::now_v7(),
+            "amount": 12.34,
+            "status": "sent",
+            "postedAt": "2026-10-01T00:00:00+00:00",
+            "counterpartyName": "Acme Supplies",
+            "attachments": []
+        });
+        if let (Some(target), Some(patch)) = (base.as_object_mut(), overrides.as_object()) {
+            for (key, value) in patch {
+                if value.is_null() {
+                    target.remove(key);
+                } else {
+                    target.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        serde_json::from_value(base).unwrap()
+    }
+
+    /// The Postgres handle the import writes through, with the schema
+    /// migrated once per process. `None` where no PostgreSQL fixture is
+    /// configured — CI sets `NAV_REQUIRE_POSTGRES=1` so its tests never skip.
+    async fn import_pg() -> Option<store::postgres::PostgresDb> {
+        if std::env::var("NAVIGATOR_POSTGRES_HOST").is_err() {
+            assert!(
+                std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
+                "PostgreSQL fixture required"
+            );
+            return None;
+        }
+        static MIGRATED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+        MIGRATED
+            .get_or_init(|| async {
+                let pg = store::postgres::PostgresDb::from_env().await.unwrap();
+                pg.migrate_embedded(None).await.unwrap();
+            })
+            .await;
+        Some(store::postgres::PostgresDb::from_env().await.unwrap())
+    }
+
+    /// A synthetic Project whose hyphenated code appears verbatim as one
+    /// token of a provider free-text field.
+    async fn import_project(surreal: &store::surreal::SurrealDb) -> (String, Uuid) {
+        let jurisdiction = store::jurisdictions::create(
+            surreal,
+            &store::jurisdictions::NewJurisdiction::new(
+                "Mercury import jurisdiction",
+                format!("MERCURY-{}", Uuid::new_v4()),
+                "state",
+            ),
+        )
+        .await
+        .unwrap();
+        let entity_type = store::entity_types::create(
+            surreal,
+            &format!("Mercury import entity type {}", Uuid::new_v4()),
+        )
+        .await
+        .unwrap();
+        let entity = store::entities::create(
+            surreal,
+            &store::entities::NewEntity {
+                name: "Mercury import matter entity".into(),
+                entity_type_id: entity_type.id,
+                jurisdiction_id: jurisdiction.id,
+                phone: None,
+                url: None,
+                xero_id: None,
+                firm_anchor_key: None,
+            },
+        )
+        .await
+        .unwrap();
+        let code = format!("mercury-import-{}", Uuid::new_v4().simple());
+        let project = store::projects::create(
+            surreal,
+            &store::projects::NewProject {
+                code: code.clone(),
+                name: "Mercury import matter".into(),
+                status: "open".into(),
+                entity_id: entity.id,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        (code, project.id)
+    }
+
+    async fn import_context<'a>(
+        surreal: &'a store::surreal::SurrealDb,
+        pg: &'a store::postgres::PostgresDb,
+        storage: &'a std::sync::Arc<dyn cloud::StorageService>,
+        projects: &'a [(String, Uuid)],
+        client: &'a cloud::mercury::Mercury,
+        dry_run: bool,
+    ) -> MercuryImportContext<'a> {
+        MercuryImportContext {
+            surreal,
+            storage,
+            pg,
+            projects,
+            client,
+            actor_id: Uuid::now_v7(),
+            dry_run,
+        }
+    }
+
+    #[tokio::test]
+    async fn import_one_skips_each_ineligible_transaction_for_its_named_reason() {
+        let Some(pg) = import_pg().await else {
+            return;
+        };
+        let surreal = store::test_support::mem_surreal().await;
+        let state = crate::test_support::app_state(surreal.clone()).await;
+        let (code, project_id) = import_project(&surreal).await;
+        let (other, other_id) = import_project(&surreal).await;
+        let projects = vec![(code, project_id), (other, other_id)];
+        let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
+        let context =
+            import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
+        let cases = [
+            (serde_json::json!({ "postedAt": null }), "unposted"),
+            (
+                serde_json::json!({ "postedAt": "01-02-2026" }),
+                "unreadable_posted_at",
+            ),
+            (serde_json::json!({ "status": "pending" }), "status"),
+            (serde_json::json!({ "amount": "abc" }), "unreadable_amount"),
+            (serde_json::json!({ "amount": 1.005 }), "unreadable_amount"),
+            (serde_json::json!({ "amount": 0 }), "non_positive_amount"),
+            (
+                serde_json::json!({ "counterpartyName": "Unrelated Vendor" }),
+                "unallocated",
+            ),
+            (
+                serde_json::json!({
+                    "counterpartyName": format!("{} and {}", projects[0].0, projects[1].0)
+                }),
+                "ambiguous",
+            ),
+        ];
+        for (patch, reason) in cases {
+            let outcome = import_one(&context, &mercury_tx(Uuid::now_v7(), patch)).await;
+            assert_eq!(outcome.disposition, "skipped", "case {reason}");
+            assert_eq!(outcome.reason.as_deref(), Some(reason), "case {reason}");
+            assert_eq!(outcome.project_code, None, "case {reason}");
+            assert_eq!(outcome.cost_id, None, "case {reason}");
+        }
+    }
+
+    #[tokio::test]
+    async fn import_one_plans_a_dry_run_without_creating_a_cost() {
+        let Some(pg) = import_pg().await else {
+            return;
+        };
+        let surreal = store::test_support::mem_surreal().await;
+        let state = crate::test_support::app_state(surreal.clone()).await;
+        let (code, project_id) = import_project(&surreal).await;
+        let projects = vec![(code.clone(), project_id)];
+        let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
+        let context = import_context(&surreal, &pg, &state.storage, &projects, &client, true).await;
+        let transaction = mercury_tx(
+            Uuid::now_v7(),
+            serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
+        );
+        let outcome = import_one(&context, &transaction).await;
+        assert_eq!(outcome.disposition, "planned");
+        assert_eq!(outcome.project_code.as_deref(), Some(code.as_str()));
+        assert!(outcome.cost_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn import_one_files_evidence_creates_the_cost_and_skips_the_rerun() {
+        let Some(pg) = import_pg().await else {
+            return;
+        };
+        let surreal = store::test_support::mem_surreal().await;
+        let state = crate::test_support::app_state(surreal.clone()).await;
+        let (code, project_id) = import_project(&surreal).await;
+        let projects = vec![(code.clone(), project_id)];
+        let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
+        let context =
+            import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
+        let transaction = mercury_tx(
+            Uuid::now_v7(),
+            serde_json::json!({ "counterpartyName": format!("Acme Supplies {code}") }),
+        );
+        let first = import_one(&context, &transaction).await;
+        assert_eq!(first.disposition, "imported");
+        assert_eq!(first.project_code.as_deref(), Some(code.as_str()));
+        let cost_id = first.cost_id.expect("an imported cost carries its id");
+        let second = import_one(&context, &transaction).await;
+        assert_eq!(second.disposition, "skipped");
+        assert_eq!(second.reason.as_deref(), Some("already_imported"));
+        assert_eq!(second.cost_id, Some(cost_id));
+        // A payee the cost store refuses still files the evidence first,
+        // then reports the rejection instead of charging the card.
+        let refused = mercury_tx(
+            Uuid::now_v7(),
+            serde_json::json!({
+                "counterpartyName": "",
+                "note": format!("Acme Supplies {code}")
+            }),
+        );
+        let outcome = import_one(&context, &refused).await;
+        assert_eq!(outcome.disposition, "skipped");
+        assert_eq!(outcome.reason.as_deref(), Some("cost_rejected"));
+    }
+
+    #[tokio::test]
+    async fn import_one_skips_a_transaction_whose_receipt_cannot_be_fetched() {
+        let Some(pg) = import_pg().await else {
+            return;
+        };
+        let surreal = store::test_support::mem_surreal().await;
+        let state = crate::test_support::app_state(surreal.clone()).await;
+        let (code, project_id) = import_project(&surreal).await;
+        let projects = vec![(code.clone(), project_id)];
+        let client = cloud::mercury::Mercury::new("synthetic-read-token").unwrap();
+        let context =
+            import_context(&surreal, &pg, &state.storage, &projects, &client, false).await;
+        let transaction = mercury_tx(
+            Uuid::now_v7(),
+            serde_json::json!({
+                "counterpartyName": format!("Acme Supplies {code}"),
+                "attachments": [{
+                    "fileName": "receipt.pdf",
+                    "attachmentType": "receipt",
+                    "url": "http://127.0.0.1/private"
+                }]
+            }),
+        );
+        let outcome = import_one(&context, &transaction).await;
+        assert_eq!(outcome.disposition, "skipped");
+        assert_eq!(outcome.reason.as_deref(), Some("receipt_unavailable"));
+    }
 }
 
 #[derive(Deserialize)]
