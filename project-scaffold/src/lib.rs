@@ -298,6 +298,37 @@ pub fn forgejo_seed_files(source: &ScaffoldSource) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The stable digest binding a canonical file set to the commit that first
+/// carries it: SHA-256 over each repository-relative path and its exact
+/// bytes, taken in path order, each length-prefixed so no boundary between
+/// a path and a body is ever ambiguous. The server seeds a Project
+/// repository through `ForgeService::initialize_source` with this digest in
+/// its `Source-Tree:` commit trailer; a retry that finds the same digest at
+/// the repository's head writes nothing. The value must therefore depend on
+/// the set and nothing else — not the caller, not the order, not the
+/// platform.
+#[must_use]
+pub fn source_tree_digest(files: &[(String, String)]) -> String {
+    use sha2::Digest;
+    use std::fmt::Write as _;
+    let mut ordered: Vec<(&String, &String)> =
+        files.iter().map(|(path, body)| (path, body)).collect();
+    ordered.sort_by_key(|(path, _)| *path);
+    let mut hasher = sha2::Sha256::new();
+    for (path, body) in ordered {
+        hasher.update(u64::try_from(path.len()).unwrap_or(u64::MAX).to_le_bytes());
+        hasher.update(path.as_bytes());
+        hasher.update(u64::try_from(body.len()).unwrap_or(u64::MAX).to_le_bytes());
+        hasher.update(body.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
 /// The repository-relative path and stub bytes of `kind`'s letter Draft, as
 /// `repository scaffold` writes it into a new Project repository.
 #[must_use]
@@ -408,6 +439,39 @@ mod tests {
         assert_eq!(
             read("drafts/onboarding__letter.md"),
             template_stub(ONBOARDING)
+        );
+    }
+
+    #[test]
+    fn the_digest_depends_on_the_set_and_not_its_order() {
+        let files = vec![
+            ("b.md".to_string(), "second".to_string()),
+            ("a.md".to_string(), "first".to_string()),
+        ];
+        let mut reordered = files.clone();
+        reordered.reverse();
+        assert_eq!(
+            source_tree_digest(&files),
+            source_tree_digest(&reordered),
+            "the same set in a different order is the same source tree"
+        );
+    }
+
+    #[test]
+    fn a_changed_body_or_path_changes_the_digest() {
+        let files = vec![("a.md".to_string(), "first".to_string())];
+        let mut body_changed = files.clone();
+        body_changed[0].1.push_str(" altered");
+        assert_ne!(
+            source_tree_digest(&files),
+            source_tree_digest(&body_changed)
+        );
+
+        let mut path_changed = files.clone();
+        path_changed[0].0 = "b.md".to_string();
+        assert_ne!(
+            source_tree_digest(&files),
+            source_tree_digest(&path_changed)
         );
     }
 

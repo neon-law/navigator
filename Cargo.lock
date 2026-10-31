@@ -9293,6 +9293,7 @@ version = "26.10.30"
 dependencies = [
  "rules",
  "serde_yaml",
+ "sha2 0.11.1",
 ]
 
 [[package]]
@@ -12474,6 +12475,7 @@ dependencies = [
  "include_dir",
  "pdf",
  "proc-macro2",
+ "project-scaffold",
  "quote",
  "rand 0.10.3",
  "repos",

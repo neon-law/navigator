@@ -36,6 +36,14 @@ const DRIVE_CONFIGURATION_KEYS: [&str; 3] = [
     "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON",
 ];
 
+/// The deployment's public host, which a seeded Project manifest pins as
+/// the gate workflow's OIDC audience.
+const NAVIGATOR_PUBLIC_HOST_ENV: &str = "NAVIGATOR_PUBLIC_HOST";
+
+/// The release tag a seeded Project manifest pins; defaults to this
+/// workspace's version when the deployment does not name one.
+const NAVIGATOR_RELEASE_TAG_ENV: &str = "NAVIGATOR_RELEASE_TAG";
+
 const FORGE_CONFIGURATION_KEYS: [&str; 8] = [
     cloud::workspace::NAVIGATOR_GITHUB_ORG,
     cloud::workspace::NAVIGATOR_GIT_HOST,
@@ -391,9 +399,244 @@ pub async fn reconcile_from_env(
         cloud::ForgeBackend::Forgejo => {
             let kms = cloud::runtime_kms_from_env().await;
             let forge = forgejo_for_project(surreal, project_id, kms.as_ref(), lookup).await?;
-            reconcile(surreal, project_id, drive.as_ref(), Some(&forge)).await
+            let root =
+                lookup(cloud::forgejo_forge::NAVIGATOR_FORGEJO_ROOT_URL_ENV).unwrap_or_default();
+            let seed = match scaffold_inputs(surreal, project_id).await {
+                Ok(seed) => seed,
+                Err(error) => {
+                    tracing::error!(
+                        %error,
+                        project_id = %project_id,
+                        "could not determine the scaffold coordinates; the Project repository was not seeded"
+                    );
+                    ScaffoldInputs::unavailable()
+                }
+            };
+            reconcile_forgejo(
+                surreal,
+                project_id,
+                drive.as_ref(),
+                &forge,
+                ForgeSite {
+                    root: &root,
+                    owner: forge.owner(),
+                },
+                &seed,
+            )
+            .await
         }
     }
+}
+
+/// Where the Firm's Forgejo lives and whom it names: the coordinates a
+/// recorded repository URL is checked against before the pass governs or
+/// seeds it.
+struct ForgeSite<'a> {
+    root: &'a str,
+    owner: &'a str,
+}
+
+/// Whether `url` names `owner`'s namespace on the Forgejo at `root` — a
+/// repository this deployment provisioned and may govern. A recorded URL
+/// from another forge (a matter whose source deliberately lives elsewhere)
+/// fails the prefix and is left entirely alone.
+#[must_use]
+fn is_firm_forges_repository(url: &str, site: &ForgeSite<'_>) -> bool {
+    let root = site.root.trim().trim_end_matches('/');
+    url.starts_with(&format!("{root}/{}/", site.owner))
+}
+
+/// The Forgejo provisioning pass: reconcile the surfaces, then converge the
+/// resolved repository onto Firm governance, and seed an empty repository
+/// with the canonical scaffold when the deployment's coordinates are known.
+///
+/// Convergence reaches a repository only when this pass created or adopted
+/// it, or when its recorded URL names the Firm's own namespace on this
+/// deployment's Forgejo. Both halves are idempotent — governance re-locks
+/// drifted settings, and a seed whose `Source-Tree` digest already sits at
+/// the head writes nothing — so the pass runs on every reconcile and a
+/// repository that lost either half recovers without a human.
+///
+/// A convergence fault is loud but non-rollback, mirroring
+/// [`reconcile_after_open`]: the provisioned surfaces stand, the fault is
+/// logged, and the next pass — a retry through the admin door or the
+/// nightly ops reconcile — repairs it.
+async fn reconcile_forgejo<D, F>(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+    drive: Option<&D>,
+    forge: &F,
+    site: ForgeSite<'_>,
+    seed: &ScaffoldInputs,
+) -> Result<ProjectSurfaces, SurfaceError>
+where
+    D: DriveService + ?Sized,
+    F: cloud::forgejo_governance::GovernedForge + ?Sized,
+{
+    let surfaces = reconcile(surreal, project_id, drive, Some(forge)).await?;
+    let Some(url) = surfaces.repository_url.as_deref() else {
+        return Ok(surfaces);
+    };
+    if surfaces.repository_status != SurfaceStatus::Created
+        && !is_firm_forges_repository(url, &site)
+    {
+        return Ok(surfaces);
+    }
+    let code = surfaces.code.clone();
+
+    // Seed before governing: the scaffold's first commit is a direct
+    // contents write to `main`, which the protection this pass applies
+    // next would refuse.
+    if let Err(error) = seed_provisioned_repository(forge, &code, seed).await {
+        if matches!(error, ForgeError::RepositoryNotEmpty { .. }) {
+            tracing::info!(
+                project_id = %project_id,
+                "Project repository already holds other source; the canonical scaffold was not seeded"
+            );
+        } else {
+            tracing::error!(
+                %error,
+                project_id = %project_id,
+                "could not seed the Project repository with the canonical scaffold; retry with projects surfaces reconcile"
+            );
+        }
+    }
+
+    match forge.reconcile_governance(&code).await {
+        Ok(repairs) if repairs.is_empty() => {}
+        Ok(repairs) => tracing::info!(
+            project_id = %project_id,
+            repairs = ?repairs,
+            "repaired Forgejo governance controls on the Project repository"
+        ),
+        Err(error) => tracing::error!(
+            %error,
+            project_id = %project_id,
+            "could not govern the Project repository after provisioning; retry with projects surfaces reconcile"
+        ),
+    }
+    Ok(surfaces)
+}
+
+/// The coordinates a seeded manifest pins: the deployment's public host —
+/// the gate workflow's OIDC audience — the release version, and the first
+/// designated lawyer and client DRI emails (the lexicographically first
+/// when a Project designates several on a side).
+struct ScaffoldInputs {
+    host: Option<String>,
+    version: String,
+    lawyer_dri: String,
+    client_dri: String,
+}
+
+impl ScaffoldInputs {
+    /// Coordinates for a pass that could not read them: nothing is seeded,
+    /// and governance still runs.
+    fn unavailable() -> Self {
+        Self {
+            host: None,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            lawyer_dri: String::new(),
+            client_dri: String::new(),
+        }
+    }
+}
+
+/// Resolve the scaffold coordinates from the deployment environment and the
+/// Project's participation.
+async fn scaffold_inputs(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+) -> Result<ScaffoldInputs, SurfaceError> {
+    let (lawyer_dri, client_dri) = dri_emails(surreal, project_id).await?;
+    Ok(ScaffoldInputs {
+        host: std::env::var(NAVIGATOR_PUBLIC_HOST_ENV)
+            .ok()
+            .filter(|host| !host.trim().is_empty()),
+        version: std::env::var(NAVIGATOR_RELEASE_TAG_ENV)
+            .ok()
+            .filter(|version| !version.trim().is_empty())
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
+        lawyer_dri,
+        client_dri,
+    })
+}
+
+/// The first designated lawyer and client DRI emails for a Project — the
+/// same derivation [`read_handles`] reports in full, narrowed to the one
+/// email per side the scaffold manifest carries.
+async fn dri_emails(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+) -> Result<(String, String), SurfaceError> {
+    let participations = projects::participations_for_project(surreal, project_id)
+        .await
+        .map_err(|error| SurfaceError::Db(error.to_string()))?;
+    let dri_ids: Vec<_> = participations
+        .iter()
+        .filter(|row| row.is_lawyer_dri || row.is_client_dri)
+        .map(|row| row.person_id)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let people = crate::persons::find_by_ids(surreal, &dri_ids)
+        .await
+        .map_err(|error| SurfaceError::Db(error.to_string()))?;
+    let emails: std::collections::HashMap<_, _> = people
+        .into_iter()
+        .map(|person| (person.id, person.email))
+        .collect();
+    let mut lawyer_dri = participations
+        .iter()
+        .filter(|row| row.is_lawyer_dri)
+        .filter_map(|row| emails.get(&row.person_id).cloned())
+        .collect::<Vec<_>>();
+    lawyer_dri.sort_unstable();
+    lawyer_dri.dedup();
+    let mut client_dri = participations
+        .iter()
+        .filter(|row| row.is_client_dri)
+        .filter_map(|row| emails.get(&row.person_id).cloned())
+        .collect::<Vec<_>>();
+    client_dri.sort_unstable();
+    client_dri.dedup();
+    Ok((
+        lawyer_dri.first().cloned().unwrap_or_default(),
+        client_dri.first().cloned().unwrap_or_default(),
+    ))
+}
+
+/// Seed an empty Project repository with the canonical scaffold as its
+/// first commit. `initialize_source` is digest-idempotent: a retry that
+/// finds the same `Source-Tree` digest at the head writes nothing, and a
+/// repository holding other source comes back
+/// [`ForgeError::RepositoryNotEmpty`] and is preserved, never replaced.
+async fn seed_provisioned_repository<F>(
+    forge: &F,
+    code: &str,
+    inputs: &ScaffoldInputs,
+) -> Result<(), ForgeError>
+where
+    F: ForgeService + ?Sized,
+{
+    let Some(host) = inputs.host.as_deref() else {
+        // Without the deployment host the manifest's gate audience would be
+        // a lie; leave the repository for a reconcile that knows it.
+        return Ok(());
+    };
+    let files = project_scaffold::forgejo_seed_files(&project_scaffold::ScaffoldSource {
+        code,
+        host,
+        lawyer_dri: &inputs.lawyer_dri,
+        client_dri: &inputs.client_dri,
+        version: &inputs.version,
+    });
+    let tree_digest = project_scaffold::source_tree_digest(&files);
+    let files: std::collections::BTreeMap<String, String> = files.into_iter().collect();
+    forge
+        .initialize_source(code, &files, &tree_digest, "Initialize project source")
+        .await?;
+    Ok(())
 }
 
 /// The Forgejo client confined to `project_id`'s Firm namespace and
@@ -525,8 +768,8 @@ async fn record_provisioned_repository(
 #[cfg(test)]
 mod tests {
     use super::{
-        read_handles, reconcile, source_state, ProjectSurfaces, SourceState, SurfaceError,
-        SurfaceStatus,
+        read_handles, reconcile, reconcile_forgejo, source_state, ForgeSite, ProjectSurfaces,
+        ScaffoldInputs, SourceState, SurfaceError, SurfaceStatus,
     };
     use crate::persons::{self, NewPerson, Role};
     use crate::projects::{self, DriSide, OpenMatterCommand};
@@ -1101,5 +1344,301 @@ mod tests {
             inserted_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
         }
+    }
+
+    /// The ForgeSite the `FakeForge` answers for: its own host and
+    /// organization, so a recorded fake URL passes the ownership check.
+    fn forge_site() -> ForgeSite<'static> {
+        ForgeSite {
+            root: "https://forge.example",
+            owner: "an-organization",
+        }
+    }
+
+    /// Scaffold coordinates matching what the Acme matter derives: a
+    /// deployment host so seeding engages, this workspace's version, and no
+    /// designated DRIs, which the manifest carries as empty strings.
+    fn seed_inputs() -> ScaffoldInputs {
+        ScaffoldInputs {
+            host: Some("staging.neonlaw.com".to_string()),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            lawyer_dri: String::new(),
+            client_dri: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_fresh_forgejo_repository_is_seeded_then_governed() {
+        let surreal = mem_surreal().await;
+        let project = open_acme(&surreal).await;
+        let drive = FakeDrive::default();
+        let forge = FakeForge::default();
+
+        let surfaces = reconcile_forgejo(
+            &surreal,
+            project.id,
+            Some(&drive),
+            &forge,
+            forge_site(),
+            &seed_inputs(),
+        )
+        .await
+        .expect("reconcile");
+
+        assert_eq!(surfaces.repository_status, SurfaceStatus::Created);
+        assert_eq!(
+            forge.initialize_writes(),
+            1,
+            "the canonical scaffold is exactly one first commit"
+        );
+        assert_eq!(
+            forge.governance_reconciles(),
+            1,
+            "governance follows seeding"
+        );
+        assert_eq!(
+            forge.call_log(),
+            vec![
+                ("ensure", project.code.clone()),
+                ("initialize", project.code.clone()),
+                ("govern", project.code.clone()),
+            ],
+            "the scaffold is written to main before the protection that would refuse it"
+        );
+        let source = project_scaffold::ScaffoldSource {
+            code: &project.code,
+            host: "staging.neonlaw.com",
+            lawyer_dri: "",
+            client_dri: "",
+            version: env!("CARGO_PKG_VERSION"),
+        };
+        let mut expected: Vec<String> = project_scaffold::forgejo_seed_files(&source)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(forge.committed_paths(&project.code), expected);
+    }
+
+    #[tokio::test]
+    async fn a_lost_seed_reply_writes_nothing_twice_and_still_governs() {
+        let surreal = mem_surreal().await;
+        let project = open_acme(&surreal).await;
+        let drive = FakeDrive::default();
+        let forge = FakeForge::default();
+        forge.lose_next_write_reply();
+
+        let first = reconcile_forgejo(
+            &surreal,
+            project.id,
+            Some(&drive),
+            &forge,
+            forge_site(),
+            &seed_inputs(),
+        )
+        .await
+        .expect("the provision stands even though the seed reply was lost");
+        assert_eq!(first.repository_status, SurfaceStatus::Created);
+        assert_eq!(
+            forge.initialize_writes(),
+            1,
+            "the write landed before the reply was lost"
+        );
+        assert_eq!(
+            forge.governance_reconciles(),
+            1,
+            "governance still followed"
+        );
+
+        let second = reconcile_forgejo(
+            &surreal,
+            project.id,
+            Some(&drive),
+            &forge,
+            forge_site(),
+            &seed_inputs(),
+        )
+        .await
+        .expect("retry");
+        assert_eq!(second.repository_status, SurfaceStatus::Present);
+        assert_eq!(
+            forge.initialize_writes(),
+            1,
+            "the retry writes nothing twice: the head already binds the digest"
+        );
+        assert_eq!(forge.governance_reconciles(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_adopted_repository_is_governed_and_its_drift_repaired() {
+        let surreal = mem_surreal().await;
+        let project = open_acme(&surreal).await;
+        let drive = FakeDrive::default();
+        let forge = FakeForge::default();
+        forge
+            .ensure_repository(&project.code)
+            .await
+            .expect("forge-level repository");
+        forge.set_governance_drift(
+            &project.code,
+            &["main.enable_push", "repository.allow_squash_merge"],
+        );
+
+        let surfaces = reconcile_forgejo(
+            &surreal,
+            project.id,
+            Some(&drive),
+            &forge,
+            forge_site(),
+            &seed_inputs(),
+        )
+        .await
+        .expect("reconcile");
+
+        assert_eq!(
+            surfaces.repository_status,
+            SurfaceStatus::Created,
+            "a forge-level repository the Project row never recorded is adopted this pass"
+        );
+        assert_eq!(forge.governance_reconciles(), 1, "adoption is governed too");
+        assert_eq!(
+            forge.initialize_writes(),
+            1,
+            "the adopted repository is empty, so the scaffold seeds it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_recorded_url_on_another_forge_is_never_touched() {
+        let surreal = mem_surreal().await;
+        let project = open_acme(&surreal).await;
+        let drive = FakeDrive::default();
+        let forge = FakeForge::default();
+        projects::set_repository_url(
+            &surreal,
+            project.id,
+            Some("https://git.example.internal/client-org/acme"),
+        )
+        .await
+        .expect("repository URL");
+
+        let surfaces = reconcile_forgejo(
+            &surreal,
+            project.id,
+            Some(&drive),
+            &forge,
+            forge_site(),
+            &seed_inputs(),
+        )
+        .await
+        .expect("reconcile");
+
+        assert_eq!(surfaces.repository_status, SurfaceStatus::Present);
+        assert_eq!(
+            forge.governance_reconciles(),
+            0,
+            "a matter whose source deliberately lives elsewhere keeps it"
+        );
+        assert_eq!(forge.initialize_writes(), 0);
+        assert!(forge.call_log().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_empty_recorded_repository_recovers_when_the_coordinates_arrive() {
+        let surreal = mem_surreal().await;
+        let project = open_acme(&surreal).await;
+        let drive = FakeDrive::default();
+        let forge = FakeForge::default();
+        let no_host = ScaffoldInputs {
+            host: None,
+            ..seed_inputs()
+        };
+
+        let first = reconcile_forgejo(
+            &surreal,
+            project.id,
+            Some(&drive),
+            &forge,
+            forge_site(),
+            &no_host,
+        )
+        .await
+        .expect("reconcile without deployment coordinates");
+        assert_eq!(first.repository_status, SurfaceStatus::Created);
+        assert_eq!(
+            forge.initialize_writes(),
+            0,
+            "without the host the manifest's gate audience would be a lie"
+        );
+        assert_eq!(forge.governance_reconciles(), 1, "governance needs no host");
+
+        let second = reconcile_forgejo(
+            &surreal,
+            project.id,
+            Some(&drive),
+            &forge,
+            forge_site(),
+            &seed_inputs(),
+        )
+        .await
+        .expect("reconcile with coordinates");
+        assert_eq!(second.repository_status, SurfaceStatus::Present);
+        assert_eq!(
+            forge.initialize_writes(),
+            1,
+            "the recorded empty repository is seeded on a later pass"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_repository_holding_other_source_is_preserved_and_still_governed() {
+        let surreal = mem_surreal().await;
+        let project = open_acme(&surreal).await;
+        let drive = FakeDrive::default();
+        let forge = FakeForge::default();
+        let mut foreign = std::collections::BTreeMap::new();
+        foreign.insert("attorney-notes.md".to_string(), "hand-written".to_string());
+        // The attorney's repository already exists on the forge, holding
+        // source Navigator never wrote; register it before committing to it.
+        forge
+            .ensure_repository(&project.code)
+            .await
+            .expect("pre-existing repository");
+        forge
+            .initialize_source(
+                &project.code,
+                &foreign,
+                "not-the-canonical-digest",
+                "Attorney notes",
+            )
+            .await
+            .expect("foreign source");
+
+        let surfaces = reconcile_forgejo(
+            &surreal,
+            project.id,
+            Some(&drive),
+            &forge,
+            forge_site(),
+            &seed_inputs(),
+        )
+        .await
+        .expect("reconcile");
+
+        assert_eq!(surfaces.repository_status, SurfaceStatus::Created);
+        assert_eq!(
+            forge.initialize_writes(),
+            1,
+            "only the attorney's own first commit ever wrote"
+        );
+        assert_eq!(forge.governance_reconciles(), 1, "still governed");
+        assert_eq!(
+            forge
+                .read_file(&project.code, "attorney-notes.md")
+                .await
+                .expect("read"),
+            Some("hand-written".to_string()),
+            "the existing source is preserved, never replaced"
+        );
     }
 }
