@@ -1177,6 +1177,10 @@ mod tests {
                 "20261030120000_create_inbox_triage.sql",
                 include_str!("../postgres/migrations/20261030120000_create_inbox_triage.sql"),
             ),
+            (
+                "20261031090000_extend_identity_systems.sql",
+                include_str!("../postgres/migrations/20261031090000_extend_identity_systems.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

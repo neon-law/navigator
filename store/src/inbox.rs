@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::access::can_see_project;
 use crate::communications::{self, IngestArgs};
+use crate::external_identities;
 use crate::persons::{self, Role};
 use crate::postgres_mirror::{after_write, MirrorKey};
 use crate::projects::{self, ProjectStoreError};
@@ -949,35 +950,60 @@ pub async fn queue_social_reply(
     Ok(message_id)
 }
 
-/// The people with a recorded phone, read once when any listed conversation
-/// is a text.
-async fn phone_directory(
-    db: &SurrealDb,
-    conversations: &[Conversation],
-) -> Result<Vec<persons::Person>, InboxError> {
-    if conversations
-        .iter()
-        .any(|conversation| conversation.channel == channel::SMS)
-    {
-        Ok(persons::list_with_phone(db).await?)
-    } else {
-        Ok(Vec::new())
+/// The `ExternalSystem` a social channel's sender ids live under.
+fn social_system(channel_name: &str) -> Option<external_identities::ExternalSystem> {
+    match channel_name {
+        channel::FACEBOOK => Some(external_identities::ExternalSystem::Facebook),
+        channel::INSTAGRAM => Some(external_identities::ExternalSystem::Instagram),
+        channel::THREADS => Some(external_identities::ExternalSystem::Threads),
+        channel::YOUTUBE => Some(external_identities::ExternalSystem::Youtube),
+        channel::TIKTOK => Some(external_identities::ExternalSystem::Tiktok),
+        _ => None,
     }
 }
 
-fn contact_for(phones: &[persons::Person], conversation: &Conversation) -> Option<ContactLink> {
-    if conversation.channel != channel::SMS {
-        return None;
+/// Who a conversation's sender is — an address-book lookup, display only.
+/// Email resolves by the address a Person records, SMS by the phone a
+/// Person records, and the social channels through the identity address
+/// book keyed on the provider id the inbound webhook recorded — the same
+/// value `Conversation.external_address` carries.
+///
+/// The resolved [`ContactLink`] grants nothing: it never satisfies a
+/// dispatch, participation, or privilege check — those read the person's
+/// role and participation, never this table.
+///
+/// # Errors
+///
+/// Propagates any database error.
+async fn sender_identity(
+    db: &SurrealDb,
+    conversation: &Conversation,
+) -> Result<Option<ContactLink>, InboxError> {
+    match conversation.channel.as_str() {
+        channel::EMAIL => Ok(persons::find_by_email_ci(
+            db,
+            conversation.external_address.trim(),
+        )
+        .await?
+        .as_ref()
+        .map(ContactLink::of)),
+        channel::SMS => Ok(persons::find_by_phone(db, &conversation.external_address)
+            .await?
+            .as_ref()
+            .map(ContactLink::of)),
+        other => match social_system(other) {
+            Some(system) => Ok(external_identities::find_person_by_account(
+                db,
+                system,
+                &conversation.external_address,
+            )
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?
+            .as_ref()
+            .map(ContactLink::of)),
+            None => Ok(None),
+        },
     }
-    phones
-        .iter()
-        .find(|person| {
-            person
-                .phone
-                .as_deref()
-                .is_some_and(|phone| persons::same_phone(phone, &conversation.external_address))
-        })
-        .map(ContactLink::of)
 }
 
 /// Record that this text conversation's number is the direct line of the
@@ -1502,13 +1528,13 @@ async fn intake_rows(
 ) -> Result<Vec<IntakeRow>, InboxError> {
     let actor = load_person(db, actor_id).await?;
     let conversations = visible_conversations(db, &actor, brand).await?;
-    let phones = phone_directory(db, &conversations).await?;
     let mut rows = Vec::with_capacity(conversations.len());
     for conversation in conversations {
+        let contact = sender_identity(db, &conversation).await?;
         let delivery_state = latest_outbound_state(db, conversation.id).await?;
         let assignee = assignee_label(db, conversation.project_id).await?;
         rows.push(IntakeRow {
-            contact: contact_for(&phones, &conversation),
+            contact,
             id: conversation.id,
             firm_id: conversation.firm_id,
             brand_key: conversation.brand_key.clone(),
@@ -1578,14 +1604,7 @@ pub async fn intake_detail(
         mark_read(db, conversation.id).await?;
     }
     let delivery_state = latest_outbound_state(db, conversation.id).await?;
-    let contact = if conversation.channel == channel::SMS {
-        persons::find_by_phone(db, &conversation.external_address)
-            .await?
-            .as_ref()
-            .map(ContactLink::of)
-    } else {
-        None
-    };
+    let contact = sender_identity(db, &conversation).await?;
     Ok(IntakeDetail {
         contact,
         projects: projects_in_firm(db, conversation.firm_id).await?,
@@ -1678,12 +1697,12 @@ pub async fn list_project(
         .into_iter()
         .filter_map(ConversationRow::into_conversation)
         .collect();
-    let phones = phone_directory(db, &conversations).await?;
     let mut listed = Vec::new();
     for conversation in conversations {
+        let contact = sender_identity(db, &conversation).await?;
         let delivery_state = latest_outbound_state(db, conversation.id).await?;
         listed.push(IntakeRow {
-            contact: contact_for(&phones, &conversation),
+            contact,
             id: conversation.id,
             firm_id: conversation.firm_id,
             brand_key: conversation.brand_key.clone(),
@@ -3490,7 +3509,7 @@ mod tests {
             "msg-vesta-1",
             "vesta-sender@example.com",
         );
-        branded.brand_key = Some("vesta".to_string());
+        branded.brand_key = Some("vesta");
         let firm_vesta = ingest_inbound(&db, &branded).await.unwrap();
         let mut other_branded = inbound(
             world.other_firm,
@@ -3499,7 +3518,7 @@ mod tests {
             "msg-vesta-2",
             "other-sender@example.com",
         );
-        other_branded.brand_key = Some("vesta".to_string());
+        other_branded.brand_key = Some("vesta");
         let other_firm_vesta = ingest_inbound(&db, &other_branded).await.unwrap();
         let mut firm_neon = inbound(
             world.firm,
@@ -3508,7 +3527,7 @@ mod tests {
             "msg-neon-1",
             "neon-sender@example.com",
         );
-        firm_neon.brand_key = Some("neon".to_string());
+        firm_neon.brand_key = Some("neon");
         ingest_inbound(&db, &firm_neon).await.unwrap();
         let mut firm_other_brand = inbound(
             world.other_firm,
@@ -3517,7 +3536,7 @@ mod tests {
             "msg-ob-1",
             "ob-sender@example.com",
         );
-        firm_other_brand.brand_key = Some("otherfirm-brand".to_string());
+        firm_other_brand.brand_key = Some("otherfirm-brand");
         ingest_inbound(&db, &firm_other_brand).await.unwrap();
 
         // The Owner reads across Firms: one Brand view carries both Firms'
@@ -3566,6 +3585,97 @@ mod tests {
             intake_brands(&db, world.client).await.unwrap_err(),
             InboxError::Denied
         ));
+    }
+
+    #[tokio::test]
+    async fn sender_identity_resolves_each_channel_through_its_address_book() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+
+        // Email resolves by the address a Person records.
+        let email = ingest_inbound(
+            &db,
+            &inbound(
+                world.firm,
+                channel::EMAIL,
+                "support",
+                "email-id-1",
+                "pat.sender@example.com",
+            ),
+        )
+        .await
+        .unwrap();
+        let pat = person(&db, "Pat Sender", "pat.sender@example.com", Role::Client).await;
+        let rows = list_intake(&db, world.owner).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.id == email.conversation_id)
+            .unwrap();
+        assert_eq!(row.contact.as_ref().map(|c| c.person_id), Some(pat));
+
+        // SMS keeps resolving by the phone a Person records.
+        let text = ingest_inbound(
+            &db,
+            &inbound(
+                world.firm,
+                channel::SMS,
+                "account",
+                "sms-id-1",
+                "+15555550123",
+            ),
+        )
+        .await
+        .unwrap();
+        let sam = person(&db, "Sam Texter", "sam.texter@example.com", Role::Client).await;
+        link_contact_phone(&db, world.owner, text.conversation_id, "sam.texter@example.com")
+            .await
+            .unwrap();
+        let rows = list_intake(&db, world.owner).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.id == text.conversation_id)
+            .unwrap();
+        assert_eq!(row.contact.as_ref().map(|c| c.person_id), Some(sam));
+
+        // A social channel resolves through the identity address book keyed
+        // on the provider id the webhook recorded — and until that link
+        // exists, the row shows the bare id, not a guess.
+        let social = ingest_inbound(
+            &db,
+            &inbound(
+                world.firm,
+                channel::FACEBOOK,
+                "page-account",
+                "fb-msg-1",
+                "fb-psid-123",
+            ),
+        )
+        .await
+        .unwrap();
+        let rows = list_intake(&db, world.owner).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.id == social.conversation_id)
+            .unwrap();
+        assert_eq!(row.contact, None);
+
+        external_identities::link(
+            &db,
+            pat,
+            external_identities::ExternalSystem::Facebook,
+            "fb-psid-123",
+            Some("Pat on Facebook"),
+        )
+        .await
+        .unwrap();
+
+        let rows = list_intake(&db, world.owner).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.id == social.conversation_id)
+            .unwrap();
+        assert_eq!(row.contact.as_ref().map(|c| c.person_id), Some(pat));
+        assert_eq!(row.contact.as_ref().map(|c| c.role.as_str()), Some("client"));
     }
 
     #[tokio::test]
