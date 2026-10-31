@@ -111,6 +111,15 @@ pub struct PublicChrome {
     /// drop relative image URLs, so it is resolved against the site origin on
     /// the server.
     pub social_image: String,
+    /// The brand's own canonical origin (`https://www.cyberinjurylaw.com`):
+    /// scheme plus [`views::brand::BrandKey::canonical_host`], no trailing
+    /// slash. The base every page's `og:url` and canonical link build on —
+    /// the address the brand answers to in production, whatever host the
+    /// render actually ran on. Empty when no brand origin is resolved (the
+    /// wasm client, a bare `PublicChrome::default()`), where a page publishes
+    /// no canonical URL rather than a wrong one.
+    #[serde(default)]
+    pub canonical_origin: String,
     pub destinations: Vec<ChromeNavLink>,
     pub utility: Vec<ChromeNavLink>,
     /// The public pages the footer links rather than the header — the two
@@ -383,6 +392,24 @@ fn footer_disclosure() -> crate::components::site_footer::FooterDisclosure {
     }
 }
 
+/// The brand's absolute `og:image` URL. The deployment's `NAV_BASE_URL`
+/// resolution wins, as everywhere `views::assets::absolute_url` runs; when
+/// the deployment advertises no origin (dev, tests, an OSS fork), the
+/// brand's own canonical origin resolves the path instead, so a share card
+/// never falls back to the relative path a scraper drops.
+#[cfg(feature = "server")]
+fn social_image_url(brand: &views::brand::SiteBrand) -> String {
+    let resolved = views::assets::absolute_url(brand.social_image);
+    if resolved.starts_with('/') {
+        format!(
+            "https://{}{resolved}",
+            views::brand::brand_key().canonical_host()
+        )
+    } else {
+        resolved
+    }
+}
+
 /// Build the public chrome for `brand`'s header, with the firm's footer data.
 ///
 /// One brand reaches this — the firm's — because the site publishes one
@@ -410,7 +437,8 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
         brand_name: brand.site_name.to_string(),
         home_href: brand.home_href.to_string(),
         logo_href: brand.logo_href.to_string(),
-        social_image: views::assets::absolute_url(brand.social_image),
+        social_image: social_image_url(brand),
+        canonical_origin: format!("https://{}", views::brand::brand_key().canonical_host()),
         destinations,
         utility,
         footer_links: views::brand::firm_footer_nav()
