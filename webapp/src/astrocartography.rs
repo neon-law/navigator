@@ -20,7 +20,7 @@ use std::sync::LazyLock;
 
 use dioxus::prelude::*;
 use ephemeris::lines::{Angle, AngularLine, LineBody, Point, LINE_BODIES};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const WIDTH: f64 = 960.0;
 const HEIGHT: f64 = 480.0;
@@ -32,6 +32,49 @@ const LAND_PATH: &str = include_str!("assets/natural-earth-110m-land.path");
 /// The specimen chart's civil instant, ISO-8601 UTC: noon on 2000-01-01, the
 /// probe instant the ephemeris fixtures already anchor.
 pub const SPECIMEN_INSTANT: &str = "2000-01-01T12:00:00Z";
+
+// ---------------------------------------------------------------------------
+// The MapLibre island
+//
+// A progressive enhancement over the SVG fallback above: the server renders
+// the same specimen chart as an inline GeoJSON payload, and a first-party
+// boot script (`/public/js/astrocartography-island.js`) mounts the vendored
+// MapLibre GL JS bundle on the island div to draw it interactively. With
+// JavaScript unavailable the payload is inert data and the SVG map below
+// remains the whole experience — nothing on this page computes or sends
+// birth data, and the only cross-origin request the island makes is the
+// raster tile fetch at [`TILE_ORIGIN`].
+// ---------------------------------------------------------------------------
+
+/// The vendored `MapLibre` GL JS entry module (BSD-3-Clause, pinned in
+/// `server/public/VENDOR.toml`). The 6.x dist is ESM: the bundle spawns
+/// `maplibre-gl-worker.mjs` as a same-origin module worker resolved relative
+/// to this URL, which the site's `script-src 'self'` policy admits without a
+/// blob-worker exception.
+pub(crate) const MAPLIBRE_MODULE_HREF: &str = "/public/vendor/maplibre/maplibre-gl.mjs";
+
+/// The vendored `MapLibre` stylesheet (control chrome and attribution).
+const MAPLIBRE_STYLESHEET_HREF: &str = "/public/vendor/maplibre/maplibre-gl.css";
+
+/// The Vesta map style: parchment ground, OSM-derived raster tiles.
+const VESTA_STYLE_HREF: &str = "/public/vendor/maplibre/vesta-style.json";
+
+/// The first-party boot script that reads [`ISLAND_DATA_ID`] and mounts the
+/// map. Loaded with `defer` so the SSR markup it enhances is complete.
+pub const ISLAND_SCRIPT_HREF: &str = "/public/js/astrocartography-island.js";
+
+/// The OSM raster tile origin the island's basemap loads tiles from. The only
+/// external origin any part of the astrocartography surface touches; the
+/// route CSP widens `img-src` and `connect-src` to exactly this origin when
+/// the island renders. Tile requests carry zoom/x/y coordinates only —
+/// never birth data, which the island never receives.
+pub const TILE_ORIGIN: &str = "https://tile.openstreetmap.org";
+
+/// The mount element's class; the island payload script's id is [`ISLAND_DATA_ID`].
+pub const ISLAND_CLASS: &str = "astro-map-island";
+
+/// The DOM id of the island's inline `GeoJSON` payload.
+pub const ISLAND_DATA_ID: &str = "astro-map-island-data";
 
 /// The embedded specimen chart: the line engine's real output at
 /// [`SPECIMEN_INSTANT`], snapshotted with provenance metadata.
@@ -206,6 +249,138 @@ pub fn specimen_lines() -> Result<Vec<AngularLine>, String> {
 
 static SPECIMEN: LazyLock<Result<Vec<AngularLine>, String>> = LazyLock::new(specimen_lines);
 
+// --- the island's GeoJSON payload ---
+//
+// The webapp owns this serializer rather than calling
+// `ephemeris::lines::geojson::feature_collection_json`: that export binds its
+// provenance block to a *verified kernel load* (file digests, time-scale and
+// frame models from the manifest), and the specimen page deliberately performs
+// no kernel load at request time. The fixture's own attestation (generator,
+// instant, Swiss Ephemeris gate) is the provenance the webapp can honestly
+// state, so the geometry serialization lives here beside it. The
+// `island_geojson_matches_the_engine_export` test below pins the geometry to
+// the engine's export byte for byte, so the two cannot drift.
+
+/// The island payload's provenance block: the fixture's own attestation.
+#[derive(Serialize)]
+struct IslandProvenance<'a> {
+    source: &'a str,
+    instant: &'a str,
+    swisseph_gate: &'a str,
+}
+
+#[derive(Serialize)]
+struct IslandFeature {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    properties: IslandProperties,
+    geometry: IslandGeometry,
+}
+
+#[derive(Serialize)]
+struct IslandProperties {
+    body: &'static str,
+    angle: &'static str,
+}
+
+#[derive(Serialize)]
+struct IslandGeometry {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    /// Antimeridian-split members, `[longitude, latitude]` pairs with the
+    /// longitude wrapped into [−180, 180) — the same per-point convention as
+    /// the engine's export.
+    coordinates: Vec<Vec<[f64; 2]>>,
+}
+
+#[derive(Serialize)]
+struct IslandCollection<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    provenance: &'a IslandProvenance<'a>,
+    features: Vec<IslandFeature>,
+}
+
+/// Serialize line-engine output as the island's `FeatureCollection` geometry.
+///
+/// # Errors
+///
+/// A non-finite coordinate (a NaN would serialize as `null` and corrupt the
+/// geometry silently) or a payload that fails to re-parse.
+fn island_geojson(lines: &[AngularLine], provenance: &IslandProvenance) -> Result<String, String> {
+    let mut features = Vec::with_capacity(lines.len());
+    for line in lines {
+        let mut coordinates = Vec::new();
+        for segment in line.segments() {
+            let mut member = Vec::with_capacity(segment.len());
+            for point in segment {
+                if !point.0.is_finite() || !point.1.is_finite() {
+                    return Err(format!("non-finite coordinate ({}, {})", point.0, point.1));
+                }
+                member.push([wrap_longitude(point.0), point.1]);
+            }
+            coordinates.push(member);
+        }
+        features.push(IslandFeature {
+            kind: "Feature",
+            properties: IslandProperties {
+                body: line.body.name(),
+                angle: line.angle.name(),
+            },
+            geometry: IslandGeometry {
+                kind: "MultiLineString",
+                coordinates,
+            },
+        });
+    }
+    serde_json::to_string(&IslandCollection {
+        kind: "FeatureCollection",
+        provenance,
+        features,
+    })
+    .map_err(|error| format!("island GeoJSON serialization failed: {error}"))
+}
+
+/// One person's line set on the island: an id for layer naming, a label for
+/// controls, and the person's own `GeoJSON` source. The /world page will carry
+/// up to six (the visitor plus five others); the specimen page carries one.
+#[derive(Serialize)]
+struct IslandPersonPayload<'a> {
+    id: &'a str,
+    label: &'a str,
+    geojson: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct IslandPayload<'a> {
+    persons: Vec<IslandPersonPayload<'a>>,
+}
+
+/// The specimen page's island payload: one person (the calculated specimen)
+/// whose `GeoJSON` source is the line engine's output, serialized once and
+/// cached for the life of the process.
+static ISLAND_PAYLOAD: LazyLock<Result<String, String>> = LazyLock::new(|| {
+    let lines = specimen_lines()?;
+    let (generator, gate) = SPECIMEN_PROVENANCE
+        .as_ref()
+        .map_err(std::clone::Clone::clone)?;
+    let provenance = IslandProvenance {
+        source: generator,
+        instant: SPECIMEN_INSTANT,
+        swisseph_gate: gate,
+    };
+    let geojson = island_geojson(&lines, &provenance)?;
+    let payload = IslandPayload {
+        persons: vec![IslandPersonPayload {
+            id: "specimen",
+            label: "Specimen chart",
+            geojson: serde_json::from_str(&geojson)
+                .map_err(|error| format!("island GeoJSON failed to re-parse: {error}"))?,
+        }],
+    };
+    serde_json::to_string(&payload).map_err(|error| format!("island payload failed: {error}"))
+});
+
 /// One preprojected overlay for the reusable map. Coordinates use a 960×480 view box.
 /// Callers supply paths computed from their own data; the map performs no astrology calculation.
 #[derive(Clone, PartialEq)]
@@ -359,7 +534,7 @@ pub fn AstrocartographyDesign() -> Element {
                 legend { "Visible planetary lines" }
                 for (index, item) in LINE_BODIES.iter().enumerate() {
                     label {
-                        input { class: "nav-checkbox", r#type: "checkbox", checked: visible()[index],
+                        input { class: "nav-checkbox", r#type: "checkbox", name: "astro-map-body", value: "{item.name()}", checked: visible()[index],
                             onchange: move |_| { visible.with_mut(|layers| layers[index] = !layers[index]); }
                         }
                         "{body_symbol(*item)} {body_display_name(*item)}"
@@ -369,6 +544,7 @@ pub fn AstrocartographyDesign() -> Element {
             div { class: "astro-map-frame",
                 AstrocartographyMap { overlays: chart_overlays }
             }
+            AstrocartographyMapIsland {}
             div { class: "astro-map-selection", role: "group", "aria-label": "Read about a planetary line",
                 for (index, item) in LINE_BODIES.iter().enumerate() {
                     button { class: "nav-btn", r#type: "button", "aria-pressed": selected() == index,
@@ -391,6 +567,41 @@ pub fn AstrocartographyDesign() -> Element {
                 p { "These reflection prompts do not determine your legal wishes or recommend relocation." }
             }
         }
+    }
+}
+
+/// The interactive `MapLibre` island: an empty mount the first-party boot script
+/// (`/public/js/astrocartography-island.js`) populates from the inline
+/// [`ISLAND_DATA_ID`] payload and the vendored `MapLibre` bundle.
+///
+/// Progressive enhancement in both directions: the mount ships empty (CSS
+/// `:empty` hides it entirely without JavaScript, so the SVG map below is the
+/// whole experience), and it renders a visible failure notice without ever
+/// touching the frame if the map cannot start. Only after a successful boot
+/// does the script flag the mount `data-live`, which the stylesheet reads to
+/// retire the static frame — the "Read the map" text alternative below stays.
+#[component]
+fn AstrocartographyMapIsland() -> Element {
+    let Ok(payload) = &*ISLAND_PAYLOAD else {
+        return rsx! {
+            p { class: "astro-demo-notice", role: "alert",
+                "The interactive map payload could not be built from the embedded fixture. The static map remains the full experience."
+            }
+        };
+    };
+    rsx! {
+        div {
+            id: ISLAND_CLASS,
+            class: ISLAND_CLASS,
+            "data-module-src": MAPLIBRE_MODULE_HREF,
+            "data-style-href": VESTA_STYLE_HREF,
+            role: "application",
+            "aria-label": "Interactive astrocartography map: pan and zoom a world map with the specimen's calculated planetary lines. The checkboxes above toggle each body's lines, and the map carries the same angles and styles as the static map.",
+            tabindex: "0"
+        }
+        script { r#type: "application/json", id: ISLAND_DATA_ID, "{payload}" }
+        document::Stylesheet { href: MAPLIBRE_STYLESHEET_HREF }
+        document::Script { src: ISLAND_SCRIPT_HREF, defer: true }
     }
 }
 
@@ -569,5 +780,151 @@ mod tests {
             html.contains("World map with planetary line overlays"),
             "{html}"
         );
+    }
+
+    // --- the MapLibre island ---
+
+    fn test_provenance() -> IslandProvenance<'static> {
+        IslandProvenance {
+            source: "test",
+            instant: SPECIMEN_INSTANT,
+            swisseph_gate: "",
+        }
+    }
+
+    #[test]
+    fn island_geojson_maps_engine_lines_to_multilinestrings() {
+        let crossing = line(
+            LineBody::Sun,
+            Angle::Asc,
+            vec![Point(170.0, 10.0), Point(179.0, 12.0), Point(-179.0, 13.0)],
+        );
+        let simple = line(
+            LineBody::Moon,
+            Angle::Mc,
+            vec![Point(0.0, 0.0), Point(1.0, 1.0)],
+        );
+        let json = island_geojson(&[crossing, simple], &test_provenance()).expect("serializes");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parses");
+        assert_eq!(value["type"], "FeatureCollection");
+        assert_eq!(value["provenance"]["instant"], SPECIMEN_INSTANT);
+        assert_eq!(value["features"].as_array().map(Vec::len), Some(2));
+
+        let geometry = &value["features"][0]["geometry"];
+        assert_eq!(geometry["type"], "MultiLineString");
+        // The antimeridian crossing draws as two members, never one across
+        // the seam.
+        assert_eq!(geometry["coordinates"].as_array().map(Vec::len), Some(2));
+        assert_eq!(geometry["coordinates"][0][0][0], 170.0);
+        assert_eq!(geometry["coordinates"][1][0][0], -179.0);
+        assert_eq!(value["features"][0]["properties"]["body"], "sun");
+        assert_eq!(value["features"][0]["properties"]["angle"], "asc");
+        assert_eq!(value["features"][1]["properties"]["body"], "moon");
+        assert_eq!(value["features"][1]["properties"]["angle"], "mc");
+    }
+
+    #[test]
+    fn island_geojson_rejects_non_finite_coordinates() {
+        let nan_line = line(LineBody::Sun, Angle::Mc, vec![Point(f64::NAN, 0.0)]);
+        let infinite_line = line(LineBody::Sun, Angle::Mc, vec![Point(0.0, f64::INFINITY)]);
+        for bad in [&nan_line, &infinite_line] {
+            let error = island_geojson(std::slice::from_ref(bad), &test_provenance())
+                .expect_err("non-finite coordinates are refused");
+            assert!(error.contains("non-finite"), "{error}");
+        }
+    }
+
+    /// The webapp serializer exists because the engine's export binds its
+    /// provenance to a verified kernel load the page does not perform. The
+    /// geometry, though, is the same engine geometry — pinned feature for
+    /// feature so the two serializers cannot drift.
+    #[test]
+    fn island_geojson_matches_the_engine_export() {
+        let lines = specimen_lines().expect("embedded fixture parses");
+        let ours: serde_json::Value =
+            serde_json::from_str(&island_geojson(&lines, &test_provenance()).expect("serializes"))
+                .expect("parses");
+        let engine_provenance = ephemeris::lines::geojson::LineProvenance {
+            instant_utc: SPECIMEN_INSTANT.to_string(),
+            time_scale_model: String::new(),
+            reference_frame: String::new(),
+            delta_t_model: "",
+            sidereal_model: "",
+            node_convention: "",
+            kernels: Vec::new(),
+        };
+        let engine: serde_json::Value = serde_json::from_str(
+            &ephemeris::lines::geojson::feature_collection_json(&lines, &engine_provenance)
+                .expect("engine serializes"),
+        )
+        .expect("parses");
+        assert_eq!(ours["features"], engine["features"]);
+        assert_eq!(ours["features"].as_array().map(Vec::len), Some(48));
+    }
+
+    #[test]
+    fn island_payload_carries_the_specimen_geometry() {
+        let payload = ISLAND_PAYLOAD.as_ref().expect("payload builds");
+        let value: serde_json::Value = serde_json::from_str(payload).expect("parses");
+        assert_eq!(value["persons"].as_array().map(Vec::len), Some(1));
+        let person = &value["persons"][0];
+        assert_eq!(person["id"], "specimen");
+        assert_eq!(person["label"], "Specimen chart");
+        assert_eq!(
+            person["geojson"]["features"].as_array().map(Vec::len),
+            Some(48)
+        );
+        assert_eq!(person["geojson"]["provenance"]["instant"], SPECIMEN_INSTANT);
+    }
+
+    /// The payload rides the page inside a `<script type="application/json">`
+    /// element, which the HTML parser treats as raw text: it must contain no
+    /// tag-unsafe character at all. The content is numeric coordinates plus
+    /// the fixture's own attestation strings, so this holds by construction —
+    /// and the test fails loudly if the fixture or serializer ever changes.
+    #[test]
+    fn island_payload_is_inert_inside_a_script_element() {
+        let payload = ISLAND_PAYLOAD.as_ref().expect("payload builds");
+        assert!(!payload.contains('<'), "no tag-unsafe character: {payload}");
+        assert!(!payload.contains("</"), "no closing tag hazard");
+    }
+
+    /// The island ships as an empty mount (CSS `:empty` hides it without
+    /// JavaScript), an inert JSON payload, the vendored bundle's stylesheet,
+    /// and the deferred boot script — with body checkboxes carrying the
+    /// values the boot script keys on.
+    #[test]
+    fn specimen_renders_the_island_as_progressive_enhancement() {
+        fn app() -> Element {
+            rsx! { crate::astrocartography::AstrocartographyDesign {} }
+        }
+        let mut dom = VirtualDom::new(app);
+        dom.rebuild_in_place();
+        let html = dioxus_ssr::render(&dom);
+        assert!(html.contains(r#"class="astro-map-island""#), "{html}");
+        assert!(
+            html.contains(r#"data-module-src="/public/vendor/maplibre/maplibre-gl.mjs""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"data-style-href="/public/vendor/maplibre/vesta-style.json""#),
+            "{html}"
+        );
+        assert!(html.contains(r#"id="astro-map-island-data""#), "{html}");
+        let payload = ISLAND_PAYLOAD.as_ref().expect("payload builds");
+        assert!(
+            html.contains(payload),
+            "the payload rides the page verbatim"
+        );
+        assert!(html.contains(r#"name="astro-map-body""#), "{html}");
+        assert!(html.contains(r#"value="mean_node""#), "{html}");
+        // The stylesheet and boot script ride in the document head via
+        // `document::Stylesheet`/`document::Script`, which the fullstack
+        // server injects — `dioxus_ssr::render` on a bare `VirtualDom`
+        // emits body markup only, so those nodes cannot appear here. Pin
+        // the head contract to the vendored asset paths instead; the
+        // vendor canon test guarantees the files exist.
+        assert!(MAPLIBRE_STYLESHEET_HREF.starts_with("/public/vendor/maplibre/"));
+        assert!(ISLAND_SCRIPT_HREF.starts_with("/public/js/"));
     }
 }

@@ -288,11 +288,13 @@ pub(crate) async fn dioxus_document_head(req: Request, next: Next) -> Response {
     let html = attach_mermaid_script(&html);
 
     let captcha = renders_hcaptcha(&html);
+    let tiles = renders_astro_island(&html);
     if let Ok(csp) = HeaderValue::from_str(&csp_with_nonce(
         &nonce,
         crate::asset_csp_origin(),
         analytics.is_some(),
         captcha,
+        tiles,
     )) {
         parts.headers.insert(header::CONTENT_SECURITY_POLICY, csp);
     }
@@ -671,11 +673,18 @@ fn generate_nonce() -> String {
 /// `captcha` is whether the page renders the hCaptcha widget. It admits [`crate::hcaptcha::CSP_ORIGINS`] to `script-src`,
 /// `style-src`, `connect-src`, and a `frame-src` the challenge iframe needs.
 /// Every other page keeps the policy it had before hCaptcha existed.
+///
+/// `tiles` is whether the page renders the astrocartography MapLibre island.
+/// It admits the OSM raster tile origin to `img-src` (tile image loads) and
+/// `connect-src` (the fetch path the bundle may take for the same tiles) —
+/// exactly [`webapp::astrocartography::TILE_ORIGIN`], the only external origin
+/// the island touches. Tile requests carry map coordinates only.
 fn csp_with_nonce(
     nonce: &str,
     asset_origin: Option<String>,
     analytics: bool,
     captcha: bool,
+    tiles: bool,
 ) -> String {
     let asset_extra = asset_origin
         .map(|origin| format!(" {origin}"))
@@ -690,11 +699,16 @@ fn csp_with_nonce(
     } else {
         String::new()
     };
+    let tiles_extra = if tiles {
+        format!(" {}", webapp::astrocartography::TILE_ORIGIN)
+    } else {
+        String::new()
+    };
     // `connect-src` is named only when a third party needs it, so a page
     // without one emits exactly the policy it emitted before analytics existed
     // rather than a directive restating `default-src`.
-    let connect_directive = if analytics || captcha {
-        format!("; connect-src 'self'{analytics_extra}{captcha_extra}")
+    let connect_directive = if analytics || captcha || tiles {
+        format!("; connect-src 'self'{analytics_extra}{captcha_extra}{tiles_extra}")
     } else {
         String::new()
     };
@@ -705,7 +719,7 @@ fn csp_with_nonce(
     };
     format!(
         "default-src 'self'; base-uri 'self'; object-src 'none'; \
-         frame-ancestors 'none'; img-src 'self' data:{asset_extra}; \
+         frame-ancestors 'none'; img-src 'self' data:{asset_extra}{tiles_extra}; \
          font-src 'self'{asset_extra}; media-src 'self'{asset_extra}; \
          style-src 'self' 'unsafe-inline'{captcha_extra}; \
          script-src 'self' 'nonce-{nonce}' 'wasm-unsafe-eval'{analytics_extra}{captcha_extra}; \
@@ -719,6 +733,15 @@ fn renders_hcaptcha(html: &str) -> bool {
     html.contains(&format!(
         "class=\"{}\"",
         webapp::lead_capture::HCAPTCHA_WIDGET_CLASS
+    ))
+}
+
+/// Whether the rendered page carries the astrocartography MapLibre island,
+/// and so needs the OSM raster tile origin in its policy.
+fn renders_astro_island(html: &str) -> bool {
+    html.contains(&format!(
+        "class=\"{}\"",
+        webapp::astrocartography::ISLAND_CLASS
     ))
 }
 
@@ -5199,7 +5222,7 @@ mod tests {
         // whatever `generate_nonce` produced for this response.
         let nonce = generate_nonce();
 
-        let same_origin = csp_with_nonce(&nonce, None, false, false);
+        let same_origin = csp_with_nonce(&nonce, None, false, false, false);
         assert!(same_origin.contains("font-src 'self';"), "{same_origin}");
         assert!(same_origin.contains("media-src 'self';"), "{same_origin}");
         assert!(
@@ -5210,6 +5233,7 @@ mod tests {
         let cdn = csp_with_nonce(
             &nonce,
             Some("https://storage.example.test".to_string()),
+            false,
             false,
             false,
         );
@@ -5242,7 +5266,7 @@ mod tests {
     #[test]
     fn without_analytics_the_policy_names_no_third_party_origin() {
         let nonce = generate_nonce();
-        let csp = csp_with_nonce(&nonce, None, false, false);
+        let csp = csp_with_nonce(&nonce, None, false, false, false);
         assert_eq!(
             csp,
             format!(
@@ -5330,11 +5354,11 @@ mod tests {
     #[test]
     fn only_a_page_with_the_hcaptcha_widget_admits_hcaptcha() {
         let nonce = generate_nonce();
-        let plain = csp_with_nonce(&nonce, None, false, false);
+        let plain = csp_with_nonce(&nonce, None, false, false, false);
         assert!(!plain.contains("hcaptcha"), "{plain}");
         assert!(!plain.contains("frame-src"), "{plain}");
 
-        let csp = csp_with_nonce(&nonce, None, false, true);
+        let csp = csp_with_nonce(&nonce, None, false, true, false);
         for directive in ["script-src", "style-src", "connect-src", "frame-src"] {
             let at = csp
                 .find(directive)
@@ -5354,10 +5378,56 @@ mod tests {
         assert!(!renders_hcaptcha(r#"<form action="/leads"></form>"#));
     }
 
+    /// A page that renders the astrocartography MapLibre island admits the
+    /// OSM raster tile origin on `img-src` and `connect-src` — the only two
+    /// directives the island's tile fetches need — and nothing else. A page
+    /// without the island emits exactly the policy it emitted before the
+    /// island existed.
+    #[test]
+    fn only_a_page_with_the_astro_island_admits_map_tiles() {
+        let nonce = generate_nonce();
+        let tile_origin = webapp::astrocartography::TILE_ORIGIN;
+
+        let plain = csp_with_nonce(&nonce, None, false, false, false);
+        assert!(
+            !plain.contains("tile.openstreetmap.org"),
+            "no tile origin without the island: {plain}"
+        );
+        assert!(!plain.contains("connect-src"), "{plain}");
+
+        let csp = csp_with_nonce(&nonce, None, false, false, true);
+        assert!(
+            csp.contains(&format!("img-src 'self' data: {tile_origin};")),
+            "{csp}"
+        );
+        assert!(
+            csp.contains(&format!("; connect-src 'self' {tile_origin}")),
+            "{csp}"
+        );
+        // The island loads no scripts, styles, or fonts from the tile origin.
+        for directive in ["script-src", "style-src", "font-src"] {
+            let at = csp
+                .find(directive)
+                .unwrap_or_else(|| panic!("{directive}: {csp}"));
+            let value = csp[at..].split(';').next().unwrap_or_default();
+            assert!(
+                !value.contains("tile.openstreetmap.org"),
+                "{directive} must not name the tile origin: {csp}"
+            );
+        }
+
+        assert!(renders_astro_island(
+            r#"<div id="astro-map-island" class="astro-map-island" data-module-src="/public/vendor/maplibre/maplibre-gl.mjs"></div>"#
+        ));
+        assert!(!renders_astro_island(
+            r#"<div class="astro-map-frame"></div>"#
+        ));
+    }
+
     #[test]
     fn analytics_admit_plausible_on_script_and_connect_only() {
         let nonce = generate_nonce();
-        let csp = csp_with_nonce(&nonce, None, true, false);
+        let csp = csp_with_nonce(&nonce, None, true, false, false);
         assert!(
             csp.contains(&format!(
                 "script-src 'self' 'nonce-{nonce}' 'wasm-unsafe-eval' https://plausible.io;"
@@ -5871,7 +5941,7 @@ mod tests {
         assert!(!nonce.is_empty());
         assert_eq!(
             csp,
-            csp_with_nonce(&nonce, crate::asset_csp_origin(), false, false)
+            csp_with_nonce(&nonce, crate::asset_csp_origin(), false, false, false)
         );
         assert!(
             csp.contains("script-src 'self' 'nonce-") && csp.contains("'wasm-unsafe-eval'"),

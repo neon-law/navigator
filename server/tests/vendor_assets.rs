@@ -131,7 +131,21 @@ fn only_approved_browser_distributions_are_vendored() {
                     | ("PDF.js worker", "vendor/pdfjs/pdf.worker.min.mjs")
                     | ("PDF.js Apache-2.0 license", "vendor/pdfjs/LICENSE")
             );
-            !(swagger || mermaid || pdfjs)
+            let maplibre = matches!(
+                (asset.name.as_str(), asset.served_path.as_str()),
+                (
+                    "MapLibre GL JS main bundle",
+                    "vendor/maplibre/maplibre-gl.mjs"
+                ) | (
+                    "MapLibre GL JS worker",
+                    "vendor/maplibre/maplibre-gl-worker.mjs"
+                ) | ("MapLibre GL JS CSS", "vendor/maplibre/maplibre-gl.css")
+                    | (
+                        "MapLibre BSD-3-Clause license",
+                        "vendor/maplibre/LICENSE.txt"
+                    )
+            );
+            !(swagger || mermaid || pdfjs || maplibre)
         })
         .map(|asset| format!("{} ({})", asset.name, asset.served_path))
         .collect::<Vec<_>>();
@@ -182,6 +196,48 @@ fn every_pdfjs_asset_is_pinned() {
             "unrecorded PDF.js asset: {served}"
         );
     }
+}
+
+/// Files under `public/vendor/maplibre/` that are ours, not upstream: the
+/// Vesta map style — parchment ground, OSM raster tiles — is first-party
+/// source, checked in beside the vendored bundle it styles. Everything else
+/// in that directory ships from `maplibre-gl` and must be pinned.
+const MAPLIBRE_FIRST_PARTY: &[&str] = &["vesta-style.json"];
+
+/// The MapLibre exception admits exactly the pinned 6.16.0 dist — main
+/// bundle, its same-origin module worker, the stylesheet, the license — and
+/// waives only [`MAPLIBRE_FIRST_PARTY`]. A refresh that drops in the
+/// unreferenced `maplibre-gl-shared.mjs` stub or any other dist file without
+/// recording it fails here.
+#[test]
+fn every_maplibre_asset_is_pinned() {
+    let public = public_dir();
+    let raw = std::fs::read_to_string(public.join("VENDOR.toml")).expect("read VENDOR.toml");
+    let manifest: Manifest = toml::from_str(&raw).expect("parse VENDOR.toml");
+
+    let dir = public.join("vendor/maplibre");
+    let mut unpinned = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("read the maplibre directory") {
+        let entry = entry.expect("read a maplibre directory entry");
+        if !entry.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if MAPLIBRE_FIRST_PARTY.contains(&file_name.as_str()) {
+            continue;
+        }
+        let served = format!("vendor/maplibre/{file_name}");
+        if !manifest.asset.iter().any(|a| a.served_path == served) {
+            unpinned.push(served);
+        }
+    }
+
+    assert!(
+        unpinned.is_empty(),
+        "vendored MapLibre files are served but not pinned in VENDOR.toml: {unpinned:?}\n\
+         Add an [[asset]] entry recording the upstream version, URL, and SHA-256 — \
+         or add the file to MAPLIBRE_FIRST_PARTY if we wrote it."
+    );
 }
 
 /// Files under `public/swagger-ui/` that are ours, not upstream: the Navigator

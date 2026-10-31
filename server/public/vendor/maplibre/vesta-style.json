@@ -1,0 +1,31 @@
+{
+  "version": 8,
+  "name": "Vesta parchment",
+  "sources": {
+    "osm": {
+      "type": "raster",
+      "tiles": ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      "tileSize": 256,
+      "maxzoom": 19,
+      "attribution": "© OpenStreetMap contributors"
+    }
+  },
+  "layers": [
+    {
+      "id": "parchment",
+      "type": "background",
+      "paint": { "background-color": "#f9f3ee" }
+    },
+    {
+      "id": "osm-raster",
+      "type": "raster",
+      "source": "osm",
+      "paint": {
+        "raster-opacity": 0.85,
+        "raster-saturation": -0.6,
+        "raster-contrast": -0.1,
+        "raster-brightness-max": 0.95
+      }
+    }
+  ]
+}
