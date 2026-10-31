@@ -4462,6 +4462,10 @@ struct UploadDocumentRequest {
     /// entry is validated before any byte is stored.
     #[serde(default)]
     notarization: Vec<store::documents::Notarization>,
+    /// The exhibit metadata the matter's evidence index reads (LAW-185).
+    /// Optional on every kind; validated before any byte is stored.
+    #[serde(default)]
+    evidence: Option<store::documents::Evidence>,
 }
 
 fn invalid_document_slug_response(filename: &str, slug: &str) -> Option<Response> {
@@ -4531,6 +4535,9 @@ async fn upload_document_door(
         .find_map(|notarization| notarization.validate().err())
     {
         return Ok(bad_request("invalid_notarization", &error.to_string()));
+    }
+    if let Some(error) = input.evidence.as_ref().and_then(|e| e.validate().err()) {
+        return Ok(bad_request("invalid_evidence", &error.to_string()));
     }
     if input.derived_from.is_some() && kind != "transcript" {
         return Ok(bad_request(
@@ -4684,6 +4691,7 @@ async fn upload_document_door(
             },
             signing: input.signing,
             notarization: input.notarization.clone(),
+            evidence: input.evidence.clone(),
         },
         &bytes,
     )
@@ -4737,6 +4745,9 @@ async fn document_pointer(
         xero_invoice_id: None,
         signing: current.signing,
         notarization: current.notarization.clone(),
+        // The evidence block rides with the current revision, so a pointer
+        // filed here carries the same provenance `project sync` records.
+        evidence: current.evidence.clone(),
         service: Vec::new(),
     })
 }
@@ -4929,6 +4940,7 @@ async fn file_mail_attachments(
             transcript_quality: None,
             signing: None,
             notarization: Vec::new(),
+            evidence: None,
         };
         let provenance = store::documents::MailProvenance {
             message_id: &message_id_str,
@@ -8261,6 +8273,7 @@ mod tests {
             transcript_quality: None,
             signing: None,
             notarization: Vec::new(),
+            evidence: None,
         };
         store::documents::ingest_bytes_as(
             surreal,

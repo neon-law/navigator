@@ -2254,6 +2254,13 @@ CREATE INDEX communication_acknowledges ON communication (project_id, acknowledg
 ALTER TABLE template ADD COLUMN firm_id UUID REFERENCES firm(id);
 ALTER TABLE template ADD CONSTRAINT template_one_scope CHECK (project_id IS NULL OR firm_id IS NULL);
 
+-- Migration: 20261030020000_add_asset_evidence.sql
+-- The exhibit metadata the matter page's evidence index reads (LAW-185):
+-- `{ dated_at, source, confidence, supports }` as a JSON object. NULL for
+-- rows written before exhibits carried provenance; the shape is
+-- `store::documents::Evidence`, validated before the write.
+ALTER TABLE asset ADD COLUMN evidence JSONB;
+
 -- Migration: 20261030120000_create_project_task.sql
 -- Net-new matter work tracking: assignable Project tasks with audited state
 -- transitions. A Task is work someone does, with a workflow state; it is not a

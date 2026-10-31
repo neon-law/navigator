@@ -111,6 +111,12 @@ pub struct Asset {
     pub signing: Option<crate::documents::Signing>,
     /// The notarial acknowledgments recorded at upload; empty when none were.
     pub notarization: Vec<crate::documents::Notarization>,
+    /// Evidence provenance a lawyer recorded at upload (LAW-185): the date
+    /// the exhibit itself bears, where it came from, how confidently it was
+    /// identified, and the claim references it supports. `None` is
+    /// unrecorded; a stored value this build cannot read reads back as
+    /// unrecorded rather than failing the row.
+    pub evidence: Option<crate::documents::Evidence>,
     /// When a lawyer soft-deleted this revision's document. Every revision
     /// of the slug chain carries the same stamp. `None` is live.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -199,6 +205,7 @@ struct AssetRow {
     transcript_quality: Option<String>,
     signing: Option<Json>,
     notarization: Option<Json>,
+    evidence: Option<Json>,
     deleted_at: Option<surrealdb::types::Datetime>,
     purge_after: Option<surrealdb::types::Datetime>,
     deleted_by_person_id: Option<surrealdb::types::RecordId>,
@@ -249,6 +256,11 @@ impl AssetRow {
                 .notarization
                 .and_then(|notarization| serde_json::from_value(notarization).ok())
                 .unwrap_or_default(),
+            // A stored value this build cannot read reads back as unrecorded
+            // rather than failing the whole row.
+            evidence: self
+                .evidence
+                .and_then(|evidence| serde_json::from_value(evidence).ok()),
             deleted_at: self.deleted_at.map(Into::into),
             purge_after: self.purge_after.map(Into::into),
             deleted_by_person_id: self.deleted_by_person_id.as_ref().and_then(record_uuid),
@@ -266,7 +278,7 @@ impl AssetRow {
 pub(crate) const SELECT: &str = "id, storage_key, secondary_storage_key, content_type, byte_size, \
      sha256_hex, project_id, filename, kind, source, received_at, description, visibility, slug, \
      published_at, source_message_id, source_sender, source_received_at, source_subject, metadata, \
-     derived_from, transcript_quality, signing, notarization, deleted_at, purge_after, \
+     derived_from, transcript_quality, signing, notarization, evidence, deleted_at, purge_after, \
      deleted_by_person_id, deleted_commit_sha, legal_hold_at, purged_at, \
      inserted_at, updated_at";
 
@@ -1516,6 +1528,13 @@ pub async fn restore_archived(db: &SurrealDb, asset: &Asset) -> Result<RowRestor
                 .then(|| serde_json::to_value(&asset.notarization).ok())
                 .flatten(),
         ))
+        .bind((
+            "evidence",
+            asset
+                .evidence
+                .as_ref()
+                .and_then(|evidence| serde_json::to_value(evidence).ok()),
+        ))
         .bind(("deleted_at", datetime(asset.deleted_at)))
         .bind(("purge_after", datetime(asset.purge_after)))
         .bind((
@@ -2485,6 +2504,7 @@ mod tests {
                     transcript_quality: None,
                     signing: None,
                     notarization: Vec::new(),
+                    evidence: None,
                 },
                 format!("bytes for {shape}").as_bytes(),
             )
@@ -2687,6 +2707,7 @@ mod tests {
                         transcript_quality: None,
                         signing: None,
                         notarization: Vec::new(),
+                        evidence: None,
                     },
                     bytes,
                 )
@@ -2748,6 +2769,7 @@ mod tests {
                         transcript_quality: None,
                         signing: None,
                         notarization: Vec::new(),
+                        evidence: None,
                     },
                     bytes,
                 )
@@ -2816,6 +2838,7 @@ mod tests {
                         transcript_quality: None,
                         signing: None,
                         notarization: Vec::new(),
+                        evidence: None,
                     },
                     bytes,
                 )
@@ -2890,6 +2913,7 @@ mod tests {
                 transcript_quality: None,
                 signing: None,
                 notarization: Vec::new(),
+                evidence: None,
             },
             bytes,
         )

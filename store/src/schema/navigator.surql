@@ -1659,6 +1659,13 @@ DEFINE FIELD OVERWRITE signing ON asset TYPE any;
 -- commission number. Optional, so earlier rows read as an empty list;
 -- `store::documents::Notarization` is the shape, validated before the write.
 DEFINE FIELD OVERWRITE notarization ON asset TYPE any;
+-- The exhibit metadata the matter page's evidence index reads (LAW-185):
+-- `{ dated_at, source, confidence, supports }` — the date the exhibit
+-- itself bears, where it came from, how confidently it is tied to what it
+-- supports, and the claim references it bears on. Optional, so rows written
+-- before it read as unrecorded without a backfill;
+-- `store::documents::Evidence` is the shape, validated before the write.
+DEFINE FIELD OVERWRITE evidence ON asset TYPE any;
 -- Soft deletion (ENG-862). A lawyer-tier delete stamps `deleted_at` on every
 -- revision of the slug chain together, with `purge_after` 180 days later, the
 -- person who deleted it, and the source-repository commit that removed its

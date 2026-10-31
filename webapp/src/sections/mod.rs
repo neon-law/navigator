@@ -25,6 +25,7 @@ pub mod checklist;
 pub mod discovery;
 pub mod engagement;
 pub mod estate;
+pub mod evidence;
 pub mod graph;
 pub mod notations;
 pub mod page;
@@ -37,6 +38,7 @@ pub use authorities::{AuthorityCard, AuthorityQuote, AuthorityView};
 pub use checklist::ChecklistStep;
 pub use discovery::{DiscoveryFilter, DiscoveryPair, DiscoveryView};
 pub use engagement::{EngagementLetterView, LetterDocument, PageDraft};
+pub use evidence::{EvidenceClaim, EvidenceExhibit, EvidenceIndexSection, EvidenceIndexView};
 pub use graph::{GraphEdge, GraphNode, GraphView};
 pub use notations::{ChecklistView, DocumentState, NotationDocumentView, NotationListRow};
 
@@ -151,6 +153,7 @@ pub enum SectionView {
     DocumentBody(PageDraft),
     CommentRail(Vec<SectionRow>),
     AuthorityTable(AuthorityView),
+    EvidenceIndex(EvidenceIndexView),
     DiscoveryPairs(DiscoveryView),
     StageList(Vec<SectionRow>),
     ArgumentExchange(ArgumentExchangeView),
@@ -214,6 +217,7 @@ impl SectionView {
             Self::DocumentBody(_) => "document_body",
             Self::CommentRail(_) => "comment_rail",
             Self::AuthorityTable(_) => "authority_table",
+            Self::EvidenceIndex(_) => "evidence_index",
             Self::DiscoveryPairs(_) => "discovery_pairs",
             Self::StageList(_) => "stage_list",
             Self::ArgumentExchange(_) => "argument_exchange",
@@ -277,6 +281,7 @@ impl SectionView {
             Self::DocumentBody(PageDraft::default()),
             Self::CommentRail(Vec::new()),
             Self::AuthorityTable(AuthorityView::default()),
+            Self::EvidenceIndex(EvidenceIndexView::default()),
             Self::DiscoveryPairs(DiscoveryView::default()),
             Self::StageList(Vec::new()),
             Self::ArgumentExchange(ArgumentExchangeView::default()),
@@ -611,6 +616,7 @@ pub fn SectionBody(view: SectionView) -> Element {
         SectionView::DocumentBody(draft) => rsx! { engagement::DocumentBodySection { draft } },
         SectionView::CommentRail(rows) => rsx! { CommentRailSection { rows } },
         SectionView::AuthorityTable(view) => rsx! { authorities::AuthorityTableSection { view } },
+        SectionView::EvidenceIndex(view) => rsx! { EvidenceIndexSection { view } },
         SectionView::DiscoveryPairs(view) => rsx! { discovery::DiscoveryPairsSection { view } },
         SectionView::StageList(rows) => rsx! { StageListSection { rows } },
         SectionView::ArgumentExchange(view) => {
@@ -676,7 +682,7 @@ pub(crate) mod tests {
     /// wasm build of this crate never links `rules`; the server-side test
     /// below proves the two agree.
     fn rules_section_count() -> usize {
-        56
+        57
     }
 
     pub(super) fn render(view: SectionView) -> String {

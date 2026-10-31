@@ -4014,6 +4014,47 @@ struct ExecutionArgs {
     /// Never the notary's name or commission number.
     #[arg(long, value_parser = parse_notarization)]
     notarization: Vec<store::documents::Notarization>,
+    /// The exhibit metadata the matter's evidence index reads (LAW-185).
+    #[command(flatten)]
+    evidence: EvidenceArgs,
+}
+
+/// The exhibit metadata `site document upload` records for the evidence
+/// index. Every flag is optional; the block is recorded only when at least
+/// one is given.
+#[derive(clap::Args)]
+struct EvidenceArgs {
+    /// The date the exhibit itself bears, `YYYY-MM-DD` — a letter's own
+    /// date, a photograph's capture date — not the filing date.
+    #[arg(long = "evidence-dated-at", value_parser = parse_calendar_date)]
+    dated_at: Option<chrono::NaiveDate>,
+    /// Where the exhibit came from, one line — a person, an agency, a URL.
+    #[arg(long = "evidence-source")]
+    source: Option<String>,
+    /// How confidently the exhibit is tied to what it supports:
+    /// `exact`, `inferred`, or `unknown`.
+    #[arg(long = "evidence-confidence", value_parser = parse_evidence_confidence)]
+    confidence: Option<store::documents::EvidenceConfidence>,
+    /// A claim reference the exhibit bears on, repeatable — exactly the
+    /// reference the reader should follow, `¶ 12` or
+    /// `Count II — Conversion`, not prose.
+    #[arg(long = "evidence-supports")]
+    supports: Vec<String>,
+}
+
+impl EvidenceArgs {
+    fn record(self) -> Option<store::documents::Evidence> {
+        let any = self.dated_at.is_some()
+            || self.source.is_some()
+            || self.confidence.is_some()
+            || !self.supports.is_empty();
+        any.then_some(store::documents::Evidence {
+            dated_at: self.dated_at,
+            source: self.source,
+            confidence: self.confidence,
+            supports: self.supports,
+        })
+    }
 }
 
 impl ExecutionArgs {
@@ -4024,6 +4065,7 @@ impl ExecutionArgs {
                 .zip(self.signed_on)
                 .map(|(method, signed_on)| store::documents::Signing { method, signed_on }),
             notarization: self.notarization,
+            evidence: self.evidence.record(),
         }
     }
 }
@@ -4034,6 +4076,9 @@ impl ExecutionArgs {
 /// the checkout's own `navigator.yaml` — a pointer path below `blobs/` (the
 /// committed `.yaml`), or the bytes below `documents/` it names, is enough for
 /// a lawyer to name a file rather than an id or a host.
+// The `upload` variant flattens every flag clap cannot box, so it is far
+// larger than the read variants; the enum is built once per process run.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum DocumentAction {
     /// File a local document into a matter (`POST /app/api/projects/{id}/documents`).
@@ -7207,6 +7252,18 @@ fn parse_signing_method(value: &str) -> Result<store::documents::SigningMethod, 
             .collect::<Vec<_>>()
             .join(" or ");
         format!("signing method must be {accepted}")
+    })
+}
+
+/// Parse one `--evidence-confidence` value.
+fn parse_evidence_confidence(value: &str) -> Result<store::documents::EvidenceConfidence, String> {
+    store::documents::EvidenceConfidence::parse(value).ok_or_else(|| {
+        let accepted = store::documents::EvidenceConfidence::ALL
+            .iter()
+            .map(|confidence| format!("`{}`", confidence.as_str()))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        format!("evidence confidence must be {accepted}")
     })
 }
 

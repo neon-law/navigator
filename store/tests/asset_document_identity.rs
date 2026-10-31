@@ -50,6 +50,7 @@ async fn insert_revision(
             transcript_quality: None,
             signing: None,
             notarization: Vec::new(),
+            evidence: None,
         },
         bytes,
     )

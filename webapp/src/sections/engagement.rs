@@ -487,6 +487,7 @@ mod tests {
                 purged_at: None,
                 inserted_at: at,
                 updated_at: at,
+                evidence: None,
             }
         }
 

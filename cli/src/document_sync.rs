@@ -488,6 +488,9 @@ async fn sync_authority_capture(
         xero_invoice_id: None,
         signing: None,
         notarization: Vec::new(),
+        // An Authority capture resolves the Authority keys, not exhibit
+        // provenance — the evidence block is always absent here.
+        evidence: None,
         service: Vec::new(),
     };
     pointer
@@ -657,6 +660,9 @@ fn carry_recorded_keys(
     pointer.signing = pointer.signing.or(from.signing);
     if pointer.notarization.is_empty() {
         pointer.notarization.clone_from(&from.notarization);
+    }
+    if pointer.evidence.is_none() {
+        pointer.evidence.clone_from(&from.evidence);
     }
     if pointer.service.is_empty() {
         pointer.service.clone_from(&from.service);
@@ -886,6 +892,9 @@ fn project_sync_plans_scoped(
             signing: current
                 .signing
                 .or_else(|| local.as_ref().and_then(|local| local.signing)),
+            // The live inventory carries no exhibit provenance; the
+            // committed pointer's evidence block is kept.
+            evidence: local.as_ref().and_then(|local| local.evidence.clone()),
             notarization: if current.notarization.is_empty() {
                 local
                     .as_ref()
@@ -2879,6 +2888,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         }
     }
 
@@ -2903,6 +2913,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         }
     }
 
@@ -2973,6 +2984,7 @@ mod tests {
             inserted_at: "2026-09-23T20:53:07.132412551Z".into(),
             signing: None,
             notarization: Vec::new(),
+            evidence: None,
         };
         let root = tempfile::tempdir().unwrap();
         let plans =
@@ -3000,6 +3012,7 @@ mod tests {
             inserted_at: "2026-09-23T20:53:07Z".into(),
             signing: None,
             notarization: Vec::new(),
+            evidence: None,
         }
     }
 

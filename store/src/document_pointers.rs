@@ -70,6 +70,13 @@ pub struct DocumentPointer {
     /// has none; a pleading's certificate of service is composed from it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub service: Vec<crate::project_service::ServiceRecord>,
+    /// The exhibit metadata the matter page's evidence index reads
+    /// (LAW-185): `{ dated_at, source, confidence, supports }` — the date
+    /// the exhibit itself bears, where it came from, how confidently it is
+    /// tied to what it supports, and the claim references it bears on.
+    /// Optional on every pointer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<crate::documents::Evidence>,
 }
 
 /// One of the lawyer-facing folders a Project checkout's `documents/`
@@ -329,6 +336,8 @@ pub enum PointerError {
     PreviousVersion,
     #[error(transparent)]
     Notarization(#[from] crate::documents::NotarizationError),
+    #[error(transparent)]
+    Evidence(#[from] crate::documents::EvidenceError),
 }
 
 impl DocumentPointer {
@@ -392,6 +401,9 @@ impl DocumentPointer {
         for notarization in &self.notarization {
             notarization.validate()?;
         }
+        if let Some(evidence) = &self.evidence {
+            evidence.validate()?;
+        }
         Ok(())
     }
 }
@@ -421,6 +433,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         }
     }
 

@@ -1698,6 +1698,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         };
         crate::document_sync::write_uploaded_pointer(
             dir.path(),
@@ -1746,6 +1747,7 @@ mod tests {
             signing: None,
             notarization: Vec::new(),
             service: Vec::new(),
+            evidence: None,
         };
         crate::document_sync::write_uploaded_pointer(dir.path(), slug, &pointer).unwrap();
         let free_look = FakeFreeLook {
