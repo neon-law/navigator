@@ -134,6 +134,7 @@ pub mod template_gallery;
 pub mod testimonials_page;
 pub mod transactional_page;
 pub mod walker_step;
+pub mod world_page;
 
 /// The root component `web` renders on the server and the wasm client
 /// hydrates in the browser.

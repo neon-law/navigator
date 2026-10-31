@@ -4379,7 +4379,7 @@ dependencies = [
 
 [[package]]
 name = "ephemeris"
-version = "26.10.31"
+version = "26.10.30"
 dependencies = [
  "hifitime",
  "serde",
@@ -5065,7 +5065,7 @@ dependencies = [
 
 [[package]]
 name = "geotime"
-version = "26.10.31"
+version = "26.10.30"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -7918,6 +7918,7 @@ dependencies = [
  "anyhow",
  "axum",
  "chrono",
+ "geotime",
  "portal",
  "rules",
  "serde",
@@ -15466,6 +15467,7 @@ dependencies = [
  "ephemeris",
  "forms",
  "futures",
+ "geotime",
  "hifitime",
  "hmac 0.13.0",
  "percent-encoding",
