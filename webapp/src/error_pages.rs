@@ -349,10 +349,6 @@ mod tests {
         let html = body_of(forbidden(Viewer::SignedIn));
         assert!(html.contains("contact@"), "a way to appeal: {html}");
         assert!(
-            html.contains("mailto:contact@"),
-            "the footer address is a link: {html}"
-        );
-        assert!(
             html.contains("not authorized"),
             "says what happened: {html}"
         );
@@ -391,10 +387,6 @@ mod tests {
         // with the button deleted.
         assert!(html.contains(">Contact us<"), "contact CTA: {html}");
         assert!(html.contains("contact@"), "wrong-address path: {html}");
-        assert!(
-            html.contains("mailto:contact@"),
-            "the footer address is a link: {html}"
-        );
     }
 
     #[test]

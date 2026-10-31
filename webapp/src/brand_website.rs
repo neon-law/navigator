@@ -87,6 +87,14 @@ const COMPILED_SITES: &[CompiledSite] = &[
         www: "www.guiebandshook.com",
         live: true,
     },
+    // Registered but held out: the placeholder RFC 2606 host is real
+    // inventory until IEP's launch decisions land, and the /app listing
+    // must not lie about the registry.
+    CompiledSite {
+        key: "iep",
+        www: "www.iep.example",
+        live: false,
+    },
 ];
 
 /// One brand key as `/app` listings should print it.

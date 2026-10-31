@@ -35,16 +35,15 @@ use crate::components::{
     BackBreadcrumb, Badge, BadgeTone, Callout, CalloutTone, Card, CatalogHero, Choice, ChoiceGroup,
     ChoiceGroupOption, ClientDriView, ClientDriViewBanner, CodeBlock, Column, ConfirmDelete,
     CopyRun, DataTable, Empty, ExternalLink, FactCard, FactGrid, Feed, FeedAccent, FeedPost,
-    FeedSource, Field, FooterAttorney, FooterBarLicense, FooterBrandLink, FooterMembership,
-    FooterNavLink, FooterOffice, FooterSocialLink, FormCard, GitHubStars, Hero, HeroAlign,
-    HeroLevel, Honeypot, Icon, IconName, LawyerPortalBreadcrumb, LegalBlueprintDisclaimer,
-    NavigatorDestination, NavigatorFooter, NavigatorFooterLink, NavigatorNavbar, NavigatorShell,
-    NotationDocument, NotationDocumentData, OpenTermLink, Pagination, Panel, PeopleListInputs,
-    PersonChoice, PersonPicker, PricingCard, PricingSection, Progress, PublicShell, QuestionStage,
-    RowActions, RunParagraph, SampleMattersBanner, Separator, SeparatorOrientation,
-    SiteFooterLegal, SiteHeader, SiteNavLink, SocialMeta, SortState, Stage, StageWidth, StatusCell,
-    StatusStrip, StepMeta, Stepper, StepperPanel, Tab, Tabs, TestimonialCards, TestimonialSection,
-    Toast, ToastTone, ToggleGroup, ToggleOption, THEME_STYLESHEET_HREF,
+    FeedSource, Field, FormCard, Hero, HeroAlign, HeroLevel, Honeypot, Icon, IconName,
+    LawyerPortalBreadcrumb, LegalBlueprintDisclaimer, NavigatorDestination, NavigatorFooter,
+    NavigatorFooterLink, NavigatorNavbar, NavigatorShell, NotationDocument, NotationDocumentData,
+    OpenTermLink, Pagination, Panel, PeopleListInputs, PersonChoice, PersonPicker, PricingCard,
+    PricingSection, Progress, PublicShell, QuestionStage, RowActions, RunParagraph,
+    SampleMattersBanner, Separator, SeparatorOrientation, SiteFooterLegal, SiteHeader, SiteNavLink,
+    SocialMeta, SortState, Stage, StageWidth, StatusCell, StatusStrip, StepMeta, Stepper,
+    StepperPanel, Tab, Tabs, TestimonialCards, TestimonialSection, Toast, ToastTone, ToggleGroup,
+    ToggleOption, THEME_STYLESHEET_HREF,
 };
 // The vendor marks come from their own module rather than the theme root: they
 // are the one component whose colours are a third party's rather than the
@@ -600,62 +599,11 @@ fn FirmFooterShowcase() -> Element {
                     legal_entity: "Guieb & Shook PC".to_string(),
                     brands: Vec::new(),
                     copyright_year: 2026,
+                    firm_home_href: "https://www.guiebandshook.com".to_string(),
                 },
             }
         }
     }
-}
-
-/// The firm's one association affiliation, as the deployed footer publishes
-/// it. Real rather than synthetic for the same reason the trademark below is:
-/// the line is a public claim about the firm, and a made-up association
-/// beside a real-looking link is the one thing it must never show.
-fn demo_memberships() -> Vec<FooterMembership> {
-    vec![FooterMembership {
-        label: "Justice Technology Association".to_string(),
-        standing: "Mission-Aligned Partner".to_string(),
-        href: "https://justicetechassociation.org/get-involved".to_string(),
-        logo_href: "/public/img/justice-technology-association/logo.png".to_string(),
-    }]
-}
-
-/// The currently live house brands, as the deployed footer's "Our Family" row
-/// lists them on the firm's own host: the firm current and unlinked, the other
-/// live brands linking their production homes.
-// Literal rather than read from `views::brand::BrandKey::family_byline`:
-// this module is not behind the `server` feature, so it compiles into the
-// wasm client, where `views` is not linked. The gallery is a fixture of what
-// the footer looks like, not a second source of truth for the copy.
-fn demo_family() -> Vec<FooterBrandLink> {
-    [
-        (
-            "Emerging Technologies Counsel",
-            "https://www.neonlaw.com",
-            true,
-            "flat-fee legal services for emerging tech",
-        ),
-        (
-            "Protect your info",
-            "https://www.deleteyourdata.com",
-            false,
-            "protect your personal information",
-        ),
-        (
-            "Lawyer Shook",
-            "https://www.lawyershook.com",
-            false,
-            "Nicholas Shook",
-        ),
-    ]
-    .into_iter()
-    .map(|(label, href, current, byline)| FooterBrandLink {
-        label: label.to_string(),
-        href: href.to_string(),
-        current,
-        logo_href: String::new(),
-        byline: byline.to_string(),
-    })
-    .collect()
 }
 
 /// The unified Navigator shell — prepared, but not yet adopted by any real
@@ -1204,141 +1152,32 @@ fn SiteHeaderShowcase() -> Element {
     }
 }
 
-/// The site footer's two bands — the contact band (email CTA, voice line,
-/// offices) above the brand-driven legal strip (the copyright that names the
-/// regulated entity, the per-attorney bar licences, and the
-/// attorney-advertising disclaimer). A deploy that publishes no contact
-/// channels renders the legal strip alone.
+/// The site footer's legal strip — the three lines a reader gets on every
+/// public page: the copyright naming the regulated entity, the mark notice
+/// (when the brand carries one), and the attorney-advertising disclaimer.
 #[component]
 fn SiteFooterShowcase() -> Element {
     rsx! {
         section {
             h2 { "Site footer" }
             SiteFooterLegal {
-                copyright_holder: "Neon Law".to_string(),
+                copyright_holder: "Guieb & Shook PC".to_string(),
+                copyright_href: "https://www.guiebandshook.com".to_string(),
                 disclaimer: "This site is attorney advertising. Prior results do not \
                              guarantee a similar outcome."
                     .to_string(),
-                copyright_year: 2026,
-                brand_name: "Neon Law".to_string(),
-                // The shipped footer's mark is a link home, so the gallery
-                // shows it as one — an unlinked mark here would document a
-                // footer no page renders.
-                home_href: "/".to_string(),
-                contact_email: "support@example.com".to_string(),
-                phone: "+1 555 010 0100".to_string(),
-                offices: demo_offices(),
-                attorneys: demo_attorneys(),
-                // The routes the header does not carry, at the full length
-                // the site publishes them: twelve links, which the stylesheet
-                // lays out in four columns. A gallery driving
-                // three would document a row that never renders and would not
-                // show the four-column layout at all.
-                nav: [
-                    ("API", "/api"),
-                    ("Blog", "/blog"),
-                    ("Contact", "/contact"),
-                    ("Design", "/design"),
-                    ("Glossary", "/glossary"),
-                    ("Navigator", "/navigator"),
-                    ("Notations", "/notations"),
-                    ("Presentations", "/presentations"),
-                    ("Privacy", "/privacy"),
-                    ("Team", "/team"),
-                    ("Terms", "/terms"),
-                    ("Testimonials", "/testimonials"),
-                ]
-                .into_iter()
-                .map(|(label, href)| FooterNavLink {
-                    label: label.to_string(),
-                    href: href.to_string(),
-                })
-                .collect(),
                 // The mark notice, driven with the firm's real registration
-                // rather than a synthetic one. The offices and attorneys above
-                // are fixtures because they stand in for regulated firm detail
-                // a gallery has no business asserting; a registration is a
-                // public record, and a made-up number beside a real-looking
-                // link is the one thing this line must never show.
+                // rather than a synthetic one: a registration is a public
+                // record, and a made-up number beside a real-looking link is
+                // the one thing this line must never show.
                 trademark: "NEON LAW".to_string(),
                 trademark_registration: "6,325,650".to_string(),
                 trademark_record_url:
                     "https://tmsearch.uspto.gov/search/search-results/90039224".to_string(),
-                // The affiliations row: the live brand family and the one
-                // membership, so the gallery shows the row every deployed
-                // page renders — and so the accessibility audit of `/design`
-                // covers its landmark, heading, and off-site link.
-                brands: demo_family(),
-                memberships: demo_memberships(),
-                social: demo_social(),
-                // The release stamp, driven with a literal so the gallery shows
-                // the line a deployed page renders. A local `cargo run` leaves
-                // it unset and the site publishes no version.
-                navigator_version: "26.8.20".to_string(),
+                copyright_year: 2026,
             }
         }
     }
-}
-
-/// The firm's published profiles, the same three the live footer links.
-fn demo_social() -> Vec<FooterSocialLink> {
-    [
-        ("x", "X", "https://x.com/NeonLawUSA"),
-        (
-            "linkedin",
-            "LinkedIn",
-            "https://www.linkedin.com/company/neon-law-usa",
-        ),
-        (
-            "youtube",
-            "YouTube",
-            "https://www.youtube.com/@neon-law-firm",
-        ),
-    ]
-    .into_iter()
-    .map(|(network, label, href)| FooterSocialLink {
-        network: network.to_string(),
-        label: label.to_string(),
-        href: href.to_string(),
-    })
-    .collect()
-}
-
-/// Two sample offices for the footer showcase. Synthetic, like every other
-/// gallery fixture: the real ones live in `views::brand`. One carries a note so
-/// the gallery shows the qualified variant next to the bare one.
-fn demo_offices() -> Vec<FooterOffice> {
-    [
-        ("California", "1 Broadway, Oakland, CA 94607", None),
-        (
-            "Nevada",
-            "2 Virginia St, Reno, NV 89501",
-            Some("Bar admission pending"),
-        ),
-    ]
-    .into_iter()
-    .map(|(state, address, note)| FooterOffice {
-        state: state.to_string(),
-        address: address.to_string(),
-        note: note.map(str::to_string),
-    })
-    .collect()
-}
-
-/// One sample attorney holding two bar licences, so the showcase shows both the
-/// per-attorney line and the multi-licence separator.
-fn demo_attorneys() -> Vec<FooterAttorney> {
-    vec![FooterAttorney {
-        name: "Aquarius Lumen".to_string(),
-        licenses: [("California", "100001"), ("Nevada", "100002")]
-            .into_iter()
-            .map(|(jurisdiction, number)| FooterBarLicense {
-                jurisdiction: jurisdiction.to_string(),
-                number: number.to_string(),
-                license_url: format!("https://example.com/bar/{number}"),
-            })
-            .collect(),
-    }]
 }
 
 /// The focus set — Stage, Hero, `ChoiceGroup`, `StepList` (via [`Stepper`]),
@@ -1896,21 +1735,6 @@ fn NavigationShowcase() -> Element {
                 " pair and an arrow: "
                 ExternalLink { href: "https://www.neonlaw.com/navigator".to_string(), "Neon Law Navigator" }
                 "."
-            }
-            p {
-                "The footer's source-repository line. The count is a prop, read from \
-                 a cache the server refreshes in the background at most once an hour — the component never fetches, which is why \
-                 it renders here with no network at all. Both states are shown, because the \
-                 second is the ordinary one before the first refresh lands:"
-            }
-            GitHubStars {
-                href: "https://github.com/neon-law/navigator".to_string(),
-                repo: "neon-law/navigator".to_string(),
-                stars: 1234u64,
-            }
-            GitHubStars {
-                href: "https://github.com/neon-law/navigator".to_string(),
-                repo: "neon-law/navigator".to_string(),
             }
         }
     }

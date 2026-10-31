@@ -1066,8 +1066,7 @@ pub const IEP_BRANDING: Branding = Branding {
     privacy_url: "/privacy",
     base_url: "",
     primary_domain: "iep.example",
-    firm_disclaimer:
-        "Attorney advertising. IEP is a practice of Lex Tecnica LLP; nothing here is \
+    firm_disclaimer: "Attorney advertising. IEP is a practice of Lex Tecnica LLP; nothing here is \
          legal advice without a signed engagement. Past results do not guarantee \
          future outcomes.",
     mission_description:
@@ -1525,7 +1524,10 @@ impl BrandKey {
     #[must_use]
     pub const fn local_port_env_var(self) -> Option<&'static str> {
         match self {
-            Self::Neon => None,
+            // No dedicated local port: Neon is the deployment default, and
+            // IEP ships no pages and no real host, so there is nothing
+            // local to preview until its launch decisions land.
+            Self::Neon | Self::Iep => None,
             Self::DeleteYourData => Some("NAVIGATOR_LOCAL_DELETE_YOUR_DATA_PORT"),
             Self::LawyerShook => Some("NAVIGATOR_LOCAL_LAWYER_SHOOK_PORT"),
             Self::Vesta => Some("NAVIGATOR_LOCAL_VESTA_PORT"),
@@ -1539,9 +1541,6 @@ impl BrandKey {
             Self::Groundwork => Some("NAVIGATOR_LOCAL_GROUNDWORK_PORT"),
             Self::GuiebShook => Some("NAVIGATOR_LOCAL_GUIEB_SHOOK_PORT"),
             Self::CyberInjuryLaw => Some("NAVIGATOR_LOCAL_CYBER_INJURY_LAW_PORT"),
-            // No local port: IEP ships no pages and no real host, so there
-            // is nothing local to preview until its launch decisions land.
-            Self::Iep => None,
         }
     }
 }

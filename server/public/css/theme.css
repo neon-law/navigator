@@ -135,12 +135,13 @@ textarea {
   color: #ffffff;
 }
 
-/* The footer's contact-channel tiles are cards whose whole surface is the
-   anchor, so `.nav-theme a:hover` above would recolour and underline the tile
-   itself — the icon and the address read as a wall of link text. These match
-   that rule's specificity to keep the tile a tile; the card's own border and
-   swell are the affordance that says it is clickable. Same reasoning, and the
-   same shape of fix, as `.nav-theme a.home-practice:hover` in `home.css`. */
+/* The litigation page's contact-channel tiles are cards whose whole surface
+   is the anchor, so `.nav-theme a:hover` above would recolour and underline
+   the tile itself — the icon and the line of text read as a wall of link
+   text. These match that rule's specificity to keep the tile a tile; the
+   card's own border and swell are the affordance that says it is clickable.
+   Same reasoning, and the same shape of fix, as `.nav-theme a.home-practice:hover`
+   in `home.css`. */
 .nav-theme a.site-footer__channel-link {
   color: var(--nav-color-text);
   text-decoration: none;
@@ -1127,9 +1128,8 @@ a.nav-pagination__link:hover {
   }
 }
 
-/* Site footer — the contact band (CTA, voice line, offices) above the
-   brand-driven legal strip (regulated entity, bar admissions, per-attorney bar
-   licenses, disclaimer, joint copyright) every public page carries.
+/* Site footer — the legal strip: firm-resolved copyright, the trademark
+   notice where a registration exists, and the attorney-advertising disclaimer.
 
    The rule is full-bleed and the content is width-capped, mirroring the header
    exactly: `.site-header` owns the border, `.site-header__nav` owns the 72rem
@@ -1156,11 +1156,6 @@ a.nav-pagination__link:hover {
 }
 
 .site-footer__inner {
-  /* The contact band's geometry, declared once because two rows are laid out
-     on it: the band's own tile grid, and the masthead above it whose link
-     columns line up with those tiles. */
-  --footer-band-inset: clamp(1.25rem, 3vw, 2rem);
-  --footer-band-gap: 0.75rem;
   /* One spacing value for every line of the legal strip, and for the gap
      under the last of them. The strip is one block of fine print, so nothing
      in it is spaced differently from anything else in it. */
@@ -1168,7 +1163,7 @@ a.nav-pagination__link:hover {
   width: min(100%, 72rem);
   box-sizing: border-box;
   margin: 0 auto;
-  /* No deep trailing gap: the strip's last line is the release stamp, and a
+  /* No deep trailing gap: the strip's last line is the disclaimer, and a
      footer is the end of the page rather than a section that needs air under
      it. Enough to keep the text off the edge, and no more. */
   padding: clamp(2rem, 5vw, 4rem) 1rem var(--footer-strip-gap);
@@ -1177,453 +1172,11 @@ a.nav-pagination__link:hover {
   gap: 1.5rem;
 }
 
-/* The masthead sits on the contact band's three tracks, so the first link
-   column starts at the first address tile and the second at the tile beside
-   it — the row and the band read as one grid rather than two that happen to
-   be stacked. The band insets its tiles by its padding AND its 1px border, so
-   this clears both or every column lands a pixel to the left. */
-.site-footer__masthead {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  column-gap: var(--footer-band-gap);
-  row-gap: 1.25rem;
-  align-items: center;
-  padding-inline: calc(var(--footer-band-inset) + 1px);
-}
 
-/* The footer reuses the header's self-contained brand mark. Its SVG stays
-   transparent, so the brand color is the mark alone rather than a tile. The
-   wordmark sits beside it: the mark alone opened the footer on an unlabelled
-   glyph.
-
-   It is an anchor home now, because the header's mark is off screen by the time
-   a reader reaches the bottom of a long page, so this is the copy they click. */
-.site-footer__brand {
-  display: flex;
-  align-items: center;
-  gap: 0.8rem;
-  margin: 0;
-}
-
-/* Same fix as the button variants and the contact tiles above: `.nav-theme a`
-   is more specific than `.site-footer__brand`, so without re-asserting at
-   matching specificity the wordmark renders in the link color instead of the
-   footer's own text color — the mark is the site's identity and reads as one
-   object, not as a phrase in a sentence. The hover half is here for the
-   underline `.nav-theme a:hover` would otherwise draw under it. */
-.nav-theme a.site-footer__brand,
-.nav-theme a.site-footer__brand:hover {
-  color: inherit;
-  text-decoration: none;
-}
-
-/* Hover and keyboard focus brighten the tile behind the glyph, which says the
-   whole mark is clickable without restyling the wordmark as a link. The
-   browser's own focus ring still marks it for a keyboard reader; this only
-   matches the pointer treatment so the two states agree. */
-.site-footer__brand:hover .site-footer__logo,
-.site-footer__brand:focus-visible .site-footer__logo {
-  border-color: color-mix(in oklab, var(--nav-color-primary) 60%, transparent);
-  background: color-mix(in oklab, var(--nav-color-primary) 16%, transparent);
-}
-
-.site-footer__logo {
-  display: block;
-  width: 3.4rem;
-  height: 3.4rem;
-  padding: 0.45rem;
-  border: 1px solid color-mix(in oklab, var(--nav-color-primary) 35%, transparent);
-  border-radius: 0.9rem;
-  background: color-mix(in oklab, var(--nav-color-primary) 8%, transparent);
-}
-
-.site-footer__wordmark {
-  font-size: 1.2rem;
-  letter-spacing: -0.015em;
-  white-space: nowrap;
-}
-
-/* The Brand's profiles and shared channel sit beneath its wordmark.
-   The marks take the host's primary, not X, LinkedIn, or YouTube's own
-   colours: the footer wears one palette. The names stay visible, because the
-   X mark alone is not a name a reader can rely on. */
-.site-footer__identity {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.85rem;
-  min-width: 0;
-}
-
-.site-footer__social {
-  margin: 0;
-  padding: 0;
-}
-
-.site-footer__social-list {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.site-footer__social-item {
-  margin: 0;
-}
-
-.site-footer__social-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-height: 2.75rem;
-  padding: 0.35rem 0.65rem;
-  border: 1px solid var(--nav-color-border);
-  border-radius: 999px;
-  color: var(--nav-color-text-muted);
-  font-size: 0.875rem;
-  text-decoration: none;
-}
-
-.nav-theme a.site-footer__social-link {
-  color: var(--nav-color-text-muted);
-  text-decoration: none;
-}
-
-.nav-theme a.site-footer__social-link:hover,
-.nav-theme a.site-footer__social-link:focus-visible {
-  background: var(--nav-color-surface-subtle);
-  color: var(--nav-color-text);
-  text-decoration: none;
-}
-
-.site-footer__social-link > .nav-icon:first-child {
-  flex: none;
-  font-size: 1.05rem;
-  color: var(--nav-color-primary);
-}
-
-/* The pages the header does not carry. A list at the top of the footer,
-   because a reader who scrolled to the bottom looking for one of them should
-   meet it before the contact detail. */
-.site-footer__nav {
-  grid-column: 2 / -1;
-  margin: 0;
-  padding: 0;
-}
-
-/* Four columns of three on a wide viewport. The rows are fixed at three and
-   the flow runs down them before moving across, so the list reads
-   top-to-bottom inside each column rather than snaking across the row. One
-   `<ul>` does this at every width — the narrow layout below simply stops
-   columnizing it, which is why the markup needs no second list. */
-.site-footer__nav-list {
-  display: grid;
-  grid-auto-flow: column;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-template-rows: repeat(3, auto);
-  column-gap: var(--footer-band-gap);
-  row-gap: 0.4rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.site-footer__nav-item {
-  margin: 0;
-}
-
-/* Plain text links: no pill, no border, no fill, and nothing that moves on
-   hover. The row is a directory of the site's remaining pages, so it reads as
-   a list of names in the footer's own muted type. Underlining on hover is the
-   whole affordance, and `:focus-visible` keeps the browser's own ring for a
-   keyboard reader. */
-.site-footer__nav-link {
-  color: var(--nav-color-text-muted);
-  font-size: 0.9375rem;
-  text-decoration: none;
-}
-
-.site-footer__nav-link:hover {
-  color: var(--nav-color-text);
-}
-
-/* The affiliations row: the firm's family on the left, its association
-   memberships on the right, between the contact band and the legal strip.
-   Inset to the band's tiles like the masthead above, so the family's first
-   chip starts where the first address tile does. Every colour here is a
-   `--nav-*` token, so on a house brand's own host the chips and the
-   membership underline take that brand's primary and face — the row is the
-   same markup on every host and wears whichever palette the host resolved. */
-.site-footer__affiliations {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 1rem 2rem;
-  padding-inline: calc(var(--footer-band-inset) + 1px);
-}
-
-/* "Our Family": a small uppercase heading and a row of chips, one per house
-   brand. The heading is the landmark's accessible name too, so it stays a
-   real heading rather than a styled span. */
-.site-footer__family {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.6rem 1rem;
-  margin: 0;
-  padding: 0;
-}
-
-.site-footer__family-heading {
-  margin: 0;
-  font-family: inherit;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--nav-color-text-muted);
-}
-
-.site-footer__family-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.site-footer__family-item {
-  margin: 0;
-}
-
-/*
- * Every multi-brand row becomes a two-column block on desktop, one brand per
- * line. One column on narrow screens keeps each entry readable.
- */
-.site-footer__family-list--two-column {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0.35rem 2rem;
-}
-
-@media (min-width: 40rem) {
-  .site-footer__family-list--two-column {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-/* In the block form the entry is a line of text, not a chip. */
-.site-footer__family-list--two-column .site-footer__family-link,
-.site-footer__family-list--two-column .site-footer__family-current {
-  display: inline;
-  min-height: 0;
-  padding: 0;
-  background: none;
-  border: 0;
-}
-
-/*
- * Supporting text, so quieter than the name it follows - but it still has to
- * clear AA, so it reads --nav-color-text-muted rather than an opacity, which
- * would silently drop contrast below the floor the palette guarantees.
- */
-.site-footer__family-byline {
-  font-size: 0.8125rem;
-  color: var(--nav-color-text-muted);
-}
-
-/*
- * "A practice of Guieb & Shook PC". A regulatory line, not decoration: on a
- * brand host it is what discloses which licensed entity is behind the trade
- * name, so it sits above the legal strip where a reader looking for that
- * answer will find it, and it is not dimmed to muted text.
- */
-.site-footer__attribution {
-  margin: 0 0 0.5rem;
-  font-weight: 600;
-  color: var(--nav-color-text);
-}
-
-/* A chip per brand, grounded like the contact band's tiles. The 2rem minimum
-   height keeps each a comfortable target for a finger or a pointer. */
-.site-footer__family-link,
-.site-footer__family-current {
-  display: inline-flex;
-  align-items: center;
-  min-height: 2rem;
-  padding: 0.25rem 0.85rem;
-  border: 1px solid color-mix(in oklab, var(--nav-color-border) 78%, transparent);
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--nav-color-surface) 74%, transparent);
-  color: var(--nav-color-text);
-  font-size: 0.875rem;
-  line-height: 1.2;
-  text-decoration: none;
-  transition:
-    border-color 240ms ease,
-    background-color 240ms ease,
-    transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.site-footer__family-logo {
-  width: 2rem;
-  height: 2rem;
-  flex: 0 0 2rem;
-  object-fit: contain;
-}
-
-/* `.nav-theme a` is more specific than the chip class, so the link colour and
-   hover underline are re-asserted away at matching specificity: a chip is a
-   tile, and answers a pointer the way the contact tiles do — brand border,
-   brand wash, a lift — rather than as a phrase in a sentence. Focus gets the
-   same treatment as hover so the two states agree; the browser's own ring
-   still marks it for a keyboard reader. */
-.nav-theme a.site-footer__family-link {
-  color: var(--nav-color-text);
-  text-decoration: none;
-}
-
-.nav-theme a.site-footer__family-link:hover,
-.nav-theme a.site-footer__family-link:focus-visible {
-  border-color: var(--nav-color-primary);
-  background: color-mix(in oklab, var(--nav-color-primary) 12%, transparent);
-  color: var(--nav-color-text);
-  text-decoration: none;
-  transform: translateY(-1px);
-}
-
-/* The brand a reader is already on: filled in the host's primary, bold, and
-   not a link — `aria-current` says so to a screen reader. */
-.site-footer__family-current {
-  border-color: color-mix(in oklab, var(--nav-color-primary) 60%, transparent);
-  background: color-mix(in oklab, var(--nav-color-primary) 14%, transparent);
-  font-weight: 600;
-}
-
-/* The association standing line: one quiet line per affiliation, right-aligned against
-   the family. The award glyph takes the host's primary; the sentence is the
-   footer's muted fine print with the link underlined in the same primary, so
-   a reader sees it is a link without it shouting. */
-.site-footer__memberships {
-  display: grid;
-  gap: 0.5rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  justify-self: end;
-}
-
-.site-footer__membership {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 0;
-  color: var(--nav-color-text-muted);
-  font-size: 0.875rem;
-}
-
-.site-footer__membership > .nav-icon {
-  flex: none;
-  font-size: 1.1em;
-  color: var(--nav-color-primary);
-}
-
-/* The association's own mark, on a dark tile in both schemes. The image is
-   decorative and sized by height, so a wide mark stays legible without
-   dominating the line beside it. */
-.site-footer__membership-badge {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  padding: 0.35rem 0.55rem;
-  border: 1px solid color-mix(in oklab, var(--nav-color-border) 78%, transparent);
-  border-radius: 0.6rem;
-  background: #0b1220;
-}
-
-.site-footer__membership-logo {
-  display: block;
-  height: 1.5rem;
-  width: auto;
-}
-
-.nav-theme a.site-footer__membership-link {
-  color: inherit;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in oklab, var(--nav-color-primary) 55%, transparent);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 0.18em;
-}
-
-.nav-theme a.site-footer__membership-link:hover,
-.nav-theme a.site-footer__membership-link:focus-visible {
-  color: var(--nav-color-text);
-  text-decoration-color: var(--nav-color-primary);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .site-footer__family-link {
-    transition: none;
-  }
-
-  .nav-theme a.site-footer__family-link:hover,
-  .nav-theme a.site-footer__family-link:focus-visible {
-    transform: none;
-  }
-}
-
-/* The contact band: one bordered surface wrapping the tile grid (the email
-   and phone channels, then every office) at a consistent tile size. */
-.site-footer__contact {
-  grid-column: 1 / -1;
-  padding: var(--footer-band-inset);
-  border: 1px solid var(--nav-color-border);
-  border-radius: 1.25rem;
-  background: color-mix(in oklab, var(--nav-color-surface-raised) 84%, transparent);
-  box-shadow: 0 1.25rem 3.5rem color-mix(in oklab, var(--nav-color-text) 8%, transparent);
-}
-
-/* A grid rather than a wrapping flex row: each office needs a column of its
-   own with a known edge, because the state watermark behind it is anchored to
-   that edge. Content-width flex items put one office's outline over the next
-   office's text.
-
-   Three columns. The email and phone channel tiles are pinned into column 1
-   (rows 1 and 2 — see the `:has()` rules below), stacking them vertically;
-   the offices are unpositioned, so grid auto-placement fills every cell
-   *around* that reserved column — column 2/3 of row 1, then column 2/3 of
-   row 2, and so on — without either side needing to know how many offices
-   the other renders. */
-.site-footer__offices {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--footer-band-gap);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: 0.85rem;
-  color: var(--nav-color-text-muted);
-}
-
-.site-footer__offices > li:has(> .site-footer__channel-link[href^="mailto:"]) {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.site-footer__offices > li:has(> .site-footer__channel-link[href^="tel:"]) {
-  grid-column: 1;
-  grid-row: 2;
-}
-
-/* Each office is its own positioning context and its own clip, so the state
-   watermark sits behind that office and can never spill into the next column.
-   `min-height` reserves the room the outline needs so a short entry does not
-   crop it. */
+/* The contact tile the litigation page borrows for its two CTA channels:
+   the footer's own tile geometry — grounded, clipped, one positioning context
+   per tile — so the CTA reads as the footer's channels without importing a
+   second component. */
 .site-footer__office {
   position: relative;
   overflow: hidden;
@@ -1634,13 +1187,12 @@ a.nav-pagination__link:hover {
   background: color-mix(in oklab, var(--nav-color-surface) 74%, transparent);
 }
 
-/* The two actionable contact channels (email, phone) are tiles in the same
-   grid as the offices, sized and grounded identically by
+/* The litigation page's two CTA channels are tiles grounded identically by
    `.site-footer__office`, and they answer a pointer the way the practice cards
    on `/` do: the border takes the brand colour, the tile lifts, and a wash
    swells across it. Motion rather than a fill is what marks them as the
    actionable pair — a brand-filled pill read as two buttons shouting over the
-   addresses beside them.
+   copy beside them.
 
    `isolation` is what lets the wash sit under the tile's own text: a
    negative-`z-index` pseudo-element paints behind its parent's background
@@ -1743,76 +1295,6 @@ a.nav-pagination__link:hover {
   font-size: 1.3rem;
 }
 
-/* The state outline, drawn behind its own address. Decoration, so it is set at
-   a low opacity in the brand colour, sits under the text in the stacking order,
-   and takes no pointer events. The opacity is what keeps the body copy over it
-   at its usual contrast; raising it would put a tinted wash under small muted
-   text, which is the one thing this must not do. */
-.site-footer__office-map {
-  position: absolute;
-  inset-block-start: 50%;
-  inset-inline-end: 0.35rem;
-  z-index: 0;
-  width: 5rem;
-  height: 5rem;
-  transform: translateY(-50%);
-  color: var(--nav-color-primary);
-  opacity: 0.11;
-  pointer-events: none;
-}
-
-/* The text rides above the watermark. */
-.site-footer__office-label,
-.site-footer__office-address,
-.site-footer__office-note {
-  position: relative;
-  z-index: 1;
-}
-
-/* A reader who has asked the platform for more contrast gets none of this. */
-@media (prefers-contrast: more) {
-  .site-footer__office-map {
-    display: none;
-  }
-}
-
-/* The label above an address: the state, on the firm footer. Named for the
-   role rather than the value, so a future brand's footer can reuse it with
-   its own label without a class rename. */
-.site-footer__office-label {
-  display: block;
-  margin-bottom: 0.2rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--nav-color-text);
-}
-
-/* `<address>` defaults to italic; these are postal addresses, not asides. */
-.site-footer__office-address {
-  font-style: normal;
-  max-width: 16rem;
-  line-height: 1.45;
-}
-
-/* Street, unit, then city — the lines an envelope carries, so the suite has its
-   own line and the city a reader is looking for starts one rather than landing
-   wherever the column wrapped. A long line still wraps within itself. */
-.site-footer__office-line {
-  display: block;
-}
-
-/* A qualification on the office above it — today, an admission that has not
-   issued. Italic and set apart so it reads as a caveat on that address rather
-   than as a second line of it, but not shrunk: it is regulated copy, and the
-   surrounding footer text is already the page's smallest. */
-.site-footer__office-note {
-  display: block;
-  margin-top: 0.25rem;
-  max-width: 16rem;
-  font-style: italic;
-}
 
 /* The legal strip. Muted and small so it reads as terminal fine print, and
    ruled off from the contact band above it. */
@@ -1866,104 +1348,6 @@ a.nav-pagination__link:hover {
 .site-footer__trademark-mark {
   font-size: 0.7em;
   line-height: 0;
-}
-
-/* The platform line: "Powered by", the repository, the running release, and
-   its stars on one row. A flex row because the parts are separate elements — the
-   gap spaces them, so none has to carry a literal space — and it wraps on a
-   narrow viewport rather than overflowing the strip. */
-.site-footer__powered {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem;
-  margin: 0;
-}
-
-@media (max-width: 54rem) {
-  /* Keep the trademark and platform attribution visually adjacent in the
-     narrow legal strip; the groups still space their own internal lines. */
-  .site-footer__legal {
-    row-gap: 0;
-  }
-
-  /* The band collapses to one tile per row here, so there are no tracks left
-     to line up with: the masthead stacks and drops the band's inset. */
-  .site-footer__masthead {
-    grid-template-columns: minmax(0, 1fr);
-    padding-inline: 0;
-  }
-
-  .site-footer__nav {
-    grid-column: 1;
-  }
-
-  /* One list of footer pages. The same `<ul>` stops columnizing and runs straight
-     down the page, so a narrow viewport shows the row as the single list it
-     is in the markup. */
-  .site-footer__nav-list {
-    grid-auto-flow: row;
-    grid-template-rows: none;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .site-footer__brand,
-  .site-footer__identity {
-    justify-self: start;
-  }
-
-  .site-footer__contact {
-    grid-column: 1;
-  }
-
-  /* Family over membership, both from the left edge, once there is no band
-     inset to line up with. */
-  .site-footer__affiliations {
-    grid-template-columns: minmax(0, 1fr);
-    padding-inline: 0;
-  }
-
-  .site-footer__memberships {
-    justify-self: start;
-  }
-}
-
-@media (max-width: 34rem) {
-  .site-footer__offices {
-    grid-template-columns: 1fr;
-  }
-}
-
-
-/* Keep the count beside its repository link, with room to read each. */
-.github-stars {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-/* The repository reads as an address, so it is set in the same mono stack
-   `.font-monospace` gives every other identifier on the site. */
-.github-stars__repo {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-}
-
-/* The per-attorney bar licenses: one line per attorney, each jurisdiction
-   linked to that bar's own public record. */
-.site-footer__licenses {
-  padding: 0;
-  list-style: none;
-}
-
-/* One attorney per line; a licensee whose licences wrap must still read as one
-   entry, so the rows are spaced further apart than the wrapped lines within a
-   row. */
-.site-footer__licensee + .site-footer__licensee {
-  margin-top: 0.35rem;
-}
-
-.site-footer__licensee-name {
-  font-weight: 600;
 }
 
 /* Pricing cards — an equal-height responsive grid; every card wears the cyan
