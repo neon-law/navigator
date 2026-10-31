@@ -1,0 +1,100 @@
+head_title: "{site_name} | Free support"
+meta_description: >-
+  Free immigration support from official sources: check your USCIS case
+  status, read processing times, use the fee calculator, find checklists,
+  know-your-rights material, and nonprofit legal-service referrals, and
+  learn when to call a lawyer.
+title: Free support
+tagline: Tools you can use today, from the agencies themselves.
+skin: practice
+bands:
+  - kind: statement
+    heading: Check your own case, for free
+    lead: The official tools first — they are free and current.
+    body:
+      - - text: >-
+            USCIS.gov hosts three tools worth knowing. The case-status page
+            tracks a receipt number and shows the latest action on a
+            pending application. The processing-times page shows how long
+            the agency reports it is taking with each form at each center,
+            which is context for the wait, not a prediction for your case.
+            The fee-calculator page totals the government fees for a form
+            before anyone files anything.
+      - - text: >-
+            The State Department publishes the monthly visa bulletin, which
+            lists which green-card categories and countries can move
+            forward that month, and the embassy pages list what each
+            consulate requires. For deadlines and hearings in immigration
+            court, the court's own case portal and automated phone line
+            confirm dates that matter.
+  - kind: statement
+    heading: Checklists and know-your-rights
+    lead: Written for the person reading, not the officer.
+    body:
+      - - text: >-
+            Before any filing, gather the documents a case usually needs:
+            identity records, civil records such as birth and marriage
+            certificates, immigration history, and financial documents.
+            USCIS publishes checklists with each form; reading them before
+            you collect saves a second trip.
+      - - text: >-
+            Everyone in the United States has certain rights in an
+            encounter with immigration officers, whatever their status: the
+            right to remain silent, the right to refuse a search without a
+            warrant signed by a judge, and the right to speak to a lawyer
+            before signing anything. Nonprofit organizations publish
+            know-your-rights materials in many languages, and carrying a
+            printed card or a phone note with those rights is common advice
+            from those organizations.
+  - kind: statement
+    heading: Free and low-cost legal help
+    lead: Where to look when a lawyer is out of reach.
+    body:
+      - - text: >-
+            The federal government keeps lists of legal-service programs it
+            has recognized, and the organizations on them have agreed to
+            practice under federal rules. The American Bar Association and
+            nonprofits such as the Catholic Legal Immigration Network
+            (CLINIC) and the Immigrant Legal Resource Center (ILRC)
+            maintain directories of accredited providers and pro bono
+            programs. Immigration law does not require a special license to
+            consult in many places — which is why the notario-fraud
+            warning matters: check any provider against the recognized
+            lists before you pay anyone for help, and be careful with
+            anyone who promises results.
+  - kind: steps
+    anchor: support-steps
+    overline: A five-minute check
+    heading: What to do before you call anyone.
+    description: >-
+      A short sequence that answers most first questions.
+    items:
+      - title: Check your case status
+        body:
+          - - text: >-
+                With a receipt number, the USCIS case-status page shows
+                where a pending application stands and what happened last.
+      - title: Read the processing time for your form
+        body:
+          - - text: >-
+                The agency's published processing times tell you whether
+                your wait is unusual. We cannot promise how long any case
+                takes; the agency decides.
+      - title: List what you cannot answer alone
+        body:
+          - - text: >-
+                Deadlines, notices, prior denials, arrests, time outside
+                the country — the facts that change a case are the ones
+                worth a conversation with a lawyer or an accredited
+                representative.
+  - kind: cta
+    heading: When the tools run out, talk to Abhaya Immigration
+    body: >-
+      A first conversation covers what the general rules ask for in your
+      situation and what a case would need. Abhaya Immigration, a Shook Law
+      PC practice, offers consultations on every matter described on this
+      site.
+    email: "{firm_email}"
+    action:
+      href: "https://www.abhayaimmigration.com/"
+      label: Talk to Abhaya Immigration

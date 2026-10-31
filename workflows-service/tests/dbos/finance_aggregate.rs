@@ -61,6 +61,7 @@ async fn registered_finance_workflow_joins_duplicate_manual_run_id() {
         nightly_project_update: None,
         email_summary: None,
         inbound_message_alert: None,
+        project_slack: None,
         notation: None,
     });
 

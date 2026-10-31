@@ -66,6 +66,7 @@ views.workspace = true
 [dev-dependencies]
 bs58.workspace = true
 sqlx.workspace = true
+surrealdb.workspace = true
 ed25519-dalek.workspace = true
 store = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "rt"] }

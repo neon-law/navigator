@@ -289,6 +289,7 @@ async fn a_synthetic_project_survives_its_whole_storage_lifecycle() {
         kind: "unclassified",
         visibility: visibility::CLIENT,
         description: None,
+        dry_run: false,
     };
     drive.fail_downloads(1);
     assert!(store::drive_import::import_project_files(
