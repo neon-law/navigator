@@ -2045,3 +2045,87 @@ mod notation_catalog_tests {
         assert!(names.contains("BEGIN"), "{names:?}");
     }
 }
+
+#[cfg(test)]
+mod catalog_projection_tests {
+    use super::*;
+
+    #[test]
+    fn a_notation_card_projects_its_declared_kind_and_slug() {
+        let src = "---\nkind: letter\n---\n\nA letter body.\n";
+        let card = notation_card(
+            "Estate planning",
+            "Signing preparation",
+            "estate-signing-preparation",
+            "What to bring to a signing.",
+            src,
+        );
+        assert_eq!(card.href, "/notations/estate-signing-preparation");
+        assert_eq!(card.eyebrow, "Estate planning");
+        assert_eq!(card.title, "Signing preparation");
+        assert_eq!(card.summary, "What to bring to a signing.");
+        assert_eq!(card.kind, "letter");
+        assert_eq!(card.kind_label, "Letter");
+        assert!(!card.category.is_empty());
+        assert!(!card.category_slug.is_empty());
+    }
+
+    #[test]
+    fn a_card_without_a_declared_kind_is_blank_kind_and_label() {
+        let card = notation_card(
+            "Estate planning",
+            "Signing preparation",
+            "estate-signing-preparation",
+            "What to bring to a signing.",
+            "No frontmatter here.\n",
+        );
+        assert_eq!(card.kind, "");
+        assert_eq!(card.kind_label, "");
+        assert_eq!(card.category, "");
+        assert_eq!(card.category_slug, "");
+        assert_eq!(card.href, "/notations/estate-signing-preparation");
+    }
+
+    #[test]
+    fn the_portfolio_names_practices_from_the_catalog_or_the_family_byline() {
+        let described = views::brand::BrandKey::ALL
+            .iter()
+            .copied()
+            .find(|key| {
+                !matches!(
+                    key,
+                    views::brand::BrandKey::LawyerShook | views::brand::BrandKey::GuiebShook
+                )
+            })
+            .expect("a third brand exists in the portfolio");
+        let href = described.public_home_href();
+        let practices = portfolio_practices(vec![webapp::home::PracticeLink {
+            mark: webapp::components::PracticeMark::Scales,
+            heading: "Whatever".into(),
+            body: "Authored description from the brand's own home.".into(),
+            href: href.clone(),
+            logo_href: String::new(),
+            font_family: String::new(),
+            primary_color: String::new(),
+        }]);
+
+        assert!(!practices.is_empty());
+        // The authored description reaches the practice whose href it names;
+        // every other practice keeps its family byline.
+        assert!(practices.iter().any(|practice| practice.href == href
+            && practice.body == "Authored description from the brand's own home."));
+        assert!(practices
+            .iter()
+            .filter(|practice| practice.href != href)
+            .all(|practice| !practice.body.is_empty()));
+        // The holding brands never appear in the portfolio.
+        assert!(!practices.iter().any(
+            |practice| practice.href == views::brand::BrandKey::LawyerShook.public_home_href()
+        ));
+        // Sorted by heading, so the catalog order is presentation-stable.
+        let headings: Vec<&str> = practices.iter().map(|p| p.heading.as_str()).collect();
+        let mut sorted = headings.clone();
+        sorted.sort_unstable();
+        assert_eq!(headings, sorted);
+    }
+}
