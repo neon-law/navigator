@@ -505,8 +505,69 @@ const BUNDLED: &[FormMeta] = &[
         }),
         fee_waiver_code: None,
     },
+    FormMeta {
+        code: "ny__nc2_minor_name_change_petition",
+        jurisdiction: "NY",
+        title: "Name Change and/or Sex Designation Change Petition for an Individual Minor (under 18)",
+        origin_url: "https://www.nycourts.gov/forms/Name-SexDesignationChange/MinorName-SexDesignationChangePetition-fillable.pdf",
+        object_path: "forms/united_states/new_york/new_york_supreme_court/ny__nc2_minor_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc2_minor_name_change_petition.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "210.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ny__nc4_family_name_change_petition",
+        jurisdiction: "NY",
+        title: "Family Name Change Petition",
+        origin_url: "https://www.nycourts.gov/FORMS/Name-SexDesignationChange/FamilyNameChangePetition-fillable.pdf",
+        object_path: "forms/united_states/new_york/new_york_supreme_court/ny__nc4_family_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc4_family_name_change_petition.sha256"
+        ),
+        filing_fee: Some(FilingFee {
+            amount: "210.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ny__nc5_family_name_change_supplement",
+        jurisdiction: "NY",
+        title: "Family Name Change Petition — Supplemental Form",
+        origin_url: "https://www.nycourts.gov/FORMS/Name-SexDesignationChange/SupplementalFamilyNameChangePetition-fillable.pdf",
+        object_path: "forms/united_states/new_york/new_york_supreme_court/ny__nc5_family_name_change_supplement.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/new_york/new_york_supreme_court/ny__nc5_family_name_change_supplement.sha256"
+        ),
+        // The supplement rides with the NC4 family petition; the fee the
+        // family pays is the petition's $210.00 (the registry row's figure).
+        filing_fee: Some(FilingFee {
+            amount: "210.00",
+            currency: "USD",
+        }),
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "ny__civ_sc50_statement_of_claim",
+        jurisdiction: "NY",
+        title: "Statement of Claim (Small Claims)",
+        origin_url: "https://www.nycourts.gov/LegacyPDFS/courts/nyc/civil/forms/CIV-SC-50.pdf",
+        object_path: "forms/united_states/new_york/nyc_civil_court/ny__civ_sc50_statement_of_claim.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/new_york/nyc_civil_court/ny__civ_sc50_statement_of_claim.sha256"
+        ),
+        // The fee is tiered by claim amount ($15.00 up to $1,000; $20.00
+        // above); no single honest figure fits FormMeta, so the registry
+        // fee_note carries the schedule.
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
 ];
-
 /// Return the bundled form registry.
 ///
 /// # Errors
