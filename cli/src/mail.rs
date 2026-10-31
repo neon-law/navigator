@@ -119,6 +119,27 @@ pub enum MailAction {
         #[arg(long)]
         name: Option<String>,
     },
+    /// File a saved RFC 5322 message (.eml) into the matter inbox through
+    /// the Navigator ingest door. Ingest-only: nothing is sent, and no
+    /// Gmail OAuth setup is required. Re-running is safe — the door
+    /// dedupes on the provider Message-ID (falling back to a raw-content
+    /// hash).
+    Ingest {
+        /// Path to the raw RFC 5322 message to file.
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+        /// Matter code. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        /// Navigator host. Defaults to host in navigator.yaml.
+        #[arg(long)]
+        host: Option<String>,
+        /// Provider account the message was read from (for example the
+        /// Gmail address). Ingress dedup keys on it. Defaults to
+        /// cli-ingest.
+        #[arg(long)]
+        provider_account: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1324,6 +1345,20 @@ async fn run_inner(action: MailAction) -> Result<()> {
             dir,
             name,
         } => save_message_command(&reference, dir.as_deref(), name.as_deref()).await,
+        MailAction::Ingest {
+            path,
+            project,
+            host,
+            provider_account,
+        } => {
+            ingest_provider_message(
+                &path,
+                project.as_deref(),
+                host.as_deref(),
+                provider_account.as_deref(),
+            )
+            .await
+        }
     }
 }
 
@@ -1451,6 +1486,53 @@ fn print_thread(thread: &GmailThread) {
             println!("[No supported message body was returned.]\n");
         }
     }
+}
+
+/// Files one saved RFC 5322 message into the matter inbox through the
+/// Navigator ingest door (`POST /app/api/projects/{id}/inbox-ingest`).
+/// Ingest-only: the door stores the message as an Inbox conversation
+/// attributed to the Project and never sends anything. The raw bytes travel
+/// as base64 and the server re-parses them, so the CLI cannot claim fields
+/// the message does not carry.
+async fn ingest_provider_message(
+    path: &Path,
+    project_code: Option<&str>,
+    host: Option<&str>,
+    provider_account: Option<&str>,
+) -> Result<()> {
+    let raw = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let local = crate::projects::manifest::read(Path::new("."));
+    let project_code = project_code
+        .or_else(|| {
+            local
+                .as_ref()
+                .and_then(|manifest| manifest.project.as_deref())
+        })
+        .ok_or_else(|| anyhow!("pass --project or run from a Project checkout"))?;
+    let host = host.or_else(|| local.as_ref().and_then(|manifest| manifest.host.as_deref()));
+    let (base, navigator_token) = crate::remote::resolve(host)?;
+    let project_id =
+        crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
+            .await?;
+    let body = json!({
+        "raw": base64::engine::general_purpose::STANDARD.encode(&raw),
+        "provider_account": provider_account,
+    });
+    let response = reqwest::Client::new()
+        .post(format!("{base}/app/api/projects/{project_id}/inbox-ingest"))
+        .bearer_auth(navigator_token)
+        .timeout(std::time::Duration::from_secs(30))
+        .json(&body)
+        .send()
+        .await
+        .context("ingest provider message")?;
+    let status = response.status();
+    let text = response.text().await.context("read ingest response")?;
+    if !status.is_success() {
+        return Err(anyhow!("ingest refused: {status} {text}"));
+    }
+    println!("{text}");
+    Ok(())
 }
 
 async fn file_thread(

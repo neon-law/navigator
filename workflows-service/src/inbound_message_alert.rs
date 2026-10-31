@@ -70,6 +70,7 @@ mod tests {
         let incoming = inbox::ingest_inbound(
             &db,
             &IngestInbound {
+                project_id: None,
                 firm_id: firm,
                 brand_key: Some("neon"),
                 interaction_type: Some("comment"),
@@ -89,7 +90,7 @@ mod tests {
                 matter_consent: false,
                 promotional_opt_in: false,
                 email_conversation_id: None,
-                attachment_asset_id: None,
+                attachments: Vec::new(),
                 occurred_at: "2026-10-07T12:00:00Z",
             },
         )
@@ -127,6 +128,7 @@ mod tests {
         inbox::ingest_inbound(
             db,
             &IngestInbound {
+                project_id: None,
                 firm_id,
                 brand_key: Some(brand),
                 interaction_type: Some("message"),
@@ -146,7 +148,7 @@ mod tests {
                 matter_consent: false,
                 promotional_opt_in: false,
                 email_conversation_id: None,
-                attachment_asset_id: None,
+                attachments: Vec::new(),
                 occurred_at: "2026-10-10T00:00:00Z",
             },
         )

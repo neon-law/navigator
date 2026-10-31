@@ -3415,6 +3415,55 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/inbox-ingest": {
+          "post": {
+            "summary": "File a provider email message into the Firm Inbox",
+            "description":
+              "Files one raw RFC 5322 message the Firm inbox has not yet received — the lawyer's own \\
+               mailbox export or a relay copy — attributed to this matter so it can be routed to a \\
+               conversation. Redelivery is safe: the message dedupes on Firm, channel, provider \\
+               account, and message id, falling back to a SHA-256 of the raw bytes when the message \\
+               carries no Message-ID. Attachments with clean payloads are ingested as \\
+               content-addressed Assets and linked to the message in provider order; the first also \\
+               becomes the conversation's primary asset. `201 Created` carries the conversation, the \\
+               message, and a `deduped` flag that is `true` when this exact message was already \\
+               filed. Authorization: lawyer or admin, and the caller must participate in the matter \\
+               (out-of-scope → 404). A matter without an owning Firm (`project_has_no_firm`), \\
+               undecodable base64 (`invalid_base64`), a message over the inbound size cap \\
+               (`message_too_large`), or unparseable mail (`unparseable_message`) is `400`. \\
+               Ingest-only: this door never sends anything.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": {
+              "required": true,
+              "content": { "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["raw"],
+                  "properties": {
+                    "raw": { "type": "string", "description": "Base64-encoded raw RFC 5322 message bytes" },
+                    "provider_account": { "type": "string", "description": "The account the message was read from. Ingress dedup keys on it, so a caller keeps one value per mailbox; defaults to `cli-ingest`" }
+                  }
+                }
+              } }
+            },
+            "responses": {
+              "201": { "description": "The message was filed into the Firm Inbox, attributed to the matter", "content": { "application/json": {
+                "schema": { "type": "object", "required": ["conversation_id", "message_id", "deduped"], "properties": {
+                  "conversation_id": { "type": "string", "format": "uuid" },
+                  "message_id": { "type": "string", "format": "uuid" },
+                  "deduped": { "type": "boolean", "description": "True when an identical message was already filed" }
+                } }
+              } } },
+              "400": { "description": "The matter has no owning Firm (error `project_has_no_firm`), `raw` is not valid base64 (`invalid_base64`), the decoded message exceeds the inbound size cap (`message_too_large`), or the message is unparseable RFC 5322 mail (`unparseable_message`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Authenticated caller is not Lawyer/admin", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such matter, or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "The message could not be filed — a storage or database fault, never a rejected field", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
         "/app/api/projects/{id}/documents/{asset_id}": {
           "patch": {
             "summary": "Reconcile visibility, set a slug on a slugless row, replace a legacy kind, or move an unrepresentable slug",

@@ -269,6 +269,7 @@ async fn receive(
         let received = store::inbox::ingest_inbound(
             &state.surreal,
             &store::inbox::IngestInbound {
+                project_id: None,
                 firm_id: account.firm_id,
                 brand_key: Some(&account.brand_key),
                 interaction_type: Some(interaction.interaction_type),
@@ -288,7 +289,7 @@ async fn receive(
                 matter_consent: false,
                 promotional_opt_in: false,
                 email_conversation_id: None,
-                attachment_asset_id: None,
+                attachments: Vec::new(),
                 occurred_at: &interaction.occurred_at,
             },
         )
@@ -332,6 +333,16 @@ pub fn routes() -> Router<crate::AppState> {
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+    use std::sync::LazyLock;
+
+    /// The Meta webhook handlers read and write process-global environment
+    /// variables (`NAVIGATOR_META_WEBHOOK_APP_SECRET`,
+    /// `NAVIGATOR_META_WEBHOOK_VERIFY_TOKEN`). Tests that exercise them run
+    /// concurrently, so every test that calls `receive` or `challenge` holds
+    /// this lock for its whole body; otherwise a sibling's `set_var` races the
+    /// first test's assertions (observed as a 401-vs-503 flake).
+    static WEBHOOK_ENV: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
 
     #[test]
     fn signature_authenticates_exact_raw_body() {
@@ -383,6 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn receive_refuses_missing_or_invalid_signatures() {
+        let _env_guard = WEBHOOK_ENV.lock().await;
         std::env::remove_var("NAVIGATOR_META_WEBHOOK_APP_SECRET");
         let state = crate::test_support::app_state(store::test_support::mem_surreal().await).await;
         let unavailable = receive(
@@ -405,6 +417,7 @@ mod tests {
 
     #[tokio::test]
     async fn challenge_echoes_a_matching_verify_token() {
+        let _env_guard = WEBHOOK_ENV.lock().await;
         std::env::remove_var("NAVIGATOR_META_WEBHOOK_VERIFY_TOKEN");
         let unavailable = challenge(axum::extract::Query(ChallengeQuery {
             mode: "subscribe".into(),
@@ -444,6 +457,8 @@ mod tests {
         use store::social_accounts::{ConnectSocialAccount, SocialProvider};
         use store::test_support::{self, mem_surreal};
         use uuid::Uuid;
+
+        let _env_guard = WEBHOOK_ENV.lock().await;
 
         let db = mem_surreal().await;
         let admin = store::persons::create(

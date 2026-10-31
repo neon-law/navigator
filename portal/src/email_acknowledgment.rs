@@ -70,10 +70,11 @@ fn receipt_allowed(email: &InboundEmail) -> bool {
 /// Reservation is at most once: uncertain sends remain visible in the inbox.
 pub(crate) async fn receive(
     db: &store::surreal::SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
     service: &dyn crate::email::EmailService,
     email: &InboundEmail,
 ) -> Result<(), String> {
-    let Some(inbound) = ingest_support_email(db, email).await? else {
+    let Some(inbound) = ingest_support_email(db, storage, email).await? else {
         return Ok(());
     };
     crate::inbox::start_inbound_message_alert(inbound.message_id).await?;
@@ -200,12 +201,16 @@ mod tests {
         let db = store::test_support::mem_surreal().await;
         store::test_support::seed_firm_with_brand(&db, "neon").await;
         let service = crate::email::CapturingEmail::new();
+        let storage = crate::test_support::fs_storage().await;
         let mut email = sample_email();
         email.to = "staging@neonlaw.com".into();
         email.message_id = Some("fixture-message@example.com".into());
-        receive(&db, &service, &email).await.unwrap();
-        receive(&db, &service, &email).await.unwrap();
-        let inbound = ingest_support_email(&db, &email).await.unwrap().unwrap();
+        receive(&db, &storage, &service, &email).await.unwrap();
+        receive(&db, &storage, &service, &email).await.unwrap();
+        let inbound = ingest_support_email(&db, &storage, &email)
+            .await
+            .unwrap()
+            .unwrap();
         let saved = store::inbox::message_by_id(&db, inbound.message_id)
             .await
             .unwrap()
@@ -235,13 +240,14 @@ mod tests {
         let db = store::test_support::mem_surreal().await;
         store::test_support::seed_firm_with_brand(&db, "neon").await;
         let service = crate::email::CapturingEmail::new();
+        let storage = crate::test_support::fs_storage().await;
         let mut email = sample_email();
         email.to = "support@neonlaw.com".into();
         email.raw = b"Auto-Submitted: auto-replied\r\n\r\nHello".to_vec();
-        receive(&db, &service, &email).await.unwrap();
+        receive(&db, &storage, &service, &email).await.unwrap();
         assert!(service.captured().is_empty());
         assert!(
-            ingest_support_email(&db, &email)
+            ingest_support_email(&db, &storage, &email)
                 .await
                 .unwrap()
                 .unwrap()
@@ -264,12 +270,13 @@ mod tests {
         .await
         .unwrap();
         let service = crate::email::CapturingEmail::new();
+        let storage = crate::test_support::fs_storage().await;
         let mut email = sample_email();
         email.to = "support@neonlaw.com".into();
-        receive(&db, &service, &email).await.unwrap();
+        receive(&db, &storage, &service, &email).await.unwrap();
         assert_eq!(service.captured().len(), 1);
         assert!(
-            ingest_support_email(&db, &email)
+            ingest_support_email(&db, &storage, &email)
                 .await
                 .unwrap()
                 .unwrap()
@@ -282,9 +289,13 @@ mod tests {
         let db = store::test_support::mem_surreal().await;
         store::test_support::seed_firm_with_brand(&db, "neon").await;
         let service = crate::email::CapturingEmail::new();
+        let storage = crate::test_support::fs_storage().await;
         let mut email = sample_email();
         email.to = "support@neonlaw.com".into();
-        let inbound = ingest_support_email(&db, &email).await.unwrap().unwrap();
+        let inbound = ingest_support_email(&db, &storage, &email)
+            .await
+            .unwrap()
+            .unwrap();
         let (first, second) = tokio::join!(
             acknowledge(&db, &service, &email, "support@neonlaw.com", &inbound),
             acknowledge(&db, &service, &email, "support@neonlaw.com", &inbound),
@@ -299,12 +310,13 @@ mod tests {
         let db = store::test_support::mem_surreal().await;
         store::test_support::seed_firm_with_brand(&db, "neon").await;
         let service = crate::email::CapturingEmail::new();
+        let storage = crate::test_support::fs_storage().await;
         let mut email = sample_email();
         email.to = "support@neonlaw.com".into();
-        receive(&db, &service, &email).await.unwrap();
-        receive(&db, &service, &email).await.unwrap();
+        receive(&db, &storage, &service, &email).await.unwrap();
+        receive(&db, &storage, &service, &email).await.unwrap();
         email.text = "A different message".into();
-        receive(&db, &service, &email).await.unwrap();
+        receive(&db, &storage, &service, &email).await.unwrap();
         assert_eq!(service.captured().len(), 2);
     }
 
@@ -313,6 +325,7 @@ mod tests {
         let db = store::test_support::mem_surreal().await;
         store::test_support::seed_firm_with_brand(&db, "neon").await;
         let service = crate::email::CapturingEmail::new();
+        let storage = crate::test_support::fs_storage().await;
         let mut email = sample_email();
         email.to = "support@neonlaw.com".into();
         email
@@ -322,9 +335,9 @@ mod tests {
                 content_type: "text/plain".into(),
                 bytes: b"First".to_vec(),
             });
-        receive(&db, &service, &email).await.unwrap();
+        receive(&db, &storage, &service, &email).await.unwrap();
         email.attachments[0].bytes = b"Second".to_vec();
-        receive(&db, &service, &email).await.unwrap();
+        receive(&db, &storage, &service, &email).await.unwrap();
         assert_eq!(service.captured().len(), 2);
     }
 
@@ -346,12 +359,16 @@ mod tests {
         let db = store::test_support::mem_surreal().await;
         store::test_support::seed_firm_with_brand(&db, "neon").await;
         let service = UncertainEmail(std::sync::atomic::AtomicUsize::new(0));
+        let storage = crate::test_support::fs_storage().await;
         let mut email = sample_email();
         email.to = "support@neonlaw.com".into();
-        receive(&db, &service, &email).await.unwrap();
-        receive(&db, &service, &email).await.unwrap();
+        receive(&db, &storage, &service, &email).await.unwrap();
+        receive(&db, &storage, &service, &email).await.unwrap();
         assert_eq!(service.0.load(std::sync::atomic::Ordering::SeqCst), 1);
-        let inbound = ingest_support_email(&db, &email).await.unwrap().unwrap();
+        let inbound = ingest_support_email(&db, &storage, &email)
+            .await
+            .unwrap()
+            .unwrap();
         let receipt = store::inbox::acknowledgment_for(&db, inbound.message_id)
             .await
             .unwrap()
@@ -363,9 +380,10 @@ mod tests {
     async fn missing_firm_never_sends_a_receipt() {
         let db = store::test_support::mem_surreal().await;
         let service = crate::email::CapturingEmail::new();
+        let storage = crate::test_support::fs_storage().await;
         let mut email = sample_email();
         email.to = "support@neonlaw.com".into();
-        assert!(receive(&db, &service, &email).await.is_err());
+        assert!(receive(&db, &storage, &service, &email).await.is_err());
         assert!(service.captured().is_empty());
     }
 }

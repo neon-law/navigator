@@ -523,6 +523,24 @@
       "Equivalent application visibility, assignment/reassignment history, participation revocation and tenant refusal require separate acceptance."
     ]
   },
+  "inbox_message_asset": {
+    "scenario": "same-Project round trip; cross-Project and cross-Firm refusal; repeated ingest reuses the ordered link",
+    "runtime_tests": [
+      {
+        "file": "store/src/inbox.rs",
+        "function": "attachments_ingest_as_ordered_assets",
+        "proves": "Attachment ingest links ordered Assets deduped by channel and provider reference; a retried delivery cannot duplicate a link row."
+      },
+      {
+        "file": "store/src/postgres_mirror/inbox.rs",
+        "function": "five_inbox_tables_mirror_and_mutable_drift_reconciles",
+        "proves": "The inbox_message_asset image mirrors to PostgreSQL and immutable target drift reconciles."
+      }
+    ],
+    "remaining": [
+      "Application reads of the ordered attachments through the matter Communications view require separate acceptance."
+    ]
+  },
   "iolta_account": {
     "scenario": "same-Firm round trip; cross-Firm refusal",
     "runtime_tests": [],

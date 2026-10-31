@@ -346,7 +346,7 @@
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 106,
+    "table_count": 107,
     "tables": {
       "address": {
         "city": "string",
@@ -925,6 +925,16 @@
         "message_id": "record<message>",
         "provider_account": "string",
         "provider_message_id": "string"
+      },
+      "inbox_message_asset": {
+        "asset_id": "record<asset>",
+        "filename": "string",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "message_id": "record<message>",
+        "position": "int",
+        "sha256": "string"
       },
       "iolta_account": {
         "balance_cents": "int",
@@ -1648,7 +1658,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 129,
+    "table_count": 130,
     "tables": {
       "address": {
         "columns": {
@@ -2829,6 +2839,38 @@
         ],
         "name": "inbox_ingress",
         "references": [
+          "firm",
+          "message"
+        ]
+      },
+      "inbox_message_asset": {
+        "columns": {
+          "asset_id": "UUID",
+          "filename": "TEXT",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "message_id": "UUID",
+          "position": "INTEGER",
+          "sha256": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "asset_id",
+            "asset"
+          ],
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "message_id",
+            "message"
+          ]
+        ],
+        "name": "inbox_message_asset",
+        "references": [
+          "asset",
           "firm",
           "message"
         ]
