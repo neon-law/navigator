@@ -389,20 +389,13 @@
       "extra_column": null,
       "extra_table": null,
       "missing_column": null,
-      "missing_table": "person_phone",
-      "table": null
-    },
-    {
-      "extra_column": null,
-      "extra_table": null,
-      "missing_column": null,
       "missing_table": "schema_version",
       "table": null
     }
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 107,
+    "table_count": 108,
     "tables": {
       "address": {
         "city": "string",
@@ -1725,7 +1718,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 137,
+    "table_count": 138,
     "tables": {
       "address": {
         "columns": {
@@ -3888,6 +3881,20 @@
         "references": [
           "person"
         ]
+      },
+      "person_phone": {
+        "columns": {
+          "e164": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "is_primary": "BOOLEAN",
+          "label": "TEXT",
+          "person_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "person_phone",
+        "references": []
       },
       "person_project_role": {
         "columns": {
