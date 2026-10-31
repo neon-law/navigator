@@ -1043,7 +1043,7 @@ pub const IEP_DEFENDERS_BRANDING: Branding = Branding {
     },
     firm_email: "IEPDefenders@LexTecnica.com",
     support_domain: "lextecnica.com",
-    firm_phone: "+1-743-437-4357",
+    firm_phone: "+1 725 239 8413",
     firm_offices: &[],
     firm_attorneys: &[],
     firm_memberships: &[],

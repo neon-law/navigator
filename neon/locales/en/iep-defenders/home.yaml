@@ -34,8 +34,8 @@ service:
           the scope, fees, and next legal step before you decide how to
           proceed.
     - - text: "Call "
-      - text: "+1-743-437-4357"
-        href: "tel:+17434374357"
+      - text: "+1 725 239 8413"
+        href: "tel:+17252398413"
       - text: " or write to "
       - text: "{firm_email}"
       - text: >-
