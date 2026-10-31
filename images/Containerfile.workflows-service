@@ -84,6 +84,11 @@ COPY billing-workflows billing-workflows
 # outside any crate dir, so `docs` must be staged explicitly or the builder
 # fails to resolve the include paths.
 COPY docs              docs
+# `store` (a `workflows` dependency) depends on `project-scaffold`, which
+# embeds the synced Project skills with include_str! from the canonical
+# `.agents/skills/` catalog, so that tree must be staged too (deploy run
+# 41198940005 failed on the missing council/SKILL.md).
+COPY .agents           .agents
 
 RUN cargo build --release --target "$(cat /tmp/rust-target)" -p workflows-service \
     && cp "target/$(cat /tmp/rust-target)/release/workflows-service" /usr/local/bin/workflows-service
