@@ -1,14 +1,16 @@
-//! Authoring forms for a questionnaire, normalized to the runtime chain.
+//! Authoring forms for a questionnaire, normalized to the runtime map.
 //!
-//! The runtime reads one map: `BEGIN` walks a single `_` edge through every
-//! state to `END`. Authors may also write a linear list, put a prompt on the
+//! The runtime reads one map: `BEGIN` walks to `END`, following the `_`
+//! edge on a linear state and the answer's own named edge on a branch
+//! state — a single-choice question whose `choices:` values name routes
+//! (LAW-209). Authors may also write a linear list, put a prompt on the
 //! state it labels, group states under a heading, and declare the columns of
 //! a `schedule__*` state. Those forms compile into that map. A schedule answer
 //! is rows of text, number, or date cells, not a document body.
 //!
 //! A state may also carry `completed_by: signer`: it is a Signer Box, a
 //! custom primitive the signer completes by hand on the printed document.
-//! The marker is lifted onto the document as `signer_boxes:`, in chain
+//! The marker is lifted onto the document as `signer_boxes:`, in walk
 //! order, so the renders and the rules read one list.
 
 use std::collections::BTreeSet;
@@ -21,8 +23,12 @@ use serde_yaml::{Mapping, Value};
 ///
 /// # Errors
 ///
-/// Returns a message when the authoring form cannot become one linear chain
-/// or a schedule column is not a text, number, or date cell.
+/// Returns a message when the authoring form cannot become one state map
+/// or a schedule column is not a text, number, or date cell. Route
+/// validation is not done here — the workflow gate
+/// (`workflows::spec::QuestionnaireSpec::validate` plus
+/// `validate_routes`) refuses unreachable questions, cycles, and
+/// uncovered choices when the frontmatter is assembled.
 pub fn normalize_value(doc: &mut Value) -> Result<(), String> {
     let Some(questionnaire) = doc.get("questionnaire").cloned() else {
         return Ok(());
@@ -564,5 +570,34 @@ mod tests {
                 .expect("yaml");
         let error = normalize_value(&mut value).expect_err("duplicate");
         assert!(error.contains("duplicate"), "{error}");
+    }
+
+    /// LAW-209: a state-map questionnaire may branch on a choice answer —
+    /// the named edges survive normalization beside the `_` fallback, so
+    /// the route gate and the walker read one map.
+    #[test]
+    fn a_branch_state_keeps_its_named_routes_alongside_the_fallback() {
+        let doc: Doc = deserialize_frontmatter(
+            "questionnaire:\n  BEGIN:\n    _: custom_single_choice__path\n  \
+             custom_single_choice__path:\n    option_a: custom_datetime__a_start\n    \
+             option_b: person__b_counterparty\n    _: END\n  \
+             custom_datetime__a_start:\n    _: END\n  \
+             person__b_counterparty:\n    _: END\n  END: {}\n",
+        )
+        .expect("branched state map");
+        assert_eq!(
+            doc.questionnaire["BEGIN"]["_"],
+            "custom_single_choice__path"
+        );
+        assert_eq!(
+            doc.questionnaire["custom_single_choice__path"]["option_a"],
+            "custom_datetime__a_start"
+        );
+        assert_eq!(
+            doc.questionnaire["custom_single_choice__path"]["option_b"],
+            "person__b_counterparty"
+        );
+        assert_eq!(doc.questionnaire["custom_single_choice__path"]["_"], "END");
+        assert_eq!(doc.questionnaire["custom_datetime__a_start"]["_"], "END");
     }
 }
