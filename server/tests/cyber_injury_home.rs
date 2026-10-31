@@ -105,13 +105,17 @@ async fn public_pages_emit_complete_open_graph_and_canonical_metadata() {
                 format!(r#"content="CyberInjuryLaw" property="og:site_name""#),
                 format!(r#"content="{description}" property="og:description""#),
                 format!(r#"content="{url}" property="og:url""#),
-                r#"property="og:image" content="https://"#.to_string(),
+                format!(
+                    r#"content="{origin}/assets/img/cyber-injury-law/canal-street-ad-f9faa356.png" property="og:image""#
+                ),
                 r#"property="og:image:alt""#.to_string(),
                 format!(r#"rel="canonical" href="{url}""#),
-                r#"name="twitter:card" content="summary""#.to_string(),
+                r#"content="summary" name="twitter:card""#.to_string(),
                 format!(r#"content="{title}" name="twitter:title""#),
                 r#"name="twitter:description""#.to_string(),
-                r#"name="twitter:image" content="https://""#.to_string(),
+                format!(
+                    r#"content="{origin}/assets/img/cyber-injury-law/canal-street-ad-f9faa356.png" name="twitter:image""#
+                ),
             ] {
                 assert!(
                     html.contains(&tag),
