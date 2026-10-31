@@ -3916,7 +3916,7 @@ pub async fn project_notations(
 async fn fetch_notation_board(
     host: Option<&str>,
     project_code: &str,
-) -> Result<Vec<webapp::lawyer_project_detail::ProjectNotationRow>> {
+) -> Result<Vec<webapp::lawyer_project_notations::ProjectNotationRow>> {
     let client = DocumentClient::connect(host, project_code).await?;
     let url = format!(
         "{}/app/api/projects/{}/notation-inventory",
@@ -3944,11 +3944,11 @@ async fn fetch_notation_board(
 pub async fn notation_rows(
     host: Option<&str>,
     project_code: &str,
-) -> Result<Vec<webapp::lawyer_project_detail::ProjectNotationRow>> {
+) -> Result<Vec<webapp::lawyer_project_notations::ProjectNotationRow>> {
     fetch_notation_board(host, project_code).await
 }
 
-fn print_notation_board(rows: &[webapp::lawyer_project_detail::ProjectNotationRow]) {
+fn print_notation_board(rows: &[webapp::lawyer_project_notations::ProjectNotationRow]) {
     let mut states = Vec::new();
     for row in rows {
         for state in &row.workflow_states {

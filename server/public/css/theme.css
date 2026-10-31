@@ -3316,6 +3316,14 @@ a.nav-link:hover {
   display: inline;
 }
 
+/* The summary strip's fact values — a count or a due date reads at a glance,
+ * so the value carries the tile and the title stays small above it. */
+.lawyer-detail__fact-value {
+  display: block;
+  font-size: 1.35rem;
+  font-weight: 600;
+}
+
 /* The Integrations section's buttons — Slack, Xero, and one per registered
  * application — wrap onto their own line with breathing room rather than
  * running together edge to edge. */

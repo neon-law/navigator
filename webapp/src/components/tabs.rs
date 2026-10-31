@@ -9,7 +9,7 @@
 use dioxus::prelude::*;
 
 /// One tab in a [`Tabs`] strip.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tab {
     pub label: String,
     pub href: String,
