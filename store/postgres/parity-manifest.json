@@ -113,13 +113,6 @@
       "table": "matter_page"
     },
     {
-      "extra_column": null,
-      "extra_table": null,
-      "missing_column": "onboarding_jurisdiction",
-      "missing_table": null,
-      "table": "project"
-    },
-    {
       "extra_column": "entity_id",
       "extra_table": null,
       "missing_column": null,
@@ -3848,6 +3841,7 @@
           "internal_slack_channel_url": "TEXT",
           "jurisdiction_id": "UUID",
           "name": "TEXT",
+          "onboarding_jurisdiction": "TEXT",
           "private_notion_page_url": "TEXT",
           "repository_url": "TEXT",
           "shared_notion_page_url": "TEXT",

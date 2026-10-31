@@ -2916,6 +2916,8 @@ BEGIN
     END IF;
 END
 $$;
+
 -- Migration: 20261031120000_add_project_onboarding_jurisdiction.sql
 -- The jurisdiction an onboarding Notation's Clauses bind to. NULL until recorded.
 ALTER TABLE project ADD COLUMN onboarding_jurisdiction TEXT;
+
