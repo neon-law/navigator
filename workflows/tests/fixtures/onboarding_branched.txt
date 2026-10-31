@@ -1,0 +1,51 @@
+---
+kind: onboarding
+title: Synthetic branched onboarding
+respondent_type: person
+confidential: true
+prompts:
+  path: Which engagement shape is this?
+choices:
+  path:
+    litigation: Litigation
+    transactional: Transactional
+questionnaire:
+  BEGIN:
+    _: custom_single_choice__path
+  custom_single_choice__path:
+    litigation: jurisdiction__governing_law
+    transactional: custom_datetime__closing_date
+  jurisdiction__governing_law:
+    _: jurisdiction__arbitration_seat
+  custom_datetime__closing_date:
+    _: jurisdiction__arbitration_seat
+  jurisdiction__arbitration_seat:
+    _: END
+  END: {}
+clauses:
+  arbitration:
+    source: engagement_arbitration@1
+    inputs:
+      law: jurisdiction__governing_law
+      seat: jurisdiction__arbitration_seat
+workflow:
+  BEGIN:
+    created: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__engagement_pdf
+  generate_pdf__engagement_pdf:
+    generated: sent_for_signature__pending
+  sent_for_signature__pending:
+    signed: END
+  END: {}
+---
+
+# Branched onboarding
+
+Engagement shape: {{custom_single_choice__path}}.
+
+Closing date: {{custom_datetime__closing_date}}.
+
+{{> arbitration}}
+
+{{client.signature}} {{client.date}} {{firm.signature}} {{firm.date}}

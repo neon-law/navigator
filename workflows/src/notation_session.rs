@@ -23,7 +23,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::runtime::{SignalContext, StateMachineRuntime, WorkflowRuntimeError};
-use crate::spec::{MachineKind, QuestionnaireSpec, StateName, WorkflowSpecError};
+use crate::spec::{
+    metadata_keys_for_state, question_code_for_state, MachineKind, QuestionnaireSpec, StateName,
+    WorkflowSpecError,
+};
 use crate::specs::{
     audiences_from_template, audiences_from_yaml, catalog_spec_yaml, choices_from_template,
     choices_from_yaml, prompt_overrides_from_template, prompt_overrides_from_yaml,
@@ -179,6 +182,16 @@ pub enum NotationSessionError {
     },
     #[error("questionnaire is already complete")]
     AlreadyComplete,
+    /// A recorded answer routes nowhere — no choice edge matches and
+    /// no `_` fallback exists. The route gate refuses to compile such
+    /// a template (uncovered choice), so reaching this at runtime
+    /// means a walk is running against a snapshot the gate never
+    /// saw — the defense-in-depth arm, never the happy path.
+    #[error(
+        "questionnaire answer at `{state}` routes nowhere — no choice edge matches and no `_` \
+         fallback exists"
+    )]
+    RouteDeadEnd { state: String },
     #[error("workflow runtime: {0}")]
     Runtime(#[from] WorkflowRuntimeError),
     #[error("database: {0}")]
@@ -259,7 +272,7 @@ pub async fn start_notation(
             definition.spec.inner(),
         )
         .await?;
-    let next = first_step(surreal, &definition).await?;
+    let next = first_step(surreal, &definition, notation_id).await?;
     Ok(StartOutcome { notation_id, next })
 }
 
@@ -403,19 +416,47 @@ pub async fn questionnaire_snapshot_for_template(
     questionnaire_snapshot_from_definition(&definition)
 }
 
-/// The ordered question-code chain (BEGIN → … → END, following the
-/// unconditional `_` edge) the notation actually walks, sourced from its
-/// frozen questionnaire snapshot — the scoped blob's questionnaire when the
-/// pinned template carried one. The admin walker's progress indicator reads
-/// this so the total tracks the questionnaire the client is answering, not
-/// the compile-time bundled spec.
+/// The questions the notation actually walks, in walk order, sourced
+/// from its frozen questionnaire snapshot — the scoped blob's
+/// questionnaire when the pinned template carried one — and resolved
+/// through the answers already recorded, so a branched questionnaire's
+/// rendered order tracks the branch taken rather than the full
+/// fan-out (which for a linear questionnaire is the same chain). The
+/// admin walker's progress indicator reads this so the total tracks
+/// the questionnaire the client is answering, not the compile-time
+/// bundled spec.
 pub async fn questionnaire_chain_for_notation(
     surreal: &store::surreal::SurrealDb,
     storage: Option<&Arc<dyn StorageService>>,
     notation_id: Uuid,
 ) -> Result<Vec<String>, NotationSessionError> {
     let (_, definition) = load_notation_and_spec(surreal, storage, notation_id).await?;
-    Ok(ordered_question_codes(&definition.spec))
+    let taken = recorded_answers(surreal, notation_id).await?;
+    Ok(definition
+        .spec
+        .question_order(&taken)
+        .into_iter()
+        .map(|state| state.0)
+        .collect())
+}
+
+/// The answers recorded for one notation, folded latest-wins into
+/// `state name → recorded value` — the route resolver's input. Rows
+/// arrive oldest-first, so the last row per state is the latest.
+async fn recorded_answers(
+    surreal: &store::surreal::SurrealDb,
+    notation_id: Uuid,
+) -> Result<BTreeMap<String, String>, NotationSessionError> {
+    let mut taken = BTreeMap::new();
+    for answer in store::answers::for_notation(surreal, notation_id).await? {
+        if let Some(state_name) = &answer.state_name {
+            taken.insert(
+                state_name.clone(),
+                store::answers::display_value(&answer.value),
+            );
+        }
+    }
+    Ok(taken)
 }
 
 fn questionnaire_snapshot_from_definition(
@@ -439,7 +480,7 @@ pub async fn current_step(
         .current_state(MachineKind::Questionnaire, notation_id)
         .await
         .unwrap_or_else(StateName::begin);
-    next_step_from(surreal, &definition, &current_state).await
+    next_step_from(surreal, &definition, notation_id, &current_state).await
 }
 
 /// Persist one answer, advance the questionnaire, and return the
@@ -503,11 +544,19 @@ pub async fn answer_step_with_reference(
         .await
         .unwrap_or_else(StateName::begin);
 
+    // Where the walk stands: the pointer rests on the last-answered
+    // question (or BEGIN), and the route out of it — the recorded
+    // answer's own choice edge on a branch state, `_` on a linear
+    // one — names the question being answered now.
+    let taken = recorded_answers(surreal, notation_id).await?;
+    let prior = taken.get(current_state.as_str()).cloned();
+    let condition = definition
+        .spec
+        .route_condition(&current_state, prior.as_deref())
+        .ok_or(NotationSessionError::AlreadyComplete)?;
     let expected = definition
         .spec
-        .transitions_from(&current_state)
-        .and_then(|t| t.lookup("_"))
-        .cloned()
+        .route_from(&current_state, prior.as_deref())
         .ok_or(NotationSessionError::AlreadyComplete)?;
     if expected == StateName::end() {
         return Err(NotationSessionError::AlreadyComplete);
@@ -564,7 +613,7 @@ pub async fn answer_step_with_reference(
         .signal_with_context(
             MachineKind::Questionnaire,
             notation_id,
-            "_",
+            &condition,
             Some(value),
             signal_context,
         )
@@ -572,18 +621,21 @@ pub async fn answer_step_with_reference(
 
     // If the next transition would land at END, fire the final
     // signal so the machine actually reaches END before we report
-    // completion.
-    let next_after = definition
+    // completion. The route out of the just-answered question
+    // follows the answer just recorded.
+    let next_after = definition.spec.route_from(&expected, Some(value));
+    let final_condition = definition
         .spec
-        .transitions_from(&expected)
-        .and_then(|t| t.lookup("_"))
-        .cloned();
+        .route_condition(&expected, Some(value))
+        .ok_or_else(|| NotationSessionError::RouteDeadEnd {
+            state: expected.0.clone(),
+        })?;
     if matches!(&next_after, Some(s) if s == &StateName::end()) {
         runtime
             .signal_with_context(
                 MachineKind::Questionnaire,
                 notation_id,
-                "_",
+                &final_condition,
                 None,
                 signal_context,
             )
@@ -591,7 +643,9 @@ pub async fn answer_step_with_reference(
         return Ok(NextStep::QuestionnaireComplete);
     }
 
-    let next_state = next_after.ok_or(NotationSessionError::AlreadyComplete)?;
+    let next_state = next_after.ok_or_else(|| NotationSessionError::RouteDeadEnd {
+        state: expected.0.clone(),
+    })?;
     Ok(NextStep::NeedsAnswer {
         question: load_question(
             surreal,
@@ -634,26 +688,6 @@ pub enum ClientIntakeStep {
     /// The client has answered every client-facing question; the rest is
     /// the firm's to finish.
     Complete { total: usize },
-}
-
-/// The ordered question codes a questionnaire walks, BEGIN → … → END
-/// (following the unconditional `_` edge each step). The same ordering
-/// the admin walker's progress indicator uses.
-fn ordered_question_codes(spec: &QuestionnaireSpec) -> Vec<String> {
-    let mut codes = Vec::new();
-    let mut here = StateName::begin();
-    while let Some(next) = spec
-        .transitions_from(&here)
-        .and_then(|t| t.lookup("_"))
-        .cloned()
-    {
-        if next == StateName::end() {
-            break;
-        }
-        codes.push(next.as_str().to_string());
-        here = next;
-    }
-    codes
 }
 
 /// The `custom_*` primitives whose seeded `help_text` speaks to the
@@ -707,7 +741,17 @@ pub async fn client_intake_step_at(
     let (notation_row, definition) = load_notation_and_spec(surreal, storage, notation_id).await?;
     let person_id = notation_row.person_id;
 
-    let codes = ordered_question_codes(&definition.spec);
+    // Route-aware: the walk's answers so far select the branches, so a
+    // question on a pruned branch is no longer part of the client's
+    // portion at all (and a still-unanswered branch fans out until its
+    // own choice is made).
+    let taken = recorded_answers(surreal, notation_id).await?;
+    let codes: Vec<String> = definition
+        .spec
+        .question_order(&taken)
+        .into_iter()
+        .map(|state| state.0)
+        .collect();
     let canonical_codes: Vec<String> = codes
         .iter()
         .map(|code| question_code_for_state(code).to_string())
@@ -908,9 +952,12 @@ pub async fn record_client_answer_with_reference(
     authored_by: Uuid,
 ) -> Result<(), NotationSessionError> {
     let (notation_row, definition) = load_notation_and_spec(surreal, storage, notation_id).await?;
-    if !ordered_question_codes(&definition.spec)
+    let taken = recorded_answers(surreal, notation_id).await?;
+    if !definition
+        .spec
+        .question_order(&taken)
         .iter()
-        .any(|c| c == question_code)
+        .any(|state| state.as_str() == question_code)
     {
         return Err(NotationSessionError::QuestionNotClientFacing(
             question_code.into(),
@@ -1070,11 +1117,17 @@ async fn questionnaire_definition_for(
 }
 
 /// Build a [`QuestionnaireDefinition`] from a bundled standalone spec YAML.
+/// Runs the full questionnaire gate — shape validation plus route
+/// coverage against the parsed `choices:` — so a template with an
+/// unreachable question, a cycle, or an uncovered answer fails here,
+/// at compile time, never mid-walk.
 fn definition_from_yaml(yaml: &str) -> Result<QuestionnaireDefinition, NotationSessionError> {
     let prompts = prompt_overrides_from_yaml(yaml)?;
     let choices = choices_from_yaml(yaml)?;
+    let spec = questionnaire_spec_from_yaml(yaml)?;
+    spec.validate_routes(&choices)?;
     Ok(QuestionnaireDefinition {
-        spec: questionnaire_spec_from_yaml(yaml)?,
+        spec,
         prompts,
         audiences: audiences_from_yaml(yaml)?,
         choices,
@@ -1082,12 +1135,15 @@ fn definition_from_yaml(yaml: &str) -> Result<QuestionnaireDefinition, NotationS
 }
 
 /// Build a [`QuestionnaireDefinition`] from a template's markdown body
-/// (its `questionnaire:` frontmatter block).
+/// (its `questionnaire:` frontmatter block). Runs the same route gate as
+/// [`definition_from_yaml`] — see there.
 fn definition_from_body(body: &str) -> Result<QuestionnaireDefinition, NotationSessionError> {
     let prompts = prompt_overrides_from_template(body)?;
     let choices = choices_from_template(body)?;
+    let spec = questionnaire_spec_from_template(body)?;
+    spec.validate_routes(&choices)?;
     Ok(QuestionnaireDefinition {
-        spec: questionnaire_spec_from_template(body)?,
+        spec,
         prompts,
         audiences: audiences_from_template(body)?,
         choices,
@@ -1097,21 +1153,24 @@ fn definition_from_body(body: &str) -> Result<QuestionnaireDefinition, NotationS
 async fn first_step(
     surreal: &store::surreal::SurrealDb,
     definition: &QuestionnaireDefinition,
+    notation_id: Uuid,
 ) -> Result<NextStep, NotationSessionError> {
-    next_step_from(surreal, definition, &StateName::begin()).await
+    next_step_from(surreal, definition, notation_id, &StateName::begin()).await
 }
 
+/// The question now being asked, given the machine's pointer: the
+/// pointer rests on the last-answered question (or BEGIN), and the
+/// route out of it — the recorded answer's own choice edge on a
+/// branch state, `_` on a linear one — names the next question.
 async fn next_step_from(
     surreal: &store::surreal::SurrealDb,
     definition: &QuestionnaireDefinition,
+    notation_id: Uuid,
     current_state: &StateName,
 ) -> Result<NextStep, NotationSessionError> {
-    let Some(next) = definition
-        .spec
-        .transitions_from(current_state)
-        .and_then(|t| t.lookup("_"))
-        .cloned()
-    else {
+    let taken = recorded_answers(surreal, notation_id).await?;
+    let prior = taken.get(current_state.as_str()).cloned();
+    let Some(next) = definition.spec.route_from(current_state, prior.as_deref()) else {
         return Ok(NextStep::QuestionnaireComplete);
     };
     if next == StateName::end() {
@@ -1145,10 +1204,6 @@ async fn load_question(
         choices: choices_for_state(choices, state.as_str()),
         help_text: store::seed::question_help_text(code),
     })
-}
-
-fn question_code_for_state(state: &str) -> &str {
-    state.split_once("__").map_or(state, |(code, _)| code)
 }
 
 /// Persist one machine-extracted answer for a notation's respondent, keyed by
@@ -1237,10 +1292,6 @@ fn answer_value_for_state(
         }
         _ => store::answers::primitive(value),
     }
-}
-
-fn role_key_for_state(state: &str) -> &str {
-    state.split_once("__").map_or(state, |(_, role)| role)
 }
 
 fn prompt_override_for_state<'a>(
@@ -1379,19 +1430,6 @@ fn ensure_declared_choice(
     Err(undeclared())
 }
 
-fn metadata_keys_for_state(state: &str) -> Vec<&str> {
-    let role = role_key_for_state(state);
-    let ty = question_code_for_state(state);
-    match (ty, role) {
-        ("person", "client") => vec!["client", "client_name"],
-        ("project", "engagement") => vec!["engagement", "project_name"],
-        ("entity", "company") => vec!["company", "entity_name"],
-        ("entity", "nonprofit") => vec!["nonprofit", "nonprofit_legal_name"],
-        ("person", "worker") => vec!["worker", "worker_legal_name"],
-        _ => vec![role],
-    }
-}
-
 fn answered_client_states(
     client_codes: &[String],
     mut answer_counts_by_code: BTreeMap<String, usize>,
@@ -1437,13 +1475,23 @@ pub fn localize_prompt_for_state(prompt: &str, state: &str) -> String {
 mod tests {
     use super::{
         answer_step, answer_value_for_state, answered_client_states, current_step,
-        is_author_facing_help, localize_prompt_for_state, ordered_question_codes,
-        questionnaire_chain_for_notation, questionnaire_definition_for, record_reask_answer,
-        start_notation, AnswerAuthor, NextStep, NotationSessionError, QuestionDescriptor,
-        QuestionnaireDefinition, StateName, AUTHOR_FACING_HELP_CODES,
+        is_author_facing_help, localize_prompt_for_state, questionnaire_chain_for_notation,
+        questionnaire_definition_for, record_reask_answer, start_notation, AnswerAuthor, NextStep,
+        NotationSessionError, QuestionDescriptor, QuestionnaireDefinition, StateName,
+        AUTHOR_FACING_HELP_CODES,
     };
     use crate::runtime::{SignalContext, StateMachineRuntime};
-    use crate::spec::MachineKind;
+    use crate::spec::{MachineKind, QuestionnaireSpec};
+
+    /// The linear-chain question order the pre-branching walker
+    /// produced — what [`QuestionnaireSpec::question_order`] must still
+    /// return for a linear spec with no answers recorded.
+    fn ordered_question_codes(spec: &QuestionnaireSpec) -> Vec<String> {
+        spec.question_order(&BTreeMap::new())
+            .into_iter()
+            .map(|state| state.0)
+            .collect()
+    }
 
     #[test]
     fn a_what_is_prompt_interpolates_the_question_label() {

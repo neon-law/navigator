@@ -142,7 +142,7 @@ pub use f114::{F114ForParentOrdering, AGGREGATE_QUESTION_TYPES};
 pub use f115::F115PathResolution;
 pub use f116::F116LawyerReviewGatesSubmission;
 pub use f117::F117GlossaryBackedCustomText;
-pub use f118::F118QuestionnaireLinearity;
+pub use f118::F118QuestionnaireRoutes;
 pub use f119::{
     describe_change_surface, describe_github_notation, F119GithubNotation, CHANGE_SURFACES,
     CHANGE_SURFACE_STATE, ENGINEERING_COUNCIL_STATE, GITHUB_NOTATIONS, GITHUB_SHELF,
@@ -359,7 +359,7 @@ pub fn description_for_code(code: &str) -> &'static str {
         "N115" => "Template data path or iterator must resolve against a typed questionnaire state",
         "N116" => "Notation workflow must gate every outbound submission behind lawyer review",
         "N117" => "every `custom_text__*` state the respondent answers must be an allowlisted free-text primitive",
-        "N118" => "Questionnaire must be one linear `_` chain from BEGIN to END",
+        "N118" => "Every questionnaire answer routes, and every route reaches END",
         "N119" => {
             "A `kind: github` notation must be `templates/github/create_issue.md` or \
              `create_pull_request.md` and ask the change-surface, Engineering Council, and \
