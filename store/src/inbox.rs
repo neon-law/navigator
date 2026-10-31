@@ -573,30 +573,7 @@ pub async fn ingest_inbound(
         }
     }
     if let Err(error) = create_ingress(db, inbound, message_id).await {
-        let _ = db
-            .query("DELETE $id")
-            .bind(("id", record_id(MESSAGE, message_id)))
-            .await;
-        after_write(db, MirrorKey::InboxMessage(message_id)).await;
-        if let Some(existing) = find_ingress(
-            db,
-            inbound.firm_id,
-            inbound.channel,
-            inbound.provider_account,
-            inbound.provider_message_id,
-        )
-        .await?
-        {
-            let Some(message) = message_by_id(db, existing).await? else {
-                return Err(InboxError::NotFound);
-            };
-            return Ok(IngestedInbound {
-                conversation_id: message.conversation_id,
-                message_id: message.id,
-                deduped: true,
-            });
-        }
-        return Err(error);
+        return recover_deduped_ingress(db, inbound, message_id, error).await;
     }
     let _ = db
         .query("UPDATE $id SET unread = true, updated_at = time::now()")
@@ -662,10 +639,10 @@ async fn link_message_assets(
         if !existing.is_empty() {
             continue;
         }
-        db.query(format!(
+        db.query(
             "CREATE $id SET firm_id = $firm, message_id = $message, \
-             asset_id = $asset, filename = $filename, position = $position, sha256 = $sha"
-        ))
+             asset_id = $asset, filename = $filename, position = $position, sha256 = $sha",
+        )
         .bind(("id", record_id(MESSAGE_ASSET, Uuid::now_v7())))
         .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
         .bind(("message", record_id(MESSAGE, message_id)))
@@ -708,6 +685,41 @@ pub async fn message_assets(
         .into_iter()
         .filter_map(MessageAssetRow::into_attachment)
         .collect())
+}
+
+/// A lost ingress-creation race: another worker filed the same provider
+/// message between our dedup check and our ingress write. Roll our message
+/// back and surface the winner's row instead of failing the ingest.
+async fn recover_deduped_ingress(
+    db: &SurrealDb,
+    inbound: &IngestInbound<'_>,
+    message_id: Uuid,
+    error: InboxError,
+) -> Result<IngestedInbound, InboxError> {
+    let _ = db
+        .query("DELETE $id")
+        .bind(("id", record_id(MESSAGE, message_id)))
+        .await;
+    after_write(db, MirrorKey::InboxMessage(message_id)).await;
+    if let Some(existing) = find_ingress(
+        db,
+        inbound.firm_id,
+        inbound.channel,
+        inbound.provider_account,
+        inbound.provider_message_id,
+    )
+    .await?
+    {
+        let Some(message) = message_by_id(db, existing).await? else {
+            return Err(InboxError::NotFound);
+        };
+        return Ok(IngestedInbound {
+            conversation_id: message.conversation_id,
+            message_id: message.id,
+            deduped: true,
+        });
+    }
+    Err(error)
 }
 
 /// Attribute or reassign a conversation to a Project in the same Firm.
