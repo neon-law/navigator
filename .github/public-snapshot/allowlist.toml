@@ -130,3 +130,9 @@ class = "email"
 match = '''(?:no-reply@(?:claims\.)?kroll\.com|no-reply@notkroll\.com)'''
 paths = ["portal/src/inbound_email.rs"]
 reason = "The claims-agent noticing vendor domain and its lookalike are the behaviour under test in the inbox classifier; the mailboxes are invented."
+
+[[allow]]
+class = "email"
+match = '''clerk@notuscourts\.gov'''
+paths = ["portal/src/inbound_email.rs"]
+reason = "A lookalike court domain the inbox classifier must refuse; the mailbox is invented."
