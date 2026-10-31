@@ -125,25 +125,25 @@ const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
     (
         "kc__adult_name_change_petition",
         include_str!(
-            "../../templates/notations/forms/united_states/washington/king_county/kc__adult_name_change_petition.fields"
+            "../../templates/notations/forms/united_states/washington/king_county_district_court/kc__adult_name_change_petition.fields"
         ),
     ),
     (
         "kc__minor_name_change_petition",
         include_str!(
-            "../../templates/notations/forms/united_states/washington/king_county/kc__minor_name_change_petition.fields"
+            "../../templates/notations/forms/united_states/washington/king_county_district_court/kc__minor_name_change_petition.fields"
         ),
     ),
     (
         "kc__small_claims_notice",
         include_str!(
-            "../../templates/notations/forms/united_states/washington/king_county/kc__small_claims_notice.fields"
+            "../../templates/notations/forms/united_states/washington/king_county_district_court/kc__small_claims_notice.fields"
         ),
     ),
     (
         "kc__small_claims_plaintiff_packet",
         include_str!(
-            "../../templates/notations/forms/united_states/washington/king_county/kc__small_claims_plaintiff_packet.fields"
+            "../../templates/notations/forms/united_states/washington/king_county_district_court/kc__small_claims_plaintiff_packet.fields"
         ),
     ),
 ];
@@ -750,7 +750,19 @@ mod tests {
             question = "entity__company.2.name"
             "#,
         );
-        let names = vec!["sneaky".to_string()];
+        let names = vec!["sneaky".to_string()    (
+        "washoe__adult_name_change_petition",
+        include_str!(
+            "../../templates/notations/forms/united_states/nevada/second_judicial_district_court/washoe__adult_name_change_petition.fields"
+        ),
+    ),
+    (
+        "washoe__fee_waiver_application",
+        include_str!(
+            "../../templates/notations/forms/united_states/nevada/second_judicial_district_court/washoe__fee_waiver_application.fields"
+        ),
+    ),
+];
         let err = plan(&map, &names, &llc_states()).expect_err("must refuse");
         assert!(
             matches!(

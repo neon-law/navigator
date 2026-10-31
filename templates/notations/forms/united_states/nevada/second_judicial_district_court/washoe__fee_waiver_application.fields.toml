@@ -1,0 +1,433 @@
+form_code = "washoe__fee_waiver_application"
+
+# Second Judicial District Court (Washoe) local form — Application and
+# Declaration to Waive Fees and Costs (F-6, revised 03/19/2026 SB, 5 pages,
+# 99 fields; the Family and General Jurisdiction folders ship the same PDF,
+# registry pins F6FAM/F6GJ share one hash).
+#
+# The F-6 is a full financial disclosure: benefits received, monthly income,
+# monthly expenses, assets, and the household the applicant supports. The
+# questionnaire documents in-template that it exceeds the 5-8 question
+# target (same treatment as the DV application's 234 fields).
+#
+# Mapped: the caption's applicant and opposing-party lines, the section 1
+# declaration name, the benefits checkboxes as adjacent yes/no toggles (the
+# checkbox-group fill shape is ENG-454, so each benefit is its own toggle —
+# same pattern as the small-claims notice's claim types), each income
+# checkbox paired with its amount, the monthly expenses, the asset rows,
+# the cash amount, the household table as flat row states
+# (custom_*_household_<part>_<n>, skip-when-empty past the first row; the
+# people-list row shape carries only contact parts, so age, relationship,
+# and contribution cannot ride a people__ aggregate), the not-employed
+# explanation, the additional-information narrative, and the printed name
+# beside the signature.
+#
+# Deliberately left unmapped (decision recorded, lawyer or clerk completes):
+# - `Your first and last name` / `Your street address` /
+#   `Your city, state, zip code` / `Your telephone` / `Your email` — the
+#   attorney/self-represented-litigant header block; the firm confirms the
+#   mailing address with the applicant at review.
+# - `Case number` / `Department number` — the clerk's caption boxes.
+# - `Check Box11` — the section 2 lead-in affirmation ("I receive benefits
+#   from one or more of the following programs"), derived: the lawyer
+#   checks it at review whenever a benefit box below is checked (verified
+#   by fill-test renders: Box11 sits beside the lead-in line at the section
+#   indent, Box12 beside "Supplemental Security Income (SSI);" at the
+#   benefit-item indent shared with the page-2 boxes).
+# - `Date of your signature` — the signature date, set when the applicant
+#   signs at the review appointment (a literal would freeze the date at
+#   vendor time).
+# - `Your signature or type /s/ then you name` — the wet signature (the
+#   official blank's own typo, recorded verbatim).
+
+[[field]]
+name = "Plaintiff, Petitioner, or Joint Petitioner"
+question = "person__client.name"
+
+[[field]]
+name = "Defendant, Respondent, or Joint Petitioner"
+question = "custom_text__opposing_party"
+
+[[field]]
+name = "Your name"
+question = "person__client.name"
+
+[[field]]
+name = "Check Box12"
+question = "custom_yes_no__benefit_ssi"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box13"
+question = "custom_yes_no__benefit_food_stamps"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box14"
+question = "custom_yes_no__benefit_tanf"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box15"
+question = "custom_yes_no__benefit_medicaid"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box16"
+question = "custom_yes_no__benefit_subsidized_housing"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box17"
+question = "custom_yes_no__benefit_legal_services"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Check Box18"
+question = "custom_yes_no__benefit_other"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Name of program"
+question = "custom_text__other_benefits_program"
+
+[[field]]
+name = "Check Box20"
+question = "custom_yes_no__income_employment"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Hourly wage"
+question = "custom_usd__hourly_wage"
+
+[[field]]
+name = "Amount of hours"
+question = "custom_text__hours_per_week"
+
+[[field]]
+name = "Check Box24"
+question = "custom_yes_no__income_salary"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Salary per year"
+question = "custom_usd__salary_per_year"
+
+[[field]]
+name = "Salary per month"
+question = "custom_usd__salary_per_month"
+
+[[field]]
+name = "Check Box27"
+question = "custom_yes_no__income_commissions"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Commissions or tips"
+question = "custom_usd__commissions_monthly"
+
+[[field]]
+name = "Check Box29"
+question = "custom_yes_no__income_unemployment"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Unemployment benefits"
+question = "custom_usd__unemployment_weekly"
+
+[[field]]
+name = "Check Box31"
+question = "custom_yes_no__income_benefits"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Veterans or social security benefits"
+question = "custom_usd__veterans_or_ss_monthly"
+
+[[field]]
+name = "Check Box33"
+question = "custom_yes_no__income_support"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Child support, spousal support, or alimony"
+question = "custom_usd__support_monthly"
+
+[[field]]
+name = "Check Box35"
+question = "custom_yes_no__income_pension"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Pension or annuity payments"
+question = "custom_usd__pension_monthly"
+
+[[field]]
+name = "Check Box37"
+question = "custom_yes_no__income_other"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Other sources of income"
+question = "custom_usd__other_income_monthly"
+
+[[field]]
+name = "Check Box39"
+question = "custom_yes_no__no_income"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Explain how you are meeting your needs"
+question = "custom_text__no_income_explanation"
+
+[[field]]
+name = "Rent or mortgage"
+question = "custom_usd__expense_rent"
+
+[[field]]
+name = "Cost of phone and utilities"
+question = "custom_usd__expense_utilities"
+
+[[field]]
+name = "Cost of food"
+question = "custom_usd__expense_food"
+
+[[field]]
+name = "Cost of childcare"
+question = "custom_usd__expense_childcare"
+
+[[field]]
+name = "Cost of Insurance"
+question = "custom_usd__expense_insurance"
+
+[[field]]
+name = "Cost of medical"
+question = "custom_usd__expense_medical"
+
+[[field]]
+name = "Cost of transportation"
+question = "custom_usd__expense_transportation"
+
+[[field]]
+name = "Other expense"
+question = "custom_text__expense_other_label"
+
+[[field]]
+name = "Cost of other expense"
+question = "custom_usd__expense_other"
+
+[[field]]
+name = "Total expenses per month"
+question = "custom_usd__expenses_total"
+
+[[field]]
+name = "First vehicle make, model, year"
+question = "custom_text__vehicle_one"
+
+[[field]]
+name = "First vehicle's worth"
+question = "custom_usd__vehicle_one_worth"
+
+[[field]]
+name = "Amount owed on first vehicle"
+question = "custom_usd__vehicle_one_owed"
+
+[[field]]
+name = "Second vehicle make, model, year"
+question = "custom_text__vehicle_two"
+
+[[field]]
+name = "Second vehicle's worth"
+question = "custom_usd__vehicle_two_worth"
+
+[[field]]
+name = "Amount owed on second vehicle"
+question = "custom_usd__vehicle_two_owed"
+
+[[field]]
+name = "Check Box57"
+question = "custom_yes_no__no_vehicle"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Address other than where you live"
+question = "custom_text__real_estate_address"
+
+[[field]]
+name = "Property's worth"
+question = "custom_usd__real_estate_worth"
+
+[[field]]
+name = "Amount owed on property"
+question = "custom_usd__real_estate_owed"
+
+[[field]]
+name = "Check Box61"
+question = "custom_yes_no__no_real_estate"
+checked_when = "yes"
+on_state = "Yes"
+
+[[field]]
+name = "Account or personal property"
+question = "custom_text__account_one"
+
+[[field]]
+name = "Property's worth_"
+question = "custom_usd__account_one_worth"
+
+[[field]]
+name = "Amount owed on property_"
+question = "custom_usd__account_one_owed"
+
+[[field]]
+name = "Account or personal property_"
+question = "custom_text__account_two"
+
+[[field]]
+name = "Property's worth__"
+question = "custom_usd__account_two_worth"
+
+[[field]]
+name = "Amount owed on property__"
+question = "custom_usd__account_two_owed"
+
+[[field]]
+name = "Cash amount"
+question = "custom_usd__cash"
+
+[[field]]
+name = "First person's name"
+question = "custom_text__household_name_1"
+
+[[field]]
+name = "First person's age"
+question = "custom_text__household_age_1"
+
+[[field]]
+name = "Your relationship to the first person"
+question = "custom_text__household_relationship_1"
+
+[[field]]
+name = "First person's monthly contribution"
+question = "custom_usd__household_contribution_1"
+
+[[field]]
+name = "Second person's name"
+question = "custom_text__household_name_2"
+
+[[field]]
+name = "Second person's age"
+question = "custom_text__household_age_2"
+
+[[field]]
+name = "Your relationship to the second person"
+question = "custom_text__household_relationship_2"
+
+[[field]]
+name = "Second person's monthly contribution"
+question = "custom_usd__household_contribution_2"
+
+[[field]]
+name = "Third person's name"
+question = "custom_text__household_name_3"
+
+[[field]]
+name = "Third person's age"
+question = "custom_text__household_age_3"
+
+[[field]]
+name = "Your relationship to the third person"
+question = "custom_text__household_relationship_3"
+
+[[field]]
+name = "Third person's monthly contribution"
+question = "custom_usd__household_contribution_3"
+
+[[field]]
+name = "Fourth person's name"
+question = "custom_text__household_name_4"
+
+[[field]]
+name = "Fourth person's age"
+question = "custom_text__household_age_4"
+
+[[field]]
+name = "Your relationship to the fourth person"
+question = "custom_text__household_relationship_4"
+
+[[field]]
+name = "Fourth person's monthly contribution"
+question = "custom_usd__household_contribution_4"
+
+[[field]]
+name = "Fifth person's name"
+question = "custom_text__household_name_5"
+
+[[field]]
+name = "Fifth person's age"
+question = "custom_text__household_age_5"
+
+[[field]]
+name = "Your relationship to the fifth person"
+question = "custom_text__household_relationship_5"
+
+[[field]]
+name = "Fifth person's monthly contribution"
+question = "custom_usd__household_contribution_5"
+
+[[field]]
+name = "Sixth person's name"
+question = "custom_text__household_name_6"
+
+[[field]]
+name = "Sixth person's age"
+question = "custom_text__household_age_6"
+
+[[field]]
+name = "Your relationship to the sixth person"
+question = "custom_text__household_relationship_6"
+
+[[field]]
+name = "Sixth person's monthly contribution"
+question = "custom_usd__household_contribution_6"
+
+[[field]]
+name = "Seventh person's name"
+question = "custom_text__household_name_7"
+
+[[field]]
+name = "Seventh person's age"
+question = "custom_text__household_age_7"
+
+[[field]]
+name = "Your relationship to the seventh person"
+question = "custom_text__household_relationship_7"
+
+[[field]]
+name = "Seventh person's monthly contribution"
+question = "custom_usd__household_contribution_7"
+
+[[field]]
+name = "Additional information"
+question = "custom_text__additional_information"
+
+[[field]]
+name = "Print your name"
+question = "person__client.name"

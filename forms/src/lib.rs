@@ -370,9 +370,9 @@ const BUNDLED: &[FormMeta] = &[
         jurisdiction: "WA",
         title: "Petition for Name Change (Individual)",
         origin_url: "https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-individual-july_2026.pdf",
-        object_path: "forms/united_states/washington/king_county/kc__adult_name_change_petition.pdf",
+        object_path: "forms/united_states/washington/king_county_district_court/kc__adult_name_change_petition.pdf",
         sha256_pin: include_str!(
-            "../../templates/notations/forms/united_states/washington/king_county/kc__adult_name_change_petition.sha256"
+            "../../templates/notations/forms/united_states/washington/king_county_district_court/kc__adult_name_change_petition.sha256"
         ),
         filing_fee: Some(FilingFee {
             amount: "98.00",
@@ -385,9 +385,9 @@ const BUNDLED: &[FormMeta] = &[
         jurisdiction: "WA",
         title: "Petition for Minor Child Name Change",
         origin_url: "https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/name-change-forms/petition-for-name-change-minor-october-2024.pdf",
-        object_path: "forms/united_states/washington/king_county/kc__minor_name_change_petition.pdf",
+        object_path: "forms/united_states/washington/king_county_district_court/kc__minor_name_change_petition.pdf",
         sha256_pin: include_str!(
-            "../../templates/notations/forms/united_states/washington/king_county/kc__minor_name_change_petition.sha256"
+            "../../templates/notations/forms/united_states/washington/king_county_district_court/kc__minor_name_change_petition.sha256"
         ),
         filing_fee: Some(FilingFee {
             amount: "98.00",
@@ -400,9 +400,9 @@ const BUNDLED: &[FormMeta] = &[
         jurisdiction: "WA",
         title: "Notice of Small Claim",
         origin_url: "https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/forms_sc/notice-of-small-claim-september-2025.pdf",
-        object_path: "forms/united_states/washington/king_county/kc__small_claims_notice.pdf",
+        object_path: "forms/united_states/washington/king_county_district_court/kc__small_claims_notice.pdf",
         sha256_pin: include_str!(
-            "../../templates/notations/forms/united_states/washington/king_county/kc__small_claims_notice.sha256"
+            "../../templates/notations/forms/united_states/washington/king_county_district_court/kc__small_claims_notice.sha256"
         ),
         filing_fee: Some(FilingFee {
             amount: "50.00",
@@ -415,9 +415,34 @@ const BUNDLED: &[FormMeta] = &[
         jurisdiction: "WA",
         title: "Small Claims Packet — Plaintiff",
         origin_url: "https://cdn.kingcounty.gov/-/media/king-county/courts/district-court/forms_resources_library_docs/small_claims_forms/info_instruct_small_claims/small_claims_plaintiff_packet-july-2026.pdf",
-        object_path: "forms/united_states/washington/king_county/kc__small_claims_plaintiff_packet.pdf",
+        object_path: "forms/united_states/washington/king_county_district_court/kc__small_claims_plaintiff_packet.pdf",
         sha256_pin: include_str!(
-            "../../templates/notations/forms/united_states/washington/king_county/kc__small_claims_plaintiff_packet.sha256"
+            "../../templates/notations/forms/united_states/washington/king_county_district_court/kc__small_claims_plaintiff_packet.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+
+    FormMeta {
+        code: "washoe__adult_name_change_petition",
+        jurisdiction: "NV",
+        title: "Petition for Adult Name Change (Washoe)",
+        origin_url: "https://www.washoecourts.com/Forms/Family/10.%20Name%20Changes/NA%20Adult%20Name%20Change/1.%20Petition%20for%20Adult%20Name%20Change.pdf",
+        object_path: "forms/united_states/nevada/second_judicial_district_court/washoe__adult_name_change_petition.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/nevada/second_judicial_district_court/washoe__adult_name_change_petition.sha256"
+        ),
+        filing_fee: None,
+        fee_waiver_code: None,
+    },
+    FormMeta {
+        code: "washoe__fee_waiver_application",
+        jurisdiction: "NV",
+        title: "Application for Waiver of Fees and Costs (Washoe)",
+        origin_url: "https://www.washoecourts.com/Forms/Family/1.%20All%20Other%20Family%20Related%20Packets/F-6%20Application%20to%20Waive%20Fees%20and%20Costs/1.%20Application%20for%20Waiver%20of%20Fees%20and%20Costs.pdf",
+        object_path: "forms/united_states/nevada/second_judicial_district_court/washoe__fee_waiver_application.pdf",
+        sha256_pin: include_str!(
+            "../../templates/notations/forms/united_states/nevada/second_judicial_district_court/washoe__fee_waiver_application.sha256"
         ),
         filing_fee: None,
         fee_waiver_code: None,
