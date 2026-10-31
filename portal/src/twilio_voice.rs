@@ -20,8 +20,12 @@
 //! transcript records the call, not its ringing. A terminal event
 //! (`completed`, `failed`, `busy`, `no-answer`, `canceled`) ingests once —
 //! Twilio's redeliveries and out-of-order retries return the original row.
-//! A missed or zero-duration call still lands in the transcript: the record
-//! shows the client tried to reach the firm.
+//! A completed call also rolls up to billed tenths in PostgreSQL: the
+//! provider's duration rounds UP to the six-minute unit and lands as one
+//! idempotent [`store::billed_calls`] row per `CallSid`, parked at the Firm
+//! level until a lawyer attributes it. A missed or zero-duration call still
+//! lands in the transcript — the record shows the client tried to reach the
+//! firm — and bills zero, because only a completed event carries billing.
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -186,6 +190,20 @@ pub async fn status(
     let Ok(saved) = ingest_call(&state.surreal, &resolved, &call).await else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
+    // Billing rides only the completed event: the tenths are a function of
+    // the provider duration, and no other status carries one. A failure is
+    // a 503 so Twilio redelivers — the ingest dedups and the billing row
+    // converges on the original.
+    if call.status == CallStatus::Completed {
+        if let Err(error) = record_billing(&state, &resolved, &call, saved.conversation_id).await {
+            tracing::error!(
+                call_sid = %call.call_sid,
+                error = %error,
+                "billed-call rollup failed; reserved for Twilio's redelivery"
+            );
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    }
     if crate::inbox::start_inbound_message_alert(saved.message_id)
         .await
         .is_err()
@@ -234,6 +252,37 @@ async fn ingest_call(
     )
     .await
     .map_err(|error| error.to_string())
+}
+
+/// The billing half of a completed call: the rollup lands beside the
+/// conversation, keyed idempotently on the `CallSid`, from the provider's
+/// own duration and start time — a completed event without a duration is a
+/// zero-duration call that bills zero tenths.
+async fn record_billing(
+    state: &crate::AppState,
+    resolved: &crate::twilio_resolution::ResolvedTwilioWebhook,
+    call: &InboundCall,
+    conversation_id: uuid::Uuid,
+) -> Result<(), String> {
+    let Some(pg) = state.twilio_registry.as_deref() else {
+        return Err("the resolution spine holds no registry".into());
+    };
+    let call_started_at = chrono::DateTime::parse_from_rfc3339(&call.occurred_at)
+        .map_err(|error| format!("the ingested provider timestamp does not parse: {error}"))?
+        .with_timezone(&chrono::Utc);
+    store::billed_calls::record(
+        pg,
+        &store::billed_calls::NewBilledCall {
+            call_sid: call.call_sid.clone(),
+            conversation_id,
+            firm_id: resolved.firm_id,
+            duration_seconds: call.duration_seconds.unwrap_or(0),
+            call_started_at,
+        },
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -390,6 +439,10 @@ mod tests {
         let mut state = crate::test_support::app_state(db.clone()).await;
         state.canonical_host = crate::CanonicalHost::new(Some(host.to_string()));
         state.twilio_registry = Some(std::sync::Arc::new(pg.clone()));
+        // The harness seals the number's token with this same fake KMS; the
+        // default state's NoRuntimeKms refuses every unwrap, so the lane
+        // would 503 before signature verification ever runs.
+        state.runtime_kms = std::sync::Arc::new(cloud::FakeKms::new("spine-test"));
         (state, firm)
     }
 
@@ -487,6 +540,20 @@ mod tests {
             1,
             "repeated deliveries attach to the same alert"
         );
+        let billed = store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-completed")
+            .await
+            .unwrap()
+            .expect("a completed call bills");
+        assert_eq!(billed.firm_id, firm);
+        assert_eq!(billed.conversation_id, voice[0].id);
+        assert_eq!(billed.duration_seconds, 42);
+        assert_eq!(billed.tenths, 1, "42s rounds up to one tenth");
+        assert_eq!(billed.project_id, None, "the call parks until attributed");
+        assert_eq!(
+            billed.call_started_at.to_rfc3339(),
+            "2026-10-30T18:00:00+00:00",
+            "the provider's StartTime is the billing record's time"
+        );
     }
 
     /// A late mid-call retry after the terminal event changes nothing: the
@@ -573,6 +640,103 @@ mod tests {
         assert_eq!(
             detail.messages[0].body, "Call from +15555550100 — completed (42s).",
             "the late ringing retry did not rewrite the completed call"
+        );
+        let billed = store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-order")
+            .await
+            .unwrap()
+            .expect("the completed call bills");
+        assert_eq!(billed.duration_seconds, 42);
+        assert_eq!(billed.tenths, 1, "the late retry did not re-bill");
+        assert!(
+            store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-fresh")
+                .await
+                .unwrap()
+                .is_none(),
+            "a call that has not completed never bills"
+        );
+    }
+
+    /// A completed call without a duration is a zero-duration call: it
+    /// bills zero tenths, recorded rather than skipped. A missed call — any
+    /// terminal status other than completed — lands in the transcript and
+    /// never writes a billing row at all.
+    #[tokio::test]
+    async fn a_zero_duration_call_bills_zero_and_a_missed_call_never_bills() {
+        let Some(pg) = crate::twilio_registry_harness::postgres().await else {
+            return;
+        };
+        let db = store::test_support::mem_surreal().await;
+        let number = "+15551234444";
+        let (state, firm) = registry_state(
+            &db,
+            &pg,
+            "neon",
+            number,
+            "registry-token",
+            "www.neonlaw.com",
+        )
+        .await;
+        let owner = store::persons::create(
+            &db,
+            &store::persons::NewPerson::with_role(
+                "Synthetic owner",
+                format!("voice-{}@example.com", uuid::Uuid::now_v7()),
+                store::persons::Role::Owner,
+            ),
+        )
+        .await
+        .unwrap()
+        .id;
+
+        let zero = params(&[
+            ("CallSid", "CAsynthetic-zero"),
+            ("From", "+15555550100"),
+            ("To", number),
+            ("CallStatus", "completed"),
+            ("CallDuration", "0"),
+            ("StartTime", "Fri, 30 Oct 2026 18:00:00 +0000"),
+        ]);
+        let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &zero);
+        assert_eq!(
+            status(State(state.clone()), headers, body).await.status(),
+            StatusCode::OK
+        );
+        let billed = store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-zero")
+            .await
+            .unwrap()
+            .expect("a zero-duration call is recorded, not skipped");
+        assert_eq!(billed.duration_seconds, 0);
+        assert_eq!(billed.tenths, 0, "a zero-duration call bills zero");
+        assert_eq!(billed.firm_id, firm);
+
+        let missed = params(&[
+            ("CallSid", "CAsynthetic-missed"),
+            ("From", "+15555550101"),
+            ("To", number),
+            ("CallStatus", "no-answer"),
+            ("StartTime", "Fri, 30 Oct 2026 18:05:00 +0000"),
+        ]);
+        let (headers, body) = signed_body("registry-token", "www.neonlaw.com", &missed);
+        assert_eq!(
+            status(State(state.clone()), headers, body).await.status(),
+            StatusCode::OK
+        );
+        let rows = store::inbox::list_intake(&db, owner).await.unwrap();
+        let missed_row = rows
+            .iter()
+            .find(|row| row.external_address == "+15555550101")
+            .expect("the missed call lands in the transcript");
+        assert_eq!(
+            missed_row.channel,
+            store::inbox::channel::VOICE,
+            "the missed call is a voice conversation"
+        );
+        assert!(
+            store::billed_calls::find_by_call_sid(&pg, "CAsynthetic-missed")
+                .await
+                .unwrap()
+                .is_none(),
+            "a call that never completed never writes a billing row"
         );
     }
 
