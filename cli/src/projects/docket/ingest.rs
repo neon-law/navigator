@@ -636,19 +636,18 @@ fn accept(scope: &ProjectScope, options: &Options, report: &mut Report) -> Vec<A
                 continue;
             }
         };
-        let parsed = match nef::parse_eml(&bytes).map_err(anyhow::Error::from) {
-            Ok(notice) => ParsedNotice::Nef(notice),
-            Err(_) => {
-                let Some(claims) = claims_agent::parse(&bytes) else {
-                    println!(
-                        "skipped {}: not a CM/ECF notice or a claims-agent notice",
-                        path.display()
-                    );
-                    report.skipped_notices += 1;
-                    continue;
-                };
-                ParsedNotice::Claims(claims)
-            }
+        let parsed = if let Ok(notice) = nef::parse_eml(&bytes).map_err(anyhow::Error::from) {
+            ParsedNotice::Nef(notice)
+        } else {
+            let Some(claims) = claims_agent::parse(&bytes) else {
+                println!(
+                    "skipped {}: not a CM/ECF notice or a claims-agent notice",
+                    path.display()
+                );
+                report.skipped_notices += 1;
+                continue;
+            };
+            ParsedNotice::Claims(claims)
         };
         let Some(case_no) = parsed.case_no().map(str::to_string) else {
             println!(
