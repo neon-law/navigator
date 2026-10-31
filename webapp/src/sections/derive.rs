@@ -217,7 +217,11 @@ pub fn docket(inputs: &DocketInputs<'_>) -> Docket {
                 format!("D.I. {} · {}", row.item.number, row.item.title)
             },
             status: if row.item.deadline {
-                row.item.state.clone()
+                if row.item.category.is_empty() {
+                    row.item.state.clone()
+                } else {
+                    format!("{} · {}", row.item.category, row.item.state)
+                }
             } else {
                 row.item.kind.clone()
             },
@@ -532,6 +536,7 @@ fn entry_rows(inputs: &DocketInputs<'_>) -> Vec<Dated> {
                 chain: chain.join(" · "),
                 deadline: false,
                 state: String::new(),
+                category: String::new(),
             };
             Dated { at, item }
         })
@@ -569,6 +574,10 @@ fn deadline_rows(inputs: &DocketInputs<'_>) -> Vec<Dated> {
                     date: row.due.clone(),
                     deadline: true,
                     state: row.state.clone(),
+                    category: crate::project_deadlines::category_label(
+                        deadline.category.as_deref().unwrap_or_default(),
+                    )
+                    .to_string(),
                     ..TimelineItem::default()
                 },
             })
@@ -672,6 +681,7 @@ mod tests {
             owner_person_id: None,
             status: "open".to_string(),
             calendar_role: role.to_string(),
+            category: Some("court".to_string()),
             internal_lead_days: Some(7),
             client_lead_days: client_lead,
             replay_key: None,
@@ -790,6 +800,29 @@ mod tests {
         assert_eq!(client.items[0].title, "Synthetic hearing order");
         assert_eq!(client.key_dates.len(), 1);
         assert_eq!(client.key_dates[0].detail, "Synthetic hearing order");
+    }
+
+    #[test]
+    fn the_key_dates_strip_names_a_deadlines_category() {
+        let cases = [case("plaintiff")];
+        let deadlines = [deadline("2026-11-02T17:00:00-08:00", "firm", None), {
+            let mut uncategorized = deadline("2026-12-02T17:00:00-08:00", "firm", None);
+            uncategorized.category = None;
+            uncategorized
+        }];
+        let Docket { key_dates, .. } = docket(&DocketInputs {
+            cases: &cases,
+            entries: &[],
+            deadlines: &deadlines,
+            assets: &[],
+            our_names: &[],
+            code: "m",
+            client_lens: false,
+            now: now(),
+        });
+        assert_eq!(key_dates.len(), 2);
+        assert_eq!(key_dates[0].status, "Court · Upcoming");
+        assert_eq!(key_dates[1].status, "Upcoming");
     }
 
     #[test]
