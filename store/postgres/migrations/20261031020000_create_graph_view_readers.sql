@@ -187,7 +187,7 @@ $fn$;
 -- relationship between members), co_counsel (members firm-side on the same
 -- matter), of_counsel (any other cross-firm relationship between members),
 -- client (a counterparty-firm member client-side on a matter this firm's
--- members staff firm-side). strength counts the distinct person-level edges
+-- members participate firm-side). strength counts the distinct person-level edges
 -- behind the tie.
 CREATE OR REPLACE FUNCTION graph_firm_view(seed text)
 RETURNS SETOF ag_catalog.agtype

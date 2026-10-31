@@ -164,7 +164,7 @@ async fn seed_edges(
         .unwrap();
     }
 
-    // Firm A staffs both lawyers; Firm B the client and the opposing
+    // Firm A holds both lawyers as members; Firm B the client and the opposing
     // lawyer. (Membership values are constrained to admin/lawyer/clerk and
     // do not reach the graph — only the MEMBER_OF edge does.)
     for (person, firm, membership) in [
