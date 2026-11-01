@@ -140,6 +140,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "project_archive_generation",
     "project_archive_item",
     "project_source_import",
+    "document_upload_session",
     "document_chain_archive",
     "document_chain_archive_item",
     "retention_purge",
