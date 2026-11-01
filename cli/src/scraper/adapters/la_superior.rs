@@ -203,12 +203,7 @@ impl SiteAdapter for LaSuperiorAdapter {
             headers,
         )
         .await?;
-        parse_case_documents(
-            &details.body,
-            self.base_url(),
-            &case.provider,
-            query.since,
-        )
+        parse_case_documents(&details.body, self.base_url(), &case.provider, query.since)
     }
 
     async fn download(
@@ -365,10 +360,14 @@ struct CaseSummary {
 /// [`AdapterError::StructureDrift`] when the body is not the search JSON.
 fn parse_case_search(body: &[u8]) -> Result<Vec<CaseSummary>, AdapterError> {
     const STEP: &str = "case search";
-    let text = std::str::from_utf8(body)
-        .map_err(|_| drift(STEP, "the body is not UTF-8".to_owned()))?;
-    let parsed: CaseSearchResponse = serde_json::from_str(text)
-        .map_err(|error| drift(STEP, format!("the body is not the case-search JSON: {error}")))?;
+    let text =
+        std::str::from_utf8(body).map_err(|_| drift(STEP, "the body is not UTF-8".to_owned()))?;
+    let parsed: CaseSearchResponse = serde_json::from_str(text).map_err(|error| {
+        drift(
+            STEP,
+            format!("the body is not the case-search JSON: {error}"),
+        )
+    })?;
     Ok(parsed.results)
 }
 
@@ -387,12 +386,14 @@ fn resolve_case(
     const STEP: &str = "case search";
     let exact: Vec<&CaseSummary> = matches
         .iter()
-        .filter(|summary| summary.case_number.trim().eq_ignore_ascii_case(docket.trim()))
+        .filter(|summary| {
+            summary
+                .case_number
+                .trim()
+                .eq_ignore_ascii_case(docket.trim())
+        })
         .collect();
-    let case_ids: BTreeSet<&str> = exact
-        .iter()
-        .map(|summary| summary.case_id.trim())
-        .collect();
+    let case_ids: BTreeSet<&str> = exact.iter().map(|summary| summary.case_id.trim()).collect();
     match case_ids.len() {
         0 => Ok(None),
         1 => {
@@ -452,8 +453,8 @@ fn parse_case_documents(
     since: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<Vec<NoticeRef>, AdapterError> {
     const STEP: &str = "case documents";
-    let text = std::str::from_utf8(body)
-        .map_err(|_| drift(STEP, "the body is not UTF-8".to_owned()))?;
+    let text =
+        std::str::from_utf8(body).map_err(|_| drift(STEP, "the body is not UTF-8".to_owned()))?;
     let envelopes: Vec<CaseDetailsEnvelope> = serde_json::from_str(text).map_err(|error| {
         drift(
             STEP,
@@ -464,9 +465,7 @@ fn parse_case_documents(
         .first()
         .and_then(|envelope| envelope.cases.first())
         .map(|case| case.documents.clone())
-        .ok_or_else(|| {
-            drift(STEP, "the register envelope carries no case".to_owned())
-        })?
+        .ok_or_else(|| drift(STEP, "the register envelope carries no case".to_owned()))?
         .ok_or_else(|| {
             drift(
                 STEP,
@@ -810,14 +809,19 @@ mod tests {
     #[test]
     fn a_document_with_an_unparseable_date_survives_since() {
         use chrono::TimeZone as _;
-        let since = chrono::Utc
-            .from_utc_datetime(&chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap());
+        let since = chrono::Utc.from_utc_datetime(
+            &chrono::NaiveDate::from_ymd_opt(2024, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap(),
+        );
         let body = r#"{"provider": "ECourt", "result": [{
             "caseId": "5436252",
             "documents": [{"documentId": "9", "name": "Order", "fileDate": "not a date"}]
         }]}"#;
-        let notices = parse_case_documents(body.as_bytes(), DEFAULT_BASE_URL, "ECourt", Some(since))
-            .expect("parses");
+        let notices =
+            parse_case_documents(body.as_bytes(), DEFAULT_BASE_URL, "ECourt", Some(since))
+                .expect("parses");
         assert_eq!(
             notices.len(),
             1,
@@ -835,8 +839,8 @@ mod tests {
     #[test]
     fn an_empty_documents_array_is_a_well_formed_empty_register() {
         let body = r#"{"provider": "ECourt", "result": [{"caseId": "5436252", "documents": []}]}"#;
-        let notices =
-            parse_case_documents(body.as_bytes(), DEFAULT_BASE_URL, "ECourt", None).expect("parses");
+        let notices = parse_case_documents(body.as_bytes(), DEFAULT_BASE_URL, "ECourt", None)
+            .expect("parses");
         assert!(notices.is_empty());
     }
 
