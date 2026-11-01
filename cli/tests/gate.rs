@@ -167,6 +167,40 @@ fn gate_succeeds_on_clean_directory() {
     ));
 }
 
+/// LAW-245: `¶` and `§` are the profession's citation marks and pass
+/// `S106`; a vulgar fraction's finding names its ASCII spelling, `--ci`
+/// reports the file as unformatted, and a bare gate writes the spelling.
+#[test]
+fn gate_allows_citation_marks_and_spells_out_fractions() {
+    let dir = TempDir::new().unwrap();
+    write(
+        dir.path(),
+        "Notes.md",
+        "See Compl. \u{B6}\u{B6} 3\u{2013}4 and 28 U.S.C. \u{A7} 1331.\n\nA 66\u{2154}% interest.\n",
+    );
+    navigator()
+        .args(["validate", dir.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(str::contains("U+2154").and(str::contains("write `2/3` instead")))
+        .stdout(str::contains("U+00B6").not())
+        .stdout(str::contains("U+00A7").not());
+    gate(dir.path())
+        .env("CI", "true")
+        .arg("--ci")
+        .assert()
+        .failure()
+        .stdout(str::contains("Notes.md F001: not formatted"));
+    gate(dir.path())
+        .env_remove("CI")
+        .assert()
+        .success()
+        .stdout(str::contains("found 0 error(s)"));
+    let fixed = fs::read_to_string(dir.path().join("Notes.md")).unwrap();
+    assert!(fixed.ends_with("A 66 2/3% interest.\n"), "{fixed}");
+    assert!(fixed.contains("\u{B6}\u{B6} 3"), "{fixed}");
+}
+
 #[test]
 fn validate_fix_removes_legacy_template_code_metadata() {
     let dir = TempDir::new().unwrap();
