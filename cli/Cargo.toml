@@ -37,7 +37,6 @@ image.workspace = true
 import.workspace = true
 include_dir.workspace = true
 k8s-openapi.workspace = true
-kube.workspace = true
 # `project efiling` and `project docket ingest` read saved `.eml` notices.
 mail-parser.workspace = true
 mcp.workspace = true

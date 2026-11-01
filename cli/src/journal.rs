@@ -56,6 +56,23 @@ pub(crate) enum JournalCmd {
         #[arg(long)]
         transaction: Uuid,
     },
+    /// Bulk-import a bounded Mercury posted-date window into Project costs.
+    /// Each transaction allocates to at most one Project by code token;
+    /// a rerun skips transactions already imported.
+    Import {
+        /// The Firm Mercury account the window lists.
+        #[arg(long)]
+        account: Uuid,
+        /// Inclusive posted-date window start, YYYY-MM-DD.
+        #[arg(long)]
+        start: String,
+        /// Inclusive posted-date window end, YYYY-MM-DD.
+        #[arg(long)]
+        end: String,
+        /// List and allocate only: file no evidence, create no costs.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 pub(crate) async fn run(firm: Uuid, host: Option<String>, action: JournalCmd) -> ExitCode {
     match execute(firm, host, action).await {
@@ -244,6 +261,38 @@ async fn execute_at(firm: Uuid, base: &str, token: &str, action: JournalCmd) -> 
                         token,
                         reqwest::Method::POST,
                         &format!("{route}/mercury"),
+                        Some(&body)
+                    )
+                    .await?
+                )?
+            );
+        }
+        JournalCmd::Import {
+            account,
+            start,
+            end,
+            dry_run,
+        } => {
+            let parse = |bound: &str, value: &str| -> Result<chrono::NaiveDate> {
+                chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                    .with_context(|| format!("--{bound} must be an ISO date, YYYY-MM-DD"))
+            };
+            let start = parse("start", &start)?;
+            let end = parse("end", &end)?;
+            if end < start {
+                bail!("--end precedes --start");
+            }
+            let body = serde_json::json!({
+                "account_id": account, "start": start, "end": end, "dry_run": dry_run
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &call(
+                        base,
+                        token,
+                        reqwest::Method::POST,
+                        &format!("{route}/mercury/import"),
                         Some(&body)
                     )
                     .await?
@@ -596,6 +645,95 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn import_command_posts_the_dry_run_window_without_applying() {
+        let server = MockServer::start().await;
+        let firm = Uuid::now_v7();
+        let account = Uuid::now_v7();
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/api/firms/{firm}/journal/mercury/import"
+            )))
+            .and(body_json(serde_json::json!({
+                "account_id": account,
+                "start": "2026-10-01",
+                "end": "2026-10-31",
+                "dry_run": true
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "account_id": account, "dry_run": true,
+                "total_transactions": 0, "imported": 0, "skipped": 0, "outcomes": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        execute_at(
+            firm,
+            &server.uri(),
+            "synthetic-token",
+            JournalCmd::Import {
+                account,
+                start: "2026-10-01".into(),
+                end: "2026-10-31".into(),
+                dry_run: true,
+            },
+        )
+        .await
+        .unwrap();
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn import_command_applies_a_window_and_refuses_an_inverted_one() {
+        let server = MockServer::start().await;
+        let firm = Uuid::now_v7();
+        let account = Uuid::now_v7();
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/api/firms/{firm}/journal/mercury/import"
+            )))
+            .and(body_json(serde_json::json!({
+                "account_id": account,
+                "start": "2026-10-01",
+                "end": "2026-10-31",
+                "dry_run": false
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "account_id": account, "dry_run": false,
+                "total_transactions": 1, "imported": 1, "skipped": 0, "outcomes": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        execute_at(
+            firm,
+            &server.uri(),
+            "synthetic-token",
+            JournalCmd::Import {
+                account,
+                start: "2026-10-01".into(),
+                end: "2026-10-31".into(),
+                dry_run: false,
+            },
+        )
+        .await
+        .unwrap();
+        server.verify().await;
+        let inverted = execute_at(
+            firm,
+            &server.uri(),
+            "synthetic-token",
+            JournalCmd::Import {
+                account,
+                start: "2026-10-31".into(),
+                end: "2026-10-01".into(),
+                dry_run: false,
+            },
+        )
+        .await;
+        assert!(inverted.is_err());
     }
 
     #[tokio::test]
