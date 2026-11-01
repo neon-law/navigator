@@ -1215,6 +1215,12 @@ mod tests {
                 MESSAGE_PROCESS_STATE_MIGRATION,
             ),
             (
+                "20261031150000_add_project_cost_source_reference.sql",
+                include_str!(
+                    "../postgres/migrations/20261031150000_add_project_cost_source_reference.sql"
+                ),
+            ),
+            (
                 "20261101000000_create_time_entry.sql",
                 include_str!("../postgres/migrations/20261101000000_create_time_entry.sql"),
             ),

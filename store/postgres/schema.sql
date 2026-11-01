@@ -3172,6 +3172,12 @@ CREATE TRIGGER stage_event_immutable
 ALTER TABLE message ADD COLUMN route TEXT CHECK (route IS NULL OR route IN ('nef', 'claims_agent', 'chambers', 'other'));
 ALTER TABLE message ADD COLUMN processed_at TEXT;
 
+-- Migration: 20261031150000_add_project_cost_source_reference.sql
+-- Where a Project Cost's money came from: `mercury::<transaction-id>` for
+-- Mercury-sourced costs. NULL for costs recorded before source references
+-- were required; new costs are validated at the store boundary.
+ALTER TABLE project_costs ADD COLUMN source_reference TEXT;
+
 -- Migration: 20261101000000_create_time_entry.sql
 -- Attributed attorney time on a matter, with the hourly rate snapshotted at
 -- creation so later fee-structure edits can never reprice captured work (the
@@ -3340,5 +3346,4 @@ CREATE TABLE matter_flat_fee (
     fee_cents bigint NOT NULL CHECK (fee_cents >= 0),
     inserted_at timestamptz NOT NULL DEFAULT now()
 );
-
 
