@@ -183,6 +183,12 @@ fn print_imported(payload: &Path, imported: &InboxImportResponse) {
     }
 }
 
+fn import_http_client(base: &str) -> Result<reqwest::Client> {
+    remote::authenticated_client_builder(base)?
+        .build()
+        .context("build Inbox import client")
+}
+
 pub(crate) async fn import(new: NewInboxImport) -> Result<()> {
     let source = new.source.trim();
     if !SOURCES.contains(&source) {
@@ -194,7 +200,7 @@ pub(crate) async fn import(new: NewInboxImport) -> Result<()> {
     let mailbox = new.mailbox.trim();
     if mailbox.is_empty() {
         return Err(anyhow!(
-            "--mailbox is required: the importing account, e.g. --mailbox=nick@neonlaw.com"
+            "--mailbox is required: the importing account, e.g. --mailbox=lawyer@neonlaw.com"
         ));
     }
     let payloads = collect_payloads(&new.files, new.dir.as_deref())?;
@@ -205,7 +211,8 @@ pub(crate) async fn import(new: NewInboxImport) -> Result<()> {
         (String::new(), String::new(), None)
     } else {
         let (base, token) = remote::resolve(new.host.as_deref())?;
-        (base, token, Some(reqwest::Client::new()))
+        let client = import_http_client(&base)?;
+        (base, token, Some(client))
     };
 
     for payload in payloads {
@@ -244,8 +251,47 @@ pub(crate) async fn import(new: NewInboxImport) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_payloads, request_body};
+    use super::{collect_payloads, import_http_client, request_body};
     use base64::Engine as _;
+
+    #[tokio::test]
+    async fn imported_payloads_do_not_follow_redirects() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let entry = MockServer::start().await;
+        let other = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/inbox/import"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("location", format!("{}/received", other.uri())),
+            )
+            .mount(&entry)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/received"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&other)
+            .await;
+        let response = import_http_client(&entry.uri())
+            .unwrap()
+            .post(format!("{}/app/api/inbox/import", entry.uri()))
+            .bearer_auth("synthetic-token")
+            .json(&request_body(
+                "email",
+                "fixture@example.test",
+                None,
+                b"synthetic message",
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            other.received_requests().await.unwrap().is_empty(),
+            "an import must not forward its payload to a redirected endpoint"
+        );
+        assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+    }
 
     #[test]
     fn the_request_names_source_mailbox_project_and_the_verbatim_bytes() {
