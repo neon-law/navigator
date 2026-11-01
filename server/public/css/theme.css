@@ -810,16 +810,6 @@ a.nav-pagination__link:hover {
   padding-bottom: 1.5rem;
 }
 
-.blog-index__brand,
-.blog-post__brand {
-  color: var(--nav-color-text-muted);
-  font-size: 0.8rem;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  margin: 0 0 0.5rem;
-  text-transform: uppercase;
-}
-
 .blog-index__title {
   font-size: 1.25rem;
   margin: 0 0 0.25rem;

@@ -170,7 +170,6 @@ pub fn BlogPostPage(chrome: PublicChrome, content: BlogPostContent, head_title: 
                 p {
                     a { href: "/blog", "← All posts" }
                 }
-                p { class: "blog-post__brand", "{chrome.brand_name}" }
                 h1 { "{content.title}" }
                 p { class: "blog-date",
                     small { "{content.date}" }
@@ -238,8 +237,8 @@ mod tests {
     fn renders_the_post_title_date_and_body() {
         let out = html();
         assert!(
-            out.contains(r#"class="blog-post__brand">Neon Law"#),
-            "Brand attribution: {out}"
+            !out.contains(r#"class="blog-post__brand"#),
+            "the header already identifies the brand: {out}"
         );
         assert!(out.contains("Going all in on Rust"), "post title: {out}");
         assert!(out.contains("June 25, 2026"), "publish date");
