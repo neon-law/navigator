@@ -557,7 +557,7 @@ pub fn render_surreal_source_erd() -> String {
                 output,
                 "        {} {}",
                 surreal_erd_type(&surreal_type),
-                column
+                mermaid_name(&column)
             );
         }
         output.push_str("    }\n");
@@ -565,7 +565,19 @@ pub fn render_surreal_source_erd() -> String {
     for table in &tables {
         for (column, surreal_type) in crate::schema::table_columns(table) {
             if let Some(target) = surreal_record_target(&surreal_type) {
-                let _ = writeln!(output, "    {target} }}o--|| {table} : {column}");
+                // A union record (`person|entity`) is several tables. Mermaid
+                // treats `|` as relationship syntax, so each member is its own edge.
+                for name in target.split('|') {
+                    let name = name.trim();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let _ = writeln!(
+                        output,
+                        "    {name} }}o--|| {table} : {}",
+                        mermaid_name(&column)
+                    );
+                }
             }
         }
     }
@@ -640,6 +652,18 @@ pub fn render_parity_manifest() -> Result<String, Error> {
     serde_json::to_string_pretty(&manifest)
         .map(|json| format!("{json}\n"))
         .map_err(Error::Json)
+}
+
+fn mermaid_name(name: &str) -> String {
+    name.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn surreal_record_target(surreal_type: &str) -> Option<String> {
@@ -1857,10 +1881,36 @@ mod tests {
         assert!(source_first.contains("project {"));
         assert!(source_first.contains("relationship_log {"));
         assert!(source_first.contains("project }o--o{ person : project_reference"));
+        assert!(
+            source_first.lines().all(|line| {
+                line.split_whitespace()
+                    .next()
+                    .is_none_or(|name| !name.contains('|'))
+            }),
+            "a union record is one edge per table so Mermaid can parse the diagram"
+        );
+        assert!(source_first.contains("person }o--|| cap_table_holding : holder_id"));
+        assert!(source_first.contains("number parameters_attorney_pct"));
+        assert!(source_first.contains("string parties___name"));
         assert_eq!(
             render_parity_manifest().expect("manifest serializes"),
             render_parity_manifest().expect("manifest serializes again")
         );
+    }
+
+    #[test]
+    fn glossary_erd_svg_names_every_surreal_table() {
+        let svg = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../server/public/glossary/ERD.svg"
+        ))
+        .expect("server/public/glossary/ERD.svg is the public copy of the Surreal diagram");
+        for table in crate::schema::table_names() {
+            assert!(
+                svg.contains(&format!("entity-{table}-")),
+                "{table} is missing from server/public/glossary/ERD.svg"
+            );
+        }
     }
 
     #[test]

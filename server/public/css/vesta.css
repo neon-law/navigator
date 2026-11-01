@@ -1,7 +1,6 @@
 /* Vesta's page uses the registered bronze palette in both color schemes. */
 .vesta-home { --vesta-rule: var(--nav-color-border); }
 :root:has(.vesta-home) { --firm-serif: var(--nav-font-family); }
-:root:has(.vesta-home) .github-stars__repo { font-family: var(--nav-font-family); }
 .vesta-home h1, .vesta-home h2, .vesta-home h3 {
   font-family: var(--brand-font-display); font-weight: 500; letter-spacing: -.035em;
 }

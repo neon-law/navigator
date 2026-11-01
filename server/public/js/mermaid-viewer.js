@@ -19,7 +19,9 @@
       clearTimeout(entry.timeout);
       entry.frame.hidden = false;
       entry.frame.style.visibility = "visible";
-      entry.frame.style.height = Math.min(2400, Math.max(160, Number(event.data.height) || 160)) + "px";
+      entry.frame.style.height = Math.max(160, Number(event.data.height) || 160) + "px";
+      var width = Number(event.data.width) || 0;
+      if (width > 0) entry.frame.style.width = width + "px";
       if (!entry.rendered) entry.details.open = false;
       entry.rendered = true;
       entry.status.textContent = "";
@@ -69,11 +71,12 @@
         '<script src="' + origin + '/public/js/mermaid-frame.js"></script></body></html>';
       figure.append(caption, status, frame, details);
       var entry = { frame: frame, source: code.textContent, details: details, status: status };
+      var budget = code.textContent.length > 8000 ? 60000 : 20000;
       entry.timeout = setTimeout(function () {
         if (entry.rendered || !frame.isConnected) return;
         frame.hidden = true;
         status.textContent = "Diagram unavailable. The Mermaid source is shown below.";
-      }, 20000);
+      }, budget);
       frames.set(frame.contentWindow, entry);
     });
     // Hydration/navigation may replace a Markdown body; release removed frames.

@@ -492,9 +492,9 @@ erDiagram
         datetime computed_at
         datetime inserted_at
         json parameters
-        number parameters.attorney_pct
-        number parameters.lead_pct
-        number parameters.overhead_pct
+        number parameters_attorney_pct
+        number parameters_lead_pct
+        number parameters_overhead_pct
         uuid project_id
         string report_json
         string run_id
@@ -715,22 +715,22 @@ erDiagram
         string id
         string case_number
         json counsel
-        json counsel.address
-        string counsel.appears_for
-        string counsel.bar_jurisdiction
-        string counsel.bar_number
-        string counsel.email
-        string counsel.firm
-        string counsel.name
-        boolean counsel.pro_per
-        string counsel.telephone
+        json counsel_address
+        string counsel_appears_for
+        string counsel_bar_jurisdiction
+        string counsel_bar_number
+        string counsel_email
+        string counsel_firm
+        string counsel_name
+        boolean counsel_pro_per
+        string counsel_telephone
         json court
         string department
         string filed_on
         string judicial_officer
         json parties
-        string parties.*.name
-        string parties.*.role
+        string parties___name
+        string parties___role
         uuid project_id
         string synced_at
         string trial_on
@@ -1017,10 +1017,10 @@ erDiagram
         json selected_social_accounts
         string slug
         json social_links
-        string social_links.*.account
-        string social_links.*.permalink
-        string social_links.*.post_id
-        string social_links.*.provider
+        string social_links___account
+        string social_links___permalink
+        string social_links___post_id
+        string social_links___provider
         string source_digest
         string status
         string threads_caption
@@ -1372,7 +1372,8 @@ erDiagram
     authority }o--|| authority_use : authority_id
     project }o--|| authority_use : project_id
     firm }o--|| brand : firm_id
-    person|entity }o--|| cap_table_holding : holder_id
+    person }o--|| cap_table_holding : holder_id
+    entity }o--|| cap_table_holding : holder_id
     project }o--|| cap_table_holding : project_id
     project }o--|| case : project_id
     case }o--|| case_docket_entry : case_id
@@ -1420,7 +1421,8 @@ erDiagram
     project }o--|| expunge_request : project_id
     person }o--|| expunge_request : requested_by_person_id
     person }o--|| expunge_request : resolved_by_person_id
-    person|entity }o--|| fiduciary_role : fiduciary_id
+    person }o--|| fiduciary_role : fiduciary_id
+    entity }o--|| fiduciary_role : fiduciary_id
     notation }o--|| fiduciary_role : notation_id
     project }o--|| fiduciary_role : project_id
     notation }o--|| filing : notation_id
@@ -1520,9 +1522,12 @@ erDiagram
     entity }o--|| project_service : recipient_entity_id
     person }o--|| project_service : recipient_person_id
     sent_email }o--|| project_service : sent_email_id
-    person|entity }o--|| relationship : in
-    person|entity }o--|| relationship : out
-    relationship_log|disclosure }o--|| relationship : source_id
+    person }o--|| relationship : in
+    entity }o--|| relationship : in
+    person }o--|| relationship : out
+    entity }o--|| relationship : out
+    relationship_log }o--|| relationship : source_id
+    disclosure }o--|| relationship : source_id
     person }o--|| relationship_log : actor_person_id
     project }o--|| relationship_log : project_id
     notation }o--|| review_document : notation_id

@@ -36,11 +36,26 @@ const OFFSITE_ARROW: &str = concat!(
     "</svg>",
 );
 
+/// The Surreal schema diagram the public page embeds. The viewer rejects a
+/// longer fence, so this stays at or under that limit.
+const SCHEMA_ERD: &str = include_str!("../../store/postgres/surreal-source-erd.mmd");
+const MERMAID_SOURCE_LIMIT: usize = 200_000;
+const _: () = assert!(SCHEMA_ERD.len() <= MERMAID_SOURCE_LIMIT);
+
+/// The opening a reader sees, plus the schema diagram.
+fn published_preamble() -> String {
+    let mut markdown = store::glossary::preamble().trim_end().to_string();
+    markdown.push_str("\n\n```mermaid\n");
+    markdown.push_str(SCHEMA_ERD.trim_end());
+    markdown.push_str("\n```\n");
+    markdown
+}
+
 /// The rendered glossary, built once from the embedded terms.
 #[must_use]
 pub fn content() -> &'static GlossaryContent {
     static CONTENT: LazyLock<GlossaryContent> = LazyLock::new(|| GlossaryContent {
-        preamble_html: render_markdown(store::glossary::preamble()),
+        preamble_html: render_markdown(&published_preamble()),
         entries: store::glossary::terms()
             .iter()
             .map(|term| GlossaryEntry {
@@ -372,6 +387,32 @@ mod tests {
             .collect();
         assert_eq!(slugs, terms, "the page drifted from store::glossary::terms");
         assert!(!content().preamble_html.is_empty(), "the preamble renders");
+        assert!(
+            content()
+                .preamble_html
+                .contains("href=\"/public/glossary/ERD.svg\""),
+            "the opening links the schema diagram"
+        );
+        assert!(
+            content()
+                .preamble_html
+                .contains("class=\"language-mermaid\""),
+            "the opening embeds the schema diagram"
+        );
+        assert!(
+            content().preamble_html.contains("erDiagram"),
+            "the embedded diagram is the entity-relationship diagram"
+        );
+        for table in store::schema::table_names() {
+            assert!(
+                super::SCHEMA_ERD.contains(&format!("    {table} {{")),
+                "{table} is missing from the glossary diagram"
+            );
+        }
+        assert!(
+            !content().preamble_html.contains("defined in one place"),
+            "the opening states the vocabulary without restating the page"
+        );
     }
 
     #[test]

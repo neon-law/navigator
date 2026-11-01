@@ -27,7 +27,7 @@ pub const GLOSSARY_TITLE: &str = "Glossary";
 
 /// The `<meta description>` the page carries.
 const GLOSSARY_DESCRIPTION: &str =
-    "The Neon Law Navigator glossary: every term the product is built on, defined in one place.";
+    "Neon Law Navigator's vocabulary, with a diagram of every SurrealDB table.";
 
 /// One rendered term.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
@@ -344,6 +344,12 @@ mod tests {
                 (false, ")".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn the_description_names_the_diagram() {
+        assert!(super::GLOSSARY_DESCRIPTION.contains("every SurrealDB table"));
+        assert!(!super::GLOSSARY_DESCRIPTION.contains("defined in one place"));
     }
 
     #[test]

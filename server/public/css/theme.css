@@ -697,6 +697,11 @@ a.nav-pagination__link:hover {
 
 .glossary__terms {
   min-width: 0;
+}
+
+.glossary__terms > h1,
+.glossary__preamble p,
+.glossary__term {
   max-width: 72ch;
 }
 
@@ -734,6 +739,19 @@ a.nav-pagination__link:hover {
 
 .glossary__definition pre {
   overflow-x: auto;
+}
+
+/* A full schema diagram keeps its own size. The figure scrolls so the
+   column does not shrink every table label to fit. */
+.nav-mermaid {
+  max-width: 100%;
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.nav-mermaid iframe {
+  display: block;
+  max-width: none;
 }
 
 @media (min-width: 60rem) {
@@ -1927,12 +1945,6 @@ a.nav-pagination__link:hover {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-}
-
-/* The repository reads as an address, so it is set in the same mono stack
-   `.font-monospace` gives every other identifier on the site. */
-.github-stars__repo {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
 /* The per-attorney bar licenses: one line per attorney, each jurisdiction
