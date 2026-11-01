@@ -103,18 +103,17 @@ async fn abhaya_publishes_immigration_home_and_services() {
     .await;
 }
 
-/// Abhaya's flat fees come from its own services catalog through the shared
-/// services band, not from prose cards, so the page carries the same search
-/// form and government-fee badge as every other catalog-backed brand.
+/// Abhaya's filings directory comes from its own services catalog through the
+/// shared services band, with the same search form and government-fee badge
+/// as every other catalog-backed brand, but no prices: every matter is quoted
+/// after a consultation.
 #[tokio::test]
-async fn abhaya_services_lists_flat_fees_for_common_filings() {
+async fn abhaya_services_lists_common_filings_without_prices() {
     let services = page("staging.abhayaimmigration.com", "/services").await;
     for expected in [
-        "Flat fees for common filings",
+        "Common filings we handle",
         "O-1 extraordinary ability petition",
-        "$7,200",
         "Green card application in the U.S.",
-        "$3,150",
         "Government fees cost extra",
         "Work visas",
     ] {
@@ -123,6 +122,10 @@ async fn abhaya_services_lists_flat_fees_for_common_filings() {
             "Abhaya services is missing {expected:?}"
         );
     }
+    assert!(
+        !services.contains("fm-services__fee-amount"),
+        "Abhaya services must not print a fee"
+    );
 }
 
 #[tokio::test]
