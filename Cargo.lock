@@ -4778,7 +4778,7 @@ dependencies = [
 
 [[package]]
 name = "gateway"
-version = "26.11.2-rc.1"
+version = "26.11.2-rc.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9953,7 +9953,7 @@ dependencies = [
 
 [[package]]
 name = "sandbox-skills"
-version = "26.11.2-rc.1"
+version = "26.11.2-rc.2"
 dependencies = [
  "serde",
 ]
