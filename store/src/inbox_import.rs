@@ -25,6 +25,8 @@ pub enum ImportError {
     UnknownSource(String),
     #[error("payload is not a parseable RFC 5322 message")]
     MalformedEmail,
+    #[error("email is missing a valid Date header")]
+    InvalidEmailDate,
     #[error("unrecognized LinkedIn export shape — headers were: {0:?}")]
     UnrecognizedExport(Vec<String>),
     #[error("LinkedIn export row {row} is missing {field}")]
@@ -245,7 +247,7 @@ impl ImportSource for EmailAdapter {
             .date()
             .map(|date| rfc3339_from_mail_date(&date))
             .filter(|stamp| !stamp.is_empty())
-            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+            .ok_or(ImportError::InvalidEmailDate)?;
 
         Ok(vec![ImportMessage {
             channel: inbox::channel::EMAIL,
@@ -654,6 +656,7 @@ mod tests {
     fn token_less_email_dedups_via_scoped_digest() {
         let raw = b"From: clerk@court.example\r\n\
                     To: nick@neonlaw.com\r\n\
+                    Date: Tue, 28 Oct 2026 14:03:00 +0000\r\n\
                     Subject: no id\r\n\
                     \r\n\
                     body text";
@@ -678,6 +681,7 @@ mod tests {
                     In-Reply-To: <notice-7@court.example>\r\n\
                     From: nick@neonlaw.com\r\n\
                     To: clerk@court.example\r\n\
+                    Date: Tue, 28 Oct 2026 14:03:00 +0000\r\n\
                     Subject: Re: discovery schedule\r\n\
                     \r\n\
                     Acknowledged.";
@@ -696,6 +700,7 @@ mod tests {
     fn email_attachments_are_parsed_with_metadata() {
         let raw = b"From: clerk@court.example\r\n\
                     To: nick@neonlaw.com\r\n\
+                    Date: Tue, 28 Oct 2026 14:03:00 +0000\r\n\
                     Subject: exhibit\r\n\
                     Content-Type: multipart/mixed; boundary=nav\r\n\
                     \r\n\
