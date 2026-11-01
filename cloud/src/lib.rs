@@ -26,6 +26,7 @@ pub mod drive;
 pub mod forge;
 pub mod forgejo_forge;
 pub mod forgejo_governance;
+pub mod forgejo_organization;
 pub mod fs;
 pub mod gcloud;
 pub mod gcs;

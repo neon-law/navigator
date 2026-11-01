@@ -19,7 +19,8 @@ most 40 characters, and is unique per installation. It must not be a reserved wo
 as `admin`, `api`, and `explore`, and `navigator`. A name that derives an invalid slug, or another Firm's slug, is
 refused. Nothing appends a suffix. The slug is immutable: renaming a Firm never moves its organization. SurrealDB holds
 the field `READONLY`, and a PostgreSQL trigger refuses an update. Boot backfills a slug for each Firm that predates the
-field, and fails on an invalid or colliding one.
+field, and fails on an invalid or colliding one. `GET /app/api/firms` lists each visible Firm's slug. Navigator creates
+or reconciles the organization itself; see [Forgejo Organization](forgejo-organization.md).
 
 The repository `<firm-slug>/library` is the Firm's [Firm Library](firm-library.md): the Drafts and the default retainer
 every matter of that Firm starts from.

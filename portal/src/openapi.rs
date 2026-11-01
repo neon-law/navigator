@@ -787,10 +787,11 @@ fn canonical_document(base: &str) -> Value {
               "Owner sees every Firm. Admin sees only Firms where their membership admits `manage_membership`. \
                This directory lets the CLI resolve an operator-supplied Firm name without accepting a raw id on its command line.",
             "responses": {
-              "200": { "description": "Visible Firm ids and names", "content": { "application/json": {
-                "schema": { "type": "array", "items": { "type": "object", "required": ["id", "name"], "properties": {
+              "200": { "description": "Visible Firm ids, names, and slugs", "content": { "application/json": {
+                "schema": { "type": "array", "items": { "type": "object", "required": ["id", "name", "slug"], "properties": {
                   "id": { "type": "string", "format": "uuid" },
-                  "name": { "type": "string" }
+                  "name": { "type": "string" },
+                  "slug": { "type": "string", "description": "The Firm's immutable slug, which names its Forgejo organization." }
                 } } }
               } } },
               "401": { "description": "No authenticated session", "content": { "application/json": {
@@ -799,6 +800,42 @@ fn canonical_document(base: &str) -> Value {
               "403": { "description": "Authenticated caller is not Owner or Admin", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } }
+            }
+          }
+        },
+        "/app/api/firms/{id}/forgejo-organization": {
+          "post": {
+            "operationId": "provisionFirmForgejoOrganization",
+            "summary": "Create or reconcile a Firm's Forgejo organization",
+            "description":
+              "Navigator's provisioning identity creates the private organization named by the Firm's slug when it is missing, \
+               makes it private when it is not, and keeps the account the Firm's own `forgejo_access_token` authenticates in its owners team. \
+               A re-run converges: nothing is created or added twice, and the Firm's one record is updated. \
+               Owner, or an Admin whose membership admits `manage_membership` on the Firm.",
+            "tags": ["Firms"],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": {
+              "200": { "description": "The organization as reconciled and recorded", "content": { "application/json": {
+                "schema": { "type": "object",
+                  "required": ["firm_id", "organization", "forgejo_id", "owner_login", "created", "made_private", "owner_added", "provisioned_at", "reconciled_at"],
+                  "properties": {
+                    "firm_id": { "type": "string", "format": "uuid" },
+                    "organization": { "type": "string" },
+                    "forgejo_id": { "type": "integer", "format": "int64" },
+                    "owner_login": { "type": "string" },
+                    "created": { "type": "boolean" },
+                    "made_private": { "type": "boolean" },
+                    "owner_added": { "type": "boolean" },
+                    "provisioned_at": { "type": "string", "format": "date-time" },
+                    "reconciled_at": { "type": "string", "format": "date-time" }
+                  } }
+              } } },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Caller is not Owner or Admin, or holds a scoped session" },
+              "404": { "description": "Firm unavailable to this caller" },
+              "409": { "description": "The organization name is held by another account" },
+              "502": { "description": "Forgejo refused or failed the provisioning request" },
+              "503": { "description": "PostgreSQL, the Forgejo root URL, the provisioning token, or the Firm's Forgejo token is not configured" }
             }
           }
         },
