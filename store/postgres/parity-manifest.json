@@ -113,20 +113,6 @@
       "table": "matter_page"
     },
     {
-      "extra_column": null,
-      "extra_table": null,
-      "missing_column": "notation_id",
-      "missing_table": null,
-      "table": "notation_draft"
-    },
-    {
-      "extra_column": null,
-      "extra_table": null,
-      "missing_column": "relationship notation_id → notation",
-      "missing_table": null,
-      "table": "notation_draft"
-    },
-    {
       "extra_column": "entity_id",
       "extra_table": null,
       "missing_column": null,
@@ -3737,6 +3723,7 @@
           "expires_at": "TIMESTAMPTZ",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
+          "notation_id": "UUID",
           "project_id": "UUID",
           "slug": "TEXT",
           "source": "TEXT",
@@ -3744,12 +3731,17 @@
         },
         "foreign_keys": [
           [
+            "notation_id",
+            "notation"
+          ],
+          [
             "project_id",
             "project"
           ]
         ],
         "name": "notation_draft",
         "references": [
+          "notation",
           "project"
         ]
       },
