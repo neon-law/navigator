@@ -633,11 +633,15 @@ mod tests {
             let (state, project_id) = fixtures("draft-unassigned").await;
             let person = store::persons::create(
                 &state.surreal,
-                &store::persons::NewPerson::with_role("Synthetic Staff", "staff@example.com", role),
+                &store::persons::NewPerson::with_role(
+                    "Synthetic Member",
+                    "member@example.com",
+                    role,
+                ),
             )
             .await
             .unwrap();
-            let mut session = SessionData::fresh("staff@example.com", role);
+            let mut session = SessionData::fresh("member@example.com", role);
             session.person_id = Some(person.id);
             assert!(scoped_project(
                 &state.surreal,
