@@ -923,6 +923,15 @@ enum Command {
         #[command(subcommand)]
         action: SiteCmd,
     },
+    /// Read and update a Person in the deployment's own store, directly.
+    ///
+    /// Distinct from `navigator site …` verbs, which speak HTTP to a running
+    /// site: these open the `SurrealDB` coordinates `NAVIGATOR_SURREAL_*`
+    /// names — the same handle the web app uses.
+    Person {
+        #[command(subcommand)]
+        action: PersonCmd,
+    },
     /// Download the `navigator-lsp` release archive matching this binary's
     /// own version and the host platform, and write a working
     /// `navigator-lsp` executable to the Downloads directory.
@@ -2430,6 +2439,55 @@ enum NotationCmd {
         /// anything.
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+/// Manage a Person directly in the store.
+#[derive(Subcommand)]
+enum PersonCmd {
+    /// Read and update a Person's phone numbers (E.164, labeled, one
+    /// primary). Numbers are keyed by their canonical E.164 spelling, so
+    /// `702 555 0142` and `+17025550142` name the same row.
+    Phone {
+        #[command(subcommand)]
+        action: PersonPhoneCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum PersonPhoneCmd {
+    /// List a Person's phone numbers, primary first, then in the order
+    /// they were written.
+    List {
+        /// Person UUID, or a Person email (primary or alias).
+        person: String,
+    },
+    /// Set one of a Person's phone numbers, creating or updating its
+    /// row. The first number a Person has becomes primary;
+    /// `--primary` moves it, and any earlier primary is demoted in the
+    /// same write.
+    Set {
+        /// Person UUID, or a Person email (primary or alias).
+        person: String,
+        /// The number, in any spelling the E.164 normalizer accepts
+        /// (`702 555 0142`, `(702) 555-0142`, `+44 20 7946 0958`).
+        #[arg(long)]
+        number: String,
+        /// Label: `mobile`, `work`, `home`, `fax`, or `other`.
+        #[arg(long)]
+        label: Option<String>,
+        /// Make this the Person's primary number.
+        #[arg(long)]
+        primary: bool,
+    },
+    /// Remove one of a Person's phone numbers. Removing a number that
+    /// is not there succeeds quietly.
+    Remove {
+        /// Person UUID, or a Person email (primary or alias).
+        person: String,
+        /// The number to remove, in any accepted spelling.
+        #[arg(long)]
+        number: String,
     },
 }
 
@@ -4760,6 +4818,7 @@ fn run() -> ExitCode {
             errors_only,
             ci: _,
         } => run_validate(&dir, fix, errors_only),
+        Command::Person { action } => runtime().block_on(run_person(action)),
         Command::Journal { firm, host, action } => {
             runtime().block_on(journal::run(firm, host, action))
         }
@@ -5155,6 +5214,125 @@ async fn open_surreal() -> Result<store::surreal::SurrealDb, ExitCode> {
         Err(e) => {
             eprintln!("navigator: surreal: {e}");
             Err(ExitCode::from(2))
+        }
+    }
+}
+
+/// Resolve the `person` argument — a Person UUID or an email (primary or
+/// alias) — to the Person's id.
+async fn resolve_person_id(
+    db: &store::surreal::SurrealDb,
+    spec: &str,
+) -> Result<uuid::Uuid, String> {
+    if let Ok(id) = spec.parse::<uuid::Uuid>() {
+        return Ok(id);
+    }
+    match store::persons::find_by_any_email(db, spec).await {
+        Ok(Some(person)) => Ok(person.id),
+        Ok(None) => Err(format!("no Person answers to the email {spec}")),
+        Err(e) => Err(format!("looking up {spec}: {e}")),
+    }
+}
+
+/// Run `navigator person` — direct store access for one Person's phones.
+async fn run_person(action: PersonCmd) -> ExitCode {
+    let PersonCmd::Phone { action } = action;
+    let db = match open_surreal().await {
+        Ok(db) => db,
+        Err(exit) => return exit,
+    };
+    let result = match action {
+        PersonPhoneCmd::List { person } => match resolve_person_id(&db, &person).await {
+            Ok(person_id) => match store::person_phones::list_phones(&db, person_id).await {
+                Ok(phones) => {
+                    if phones.is_empty() {
+                        println!("no phone numbers on record");
+                    }
+                    for phone in phones {
+                        let primary = if phone.is_primary { " (primary)" } else { "" };
+                        println!("{} [{}]{primary}", phone.e164, phone.label.as_str());
+                    }
+                    Ok(())
+                }
+                Err(e) => Err(e.to_string()),
+            },
+            Err(message) => Err(message),
+        },
+        PersonPhoneCmd::Set {
+            person,
+            number,
+            label,
+            primary,
+        } => {
+            // An unlabeled number is `other`; a wrong label word is a
+            // usage error, refused before the store is touched.
+            let parsed_label = match label
+                .as_deref()
+                .map(store::person_phones::PhoneLabel::parse)
+            {
+                Some(Some(parsed)) => parsed,
+                Some(None) => {
+                    eprintln!(
+                        "navigator: label must be mobile, work, home, fax, or other; got {}",
+                        label.as_deref().unwrap_or("")
+                    );
+                    return ExitCode::from(2);
+                }
+                None => store::person_phones::PhoneLabel::Other,
+            };
+            let person_id = match resolve_person_id(&db, &person).await {
+                Ok(id) => id,
+                Err(message) => {
+                    eprintln!("navigator: {message}");
+                    return ExitCode::from(2);
+                }
+            };
+            // `set_phone` normalizes internally, before any write, so a
+            // typo is refused rather than half-written.
+            match store::person_phones::set_phone(&db, person_id, &number, parsed_label, primary)
+                .await
+            {
+                Ok(phone) => {
+                    println!(
+                        "{} [{}]{} saved",
+                        phone.e164,
+                        phone.label.as_str(),
+                        if phone.is_primary { " (primary)" } else { "" }
+                    );
+                    Ok(())
+                }
+                Err(e) => Err(e.to_string()),
+            }
+        }
+        PersonPhoneCmd::Remove { person, number } => {
+            let person_id = match resolve_person_id(&db, &person).await {
+                Ok(id) => id,
+                Err(message) => {
+                    eprintln!("navigator: {message}");
+                    return ExitCode::from(2);
+                }
+            };
+            match store::person_phones::remove_phone(&db, person_id, &number).await {
+                // The removal echoes the store's canonical E.164 form,
+                // not the raw argument, so no un-normalized input is
+                // written back to the terminal.
+                Ok(Some(removed_e164)) => {
+                    println!("{removed_e164} removed");
+                    Ok(())
+                }
+                Ok(None) => {
+                    println!("no matching phone to remove");
+                    Ok(())
+                }
+                Err(e) => Err(e.to_string()),
+            }
+        }
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("navigator: {message}");
+            ExitCode::FAILURE
         }
     }
 }

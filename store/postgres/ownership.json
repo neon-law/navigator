@@ -11,6 +11,13 @@
     "scope": "project",
     "through": "notation_id -> Project; unbound source rows require explicit backfill review"
   },
+  "archived_object_purge": {
+    "migration_slice": "document-retention",
+    "parity_scenario": "one row per purged archived digest per Project; recovery generations report it as purged, not corrupt",
+    "scope": "project",
+    "target_only": true,
+    "through": "project_id with firm_id recorded where the row carries authority; born in PostgreSQL with no Surreal source"
+  },
   "asset": {
     "migration_slice": "document-storage",
     "parity_scenario": "content-addressed bytes and revision pointers; internal default; Project isolation; legal hold and retention",
@@ -86,7 +93,7 @@
   },
   "communication": {
     "migration_slice": "communications-storage",
-    "parity_scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
+    "parity_scenario": "same-Project round trip; channel/source_ref dedup; client-visible projection unchanged",
     "scope": "project",
     "through": "project_id -> Project.firm_id"
   },
@@ -125,6 +132,20 @@
     "parity_scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
     "scope": "project",
     "through": "case_id -> owning parent scope"
+  },
+  "document_chain_archive": {
+    "migration_slice": "document-retention",
+    "parity_scenario": "one archive per soft deletion of a chain; active copies removed only after every revision verifies; restored or purged in place",
+    "scope": "project",
+    "target_only": true,
+    "through": "project_id with firm_id recorded where the row carries authority; born in PostgreSQL with no Surreal source"
+  },
+  "document_chain_archive_item": {
+    "migration_slice": "document-retention",
+    "parity_scenario": "one verified archived copy per revision of an archived chain",
+    "scope": "project",
+    "target_only": true,
+    "through": "project_id with firm_id recorded where the row carries authority; born in PostgreSQL with no Surreal source"
   },
   "document_comment": {
     "migration_slice": "matter-storage",
@@ -179,12 +200,6 @@
     "parity_scenario": "stable identity; tenant link isolation and no inferred participation",
     "scope": "identity",
     "through": "identity ownership and explicit Person/Entity links; no inferred participation"
-  },
-  "communication": {
-    "migration_slice": "communications-storage",
-    "parity_scenario": "same-Project round trip; channel/source_ref dedup; client-visible projection unchanged",
-    "scope": "project",
-    "through": "project_id -> Project.firm_id"
   },
   "entity": {
     "migration_slice": "identity-storage",
@@ -384,6 +399,27 @@
     "scope": "project",
     "through": "conversation_id -> owning parent scope"
   },
+  "mirror_backfill_checkpoint": {
+    "migration_slice": "mirror-backfill",
+    "parity_scenario": "one checkpoint per run and mirror group; batch counts only grow; completed once its missing rows are written or recorded as failures",
+    "scope": "platform",
+    "target_only": true,
+    "through": "operator evidence about the mirror itself; no Firm, Project, or client scope; born in PostgreSQL with no Surreal source"
+  },
+  "mirror_backfill_failure": {
+    "migration_slice": "mirror-backfill",
+    "parity_scenario": "one row per still-missing source row at a group's completion; names table and UUID only, never values",
+    "scope": "platform",
+    "target_only": true,
+    "through": "operator evidence about the mirror itself; no Firm, Project, or client scope; born in PostgreSQL with no Surreal source"
+  },
+  "mirror_backfill_run": {
+    "migration_slice": "mirror-backfill",
+    "parity_scenario": "one run per operator invocation; resumed by id; completed only after every mirror group checkpoints",
+    "scope": "platform",
+    "target_only": true,
+    "through": "operator evidence about the mirror itself; no Firm, Project, or client scope; born in PostgreSQL with no Surreal source"
+  },
   "notarization": {
     "migration_slice": "workflow-storage",
     "parity_scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
@@ -530,62 +566,6 @@
     "target_only": true,
     "through": "firm_id and project_id recorded on the generation; born in PostgreSQL with no Surreal source"
   },
-  "project_source_import": {
-    "migration_slice": "project-source-import",
-    "parity_scenario": "one import per operation key and at most one pending per Project; canonical archive cleared on commit; commit bound to the tree digest",
-    "scope": "project",
-    "target_only": true,
-    "through": "firm_id and project_id recorded on the import; born in PostgreSQL with no Surreal source"
-  },
-  "purchase": {
-    "migration_slice": "purchase",
-    "parity_scenario": "at most one unpaid invoice per Client and Offering; price copied at purchase; active only once Xero reports the invoice paid",
-    "scope": "identity",
-    "target_only": true,
-    "through": "person_id recorded on the Purchase; born in PostgreSQL with no Surreal source"
-  },
-  "archived_object_purge": {
-    "migration_slice": "document-retention",
-    "parity_scenario": "one row per purged archived digest per Project; recovery generations report it as purged, not corrupt",
-    "scope": "project",
-    "target_only": true,
-    "through": "project_id with firm_id recorded where the row carries authority; born in PostgreSQL with no Surreal source"
-  },
-  "document_chain_archive": {
-    "migration_slice": "document-retention",
-    "parity_scenario": "one archive per soft deletion of a chain; active copies removed only after every revision verifies; restored or purged in place",
-    "scope": "project",
-    "target_only": true,
-    "through": "project_id with firm_id recorded where the row carries authority; born in PostgreSQL with no Surreal source"
-  },
-  "document_chain_archive_item": {
-    "migration_slice": "document-retention",
-    "parity_scenario": "one verified archived copy per revision of an archived chain",
-    "scope": "project",
-    "target_only": true,
-    "through": "project_id with firm_id recorded where the row carries authority; born in PostgreSQL with no Surreal source"
-  },
-  "retention_purge": {
-    "migration_slice": "document-retention",
-    "parity_scenario": "one governed purge per chain and window; Firm-scoped authority recorded; a retry joins the same run",
-    "scope": "project",
-    "target_only": true,
-    "through": "project_id with firm_id recorded where the row carries authority; born in PostgreSQL with no Surreal source"
-  },
-  "project_handoff": {
-    "migration_slice": "project-handoff",
-    "parity_scenario": "one immutable manifest per handoff; only current live legal files the recipient's lens admits; verified sizes and digests",
-    "scope": "project",
-    "target_only": true,
-    "through": "firm_id and project_id recorded on the handoff; born in PostgreSQL with no Surreal source"
-  },
-  "project_handoff_acknowledgment": {
-    "migration_slice": "project-handoff",
-    "parity_scenario": "one immutable acknowledgment per handoff, by its recipient, bound to the exact manifest digest",
-    "scope": "project",
-    "target_only": true,
-    "through": "handoff_id -> project_handoff.project_id; born in PostgreSQL with no Surreal source"
-  },
   "project_cost_events": {
     "migration_slice": "project-costs",
     "parity_scenario": "immutable actor-attributed audit event for each cost create and update",
@@ -606,6 +586,20 @@
     "scope": "project",
     "through": "project_id -> Project.firm_id"
   },
+  "project_handoff": {
+    "migration_slice": "project-handoff",
+    "parity_scenario": "one immutable manifest per handoff; only current live legal files the recipient's lens admits; verified sizes and digests",
+    "scope": "project",
+    "target_only": true,
+    "through": "firm_id and project_id recorded on the handoff; born in PostgreSQL with no Surreal source"
+  },
+  "project_handoff_acknowledgment": {
+    "migration_slice": "project-handoff",
+    "parity_scenario": "one immutable acknowledgment per handoff, by its recipient, bound to the exact manifest digest",
+    "scope": "project",
+    "target_only": true,
+    "through": "handoff_id -> project_handoff.project_id; born in PostgreSQL with no Surreal source"
+  },
   "project_module": {
     "migration_slice": "matter-storage",
     "parity_scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
@@ -624,6 +618,20 @@
     "scope": "project",
     "through": "project_id -> Project.firm_id"
   },
+  "project_source_import": {
+    "migration_slice": "project-source-import",
+    "parity_scenario": "one import per operation key and at most one pending per Project; canonical archive cleared on commit; commit bound to the tree digest",
+    "scope": "project",
+    "target_only": true,
+    "through": "firm_id and project_id recorded on the import; born in PostgreSQL with no Surreal source"
+  },
+  "purchase": {
+    "migration_slice": "purchase",
+    "parity_scenario": "at most one unpaid invoice per Client and Offering; price copied at purchase; active only once Xero reports the invoice paid",
+    "scope": "identity",
+    "target_only": true,
+    "through": "person_id recorded on the Purchase; born in PostgreSQL with no Surreal source"
+  },
   "question": {
     "migration_slice": "catalog-storage",
     "parity_scenario": "stable catalog lookup; unauthorized mutation refusal",
@@ -641,6 +649,13 @@
     "parity_scenario": "append-only provenance; scoped history; actor attribution; graph rebuild preserves evidence",
     "scope": "project-or-firm",
     "through": "project_id when assigned; explicit owning Firm for unassigned rows"
+  },
+  "retention_purge": {
+    "migration_slice": "document-retention",
+    "parity_scenario": "one governed purge per chain and window; Firm-scoped authority recorded; a retry joins the same run",
+    "scope": "project",
+    "target_only": true,
+    "through": "project_id with firm_id recorded where the row carries authority; born in PostgreSQL with no Surreal source"
   },
   "review_document": {
     "migration_slice": "workflow-storage",
@@ -672,17 +687,17 @@
     "scope": "project",
     "through": "notation_id -> owning parent scope"
   },
-  "social_account_selection": {
-    "migration_slice": "brand-storage",
-    "parity_scenario": "saved destination round trip; cancellation preservation; Brand and Firm isolation",
-    "scope": "firm",
-    "through": "firm_id -> owning Firm; brand_key -> Firm-owned Brand"
-  },
   "social_account": {
     "migration_slice": "communications-storage",
     "parity_scenario": "ciphertext and wrapped key copied byte-for-byte; Firm and Person ownership; revoke clears secrets",
     "scope": "firm",
     "through": "firm_id -> owning Firm; brand_key -> Firm-owned Brand; connected/revoking People are explicit"
+  },
+  "social_account_selection": {
+    "migration_slice": "brand-storage",
+    "parity_scenario": "saved destination round trip; cancellation preservation; Brand and Firm isolation",
+    "scope": "firm",
+    "through": "firm_id -> owning Firm; brand_key -> Firm-owned Brand"
   },
   "social_handle": {
     "migration_slice": "brand-storage",
@@ -750,25 +765,10 @@
     "scope": "project",
     "through": "project_id -> Project.firm_id"
   },
-  "mirror_backfill_run": {
-    "migration_slice": "mirror-backfill",
-    "parity_scenario": "one run per operator invocation; resumed by id; completed only after every mirror group checkpoints",
-    "scope": "platform",
-    "target_only": true,
-    "through": "operator evidence about the mirror itself; no Firm, Project, or client scope; born in PostgreSQL with no Surreal source"
-  },
-  "mirror_backfill_checkpoint": {
-    "migration_slice": "mirror-backfill",
-    "parity_scenario": "one checkpoint per run and mirror group; batch counts only grow; completed once its missing rows are written or recorded as failures",
-    "scope": "platform",
-    "target_only": true,
-    "through": "operator evidence about the mirror itself; no Firm, Project, or client scope; born in PostgreSQL with no Surreal source"
-  },
-  "mirror_backfill_failure": {
-    "migration_slice": "mirror-backfill",
-    "parity_scenario": "one row per still-missing source row at a group's completion; names table and UUID only, never values",
-    "scope": "platform",
-    "target_only": true,
-    "through": "operator evidence about the mirror itself; no Firm, Project, or client scope; born in PostgreSQL with no Surreal source"
+  "person_phone": {
+    "scope": "identity",
+    "through": "person_id record link to the Person the number belongs to; no inferred participation",
+    "migration_slice": "identity-storage",
+    "parity_scenario": "E.164 canonical spelling at the write boundary; one primary per Person; row identity stable across label and primary changes"
   }
 }

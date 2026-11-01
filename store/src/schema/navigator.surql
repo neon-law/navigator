@@ -644,11 +644,40 @@ DEFINE INDEX OVERWRITE person_apple_subject ON person FIELDS apple_subject UNIQU
 -- claim to the new mailbox. A claim that outlived its person would lock
 -- that mailbox out of ever being used again.
 --
+-- `person_delegate`: the recorded fact that one Person helps another with
 -- `person_email_lower` stays as the backstop for a fork that is not a
 -- race — a row written before this table existed, or one whose claim was
 -- released without its row going with it.
 DEFINE TABLE IF NOT EXISTS person_mailbox SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE person_id ON person_mailbox TYPE record<person>;
+
+-- `person_phone`: one Person's phone numbers, one row per number.
+--
+-- `person.phone` predates this table and stays: it is the single
+-- free-text line older surfaces wrote and read, and a definition change
+-- to it would have to reach every reader at once. The structured facts
+-- live here instead — a number normalized to E.164 (`+` then 8–15
+-- digits), the kind of line it is, and whether it is the one a
+-- filing or a callback uses first. A Person carries as many rows as
+-- they have numbers; the UNIQUE `(person_id, e164)` index keeps one
+-- row per number, and exactly one of them is primary by store-layer
+-- convention (`store::person_phones::set_phone` demotes the others in
+-- the same transaction, the only writer).
+--
+-- Normalization happens at the write boundary, never at read: the
+-- stored form is already canonical, so comparisons and the Google
+-- Contacts sync see one spelling.
+DEFINE TABLE IF NOT EXISTS person_phone SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD OVERWRITE person_id ON person_phone TYPE record<person>;
+DEFINE FIELD OVERWRITE e164 ON person_phone TYPE string
+    ASSERT $value != '' AND string::starts_with($value, '+');
+DEFINE FIELD OVERWRITE label ON person_phone TYPE string DEFAULT 'mobile'
+    ASSERT $value IN ['mobile', 'work', 'home', 'fax', 'other'];
+DEFINE FIELD OVERWRITE is_primary ON person_phone TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE inserted_at ON person_phone TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON person_phone TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE person_phone_pair ON person_phone FIELDS person_id, e164 UNIQUE;
+DEFINE INDEX OVERWRITE person_phone_person ON person_phone FIELDS person_id;
 
 -- `person_delegate`: the recorded fact that one Person helps another with
 -- their matters. A mailbox is how we reach you. It is not who you are,

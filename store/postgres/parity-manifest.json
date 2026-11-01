@@ -382,21 +382,7 @@
       "extra_column": null,
       "extra_table": null,
       "missing_column": null,
-      "missing_table": "assistant_turn",
-      "table": null
-    },
-    {
-      "extra_column": null,
-      "extra_table": null,
-      "missing_column": null,
       "missing_table": "draft",
-      "table": null
-    },
-    {
-      "extra_column": null,
-      "extra_table": null,
-      "missing_column": null,
-      "missing_table": "sandbox_usage",
       "table": null
     },
     {
@@ -409,7 +395,7 @@
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 109,
+    "table_count": 108,
     "tables": {
       "address": {
         "city": "string",
@@ -470,17 +456,6 @@
         "transcript_quality": "option<string>",
         "updated_at": "datetime",
         "visibility": "string"
-      },
-      "assistant_turn": {
-        "content": "string",
-        "id": "record",
-        "input_tokens": "option<int>",
-        "inserted_at": "datetime",
-        "kind": "string",
-        "output_tokens": "option<int>",
-        "person_id": "record<person>",
-        "tool_name": "option<string>",
-        "updated_at": "datetime"
       },
       "attestation": {
         "chain": "string",
@@ -1367,6 +1342,15 @@
         "id": "record",
         "person_id": "record<person>"
       },
+      "person_phone": {
+        "e164": "string",
+        "id": "record",
+        "inserted_at": "datetime",
+        "is_primary": "bool",
+        "label": "string",
+        "person_id": "record<person>",
+        "updated_at": "datetime"
+      },
       "person_project_role": {
         "id": "record",
         "inserted_at": "string",
@@ -1534,16 +1518,6 @@
         "notation_id": "record<notation>",
         "status": "string",
         "title": "string",
-        "updated_at": "datetime"
-      },
-      "sandbox_usage": {
-        "granted_cents": "int",
-        "id": "record",
-        "inserted_at": "datetime",
-        "overage": "bool",
-        "period": "string",
-        "person_id": "record<person>",
-        "spent_cents": "int",
         "updated_at": "datetime"
       },
       "schema_version": {
@@ -1744,7 +1718,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 137,
+    "table_count": 138,
     "tables": {
       "address": {
         "columns": {
@@ -3907,6 +3881,20 @@
         "references": [
           "person"
         ]
+      },
+      "person_phone": {
+        "columns": {
+          "e164": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "is_primary": "BOOLEAN",
+          "label": "TEXT",
+          "person_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "person_phone",
+        "references": []
       },
       "person_project_role": {
         "columns": {
