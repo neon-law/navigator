@@ -8680,6 +8680,20 @@ impl IntoResponse for ApiError {
                 tracing::error!(error = %e, "api: asset error");
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "internal" }))).into_response()
             }
+            Self::UploadSession(store::documents::UploadSessionError::InvalidKind(_)) =>
+                bad_request("invalid_kind", "Choose an accepted document kind."),
+            Self::UploadSession(store::documents::UploadSessionError::BlankFilename) =>
+                bad_request("filename_required", "A filename is required."),
+            Self::UploadSession(store::documents::UploadSessionError::InvalidVisibility) =>
+                bad_request("invalid_visibility", "Visibility must be internal or client."),
+            Self::UploadSession(store::documents::UploadSessionError::ShaFormat(_)) =>
+                bad_request("invalid_sha256", "The digest must be 64 lowercase hexadecimal characters."),
+            Self::UploadSession(store::documents::UploadSessionError::EmptyUpload { .. }) =>
+                bad_request("empty_upload", "A streaming upload needs at least one byte."),
+            Self::UploadSession(store::documents::UploadSessionError::TooLarge { .. }) => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(serde_json::json!({ "error": "upload_too_large" })),
+            ).into_response(),
             Self::UploadSession(e) => {
                 tracing::error!(error = %e, "api: upload session error");
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "internal" }))).into_response()
@@ -9728,6 +9742,33 @@ mod tests {
         .unwrap();
         assert_eq!(response.status(), StatusCode::CREATED);
         streaming_json(response).await
+    }
+
+    #[tokio::test]
+    async fn streaming_session_rejects_invalid_metadata_as_bad_request() {
+        let (state, session, project_id) = streaming_fixture().await;
+        for (kind, digest) in [
+            ("unsupported", store::documents::sha256_hex(b"audio")),
+            ("transcript", "not-a-sha".to_owned()),
+        ] {
+            let request = serde_json::from_value(serde_json::json!({
+                "filename": "hearing.mp3", "kind": kind,
+                "declared_size": 5, "declared_sha256": digest
+            }))
+            .unwrap();
+            let result = create_upload_session_door(
+                State(state.clone()),
+                LawyerSession(session.clone()),
+                Path(project_id),
+                JsonOrForm(request),
+            )
+            .await;
+            let response = match result {
+                Ok(response) => response,
+                Err(error) => error.into_response(),
+            };
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
     }
 
     /// The streaming doors carry one small upload end to end: open a
