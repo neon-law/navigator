@@ -128,15 +128,28 @@ fn top_level_help_keeps_orchestration_nested_under_groups() {
 }
 
 #[test]
-fn mail_help_exposes_only_read_draft_file_ingest_parse_and_save_actions() {
+fn mail_help_exposes_only_read_draft_file_ingest_parse_save_login_and_attachments_actions() {
     let output = help(&["mail", "--help"]);
 
     assert_eq!(
         command_names(&output),
-        vec!["draft", "file", "ingest", "parse", "read", "save", "search", "setup", "help"]
+        vec![
+            "attachments",
+            "draft",
+            "file",
+            "ingest",
+            "login",
+            "parse",
+            "read",
+            "save",
+            "search",
+            "setup",
+            "help"
+        ]
     );
     assert!(!command_names(&output).contains(&"send"));
     assert!(!command_names(&output).contains(&"forward"));
+    assert!(!command_names(&output).contains(&"reply"));
 }
 
 #[test]
