@@ -70,6 +70,27 @@ picks up. It runs when `NAVIGATOR_DBOS_ENABLED=true` and `NAVIGATOR_DBOS_PROJECT
 schedule fails the boot without PostgreSQL or the archived-projects lane. Without the schedule, requests stay pending.
 See [DBOS durability](dbos-durability.md#projectrecovery).
 
+## Coverage
+
+`store::project_archives::coverage::report` reads the whole Project inventory, open and closed, never a workstation's
+checkout folders. It judges each Project against its newest committed generation:
+
+| State | Meaning |
+| --- | --- |
+| `current` | Open: the cutoff is within the 12-hour baseline. Closed: the cutoff is at or after the close. |
+| `stale` | A committed generation exists but is older than the baseline, or predates the close. |
+| `missing` | No committed generation exists. |
+| `source_unbound` | The Project records a repository, but its newest generation holds no verified Git bundle. |
+| `no_firm` | The Project belongs to no Firm, so no generation can be requested. |
+
+Freshness is read from the cutoff, the instant the record was captured, not from the commit time or a live HEAD. The
+12-hour baseline is the twice-daily full-archive baseline. It is a reporting threshold, not a recovery-point objective.
+Each entry also says whether an uncommitted generation is already requested.
+
+The `ProjectRecovery` schedule ends every slot with a `coverage` step. The slot's output keeps the counts and the
+Project ids that are not current, and a gap logs a warning with the counts. The step requests nothing. A failed read is
+recorded on the slot and does not fail it.
+
 ## Restore
 
 `store::project_archives::restore` rebuilds the Project from one committed generation into any target. It verifies the
