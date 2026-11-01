@@ -2989,6 +2989,30 @@ test_anonymous_denied_app_owner if {
 	not authz.allow with input as {"path": ["app", "owner"], "method": "GET", "session": null}
 }
 
+test_lawyer_can_import_historical_messages if {
+	authz.allow with input as {"path": ["app", "api", "inbox", "import"], "method": "POST", "session": lawyer_session}
+	authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest"], "method": "POST", "session": lawyer_session}
+}
+
+test_client_and_clerk_cannot_import_historical_messages if {
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import"], "method": "POST", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import"], "method": "POST", "session": clerk_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest"], "method": "POST", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest"], "method": "POST", "session": clerk_session}
+}
+
+test_anonymous_cannot_import_historical_messages if {
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import"], "method": "POST", "session": null}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest"], "method": "POST", "session": null}
+}
+
+test_historical_import_policy_is_exact if {
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import"], "method": "GET", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "inbox", "import", "extra"], "method": "POST", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest"], "method": "DELETE", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest", "extra"], "method": "POST", "session": lawyer_session}
+}
+
 test_owner_can_open_owner_inbox if {
 	authz.allow with input as {"path": ["app", "owner", "inbox"], "method": "GET", "session": owner_session}
 }

@@ -326,6 +326,30 @@ async fn a_corrupted_linkedin_export_fails_loudly_naming_the_headers() {
 }
 
 #[tokio::test]
+async fn embedded_policy_admits_the_lawyer_import_door() {
+    let fixture = fixture().await;
+    let app = fixture
+        .app
+        .clone()
+        .layer(axum::middleware::from_fn_with_state(
+            (
+                portal::SessionStore::new(vec![7_u8; 32]),
+                portal::policy::PolicyClient::embedded().expect("compile deployed policy"),
+            ),
+            portal::policy::require_policy,
+        ))
+        .layer(tower_cookies::CookieManagerLayer::new());
+    let (status, body) = post_json(
+        &app,
+        Some(&fixture.lawyer_session),
+        email_body(INBOUND_EML, &json!({"dry_run": true})),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["would_import"], 1);
+}
+
+#[tokio::test]
 async fn a_dry_run_previews_the_parse_and_writes_nothing() {
     let fixture = fixture().await;
 

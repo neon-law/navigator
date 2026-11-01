@@ -491,9 +491,11 @@ fn regorus_matches_every_checked_in_policy_decision() {
     //   deeper segment, and an extra path element denied even to Lawyer.
     // 652 + 6 = 658.
 
+    // + 4 for historical message import admission, denied tiers, and exact routes.
+    // 658 + 4 = 662.
     assert_eq!(
         test_names.len(),
-        658,
+        662,
         "the policy decision inventory changed; review every new or removed rule"
     );
 
