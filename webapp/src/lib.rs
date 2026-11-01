@@ -143,6 +143,23 @@ pub mod world_page;
 /// and the same markup is what the WebAssembly bundle hydrates in the browser.
 #[allow(non_snake_case)]
 pub fn App() -> Element {
+    // The Vesta `/world` page first: `portal::dioxus_app::world_router`
+    // injects `InjectedWorld` as a request extension, and `world_page_view`
+    // reads it back. The client resumes the cached result from the
+    // hydration blob and renders the same tree the server did — the same
+    // `matched`-flag pattern the notation draft door uses below.
+    let world = use_server_future(world_page::world_page_view)?;
+    if let Some(Ok(view)) = &*world.read() {
+        if view.matched {
+            return rsx! {
+                world_page::WorldPage {
+                    chrome: view.chrome.clone(),
+                    content: view.content.clone(),
+                }
+            };
+        }
+    }
+
     let notation_preview = use_server_future(notation_preview::notation_preview_view)?;
     if let Some(Ok(view)) = &*notation_preview.read() {
         if !view.content.title.is_empty() {

@@ -2,8 +2,9 @@
 //! through the Dioxus SSR port on Vesta hosts only.
 //!
 //! Content-backed like the contact page: the portal router pre-resolves the
-//! page's [`WorldContent`] from the mounted brand and injects it through
-//! `ServeConfig::context_providers`; [`world_page_view`] reads it back. The
+//! page's [`WorldContent`] from the mounted brand and injects it as an
+//! `axum::Extension` via `portal::dioxus_app::inject_world`; [`world_page_view`]
+//! reads it back. The
 //! specimen chart section composes the public `AstrocartographyDesign`
 //! component from the map work (#233, #256); the birth form stages people
 //! client-side and submits through a typed server function.
@@ -55,41 +56,39 @@ pub struct WorldContent {
 #[derive(Clone, Default)]
 pub struct InjectedWorld(pub WorldContent);
 
-/// Everything the page renders.
+/// Everything the page renders, plus whether the request matched the world
+/// route at all. The `matched` flag is the hydration-safe discriminator
+/// `webapp::App` branches on — the same pattern as
+/// `notation_draft::notation_draft_view`'s `matched`: the client resumes the
+/// cached server-future result from the hydration blob and renders the same
+/// tree the server did, with no client-side context needed.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct WorldPageView {
     pub chrome: PublicChrome,
     pub content: WorldContent,
+    pub matched: bool,
 }
 
 /// Resolve the chrome from the process brand and the world content from the
-/// injected [`InjectedWorld`] context.
+/// `InjectedWorld` request extension `portal::dioxus_app::world_router`
+/// injects. Every surface sharing `webapp::App` that is not `/world` lacks
+/// the extension and gets an unmatched view — the App falls through to its
+/// other routes.
 #[server]
 pub async fn world_page_view() -> Result<WorldPageView, ServerFnError> {
-    let content =
-        crate::public_chrome::copy_from_request_or_context(consume_context::<InjectedWorld>)
+    let injected =
+        dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<InjectedWorld>, _>()
             .await
-            .0;
+            .ok();
+    let matched = injected.is_some();
+    let content = injected
+        .map(|axum::Extension(injected)| injected.0)
+        .unwrap_or_default();
     Ok(WorldPageView {
         chrome: crate::public_chrome::firm_public_chrome_from_context().await,
         content,
+        matched,
     })
-}
-
-/// The page's route entry.
-#[component]
-pub fn WorldPageEntry() -> Element {
-    let resource = use_server_future(world_page_view)?;
-    let view = match &*resource.read() {
-        Some(Ok(view)) => view.clone(),
-        _ => return rsx! {},
-    };
-    rsx! {
-        WorldPage {
-            chrome: view.chrome,
-            content: view.content,
-        }
-    }
 }
 
 /// One person's staged birth details, edited in the form before submission.
@@ -213,6 +212,11 @@ pub struct BirthEntry {
 impl BirthEntry {
     /// The name the results address this person by: their display name when
     /// given, otherwise their position in the chart.
+    ///
+    /// Server-gated: every caller lives in the `#[server]` body or
+    /// `resolve_person`, which the wasm client compiles out — the stub the
+    /// `#[server]` macro emits serializes the entries without naming them.
+    #[cfg(feature = "server")]
     fn display_name(&self, position: usize) -> String {
         let trimmed = self.name.trim();
         if trimmed.is_empty() {

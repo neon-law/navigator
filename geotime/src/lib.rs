@@ -135,6 +135,7 @@ const SUGGESTION_COUNT: usize = 3;
 /// Every country in the bundled index, in its bundled order — the page layer
 /// uses these as the birth-form country options. The list is static, so it
 /// carries no visitor data and can ride the wire or render into a select.
+#[must_use]
 pub fn countries() -> Vec<Country> {
     index::global().countries.clone()
 }
