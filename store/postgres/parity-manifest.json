@@ -303,6 +303,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "project_folder",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "project_handoff",
       "missing_column": null,
       "missing_table": null,
@@ -4305,6 +4312,29 @@
           "asset",
           "person",
           "project"
+        ]
+      },
+      "project_folder": {
+        "columns": {
+          "drive_folder_id": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "parent_drive_folder_id": "TEXT",
+          "parent_id": "UUID",
+          "project_id": "UUID",
+          "slot": "TEXT",
+          "verified_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "project_folder",
+        "references": [
+          "project",
+          "project_folder"
         ]
       },
       "project_handoff": {
