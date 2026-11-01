@@ -3466,7 +3466,9 @@ ALTER TABLE project_deadlines ADD COLUMN category TEXT CHECK (category IN ('cour
 
 -- Migration: 20261101110000_linkedin_channel_and_raw_storage.sql
 -- Imported direct messages and scraper notices share the Inbox channel vocabulary.
-ALTER TABLE inbox_conversation DROP CONSTRAINT IF EXISTS inbox_conversation_channel_check;
+DO $$ BEGIN
+    ALTER TABLE inbox_conversation DROP CONSTRAINT IF EXISTS inbox_conversation_channel_check;
+END $$;
 ALTER TABLE inbox_conversation ADD CONSTRAINT inbox_conversation_channel_check CHECK (channel IN ('email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'linkedin', 'scraper'));
 ALTER TABLE message ADD COLUMN raw_storage_key TEXT;
 
