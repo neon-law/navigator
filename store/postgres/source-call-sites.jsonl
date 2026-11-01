@@ -679,7 +679,12 @@
 {"file":"portal/src/people_list_answer.rs","line":27,"function":"assemble","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/policy.rs","line":202,"function":"require_policy","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/policy.rs","line":223,"function":"require_policy","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/project_documents.rs","line":894,"function":"download","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/project_documents.rs","line":910,"function":"download","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/project_documents.rs","line":1116,"function":"drive_database","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/project_documents.rs","line":1116,"function":"drive_database","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
+{"file":"portal/src/project_documents.rs","line":1138,"function":"verified_drive_folders","operation":"bind","sql_operations":[],"tables":["entity_type"],"transaction":false}
+{"file":"portal/src/project_documents.rs","line":1138,"function":"verified_drive_folders","operation":"bind","sql_operations":[],"tables":["jurisdiction"],"transaction":false}
+{"file":"portal/src/project_documents.rs","line":1138,"function":"verified_drive_folders","operation":"query","sql_operations":["UPSERT"],"tables":["jurisdiction"],"transaction":false}
 {"file":"portal/src/project_export.rs","line":181,"function":"unique_entry_name","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/project_export.rs","line":192,"function":"unique_entry_name","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/purchases.rs","line":349,"function":"inject_public_context","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
