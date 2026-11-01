@@ -468,18 +468,20 @@ mod tests {
     #[test]
     fn signature_authenticates_body_timestamp_and_rejects_stale_signatures() {
         let body = br#"{"event":"comment.update"}"#;
-        let headers = signed("synthetic-secret", body, 1_800_000_000);
-        assert!(verify("synthetic-secret", &headers, body, 1_800_000_001));
-        assert!(!verify("other", &headers, body, 1_800_000_001));
-        assert!(!verify("synthetic-secret", &headers, b"{}", 1_800_000_001));
-        assert!(!verify("synthetic-secret", &headers, body, 1_800_000_301));
-        assert!(!verify("synthetic-secret", &headers, body, 1_799_999_699));
+        let secret = uuid::Uuid::new_v4().to_string();
+        let wrong_secret = uuid::Uuid::new_v4().to_string();
+        let headers = signed(&secret, body, 1_800_000_000);
+        assert!(verify(&secret, &headers, body, 1_800_000_001));
+        assert!(!verify(&wrong_secret, &headers, body, 1_800_000_001));
+        assert!(!verify(&secret, &headers, b"{}", 1_800_000_001));
+        assert!(!verify(&secret, &headers, body, 1_800_000_301));
+        assert!(!verify(&secret, &headers, body, 1_799_999_699));
         let mut duplicate = headers.clone();
         duplicate.insert(
             "tiktok-signature",
             "t=1800000000,t=1800000000,s=00".parse().unwrap(),
         );
-        assert!(!verify("synthetic-secret", &duplicate, body, 1_800_000_000));
+        assert!(!verify(&secret, &duplicate, body, 1_800_000_000));
     }
 
     #[test]
@@ -758,18 +760,17 @@ mod tests {
     #[tokio::test]
     async fn signed_nonpublic_events_acknowledge_without_new_messages_and_wrong_app_is_refused() {
         let state = crate::test_support::app_state(store::test_support::mem_surreal().await).await;
+        let secret = uuid::Uuid::new_v4().to_string();
         for action in ["delete", "set_to_hidden", "set_to_friends_only"] {
             let body = serde_json::to_vec(&serde_json::json!({"client_key":"synthetic-app","event":"comment.update","user_openid":"synthetic-account",
                 "content":serde_json::json!({"comment_id":1,"video_id":2,"comment_action":action}).to_string()})).unwrap();
-            let headers = signed("synthetic-secret", &body, Utc::now().timestamp());
+            let headers = signed(&secret, &body, Utc::now().timestamp());
             assert_eq!(
-                receive_authenticated(&state, &headers, &body, "synthetic-app", "synthetic-secret")
-                    .await,
+                receive_authenticated(&state, &headers, &body, "synthetic-app", &secret).await,
                 StatusCode::OK
             );
             assert_eq!(
-                receive_authenticated(&state, &headers, &body, "another-app", "synthetic-secret")
-                    .await,
+                receive_authenticated(&state, &headers, &body, "another-app", &secret).await,
                 StatusCode::BAD_REQUEST
             );
         }

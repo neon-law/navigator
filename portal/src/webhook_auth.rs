@@ -108,43 +108,52 @@ mod tests {
     use p256::ecdsa::{signature::Signer, Signature, SigningKey};
     use p256::pkcs8::EncodePublicKey;
 
-    const KEY: &[u8] = b"shared-webhook-secret";
+    // Each test owns a fresh key; no reusable webhook credential ships in fixtures.
+    fn test_key() -> [u8; 32] {
+        rand::random()
+    }
     const BODY: &[u8] = br#"{"envelopeId":"abc-123","status":"completed"}"#;
 
     #[test]
     fn a_freshly_signed_body_verifies() {
-        let sig = sign_hmac_sha256_b64(KEY, BODY);
-        assert!(verify_hmac_sha256_b64(KEY, BODY, &sig));
+        let key = test_key();
+        let sig = sign_hmac_sha256_b64(&key, BODY);
+        assert!(verify_hmac_sha256_b64(&key, BODY, &sig));
     }
 
     #[test]
     fn a_tampered_body_fails_against_the_original_signature() {
-        let sig = sign_hmac_sha256_b64(KEY, BODY);
+        let key = test_key();
+        let sig = sign_hmac_sha256_b64(&key, BODY);
         let tampered = br#"{"envelopeId":"evil-999","status":"completed"}"#;
-        assert!(!verify_hmac_sha256_b64(KEY, tampered, &sig));
+        assert!(!verify_hmac_sha256_b64(&key, tampered, &sig));
     }
 
     #[test]
     fn the_wrong_key_fails() {
-        let sig = sign_hmac_sha256_b64(KEY, BODY);
-        assert!(!verify_hmac_sha256_b64(b"not-the-key", BODY, &sig));
+        let key = test_key();
+        let sig = sign_hmac_sha256_b64(&key, BODY);
+        assert!(!verify_hmac_sha256_b64(&test_key(), BODY, &sig));
     }
 
     #[test]
     fn a_non_base64_header_is_rejected_not_panicked() {
-        assert!(!verify_hmac_sha256_b64(KEY, BODY, "@@@not base64@@@"));
+        let key = test_key();
+        assert!(!verify_hmac_sha256_b64(&key, BODY, "@@@not base64@@@"));
     }
 
     #[test]
     fn an_empty_signature_is_rejected() {
-        assert!(!verify_hmac_sha256_b64(KEY, BODY, ""));
+        let key = test_key();
+        assert!(!verify_hmac_sha256_b64(&key, BODY, ""));
     }
 
     #[test]
     fn surrounding_whitespace_in_the_header_is_tolerated() {
-        let sig = sign_hmac_sha256_b64(KEY, BODY);
+        let key = test_key();
+        let sig = sign_hmac_sha256_b64(&key, BODY);
         let padded = format!("  {sig}\n");
-        assert!(verify_hmac_sha256_b64(KEY, BODY, &padded));
+        assert!(verify_hmac_sha256_b64(&key, BODY, &padded));
     }
 
     // --- ECDSA / P-256 (SendGrid Signed Event Webhook) ---
