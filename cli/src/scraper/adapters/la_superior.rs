@@ -523,7 +523,7 @@ mod tests {
     };
     use crate::scraper::adapter::{AdapterError, NoticeKey, SiteAdapter, SiteKey};
     use crate::scraper::download::DownloadSink;
-    use crate::scraper::fetcher::{FetchError, FetchRequest, FetchResponse};
+    use crate::scraper::fetcher::{FetchRequest, FetchResponse};
     use crate::scraper::testing::{MockFetcher, MockHandler};
     use std::path::PathBuf;
     use std::sync::Arc;
