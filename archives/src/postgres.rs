@@ -84,6 +84,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "time_entry",
     "time_entry_events",
     "timer",
+    "ssh_public_key",
     "person",
     "person_firm_role",
     "person_project_role",

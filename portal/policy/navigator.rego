@@ -722,6 +722,24 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# A Firm user's own SSH public keys (ENG-1219): list, register, sync, and
+# revoke at `/app/api/ssh-keys` and `/app/api/ssh-keys/{id|sync}`. Firm tiers
+# only — Owner and Admin through the bypass, Lawyer and Clerk here; a client
+# holds no Firm membership and has no key to register. The handler resolves
+# the Person from the session and decides who may revoke whose key
+# (`store::ssh_public_keys::may_revoke`); this admits the tier, not the scope.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "ssh-keys"
+    count(input.path) <= 4
+    ssh_key_tier(input.session)
+}
+
+ssh_key_tier(session) if is_lawyer(session)
+
+ssh_key_tier(session) if is_clerk(session)
+
 # Brand presentation writes (ENG-586), named explicitly rather than resting
 # on the Owner/Admin route bypass — the same convention every other
 # `/app/api` write follows. `store::brands`' own `authorize` is what actually

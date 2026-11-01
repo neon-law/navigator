@@ -58,6 +58,7 @@ mod sas;
 mod scraper;
 mod sendgrid_openapi;
 mod site_asset;
+mod ssh_keys;
 mod surreal_archive;
 mod upload_slug;
 mod video_prepare;
@@ -2512,6 +2513,50 @@ enum SitePersonCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Manage your own SSH public keys. Navigator adds them to your account
+    /// on the installation's Forgejo and removes them when you remove them
+    /// here or leave your Firm. Only ed25519 and ECDSA public keys are
+    /// accepted; a private key is refused before it leaves this machine.
+    SshKey {
+        #[command(subcommand)]
+        action: SshKeyCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum SshKeyCmd {
+    /// Register one public key, read from a `.pub` file (or `-` for stdin).
+    Add {
+        /// The public key file, for example `~/.ssh/id_ed25519.pub`.
+        file: PathBuf,
+        /// A label for the key; defaults to the key's comment.
+        #[arg(long)]
+        label: Option<String>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// List your keys by id, fingerprint, type, and label.
+    List {
+        /// Another Person's id, whose keys you may revoke as their Firm's
+        /// administrator.
+        #[arg(long)]
+        person: Option<uuid::Uuid>,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Revoke a key by id; it is removed from Forgejo too.
+    Remove {
+        /// The key id `list` prints.
+        id: uuid::Uuid,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Reconcile your Forgejo account now, for example after your first
+    /// Forgejo sign-in.
+    Sync {
+        #[command(flatten)]
+        host: HostOpt,
+    },
 }
 
 #[derive(Subcommand)]
@@ -3602,6 +3647,11 @@ enum EmailSummaryCmd {
 
 #[derive(Subcommand)]
 enum ForgejoPolicyCmd {
+    /// Reconcile Firm users' SSH public keys onto their Forgejo accounts.
+    SshKeys {
+        #[command(subcommand)]
+        action: ForgejoSshKeysCmd,
+    },
     /// Run one repository-scoped Actions job in a disposable, network-isolated Kubernetes pod.
     #[command(
         after_help = "Run only from a trusted operator host. FORGEJO_TOKEN must never enter a pull-request-controlled job."
@@ -3668,6 +3718,24 @@ enum ForgejoPolicyCmd {
         /// Exact required check context observed on this Forgejo installation.
         #[arg(long)]
         check_context: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ForgejoSshKeysCmd {
+    /// Reconcile every Person holding a key (or one Person) through the
+    /// key-sync service identity. Drift is reported, never removed; exits
+    /// nonzero while any account holds drift or failed.
+    #[command(
+        after_help = "Needs NAVIGATOR_FORGEJO_ROOT_URL, NAVIGATOR_FORGEJO_KEY_SYNC_LOGIN and NAVIGATOR_FORGEJO_KEY_SYNC_TOKEN, plus the SurrealDB and PostgreSQL settings."
+    )]
+    Sync {
+        /// One Person, by id or email; every Person holding a key otherwise.
+        #[arg(long)]
+        person: Option<String>,
+        /// Report the plan without writing to Forgejo.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -4885,6 +4953,20 @@ fn run() -> ExitCode {
             SiteCmd::Person {
                 action: SitePersonCmd::Merge { keep, drop, host },
             } => runtime().block_on(remote::merge_people(host.host, &keep, &drop)),
+            SiteCmd::Person {
+                action: SitePersonCmd::SshKey { action },
+            } => match action {
+                SshKeyCmd::Add { file, label, host } => {
+                    runtime().block_on(ssh_keys::add(host.host, &file, label.as_deref()))
+                }
+                SshKeyCmd::List { person, host } => {
+                    runtime().block_on(ssh_keys::list(host.host, person))
+                }
+                SshKeyCmd::Remove { id, host } => {
+                    runtime().block_on(ssh_keys::remove(host.host, id))
+                }
+                SshKeyCmd::Sync { host } => runtime().block_on(ssh_keys::sync(host.host)),
+            },
             SiteCmd::Firm {
                 action: SiteFirmCmd::ProvisionForgejo { slug, host },
             } => runtime().block_on(firm_forgejo::provision(host.host.as_deref(), &slug)),

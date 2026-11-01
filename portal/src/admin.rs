@@ -188,7 +188,8 @@ pub fn routes(
     // project-visibility predicate applies.
     let mut r = Router::new()
         .merge(crate::social_oauth::admin_routes())
-        .merge(crate::deployment_keys::routes());
+        .merge(crate::deployment_keys::routes())
+        .merge(crate::ssh_keys::routes());
     // Admin-only people administration: the one browser surface that creates or
     // edits a Person. Detail/edit use the singular `/app/admin/people`.
     // embedded Rego policy needs no `/admin` rule — the admin-bypass allows admin and

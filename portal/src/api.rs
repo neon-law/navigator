@@ -155,6 +155,20 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ("PATCH", "/app/api/people/{id}", patch(update_person)),
         ("DELETE", "/app/api/people/{id}", delete(delete_person)),
         ("POST", "/app/api/people/{id}/welcome", post(send_welcome)),
+        // A Firm user's own SSH public keys (ENG-1219); revocation also
+        // admits that user's Firm administrator. See [`crate::ssh_keys`].
+        ("GET", "/app/api/ssh-keys", get(crate::ssh_keys::list)),
+        ("POST", "/app/api/ssh-keys", post(crate::ssh_keys::add)),
+        (
+            "POST",
+            "/app/api/ssh-keys/sync",
+            post(crate::ssh_keys::sync_own),
+        ),
+        (
+            "DELETE",
+            "/app/api/ssh-keys/{id}",
+            delete(crate::ssh_keys::revoke),
+        ),
         (
             "GET",
             "/app/api/firms/{id}/journal/signals",

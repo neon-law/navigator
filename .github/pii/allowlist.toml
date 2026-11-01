@@ -65,12 +65,13 @@ values = [
 ]
 
 [[email_domains]]
-reason = "Machine identities and Git transport addresses, not people."
+reason = "Machine identities, Git transport addresses, and OpenSSH key-type names, not people."
 values = [
   "gserviceaccount.com",
   "github.com",
   "gitlab.com",
   "sms.twilio.com",
+  "openssh.com",
 ]
 
 [[email_domains]]

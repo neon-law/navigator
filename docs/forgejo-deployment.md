@@ -160,6 +160,45 @@ integration test](https://codeberg.org/forgejo/forgejo/src/tag/v15.0.9/tests/int
 These checks prove the verifier against signed local fixtures matching that source contract; they do not claim a live
 Forgejo Actions run or fleet-wide replay test.
 
+## SSH public keys
+
+A Firm user registers an [SSH Public Key](glossary/ssh-public-key.md) once in Navigator: on `/app/profile`, or with
+`navigator site person ssh-key add ~/.ssh/id_ed25519.pub`. Navigator then makes it a key on their Forgejo account. The
+same verb's `list`, `remove <id>`, and `sync` subcommands read, revoke, and re-reconcile. Navigator reconciles a
+Person's account after each registration or revocation and after a Firm membership is removed. The operator sweep
+`navigator ops forgejo ssh-keys sync [--person <id-or-email>] [--dry-run]` reconciles every Person holding a key row.
+Only ed25519 and NIST ECDSA public keys are accepted, and a private key is refused, by the CLI before it is sent.
+
+Reconciliation finds the Forgejo account whose email exactly matches the Person's. It adds every live key the account
+lacks, titled `navigator:<label>`. It removes every `navigator:`-titled key Navigator no longer holds. A Person without
+a Firm membership wants no keys, so leaving a Firm removes them. A key Navigator neither holds nor manages is drift: the
+sweep prints its fingerprint, leaves it in place, and exits nonzero. A Person who has not yet signed in to Forgejo has
+no account. Their keys arrive on the first reconciliation after that sign-in (`navigator site person ssh-key sync`).
+
+The sync runs as a dedicated service identity, never the reserved `navigator-admin` seat or an operator's account.
+Forgejo 15.0.9 serves `POST`/`DELETE /api/v1/admin/users/{username}/keys` and the admin user list only to a site
+administrator, so the account carries that flag. Its access token is scoped to `write:admin` and `read:user` only. With
+no repository or organization scope, the token cannot reach the forced-merge path described below. Before any write,
+each reconciliation reads `GET /api/v1/user` and refuses unless the token answers as the configured login. The web
+process and the operator sweep read three settings:
+
+| Setting | Value |
+| --- | --- |
+| `NAVIGATOR_FORGEJO_ROOT_URL` | The installation's Forgejo root URL |
+| `NAVIGATOR_FORGEJO_KEY_SYNC_LOGIN` | The service identity's Forgejo login, for example `navigator-key-sync` |
+| `NAVIGATOR_FORGEJO_KEY_SYNC_TOKEN` | Its scoped access token (key material; keep it in the deployment's secrets) |
+
+With any setting unset, keys are still stored and every reconciliation reports `not_configured`. Provisioning the
+service identity, adding the token to the web Secret, and enabling SSH stay deployment steps. SSH is enabled in the
+overlay, not by hand, with its own host key and an `SSH_DOMAIN`, after this has shipped. Until then the base keeps
+`DISABLE_SSH = true`, and Git access remains HTTPS with a personal token.
+
+**Decision (ENG-1219, against ENG-1050's short-lived certificates).** Stored static keys come before certificates and do
+not replace them. A static key stays valid until it is removed, so removal is driven from Navigator: on revocation, on
+leaving a Firm, and by the sweep. A certificate expires on its own and needs a signing authority Forgejo trusts, which
+this installation does not run yet. When that authority exists, certificates can replace static keys for interactive Git
+access. The `ssh_public_key` rows then remain the registry of which public keys a Person may have certified.
+
 ## Repository policy and Actions migration
 
 The current exact reconciliation command is `navigator ops github setup [repository]`, implemented in
