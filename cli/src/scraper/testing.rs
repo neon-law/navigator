@@ -308,7 +308,7 @@ impl MockFetcher {
     pub(crate) fn requests(&self) -> Vec<FetchRequest> {
         self.requests
             .lock()
-            .map_or_else(Vec::new, |requests| requests.clone())
+            .map_or_else(|_| Vec::new(), |requests| requests.clone())
     }
 }
 
