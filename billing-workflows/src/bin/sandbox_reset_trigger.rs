@@ -57,11 +57,11 @@ async fn main() -> Result<()> {
         }
     }
 
-    // codeql[rust/clear-text-logging-of-sensitive-information] run_id is a
-    // billing month ("YYYY-MM") — an identifier, never a credential or
-    // subscriber content; the observability contract sanctions identifiers
-    // in logs.
-    tracing::info!(%run_id, "sandbox-credit-reset workflow triggered");
-    println!("triggered SandboxCreditReset/{run_id}");
+    // run_id is a billing month ("YYYY-MM") — an identifier, never a
+    // credential or subscriber content; the observability contract
+    // sanctions identifiers in logs. The suppression must carry the Rust
+    // query id (rust/cleartext-logging) on the reported line itself.
+    tracing::info!(%run_id, "sandbox-credit-reset workflow triggered"); // codeql[rust/cleartext-logging] run_id is a billing month identifier, sanctioned in logs by the observability contract.
+    println!("triggered SandboxCreditReset/{run_id}"); // codeql[rust/cleartext-logging] run_id is a billing month identifier, sanctioned in logs by the observability contract.
     Ok(())
 }
