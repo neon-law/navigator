@@ -232,7 +232,7 @@ impl Rule for F110JurisdictionPath {
 
 /// True when the `origin_url` points at an official source: any `https://`
 /// `.gov` host, or an exact domain from [`OFFICIAL_COURT_DOMAINS`]. Nevada's
-/// county courts run their official sites on `.com` (and staff a court
+/// county courts run their official sites on `.com` (and provide a court
 /// forms service through a county-contracted nonprofit), so a bare TLD
 /// test would refuse the very pages those courts publish the forms on.
 fn origin_url_is_official(url: &str) -> bool {
