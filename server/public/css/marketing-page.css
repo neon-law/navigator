@@ -717,7 +717,23 @@
 
 /* ---- Steps --------------------------------------------------------------- */
 
+.public-shell:has(.fm-band--steps) {
+  overflow-x: clip;
+}
+
 .fm-band--steps {
+  position: relative;
+  isolation: isolate;
+}
+
+/* Paint beyond the shell's content column without widening the ordered list
+   or introducing horizontal scrolling from the viewport's scrollbar width. */
+.fm-band--steps::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline: calc(50% - 50vw);
+  z-index: -1;
   background: color-mix(in srgb, var(--nav-color-primary) 5%, transparent);
 }
 

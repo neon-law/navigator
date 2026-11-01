@@ -244,7 +244,7 @@ mod firm_copy_tests {
                     service.item,
                     service.name,
                     service.category,
-                    service.fee,
+                    service.fee.as_deref().unwrap_or_default(),
                     service.period,
                     service.blurb,
                     service.includes.join(" "),
@@ -575,7 +575,7 @@ mod firm_copy_tests {
     fn any_published_fee_is_a_real_figure() {
         let content = super::legal_services(&views::brand::DEFAULT_BRANDING);
         for service in &schedule(&content).services {
-            let price = &service.fee;
+            let price = service.fee.as_deref().unwrap_or_default();
             assert!(
                 price.starts_with('$'),
                 "{} publishes {price:?}, which is not a fee",
@@ -608,7 +608,11 @@ mod firm_copy_tests {
     fn a_fee_with_a_pass_through_names_it() {
         let content = super::legal_services(&views::brand::DEFAULT_BRANDING);
         for service in &schedule(&content).services {
-            let printed = format!("{} {}", service.fee, service.period);
+            let printed = format!(
+                "{} {}",
+                service.fee.as_deref().unwrap_or_default(),
+                service.period
+            );
             if printed.contains('+') {
                 assert!(
                     printed.contains("fee"),
@@ -694,7 +698,7 @@ mod firm_copy_tests {
             .iter()
             .find(|service| service.id == "trademark")
             .expect("the trademark service remains available");
-        assert_eq!(trademark.fee, "$100");
+        assert_eq!(trademark.fee.as_deref(), Some("$100"));
         assert_eq!(trademark.period, "+ government filing fees");
         assert!(
             !trademark.members_only,
@@ -705,7 +709,7 @@ mod firm_copy_tests {
             .iter()
             .find(|service| service.id == "estate-package")
             .expect("the family plan is a Notation package");
-        assert_eq!(family_plan.fee, "$5,000");
+        assert_eq!(family_plan.fee.as_deref(), Some("$5,000"));
         assert_eq!(family_plan.period, "per package");
         // No plan price: it quoted against the retired consumer plan, so the
         // package now publishes its a la carte fee alone rather than a
@@ -716,7 +720,7 @@ mod firm_copy_tests {
             .iter()
             .find(|service| service.id == "llc-launch")
             .expect("company setup is a Notation package");
-        assert_eq!(setup.fee, "$100");
+        assert_eq!(setup.fee.as_deref(), Some("$100"));
         assert_eq!(setup.plan_price, None);
     }
 

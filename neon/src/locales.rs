@@ -573,7 +573,7 @@ fn service(
         audience: record.category.search_aliases().to_string(),
         includes: record.includes.clone(),
         keywords: record.keywords.clone(),
-        fee: catalog.fee(record).to_string(),
+        fee: catalog.fee(record).map(str::to_string),
         period: record.period.clone(),
         members_only: record.members_only,
         state_fee: record.state_fee,
@@ -2019,13 +2019,13 @@ mod tests {
         }
     }
 
-    /// `/services` renders the schedule from the catalog: every service, with
-    /// its fee resolved and its `related` ids turned into names a reader can
-    /// follow.
+    /// Abhaya's `/services` renders its filings directory from the catalog
+    /// with no fee on any card: every matter is quoted after a consultation.
     #[test]
-    fn abhaya_publishes_flat_fees_for_common_filings_through_the_services_band() {
+    fn abhaya_lists_common_filings_without_prices() {
         let branding = &views::brand::ABHAYA_BRANDING;
         let catalog = services_catalog(branding).expect("Abhaya ships a catalog");
+        assert!(!catalog.priced, "Abhaya's catalog publishes no fees");
         let content = legal_services(branding);
         let band = content
             .bands
@@ -2033,22 +2033,20 @@ mod tests {
             .find_map(RenderedBand::services)
             .expect("the Abhaya services page renders its services band");
         assert_eq!(band.services.len(), catalog.services.len());
+        assert!(band.services.iter().all(|service| service.fee.is_none()));
 
-        let fee = |id: &str| {
+        let service = |id: &str| {
             band.services
                 .iter()
                 .find(|service| service.id == id)
                 .unwrap_or_else(|| panic!("{id} renders"))
         };
-        let o1 = fee("o1-new");
-        assert_eq!(o1.fee, "$7,200");
-        assert_eq!(o1.category, "Work visas");
-        assert_eq!(fee("aos-adult").fee, "$3,150");
-        assert_eq!(fee("eb2-niw").category, "Green cards");
-        // Immigration fees never include what USCIS or the State Department
-        // charges, so every card carries the government-fee badge.
+        assert_eq!(service("o1-new").category, "Work visas");
+        assert_eq!(service("eb2-niw").category, "Green cards");
+        // Immigration work never includes what USCIS or the State Department
+        // charges, so every card still carries the government-fee badge.
         assert!(band.services.iter().all(|service| service.state_fee));
-        assert!(fee("ead-renewal").matches("work permit"));
+        assert!(service("ead-renewal").matches("work permit"));
     }
 
     #[test]
@@ -2084,7 +2082,7 @@ mod tests {
             will.matches("family"),
             "estate work is findable by `family`"
         );
-        assert_eq!(will.fee, "$3,000");
+        assert_eq!(will.fee.as_deref(), Some("$3,000"));
         let family_plan = band
             .services
             .iter()
@@ -2095,7 +2093,7 @@ mod tests {
             .as_ref()
             .expect("estate-package is a Notation package");
         assert_eq!(quote.members.len(), 3);
-        assert_eq!(family_plan.fee, "$5,000");
+        assert_eq!(family_plan.fee.as_deref(), Some("$5,000"));
         // The retired consumer plan's discount is gone with the plan.
         assert_eq!(family_plan.plan_price, None);
     }

@@ -25,6 +25,11 @@
 //! Both is two a la carte prices on one matter; neither is a priced list with a
 //! blank in it. Both are refused here rather than on the page. A Notation
 //! package may additionally publish its lower price for a named plan.
+//!
+//! A catalog may instead declare `priced: false`: a directory of services the
+//! firm quotes after a consultation. Then the rule inverts — no service
+//! publishes any fee, so a page cannot print a price beside a list that says
+//! it has none.
 
 use std::collections::BTreeSet;
 
@@ -182,6 +187,8 @@ pub struct ServiceCopy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<ServicePackage>,
     /// What the fee is charged per — `per form`, `per contract`, `per year`.
+    /// Required in a priced catalog; absent in an unpriced one.
+    #[serde(default)]
     pub period: String,
     /// The discounted price a named plan pays for this Notation package.
     /// Validation requires it to be at least 50% below the a la carte price.
@@ -274,10 +281,10 @@ impl ServiceCopy {
         [
             ("blurb", self.blurb.as_str()),
             ("name", self.name.as_str()),
-            ("period", self.period.as_str()),
             ("item", self.item.as_str()),
         ]
         .into_iter()
+        .chain((!self.period.is_empty()).then_some(("period", self.period.as_str())))
         .chain(self.amount.as_deref().map(|amount| ("amount", amount)))
         .chain(self.includes.iter().map(|line| ("includes", line.as_str())))
         .chain(self.keywords.iter().map(|word| ("keywords", word.as_str())))
@@ -342,8 +349,14 @@ pub struct ServicesCatalog {
     /// label.
     pub categories: Vec<CategoryCopy>,
     /// What a [`FlatFee`] service costs. One figure, so a page cannot print
-    /// two different "flat fees".
-    pub flat_fee: String,
+    /// two different "flat fees". Required in a priced catalog; refused in an
+    /// unpriced one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flat_fee: Option<String>,
+    /// Whether this catalog publishes fees. `false` is a directory of services
+    /// quoted after a consultation: no service carries an amount.
+    #[serde(default = "default_priced")]
+    pub priced: bool,
     /// The services, in publication order.
     pub services: Vec<ServiceCopy>,
     /// The copy for the service start door and the client intake confirmation.
@@ -371,7 +384,20 @@ impl ServicesCatalog {
                 self.catalog_version
             ));
         }
-        check_fee("flat_fee", &self.flat_fee)?;
+        match (self.priced, self.flat_fee.as_deref()) {
+            (true, Some(flat_fee)) => check_fee("flat_fee", flat_fee)?,
+            (true, None) => {
+                return Err(format!(
+                    "{SERVICES_CATALOG_STEM}: a priced catalog publishes `flat_fee`"
+                ))
+            }
+            (false, Some(_)) => {
+                return Err(format!(
+                    "{SERVICES_CATALOG_STEM}: an unpriced catalog publishes no `flat_fee`"
+                ))
+            }
+            (false, None) => {}
+        }
         self.validate_categories()?;
         self.validate_start()?;
         self.validate_purchase()?;
@@ -518,7 +544,11 @@ impl ServicesCatalog {
                     service.item, service.id
                 ));
             }
+            if !self.priced {
+                Self::validate_unpriced(service)?;
+            }
             match (&service.flat_fee, &service.amount) {
+                _ if !self.priced => {}
                 (Some(_), Some(_)) => {
                     return Err(format!(
                         "{SERVICES_CATALOG_STEM}: `{}` publishes both a flat fee and an amount; a \
@@ -537,6 +567,13 @@ impl ServicesCatalog {
             }
             if let Some(amount) = service.amount.as_deref() {
                 check_fee(&format!("{}.amount", service.id), amount)?;
+            }
+            if self.priced && service.period.trim().is_empty() {
+                return Err(format!(
+                    "{SERVICES_CATALOG_STEM}: `{}` publishes a fee without saying what it is \
+                     charged per; set `period`",
+                    service.id
+                ));
             }
             if service.includes.is_empty() {
                 return Err(format!(
@@ -571,11 +608,34 @@ impl ServicesCatalog {
         self.services.iter().find(|service| service.id == id)
     }
 
+    /// Refuse any fee on a service in an unpriced catalog.
+    fn validate_unpriced(service: &ServiceCopy) -> Result<(), String> {
+        let published = [
+            ("amount", service.amount.is_some()),
+            ("flat_fee", service.flat_fee.is_some()),
+            ("period", !service.period.is_empty()),
+            ("plan_price", service.plan_price.is_some()),
+            ("package", service.package.is_some()),
+        ];
+        match published.iter().find(|(_, set)| *set) {
+            Some((field, _)) => Err(format!(
+                "{SERVICES_CATALOG_STEM}: `{}` sets `{field}` in an unpriced catalog, which \
+                 publishes no fees",
+                service.id
+            )),
+            None => Ok(()),
+        }
+    }
+
     /// What `service` charges: its literal amount, or the catalog's one flat
-    /// fee. Infallible for the same reason [`Self::category_label`] is.
+    /// fee. `None` only in an unpriced catalog; validation proves every
+    /// service in a priced one resolves.
     #[must_use]
-    pub fn fee<'a>(&'a self, service: &'a ServiceCopy) -> &'a str {
-        service.amount.as_deref().unwrap_or(self.flat_fee.as_str())
+    pub fn fee<'a>(&'a self, service: &'a ServiceCopy) -> Option<&'a str> {
+        service
+            .amount
+            .as_deref()
+            .or_else(|| service.flat_fee.and(self.flat_fee.as_deref()))
     }
 
     /// The included Notations for a Notation package, if `service` is one.
@@ -612,7 +672,7 @@ impl ServicesCatalog {
             &format!("{}.plan_price.amount", service.id),
             &plan_price.amount,
         )?;
-        let Some(a_la_carte_cents) = fee_cents(self.fee(service)) else {
+        let Some(a_la_carte_cents) = self.fee(service).and_then(fee_cents) else {
             return Err(format!(
                 "{SERVICES_CATALOG_STEM}: `{}` has no payable a la carte fee",
                 service.id
@@ -690,7 +750,7 @@ impl ServicesCatalog {
                     service.id
                 ));
             }
-            let Some(member_cents) = fee_cents(self.fee(member)) else {
+            let Some(member_cents) = self.fee(member).and_then(fee_cents) else {
                 return Err(format!(
                     "{SERVICES_CATALOG_STEM}: `{}.package.of` member `{id}` has no payable fee",
                     service.id
@@ -712,7 +772,7 @@ impl ServicesCatalog {
             };
             separate_cents = separate_cents.saturating_add(extra_cents);
         }
-        let Some(package_cents) = fee_cents(self.fee(service)) else {
+        let Some(package_cents) = self.fee(service).and_then(fee_cents) else {
             return Err(format!(
                 "{SERVICES_CATALOG_STEM}: `{}` has no payable package fee",
                 service.id
@@ -761,6 +821,10 @@ fn check_value(key: &str, value: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn default_priced() -> bool {
+    true
 }
 
 /// Refuse a published fee that is not a figure a reader can pay.
@@ -939,10 +1003,60 @@ services:
         // reads itself.
         let llc = catalog.get("llc-file").expect("llc-file");
         assert_eq!(llc.template.as_deref(), Some("nv__llc_formation"));
-        assert_eq!(catalog.fee(llc), "$50");
+        assert_eq!(catalog.fee(llc), Some("$50"));
         let address = catalog.get("nv-address").expect("nv-address");
-        assert_eq!(catalog.fee(address), "$350");
+        assert_eq!(catalog.fee(address), Some("$350"));
         assert!(catalog.get("nothing").is_none());
+    }
+
+    /// The fixture with every fee stripped and the catalog marked unpriced.
+    fn unpriced_fixture() -> String {
+        fixture()
+            .replace("flat_fee: $50\n", "priced: false\n")
+            .replace("    flat_fee: form\n", "")
+            .replace("    amount: $350\n", "")
+            .replace("    period: per form\n", "")
+            .replace("    period: per year\n", "")
+    }
+
+    #[test]
+    fn an_unpriced_catalog_publishes_no_fee() {
+        let catalog = ServicesCatalog::parse(&unpriced_fixture()).expect("unpriced is valid");
+        assert!(!catalog.priced);
+        assert!(catalog.flat_fee.is_none());
+        for service in &catalog.services {
+            assert_eq!(catalog.fee(service), None, "{}", service.id);
+        }
+    }
+
+    #[test]
+    fn an_unpriced_catalog_refuses_any_fee() {
+        let with_amount = unpriced_fixture().replace(
+            "    category: compliance\n",
+            "    category: compliance\n    amount: $350\n",
+        );
+        let err = ServicesCatalog::parse(&with_amount).expect_err("amount in unpriced");
+        assert!(
+            err.contains("`nv-address` sets `amount` in an unpriced catalog"),
+            "{err}"
+        );
+        let with_flat_fee =
+            unpriced_fixture().replace("priced: false\n", "priced: false\nflat_fee: $50\n");
+        let err = ServicesCatalog::parse(&with_flat_fee).expect_err("flat fee in unpriced");
+        assert!(
+            err.contains("an unpriced catalog publishes no `flat_fee`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_priced_catalog_requires_its_flat_fee() {
+        let err = ServicesCatalog::parse(&fixture().replace("flat_fee: $50\n", ""))
+            .expect_err("no flat fee");
+        assert!(
+            err.contains("a priced catalog publishes `flat_fee`"),
+            "{err}"
+        );
     }
 
     #[test]

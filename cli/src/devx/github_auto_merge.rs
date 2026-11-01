@@ -19,6 +19,20 @@
 //! The merge is pinned to the head commit it checked (`sha` on the merge call),
 //! so a push between the check and the merge fails the merge instead of
 //! landing an unchecked commit.
+//!
+//! `--await-app <seconds>` makes the caller a fallback rather than a racer
+//! (LAW-144). A Project repository's `automerge` workflow arms auto-merge as
+//! the merge-queue App, but only after the `pull_request` event queues a run,
+//! a runner boots, and an App token is minted — about ten to fifteen seconds
+//! after the pull request opens. Reading `autoMergeRequest` sooner than that
+//! sees `null` on a pull request the App is about to arm, which is how a whole
+//! fleet bump came to be armed by hand. With a window set, the verb polls
+//! until the App's arm is visible (and says who armed it), and only when the
+//! window closes unarmed does it name what the `automerge` run did for the
+//! head commit and arm as the caller.
+
+use std::future::Future;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -41,8 +55,8 @@ enum Outcome {
     Closed,
     /// A draft is how a ready pull request is held, so it is left alone.
     Draft,
-    /// Auto-merge was already armed.
-    AlreadyArmed,
+    /// Auto-merge was already armed, by the login GitHub names when it does.
+    AlreadyArmed { by: Option<String> },
     /// Auto-merge is armed and GitHub will squash-merge when the gate is green.
     Armed,
     /// The gate was already green, so the pull request was squash-merged now.
@@ -59,9 +73,35 @@ struct PullRequest {
     draft: bool,
     #[serde(default)]
     merged: bool,
-    auto_merge: Option<serde_json::Value>,
+    auto_merge: Option<AutoMergeRequest>,
     head: Ref,
     base: Ref,
+}
+
+#[derive(Debug, Deserialize)]
+struct AutoMergeRequest {
+    #[serde(default)]
+    enabled_by: Option<Login>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Login {
+    login: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowRuns {
+    #[serde(default)]
+    workflow_runs: Vec<WorkflowRun>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkflowRun {
+    #[serde(default)]
+    path: String,
+    status: String,
+    conclusion: Option<String>,
+    html_url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,18 +148,29 @@ struct GraphqlError {
 /// When GitHub refuses for any reason other than the two this verb resolves,
 /// when the base branch requires no status check, or when a required check has
 /// not passed on the head commit.
-pub(super) fn run(target: &RepositoryTarget, number: u64) -> Result<()> {
+pub(super) fn run(target: &RepositoryTarget, number: u64, await_app: u64) -> Result<()> {
     let client = GitHubClient::from_env(target)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("build tokio runtime")?;
-    let outcome = runtime.block_on(auto_merge(&client, number))?;
+    let outcome = runtime.block_on(await_then_auto_merge(
+        &client,
+        number,
+        Duration::from_secs(await_app),
+        APP_POLL_INTERVAL,
+        tokio::time::sleep,
+    ))?;
     let repository = &client.repository;
     match outcome {
         Outcome::Closed => println!("{repository}#{number} is already closed; nothing to do"),
         Outcome::Draft => println!("{repository}#{number} is a draft; left alone"),
-        Outcome::AlreadyArmed => println!("{repository}#{number} already has auto-merge armed"),
+        Outcome::AlreadyArmed { by: Some(login) } => {
+            println!("auto-merge is already armed, by {login}");
+        }
+        Outcome::AlreadyArmed { by: None } => {
+            println!("auto-merge is already armed");
+        }
         Outcome::Armed => println!("{repository}#{number}: squash auto-merge armed"),
         Outcome::Merged => {
             println!("{repository}#{number}: required checks already passed; squash-merged");
@@ -132,18 +183,122 @@ pub(super) fn run(target: &RepositoryTarget, number: u64) -> Result<()> {
     Ok(())
 }
 
-async fn auto_merge(client: &GitHubClient, number: u64) -> Result<Outcome> {
-    let pull: PullRequest = client
+/// How often `--await-app` reads the pull request back.
+const APP_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Where every Project repository's App-arming workflow lives.
+const AUTOMERGE_WORKFLOW_PATH: &str = ".github/workflows/automerge.yml";
+
+/// Give the merge-queue App `window` to arm the pull request, then arm it as
+/// the caller only if the App has not. A zero window arms straight away.
+async fn await_then_auto_merge<S, Fut>(
+    client: &GitHubClient,
+    number: u64,
+    window: Duration,
+    poll: Duration,
+    sleep: S,
+) -> Result<Outcome>
+where
+    S: Fn(Duration) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    if window.is_zero() {
+        return auto_merge(client, number).await;
+    }
+    let mut waited = Duration::ZERO;
+    let head = loop {
+        let request = fetch_pull(client, number).await?;
+        if let Some(outcome) = settled(&request) {
+            return Ok(outcome);
+        }
+        if waited >= window {
+            break request.head.sha;
+        }
+        let step = poll
+            .min(window.saturating_sub(waited))
+            .max(Duration::from_millis(1));
+        sleep(step).await;
+        waited += step;
+    };
+    // The repository, number and window come off the command line, which
+    // CodeQL treats as secret (`Commands::Secrets`); the caller already knows
+    // them, so the warning names only what the `automerge` run did.
+    let diagnosis = automerge_run_diagnosis(client, &head).await;
+    eprintln!(
+        "warning: the pull request was not armed within the --await-app window: {diagnosis}; \
+         arming as the caller (fallback)"
+    );
+    auto_merge(client, number).await
+}
+
+/// What the App-arming `automerge` run did for `head`, worded for the operator
+/// about to arm by hand. A failed lookup is reported, never fatal: the
+/// fallback arm still goes ahead.
+async fn automerge_run_diagnosis(client: &GitHubClient, head: &str) -> String {
+    let runs: WorkflowRuns = match client
+        .get_json(&client.repo_path(&format!(
+            "/actions/runs?head_sha={head}&event=pull_request&per_page=100"
+        )))
+        .await
+    {
+        Ok(runs) => runs,
+        Err(_) => return "the `automerge` run lookup failed".to_string(),
+    };
+    describe_automerge_run(
+        runs.workflow_runs
+            .iter()
+            .find(|run| run.path.ends_with(AUTOMERGE_WORKFLOW_PATH)),
+    )
+}
+
+fn describe_automerge_run(run: Option<&WorkflowRun>) -> String {
+    let Some(run) = run else {
+        return format!(
+            "no `automerge` run exists for the head commit, so `{AUTOMERGE_WORKFLOW_PATH}` never \
+             triggered; check it is on the base branch and that the pull request was opened by \
+             an identity whose events start workflows"
+        );
+    };
+    let url = &run.html_url;
+    if run.status != "completed" {
+        return format!("the `automerge` run {url} is still {}", run.status);
+    }
+    match run.conclusion.as_deref() {
+        Some("success") => format!(
+            "the `automerge` run {url} succeeded without arming; its log says whether the \
+             merge-queue App credentials are absent from this repository"
+        ),
+        Some(conclusion) => format!("the `automerge` run {url} concluded {conclusion}"),
+        None => format!("the `automerge` run {url} completed without a conclusion"),
+    }
+}
+
+async fn fetch_pull(client: &GitHubClient, number: u64) -> Result<PullRequest> {
+    client
         .get_json(&client.repo_path(&format!("/pulls/{number}")))
-        .await?;
+        .await
+}
+
+/// The outcome for a pull request with nothing left to arm, or `None` when it
+/// is open, ready, and unarmed.
+fn settled(pull: &PullRequest) -> Option<Outcome> {
     if pull.merged || pull.state != "open" {
-        return Ok(Outcome::Closed);
+        return Some(Outcome::Closed);
     }
     if pull.draft {
-        return Ok(Outcome::Draft);
+        return Some(Outcome::Draft);
     }
-    if pull.auto_merge.is_some() {
-        return Ok(Outcome::AlreadyArmed);
+    pull.auto_merge
+        .as_ref()
+        .map(|request| Outcome::AlreadyArmed {
+            by: request.enabled_by.as_ref().map(|login| login.login.clone()),
+        })
+}
+
+async fn auto_merge(client: &GitHubClient, number: u64) -> Result<Outcome> {
+    let pull = fetch_pull(client, number).await?;
+    if let Some(outcome) = settled(&pull) {
+        return Ok(outcome);
     }
 
     let errors = enable_auto_merge(client, &pull.node_id).await?;
@@ -456,7 +611,7 @@ mod tests {
             (serde_json::json!({ "merged": true }), Outcome::Closed),
             (
                 serde_json::json!({ "auto_merge": { "merge_method": "squash" } }),
-                Outcome::AlreadyArmed,
+                Outcome::AlreadyArmed { by: None },
             ),
         ] {
             let server = MockServer::start().await;
@@ -491,5 +646,143 @@ mod tests {
         let client = GitHubClient::for_test(&server.uri(), REPO);
         let error = auto_merge(&client, 7).await.unwrap_err().to_string();
         assert!(error.contains("Auto merge is not allowed"), "{error}");
+    }
+
+    /// The fleet-bump case (LAW-144): the App arms a few polls after the pull
+    /// request opens. The verb waits for it, names the App, and never arms as
+    /// the caller.
+    #[tokio::test]
+    async fn awaiting_the_app_reports_its_arm_and_never_arms_as_the_caller() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{REPO}/pulls/7")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pull(&serde_json::json!({}))))
+            .up_to_n_times(2)
+            .mount(&server)
+            .await;
+        mount_pull(
+            &server,
+            pull(&serde_json::json!({
+                "auto_merge": {
+                    "merge_method": "squash",
+                    "enabled_by": { "login": "neon-law-merge-queue[bot]" },
+                },
+            })),
+        )
+        .await;
+        let client = GitHubClient::for_test(&server.uri(), REPO);
+        let outcome = await_then_auto_merge(
+            &client,
+            7,
+            Duration::from_secs(60),
+            Duration::from_secs(5),
+            |_| async {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome,
+            Outcome::AlreadyArmed {
+                by: Some("neon-law-merge-queue[bot]".into())
+            }
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 3, "two unarmed reads, then the armed one");
+        assert!(requests
+            .iter()
+            .all(|request| request.method == wiremock::http::Method::GET));
+    }
+
+    /// When the window closes unarmed, the verb looks at the `automerge` run
+    /// for the head commit and then arms as the caller: the manual step is the
+    /// fallback, taken loudly, not the default.
+    #[tokio::test]
+    async fn an_app_that_never_arms_falls_back_to_the_caller_after_the_window() {
+        let server = MockServer::start().await;
+        mount_pull(&server, pull(&serde_json::json!({}))).await;
+        mount_graphql(&server, &[]).await;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{REPO}/actions/runs")))
+            .and(query_param("head_sha", HEAD))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "workflow_runs": [],
+            })))
+            .mount(&server)
+            .await;
+        let client = GitHubClient::for_test(&server.uri(), REPO);
+        let slept = std::sync::Mutex::new(Vec::new());
+        let outcome = await_then_auto_merge(
+            &client,
+            7,
+            Duration::from_secs(12),
+            Duration::from_secs(5),
+            |step| {
+                slept.lock().unwrap().push(step);
+                async {}
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, Outcome::Armed);
+        assert_eq!(
+            *slept.lock().unwrap(),
+            [5, 5, 2].map(Duration::from_secs),
+            "the window is honoured exactly, never overshot"
+        );
+        let requests = server.received_requests().await.unwrap();
+        let paths: Vec<_> = requests.iter().map(|r| r.url.path().to_string()).collect();
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|p| p.ends_with("/actions/runs"))
+                .count(),
+            1,
+            "{paths:?}"
+        );
+        assert_eq!(
+            paths.iter().filter(|p| p.as_str() == "/graphql").count(),
+            1,
+            "{paths:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_zero_window_arms_straight_away_without_polling() {
+        let server = MockServer::start().await;
+        mount_pull(&server, pull(&serde_json::json!({}))).await;
+        mount_graphql(&server, &[]).await;
+        let client = GitHubClient::for_test(&server.uri(), REPO);
+        let outcome = await_then_auto_merge(
+            &client,
+            7,
+            Duration::ZERO,
+            Duration::from_secs(5),
+            |_| async { panic!("a zero window never sleeps") },
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, Outcome::Armed);
+    }
+
+    #[test]
+    fn the_fallback_names_what_the_automerge_run_did() {
+        let run = |status: &str, conclusion: Option<&str>| WorkflowRun {
+            path: AUTOMERGE_WORKFLOW_PATH.into(),
+            status: status.into(),
+            conclusion: conclusion.map(str::to_string),
+            html_url: "https://example.test/run/1".into(),
+        };
+        assert!(describe_automerge_run(None).contains("never triggered"));
+        assert!(
+            describe_automerge_run(Some(&run("in_progress", None))).contains("still in_progress")
+        );
+        assert!(
+            describe_automerge_run(Some(&run("completed", Some("success"))))
+                .contains("credentials are absent")
+        );
+        assert!(
+            describe_automerge_run(Some(&run("completed", Some("failure"))))
+                .contains("concluded failure")
+        );
     }
 }

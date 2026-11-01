@@ -950,7 +950,12 @@ fn dispatch_with_dns_provider(
         crate::Command::Ops(crate::OpsCmd::Github(crate::GithubCmd::AutoMerge {
             repository,
             pull_request,
-        })) => github_auto_merge::run(&RepositoryTarget::resolve(repository)?, pull_request),
+            await_app,
+        })) => github_auto_merge::run(
+            &RepositoryTarget::resolve(repository)?,
+            pull_request,
+            await_app,
+        ),
         crate::Command::Ops(crate::OpsCmd::Github(crate::GithubCmd::CheckSignatures {
             base,
             head,

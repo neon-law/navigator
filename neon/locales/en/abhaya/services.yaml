@@ -212,12 +212,11 @@ bands:
                 have a licensed attorney review it before submission.
   - kind: services
     anchor: prices
-    overline: Prices
-    heading: Flat fees for common filings
+    overline: Filings
+    heading: Common filings we handle
     description: >-
-      Our fee for each common filing, agreed in writing before work begins.
-      Government filing fees are separate. Other matters are quoted after a
-      consultation.
+      Every matter is quoted after a consultation, and the fee is agreed in
+      writing before work begins. Government filing fees are separate.
     search_label: Search filings
     search_placeholder: O-1, H-1B, green card, work permit
     submit_label: Search

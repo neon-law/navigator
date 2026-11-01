@@ -6314,7 +6314,7 @@ mod tests {
                         blurb: "A lawyer files the papers.".to_string(),
                         category: "Start a business".to_string(),
                         includes: vec!["Prepare the papers".to_string()],
-                        fee: "$50".to_string(),
+                        fee: Some("$50".to_string()),
                         period: "per form".to_string(),
                         ..webapp::services_search::Service::default()
                     }],

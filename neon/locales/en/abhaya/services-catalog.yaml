@@ -1,19 +1,13 @@
-# Abhaya Immigration's flat fees for common filings, as structured records.
+# Abhaya Immigration's directory of common filings, as structured records.
 #
 # The same typed catalog Neon publishes (`views::locales::services`), so the
 # `/services` page renders these through the shared services band: one search,
-# one fee card, one "government fees cost extra" badge, and the same gate
-# (Y002) refusing a malformed fee. Fees, item codes, service names, and
-# `includes` scope lines are attorney-set.
-#
-# Fees are set at 90% of the 2026-10 market rate for each filing and rounded to
-# whole dollars. Government filing fees are always separate (`state_fee: true`).
+# one card per filing, and one "government fees cost extra" badge. Abhaya
+# publishes no prices (`priced: false`): every matter is quoted after a
+# consultation, and the catalog gate (Y002) refuses any fee on a row. Item
+# codes, service names, and `includes` scope lines are attorney-set.
 catalog_version: 2
-
-# Required by the catalog contract. No Abhaya service charges the shared flat
-# fee; every row below publishes its own `amount`.
-flat_fee: "$450"
-
+priced: false
 categories:
   - value: work_visas
     label: Work visas
@@ -30,8 +24,6 @@ services:
       A new O-1 petition for a person with extraordinary ability or achievement
       in science, business, education, arts, or athletics.
     category: work_visas
-    amount: "$7,200"
-    period: per petition
     state_fee: true
     includes:
       - Review your achievements against the O-1 criteria
@@ -51,8 +43,6 @@ services:
     blurb: >-
       Extend O-1 status with the same employer or agent.
     category: work_visas
-    amount: "$2,700"
-    period: per petition
     state_fee: true
     includes:
       - Prepare the extension petition and updated evidence
@@ -69,8 +59,6 @@ services:
     blurb: >-
       Register an employee for the annual H-1B cap selection.
     category: work_visas
-    amount: "$450"
-    period: per registration
     state_fee: true
     includes:
       - Confirm the role and degree fit the specialty-occupation rules
@@ -88,8 +76,6 @@ services:
     blurb: >-
       A cap or cap-exempt H-1B petition for a specialty-occupation role.
     category: work_visas
-    amount: "$3,150"
-    period: per petition
     state_fee: true
     includes:
       - Review the position, wage level, and the worker's qualifications
@@ -111,8 +97,6 @@ services:
       Extend H-1B status, move to a new employer, or amend a petition after a
       material change.
     category: work_visas
-    amount: "$2,700"
-    period: per petition
     state_fee: true
     includes:
       - Prepare the labor condition application and the petition
@@ -132,8 +116,6 @@ services:
       A new L-1 petition, including a new U.S. office, for an executive,
       manager, or specialized-knowledge employee.
     category: work_visas
-    amount: "$7,200"
-    period: per petition
     state_fee: true
     includes:
       - Review the relationship between the companies and the role
@@ -153,8 +135,6 @@ services:
     blurb: >-
       Extend L-1 status with the same company.
     category: work_visas
-    amount: "$2,700"
-    period: per petition
     state_fee: true
     includes:
       - Prepare the extension petition and updated evidence
@@ -172,8 +152,6 @@ services:
       A new TN case for an eligible Canadian or Mexican professional, filed
       with USCIS or presented at the border or a consulate.
     category: work_visas
-    amount: "$2,700"
-    period: per case
     state_fee: true
     includes:
       - Confirm the profession qualifies
@@ -193,8 +171,6 @@ services:
     blurb: >-
       Extend TN status, move to a new employer, or amend after a change.
     category: work_visas
-    amount: "$2,250"
-    period: per case
     state_fee: true
     includes:
       - Prepare the employer letter and petition
@@ -212,8 +188,6 @@ services:
       A new E-3 case for an eligible Australian citizen, filed with USCIS or
       at a consulate.
     category: work_visas
-    amount: "$3,150"
-    period: per case
     state_fee: true
     includes:
       - Review the role and the worker's qualifications
@@ -231,8 +205,6 @@ services:
     blurb: >-
       Extend E-3 status, move to a new employer, or amend after a change.
     category: work_visas
-    amount: "$2,700"
-    period: per case
     state_fee: true
     includes:
       - Prepare the labor condition application and the petition
@@ -250,8 +222,6 @@ services:
       Request a waiver of the two-year home-residence requirement through a
       no-objection statement from your home country.
     category: work_visas
-    amount: "$6,750"
-    period: per case
     state_fee: true
     includes:
       - Confirm the no-objection route fits your exchange program
@@ -269,8 +239,6 @@ services:
       An EB-1A extraordinary ability, EB-1B outstanding researcher, or EB-1C
       multinational manager petition.
     category: green_cards
-    amount: "$9,000"
-    period: per petition
     state_fee: true
     includes:
       - Review your record against the EB-1 criteria
@@ -292,8 +260,6 @@ services:
       A self-petition asking USCIS to waive the job offer and labor
       certification in the national interest.
     category: green_cards
-    amount: "$9,000"
-    period: per petition
     state_fee: true
     includes:
       - Review your eligibility and proposed endeavor
@@ -314,8 +280,6 @@ services:
       The Department of Labor process an employer completes before most EB-2
       and EB-3 petitions.
     category: green_cards
-    amount: "$7,200"
-    period: per case
     state_fee: true
     includes:
       - Prevailing wage request and recruitment plan
@@ -336,8 +300,6 @@ services:
       The employer's immigrant petition once the labor certification is
       approved.
     category: green_cards
-    amount: "$3,600"
-    period: per petition
     state_fee: true
     includes:
       - Prepare the petition with the approved labor certification
@@ -354,11 +316,9 @@ services:
     item: "2221"
     name: EB-5 investor petition
     blurb: >-
-      The immigrant investor petition. The fee starts here and depends on the
-      investment structure.
+      The immigrant investor petition. The scope depends on the investment
+      structure.
     category: green_cards
-    amount: "$18,900"
-    period: starting fee
     state_fee: true
     includes:
       - Review the investment and the source of funds
@@ -376,8 +336,6 @@ services:
       Adjustment of status for an adult, filed with a work permit and travel
       document application.
     category: green_cards
-    amount: "$3,150"
-    period: per adult
     state_fee: true
     includes:
       - Prepare the I-485, I-765, and I-131
@@ -399,8 +357,6 @@ services:
       Adjustment of status for a child under 14, filed with a travel document
       application and, where needed, a work permit.
     category: green_cards
-    amount: "$1,800"
-    period: per child
     state_fee: true
     includes:
       - Prepare the I-485 and I-131, and the I-765 where needed
@@ -419,8 +375,6 @@ services:
       Immigrant visa processing through the Department of State for a person
       outside the United States.
     category: green_cards
-    amount: "$2,250"
-    period: per applicant
     state_fee: true
     includes:
       - Prepare the DS-260 and civil documents
@@ -440,8 +394,6 @@ services:
       Renew an employment authorization document based on a pending green card
       application.
     category: permits_and_travel
-    amount: "$1,350"
-    period: per application
     state_fee: true
     includes:
       - Prepare the I-765
@@ -459,8 +411,6 @@ services:
       Renew the travel document that lets you leave and return while a green
       card application is pending.
     category: permits_and_travel
-    amount: "$1,350"
-    period: per application
     state_fee: true
     includes:
       - Prepare the I-131
@@ -478,8 +428,6 @@ services:
     blurb: >-
       An initial or extended work permit for an F-1 student on STEM OPT.
     category: permits_and_travel
-    amount: "$540"
-    period: per application
     state_fee: true
     includes:
       - Prepare the I-765
@@ -497,8 +445,6 @@ services:
       Extend or change status for a spouse or child alongside a principal's
       petition.
     category: permits_and_travel
-    amount: "$630"
-    period: per dependent
     state_fee: true
     includes:
       - Prepare the I-539

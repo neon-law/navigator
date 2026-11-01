@@ -102,7 +102,8 @@ pub struct Service {
     pub includes: Vec<String>,
     pub keywords: Vec<String>,
     /// The a la carte fee: the service's own amount, or the catalog's flat-fee lookup.
-    pub fee: String,
+    /// `None` in an unpriced catalog, which renders no fee row.
+    pub fee: Option<String>,
     /// What the fee is charged per.
     pub period: String,
     /// Whether a plan is required.
@@ -343,10 +344,12 @@ pub fn ServicesSearch(band: ServicesBand, query: String) -> Element {
                                 h3 { class: "fm-card__title", "{service.name}" }
                                 p { class: "fm-services__category", "{service.category}" }
                                 div { class: "fm-services__pricing",
-                                    p { class: "fm-services__price-choice",
-                                        span { class: "fm-services__fee-label", "{band.fee_label}" }
-                                        strong { class: "fm-services__fee-amount", "{service.fee}" }
-                                        span { class: "fm-services__fee-period", "{service.period}" }
+                                    if let Some(fee) = service.fee.as_ref() {
+                                        p { class: "fm-services__price-choice",
+                                            span { class: "fm-services__fee-label", "{band.fee_label}" }
+                                            strong { class: "fm-services__fee-amount", "{fee}" }
+                                            span { class: "fm-services__fee-period", "{service.period}" }
+                                        }
                                     }
                                     if let Some(plan_price) = service.plan_price.as_ref() {
                                         p { class: "fm-services__price-choice fm-services__price-choice--plan",
@@ -421,7 +424,7 @@ mod tests {
             audience: String::new(),
             includes: vec!["A scope line".to_string()],
             keywords: Vec::new(),
-            fee: "$50".to_string(),
+            fee: Some("$50".to_string()),
             period: "per form".to_string(),
             members_only: false,
             state_fee: false,
