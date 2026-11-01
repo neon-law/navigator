@@ -85,6 +85,27 @@ async fn history_is_scoped_to_the_owner() {
 }
 
 #[tokio::test]
+async fn history_retains_the_latest_window_in_chronological_order() {
+    let db = mem().await;
+    let owner = Uuid::now_v7();
+    let other = Uuid::now_v7();
+    for index in 0..205 {
+        assistant_turns::append(&db, turn(owner, TurnKind::Prompt, &index.to_string()))
+            .await
+            .unwrap();
+    }
+    assistant_turns::append(&db, turn(other, TurnKind::Prompt, "other owner"))
+        .await
+        .unwrap();
+
+    let history = assistant_turns::history(&db, owner).await.unwrap();
+    let contents: Vec<_> = history.iter().map(|turn| turn.content.clone()).collect();
+    let expected: Vec<_> = (5..205).map(|index| index.to_string()).collect();
+    assert_eq!(contents, expected);
+    assert!(history.iter().all(|turn| turn.person_id == owner));
+}
+
+#[tokio::test]
 async fn all_four_kinds_round_trip_with_tool_fields_and_token_counts() {
     let db = mem().await;
     let who = Uuid::now_v7();
@@ -183,7 +204,8 @@ async fn the_schema_refuses_a_kind_the_glossary_does_not_define() {
     let result = db
         .query("CREATE assistant_turn SET person_id = $person_id, kind = 'nonsense', content = ''")
         .bind(("person_id", store::surreal::record_id("person", who)))
-        .await;
+        .await
+        .and_then(|mut response| response.take::<surrealdb::types::Value>(0));
 
     assert!(result.is_err(), "the schema must refuse an undefined kind");
 }

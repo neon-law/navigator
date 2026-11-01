@@ -944,10 +944,10 @@
 {"file":"store/src/assistant_turns.rs","line":185,"function":"append","operation":"query","sql_operations":["SELECT","CREATE"],"tables":[],"transaction":false}
 {"file":"store/src/assistant_turns.rs","line":219,"function":"history","operation":"bind","sql_operations":[],"tables":["person"],"transaction":false}
 {"file":"store/src/assistant_turns.rs","line":219,"function":"history","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
-{"file":"store/src/assistant_turns.rs","line":241,"function":"purge","operation":"bind","sql_operations":[],"tables":["person"],"transaction":false}
-{"file":"store/src/assistant_turns.rs","line":241,"function":"purge","operation":"query","sql_operations":["DELETE"],"tables":[],"transaction":false}
-{"file":"store/src/assistant_turns.rs","line":402,"function":"a_row_with_an_unknown_kind_is_skipped","operation":"bind","sql_operations":[],"tables":["person"],"transaction":false}
-{"file":"store/src/assistant_turns.rs","line":402,"function":"a_row_with_an_unknown_kind_is_skipped","operation":"query","sql_operations":["CREATE"],"tables":["assistant_turn"],"transaction":false}
+{"file":"store/src/assistant_turns.rs","line":243,"function":"purge","operation":"bind","sql_operations":[],"tables":["person"],"transaction":false}
+{"file":"store/src/assistant_turns.rs","line":243,"function":"purge","operation":"query","sql_operations":["DELETE"],"tables":[],"transaction":false}
+{"file":"store/src/assistant_turns.rs","line":404,"function":"a_row_with_an_unknown_kind_is_skipped","operation":"bind","sql_operations":[],"tables":["person"],"transaction":false}
+{"file":"store/src/assistant_turns.rs","line":404,"function":"a_row_with_an_unknown_kind_is_skipped","operation":"query","sql_operations":["CREATE"],"tables":["assistant_turn"],"transaction":false}
 {"file":"store/src/attestations.rs","line":152,"function":"by_notation","operation":"bind","sql_operations":[],"tables":["attestation","notation"],"transaction":false}
 {"file":"store/src/attestations.rs","line":152,"function":"by_notation","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
 {"file":"store/src/attestations.rs","line":179,"function":"record","operation":"bind","sql_operations":[],"tables":["attestation"],"transaction":false}

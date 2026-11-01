@@ -200,7 +200,7 @@ pub async fn append(db: &SurrealDb, turn: NewTurn) -> Result<AssistantTurn, Assi
     one(response)?.ok_or(AssistantTurnError::WriteReturnedNothing)
 }
 
-/// A subscriber's chat in chronological order.
+/// The most recent turns in a subscriber's chat, in chronological order.
 ///
 /// # Ownership
 ///
@@ -219,12 +219,14 @@ pub async fn history(
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
-             WHERE person_id = $person_id ORDER BY id ASC LIMIT $limit"
+             WHERE person_id = $person_id ORDER BY id DESC LIMIT $limit"
         ))
         .bind(("person_id", record_id(PERSON_TABLE, person_id)))
         .bind(("limit", HISTORY_LIMIT))
         .await?;
-    many(response)
+    let mut turns = many(response)?;
+    turns.reverse();
+    Ok(turns)
 }
 
 /// The most turns one `history` read returns — the transcript a session
