@@ -214,7 +214,9 @@ where
         if waited >= window {
             break request.head.sha;
         }
-        let step = poll.min(window.saturating_sub(waited)).max(Duration::from_millis(1));
+        let step = poll
+            .min(window.saturating_sub(waited))
+            .max(Duration::from_millis(1));
         sleep(step).await;
         waited += step;
     };
