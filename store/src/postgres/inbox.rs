@@ -235,8 +235,10 @@ pub(crate) async fn ingest_message_on(
     author_person_id: Option<Uuid>,
     inbound: &IngestInbound<'_>,
 ) -> Result<IngestedInbound, InboxError> {
-    let channel_supported = matches!(inbound.channel, channel::EMAIL | channel::SMS)
-        || inbox::is_social_channel(inbound.channel);
+    let channel_supported = matches!(
+        inbound.channel,
+        channel::EMAIL | channel::SMS | channel::SCRAPER
+    ) || inbox::is_social_channel(inbound.channel);
     if !channel_supported
         || !matches!(
             inbound.interaction_type.unwrap_or("message"),
@@ -290,7 +292,10 @@ pub(crate) async fn ingest_message_on(
             delivery_state: delivery::RECEIVED,
             purpose: purpose::MATTER,
             visibility: inbound.visibility,
-            attachment_asset_id: inbound.attachment_asset_id,
+            attachment_asset_id: inbound
+                .attachments
+                .first()
+                .map(|attachment| attachment.asset_id),
             raw_storage_key: inbound.raw_storage_key,
             occurred_at: inbound.occurred_at,
         },
@@ -921,6 +926,7 @@ pub(crate) async fn open_sms_conversation_on(
     }
     let thread = IngestInbound {
         firm_id,
+        project_id: None,
         brand_key,
         interaction_type: Some("message"),
         provider_post_id: None,
@@ -939,7 +945,7 @@ pub(crate) async fn open_sms_conversation_on(
         matter_consent: true,
         promotional_opt_in: false,
         email_conversation_id: None,
-        attachment_asset_id: None,
+        attachments: Vec::new(),
         occurred_at: &Utc::now().to_rfc3339(),
         raw_storage_key: None,
     };

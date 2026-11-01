@@ -135,6 +135,7 @@ async fn build_app(db: SurrealDb, person_id: Uuid) -> Fixture {
     let state = portal::test_support::app_state(db).await;
     let api_state = ApiState {
         surreal: state.surreal.clone(),
+        canonical_base_url: None,
         email: state.email.clone(),
         bootstrap_owner_email: state.bootstrap_owner_email.clone(),
         bootstrap_company: "Synthetic Firm".into(),
@@ -478,6 +479,7 @@ async fn run_lifecycle() {
     let project_id = project.id;
     assert_email_lifecycle(&fixture, &pg, project_id).await;
     assert_linkedin_lifecycle(&fixture).await;
+    assert_interrupted_import_recovers_attachments(&fixture, project.firm_id.unwrap()).await;
 }
 
 /// The email walk (AC3, AC4, AC6, AC7, AC8): first import attributed at
@@ -540,6 +542,16 @@ async fn assert_email_lifecycle(
         .await
         .expect("fetch the filed attachment");
     assert_eq!(fetched, b"synthetic pdf bytes".as_slice());
+    let message_id: Uuid = first["imported"][0]["message_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let project = store::projects::find_by_id(&fixture.surreal, project_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_pg_process_reads(fixture, project.firm_id.unwrap(), message_id).await;
 
     // Replay: the same payload reports the existing ids and dedups (AC3).
     let (status, second) = post_json(
@@ -550,6 +562,11 @@ async fn assert_email_lifecycle(
     .await;
     assert_eq!(status, 201, "{second}");
     assert_eq!(second["imported"][0]["deduped"], true);
+    assert_eq!(second["archived_key"], first["archived_key"]);
+    assert_eq!(
+        second["imported"][0]["attachments"],
+        first["imported"][0]["attachments"]
+    );
     assert_eq!(
         second["imported"][0]["message_id"],
         first["imported"][0]["message_id"]
@@ -564,6 +581,89 @@ async fn assert_email_lifecycle(
     .await;
     assert_eq!(status, 201, "{sent}");
     assert_eq!(sent["imported"][0]["direction"], "outbound");
+}
+
+async fn assert_pg_process_reads(fixture: &Fixture, firm_id: Uuid, message_id: Uuid) {
+    let actor = fixture.lawyer_session.person_id.unwrap();
+    let state = store::inbox::process_state(&fixture.surreal, message_id)
+        .await
+        .unwrap();
+    let links = store::inbox::message_assets(&fixture.surreal, firm_id, message_id)
+        .await
+        .unwrap();
+    let pending = store::inbox::unprocessed_inbox(&fixture.surreal, actor)
+        .await
+        .unwrap();
+    assert!(
+        state.is_some() && links.len() == 1 && pending.iter().any(|row| row.id == message_id),
+        "PostgreSQL authority must serve process state, attachments, and the backlog: {:?}",
+        (state.is_some(), links.len(), pending.len())
+    );
+    let at = chrono::Utc::now();
+    store::inbox::mark_processed(&fixture.surreal, message_id, store::inbox::route::NEF, at)
+        .await
+        .unwrap();
+    let state = store::inbox::process_state(&fixture.surreal, message_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.route.as_deref(), Some(store::inbox::route::NEF));
+    assert_eq!(state.processed_at, Some(at));
+    let pending = store::inbox::unprocessed_inbox(&fixture.surreal, actor)
+        .await
+        .unwrap();
+    assert!(
+        !pending.iter().any(|row| row.id == message_id),
+        "processing removes the Message from the backlog"
+    );
+}
+
+async fn assert_interrupted_import_recovers_attachments(fixture: &Fixture, firm_id: Uuid) {
+    let raw = String::from_utf8(INBOUND_EML.to_vec()).unwrap().replace(
+        "notice-1@opposing.example",
+        "interrupted-1@opposing.example",
+    );
+    let adapter = store::inbox_import::source_adapter("email").unwrap();
+    let mut parsed = adapter.parse(MAILBOX, raw.as_bytes()).unwrap();
+    fixture
+        .storage
+        .put("mail/interrupted.eml", raw.as_bytes(), "message/rfc822")
+        .await
+        .unwrap();
+    parsed[0].raw_storage_key = Some("mail/interrupted.eml".into());
+    let input = store::inbox_import::import_message_to_ingest(&parsed[0], firm_id, MAILBOX);
+    let seeded = store::inbox::ingest_imported("inbound", None, &input)
+        .await
+        .unwrap();
+    // This committed Message has no filed attachments, as after an interruption.
+    let (status, response) = post_json(
+        &fixture.app,
+        Some(&fixture.lawyer_session),
+        email_body(raw.as_bytes(), &json!({"project": "alpha-matter"})),
+    )
+    .await;
+    assert_eq!(status, 201, "{response}");
+    assert_eq!(
+        response["imported"][0]["message_id"],
+        seeded.message_id.to_string()
+    );
+    assert_eq!(response["imported"][0]["deduped"], true);
+    assert_eq!(
+        response["imported"][0]["attachments"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "a deduped Message must not suppress recovery of unfiled attachments"
+    );
+    let links = store::inbox::message_assets(&fixture.surreal, firm_id, seeded.message_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        links.len(),
+        1,
+        "the recovered attachment must be linked to its Message"
+    );
 }
 
 /// The `LinkedIn` walk (AC3, AC9): one request imports both directions

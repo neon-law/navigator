@@ -234,7 +234,7 @@ impl ImportSource for EmailAdapter {
         });
         let provider_thread_ref = message
             .in_reply_to()
-            .as_text()
+            .and_then(|ids| ids.last())
             .map(str::trim)
             .filter(|reply_to| !reply_to.is_empty())
             .map(str::to_string);
@@ -243,7 +243,7 @@ impl ImportSource for EmailAdapter {
 
         let occurred_at = message
             .date()
-            .map(rfc3339_from_mail_date)
+            .map(|date| rfc3339_from_mail_date(&date))
             .filter(|stamp| !stamp.is_empty())
             .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
@@ -290,8 +290,6 @@ fn email_author(message: &mail_parser::Message<'_>) -> Option<(String, Option<St
 
 /// Every attachment part of a parsed email, in header order.
 fn email_attachments(message: &mail_parser::Message<'_>) -> Vec<ImportAttachment> {
-    use mail_parser::MimeHeaders as _;
-
     message
         .attachments()
         .map(|part| {
@@ -300,15 +298,15 @@ fn email_attachments(message: &mail_parser::Message<'_>) -> Vec<ImportAttachment
                 |mime| {
                     format!(
                         "{}/{}",
-                        mime.c_type,
-                        mime.c_subtype.as_deref().unwrap_or("octet-stream")
+                        mime.ctype(),
+                        mime.subtype().unwrap_or("octet-stream")
                     )
                 },
             );
             ImportAttachment {
                 filename: part.attachment_name().unwrap_or("attachment").to_string(),
                 content_type,
-                bytes: part.contents().to_vec(),
+                bytes: part.decoded().into_owned(),
             }
         })
         .collect()
@@ -568,6 +566,7 @@ pub fn import_message_to_ingest<'a>(
 ) -> inbox::IngestInbound<'a> {
     inbox::IngestInbound {
         firm_id,
+        project_id: None,
         brand_key: None,
         interaction_type: Some("message"),
         provider_post_id: None,
@@ -590,7 +589,7 @@ pub fn import_message_to_ingest<'a>(
         matter_consent: false,
         promotional_opt_in: false,
         email_conversation_id: None,
-        attachment_asset_id: None,
+        attachments: Vec::new(),
         occurred_at: &message.occurred_at,
         raw_storage_key: message.raw_storage_key.as_deref(),
     }
@@ -601,6 +600,15 @@ mod tests {
     use super::*;
 
     const MAILBOX: &str = "nick@neonlaw.com";
+
+    #[test]
+    fn undated_email_does_not_gain_the_import_time() {
+        let raw = b"From: sender@example.test\r\nTo: nick@neonlaw.com\r\nSubject: Historical mail\r\n\r\nA message without its date.";
+        assert!(
+            EmailAdapter.parse(MAILBOX, raw).is_err(),
+            "an absent Date header cannot become the time of import"
+        );
+    }
 
     #[test]
     fn email_from_counterparty_is_inbound_with_message_id_identity() {

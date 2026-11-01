@@ -272,7 +272,12 @@ mod tests {
         // never sends a dry-run request.
         assert!(body.get("dry_run").is_none());
 
-        let unattributed = request_body("linkedin", "https://linkedin.com/in/example-lawyer", None, b"");
+        let unattributed = request_body(
+            "linkedin",
+            "https://linkedin.com/in/example-lawyer",
+            None,
+            b"",
+        );
         assert_eq!(unattributed["project"], serde_json::Value::Null);
     }
 

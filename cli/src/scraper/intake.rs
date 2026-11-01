@@ -267,6 +267,7 @@ impl InboxIntake for StoreInboxIntake {
         let ingested = store::inbox::ingest_inbound(
             self.db.as_ref(),
             &store::inbox::IngestInbound {
+                raw_storage_key: None,
                 // No project attribution at ingest time: like support-app
                 // intake, the conversation stays on the Firm until triage
                 // assigns it to the docket task's Project.

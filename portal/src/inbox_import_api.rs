@@ -445,6 +445,7 @@ async fn file_import_attachment(
         transcript_quality: None,
         signing: None,
         notarization: Vec::new(),
+        evidence: None,
     };
     let provenance = store::documents::MailProvenance {
         message_id: &message_id_str,

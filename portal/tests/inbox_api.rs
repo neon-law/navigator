@@ -89,6 +89,7 @@ async fn seed_message(
     let ingested = store::inbox::ingest_inbound(
         db,
         &store::inbox::IngestInbound {
+            raw_storage_key: None,
             project_id: None,
             firm_id,
             brand_key: None,

@@ -4915,6 +4915,7 @@ async fn ingest_provider_message_door(
     let ingested = store::inbox::ingest_inbound(
         &state.surreal,
         &store::inbox::IngestInbound {
+            raw_storage_key: None,
             firm_id,
             project_id: Some(id),
             brand_key: None,

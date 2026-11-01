@@ -59,10 +59,25 @@ fn finish(result: Result<()>) -> ExitCode {
 async fn run_inner(action: InboxAction) -> Result<()> {
     match action {
         InboxAction::Import(crate::inbox_import::InboxCmd::Import {
-            source, mailbox, file, dir, project, dry_run, host,
-        }) => crate::inbox_import::import(crate::inbox_import::NewInboxImport {
-            source, mailbox, files: file, dir, project, dry_run, host: host.host,
-        }).await,
+            source,
+            mailbox,
+            file,
+            dir,
+            project,
+            dry_run,
+            host,
+        }) => {
+            crate::inbox_import::import(crate::inbox_import::NewInboxImport {
+                source,
+                mailbox,
+                files: file,
+                dir,
+                project,
+                dry_run,
+                host: host.host,
+            })
+            .await
+        }
         InboxAction::List { host } => list(host.as_deref()).await,
         InboxAction::Process {
             message,

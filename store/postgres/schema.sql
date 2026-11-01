@@ -3464,6 +3464,12 @@ CREATE INDEX document_upload_session_expiry ON document_upload_session (expires_
 -- before categories existed read back without one.
 ALTER TABLE project_deadlines ADD COLUMN category TEXT CHECK (category IN ('court', 'hearing', 'discovery', 'internal'));
 
+-- Migration: 20261101110000_linkedin_channel_and_raw_storage.sql
+-- Imported direct messages and scraper notices share the Inbox channel vocabulary.
+ALTER TABLE inbox_conversation DROP CONSTRAINT IF EXISTS inbox_conversation_channel_check;
+ALTER TABLE inbox_conversation ADD CONSTRAINT inbox_conversation_channel_check CHECK (channel IN ('email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'linkedin', 'scraper'));
+ALTER TABLE message ADD COLUMN raw_storage_key TEXT;
+
 -- Migration: 20261101130000_create_firm_forgejo_organization.sql
 -- A Firm's organization on the installation's Forgejo, as Navigator's
 -- provisioning identity last reconciled it. The organization is named by the

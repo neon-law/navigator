@@ -143,6 +143,7 @@ async fn ingest_for_config(
     store::inbox::ingest_inbound(
         db,
         &store::inbox::IngestInbound {
+            raw_storage_key: None,
             project_id: None,
             firm_id: config.firm_id,
             brand_key: None,

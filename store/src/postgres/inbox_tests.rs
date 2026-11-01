@@ -213,6 +213,7 @@ fn inbound<'a>(
 ) -> IngestInbound<'a> {
     IngestInbound {
         firm_id: firm,
+        project_id: None,
         brand_key: None,
         interaction_type: None,
         provider_post_id: None,
@@ -231,7 +232,7 @@ fn inbound<'a>(
         matter_consent: true,
         promotional_opt_in: false,
         email_conversation_id: None,
-        attachment_asset_id: None,
+        attachments: Vec::new(),
         occurred_at: "2026-09-27T00:00:00Z",
         raw_storage_key: None,
     }
@@ -852,4 +853,68 @@ async fn unsupported_channels_are_refused() {
     assert!(matches!(error, InboxError::Denied));
     assert_eq!(message_count(&fixture.pg).await, 0);
     assert_eq!(conversation_count(&fixture.pg).await, 0);
+}
+
+#[tokio::test]
+async fn targeted_ingest_preserves_project_scope_and_all_attachments() {
+    let Some(fixture) = fixture().await else {
+        return;
+    };
+    let mut input = inbound(
+        fixture.firm,
+        channel::SCRAPER,
+        "court.example.test",
+        "scraper-seed",
+        "clerk@example.test",
+    );
+    input.project_id = Some(fixture.project);
+    for index in 0..2 {
+        let id = Uuid::now_v7();
+        let sha = format!("{index:064x}");
+        sqlx::query("INSERT INTO asset (id, storage_key, content_type, byte_size, sha256_hex) VALUES ($1, $2, 'application/pdf', 3, $3)")
+            .bind(id).bind(format!("synthetic/{id}")).bind(&sha).execute(fixture.pg.pool()).await.unwrap();
+        input.attachments.push(crate::inbox::IngestAttachment {
+            asset_id: id,
+            filename: format!("notice-{index}.pdf"),
+            sha256: sha,
+        });
+    }
+    let first = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+        .await
+        .unwrap();
+    let conversation = pg_inbox::conversation_by_id_on(&fixture.pg, first.conversation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let links: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM inbox_message_asset WHERE message_id = $1")
+            .bind(first.message_id)
+            .fetch_one(fixture.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        (conversation.project_id, links),
+        (Some(fixture.project), 2),
+        "targeted ingest retains its Project and every provider attachment"
+    );
+    let replay = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+        .await
+        .unwrap();
+    assert_eq!(replay.message_id, first.message_id);
+    let links: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM inbox_message_asset WHERE message_id = $1")
+            .bind(first.message_id)
+            .fetch_one(fixture.pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(links, 2, "replay must not duplicate attachment links");
+    input.project_id = None;
+    input.provider_message_id = "unassigned-seed";
+    let unassigned = pg_inbox::ingest_inbound_on(&fixture.pg, &input)
+        .await
+        .unwrap();
+    assert_ne!(
+        unassigned.conversation_id, first.conversation_id,
+        "unassigned intake cannot join a matter-scoped thread"
+    );
 }
