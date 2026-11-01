@@ -166,10 +166,10 @@ pub(super) fn run(target: &RepositoryTarget, number: u64, await_app: u64) -> Res
         Outcome::Closed => println!("{repository}#{number} is already closed; nothing to do"),
         Outcome::Draft => println!("{repository}#{number} is a draft; left alone"),
         Outcome::AlreadyArmed { by: Some(login) } => {
-            println!("{repository}#{number} already has auto-merge armed by {login}");
+            println!("auto-merge is already armed, by {login}");
         }
         Outcome::AlreadyArmed { by: None } => {
-            println!("{repository}#{number} already has auto-merge armed");
+            println!("auto-merge is already armed");
         }
         Outcome::Armed => println!("{repository}#{number}: squash auto-merge armed"),
         Outcome::Merged => {
@@ -220,11 +220,13 @@ where
         sleep(step).await;
         waited += step;
     };
+    // The repository, number and window come off the command line, which
+    // CodeQL treats as secret (`Commands::Secrets`); the caller already knows
+    // them, so the warning names only what the `automerge` run did.
+    let diagnosis = automerge_run_diagnosis(client, &head).await;
     eprintln!(
-        "warning: {}#{number} was not armed within {}s: {}; arming as the caller (fallback)",
-        client.repository,
-        window.as_secs(),
-        automerge_run_diagnosis(client, &head).await
+        "warning: the pull request was not armed within the --await-app window: {diagnosis}; \
+         arming as the caller (fallback)"
     );
     auto_merge(client, number).await
 }
@@ -240,7 +242,7 @@ async fn automerge_run_diagnosis(client: &GitHubClient, head: &str) -> String {
         .await
     {
         Ok(runs) => runs,
-        Err(error) => return format!("the `automerge` run lookup failed ({error:#})"),
+        Err(_) => return "the `automerge` run lookup failed".to_string(),
     };
     describe_automerge_run(
         runs.workflow_runs
