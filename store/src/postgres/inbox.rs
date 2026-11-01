@@ -301,6 +301,25 @@ pub(crate) async fn ingest_message_on(
         },
     )
     .await?;
+    for (position, attachment) in inbound.attachments.iter().enumerate() {
+        let position = i32::try_from(position)
+            .map_err(|_| InboxError::Db("too many message attachments".into()))?;
+        sqlx::query(
+            "INSERT INTO inbox_message_asset (id, firm_id, message_id, asset_id, filename, \
+             position, sha256, inserted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, now()) \
+             ON CONFLICT ON CONSTRAINT inbox_message_asset_key DO NOTHING",
+        )
+        .bind(Uuid::now_v7())
+        .bind(inbound.firm_id)
+        .bind(message_id)
+        .bind(attachment.asset_id)
+        .bind(&attachment.filename)
+        .bind(position)
+        .bind(&attachment.sha256)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    }
     if let Some(parent_provider) = inbound.parent_provider_message_id {
         let parent: Option<Uuid> = sqlx::query_scalar(
             "SELECT id FROM message WHERE conversation_id = $1 AND provider_message_id = $2 \
@@ -417,7 +436,7 @@ async fn find_open_thread_on(
         "SELECT {CONVERSATION_COLUMNS} FROM inbox_conversation WHERE firm_id = $1 \
          AND channel = $2 AND brand_key IS NOT DISTINCT FROM $3 AND provider_account = $4 \
          AND interaction_type = $5 AND ($6::text IS NULL OR provider_thread_ref = $6) \
-         AND external_address = $7 ORDER BY inserted_at DESC LIMIT 1"
+         AND external_address = $7 AND project_id IS NOT DISTINCT FROM $8 ORDER BY inserted_at DESC LIMIT 1"
     )))
     .bind(inbound.firm_id)
     .bind(inbound.channel)
@@ -426,6 +445,7 @@ async fn find_open_thread_on(
     .bind(inbound.interaction_type.unwrap_or("message"))
     .bind(inbound.provider_thread_ref.map(str::to_string))
     .bind(inbound.external_address)
+    .bind(inbound.project_id)
     .fetch_optional(executor)
     .await
     .map_err(db_error)?;
@@ -444,7 +464,7 @@ async fn create_conversation_on(
          project_id, channel, external_address, external_name, subject, unread, provider_account, \
          provider_thread_ref, source_page, source_channel, matter_consent, promotional_opt_in, \
          promotional_opt_out, email_conversation_id, inserted_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, $9, TRUE, $10, $11, $12, $13, $14, $15, \
+         VALUES ($1, $2, $3, $4, $5, $17, $6, $7, $8, $9, TRUE, $10, $11, $12, $13, $14, $15, \
          FALSE, $16, now(), now())",
     )
     .bind(id)
@@ -463,6 +483,7 @@ async fn create_conversation_on(
     .bind(inbound.matter_consent)
     .bind(inbound.promotional_opt_in)
     .bind(inbound.email_conversation_id)
+    .bind(inbound.project_id)
     .execute(executor)
     .await
     .map_err(db_error)?;
@@ -472,7 +493,7 @@ async fn create_conversation_on(
         brand_key: inbound.brand_key.map(str::to_string),
         interaction_type: inbound.interaction_type.unwrap_or("message").to_string(),
         provider_post_id: inbound.provider_post_id.map(str::to_string),
-        project_id: None,
+        project_id: inbound.project_id,
         channel: inbound.channel.to_string(),
         external_address: inbound.external_address.to_string(),
         external_name: inbound.external_name.map(str::to_string),
