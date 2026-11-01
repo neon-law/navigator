@@ -1939,12 +1939,6 @@ a.nav-pagination__link:hover {
   gap: 0.5rem;
 }
 
-/* The repository reads as an address, so it is set in the same mono stack
-   `.font-monospace` gives every other identifier on the site. */
-.github-stars__repo {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-}
-
 /* The per-attorney bar licenses: one line per attorney, each jurisdiction
    linked to that bar's own public record. */
 .site-footer__licenses {
