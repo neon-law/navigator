@@ -88,8 +88,9 @@ pub use message_alert::{
 };
 pub use notation_session::{
     answer_step, answer_step_with_reference, choice_label, create_notation_from_repo, current_step,
-    enforce_engagement_first, start_notation, AnswerAuthor, NextStep, NotationSessionError,
-    QuestionChoice, QuestionDescriptor, StartOutcome,
+    enforce_engagement_first, enforce_engagement_first_pinned, start_notation,
+    start_notation_pinned, AnswerAuthor, NextStep, NotationSessionError, QuestionChoice,
+    QuestionDescriptor, StartOutcome, StartPinnedNotation,
 };
 pub use notify::{
     ops_slack_messages, project_channel_name, upsert_channel_canvas, CanvasWrite,

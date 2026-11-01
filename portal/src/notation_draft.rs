@@ -17,8 +17,8 @@
 //! lawyer's tool, and the lawyer is who answers it.
 //!
 //! Matter-scoped the same way `notation create` is: the acting lawyer must
-//! participate in the target Project (`store::access::can_see_project_as_lawyer`;
-//! admin bypasses), so a miss and an out-of-scope project both read as "not
+//! participate in the target Project (`store::access::matter_viewer`;
+//! firm-side participation required), so a miss and an out-of-scope project both read as "not
 //! found" rather than disclosing which.
 //!
 //! The route lives under `/app/projects`, wrapped (with the rest of that
@@ -92,11 +92,12 @@ pub async fn create_notation_draft_post(
     let doc = crate::notation_preview_doc::from_markdown(slug, "", source);
 
     let code = template_code_for_slug(slug);
-    if let Err(response) = persist_pushed_template(&state, project_id, &code, source).await {
-        return response;
-    }
+    let template = match persist_pushed_template(&state, project_id, &code, source).await {
+        Ok(template) => template,
+        Err(response) => return response,
+    };
 
-    let outcome = match open_preview_run(&state, project_id, &code, session.as_deref()).await {
+    let outcome = match open_preview_run(&state, project_id, &template, session.as_deref()).await {
         Ok(outcome) => outcome,
         Err(response) => return response,
     };
@@ -153,14 +154,9 @@ async fn scoped_project(
         Some(s) => (s.person_id, s.role),
         None => (None, store::persons::Role::Client),
     };
-    let in_scope = store::access::can_see_project_as_lawyer(
-        surreal,
-        acting_person_id,
-        acting_role,
-        project_id,
-    )
-    .await
-    .unwrap_or(false);
+    let in_scope = store::access::matter_viewer(surreal, acting_person_id, acting_role, project_id)
+        .await
+        .is_ok_and(|viewer| viewer.is_some_and(store::access::MatterViewer::is_firm_side));
     if !in_scope {
         return Err((StatusCode::NOT_FOUND, "matter not found").into_response());
     }
@@ -175,7 +171,7 @@ async fn persist_pushed_template(
     project_id: uuid::Uuid,
     code: &str,
     source: &str,
-) -> Result<(), Response> {
+) -> Result<store::templates::Template, Response> {
     match store::template_source::persist_contents(
         &state.surreal,
         &state.storage,
@@ -186,7 +182,7 @@ async fn persist_pushed_template(
     )
     .await
     {
-        Ok(_) => Ok(()),
+        Ok(persisted) => Ok(persisted.template),
         Err(store::template_source::TemplateSourceError::Invalid { code, violations }) => {
             tracing::warn!(%code, count = violations.len(), "notation draft push: template refused");
             Err((
@@ -212,10 +208,12 @@ async fn persist_pushed_template(
 async fn open_preview_run(
     state: &AdminState,
     project_id: uuid::Uuid,
-    code: &str,
+    template: &store::templates::Template,
     session: Option<&SessionData>,
 ) -> Result<workflows::StartOutcome, Response> {
-    if let Err(e) = workflows::enforce_engagement_first(&state.surreal, project_id, code).await {
+    if let Err(e) =
+        workflows::enforce_engagement_first_pinned(&state.surreal, project_id, template).await
+    {
         return Err(match e {
             workflows::NotationSessionError::EngagementMustBeFirst { code, kind } => (
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -241,14 +239,16 @@ async fn open_preview_run(
             .into_response());
     };
 
-    match workflows::start_notation(
+    match workflows::start_notation_pinned(
         &state.surreal,
         state.questionnaire_runtime.as_ref(),
         Some(&state.storage),
-        code,
-        person_id,
-        project_id,
-        None,
+        workflows::StartPinnedNotation {
+            template,
+            person_id,
+            project_id,
+            entity_id: None,
+        },
     )
     .await
     {
@@ -390,8 +390,7 @@ mod tests {
     }
 
     /// Blank `slug`/`source` is refused before any store write. Carries an
-    /// admin session (which bypasses matter scope, same as
-    /// `create_project_notation`) so the request reaches the field
+    /// participating admin session so the request reaches the field
     /// validation rather than being turned away earlier by the scope check.
     #[tokio::test]
     async fn blank_fields_are_refused() {
@@ -401,11 +400,25 @@ mod tests {
             .expect("read project")
             .expect("project exists");
         let code = project.code.clone();
-        let session = crate::session::SessionData::fresh(
+        let person = store::persons::create(
+            &state.surreal,
+            &store::persons::NewPerson::with_role(
+                "Synthetic Admin",
+                "admin@example.com",
+                store::persons::Role::Admin,
+            ),
+        )
+        .await
+        .unwrap();
+        store::projects::add_participation(&state.surreal, project_id, person.id, "lawyer")
+            .await
+            .unwrap();
+        let mut session = crate::session::SessionData::fresh(
             "admin@example.com".to_string(),
             store::persons::Role::Admin,
         );
 
+        session.person_id = Some(person.id);
         let response = tower::ServiceExt::oneshot(
             router(state),
             axum::http::Request::builder()
@@ -424,7 +437,7 @@ mod tests {
 
     /// No session (no `Authorization: Bearer …`, no cookie) is refused —
     /// with no auth or policy layer mounted in this focused router, the
-    /// handler's own `can_see_project_as_lawyer` check is what stands in
+    /// handler's own `matter_viewer` check is what stands in
     /// for the full `/app/projects` stack's `require_auth`.
     #[tokio::test]
     async fn no_session_is_refused_even_for_a_real_project() {
@@ -475,7 +488,7 @@ mod tests {
         .await
         .expect("person");
         // The acting lawyer participates in the matter — a firm-side row,
-        // which is what `can_see_project_as_lawyer` scopes the door by.
+        // which is what `matter_viewer` scopes the door by.
         store::projects::add_participation(&surreal, project_id, person.id, "lawyer")
             .await
             .expect("participation");
@@ -613,5 +626,118 @@ mod tests {
                 .expect("exists check"),
             "a refused push opens no run"
         );
+    }
+    #[tokio::test]
+    async fn owner_and_admin_without_participation_cannot_push_matter_content() {
+        for role in [store::persons::Role::Owner, store::persons::Role::Admin] {
+            let (state, project_id) = fixtures("draft-unassigned").await;
+            let person = store::persons::create(
+                &state.surreal,
+                &store::persons::NewPerson::with_role("Synthetic Staff", "staff@example.com", role),
+            )
+            .await
+            .unwrap();
+            let mut session = SessionData::fresh("staff@example.com", role);
+            session.person_id = Some(person.id);
+            assert!(scoped_project(
+                &state.surreal,
+                &store::projects::find_by_id(&state.surreal, project_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .code,
+                Some(&session)
+            )
+            .await
+            .is_err());
+            assert!(
+                !store::notations::exists_for_project(&state.surreal, project_id)
+                    .await
+                    .unwrap()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn later_current_version_cannot_replace_the_pushed_source_or_questionnaire() {
+        let (state, project_id) = fixtures("draft-exact-version").await;
+        let person = store::persons::create(
+            &state.surreal,
+            &store::persons::NewPerson::new("Synthetic Lawyer", "lawyer@example.com"),
+        )
+        .await
+        .unwrap();
+        store::projects::add_participation(&state.surreal, project_id, person.id, "lawyer")
+            .await
+            .unwrap();
+        let mut session = SessionData::fresh("lawyer@example.com", store::persons::Role::Lawyer);
+        session.person_id = Some(person.id);
+        let original = persist_pushed_template(&state, project_id, "onboarding", ONBOARDING_SOURCE)
+            .await
+            .unwrap();
+        let newer_source = ONBOARDING_SOURCE.replace("Synthetic onboarding", "Later onboarding")
+            .replace("_: jurisdiction__governing_law\n  jurisdiction__governing_law:\n    _: jurisdiction__arbitration_seat\n  jurisdiction__arbitration_seat:\n    _: END",
+                     "_: jurisdiction__arbitration_seat\n  jurisdiction__arbitration_seat:\n    _: jurisdiction__governing_law\n  jurisdiction__governing_law:\n    _: END");
+        let newer = persist_pushed_template(&state, project_id, "onboarding", &newer_source)
+            .await
+            .unwrap();
+        assert_ne!(original.id, newer.id);
+        let mut wrong_project = original.clone();
+        wrong_project.project_id = Some(uuid::Uuid::now_v7());
+        let mut firm_scope = original.clone();
+        firm_scope.project_id = None;
+        firm_scope.firm_id = Some(uuid::Uuid::now_v7());
+        let mut shared = original.clone();
+        shared.project_id = None;
+        shared.firm_id = None;
+        for invalid in [wrong_project, firm_scope, shared] {
+            assert!(workflows::start_notation_pinned(
+                &state.surreal,
+                state.questionnaire_runtime.as_ref(),
+                Some(&state.storage),
+                workflows::StartPinnedNotation {
+                    template: &invalid,
+                    person_id: person.id,
+                    project_id,
+                    entity_id: None
+                }
+            )
+            .await
+            .is_err());
+        }
+        assert!(
+            !store::notations::exists_for_project(&state.surreal, project_id)
+                .await
+                .unwrap()
+        );
+
+        let started = open_preview_run(&state, project_id, &original, Some(&session))
+            .await
+            .unwrap();
+        let notation = store::notations::find_by_id(&state.surreal, started.notation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(notation.template_id, original.id);
+        let expected = workflows::notation_session::questionnaire_snapshot_for_template(
+            &state.surreal,
+            Some(&state.storage),
+            &original,
+        )
+        .await
+        .unwrap();
+        let later = workflows::notation_session::questionnaire_snapshot_for_template(
+            &state.surreal,
+            Some(&state.storage),
+            &newer,
+        )
+        .await
+        .unwrap();
+        assert_ne!(
+            expected, later,
+            "fixture must distinguish the two questionnaires"
+        );
+        assert_eq!(notation.questionnaire_snapshot, Some(expected));
+        assert_eq!(notation.template_body_sha256, original.body_sha256);
     }
 }

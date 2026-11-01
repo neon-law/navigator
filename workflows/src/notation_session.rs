@@ -250,7 +250,60 @@ pub async fn start_notation(
         .await?
         .ok_or_else(|| NotationSessionError::TemplateNotFound(template_code.into()))?;
 
-    let definition = questionnaire_definition_for(surreal, storage, &template_row).await?;
+    start_resolved_notation(
+        surreal,
+        runtime,
+        storage,
+        StartPinnedNotation {
+            template: &template_row,
+            person_id,
+            project_id,
+            entity_id,
+        },
+    )
+    .await
+}
+
+/// Named coordinates for a Project-scoped immutable preview version.
+pub struct StartPinnedNotation<'a> {
+    pub template: &'a store::templates::Template,
+    pub person_id: Uuid,
+    pub project_id: Uuid,
+    pub entity_id: Option<Uuid>,
+}
+
+/// Start from the exact persisted Project version returned by the authoring write.
+/// Shared and Firm Library resolution remains with the existing code-resolving entry point.
+/// # Errors
+/// Refuses another scope or Project, and propagates questionnaire/runtime/store failures.
+pub async fn start_notation_pinned(
+    surreal: &store::surreal::SurrealDb,
+    runtime: &dyn StateMachineRuntime,
+    storage: Option<&Arc<dyn StorageService>>,
+    request: StartPinnedNotation<'_>,
+) -> Result<StartOutcome, NotationSessionError> {
+    if request.template.project_id != Some(request.project_id) || request.template.firm_id.is_some()
+    {
+        return Err(NotationSessionError::TemplateNotFound(
+            request.template.code.clone(),
+        ));
+    }
+    start_resolved_notation(surreal, runtime, storage, request).await
+}
+
+async fn start_resolved_notation(
+    surreal: &store::surreal::SurrealDb,
+    runtime: &dyn StateMachineRuntime,
+    storage: Option<&Arc<dyn StorageService>>,
+    request: StartPinnedNotation<'_>,
+) -> Result<StartOutcome, NotationSessionError> {
+    let StartPinnedNotation {
+        template: template_row,
+        person_id,
+        project_id,
+        entity_id,
+    } = request;
+    let definition = questionnaire_definition_for(surreal, storage, template_row).await?;
     let snapshot = questionnaire_snapshot_from_definition(&definition)?;
 
     let mut new_notation = store::notations::NewNotation::new(
@@ -323,8 +376,7 @@ pub async fn enforce_engagement_first(
     project_id: Uuid,
     template_code: &str,
 ) -> Result<(), NotationSessionError> {
-    let is_first = !store::notations::exists_for_project(surreal, project_id).await?;
-    if !is_first {
+    if store::notations::exists_for_project(surreal, project_id).await? {
         return Ok(());
     }
     let Some(template) =
@@ -332,6 +384,33 @@ pub async fn enforce_engagement_first(
     else {
         return Ok(());
     };
+    enforce_engagement_first_resolved(surreal, project_id, &template).await
+}
+
+/// Apply the existing engagement rule to the exact version the caller will open.
+/// # Errors
+/// The same engagement-first or store failure as the code-resolving wrapper.
+pub async fn enforce_engagement_first_pinned(
+    surreal: &store::surreal::SurrealDb,
+    project_id: Uuid,
+    template: &store::templates::Template,
+) -> Result<(), NotationSessionError> {
+    if template.project_id != Some(project_id) || template.firm_id.is_some() {
+        return Err(NotationSessionError::TemplateNotFound(
+            template.code.clone(),
+        ));
+    }
+    enforce_engagement_first_resolved(surreal, project_id, template).await
+}
+
+async fn enforce_engagement_first_resolved(
+    surreal: &store::surreal::SurrealDb,
+    project_id: Uuid,
+    template: &store::templates::Template,
+) -> Result<(), NotationSessionError> {
+    if store::notations::exists_for_project(surreal, project_id).await? {
+        return Ok(());
+    }
     let kind = template.kind.as_deref().and_then(rules::kind::Kind::parse);
     let opens = kind.is_some_and(rules::kind::Kind::opens_a_matter);
     // A pitch has no opening notation by definition. It still needs
@@ -350,8 +429,8 @@ pub async fn enforce_engagement_first(
         return Ok(());
     }
     Err(NotationSessionError::EngagementMustBeFirst {
-        code: template_code.to_string(),
-        kind: template.kind.unwrap_or_else(|| "none".into()),
+        code: template.code.clone(),
+        kind: template.kind.clone().unwrap_or_else(|| "none".into()),
     })
 }
 
