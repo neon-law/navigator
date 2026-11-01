@@ -8,7 +8,7 @@
 //! sha-pinned merge that covers that case is the same escape
 //! `devx::github_auto_merge` uses for the operator verb.
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::Deserialize;
@@ -62,6 +62,8 @@ impl GitHubForge {
         );
         let http = reqwest::Client::builder()
             .default_headers(headers)
+            .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent(USER_AGENT)
             .build()
             .context("build GitHub HTTP client")?;
@@ -202,6 +204,61 @@ impl GitHubForge {
             jobs,
         }))
     }
+    async fn merge_ready(&self, review: &ReviewRef, base: &str) -> Result<ArmOutcome> {
+        // A direct merge must prove every live required context on the pinned head.
+        let rules: Vec<serde_json::Value> = self
+            .get_json(&self.repo_path(&format!("rules/branches/{base}")))
+            .await?;
+        let contexts: Vec<_> = rules
+            .iter()
+            .filter(|rule| rule["type"] == "required_status_checks")
+            .filter_map(|rule| rule["parameters"]["required_status_checks"].as_array())
+            .flatten()
+            .filter_map(|check| check["context"].as_str())
+            .collect();
+        anyhow::ensure!(
+            !contexts.is_empty(),
+            "base branch has no required check; refusing an ungated merge"
+        );
+        for context in contexts {
+            let query: String = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("check_name", context)
+                .append_pair("filter", "latest")
+                .finish();
+            let runs: CheckRuns = self
+                .get_json(
+                    &self.repo_path(&format!("commits/{}/check-runs?{query}", review.head_sha)),
+                )
+                .await?;
+            anyhow::ensure!(
+                runs.check_runs.iter().any(|run| run.status == "completed"
+                    && run.name == context
+                    && run.conclusion.as_deref() == Some("success")),
+                "required check {context} has not passed on the reviewed head"
+            );
+        }
+        let (status, body) = self
+            .write_json(
+                reqwest::Method::PUT,
+                &self.repo_path(&format!("pulls/{}/merge", review.number)),
+                &json!({"sha": review.head_sha, "merge_method": "squash"}),
+            )
+            .await?;
+        anyhow::ensure!(
+            (200..300).contains(&status),
+            "pinned squash merge failed: {status}: {}",
+            snippet(&body)
+        );
+        let merged: MergeResult = serde_json::from_str(&body)?;
+        anyhow::ensure!(
+            merged.merged,
+            "GitHub did not confirm the pinned squash merge"
+        );
+        merged
+            .sha
+            .map(|merge_commit| ArmOutcome::MergedNow { merge_commit })
+            .context("GitHub merge omitted the merge commit")
+    }
 }
 
 /// The first line of a GitHub error body, for error messages an agent reads.
@@ -210,9 +267,25 @@ fn snippet(body: &str) -> String {
     line.chars().take(300).collect()
 }
 
+#[derive(Deserialize)]
+struct Graphql {
+    #[serde(default)]
+    errors: Vec<GraphqlError>,
+}
+#[derive(Deserialize)]
+struct GraphqlError {
+    message: String,
+}
+
 /// One pull request as this backend reads it.
 #[derive(Debug, Deserialize)]
 struct Pull {
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    node_id: String,
+    #[serde(default)]
+    auto_merge: Option<serde_json::Value>,
     number: u64,
     head: PullHead,
     base: PullBase,
@@ -242,13 +315,10 @@ struct User {
 }
 
 #[derive(Debug, Deserialize)]
-struct AutoMerge {
-    enabled: bool,
-}
-
-#[derive(Debug, Deserialize)]
 struct CheckRun {
     name: String,
+    #[serde(default)]
+    status: String,
     #[serde(default)]
     conclusion: Option<String>,
 }
@@ -261,6 +331,7 @@ struct CheckRuns {
 
 #[derive(Debug, Deserialize)]
 struct MergeResult {
+    merged: bool,
     #[serde(default)]
     sha: Option<String>,
 }
@@ -268,6 +339,9 @@ struct MergeResult {
 /// The required check's verdict from GitHub's own words. A check run without
 /// a conclusion is still running, whatever its status field claims.
 fn verdict(mergeable_state: &str, runs: &[CheckRun]) -> CheckVerdict {
+    if runs.is_empty() {
+        return CheckVerdict::Pending;
+    }
     for run in runs {
         if run
             .conclusion
@@ -284,7 +358,8 @@ fn verdict(mergeable_state: &str, runs: &[CheckRun]) -> CheckVerdict {
         "behind" => CheckVerdict::BranchBehind,
         "blocked" => CheckVerdict::HeldReview,
         "dirty" => CheckVerdict::Conflict,
-        _ => CheckVerdict::Green,
+        "clean" | "unstable" | "has_hooks" => CheckVerdict::Green,
+        _ => CheckVerdict::Pending,
     }
 }
 
@@ -313,6 +388,10 @@ impl Forge for GitHubForge {
             .iter()
             .find(|pull| pull.base.git_ref == request.base_branch)
         {
+            anyhow::ensure!(
+                !pull.draft,
+                "the existing review request is a draft; mark it ready before continuing"
+            );
             return Ok(ReviewRef {
                 number: pull.number,
                 head_sha: pull.head.sha.clone(),
@@ -360,74 +439,83 @@ impl Forge for GitHubForge {
     }
 
     async fn arm_merge(&self, review: &ReviewRef) -> Result<ArmOutcome> {
-        let arm_path = self.repo_path(&format!("pulls/{}/auto-merge", review.number));
-        let (status, body) = self
-            .write_json(
-                reqwest::Method::PUT,
-                &arm_path,
-                &json!({ "merge_method": "squash" }),
-            )
-            .await?;
-        if status == 200 || status == 202 {
-            // Read the arm back: the write succeeding is not the arm
-            // queueing, and only the read back tells the two apart.
-            let armed: AutoMerge = self.get_json(&arm_path).await?;
-            if armed.enabled {
-                return Ok(ArmOutcome::Armed);
-            }
-            bail!(
-                "merge-when-green did not stay armed for review request #{}",
-                review.number
-            );
+        let pull_path = self.repo_path(&format!("pulls/{}", review.number));
+        let pull: Pull = self.get_json(&pull_path).await?;
+        anyhow::ensure!(!pull.draft, "a draft review request cannot arm auto-merge");
+        anyhow::ensure!(
+            pull.head.sha == review.head_sha,
+            "review head changed before arming merge"
+        );
+        if pull.merged {
+            return pull
+                .merge_commit_sha
+                .map(|merge_commit| ArmOutcome::MergedNow { merge_commit })
+                .context("merged review omitted its merge commit");
         }
-        if body.contains("clean status") || body.contains("unstable status") {
-            // The request merges now, so GitHub refused to queue it. Merge
-            // directly, pinned to the head commit the check ran against.
-            let (merge_status, merge_body) = self
-                .write_json(
-                    reqwest::Method::PUT,
-                    &self.repo_path(&format!("pulls/{}/merge", review.number)),
-                    &json!({ "sha": review.head_sha, "merge_method": "squash" }),
-                )
-                .await?;
-            if !(200..300).contains(&merge_status) {
-                bail!(
-                    "the direct merge of review request #{} failed: {}: {}",
-                    review.number,
-                    merge_status,
-                    snippet(&merge_body)
-                );
-            }
-            let merged: MergeResult =
-                serde_json::from_str(&merge_body).context("parse the merge response")?;
-            return merged
-                .sha
-                .map(|sha| ArmOutcome::MergedNow { merge_commit: sha })
-                .ok_or_else(|| {
-                    anyhow!(
-                        "GitHub merged review request #{} without reporting a merge commit",
-                        review.number
-                    )
-                });
-        }
-        // An arm a previous run left enabled answers the retry here.
-        let armed: AutoMerge = self.get_json(&arm_path).await?;
-        if armed.enabled {
+        if pull.auto_merge.is_some() {
             return Ok(ArmOutcome::AlreadyArmed);
         }
-        bail!(
-            "arming merge-when-green for review request #{} failed: {}: {}",
-            review.number,
-            status,
-            snippet(&body)
-        )
+        anyhow::ensure!(
+            !pull.node_id.is_empty(),
+            "review request omitted its GraphQL node id"
+        );
+        let (status, body) = self.write_json(reqwest::Method::POST, "/graphql", &json!({
+            "query": "mutation($pr: ID!, $head: GitObjectID!) { enablePullRequestAutoMerge(input: {pullRequestId: $pr, expectedHeadOid: $head, mergeMethod: SQUASH}) { pullRequest { number } } }",
+            "variables": {"pr": pull.node_id, "head": review.head_sha},
+        })).await?;
+        anyhow::ensure!(
+            (200..300).contains(&status),
+            "GitHub auto-merge returned {status}"
+        );
+        let response: Graphql =
+            serde_json::from_str(&body).context("decode auto-merge response")?;
+        let messages: Vec<_> = response
+            .errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect();
+        if messages
+            .iter()
+            .any(|message| message.contains("clean status") || message.contains("unstable status"))
+        {
+            return self.merge_ready(review, &pull.base.git_ref).await;
+        }
+        anyhow::ensure!(
+            messages.is_empty(),
+            "GitHub refused auto-merge: {}",
+            messages.join("; ")
+        );
+        let readback: Pull = self.get_json(&pull_path).await?;
+        anyhow::ensure!(
+            readback.head.sha == review.head_sha,
+            "review head changed during merge arming"
+        );
+        if readback.merged {
+            return readback
+                .merge_commit_sha
+                .map(|merge_commit| ArmOutcome::MergedNow { merge_commit })
+                .context("merged review omitted its merge commit");
+        }
+        anyhow::ensure!(
+            readback.auto_merge.is_some(),
+            "merge-when-green did not stay armed"
+        );
+        Ok(ArmOutcome::Armed)
     }
 
     async fn check_verdict(&self, review: &ReviewRef) -> Result<CheckVerdict> {
         let pull: Pull = self
             .get_json(&self.repo_path(&format!("pulls/{}", review.number)))
             .await?;
-        let state = pull.mergeable_state.as_deref().unwrap_or("unknown");
+        anyhow::ensure!(
+            pull.head.sha == review.head_sha,
+            "review head changed; re-run the verb"
+        );
+        let state = if pull.merged {
+            "clean"
+        } else {
+            pull.mergeable_state.as_deref().unwrap_or("unknown")
+        };
         let runs: CheckRuns = self
             .get_json(&self.repo_path(&format!("commits/{}/check-runs", review.head_sha)))
             .await?;
@@ -444,6 +532,7 @@ impl Forge for GitHubForge {
             Ok(None)
         }
     }
+
     async fn deployment(&self, merge_commit: &str) -> Result<Option<DeploymentRun>> {
         self.workflow_run(merge_commit, "cd.yml", "push").await
     }
@@ -456,7 +545,7 @@ impl Forge for GitHubForge {
 
 #[cfg(test)]
 mod tests {
-    use super::{GitHubForge, verdict};
+    use super::{verdict, GitHubForge};
     use crate::projects::forge::{ArmOutcome, CheckVerdict, Forge, ReviewRef, ReviewRequest};
     use serde_json::json;
     use wiremock::matchers::{method, path, query_param};
@@ -497,6 +586,18 @@ mod tests {
     }
 
     #[test]
+    fn absent_checks_and_unknown_mergeability_stay_pending() {
+        assert_eq!(verdict("clean", &[]), CheckVerdict::Pending);
+        let runs = vec![serde_json::from_value::<super::CheckRun>(check_run(
+            "ci / ci",
+            "completed",
+            Some("success"),
+        ))
+        .unwrap()];
+        assert_eq!(verdict("unknown", &runs), CheckVerdict::Pending);
+    }
+
+    #[test]
     fn a_failing_check_run_names_itself_as_the_forge_reports_it() {
         let runs = vec![
             serde_json::from_value::<super::CheckRun>(check_run(
@@ -520,23 +621,23 @@ mod tests {
 
     #[test]
     fn a_running_check_run_is_pending() {
-        let runs = vec![
-            serde_json::from_value::<super::CheckRun>(check_run("ci / test", "in_progress", None))
-                .unwrap(),
-        ];
+        let runs = vec![serde_json::from_value::<super::CheckRun>(check_run(
+            "ci / test",
+            "in_progress",
+            None,
+        ))
+        .unwrap()];
         assert_eq!(verdict("blocked", &runs), CheckVerdict::Pending);
     }
 
     #[test]
     fn green_checks_answer_by_mergeable_state() {
-        let runs = vec![
-            serde_json::from_value::<super::CheckRun>(check_run(
-                "ci / test",
-                "completed",
-                Some("success"),
-            ))
-            .unwrap(),
-        ];
+        let runs = vec![serde_json::from_value::<super::CheckRun>(check_run(
+            "ci / test",
+            "completed",
+            Some("success"),
+        ))
+        .unwrap()];
         assert_eq!(verdict("clean", &runs), CheckVerdict::Green);
         assert_eq!(verdict("behind", &runs), CheckVerdict::BranchBehind);
         assert_eq!(verdict("blocked", &runs), CheckVerdict::HeldReview);
@@ -655,17 +756,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn arm_merge_arms_and_reads_the_arm_back() {
+    async fn arm_merge_uses_graphql_and_reads_the_arm_back() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/repos/acme/nav/pulls/7/auto-merge"))
-            .respond_with(ResponseTemplate::new(202))
-            .expect(1)
+        let reads = Arc::new(AtomicUsize::new(0));
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/nav/pulls/7"))
+            .respond_with(move |_: &wiremock::Request| {
+                let mut pull = pull_body(7, "abc123", "blocked", false);
+                pull["node_id"] = json!("PR_7");
+                pull["auto_merge"] = if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    json!(null)
+                } else {
+                    json!({"merge_method": "squash"})
+                };
+                ResponseTemplate::new(200).set_body_json(pull)
+            })
+            .expect(2)
             .mount(&server)
             .await;
-        Mock::given(method("GET"))
-            .and(path("/repos/acme/nav/pulls/7/auto-merge"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "enabled": true })))
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"data": {"enablePullRequestAutoMerge": {"pullRequest": {"number": 7}}}}),
+            ))
             .expect(1)
             .mount(&server)
             .await;
@@ -677,30 +794,117 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_request_that_merges_now_is_merged_directly_and_pinned() {
+    async fn a_request_that_merges_now_requires_the_live_gate_and_pinned_head() {
+        use wiremock::matchers::body_json;
         let server = MockServer::start().await;
-        Mock::given(method("PUT"))
-            .and(path("/repos/acme/nav/pulls/7/auto-merge"))
+        let mut pull = pull_body(7, "abc123", "clean", false);
+        pull["node_id"] = json!("PR_7");
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/nav/pulls/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pull))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
             .respond_with(
-                ResponseTemplate::new(422)
-                    .set_body_string("{\"message\":\"Pull request is in clean status\"}"),
+                ResponseTemplate::new(200).set_body_json(
+                    json!({"errors": [{"message": "Pull request is in clean status"}]}),
+                ),
             )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET")).and(path("/repos/acme/nav/rules/branches/main"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "ci / ci"}]}}])))
+            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/nav/commits/abc123/check-runs"))
+            .and(query_param("check_name", "ci / ci"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"check_runs": [{"name": "ci / ci", "status": "completed", "conclusion": "success"}]}),
+            ))
+            .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("PUT"))
             .and(path("/repos/acme/nav/pulls/7/merge"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "sha": "merge555",
-                "merged": true,
-            })))
+            .and(body_json(
+                json!({"sha": "abc123", "merge_method": "squash"}),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"sha": "merge555", "merged": true})),
+            )
+            .expect(1)
             .mount(&server)
             .await;
         let forge = GitHubForge::new(&server.uri(), "acme", "nav", "t").unwrap();
         assert_eq!(
             forge.arm_merge(&review(7, "abc123")).await.unwrap(),
             ArmOutcome::MergedNow {
-                merge_commit: "merge555".to_string()
+                merge_commit: "merge555".into()
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn immediate_merge_is_refused_without_a_required_gate() {
+        let server = MockServer::start().await;
+        let mut pull = pull_body(7, "abc123", "clean", false);
+        pull["node_id"] = json!("PR_7");
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/nav/pulls/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pull))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    json!({"errors": [{"message": "Pull request is in clean status"}]}),
+                ),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/nav/rules/branches/main"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/repos/acme/nav/pulls/7/merge"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let forge = GitHubForge::new(&server.uri(), "acme", "nav", "t").unwrap();
+        let error = forge.arm_merge(&review(7, "abc123")).await.unwrap_err();
+        assert!(
+            error.to_string().contains("refusing an ungated merge"),
+            "{error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn merged_reviews_do_not_wait_for_mergeability_to_be_recomputed() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/nav/pulls/7"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(pull_body(7, "abc123", "unknown", true)),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/nav/commits/abc123/check-runs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"check_runs": [check_run("ci / ci", "completed", Some("success"))]}),
+            ))
+            .mount(&server)
+            .await;
+        let forge = GitHubForge::new(&server.uri(), "acme", "nav", "t").unwrap();
+        assert_eq!(
+            forge.check_verdict(&review(7, "abc123")).await.unwrap(),
+            CheckVerdict::Green
         );
     }
 
