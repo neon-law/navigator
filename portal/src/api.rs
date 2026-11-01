@@ -622,9 +622,9 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             get(list_document_revisions_door),
         ),
         (
-            "GET",
-            "/app/api/projects/{id}/documents/upload-session/{session_id}",
-            get(upload_session_status_door),
+            "POST",
+            "/app/api/projects/{id}/documents/upload-session/status",
+            post(upload_session_status_door),
         ),
         (
             "GET",
@@ -797,7 +797,7 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "POST",
-            "/app/api/projects/{id}/documents/upload-session/{session_id}/chunk",
+            "/app/api/projects/{id}/documents/upload-session/chunk",
             // One chunk plus its JSON envelope, never the whole file.
             post(append_upload_chunk_door).layer(DefaultBodyLimit::max(
                 store::documents::MAX_UPLOAD_CHUNK_REQUEST_BYTES,
@@ -805,7 +805,7 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "POST",
-            "/app/api/projects/{id}/documents/upload-session/{session_id}/complete",
+            "/app/api/projects/{id}/documents/upload-session/complete",
             post(complete_upload_session_door),
         ),
         (
@@ -5107,11 +5107,21 @@ struct CreateUploadSessionRequest {
     declared_sha256: String,
 }
 
-/// Request body for the chunk-append door: one base64-encoded chunk.
+/// Request body for the chunk-append door: one base64-encoded chunk. The
+/// session the chunk belongs to rides in the body — never URL material.
 #[derive(Deserialize)]
 struct UploadChunkRequest {
+    session_id: Uuid,
     offset: i64,
     content_base64: String,
+}
+
+/// Request body for the status and completion doors: the session to read or
+/// file. The session id arrives in the body, not the path, so the identifier
+/// never lands in a URL, a proxy log, or a CodeQL cleartext finding.
+#[derive(Deserialize)]
+struct UploadSessionRefRequest {
+    session_id: Uuid,
 }
 
 /// The wire shape of an upload session: where the upload stands and what the
@@ -5390,16 +5400,18 @@ async fn create_upload_session_door(
     }
 }
 
-/// `GET /app/api/projects/{id}/documents/upload-session/{session_id}` — where
+/// `POST /app/api/projects/{id}/documents/upload-session/status` — where
 /// the streaming upload stands (LAW-172). The resume probe: a client that
 /// lost its connection reads the acknowledged byte count from here instead of
-/// restarting a file it cannot re-fetch. `404` for a foreign, finished, or
-/// never-opened session.
+/// restarting a file it cannot re-fetch. The session id rides in the body,
+/// never the path. `404` for a foreign, finished, or never-opened session.
 async fn upload_session_status_door(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
-    Path((id, session_id)): Path<(Uuid, Uuid)>,
+    Path(id): Path<Uuid>,
+    JsonOrForm(input): JsonOrForm<UploadSessionRefRequest>,
 ) -> Result<Response, ApiError> {
+    let session_id = input.session_id;
     let in_scope = store::access::can_see_project_as_lawyer(
         &state.surreal,
         lawyer.0.person_id,
@@ -5420,7 +5432,7 @@ async fn upload_session_status_door(
     }
 }
 
-/// `POST /app/api/projects/{id}/documents/upload-session/{session_id}/chunk` —
+/// `POST /app/api/projects/{id}/documents/upload-session/chunk` —
 /// stage one chunk at exactly the offset the session counts (LAW-172). The
 /// base64 mirror of the buffered door's byte field; the route's request cap
 /// is [`store::documents::MAX_UPLOAD_CHUNK_REQUEST_BYTES`], one chunk plus
@@ -5432,9 +5444,10 @@ async fn upload_session_status_door(
 async fn append_upload_chunk_door(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
-    Path((id, session_id)): Path<(Uuid, Uuid)>,
+    Path(id): Path<Uuid>,
     JsonOrForm(input): JsonOrForm<UploadChunkRequest>,
 ) -> Result<Response, ApiError> {
+    let session_id = input.session_id;
     let in_scope = store::access::can_see_project_as_lawyer(
         &state.surreal,
         lawyer.0.person_id,
@@ -5505,9 +5518,10 @@ async fn append_upload_chunk_door(
     }
 }
 
-/// `POST /app/api/projects/{id}/documents/upload-session/{session_id}/complete`
+/// `POST /app/api/projects/{id}/documents/upload-session/complete`
 /// — verify the staged bytes against the declared digest and file the
-/// document through the ordinary revision ingest (LAW-172). The response is
+/// document through the ordinary revision ingest (LAW-172). The session id
+/// rides in the body, never the path. The response is
 /// the same source-safe pointer the buffered door returns. `201` for a new
 /// revision and `200` for an identical one; `409` until every byte has
 /// arrived; `422` when the staged bytes hash to something other than the
@@ -5516,8 +5530,10 @@ async fn append_upload_chunk_door(
 async fn complete_upload_session_door(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
-    Path((id, session_id)): Path<(Uuid, Uuid)>,
+    Path(id): Path<Uuid>,
+    JsonOrForm(input): JsonOrForm<UploadSessionRefRequest>,
 ) -> Result<Response, ApiError> {
+    let session_id = input.session_id;
     let in_scope = store::access::can_see_project_as_lawyer(
         &state.surreal,
         lawyer.0.person_id,
@@ -8769,6 +8785,7 @@ mod tests {
     use super::{
         append_upload_chunk_door, complete_upload_session_door, create_upload_session_door,
         upload_session_status_door, CreateUploadSessionRequest, JsonOrForm, UploadChunkRequest,
+        UploadSessionRefRequest,
     };
     use axum::extract::{Path, Query, State};
     use axum::http::StatusCode;
@@ -9806,8 +9823,9 @@ mod tests {
         let appended = append_upload_chunk_door(
             State(state.clone()),
             LawyerSession(session_data.clone()),
-            Path((project_id, session_id)),
+            Path(project_id),
             JsonOrForm(UploadChunkRequest {
+                session_id,
                 offset: 0,
                 content_base64: encode(&bytes),
             }),
@@ -9829,8 +9847,9 @@ mod tests {
         let replayed = append_upload_chunk_door(
             State(state.clone()),
             LawyerSession(session_data.clone()),
-            Path((project_id, session_id)),
+            Path(project_id),
             JsonOrForm(UploadChunkRequest {
+                session_id,
                 offset: 0,
                 content_base64: encode(&bytes),
             }),
@@ -9850,7 +9869,8 @@ mod tests {
         let resumed = upload_session_status_door(
             State(state.clone()),
             LawyerSession(session_data.clone()),
-            Path((project_id, session_id)),
+            Path(project_id),
+            JsonOrForm(UploadSessionRefRequest { session_id }),
         )
         .await
         .unwrap();
@@ -9861,7 +9881,8 @@ mod tests {
         let completed = complete_upload_session_door(
             State(state.clone()),
             LawyerSession(session_data.clone()),
-            Path((project_id, session_id)),
+            Path(project_id),
+            JsonOrForm(UploadSessionRefRequest { session_id }),
         )
         .await
         .unwrap();
@@ -9892,8 +9913,9 @@ mod tests {
         let misaligned = append_upload_chunk_door(
             State(state.clone()),
             LawyerSession(session_data.clone()),
-            Path((project_id, empty_id)),
+            Path(project_id),
             JsonOrForm(UploadChunkRequest {
+                session_id: empty_id,
                 offset: 5,
                 content_base64: encode(&bytes),
             }),
@@ -9906,7 +9928,10 @@ mod tests {
         let early = complete_upload_session_door(
             State(state.clone()),
             LawyerSession(session_data.clone()),
-            Path((project_id, empty_id)),
+            Path(project_id),
+            JsonOrForm(UploadSessionRefRequest {
+                session_id: empty_id,
+            }),
         )
         .await
         .unwrap();

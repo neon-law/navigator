@@ -12,7 +12,7 @@
 //! | `projects close` | `POST /app/api/projects/{id}/lifecycle`, then a repository archive upload |
 //! | `project setup` | `GET /app/api/projects` plus the authenticated surface, Slack, and Notion setup doors |
 //! | `project sync` | `GET /app/api/projects/{id}/documents` plus each current revision's download door |
-//! | `document upload` | `POST /app/api/projects/{id}/documents`, or above the buffered cap the streaming session doors — `POST .../documents/upload-session`, `.../upload-session/{id}/chunk`, `.../upload-session/{id}/complete` (LAW-172) |
+//! | `document upload` | `POST /app/api/projects/{id}/documents`, or above the buffered cap the streaming session doors — `POST .../documents/upload-session`, `.../upload-session/chunk`, `.../upload-session/status`, `.../upload-session/complete` (LAW-172; session ids ride in bodies, never URLs) |
 //! | `document slug` | `PATCH /app/api/projects/{id}/documents/{asset_id}` |
 //! | `document reclassify` | `POST /app/api/projects/{id}/documents/{asset_id}/reclassify` |
 //! | `document repair` | `POST /app/api/projects/{id}/documents/{asset_id}/storage` |
@@ -1601,13 +1601,14 @@ impl DocumentClient {
         self.stream_upload_chunks(bytes, session).await?;
 
         let complete_url = format!(
-            "{}/app/api/projects/{}/documents/upload-session/{session_id}/complete",
+            "{}/app/api/projects/{}/documents/upload-session/complete",
             self.base, self.project_id
         );
         let response = self
             .client
             .post(&complete_url)
             .bearer_auth(&self.token)
+            .json(&serde_json::json!({ "session_id": session_id }))
             .send()
             .await
             .with_context(|| {
@@ -1655,7 +1656,7 @@ impl DocumentClient {
             let end = offset.saturating_add(chunk_len).min(bytes.len());
             let chunk = &bytes[offset..end];
             let chunk_url = format!(
-                "{}/app/api/projects/{}/documents/upload-session/{session_id}/chunk",
+                "{}/app/api/projects/{}/documents/upload-session/chunk",
                 self.base, self.project_id
             );
             let response = self
@@ -1663,6 +1664,7 @@ impl DocumentClient {
                 .post(&chunk_url)
                 .bearer_auth(&self.token)
                 .json(&serde_json::json!({
+                    "session_id": session_id,
                     "offset": offset,
                     "content_base64":
                         base64::engine::general_purpose::STANDARD.encode(chunk),
@@ -1727,16 +1729,17 @@ impl DocumentClient {
     /// chunk size the server is enforcing.
     async fn upload_session_status(&self, session_id: Uuid) -> Result<StreamingSessionStatus> {
         let url = format!(
-            "{}/app/api/projects/{}/documents/upload-session/{session_id}",
+            "{}/app/api/projects/{}/documents/upload-session/status",
             self.base, self.project_id
         );
         let response = self
             .client
-            .get(&url)
+            .post(&url)
             .bearer_auth(&self.token)
+            .json(&serde_json::json!({ "session_id": session_id }))
             .send()
             .await
-            .with_context(|| format!("GET {url}"))?;
+            .with_context(|| format!("POST {url}"))?;
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         if status == reqwest::StatusCode::NOT_FOUND {
@@ -10026,8 +10029,9 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path(format!(
-                "/app/api/projects/{project_id}/documents/upload-session/{session_id}/complete"
+                "/app/api/projects/{project_id}/documents/upload-session/complete"
             )))
+            .and(body_json(serde_json::json!({ "session_id": session_id })))
             .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
                 "kind": "transcript",
                 "visibility": "internal",
@@ -10057,8 +10061,7 @@ mod tests {
             use base64::Engine as _;
             base64::engine::general_purpose::STANDARD.encode(chunk)
         };
-        let chunk_url =
-            format!("/app/api/projects/{project_id}/documents/upload-session/{session_id}/chunk");
+        let chunk_url = format!("/app/api/projects/{project_id}/documents/upload-session/chunk");
         // 16 bytes at a 4-byte chunk size stream as four chunks. The first
         // append of chunk one is refused with a conflict — the lost
         // acknowledgement case — so the client re-syncs from the status door
@@ -10068,6 +10071,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path(&chunk_url))
             .and(body_json(serde_json::json!({
+                "session_id": session_id,
                 "offset": 0,
                 "content_base64": encode(&bytes[..4])
             })))
@@ -10082,6 +10086,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path(&chunk_url))
             .and(body_json(serde_json::json!({
+                "session_id": session_id,
                 "offset": 0,
                 "content_base64": encode(&bytes[..4])
             })))
@@ -10095,10 +10100,11 @@ mod tests {
             .await;
         // The re-sync reads the acknowledged offset from the status door; the
         // server stands at zero because the refused chunk was never applied.
-        Mock::given(method("GET"))
+        Mock::given(method("POST"))
             .and(path(format!(
-                "/app/api/projects/{project_id}/documents/upload-session/{session_id}"
+                "/app/api/projects/{project_id}/documents/upload-session/status"
             )))
+            .and(body_json(serde_json::json!({ "session_id": session_id })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": session_id,
                 "chunk_size": 4,
@@ -10113,6 +10119,7 @@ mod tests {
             Mock::given(method("POST"))
                 .and(path(&chunk_url))
                 .and(body_json(serde_json::json!({
+                    "session_id": session_id,
                     "offset": index * 4,
                     "content_base64": encode(chunk)
                 })))

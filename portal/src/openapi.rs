@@ -3562,6 +3562,165 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/documents/upload-session": {
+          "post": {
+            "summary": "Open (or resume) a resumable streaming upload session",
+            "description":
+              "Opens a streaming upload for media beyond the buffered door's cap: the declared \
+               size and SHA-256 of the whole file arrive up front, the bytes follow as base64 \
+               chunks against the enforced chunk size. Re-declaring an identical file (same \
+               project, filename, size, and digest) adopts the standing session instead of \
+               starting a second one, so a dropped run resumes where it left off. The session id \
+               the later chunk, status, and completion calls present in their bodies never rides \
+               in a URL. Authorization: lawyer or admin participating in the matter \
+               (out-of-scope → 404). A declared size above the streaming cap, a blank filename, \
+               or an empty digest is 400.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": {
+              "required": true,
+              "content": { "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["filename", "declared_size", "declared_sha256"],
+                  "properties": {
+                    "filename": { "type": "string" },
+                    "slug": { "type": "string", "description": "Stable document identity; defaults to filename" },
+                    "content_type": { "type": "string" },
+                    "kind": { "type": "string", "description": "Asset-lane document classification (`rules::kind::Kind` values valid for `Lane::Asset`)" },
+                    "visibility": { "type": "string", "enum": ["client", "internal"] },
+                    "description": { "type": "string" },
+                    "metadata": { "type": "object" },
+                    "derived_from": { "type": "object", "description": "Exhibit provenance; raw uploads carry none" },
+                    "transcript_quality": { "type": "string" },
+                    "signing": { "$ref": "#/components/schemas/DocumentSigning" },
+                    "notarization": { "type": "array", "items": { "$ref": "#/components/schemas/DocumentNotarization" } },
+                    "declared_size": { "type": "integer", "description": "The byte size of the whole file, as the client counts it; at most the streaming cap" },
+                    "declared_sha256": { "type": "string", "description": "Lowercase hex SHA-256 of the whole file, as the client hashed it" }
+                  }
+                }
+              } }
+            },
+            "responses": {
+              "200": { "description": "An identical re-declaration adopted the standing session", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "201": { "description": "The session stands open with its chunk contract", "content": { "application/json": { "schema": { "type": "object", "required": ["id", "chunk_size", "received_bytes", "declared_size", "complete", "expires_at"], "properties": {
+                "id": { "type": "string", "format": "uuid" },
+                "chunk_size": { "type": "integer" },
+                "received_bytes": { "type": "integer" },
+                "declared_size": { "type": "integer" },
+                "complete": { "type": "boolean" },
+                "expires_at": { "type": "string", "format": "date-time" }
+              } } } } },
+              "400": { "description": "Blank filename, empty digest, or a declared size above the streaming cap", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Authenticated caller is not Lawyer/admin", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such matter, or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
+        "/app/api/projects/{id}/documents/upload-session/chunk": {
+          "post": {
+            "summary": "Stage one chunk of a streaming upload",
+            "description":
+              "Stages one base64-encoded chunk at exactly the offset the session counts. The \
+               session id arrives in the body, never the path. The route's request cap is one \
+               chunk plus its JSON envelope — never the whole file. The response is the session \
+               status, so the client resumes from the acknowledged count: 200 for an applied \
+               chunk or an idempotent replay of the last one, 409 when the chunk is not the one \
+               the offset names, 410 when the session expired, 404 for a foreign or finished \
+               session. Authorization: lawyer or admin participating in the matter.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": {
+              "required": true,
+              "content": { "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["session_id", "offset", "content_base64"],
+                  "properties": {
+                    "session_id": { "type": "string", "format": "uuid" },
+                    "offset": { "type": "integer" },
+                    "content_base64": { "type": "string", "description": "Base64-encoded chunk bytes" }
+                  }
+                }
+              } }
+            },
+            "responses": {
+              "200": { "description": "The chunk is applied (or replayed idempotently); the body is the session status", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such matter, out of scope, or the session is foreign or finished", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "409": { "description": "The chunk is not the one the offset names; the body names the offset the session stands at", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "410": { "description": "The session expired between calls; open a new one", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "413": { "description": "The request body exceeds one chunk plus its JSON envelope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
+        "/app/api/projects/{id}/documents/upload-session/status": {
+          "post": {
+            "summary": "Read a streaming upload session's resume point",
+            "description":
+              "The resume probe: a client that lost its connection reads the acknowledged byte \
+               count from here instead of restarting a file it cannot re-fetch. The session id \
+               rides in the body, never the path. 404 for a foreign, finished, or never-opened \
+               session. Authorization: lawyer or admin participating in the matter.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": {
+              "required": true,
+              "content": { "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["session_id"],
+                  "properties": { "session_id": { "type": "string", "format": "uuid" } }
+                }
+              } }
+            },
+            "responses": {
+              "200": { "description": "Where the upload stands: the chunk size and the acknowledged byte count", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such matter, out of scope, or a foreign, finished, or never-opened session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
+        "/app/api/projects/{id}/documents/upload-session/complete": {
+          "post": {
+            "summary": "File the completed streaming upload as a document revision",
+            "description":
+              "Verifies the staged bytes against the declared digest and files the document \
+               through the ordinary revision ingest; the session id arrives in the body, never \
+               the path. The response is the same source-safe pointer the buffered door returns: \
+               201 for a new revision and 200 for an identical one. 409 until every byte has \
+               arrived; 422 when the staged bytes hash to something other than the declared \
+               digest (the session is removed, so a retry starts clean); 404 for a foreign, \
+               finished, or never-opened session. Authorization: lawyer or admin participating \
+               in the matter.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": {
+              "required": true,
+              "content": { "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["session_id"],
+                  "properties": { "session_id": { "type": "string", "format": "uuid" } }
+                }
+              } }
+            },
+            "responses": {
+              "200": { "description": "An identical retry returned the existing revision pointer", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "201": { "description": "The document revision was filed and its pointer returned", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such matter, out of scope, or a foreign, finished, or never-opened session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "409": { "description": "The session has not received every declared byte", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "410": { "description": "The session expired between calls", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "422": { "description": "The staged bytes do not hash to the declared digest; the session is removed so a retry starts clean", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
         "/app/api/inbox/unprocessed": {
           "get": {
             "summary": "List the unprocessed inbox backlog",
