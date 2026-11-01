@@ -3013,6 +3013,22 @@ test_historical_import_policy_is_exact if {
 	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox-ingest", "extra"], "method": "POST", "session": lawyer_session}
 }
 
+test_lawyer_can_download_a_project_message_attachment if {
+	authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments", "a"], "method": "GET", "session": lawyer_session}
+}
+
+test_message_attachment_download_denies_other_tiers if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments", "a"], "method": "GET", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments", "a"], "method": "GET", "session": clerk_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments", "a"], "method": "GET", "session": null}
+}
+
+test_message_attachment_download_policy_is_exact if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments", "a"], "method": "POST", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments", "a", "extra"], "method": "GET", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p", "inbox", "c", "messages", "m", "attachments"], "method": "GET", "session": lawyer_session}
+}
+
 test_owner_can_open_owner_inbox if {
 	authz.allow with input as {"path": ["app", "owner", "inbox"], "method": "GET", "session": owner_session}
 }

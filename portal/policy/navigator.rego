@@ -638,6 +638,20 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+# Download an Inbox Message's attachment. The handler checks Project
+# participation, Conversation and Message membership, and the Asset link.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "inbox"
+    input.path[6] == "messages"
+    input.path[8] == "attachments"
+    count(input.path) == 10
+    input.method == "GET"
+    is_lawyer(input.session)
+}
+
 # Log a Communication (LAW-140): POST /app/api/projects/{id}/communications.
 # Lawyer tier, the same gate the `LawyerSession` extractor applies; the handler
 # repeats the matter-scope check and collapses an out-of-scope Project to 404.

@@ -235,6 +235,64 @@ pub(crate) async fn list_communications(
     Ok(Json(views).into_response())
 }
 
+/// Download a linked Message attachment after resolving its Project thread.
+/// Bare Inbox assets have no document identity; their authority comes from
+/// this Message association, not from an invented Project document route.
+pub(crate) async fn download_message_attachment(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Path((project_id, conversation_id, message_id, asset_id)): Path<(Uuid, Uuid, Uuid, Uuid)>,
+) -> Result<Response, ApiError> {
+    let actor_id = session.person_id.ok_or(ApiError::NotFound)?;
+    let thread =
+        store::inbox::project_thread(&state.surreal, actor_id, project_id, conversation_id)
+            .await
+            .map_err(attachment_inbox_error)?;
+    let message = thread
+        .messages
+        .iter()
+        .find(|message| message.id == message_id)
+        .ok_or(ApiError::NotFound)?;
+    let links =
+        store::inbox::message_assets(&state.surreal, thread.conversation.firm_id, message_id)
+            .await
+            .map_err(attachment_inbox_error)?;
+    let linked = links.into_iter().find(|link| link.asset_id == asset_id);
+    if linked.is_none() && message.attachment_asset_id != Some(asset_id) {
+        return Err(ApiError::NotFound);
+    }
+    let asset = store::assets::find_by_id(&state.surreal, asset_id)
+        .await
+        .map_err(ApiError::Asset)?
+        .ok_or(ApiError::NotFound)?;
+    if asset.project_id.is_some_and(|id| id != project_id) {
+        return Err(ApiError::NotFound);
+    }
+    let filename = linked
+        .map(|link| link.filename)
+        .or_else(|| asset.filename.clone())
+        .unwrap_or_else(|| "attachment".into());
+    let bytes = match state.storage.get(&asset.storage_key).await {
+        Ok(object) => object.bytes,
+        Err(cloud::StorageError::NotFound(_)) => return Err(ApiError::NotFound),
+        Err(error) => return Err(ApiError::Db(error.to_string())),
+    };
+    Ok(crate::project_documents::attachment_bytes_response(
+        bytes,
+        &asset.content_type,
+        &filename,
+    ))
+}
+
+fn attachment_inbox_error(error: store::inbox::InboxError) -> ApiError {
+    match error {
+        store::inbox::InboxError::Denied
+        | store::inbox::InboxError::NotFound
+        | store::inbox::InboxError::CrossFirm => ApiError::NotFound,
+        error => ApiError::Db(error.to_string()),
+    }
+}
+
 /// A call or email names who it was with; a note has no counterparty.
 fn require_counterparty(value: Option<&str>, channel: &str) -> Result<String, ApiError> {
     value

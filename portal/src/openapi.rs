@@ -102,6 +102,7 @@ pub fn document_with_base(base: &str) -> Value {
     add_graph_operations(&mut document);
     add_upload_session_operations(&mut document);
     add_inbox_import_operation(&mut document);
+    add_inbox_attachment_operation(&mut document);
     document["paths"]["/app/api/projects/{id}/section-counts"] = serde_json::json!({
       "get": {
         "operationId": "getProjectSectionCounts", "tags": ["Projects"],
@@ -428,6 +429,23 @@ fn add_draft_aliases(document: &mut Value) {
         }
         document["paths"][twin] = item;
     }
+}
+
+fn add_inbox_attachment_operation(document: &mut Value) {
+    let parameters = ["id", "conversation_id", "message_id", "asset_id"]
+        .map(|name| json!({"name": name, "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}));
+    document["paths"]["/app/api/projects/{id}/inbox/{conversation_id}/messages/{message_id}/attachments/{asset_id}"] = json!({"get": {
+        "operationId": "downloadInboxMessageAttachment", "tags": ["Inbox"],
+        "summary": "Download a Project Message attachment",
+        "description": "Requires a Lawyer participating in the Project. The Conversation must belong to that Project, the Message to that Conversation, and the Asset to that Message and Firm. The attachment retains its provider filename; bare Inbox assets do not need a Project document identity.",
+        "parameters": parameters,
+        "responses": {
+            "200": {"description": "Attachment bytes with Content-Disposition attachment and the provider filename", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}},
+            "401": {"description": "No authenticated session"},
+            "403": {"description": "The caller is not Lawyer tier"},
+            "404": {"description": "No visible Project/Conversation/Message attachment with these identities"}
+        }
+    }});
 }
 
 fn add_inbox_import_operation(document: &mut Value) {

@@ -908,6 +908,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             )),
         ),
         (
+            "GET",
+            "/app/api/projects/{id}/inbox/{conversation_id}/messages/{message_id}/attachments/{asset_id}",
+            get(crate::communications_api::download_message_attachment),
+        ),
+        (
             "PATCH",
             "/app/api/projects/{id}/documents/{asset_id}",
             patch(update_document_door),

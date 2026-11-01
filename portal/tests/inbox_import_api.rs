@@ -165,9 +165,18 @@ async fn post_json(
     session: Option<&portal::SessionData>,
     body: Value,
 ) -> (u16, Value) {
+    post_json_at(app, session, "/app/api/inbox/import", body).await
+}
+
+async fn post_json_at(
+    app: &Router,
+    session: Option<&portal::SessionData>,
+    uri: &str,
+    body: Value,
+) -> (u16, Value) {
     let mut builder = Request::builder()
         .method("POST")
-        .uri("/app/api/inbox/import")
+        .uri(uri)
         .header(header::CONTENT_TYPE, "application/json");
     if let Some(session) = session {
         builder = builder.extension(session.clone());
@@ -322,6 +331,123 @@ async fn a_corrupted_linkedin_export_fails_loudly_naming_the_headers() {
     assert!(
         message.contains("CONVERSATION"),
         "the offending header must be named: {message}"
+    );
+}
+
+#[tokio::test]
+async fn a_project_message_attachment_download_keeps_its_name_and_scope() {
+    let db = mem_surreal().await;
+    let (lawyer_id, project) = seed_practice(&db).await;
+    let fixture = build_app(db, lawyer_id).await;
+    let (status, body) = post_json_at(
+        &fixture.app,
+        Some(&fixture.lawyer_session),
+        &format!("/app/api/projects/{}/inbox-ingest", project.id),
+        json!({"raw": base64::engine::general_purpose::STANDARD.encode(INBOUND_EML)}),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let conversation_id = body["conversation_id"].as_str().unwrap();
+    let message_id: Uuid = body["message_id"].as_str().unwrap().parse().unwrap();
+    let attachments =
+        store::inbox::message_assets(&fixture.surreal, project.firm_id.unwrap(), message_id)
+            .await
+            .unwrap();
+    assert_eq!(attachments.len(), 1);
+    let attachment = &attachments[0];
+    let path = format!(
+        "/app/api/projects/{}/inbox/{conversation_id}/messages/{message_id}/attachments/{}",
+        project.id, attachment.asset_id
+    );
+    assert_downloaded_email_attachment(&fixture, &path).await;
+
+    for denied in [
+        path.replace(&project.id.to_string(), &Uuid::now_v7().to_string()),
+        path.replace(conversation_id, &Uuid::now_v7().to_string()),
+        path.replace(&message_id.to_string(), &Uuid::now_v7().to_string()),
+        path.replace(
+            &attachment.asset_id.to_string(),
+            &Uuid::now_v7().to_string(),
+        ),
+    ] {
+        assert_eq!(
+            get_attachment(&fixture.app, &fixture.lawyer_session, &denied)
+                .await
+                .status(),
+            404
+        );
+    }
+    for role in [Role::Client, Role::Clerk] {
+        let session = portal::SessionData {
+            role,
+            ..fixture.lawyer_session.clone()
+        };
+        assert_eq!(
+            get_attachment(&fixture.app, &session, &path).await.status(),
+            403
+        );
+    }
+    let outsider = ensure_person(
+        &fixture.surreal,
+        &NewPerson {
+            name: "Outside Lawyer".into(),
+            email: "outside@example.test".into(),
+            role: Role::Lawyer,
+            ..Default::default()
+        },
+    )
+    .await;
+    let session = portal::SessionData {
+        person_id: Some(outsider.id),
+        ..fixture.lawyer_session.clone()
+    };
+    assert_eq!(
+        get_attachment(&fixture.app, &session, &path).await.status(),
+        404
+    );
+}
+
+async fn get_attachment(
+    app: &Router,
+    session: &portal::SessionData,
+    path: &str,
+) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .extension(session.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+async fn assert_downloaded_email_attachment(fixture: &Fixture, path: &str) {
+    let response = get_attachment(&fixture.app, &fixture.lawyer_session, path).await;
+    assert_eq!(
+        response.status(),
+        200,
+        "download the synthetic email attachment"
+    );
+    assert_eq!(
+        response.headers()[header::CONTENT_DISPOSITION],
+        "attachment; filename=\"exhibit-a.pdf\""
+    );
+    assert_eq!(
+        response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+        "nosniff"
+    );
+    assert_eq!(
+        response.headers()[header::CACHE_CONTROL],
+        "private, no-store"
+    );
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+        b"synthetic pdf bytes".as_slice()
     );
 }
 
@@ -581,11 +707,12 @@ async fn assert_email_lifecycle(
         asset.slug.as_deref().unwrap(),
     )
     .expect("an imported attachment must be representable by a repository pointer");
-    let message_id: Uuid = first["imported"][0]["message_id"]
-        .as_str()
-        .unwrap()
-        .parse()
-        .unwrap();
+    let message_id: Uuid = serde_json::from_value(first["imported"][0]["message_id"].clone())
+        .expect("imported Message UUID");
+    let download_path = format!(
+        "/app/api/projects/{project_id}/inbox/{conversation_id}/messages/{message_id}/attachments/{asset_id}"
+    );
+    assert_downloaded_email_attachment(fixture, &download_path).await;
     let project = store::projects::find_by_id(&fixture.surreal, project_id)
         .await
         .unwrap()

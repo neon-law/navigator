@@ -66,16 +66,14 @@ pub struct InboxMessageView {
     pub provider_message_id: Option<String>,
     #[serde(default)]
     pub visibility: Option<String>,
-    /// The attachments rendered under this Message — the asset its
-    /// `attachment_asset_id` slot holds plus every provenance-linked asset
-    /// the import filed (LAW-238 D4). Empty for threads fetched outside a
-    /// matter, whose lookups are Project-scoped.
+    /// Attachments in provider order, with primary and filed document slots
+    /// filling older records' gaps. Empty outside a Project-scoped thread.
     #[serde(default)]
     pub attachments: Vec<InboxAttachmentView>,
 }
 
-/// One attachment under a transcript Message: the filed Asset's filename,
-/// kind, and link into the matter's documents (LAW-238 D4).
+/// One transcript attachment: its provider filename, optional document kind,
+/// and authorized document or Message download link.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InboxAttachmentView {
     #[serde(default)]
@@ -434,21 +432,43 @@ fn message_view(message: &store::inbox::Message) -> InboxMessageView {
 }
 
 /// The attachments one transcript Message renders, as the thread page
-/// receives them (LAW-238 D4): the Message's own asset slot first, then the
-/// provenance-linked assets the import filed (`mail/{message_id}/{index}`),
-/// deduped by asset id — the first attachment occupies both slots, the same
-/// join the Communications list door makes. Each links into the matter's
-/// documents at the revision route the documents table uses.
+/// receives them: provider links retain their names and order; older primary
+/// and provenance slots fill any gaps. Document assets link to their revision;
+/// bare Inbox assets use the Project/Conversation/Message-authorized download.
 #[cfg(feature = "server")]
 #[must_use]
 fn thread_attachment_views(
     code: &str,
+    project_id: uuid::Uuid,
+    conversation_id: uuid::Uuid,
+    message_id: uuid::Uuid,
     primary: Option<store::assets::Asset>,
     filed: Vec<store::assets::Asset>,
+    linked: Vec<store::inbox::MessageAttachment>,
 ) -> Vec<InboxAttachmentView> {
     let mut attachments = Vec::new();
     let mut seen = Vec::new();
-    for asset in primary.into_iter().chain(filed) {
+    let assets = primary.into_iter().chain(filed).collect::<Vec<_>>();
+    let href = |id, asset: Option<&store::assets::Asset>| {
+        if asset.is_some_and(|asset| asset.project_id == Some(project_id)) {
+            format!("/app/projects/{code}/documents/{id}")
+        } else {
+            format!("/app/api/projects/{project_id}/inbox/{conversation_id}/messages/{message_id}/attachments/{id}")
+        }
+    };
+    for link in linked {
+        if seen.contains(&link.asset_id) {
+            continue;
+        }
+        seen.push(link.asset_id);
+        let asset = assets.iter().find(|asset| asset.id == link.asset_id);
+        attachments.push(InboxAttachmentView {
+            filename: Some(link.filename),
+            kind: asset.and_then(|asset| asset.kind.clone()),
+            href: href(link.asset_id, asset),
+        });
+    }
+    for asset in assets {
         if seen.contains(&asset.id) {
             continue;
         }
@@ -456,22 +476,22 @@ fn thread_attachment_views(
         attachments.push(InboxAttachmentView {
             filename: asset.filename.clone(),
             kind: asset.kind.clone(),
-            href: format!("/app/projects/{code}/documents/{}", asset.id),
+            href: href(asset.id, Some(&asset)),
         });
     }
     attachments
 }
 
-/// The thread's Messages with each one's attachments resolved (LAW-238 D4):
-/// the Message's `attachment_asset_id` slot plus the provenance-linked
-/// assets filed under its id. A lookup failure drops that message's
-/// attachment list rather than the transcript — the same trade the strip's
-/// page read makes.
+/// Resolve a Project thread's ordered Message attachments and older primary
+/// or provenance slots. A failed lookup keeps the readable transcript and
+/// whatever attachment sources remain available.
 #[cfg(feature = "server")]
 async fn thread_messages_with_attachments(
     surreal: &store::surreal::SurrealDb,
     code: &str,
     project_id: uuid::Uuid,
+    firm_id: uuid::Uuid,
+    conversation_id: uuid::Uuid,
     messages: &[store::inbox::Message],
 ) -> Vec<InboxMessageView> {
     let mut views = Vec::with_capacity(messages.len());
@@ -487,7 +507,18 @@ async fn thread_messages_with_attachments(
             store::assets::find_by_source_message_id(surreal, project_id, &message.id.to_string())
                 .await
                 .unwrap_or_default();
-        view.attachments = thread_attachment_views(code, primary, filed);
+        let linked = store::inbox::message_assets(surreal, firm_id, message.id)
+            .await
+            .unwrap_or_default();
+        view.attachments = thread_attachment_views(
+            code,
+            project_id,
+            conversation_id,
+            message.id,
+            primary,
+            filed,
+            linked,
+        );
         views.push(view);
     }
     views
@@ -791,6 +822,8 @@ pub async fn project_inbox_thread() -> Result<InboxThreadPage, ServerFnError> {
             &surreal,
             &project_code,
             project.id,
+            thread.conversation.firm_id,
+            thread.conversation.id,
             &thread.messages,
         )
         .await,
@@ -1562,33 +1595,68 @@ mod tests {
 
     #[test]
     fn thread_attachments_dedupe_the_first_slot_and_keep_list_order() {
+        let project_id = uuid::Uuid::from_u128(10);
         let primary_id = uuid::Uuid::nil();
         let filed_id = uuid::Uuid::from_u128(2);
         let asset = |id, filename: &str| store::assets::Asset {
             id,
             filename: Some(filename.into()),
             kind: Some("pdf".into()),
+            project_id: Some(project_id),
             ..asset_fixture()
         };
         let views = thread_attachment_views(
-            "24-1043",
+            "sample-litigation",
+            project_id,
+            uuid::Uuid::from_u128(11),
+            uuid::Uuid::from_u128(12),
             Some(asset(primary_id, "exhibit-a.pdf")),
             vec![
                 asset(primary_id, "exhibit-a.pdf"),
                 asset(filed_id, "exhibit-b.pdf"),
             ],
+            Vec::new(),
         );
         assert_eq!(views.len(), 2, "the first attachment occupies both slots");
         assert_eq!(views[0].filename.as_deref(), Some("exhibit-a.pdf"));
         assert_eq!(views[1].filename.as_deref(), Some("exhibit-b.pdf"));
         assert_eq!(
             views[1].href,
-            format!("/app/projects/24-1043/documents/{filed_id}")
+            format!("/app/projects/sample-litigation/documents/{filed_id}")
         );
         assert_eq!(
             attachment_label(&views[0]),
             "exhibit-a.pdf (pdf)".to_string()
         );
+    }
+
+    #[test]
+    fn bare_inbox_attachments_keep_provider_names_order_and_download_scope() {
+        let project = uuid::Uuid::from_u128(10);
+        let conversation = uuid::Uuid::from_u128(11);
+        let message = uuid::Uuid::from_u128(12);
+        let links = [(1_u128, 0_i64, "first.txt"), (2, 1, "second.txt")]
+            .into_iter()
+            .map(|(id, position, name)| store::inbox::MessageAttachment {
+                asset_id: uuid::Uuid::from_u128(id),
+                filename: name.into(),
+                position,
+                sha256: String::new(),
+            })
+            .collect();
+        let views = thread_attachment_views(
+            "sample-litigation",
+            project,
+            conversation,
+            message,
+            None,
+            Vec::new(),
+            links,
+        );
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].filename.as_deref(), Some("first.txt"));
+        assert_eq!(views[1].filename.as_deref(), Some("second.txt"));
+        assert_eq!(views[1].href, format!("/app/api/projects/{project}/inbox/{conversation}/messages/{message}/attachments/{}", uuid::Uuid::from_u128(2)));
     }
 
     fn asset_fixture() -> store::assets::Asset {
