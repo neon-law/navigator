@@ -41,6 +41,7 @@ pub mod channel {
     pub const THREADS: &str = "threads";
     pub const YOUTUBE: &str = "youtube";
     pub const TIKTOK: &str = "tiktok";
+    pub const X: &str = "x";
 }
 
 pub mod direction {
@@ -1945,6 +1946,7 @@ pub(crate) fn is_social_channel(channel_name: &str) -> bool {
             | channel::THREADS
             | channel::YOUTUBE
             | channel::TIKTOK
+            | channel::X
     )
 }
 

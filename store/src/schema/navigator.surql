@@ -2531,7 +2531,7 @@ DEFINE FIELD OVERWRITE interaction_type ON inbox_conversation TYPE string DEFAUL
 DEFINE FIELD OVERWRITE provider_post_id ON inbox_conversation TYPE option<string>;
 DEFINE FIELD OVERWRITE project_id ON inbox_conversation TYPE option<record<project>>;
 DEFINE FIELD OVERWRITE channel ON inbox_conversation TYPE string
-    ASSERT $value IN ['email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok'];
+    ASSERT $value IN ['email', 'sms', 'facebook', 'instagram', 'threads', 'youtube', 'tiktok', 'x'];
 DEFINE FIELD OVERWRITE external_address ON inbox_conversation TYPE string;
 DEFINE FIELD OVERWRITE external_name ON inbox_conversation TYPE option<string>;
 DEFINE FIELD OVERWRITE subject ON inbox_conversation TYPE option<string>;
