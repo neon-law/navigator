@@ -28,7 +28,7 @@ recommended practices.
 
 The source is public at [neon-law/navigator](https://github.com/neon-law/navigator), so anyone can read, run, and fork
 it. Outside pull requests are closed for now, so the ways below run through conversation and use rather than the merge
-queue. Anyone may write to <contact@neonlaw.org>.
+queue. Anyone may write to <support@neonlaw.com>.
 
 ## Improve the Corpus
 
