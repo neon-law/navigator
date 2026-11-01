@@ -293,6 +293,34 @@ fn not_configured(provider: IntegrationProvider, kind: IntegrationSecretKind) ->
     }
 }
 
+/// A fresh store has no `firm_integration_secret` table yet: SurrealDB
+/// refuses the query with a table-not-found error instead of returning an
+/// empty result (observed live as `NotFound: The table
+/// 'firm_integration_secret' does not exist`). `surrealdb::Error` carries
+/// no structured variant for that condition, so the error's rendered text
+/// is the only signal. The match lives here — the one module that owns the
+/// table — so every resolver treats a fresh database as "nothing
+/// configured" while every other query fault (permissions, serialization,
+/// connection) still surfaces as a hard `Db` error.
+fn is_missing_table(error: &surrealdb::Error) -> bool {
+    let text = error.to_string().to_lowercase();
+    text.contains("table") && (text.contains("does not exist") || text.contains("doesn't exist"))
+}
+
+/// Project a store query fault into a `SecretStoreError`, mapping only the
+/// missing-table case to `NotConfigured`.
+fn classify_query_error(
+    error: surrealdb::Error,
+    provider: IntegrationProvider,
+    kind: IntegrationSecretKind,
+) -> SecretStoreError {
+    if is_missing_table(&error) {
+        not_configured(provider, kind)
+    } else {
+        SecretStoreError::Db(error)
+    }
+}
+
 fn validate_kind(
     provider: IntegrationProvider,
     kind: IntegrationSecretKind,
@@ -575,7 +603,8 @@ pub async fn resolve_firm_credential(
         .bind(("provider", provider.as_str().to_string()))
         .bind(("kind", kind.as_str().to_string()))
         .await
-        .and_then(surrealdb::IndexedResults::check)?;
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(|error| classify_query_error(error, provider, kind))?;
     let rows: Vec<SecretRow> = response.take(0)?;
     let row = rows
         .into_iter()
@@ -617,6 +646,65 @@ mod tests {
     use super::{zeroize, IntegrationProvider, IntegrationSecretKind, ResolvedCredential};
 
     const SECRET: &[u8] = b"la-superior-password";
+
+    /// The live shape the engine raises for a query against a table that
+    /// does not exist yet (art_UoDN4Gp6, fresh local SurrealDB 3.2.3).
+    fn missing_table_error() -> surrealdb::Error {
+        surrealdb::Error::query(
+            "The table 'firm_integration_secret' does not exist".to_string(),
+            None,
+        )
+    }
+
+    #[test]
+    fn a_missing_table_error_is_classified_as_not_configured() {
+        let error = super::classify_query_error(
+            missing_table_error(),
+            IntegrationProvider::CourtPortal,
+            IntegrationSecretKind::PortalLogin,
+        );
+        assert!(matches!(
+            error,
+            super::SecretStoreError::NotConfigured {
+                provider: "court_portal",
+                kind: "portal_login"
+            }
+        ));
+    }
+
+    #[test]
+    fn any_other_query_fault_stays_a_hard_db_error() {
+        let faults = [
+            surrealdb::Error::query("Query timed out".to_string(), None),
+            surrealdb::Error::query(
+                "The table 'firm_integration_secret' was locked".to_string(),
+                None,
+            ),
+        ];
+        for fault in faults {
+            let error = super::classify_query_error(
+                fault,
+                IntegrationProvider::CourtPortal,
+                IntegrationSecretKind::PortalLogin,
+            );
+            assert!(
+                matches!(error, super::SecretStoreError::Db(_)),
+                "only the missing-table case may map to NotConfigured"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fresh_store_without_the_secret_table_resolves_to_not_configured() {
+        // The behavioral end-to-end pin lives in `cli`'s scraper
+        // credentials tests against the mem store; this one pins the
+        // classification at the store seam.
+        assert!(super::is_missing_table(&missing_table_error()));
+        assert!(!super::is_missing_table(&surrealdb::Error::query(
+            "Not authorized".to_string(),
+            None
+        )));
+    }
 
     #[test]
     fn zeroize_helper_overwrites_every_byte() {
