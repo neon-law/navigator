@@ -29,6 +29,9 @@ when the provider supplied none.
 `--dry-run` prints the complete request JSON, including the base64 payload, and makes no request or login lookup.
 `--host` selects the deployment's stored session. `--project` supplies a visible Project code for attribution.
 
+Remote deployments require HTTPS. The command refuses redirects to keep credentials and payloads on the selected
+deployment; HTTP is allowed for a local loopback fixture.
+
 ## Server requirements
 
 The command calls `POST /app/api/inbox/import` with a lawyer-tier session. Writing imports requires the PostgreSQL Inbox

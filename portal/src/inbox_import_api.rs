@@ -32,8 +32,8 @@ pub(crate) struct InboxImportRequest {
     payload_base64: String,
     /// Optional matter code; conversations attribute (or move) there.
     project: Option<String>,
-    /// Report what the import would do and write nothing — the CLI's
-    /// `--dry-run` rides this field (AC11).
+    /// Parse and preview without writing. The CLI's local `--dry-run`
+    /// prints the request instead of contacting this endpoint.
     #[serde(default)]
     dry_run: bool,
 }

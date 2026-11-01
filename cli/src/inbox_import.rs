@@ -314,8 +314,7 @@ mod tests {
             .unwrap(),
             "From: counsel@example.com\r\n"
         );
-        // The door's dry-run field is the CLI's --dry-run only; the CLI
-        // never sends a dry-run request.
+        // The CLI previews locally; it never sends a server dry-run request.
         assert!(body.get("dry_run").is_none());
 
         let unattributed = request_body(
