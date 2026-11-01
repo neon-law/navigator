@@ -541,6 +541,14 @@ erDiagram
         datetime inserted_at
         datetime updated_at
     }
+    firm_forgejo_organization {
+        uuid firm_id
+        int forgejo_id
+        string organization
+        string owner_login
+        datetime provisioned_at
+        datetime reconciled_at
+    }
     firm_integration_secret {
         uuid actor_id
         string ciphertext
@@ -1678,6 +1686,7 @@ erDiagram
     entity }o--|| firm : references
     brand }o--|| firm_brand : references
     firm }o--|| firm_brand : references
+    firm }o--|| firm_forgejo_organization : references
     firm }o--|| firm_integration_secret : references
     person }o--|| firm_integration_secret : references
     person }o--|| git_access_token : references

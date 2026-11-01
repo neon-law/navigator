@@ -198,6 +198,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "firm_forgejo_organization",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "journal_entry_source",
       "missing_column": null,
       "missing_table": null,
@@ -1718,7 +1725,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 138,
+    "table_count": 139,
     "tables": {
       "address": {
         "columns": {
@@ -2710,6 +2717,26 @@
         "name": "firm_brand",
         "references": [
           "brand",
+          "firm"
+        ]
+      },
+      "firm_forgejo_organization": {
+        "columns": {
+          "firm_id": "UUID",
+          "forgejo_id": "BIGINT",
+          "organization": "TEXT",
+          "owner_login": "TEXT",
+          "provisioned_at": "TIMESTAMPTZ",
+          "reconciled_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "firm_forgejo_organization",
+        "references": [
           "firm"
         ]
       },

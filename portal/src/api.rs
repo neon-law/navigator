@@ -173,6 +173,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ("GET", "/app/api/entities", get(list_entities)),
         ("GET", "/app/api/firms", get(list_firms)),
         (
+            "POST",
+            "/app/api/firms/{id}/forgejo-organization",
+            post(crate::firm_forgejo_api::provision),
+        ),
+        (
             "GET",
             "/app/api/firms/{id}/journal/audits",
             get(firm_journal_api::audits),
@@ -4588,6 +4593,7 @@ async fn list_firms(
             .map(|firm| FirmDirectoryEntry {
                 id: firm.id,
                 name: firm.name,
+                slug: firm.slug,
             })
             .collect(),
     ))
@@ -4597,6 +4603,8 @@ async fn list_firms(
 struct FirmDirectoryEntry {
     id: Uuid,
     name: String,
+    /// The Firm's immutable slug, which names its Forgejo organization.
+    slug: String,
 }
 
 async fn get_entity(
