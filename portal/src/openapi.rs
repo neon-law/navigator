@@ -5162,6 +5162,21 @@ pub const TOOLS_WITHOUT_AN_API_OPERATION: &[(&str, &str)] = &[
          and adding one would give a second, un-gated door onto the same \
          irreversible operation.",
     ),
+    (
+        "search_case_law",
+        "No route today. The sandbox session loop invokes read-only \
+         CourtListener search as a detour inside a metered completion; the \
+         subscriber's door is the sandbox session itself, and a public API \
+         operation would bypass the credit meter and the outbound \
+         query sanitization.",
+    ),
+    (
+        "search_legal_aid",
+        "No route today. Same shape as `search_case_law`: a read-only \
+         Descrybe search the completion loop may call, metered and \
+         sanitized only inside the sandbox session — there is no \
+         HTTP-side command for an operation to share.",
+    ),
 ];
 
 /// Every `x-mcp-tool` value in [`document`], paired with the operation

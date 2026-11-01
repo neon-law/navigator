@@ -182,13 +182,21 @@ where
         }
     };
 
-    finish_delivery(forge, &review, merge_commit, sleep).await
+    finish_delivery(
+        forge,
+        &review,
+        merge_commit,
+        Instant::now() + CHECK_TIMEOUT,
+        sleep,
+    )
+    .await
 }
 
 async fn finish_delivery<S, Fut>(
     forge: &dyn Forge,
     review: &ReviewRef,
     merge_commit: String,
+    deadline: Instant,
     sleep: S,
 ) -> Result<LaneReport>
 where
@@ -207,7 +215,7 @@ where
             None
         }
     };
-    let deployment = match watch_deployment(forge, &merge_commit, sleep).await {
+    let deployment = match watch_deployment(forge, &merge_commit, deadline, sleep).await {
         Ok(run) => Some(run),
         Err(error) => {
             unverified.push(format!("deployment unverified: {error:#}"));
@@ -215,8 +223,13 @@ where
         }
     };
     for (stage, run) in [("CI", ci.as_ref()), ("deployment", deployment.as_ref())] {
-        if run.is_some_and(|run| run.jobs.is_empty()) {
-            unverified.push(format!("{stage} job details unavailable"));
+        if let Some(run) = run {
+            if run.jobs.is_empty() {
+                unverified.push(format!("{stage} job details unavailable"));
+            }
+            if run.conclusion.is_none() {
+                unverified.push(format!("{stage} has not completed"));
+            }
         }
     }
     let report = LaneReport {
@@ -248,21 +261,9 @@ where
     Ok(report)
 }
 
-/// Keep merge success distinct from the live gate's verdict.
-pub(crate) async fn watch_deployment<S, Fut>(
-    forge: &dyn Forge,
-    merge_commit: &str,
-    sleep: S,
-) -> Result<DeploymentRun>
-where
-    S: Fn(Duration) -> Fut,
-    Fut: Future<Output = ()>,
-{
-    let deadline = Instant::now() + CHECK_TIMEOUT;
-    watch_deployment_within(forge, merge_commit, deadline, sleep).await
-}
-
-async fn watch_deployment_within<S, Fut>(
+/// Return a terminal deployment, or retain the last observed run at the deadline.
+/// A pending conclusion remains unverified and cannot count as successful delivery.
+async fn watch_deployment<S, Fut>(
     forge: &dyn Forge,
     merge_commit: &str,
     deadline: Instant,
@@ -272,6 +273,7 @@ where
     S: Fn(Duration) -> Fut,
     Fut: Future<Output = ()>,
 {
+    let mut observed = None;
     loop {
         if let Some(run) = forge.deployment(merge_commit).await? {
             anyhow::ensure!(
@@ -281,8 +283,12 @@ where
             if run.conclusion.is_some() {
                 return Ok(run);
             }
+            observed = Some(run);
         }
         if Instant::now() >= deadline {
+            if let Some(run) = observed {
+                return Ok(run);
+            }
             bail!(
                 "merged {merge_commit}; cd deployment remains unverified after {} seconds",
                 CHECK_TIMEOUT.as_secs()
@@ -499,6 +505,7 @@ mod tests {
         merge_after_polls: usize,
         opened: Mutex<Vec<ReviewRequest>>,
         deployment_conclusion: String,
+        deployment_missing: bool,
     }
 
     impl MockForge {
@@ -515,6 +522,7 @@ mod tests {
                 merge_after_polls: polls,
                 opened: Mutex::new(Vec::new()),
                 deployment_conclusion: "success".into(),
+                deployment_missing: false,
             }
         }
 
@@ -560,6 +568,9 @@ mod tests {
         }
 
         async fn deployment(&self, merge_commit: &str) -> Result<Option<super::DeploymentRun>> {
+            if self.deployment_missing {
+                return Ok(None);
+            }
             Ok(Some(super::DeploymentRun {
                 url: "https://forge.example/run/8".into(),
                 commit: merge_commit.into(),
@@ -567,7 +578,8 @@ mod tests {
                     .then(|| self.deployment_conclusion.clone()),
                 jobs: vec![crate::projects::forge::DeploymentJob {
                     name: "seeds".into(),
-                    conclusion: Some(self.deployment_conclusion.clone()),
+                    conclusion: (!self.deployment_conclusion.is_empty())
+                        .then(|| self.deployment_conclusion.clone()),
                 }],
             }))
         }
@@ -591,21 +603,38 @@ mod tests {
     async fn deployment_failure_is_reported_after_merge() {
         let mut forge = MockForge::green_after(1);
         forge.deployment_conclusion = "failure".into();
-        let report = super::watch_deployment(&forge, "merge111", instant_sleep)
-            .await
-            .unwrap();
+        let report = super::watch_deployment(
+            &forge,
+            "merge111",
+            Instant::now() + super::CHECK_TIMEOUT,
+            instant_sleep,
+        )
+        .await
+        .unwrap();
         assert_eq!(report.conclusion.as_deref(), Some("failure"));
         assert_eq!(report.jobs[0].name, "seeds");
     }
 
     #[tokio::test]
-    async fn pending_deployment_times_out_as_unverified() {
+    async fn pending_deployment_retains_run_evidence_at_timeout() {
         let mut forge = MockForge::green_after(1);
         forge.deployment_conclusion.clear();
-        let error =
-            super::watch_deployment_within(&forge, "merge111", Instant::now(), instant_sleep)
-                .await
-                .unwrap_err();
+        let run = super::watch_deployment(&forge, "merge111", Instant::now(), instant_sleep)
+            .await
+            .unwrap();
+        assert_eq!(run.url, "https://forge.example/run/8");
+        assert_eq!(run.commit, "merge111");
+        assert_eq!(run.conclusion, None);
+        assert_eq!(run.jobs[0].name, "seeds");
+    }
+
+    #[tokio::test]
+    async fn missing_deployment_remains_unverified_at_timeout() {
+        let mut forge = MockForge::green_after(1);
+        forge.deployment_missing = true;
+        let error = super::watch_deployment(&forge, "merge111", Instant::now(), instant_sleep)
+            .await
+            .unwrap_err();
         assert!(
             error.to_string().contains("deployment remains unverified"),
             "{error:#}"
@@ -613,11 +642,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pending_deployment_cannot_complete_delivery() {
+        let mut forge = MockForge::green_after(1);
+        forge.deployment_conclusion.clear();
+        let error = super::finish_delivery(
+            &forge,
+            &forge.review,
+            "merge111".into(),
+            Instant::now(),
+            instant_sleep,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("deployment did not succeed"),
+            "{error:#}"
+        );
+    }
+
+    #[tokio::test]
     async fn successful_deployment_reports_its_exact_commit() {
         let forge = MockForge::green_after(1);
-        let run = super::watch_deployment(&forge, "merge111", instant_sleep)
-            .await
-            .unwrap();
+        let run = super::watch_deployment(
+            &forge,
+            "merge111",
+            Instant::now() + super::CHECK_TIMEOUT,
+            instant_sleep,
+        )
+        .await
+        .unwrap();
         assert_eq!(run.commit, "merge111");
         assert_eq!(run.conclusion.as_deref(), Some("success"));
     }

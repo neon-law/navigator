@@ -33,6 +33,7 @@ sqlx.workspace = true
 store = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 tower.workspace = true
+wiremock.workspace = true
 
 [lints]
 workspace = true

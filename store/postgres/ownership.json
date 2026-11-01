@@ -24,6 +24,12 @@
     "scope": "project-or-catalog",
     "through": "project_id when present; explicit catalog provenance otherwise"
   },
+  "assistant_turn": {
+    "migration_slice": "identity-storage",
+    "parity_scenario": "owner-scoped conversation history; cross-owner isolation; purge removes every stored turn",
+    "scope": "identity",
+    "through": "person_id — owner-scoped sandbox transcript with no firm or project anchor"
+  },
   "attestation": {
     "migration_slice": "workflow-storage",
     "parity_scenario": "pending, recorded, and failed attestations; source identity and Notation retention",
@@ -656,6 +662,12 @@
     "parity_scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
     "scope": "project",
     "through": "notation_id -> owning parent scope"
+  },
+  "sandbox_usage": {
+    "migration_slice": "accounting-storage",
+    "parity_scenario": "stable identity; tenant link isolation and no inferred participation",
+    "scope": "identity",
+    "through": "person_id -> Person; no Project or Firm attribution"
   },
   "schema_version": {
     "migration_slice": "platform-storage",

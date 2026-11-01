@@ -65,6 +65,17 @@ erDiagram
         datetime updated_at
         string visibility
     }
+    assistant_turn {
+        string content
+        uuid id
+        int input_tokens
+        datetime inserted_at
+        string kind
+        int output_tokens
+        uuid person_id
+        string tool_name
+        datetime updated_at
+    }
     attestation {
         string chain
         string client_wallet
@@ -1409,6 +1420,16 @@ erDiagram
         string title
         datetime updated_at
     }
+    sandbox_usage {
+        int granted_cents
+        uuid id
+        datetime inserted_at
+        boolean overage
+        string period
+        uuid person_id
+        int spent_cents
+        datetime updated_at
+    }
     sent_email {
         string body
         uuid id
@@ -1657,6 +1678,7 @@ erDiagram
     question }o--|| answer : references
     person }o--|| asset : references
     project }o--|| asset : references
+    person }o--|| assistant_turn : references
     notation }o--|| attestation : references
     person }o--|| attorney_rate : references
     project }o--|| attorney_rate : references
@@ -1781,6 +1803,7 @@ erDiagram
     project_task }o--|| project_task_events : references
     person }o--|| relationship_log : references
     project }o--|| relationship_log : references
+    person }o--|| sandbox_usage : references
     project }o--|| sent_email : references
     brand }o--|| social_account : references
     firm }o--|| social_account : references

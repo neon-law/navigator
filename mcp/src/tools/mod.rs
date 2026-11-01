@@ -37,6 +37,8 @@ pub mod project_deadlines;
 pub mod project_skill_list;
 pub mod project_skill_show;
 pub mod project_status;
+pub mod search_case_law;
+pub mod search_legal_aid;
 pub mod send_welcome_email;
 pub mod show_person;
 pub mod spawn_legal_council;
@@ -74,6 +76,8 @@ pub fn list_tools() -> Vec<Value> {
         glossary_show::descriptor(),
         project_skill_list::descriptor(),
         project_skill_show::descriptor(),
+        search_case_law::descriptor(),
+        search_legal_aid::descriptor(),
     ]
 }
 
@@ -185,6 +189,8 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "glossary_show",
     "project_skill_list",
     "project_skill_show",
+    "search_case_law",
+    "search_legal_aid",
 ];
 
 /// Whether a tool mutates state — writes a row, sends an email, commits
@@ -353,6 +359,8 @@ pub async fn call_tool(
         "glossary_show" => glossary_show::call(arguments).await,
         "project_skill_list" => project_skill_list::call(arguments).await,
         "project_skill_show" => project_skill_show::call(arguments).await,
+        "search_case_law" => search_case_law::call(state.search.as_ref(), arguments).await,
+        "search_legal_aid" => search_legal_aid::call(state.search.as_ref(), arguments).await,
         other => Err(ToolError::Unknown(other.to_string())),
     }
 }

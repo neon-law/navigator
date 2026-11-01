@@ -139,3 +139,58 @@ async fn a_complimentary_consultation_is_never_invoiced_and_prices_are_positive(
     ));
     assert!(purchases::invoiced(&pg, 10).await.unwrap().is_empty());
 }
+
+/// The monthly credit reset reads its subscriber list through this one
+/// query: every Purchase of the Nautilus offerings, in every state. State
+/// filtering is the caller's decision — an `active` Purchase makes a
+/// subscriber, while an `invoiced` one still names the contact an overage
+/// invoice bills to.
+#[tokio::test]
+async fn for_offerings_lists_nautilus_purchases_in_every_state_and_no_others() {
+    let Some(pg) = database().await else { return };
+    let now = Utc.with_ymd_and_hms(2026, 10, 20, 12, 0, 0).unwrap();
+    let monthly_subscriber = Uuid::new_v4();
+    let annual_subscriber = Uuid::new_v4();
+    let other = Uuid::new_v4();
+
+    purchases::open(&pg, &plan(monthly_subscriber), now)
+        .await
+        .unwrap();
+    let annual = NewPurchase {
+        offering: "delete-your-data-annual".into(),
+        offering_name: "Delete Your Data, annual".into(),
+        cadence: Cadence::Year,
+        ..plan(annual_subscriber)
+    };
+    let annual = purchases::open(&pg, &annual, now).await.unwrap();
+    purchases::record_invoice(&pg, annual.id, "contact", "annual-invoice", None, now)
+        .await
+        .unwrap();
+    purchases::activate(&pg, annual.id, None, now + TimeDelta::minutes(5))
+        .await
+        .unwrap();
+    let other = NewPurchase {
+        offering: "consultation".into(),
+        offering_name: "Consultation".into(),
+        ..plan(other)
+    };
+    purchases::record_complimentary(&pg, &other, now)
+        .await
+        .unwrap();
+
+    let listed = purchases::for_offerings(&pg, &purchases::NAUTILUS_OFFERINGS)
+        .await
+        .unwrap();
+    let listed_people: std::collections::BTreeSet<Uuid> =
+        listed.iter().map(|p| p.person_id).collect();
+    assert_eq!(
+        listed_people,
+        [monthly_subscriber, annual_subscriber]
+            .into_iter()
+            .collect(),
+        "the two Nautilus subscribers, in both states, and no other offering"
+    );
+    assert!(listed
+        .iter()
+        .all(|p| purchases::NAUTILUS_OFFERINGS.contains(&p.offering.as_str())));
+}
