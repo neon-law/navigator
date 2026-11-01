@@ -141,6 +141,8 @@ COPY templates templates
 COPY archives          archives
 COPY billing           billing
 COPY billing-workflows billing-workflows
+COPY gateway gateway
+COPY sandbox-skills sandbox-skills
 # `store::glossary` bakes `docs/glossary/` into the binary with
 # include_dir!("$CARGO_MANIFEST_DIR/../docs/glossary"), and other crates
 # include_str! files under `docs/`. Those files

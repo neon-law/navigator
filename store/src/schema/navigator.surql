@@ -2730,3 +2730,61 @@ DEFINE FIELD OVERWRITE provider_account_id ON social_account_selection TYPE stri
 DEFINE FIELD OVERWRITE inserted_at ON social_account_selection TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON social_account_selection TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE social_account_selection_brand_provider ON social_account_selection FIELDS brand_key, provider UNIQUE;
+
+-- `sandbox_usage`: the metered-credit ledger behind the Nautilus Legal
+-- Sandbox (the glossary's Legal Sandbox). A subscriber's subscription
+-- includes $5 of model usage per billing month; one row here is one
+-- subscriber's credit for one month — the grant (500 cents, the `billing`
+-- convention: integer cents, never a float), the running debit across
+-- completions, and the overage flag.
+--
+-- The row's own record id is the compound natural key
+-- `⟨<person uuid>:<period>⟩`, not an independently minted UUID. That is
+-- the concurrency boundary, for the reason the store has already paid
+-- for twice (`store/tests/person_mailbox_race.rs`, `store::xero_invoices`):
+-- a UNIQUE index does not serialize racers that each mint their own
+-- record id, and a `WHERE` predicate over a table scan does not enter the
+-- optimistic layer's read set the way a direct record address does.
+-- First-touch `CREATE`s of one month collide on the row's key, and the
+-- metered debit (`store::sandbox_usage::debit`) is an `UPDATE` addressed
+-- at that key whose `WHERE` holds the whole decision, so two parallel
+-- tabs of the same subscriber serialize instead of double-spending.
+--
+-- The index is a plain lookup for the overage-invoice read (a closed
+-- period's owing rows), not a uniqueness guard — the record id is that.
+DEFINE TABLE IF NOT EXISTS sandbox_usage SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD OVERWRITE person_id ON sandbox_usage TYPE record<person>;
+DEFINE FIELD OVERWRITE period ON sandbox_usage TYPE string;
+DEFINE FIELD OVERWRITE granted_cents ON sandbox_usage TYPE int;
+DEFINE FIELD OVERWRITE spent_cents ON sandbox_usage TYPE int;
+DEFINE FIELD OVERWRITE overage ON sandbox_usage TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE inserted_at ON sandbox_usage TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON sandbox_usage TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE sandbox_usage_period ON sandbox_usage FIELDS period, overage;
+
+-- `assistant_turn`: one ordered entry in a subscriber's Assistant Chat —
+-- the glossary's Assistant Turn. A prompt the subscriber asked, a reply
+-- the assistant gave, or a tool call and its result from the session
+-- loop's read-only search detours. Every row belongs to exactly one
+-- Person and no other surface reads the table; the transcript is the
+-- subscriber's own workspace content.
+--
+-- The record id is a minted UUIDv7: time-ordered, so `history`'s
+-- `ORDER BY id` is the chronological order with no `max(seq) + 1` race
+-- between the parallel tool turns of one exchange.
+--
+-- Retention is a policy question the spec leaves open, and the schema
+-- assumes nothing: `store::assistant_turns::purge` removes one
+-- subscriber's whole chat in one statement, and the retention answer —
+-- whatever it becomes — is a caller of that seam, not a migration here.
+DEFINE TABLE IF NOT EXISTS assistant_turn SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD OVERWRITE person_id ON assistant_turn TYPE record<person>;
+DEFINE FIELD OVERWRITE kind ON assistant_turn TYPE string
+    ASSERT $value IN ["prompt", "reply", "tool_call", "tool_result"];
+DEFINE FIELD OVERWRITE content ON assistant_turn TYPE string;
+DEFINE FIELD OVERWRITE tool_name ON assistant_turn TYPE option<string>;
+DEFINE FIELD OVERWRITE input_tokens ON assistant_turn TYPE option<int>;
+DEFINE FIELD OVERWRITE output_tokens ON assistant_turn TYPE option<int>;
+DEFINE FIELD OVERWRITE inserted_at ON assistant_turn TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON assistant_turn TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE assistant_turn_owner ON assistant_turn FIELDS person_id;

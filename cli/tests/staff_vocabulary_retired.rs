@@ -63,6 +63,10 @@ const SKIPPED_DIRS: &[&str] = &[
     ".worktrees",
     "worktrees",
     ".devx",
+    // Vendored upstream trees (the LawDroid Legal Aid Plugin, the SendGrid
+    // SDK): files Navigator does not author, whose English use of "staff" is
+    // the third party's own prose, not role vocabulary in this workspace.
+    "vendor",
 ];
 
 /// Files exempt by provenance rather than by name: only this test, whose own
