@@ -297,15 +297,17 @@ impl ModelProvider for VertexProvider {
             .await
             .context("vertex rawPredict request")?;
         let status = response.status();
-        let body = response.text().await.context("read vertex response body")?;
         if !status.is_success() {
-            bail!(
-                "vertex rawPredict returned {status}: {}",
-                truncate(&body, 500)
-            );
+            bail!("vertex rawPredict returned {status}");
         }
-        let parsed: VertexResponse = serde_json::from_str(&body)
-            .with_context(|| format!("parse vertex response: {}", truncate(&body, 500)))?;
+        let body = response.text().await.context("read vertex response body")?;
+        let parsed: VertexResponse = serde_json::from_str(&body).map_err(|error| {
+            anyhow::anyhow!(
+                "parse vertex response at line {}, column {}",
+                error.line(),
+                error.column()
+            )
+        })?;
         let (content, tool_calls) = VertexProvider::reply_parts(&parsed.content)?;
         let mut result = CompletionResult {
             messages: Vec::new(),
@@ -331,15 +333,6 @@ impl ModelProvider for VertexProvider {
             usage.output_tokens,
             self.output_rate_cents_per_mtok,
         )
-    }
-}
-
-/// First `max` characters of a body, for error messages — enough to name
-/// the failure, never enough to echo a whole payload around.
-fn truncate(body: &str, max: usize) -> &str {
-    match body.char_indices().nth(max) {
-        Some((idx, _)) => &body[..idx],
-        None => body,
     }
 }
 
@@ -516,7 +509,26 @@ mod tests {
             .await
             .expect_err("a 429 fails the completion");
         assert!(error.to_string().contains("429"));
-        assert!(error.to_string().contains("quota exceeded"));
+        assert!(!format!("{error:#}").contains("quota exceeded"));
+    }
+
+    #[tokio::test]
+    async fn invalid_response_errors_do_not_disclose_provider_content() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "content": [{"type": "text", "text": "synthetic-sensitive-response"}],
+                "usage": {"input_tokens": "synthetic-sensitive-response", "output_tokens": 1}
+            })))
+            .mount(&server)
+            .await;
+
+        let error = a_provider(server.uri())
+            .complete(a_request())
+            .await
+            .expect_err("invalid usage fails the completion");
+        assert!(error.to_string().contains("parse vertex response"));
+        assert!(!format!("{error:#}").contains("synthetic-sensitive-response"));
     }
 
     #[tokio::test]
