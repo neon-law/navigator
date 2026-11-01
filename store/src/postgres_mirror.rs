@@ -708,6 +708,30 @@ async fn mirror_social_handle(
     Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
 }
 
+/// Run a whole-table `SELECT` against SurrealDB, reading a table the engine
+/// has not defined yet as empty.
+///
+/// `ops ship` reconciles the mirror before it rolls the web process, and the
+/// web process is what applies `navigator.surql` on boot. A release that adds
+/// a mirrored table therefore reaches a database with no such table, and
+/// SurrealDB 3 answers that with an error, not an empty result. Only that
+/// typed `NotFound(Table)` detail reads as empty; any other failure surfaces.
+async fn select_table(
+    surreal: &SurrealDb,
+    table: &str,
+    sql: String,
+) -> Result<Vec<surrealdb::types::Value>, MirrorError> {
+    match surreal
+        .query(sql)
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+    {
+        Ok(mut response) => response.take(0).map_err(|_| MirrorError::Source),
+        Err(error) if crate::schema::is_undefined_table(&error, table) => Ok(Vec::new()),
+        Err(_) => Err(MirrorError::Source),
+    }
+}
+
 fn changed(rows: u64, effect: Mirrored) -> Mirrored {
     if rows == 0 {
         Mirrored::Unchanged

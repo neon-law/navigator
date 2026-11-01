@@ -904,13 +904,8 @@ pub async fn unresolved_references(
     let mut parent_ids = BTreeMap::<&str, std::collections::BTreeSet<Uuid>>::new();
     let mut target_parent_ids = BTreeMap::<&str, std::collections::BTreeSet<Uuid>>::new();
     for parent in parent_tables {
-        let ids: Vec<surrealdb::types::Value> = surreal
-            .query(format!("SELECT VALUE id FROM `{parent}`"))
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .map_err(|_| MirrorError::Source)?
-            .take(0)
-            .map_err(|_| MirrorError::Source)?;
+        let ids = super::select_table(surreal, parent, format!("SELECT VALUE id FROM `{parent}`"))
+            .await?;
         let mut decoded_ids = std::collections::BTreeSet::new();
         for id in ids {
             decoded_ids.insert(uuid_in(&id.into_json_value()).ok_or(MirrorError::Source)?);
@@ -929,13 +924,8 @@ pub async fn unresolved_references(
     let mut source_natural_ids = BTreeMap::<&str, std::collections::BTreeSet<String>>::new();
     let mut target_natural_ids = BTreeMap::<&str, std::collections::BTreeSet<String>>::new();
     for parent in natural_parent_tables {
-        let ids: Vec<surrealdb::types::Value> = surreal
-            .query(format!("SELECT VALUE id FROM `{parent}`"))
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .map_err(|_| MirrorError::Source)?
-            .take(0)
-            .map_err(|_| MirrorError::Source)?;
+        let ids = super::select_table(surreal, parent, format!("SELECT VALUE id FROM `{parent}`"))
+            .await?;
         let parent_table = table(parent)?;
         let mut decoded_ids = std::collections::BTreeSet::new();
         for id in ids {
@@ -1310,13 +1300,12 @@ async fn source(
     surreal: &SurrealDb,
     table: &'static Table,
 ) -> Result<BTreeMap<MirrorKey, Value>, MirrorError> {
-    let rows: Vec<surrealdb::types::Value> = surreal
-        .query(format!("SELECT * FROM `{}`", table.name))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|_| MirrorError::Source)?
-        .take(0)
-        .map_err(|_| MirrorError::Source)?;
+    let rows = super::select_table(
+        surreal,
+        table.name,
+        format!("SELECT * FROM `{}`", table.name),
+    )
+    .await?;
     rows.into_iter()
         .map(|row| normalize_surreal(table, row))
         .collect()

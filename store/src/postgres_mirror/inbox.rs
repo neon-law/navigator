@@ -125,13 +125,8 @@ async fn source(
     surreal: &SurrealDb,
     table: &Table,
 ) -> Result<BTreeMap<MirrorKey, Value>, MirrorError> {
-    let rows: Vec<surrealdb::types::Value> = surreal
-        .query(format!("SELECT * FROM {}", table.name))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|_| MirrorError::Source)?
-        .take(0)
-        .map_err(|_| MirrorError::Source)?;
+    let rows =
+        super::select_table(surreal, table.name, format!("SELECT * FROM {}", table.name)).await?;
     rows.into_iter()
         .map(|row| normalize(table, row.into_json_value()))
         .collect()
@@ -363,6 +358,19 @@ mod tests {
         assert!(sql.contains("ON CONFLICT (id) DO UPDATE"));
         assert!(sql.contains("ROW(message.conversation_id"));
         assert!(sql.contains("IS DISTINCT FROM"));
+    }
+
+    #[tokio::test]
+    async fn a_table_the_engine_has_not_defined_yet_reads_as_empty() {
+        let db = crate::test_support::mem_surreal().await;
+        db.query("REMOVE TABLE inbox_message_asset")
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .unwrap();
+        let rows = source(&db, table("inbox_message_asset").unwrap())
+            .await
+            .unwrap();
+        assert!(rows.is_empty());
     }
 
     #[tokio::test]
